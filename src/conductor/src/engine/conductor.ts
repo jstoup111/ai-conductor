@@ -6328,6 +6328,22 @@ export class Conductor {
             });
           }
           try {
+            const runStepRunner = async (): Promise<StepRunResult> => {
+              try {
+                return await this.stepRunner.run(step.name, state, {
+                  retryReason: retryHint,
+                  attempt,
+                  escalate: resolved.escalate,
+                  modelOverride: esc.model,
+                  effortOverride: esc.effort,
+                });
+              } catch (err) {
+                return {
+                  success: false,
+                  output: err instanceof Error ? err.message : String(err),
+                };
+              }
+            };
             if (
               step.name !== 'complexity' &&
               step.name !== 'worktree' &&
@@ -6376,13 +6392,7 @@ export class Conductor {
                             })
                         : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
                           ? await this.runSelfBuildDispatch(step.name, state, retryHint)
-                          : await this.stepRunner.run(step.name, state, {
-                            retryReason: retryHint,
-                            attempt,
-                            escalate: resolved.escalate,
-                            modelOverride: esc.model,
-                            effortOverride: esc.effort,
-                          }));
+                          : await runStepRunner());
           } finally {
             buildWatcher?.stop();
             closeoutTail?.stop();

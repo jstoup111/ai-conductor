@@ -10,6 +10,7 @@ import {
   type StepRunResult,
 } from '../../src/engine/conductor.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { checkGate } from '../../src/engine/gates.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -401,7 +402,8 @@ describe('step refusal event spine', () => {
       protectedArtifacts: [],
       rebaselines: [],
     });
-    const run = vi.fn(async () => ({ success: false, output: 'boom' }));
+    const refusalLikeOutput = 'Protected artifact changed: .docs/plans/x.md';
+    const run = vi.fn(async () => ({ success: false, output: refusalLikeOutput }));
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: { run },
@@ -436,8 +438,59 @@ describe('step refusal event spine', () => {
           expect.any(Array),
         ],
         refusals: [],
-        failures: [expect.objectContaining({ step: 'build', error: 'boom' })],
+        failures: [expect.objectContaining({ step: 'build', error: refusalLikeOutput })],
         terminalOutcome: 'failed',
+      });
+      expect(checkGate('test_suite', JSON.parse(await readFile(statePath, 'utf8')))).toEqual({
+        passed: false,
+        reason: 'Prerequisites not satisfied: build',
+        unsatisfied: [{ step: 'build', status: 'failed' }],
+      });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a thrown build runner on the existing failed/HALT path', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'step-refusal-runner-throw-'));
+    const statePath = join(projectRoot, 'conduct-state.json');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    await writeFile(statePath, JSON.stringify({ plan: 'done', build: 'pending' }), 'utf8');
+    const runnerError = new Error('runner boom');
+    const run = vi.fn(async () => {
+      throw runnerError;
+    });
+
+    persister.start();
+    try {
+      await new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run },
+        events,
+        projectRoot,
+        config: {} as never,
+        fromStep: 'build',
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 1,
+      }).run();
+
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect({
+        build: JSON.parse(await readFile(statePath, 'utf8')).build,
+        runnerCalls: run.mock.calls,
+        refusals: records.filter((record) => record.type === 'step_refused'),
+        failures: records.filter((record) => record.type === 'step_failed'),
+        halt: await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8'),
+      }).toEqual({
+        build: 'failed',
+        runnerCalls: [expect.any(Array)],
+        refusals: [],
+        failures: [expect.objectContaining({ step: 'build', error: expect.stringContaining('runner boom') })],
+        halt: "step 'build' failed in auto mode (retries exhausted)\n",
       });
     } finally {
       persister.stop();
