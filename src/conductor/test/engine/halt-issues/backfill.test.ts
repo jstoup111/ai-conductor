@@ -74,6 +74,9 @@ class MockFs implements FsAbstraction, LedgerFs {
  * Minimal gh abstraction — dry-run never calls it, but sweep requires one.
  */
 class MockGh implements TrackerClient {
+  async findIssueBySourceRef(): Promise<string | null> {
+    throw new Error('gh should not be called during dry-run');
+  }
   async getIssueBody(): Promise<string | null> {
     throw new Error('gh should not be called during dry-run');
   }

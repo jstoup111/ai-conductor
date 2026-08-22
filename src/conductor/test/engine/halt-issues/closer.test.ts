@@ -103,6 +103,9 @@ class FakeGh implements TrackerClient {
 
   // The remaining TrackerClient methods are not exercised by this suite —
   // closeIssue()/stampIssue() only call the methods implemented above.
+  async findIssueBySourceRef(): Promise<string | null> {
+    throw new Error('not used in this test');
+  }
   async getIssueState(): Promise<string> {
     throw new Error('not used in this test');
   }

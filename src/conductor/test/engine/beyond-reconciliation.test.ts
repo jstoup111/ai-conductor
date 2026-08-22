@@ -96,7 +96,7 @@ describe('reconcileBeyondRecords', () => {
       .mockResolvedValueOnce('https://github.com/acme/repo/issues/4');
     const originalRemember = BuildReviewDispositionStore.prototype.rememberBeyondIssueUrl;
     vi.spyOn(BuildReviewDispositionStore.prototype, 'rememberBeyondIssueUrl')
-      .mockImplementationOnce(async () => ({ ok: false, message: 'simulated stamp failure' }))
+      .mockImplementationOnce(async () => ({ ok: false, kind: 'filesystem', message: 'simulated stamp failure' }))
       .mockImplementation(originalRemember);
 
     const input = { projectRoot: root, tracker: { findIssueBySourceRef, createIssue } as never, gh: vi.fn(async () => ({ stdout: '' })), log: vi.fn() };
