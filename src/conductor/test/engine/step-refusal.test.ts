@@ -282,6 +282,76 @@ describe('step refusal event spine', () => {
     }
   });
 
+  it('refuses a deferred live-boundary halt without changing a completed build', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'step-refusal-live-boundary-'));
+    const statePath = join(projectRoot, 'conduct-state.json');
+    const events = new ConductorEventEmitter();
+    const reason = 'live checkout changed during self-host execution';
+    await writeFile(statePath, JSON.stringify({ plan: 'done', build: 'done' }), 'utf8');
+    const run = vi.fn(async () => {
+      throw new Error('live-boundary refusal must prevent dispatch');
+    });
+    const refusals: ConductorEvent[] = [];
+    const failures: ConductorEvent[] = [];
+    const haltReasons: string[] = [];
+    events.on('step_refused', (event) => {
+      refusals.push(event);
+    });
+    events.on('step_failed', (event) => {
+      failures.push(event);
+    });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') haltReasons.push(event.reason);
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      projectRoot,
+      config: {} as never,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+    });
+    const liveBoundary = conductor as unknown as {
+      pendingLiveBoundaryHalt?: string;
+      consumePendingLiveBoundaryHalt: () => Promise<string | undefined>;
+    };
+    liveBoundary.pendingLiveBoundaryHalt = reason;
+    const consumePendingLiveBoundaryHalt = liveBoundary.consumePendingLiveBoundaryHalt.bind(conductor);
+    vi.spyOn(liveBoundary, 'consumePendingLiveBoundaryHalt')
+      .mockResolvedValueOnce(undefined)
+      .mockImplementation(consumePendingLiveBoundaryHalt);
+    vi.spyOn(
+      conductor as unknown as { surfaceRemediationPr: (haltReason: string) => Promise<string | undefined> },
+      'surfaceRemediationPr',
+    ).mockResolvedValue(undefined);
+
+    try {
+      await conductor.run();
+
+      expect({
+        build: JSON.parse(await readFile(statePath, 'utf8')).build,
+        runnerCalls: run.mock.calls,
+        refusals,
+        failures,
+        haltReason: haltReasons[0],
+        halt: await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8'),
+        haltClass: await readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8'),
+      }).toEqual({
+        build: 'done',
+        runnerCalls: [],
+        refusals: [expect.objectContaining({ step: 'build', kind: 'live-boundary', reason })],
+        failures: [],
+        haltReason: reason,
+        halt: `${reason}\n`,
+        haltClass: 'mechanical',
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('keeps a genuine build failure on the failed path when the seal passes', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'step-refusal-'));
     const statePath = join(projectRoot, 'conduct-state.json');

@@ -6131,16 +6131,14 @@ export class Conductor {
           // with the same reason and the same `mechanical` HALT class; what
           // changes is that the completed step keeps its own verdict, so a
           // re-kick resumes after it instead of redoing it.
-          {
-            const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
-            if (boundaryHalt) {
-              const prUrl = await this.surfaceRemediationPr(boundaryHalt);
-              await this.emitLoopHalt(boundaryHalt, prUrl);
-              process.off('SIGINT', sigintHandler);
-              process.off('SIGTERM', sigterm);
-              return;
-            }
-          }
+          const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
+          const liveBoundaryRefusal = boundaryHalt === undefined
+            ? undefined
+            : {
+                success: false,
+                output: boundaryHalt,
+                refused: { kind: 'live-boundary' as const, reason: boundaryHalt },
+              };
 
           // #188 retry-as-escalation: recompute the per-attempt (model, effort)
           // as a pure function of the 1-based `attempt`. Attempt 1 returns the
@@ -6159,9 +6157,11 @@ export class Conductor {
           // Check the worktree before any per-attempt bookkeeping can create
           // `.pipeline` beneath an absent path. This is a refusal, not a
           // started step, so it must retain the prior status unchanged.
-          const missingWorktree = await this.missingWorktreeResult(step.name);
+          const missingWorktree = liveBoundaryRefusal
+            ? undefined
+            : await this.missingWorktreeResult(step.name);
 
-          if (!missingWorktree && step.name === 'build') {
+          if (!liveBoundaryRefusal && !missingWorktree && step.name === 'build') {
             await seedBuildTaskTelemetry(
               this.projectRoot,
               state.feature_desc ?? this.featureDesc ?? '',
@@ -6180,7 +6180,7 @@ export class Conductor {
           // a no-op), so operators who disable the feature pay zero overhead
           // and the existing post-hoc stall-breaker (below) is unaffected.
           const buildWatcher: BuildProgressWatcher | null =
-            !missingWorktree && step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
+            !liveBoundaryRefusal && !missingWorktree && step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
               ? new BuildProgressWatcher({
                   projectRoot: this.projectRoot,
                   events: this.events,
@@ -6203,7 +6203,7 @@ export class Conductor {
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
           let protectedArtifactIssue: string | null = null;
-          if (!missingWorktree && (step.phase === 'BUILD' || step.phase === 'SHIP')) {
+          if (!liveBoundaryRefusal && !missingWorktree && (step.phase === 'BUILD' || step.phase === 'SHIP')) {
             const currentCommit = await currentCommitSha(this.projectRoot);
             const baselineCommit = step.phase === 'BUILD' ? currentCommit : undefined;
             // Legacy/test-only non-git roots cannot establish an approved
@@ -6242,7 +6242,7 @@ export class Conductor {
           // session-hook write-guard can distinguish "docs/spec artifacts
           // changed mid-BUILD/SHIP" from DECIDE-phase edits. Independent of
           // written for every BUILD/SHIP step, not just `build`.
-          if (!missingWorktree && (step.phase === 'BUILD' || step.phase === 'SHIP')) {
+          if (!liveBoundaryRefusal && !missingWorktree && (step.phase === 'BUILD' || step.phase === 'SHIP')) {
             writePhaseMarker(this.projectRoot, {
               step: step.name,
               phase: step.phase,
@@ -6253,7 +6253,7 @@ export class Conductor {
           // The repository-local release-disposition gate writes machine-owned
           // metadata into the retained SHIP draft. Capture it immediately
           // before finish dispatches, because finish may replace the body.
-          if (!missingWorktree && step.name === 'finish') {
+          if (!liveBoundaryRefusal && !missingWorktree && step.name === 'finish') {
             await this.snapshotFinishReleaseMetadata(state.worktree_branch);
           }
           // Whatever this dispatch writes supersedes any earlier capture — a
@@ -6261,12 +6261,14 @@ export class Conductor {
           // over the freshly authored one.
           // `release-disposition` is a repository-local custom step, so it is
           // outside the built-in `StepName` union and compared as a plain string.
-          if (!missingWorktree && (step.name as string) === 'release-disposition') {
+          if (!liveBoundaryRefusal && !missingWorktree && (step.name as string) === 'release-disposition') {
             await this.clearFinishReleaseMetadataSnapshot();
           }
 
           let result: StepRunResult;
-          if (missingWorktree) {
+          if (liveBoundaryRefusal) {
+            result = liveBoundaryRefusal;
+          } else if (missingWorktree) {
             result = missingWorktree;
           } else if (protectedArtifactIssue) {
             buildWatcher?.stop();
@@ -6418,6 +6420,10 @@ export class Conductor {
               // No remediation-PR surfacing: that path runs git/gh from the
               // very directory that is missing.
               await this.emitLoopHalt(result.refused.reason);
+            }
+            if (result.refused.kind === 'live-boundary') {
+              const prUrl = await this.surfaceRemediationPr(result.refused.reason);
+              await this.emitLoopHalt(result.refused.reason, prUrl);
             }
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
