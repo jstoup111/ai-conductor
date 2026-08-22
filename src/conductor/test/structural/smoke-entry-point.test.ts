@@ -173,8 +173,6 @@ describe('structural: smoke test entry point', () => {
       const fixtureFiles = ['first.smoke.test.ts', 'second.smoke.test.ts']
         .map((name) => join(fixtureDir, name));
       const config = join(fixtureDir, 'vitest.config.ts');
-      const originalRunTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-      const originalTmpdir = process.env.TMPDIR;
 
       try {
         await Promise.all(fixtureFiles.map((file) => writeFile(file, [
@@ -199,20 +197,11 @@ describe('structural: smoke test entry point', () => {
           '} });',
         ].join('\n'));
 
-        delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-        delete process.env.TMPDIR;
-        try {
-          await runSmokeCli(config, {
-            mode: 'advisory',
-            environment: {},
-            emit: (line) => ledger.push(line),
-          });
-        } finally {
-          if (originalRunTmpRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-          else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = originalRunTmpRoot;
-          if (originalTmpdir === undefined) delete process.env.TMPDIR;
-          else process.env.TMPDIR = originalTmpdir;
-        }
+        await runSmokeCli(config, {
+          mode: 'advisory',
+          environment: {},
+          emit: (line) => ledger.push(line),
+        });
 
         expect(ledger.filter((line) => line.endsWith('[hermetic] ran'))).toEqual(
           fixtureFiles.map((file) => `smoke ledger: ${relative(conductorRoot, file)} [hermetic] ran`),
