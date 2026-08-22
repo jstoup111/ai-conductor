@@ -3,8 +3,10 @@ import {
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
   type BuildReviewLapId,
+  type BuildReviewInfrastructureFailure,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
+import { isRegisteredRubric } from './build-review-registry.js';
 import {
   matchesBuildReviewDisposition,
   matchesBuildReviewReducedCoverageDisposition,
@@ -20,6 +22,12 @@ const RUBRICS = ['tautology', 'scope', 'rootCause', 'completeness'] as const;
 type Coverage = 'judged' | 'skipped' | 'infrastructure-failure';
 type RubricFlags = Record<BuildReviewRubricId, boolean>;
 type LegacyFindings = Record<BuildReviewRubricId, string[]>;
+
+/** A rejected retired-rubric envelope is infrastructure evidence, never a reviewer FAIL. */
+export type BuildReviewVerdictEnvelopeValidation =
+  | { readonly kind: 'valid'; readonly result: BuildReviewRubricResult }
+  | { readonly kind: 'invalid' }
+  | { readonly kind: 'mechanical-fault'; readonly fault: BuildReviewInfrastructureFailure };
 
 /** The sole raw join: four attributable outcomes plus legacy gate fields. */
 export interface BuildReviewAggregate {
@@ -77,6 +85,25 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
         ? ['kind', 'rubric', 'reason', 'detail']
         : [];
   return exactKeys(candidate, keys) ? parseBuildReviewRubricResult(candidate) : undefined;
+}
+
+/**
+ * Keep registry membership at the verdict boundary: a retired rubric cannot
+ * turn its provider judgement into a semantic feature failure.
+ */
+export function validateBuildReviewVerdictEnvelope(value: unknown): BuildReviewVerdictEnvelopeValidation {
+  const result = strictResult(value);
+  if (!result) return { kind: 'invalid' };
+  if (result.kind !== 'judged' || isRegisteredRubric(result.rubric)) return { kind: 'valid', result };
+  return {
+    kind: 'mechanical-fault',
+    fault: {
+      kind: 'infrastructure-failure',
+      rubric: result.rubric,
+      reason: 'malformed-artifact',
+      detail: `unregistered build-review rubric: ${result.rubric}`,
+    },
+  };
 }
 
 function parseResults(

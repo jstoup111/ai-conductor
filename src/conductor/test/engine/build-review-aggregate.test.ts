@@ -7,6 +7,7 @@ import {
   deriveEffectiveBuildReviewVerdictWithDispositions,
   joinBuildReviewRubricOutcomes,
   parseBuildReviewAggregate,
+  validateBuildReviewVerdictEnvelope,
 } from '../../src/engine/build-review-aggregate.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import type { BuildReviewDispositionRecord, BuildReviewFeatureIdentity } from '../../src/engine/build-review-dispositions.js';
@@ -34,6 +35,18 @@ function results(overrides: Record<string, unknown> = {}) {
 }
 
 describe('build-review raw aggregate', () => {
+  it('routes a judged envelope for an unregistered rubric through the mechanical-fault lane', () => {
+    expect(validateBuildReviewVerdictEnvelope(judged('completeness'))).toEqual({
+      kind: 'mechanical-fault',
+      fault: {
+        kind: 'infrastructure-failure',
+        rubric: 'completeness',
+        reason: 'malformed-artifact',
+        detail: 'unregistered build-review rubric: completeness',
+      },
+    });
+  });
+
   it('joins all current judged branches with zero findings into one backward-compatible PASS', () => {
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: results(), codeStamp: 'head' });
     expect(aggregate).toMatchObject({
