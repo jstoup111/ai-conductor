@@ -3351,6 +3351,26 @@ TIER: M`,
       let rawAggregate: unknown;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(), planPath, events,
+        buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+          version: 1,
+          rubric,
+          lapId,
+          snapshotDigest,
+          provenance: { kind: 'fresh' as const },
+          result: {
+            kind: 'judged' as const,
+            rubric,
+            lapId,
+            snapshotDigest,
+            contractVersion: 'v3' as never,
+            findings: rubric === 'scope' ? [{
+              concernKind: 'out-of-plan-change', summary: 'The changed path is outside the approved plan.',
+              evidenceLocations: ['x:1'],
+              anchor: { rubric: 'scope', path: 'x', relation: 'not-authorized-by-plan' },
+            }] : [],
+            verdict: rubric === 'scope' ? 'FAIL' as const : 'PASS' as const,
+          },
+        }),
         buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
           rawAggregate = aggregate;
           return {
@@ -3369,9 +3389,10 @@ TIER: M`,
         contractVersion: 'v3',
         findings: branch.rubric === 'scope' ? [{
           concernKind: 'out-of-plan-change', summary: 'The changed path is outside the approved plan.',
-          evidenceLocations: ['src/example.ts:1'],
-          anchor: { rubric: 'scope', path: 'src/example.ts', relation: 'out-of-plan-change' },
+          evidenceLocations: ['x:1'],
+          anchor: { rubric: 'scope', path: 'x', relation: 'not-authorized-by-plan' },
         }] : [],
+        verdict: branch.rubric === 'scope' ? 'FAIL' : 'PASS',
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
@@ -3381,7 +3402,7 @@ TIER: M`,
       }));
     });
 
-    it('settles missing current-lap branch artifacts as a blocking infrastructure failure', async () => {
+    it('leaves a missing current-lap branch artifact absent until the mechanical allowance is exhausted', async () => {
       const provider = createMockProvider();
       const events = { emit: vi.fn(async () => undefined) } as any;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -3395,11 +3416,10 @@ TIER: M`,
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: false });
-      expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'build_review_outer_verdict', rawVerdict: 'FAIL', effectiveVerdict: 'FAIL',
-      }));
-      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject({
-        results: { scope: { kind: 'infrastructure-failure', reason: 'artifact-read-failed' } },
+      expect(events.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'build_review_outer_verdict' }));
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'))).toMatchObject({
+        gates: { build_review: { mechanicalFaults: 1, cumulative: 0 } },
       });
     });
 

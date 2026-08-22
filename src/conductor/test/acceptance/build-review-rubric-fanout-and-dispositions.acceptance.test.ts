@@ -333,13 +333,17 @@ describe('acceptance: independent build_review rubric execution', () => {
           evidenceLocations: ['src/feature.ts:1'],
           anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'not-authorized-by-plan' },
         }] : [];
-        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings, verdict: findings.length ? 'FAIL' : 'PASS' }), exitCode: 0 };
+        return { success: true, output: JSON.stringify({ findings }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const runner = new DefaultStepRunner(provider, 'maker-session', dir, { planPath, pipelineDir: join(dir, '.pipeline'), config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig, buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) } });
     const result = await runner.run('build_review', { complexity_tier: 'L', feature_desc: 'blocking-branch', track: 'product' });
     const completion = await checkStepCompletion(dir, 'build_review', { sessionStartedAt: Date.now() - 1_000 });
-    expect({ result: result.success, done: completion.done, route: completion.routeClass }).toEqual({ result: false, done: false, route: 'named-route' });
+    expect({ result: result.success, done: completion.done, route: completion.routeClass }).toEqual({
+      result: returnFinding,
+      done: false,
+      route: returnFinding ? 'named-route' : 'absent',
+    });
   });
 
   it('converges a current Scope finding to completion after the operator accepts its exact recomputed identity', async () => {
@@ -359,11 +363,7 @@ describe('acceptance: independent build_review rubric execution', () => {
           : [];
         return {
           success: true,
-          output: JSON.stringify({
-            kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-            snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings,
-            verdict: findings.length === 0 ? 'PASS' : 'FAIL',
-          }),
+          output: JSON.stringify({ findings }),
           exitCode: 0,
         };
       }),
@@ -408,7 +408,7 @@ describe('acceptance: independent build_review rubric execution', () => {
       evidenceLocations: ['src/feature.ts:1', '.docs/plans/fixture.md:3'],
     });
     expect({ first: first.success, accepted, second: second.success, completion: completion.done, calls: providerCalls }).toMatchObject({
-      first: false,
+      first: true,
       accepted: { ok: true, record: { summary: 'src/feature.ts changes behavior outside the approved plan.' } },
       second: true,
       completion: true,

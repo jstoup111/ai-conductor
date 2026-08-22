@@ -9,6 +9,7 @@ import {
 } from '../../src/engine/finish-publication-production.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
@@ -703,6 +704,20 @@ describe('production FINISH publication composition', () => {
         version: 'v1', feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!,
         summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
       };
+      const coverage = {
+        kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+        identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const },
+        rationale: 'The provider was unavailable for this current lap.', operator: 'james', acceptedAt: '2026-08-20T00:00:00.000Z',
+      };
+      const currentLap = parseBuildReviewLapId('lap-current')!;
+      await writeFile(join(pipeline, 'build-review.json'), JSON.stringify(joinBuildReviewRubricOutcomes({
+        lapId: currentLap, snapshotDigest: 'sha256:current', results: {
+          tautology: { kind: 'judged', rubric: 'tautology', lapId: currentLap, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+          scope: { kind: 'judged', rubric: 'scope', lapId: currentLap, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+          rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'provider unavailable' },
+          completeness: { kind: 'judged', rubric: 'completeness', lapId: currentLap, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        },
+      })));
       const edits: string[][] = [];
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
@@ -719,7 +734,10 @@ describe('production FINISH publication composition', () => {
         observeReleaseReadiness: async () => 'present',
         repairPresentation: async () => undefined,
         resolveFeatureIdentity: async () => feature,
-        createDispositionStore: () => ({ list: async () => ({ ok: true, records: Object.freeze([accepted]) }) }),
+        createDispositionStore: () => ({
+          list: async () => ({ ok: true, records: Object.freeze([accepted]) }),
+          listReducedCoverage: async () => ({ ok: true as const, records: [coverage] }),
+        }),
       });
       const state = {
         feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
@@ -738,17 +756,88 @@ describe('production FINISH publication composition', () => {
       const body = edits[0][edits[0].indexOf('--body') + 1];
       expect(body).toContain('Reader-facing summary.');
       expect(body).toContain('Accepted build-review risk');
+      expect(body).toContain('## Reduced build-review coverage');
+      expect(body).toContain('Current diagnostic: provider unavailable');
       expect(body).toContain(`- Finding: \`${finding.id}\` — rubric: scope`);
       expect(body).not.toContain('**Rationale:**');
       expect(body).not.toContain('reason');
-      expect(body).not.toContain('james');
-      expect(body).not.toContain('2026-08-14T12:00:00.000Z');
+      expect(body).toContain('Operator: james');
+      expect(body).toContain('Decision time: 2026-08-20T00:00:00.000Z');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('blocks retained-PR maintenance when disposition state is unavailable instead of dropping accepted risk (Task 38)', async () => {
+  it('strips a stale reduced-coverage section from the retained PR when no records remain', async () => {
+    // Plan task rem-adr-5's absent case. The present and unrenderable cases are
+    // covered above; this drives the section-removal branch of
+    // upsertReducedCoverageEvidence — an empty listReducedCoverage renders no
+    // section, so a section left on the PR by an earlier lap must come off.
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-risk-absent-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1174';
+      const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
+      const staleBody = [
+        'Reader-facing summary.',
+        '',
+        '## Reduced build-review coverage',
+        '',
+        'Rubric rootCause closed as provider-error.',
+        '',
+        '## Test plan',
+        '',
+        'Ran the suite.',
+      ].join('\n');
+      const edits: string[][] = [];
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: staleBody, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') { edits.push(args); return commandResult; }
+        throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh,
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation: async () => undefined,
+        resolveFeatureIdentity: async () => feature,
+        createDispositionStore: () => ({
+          list: async () => ({ ok: true, records: Object.freeze([]) }),
+          listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+        }),
+      });
+      const state = {
+        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+      } as ConductState;
+
+      const dispatchJudgment = async () => ({ success: true, publicationDisposition: { kind: 'accepted' } }) as never;
+      for (let i = 0; i < 6 && edits.length === 0; i++) {
+        await coordinator.advance({ state, mode: 'auto', daemon: true, dispatchJudgment, emit: async () => {} });
+      }
+
+      expect(edits.length).toBe(1);
+      const body = edits[0][edits[0].indexOf('--body') + 1];
+      expect(body).not.toContain('## Reduced build-review coverage');
+      expect(body).not.toContain('closed as provider-error');
+      // The rest of the body survives the removal.
+      expect(body).toContain('Reader-facing summary.');
+      expect(body).toContain('## Test plan');
+      expect(body).toContain('Ran the suite.');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks retained-PR maintenance when reduced coverage is known but lacks current-lap evidence', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-risk-block-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -757,6 +846,12 @@ describe('production FINISH publication composition', () => {
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
       await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
       const prUrl = 'https://github.com/acme/widget/pull/1174';
+      const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
+      const coverage = {
+        kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+        identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const },
+        rationale: 'approved', operator: 'james', acceptedAt: '2026-08-20T00:00:00.000Z',
+      };
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: 'Reader-facing summary.', isDraft: true }) };
@@ -770,8 +865,11 @@ describe('production FINISH publication composition', () => {
         gh,
         observeReleaseReadiness: async () => 'present',
         repairPresentation: async () => { throw new Error('presentation repair must not run before the risk projection settles'); },
-        resolveFeatureIdentity: async () => ({ version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' }),
-        createDispositionStore: () => ({ list: async () => ({ ok: false, kind: 'unreadable' as const, message: 'disposition store unreadable' }) }),
+        resolveFeatureIdentity: async () => feature,
+        createDispositionStore: () => ({
+          list: async () => ({ ok: true as const, records: [] }),
+          listReducedCoverage: async () => ({ ok: true as const, records: [coverage] }),
+        }),
       });
       const state = {
         feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,

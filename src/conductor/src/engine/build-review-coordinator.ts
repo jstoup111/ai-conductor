@@ -7,6 +7,7 @@ import {
   parseBuildReviewJudgedResult,
   type BuildReviewJudgedResult,
   type BuildReviewLapId,
+  type BuildReviewCoordinatorFailureReason,
   type BuildReviewSkip,
 } from "./build-review-domain.js";
 import {
@@ -77,7 +78,7 @@ export type BuildReviewCoordinatedBranch =
   | {
       readonly kind: "infrastructure-failure";
       readonly rubric: BuildReviewRubricId;
-      readonly reason: string;
+      readonly reason: BuildReviewCoordinatorFailureReason;
       /** Bounded diagnostic (e.g. a raw-output excerpt); never part of routing identity. */
       readonly detail?: string;
     };
@@ -165,7 +166,7 @@ function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTa
   };
 }
 
-function infrastructure(rubric: BuildReviewRubricId, reason: string, detail?: string): BuildReviewCoordinatedBranch {
+function infrastructure(rubric: BuildReviewRubricId, reason: BuildReviewCoordinatorFailureReason, detail?: string): BuildReviewCoordinatedBranch {
   return { kind: "infrastructure-failure", rubric, reason, ...(detail === undefined ? {} : { detail }) };
 }
 

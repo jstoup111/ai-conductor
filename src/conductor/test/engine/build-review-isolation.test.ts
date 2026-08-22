@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,16 @@ import {
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { HarnessConfig } from '../../src/types/config.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+
+vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>(),
+  coordinateBuildReviewRubrics: vi.fn(),
+}));
 
 // ── Structural input-isolation test (build_review) ───────────────────────
 //
@@ -48,6 +58,7 @@ const CURRENT_PROOF = {
 
 describe('build_review input isolation', () => {
   let dir: string;
+  let mainDir: string;
   let planPath: string;
 
   async function git(...args: string[]): Promise<string> {
@@ -68,23 +79,25 @@ describe('build_review input isolation', () => {
   }
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'build-review-isolation-'));
+    mainDir = await mkdtemp(join(tmpdir(), 'build-review-isolation-main-'));
+    const mainGit = async (...args: string[]) => {
+      await execFileAsync('git', ['-C', mainDir, ...args]);
+    };
+    await execFileAsync('git', ['init', '-b', 'main', mainDir]);
+    await mainGit('config', 'user.email', 'test@example.com');
+    await mainGit('config', 'user.name', 'Test');
+    await mainGit('config', 'commit.gpgsign', 'false');
+    await writeFile(join(mainDir, 'base.txt'), 'base\n');
+    await mainGit('add', '.');
+    await mainGit('commit', '-m', 'initial commit on base');
+    await mainGit('remote', 'add', 'origin', mainDir);
+    await mainGit('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+    await mainGit('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+
+    dir = join(mainDir, '.worktrees', 'feature');
+    await mainGit('worktree', 'add', '-b', 'feature/foo', dir);
     planPath = join(dir, 'plan.md');
     await writeFile(planPath, '# Plan body\n\nDo the isolated thing.\n', 'utf-8');
-
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
-    await git('config', 'commit.gpgsign', 'false');
-
-    await writeFile(join(dir, 'base.txt'), 'base\n');
-    await git('add', '.');
-    await git('commit', '-m', 'initial commit on base');
-    await git('remote', 'add', 'origin', dir);
-    await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
-    await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
-
-    await git('checkout', '-b', 'feature/foo');
 
     // Commit an unrelated feature change — this is what should actually
     // appear in the graded diff.
@@ -111,7 +124,7 @@ describe('build_review input isolation', () => {
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(mainDir, { recursive: true, force: true });
   });
 
   it('never leaks task status, transcript, or maker-summary content into assembled inputs or the grader prompt', async () => {
@@ -180,5 +193,171 @@ describe('build_review input isolation', () => {
       expect(harness).toContain(trigger);
       expect(pipeline).toContain(trigger);
     }
+  });
+
+  it('routes an infrastructure result with arbitrary detail through the mechanical lane', async () => {
+    const provider: LLMProvider = {
+      invoke: vi.fn(),
+      invokeInteractive: vi.fn(),
+    };
+    const coordinate = vi.mocked(coordinateBuildReviewRubrics);
+    coordinate.mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        {
+          kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result',
+          detail: 'the rubric worker lost its response payload',
+        },
+        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({
+          kind: 'dispatched' as const, rubric,
+          result: {} as never,
+        })),
+      ],
+    });
+    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
+      gitRunner: realGit(), planPath,
+      config: { build_review: { enabled: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
+      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: {
+          kind: 'judged', rubric, lapId, snapshotDigest,
+          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
+        },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+
+    await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({
+      success: false,
+      output: 'build_review mechanical fault in scope (malformed-artifact): invalid-provider-result: the rubric worker lost its response payload',
+      currentLapMechanicalFault: true,
+    });
+    await expect(readFile(join(dir, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
+  });
+
+  it('keeps a judged finding with environment-sounding prose in the blocking finding lane', async () => {
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: (['tautology', 'scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
+        kind: 'dispatched' as const, rubric, result: {} as never,
+      })),
+    });
+    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
+      gitRunner: realGit(), planPath,
+      config: { build_review: { enabled: true } } as HarnessConfig,
+      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
+      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: {
+          kind: 'judged', rubric, lapId, snapshotDigest,
+          contractVersion: 'v3' as never,
+          findings: rubric === 'scope' ? [{
+            concernKind: 'out-of-plan-change',
+            summary: 'The environment cannot load this change safely.',
+            evidenceLocations: ['feature.txt:1'],
+            anchor: { rubric: 'scope', path: 'feature.txt', relation: 'not-authorized-by-plan' },
+          }] : [],
+          verdict: rubric === 'scope' ? 'FAIL' : 'PASS',
+        },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+
+    const result = await runner.run('build_review', {} as never);
+
+    // A judged finding is deliberately surfaced as a successful runner
+    // dispatch: the conductor consumes the persisted FAIL aggregate and
+    // routes it through the normal build-review kickback lane.
+    expect(result).toMatchObject({ success: true });
+    expect(result.currentLapMechanicalFault).toBeUndefined();
+    expect(result.output).toContain('The environment cannot load this change safely.');
+    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
+      'The environment cannot load this change safely.',
+    );
+  });
+
+  it('keeps skipped rubrics out of the mechanical lane', async () => {
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        { kind: 'skipped', rubric: 'tautology', reason: 'disabled' },
+        ...(['scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
+          kind: 'dispatched' as const, rubric, result: {} as never,
+        })),
+      ],
+    });
+    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
+      gitRunner: realGit(), planPath,
+      config: { build_review: { enabled: true } } as HarnessConfig,
+      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
+      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: {
+          kind: 'judged', rubric, lapId, snapshotDigest,
+          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
+        },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+
+    const result = await runner.run('build_review', {} as never);
+    expect(result).toMatchObject({ success: true });
+    expect(result.currentLapMechanicalFault).toBeUndefined();
+    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
+      '"kind": "skipped"',
+    );
+  });
+
+  it('publishes an exhausted malformed artifact as the current lap mechanical failure', async () => {
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: (['tautology', 'scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
+        kind: 'dispatched' as const, rubric, result: {} as never,
+      })),
+    });
+    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
+      gitRunner: realGit(), planPath,
+      config: { build_review: { enabled: true } } as HarnessConfig,
+      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
+      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: rubric === 'scope' ? { kind: 'not-a-rubric-result' } as never : {
+          kind: 'judged', rubric, lapId, snapshotDigest,
+          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
+        },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, mechanicalFaults: MAX_MECHANICAL_FAULTS_BUILD_REVIEW - 1,
+          treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+
+    await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({ success: false });
+    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
+      '"reason": "malformed-artifact"',
+    );
   });
 });

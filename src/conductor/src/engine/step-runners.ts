@@ -62,8 +62,14 @@ import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import {
+  bumpMechanicalFaultsInLedger,
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+} from './kickback-ledger.js';
+import {
+  deriveBuildReviewInfrastructureFailureReason,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
+  parseBuildReviewRubricResult,
   renderBuildReviewJudgedResultShape,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
@@ -1786,6 +1792,12 @@ export class DefaultStepRunner implements StepRunner {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
 
+    // A prior lap's aggregate cannot represent this lap. Invalidate it before
+    // dispatch so a mechanical early return leaves no stale semantic FAIL for
+    // the conductor to route back to build.
+    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    await rm(join(effectivePipelineDir, 'build-review.json'), { force: true });
+
     const coordination = await coordinateBuildReviewRubrics({
       config,
       inputs,
@@ -1820,32 +1832,6 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: `build_review refused: ${coordination.reason}` };
     }
 
-    const writeFailure = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
-      branch.kind === 'infrastructure-failure' && /(?:artifact|cache)-write-failed/.test(branch.reason),
-    );
-    if (writeFailure) {
-      return { success: false, output: `build_review evidence write failed for ${writeFailure.rubric}: ${writeFailure.reason}` };
-    }
-
-    // A result that still violates the judged contract after its one repair
-    // turn — including a byte-identical repair that cannot converge — is not
-    // a reviewer decision about the diff. Do not publish it as a fresh FAIL
-    // aggregate: completion deliberately classifies a missing verdict as
-    // `absent`, which re-dispatches this rubric without consuming the
-    // build_review kickback budget.
-    const rejectedAfterRepair = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
-      branch.kind === 'infrastructure-failure' &&
-      branch.reason === 'invalid-provider-result' &&
-      (branch.detail?.startsWith('judged-result contract not satisfied after one repair turn:') === true ||
-        branch.detail?.startsWith('judged-result repair was byte-identical to the rejected output;') === true),
-    );
-    if (rejectedAfterRepair) {
-      return {
-        success: false,
-        output: `build_review ${rejectedAfterRepair.rubric} rubric rejected after repair: ${rejectedAfterRepair.detail}`,
-      };
-    }
-
     const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
       if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
         const artifact = await this.buildReviewArtifactReader(
@@ -1860,6 +1846,9 @@ export class DefaultStepRunner implements StepRunner {
             rename,
           },
         );
+        if (artifact && !parseBuildReviewRubricResult(artifact.result)) {
+          return [branch.rubric, { kind: 'malformed' as const, rubric: branch.rubric }];
+        }
         return [branch.rubric, artifact?.result ?? {
           kind: 'infrastructure-failure' as const,
           rubric: branch.rubric,
@@ -1872,16 +1861,60 @@ export class DefaultStepRunner implements StepRunner {
         : {
             kind: 'infrastructure-failure' as const,
             rubric: branch.rubric,
-            reason: 'provider-error' as const,
+            reason: deriveBuildReviewInfrastructureFailureReason({ reason: branch.reason }),
             detail: branch.detail === undefined ? branch.reason : `${branch.reason}: ${branch.detail}`,
           }];
-    }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+    }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult | {
+      readonly kind: 'malformed';
+      readonly rubric: BuildReviewRubricResult['rubric'];
+    }>;
+
+    const malformedResult = Object.values(results).find((result): result is Extract<typeof result, { kind: 'malformed' }> =>
+      result.kind === 'malformed',
+    );
+    if (malformedResult) {
+      // Branch evidence which cannot be parsed is a mechanical failure, not a
+      // reviewer verdict.  It must still join the current lap's aggregate:
+      // the bounded mechanical lane and its operator recovery both depend on
+      // that aggregate being present.  Returning here would leave neither
+      // diagnostic nor recoverable state after consuming an allowance.
+      results[malformedResult.rubric] = {
+        kind: 'infrastructure-failure',
+        rubric: malformedResult.rubric,
+        reason: 'malformed-artifact',
+        detail: 'current-lap branch artifact is malformed',
+      };
+    }
+    const validResults = results as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+
+    // An infrastructure result is not a reviewer decision about the diff.
+    // Do not publish it as a fresh FAIL aggregate: completion deliberately
+    // classifies a missing verdict as `absent`, which re-dispatches this
+    // rubric without consuming the build_review kickback budget.
+    const infrastructureFailure = Object.values(validResults).find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
+      result.kind === 'infrastructure-failure',
+    );
+    if (infrastructureFailure) {
+      const hasJudgedFinding = Object.values(validResults).some(
+        (result) => result.kind === 'judged' && result.findings.length > 0,
+      );
+      if (!hasJudgedFinding) {
+        const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review');
+        if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+          return {
+            success: false,
+            output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
+            currentLapMechanicalFault: true,
+          };
+        }
+      }
+    }
+
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: inputs.sourceSnapshot.digest,
-      results,
+      results: validResults,
     });
-    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
     const aggregatePath = join(effectivePipelineDir, 'build-review.json');
     const publication = await new BuildReviewDispositionStore(this.projectDir).withLease(async () => {
       await mkdir(effectivePipelineDir, { recursive: true });
@@ -1904,8 +1937,37 @@ export class DefaultStepRunner implements StepRunner {
     if (!effective.ok) {
       return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
     }
+    // The effective resolver is the only live join of current-lap mechanical
+    // faults and durable operator decisions.  Persist its shared rendering on
+    // the aggregate itself so the lap evidence and shipped-record projection
+    // cannot drift into independently formatted views.
+    if (effective.reducedCoverageEvidence !== undefined) {
+      const stampedAggregate = { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence };
+      try {
+        const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
+        await writeFile(temporaryPath, `${JSON.stringify(stampedAggregate, null, 2)}\n`, 'utf-8');
+        await rename(temporaryPath, aggregatePath);
+      } catch (error) {
+        return {
+          success: false,
+          output: `build_review reduced-coverage evidence publication failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
-    return { success: effective.effective.verdict === 'PASS', output: JSON.stringify(aggregate) };
+    // A judged finding is a completed review, even when another rubric had a
+    // mechanical fault. Let the conductor route that semantic failure through
+    // its ordinary kickback budget; only a pure mechanical lap retries here.
+    const hasJudgedFinding = Object.values(aggregate.results).some(
+      (result) => result.kind === 'judged' && result.findings.length > 0,
+    );
+    return {
+      success: effective.effective.verdict === 'PASS' || hasJudgedFinding,
+      output: JSON.stringify(aggregate),
+      // A mixed lap publishes and routes its judged finding as semantic
+      // rework. Only a pure infrastructure lap owns the mechanical lane.
+      ...(infrastructureFailure === undefined || hasJudgedFinding ? {} : { currentLapMechanicalFault: true }),
+    };
   }
 
   private async dispatchBuildReviewRubric(

@@ -3,7 +3,7 @@
 **Date:** 2026-08-18
 **Design:** [PRD](../specs/2026-08-18-review-infrastructure-failures-are-operator-unreco.md)
 **Stories:** .docs/stories/review-infrastructure-failures-are-operator-unreco.md
-**Conflict check:** Clean as of 2026-08-18 — `.docs/conflicts/2026-08-18-review-infrastructure-failures.md`
+**Conflict check:** Clean as of 2026-08-18 — `.docs/conflicts/2026-08-18-review-infrastructure-failures-are-operator-unreco.md`
 **ADR:** [mechanical rubric faults are their own lane](../decisions/adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane.md) (APPROVED)
 
 ## Summary
@@ -202,6 +202,38 @@ existing cumulative reset". That reset is deleted by `adr-2026-08-18-rebase-inva
 feature has not landed when this task runs, read `kickback-ledger.ts` as current and implement the
 advance and ceiling only — never add a PASS reset.
 
+**Note (amended 2026-08-20, operator-directed):** step 3's instruction to "verify that rather than
+re-implementing it" was wrong on one point, and this task's scope is widened to correct it.
+
+The generic helper is `creditKickbackGateLapCounts` (`kickback-ledger.ts`), and it is pure — it
+transforms an entry and nothing more. It therefore does **not** credit the allowance on its own:
+something must load the ledger, apply it, and persist the result at the moment a rebase invalidates
+`build_review`. No other approved task owns that seam (Tasks 10-11 touch `conductor.ts` only for
+exhaustion and halt behavior; Task 20 owns event emission), so without this amendment the call site
+is out-of-plan.
+
+Task 6 therefore also owns, in `conductor.ts`'s `advanceTail` changed-rebase invalidation loop:
+invoke the generic credit exactly once for `build_review`, immediately before `navigateStateBack`
+re-opens the gate, and prove it at conductor level. ADR D2/D6 require the credit before the gate is
+re-opened, not merely that a helper exists. The existing ledger-helper scope is retained unchanged.
+
+**Files (additional):**
+- `src/conductor/src/engine/conductor.ts` — credit `build_review` once in the rebase-invalidation
+  loop, before `navigateStateBack`
+- `src/conductor/test/engine/conductor.test.ts` — conductor-level proof: a changed rebase that
+  re-opens `build_review` zeroes `cumulative` and `mechanicalFaults` in the persisted ledger and
+  leaves the step `pending`; a changed rebase that re-opens a *different* gate credits nothing
+
+Delivered by `64db10f2d` ("fix(conductor): credit invalidated rebase review laps"). This note
+records the scope that commit already occupies; it does not request further implementation.
+
+> **Amended 2026-08-19 by operator retry:** ADR D2 requires the generic credit helper to be
+> invoked exactly once in `conductor.ts`'s `advanceTail` changed-rebase invalidation loop,
+> immediately before `build_review` is re-opened. Extend the RED/GREEN proof to cover that
+> conductor-level behavior and include `src/conductor/src/engine/conductor.ts` plus its focused
+> behavioral test in this task. The generic helper remains owned by `kickback-ledger.ts`; this
+> amendment corrects the previously omitted call site rather than duplicating its logic.
+
 **Dependencies:** Task 5
 
 ### Task 7: A mechanical lap publishes no aggregate and re-runs the review
@@ -348,7 +380,11 @@ advance and ceiling only — never add a PASS reset.
 2. Verify tests fail (RED).
 3. Implement as a new action in the existing pre-boot `build-review` command family, reusing the
    TTY-plus-operator-identity gate that finding acceptance already applies — checked before any
-   artifact or store access.
+   artifact or store access. The action's callable interface is fixed by ADR D6 (amended
+   2026-08-19) and is exactly:
+   `conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>`
+   — `--lap` carries `accept`'s exact-current-lap semantics and makes D6's stale-review refusal
+   reachable; the closed reason is derived per D7, never an argument.
 4. Verify tests pass (GREEN).
 5. Commit: "feat(build-review): operator-only reduced-coverage action".
 
@@ -356,6 +392,7 @@ advance and ceiling only — never add a PASS reset.
 - `src/conductor/src/engine/build-review-cli.ts` — the action and its gate
 - `src/conductor/src/engine/cli-builtins.ts` — command registration
 - `src/conductor/test/engine/build-review-cli.test.ts` — authority tests
+- `docs/reference/cli.md` — document the action under `conduct-ts build-review`
 
 **Dependencies:** Task 12
 
@@ -535,3 +572,25 @@ Task 1 ──┬─> Task 2 ──> Task 12 ──┬─> Task 13
 | 11 | 17 | happy and negative (17) |
 | 12 | 19 | happy and negative (19) |
 | 13 | 5 | happy and negative (5) |
+### Task rem-fr1-1: src/conductor/src/engine/step-runners.ts:1912-1919 — add and populate a typed StepRunResult current-lap mechanical-fault discriminator; extend src/conductor/test/engine/build-review-isolation.test.ts with a mechanical result whose diagnostic wording differs from the current message
+### Task rem-fr4-1: src/conductor/src/engine/build-review-cli.ts:90-97,178 — derive exhausted faults from the persisted mechanical allowance, load reduced-coverage records, and render the engine-equivalent effective verdict; extend src/conductor/test/engine/build-review-cli.test.ts with allowance-remaining mixed-lap and recorded-reduction cases
+### Task rem-fr6-1: src/conductor/test/execution/daemon-session-enforcement.test.ts:29-50 — add behavioral coverage proving build-review remains absent from daemon-sanctioned subcommands and no daemon configuration can invoke record-reduced-coverage with interactive authority
+### Task rem-fr11-1: src/conductor/test/engine/shipped-record.test.ts:419-423 — drive non-empty reduced-coverage evidence through dispatchShippedRecord and src/conductor/src/engine/shipped-record-cli.ts:206-240, asserting the section reaches .docs/shipped/<slug>.md and known-but-unrenderable evidence blocks without writing
+### Task rem-fr12-1: src/conductor/src/engine/step-runners.ts:1958-1962 — per amended FR-15, keep the judged-finding success override unscoped so a ran-and-failed grader returns success=true; add a linked-worktree regression in src/conductor/test/engine/build-review-isolation.test.ts proving a fault-free full-coverage judged FAIL routes to the #646 named-route build kickback in one lap without burning the retry ladder
+### Task rem-fr12-2: src/conductor/src/engine/conductor.ts:6708-6712 — require the typed current-lap mechanical-fault discriminator before emitting the exhausted-allowance HALT; extend src/conductor/test/engine/build-review-halt-wiring.test.ts with a ceiling-reached ledger followed by an unrelated fault-free judged failure
+### Task rem-fr15-1: src/conductor/test/engine/build-review-isolation.test.ts:237 — replace the non-linked fixture with a real linked-worktree setup and prove a fault-free full-coverage judged FAIL still BLOCKS the build (outcome parity per amended FR-15), routed as a build kickback rather than a retry-ladder burn
+### Task rem-fr15-2: src/conductor/test/engine/build-review-dispositions.test.ts:79 and src/conductor/test/engine/build-review-effective.test.ts:116-147 — add negative coverage proving an unrecognised disposition record kind grants no reduction and a deleted/recreated worktree reloads legacy-compatible state without widening coverage
+### Task rem-adr-1: src/conductor/src/engine/build-review-aggregate.ts:233-238,284-288 — replace duplicated reduced-coverage identity comparisons with matchesBuildReviewReducedCoverageDisposition from src/conductor/src/engine/build-review-dispositions.ts:263; move identity edge-case assertions into src/conductor/test/engine/build-review-effective.test.ts so they exercise the production reducer
+### Task rem-adr-2: src/conductor/src/engine/step-runners.ts:1899-1911 — call bumpMechanicalFaultsInLedger from src/conductor/src/engine/kickback-ledger.ts:250 instead of open-coding read-bump-write; add focused coverage proving one persisted bump per mechanical lap
+### Task rem-adr-3: src/conductor/src/engine/build-review-dispositions.ts:422 and src/conductor/src/engine/artifacts.ts:59 — delete the test-only appendReducedCoverage method and renderer wrapper; update src/conductor/test/engine/build-review-dispositions.test.ts and src/conductor/test/engine/build-review-projections.test.ts to exercise appendReducedCoverageIfCurrent and renderBuildReviewReducedCoverageEvidence through their production entry points
+### Task rem-adr-4: src/conductor/src/engine/conductor.ts:6815 — consume the typed current-lap mechanical-fault discriminator for retry routing and remove the result.output.startsWith condition; extend src/conductor/test/engine/build-review-halt-wiring.test.ts to prove routing is independent of diagnostic text
+### Task rem-adr-5: src/conductor/src/engine/finish-publication-production.ts:239-258 — load and render current reduced-coverage records through the approved shared projection when updating the retained PR; extend the finish-publication production tests with present, absent, and unrenderable reduced-coverage cases
+### Task rem-fr1-1-323c89: src/conductor/src/engine/step-runners.ts:1912-1919 — add and populate a typed StepRunResult current-lap mechanical-fault discriminator; extend src/conductor/test/engine/build-review-isolation.test.ts with a mechanical result whose diagnostic wording differs from the current message
+### Task rem-adr-4-a72f79: src/conductor/src/engine/conductor.ts:6815 — consume the typed current-lap mechanical-fault discriminator for retry routing and remove the result.output.startsWith condition; extend src/conductor/test/engine/build-review-halt-wiring.test.ts to prove routing is independent of diagnostic text
+### Task rem-fr4-1-ec8047: src/conductor/src/engine/build-review-cli.ts:90-97,178 — derive exhausted faults from the persisted mechanical allowance, load reduced-coverage records, and render the engine-equivalent effective verdict; extend src/conductor/test/engine/build-review-cli.test.ts with allowance-remaining mixed-lap and recorded-reduction cases
+### Task rem-fr11-1-50aeeb: src/conductor/test/engine/shipped-record.test.ts:419-423 — drive non-empty reduced-coverage evidence through dispatchShippedRecord and src/conductor/src/engine/shipped-record-cli.ts:206-240, asserting the section reaches .docs/shipped/<slug>.md and known-but-unrenderable evidence blocks without writing
+### Task rem-fr12-1-439907: src/conductor/src/engine/step-runners.ts:1958-1962 — per amended FR-15, keep the judged-finding success override unscoped so a ran-and-failed grader returns success=true; add a linked-worktree regression in src/conductor/test/engine/build-review-isolation.test.ts proving a fault-free full-coverage judged FAIL routes to the #646 named-route build kickback in one lap without burning the retry ladder
+### Task rem-fr12-2-135f95: src/conductor/src/engine/conductor.ts:6708-6712 — require the typed current-lap mechanical-fault discriminator before emitting the exhausted-allowance HALT; extend src/conductor/test/engine/build-review-halt-wiring.test.ts with a ceiling-reached ledger followed by an unrelated fault-free judged failure
+### Task rem-adr-1-ea3f1d: src/conductor/src/engine/build-review-aggregate.ts:233-238,284-288 — replace duplicated reduced-coverage identity comparisons with matchesBuildReviewReducedCoverageDisposition from src/conductor/src/engine/build-review-dispositions.ts:263; move identity edge-case assertions into src/conductor/test/engine/build-review-effective.test.ts so they exercise the production reducer
+### Task rem-adr-2-b2459d: src/conductor/src/engine/step-runners.ts:1899-1911 — call bumpMechanicalFaultsInLedger from src/conductor/src/engine/kickback-ledger.ts:250 instead of open-coding read-bump-write; add focused coverage proving one persisted bump per mechanical lap
+### Task rem-adr-3-851c80: src/conductor/src/engine/build-review-dispositions.ts:422 and src/conductor/src/engine/artifacts.ts:59 — delete the test-only appendReducedCoverage method and renderer wrapper; update src/conductor/test/engine/build-review-dispositions.test.ts and src/conductor/test/engine/build-review-projections.test.ts to exercise appendReducedCoverageIfCurrent and renderBuildReviewReducedCoverageEvidence through their production entry points

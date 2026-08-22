@@ -28,10 +28,18 @@ import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
-import { KICKBACK_LEDGER_PATH, readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import {
+  KICKBACK_LEDGER_PATH,
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  readKickbackLedger,
+  writeKickbackLedger,
+} from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { Conductor } from '../test-conductor.js';
+import { dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
 
 const execFile = promisify(execFileCb);
 
@@ -727,5 +735,217 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     expect(calls.filter((step) => step === 'build_review')).toHaveLength(1);
     expect(calls).not.toContain('wiring_check');
     expect(await readFile(join(repo, HALT_MARKER), 'utf8').catch(() => null)).toBeNull();
+  }, 30000);
+
+  it('halts for a human after an exhausted mechanical allowance publishes its aggregate instead of retrying', async () => {
+    const fixture = await setupStaleTrackingRefFixture(dir);
+    const repo = fixture.repo;
+    await seedToBuildReview(statePath, repo);
+    const seeded = await readState(statePath);
+    await writeState(statePath, {
+      ...(seeded.ok ? seeded.value : {}),
+      run_started_at: Date.now(),
+    } as ConductState);
+    await writeKickbackLedger(repo, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0,
+          mechanicalFaults: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+          treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+
+    const calls: StepName[] = [];
+    const allowanceOccurrences: unknown[] = [];
+    events.on('build_review_mechanical_allowance_exhausted' as never, (event) => {
+      allowanceOccurrences.push(event);
+    });
+    const lapId = parseBuildReviewLapId('lap-mechanical-root-cause')!;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:mechanical-halt',
+      results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:mechanical-halt', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:mechanical-halt', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'provider transport unavailable' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:mechanical-halt', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      },
+    });
+    const runner: StepRunner = {
+      run: async (step) => {
+        calls.push(step);
+        if (step === 'build_review') {
+          await writeFile(
+            join(repo, '.pipeline/build-review.json'),
+            JSON.stringify(aggregate),
+          );
+          return { success: false, output: 'scope rubric infrastructure failure', currentLapMechanicalFault: true };
+        }
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: withPassingBuildVerification(repo, runner),
+      events,
+      projectRoot: repo,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'build_review',
+    } as never).run();
+
+    expect(calls.filter((step) => step === 'build_review')).toHaveLength(1);
+    const haltBody = await readFile(join(repo, HALT_MARKER), 'utf8');
+    expect(haltBody).toMatch(
+      /build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed\.\nCurrent lap lap-mechanical-root-cause: rootCause closed cause provider-error \(provider transport unavailable\)\.\n1\. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <feature-slug> --lap lap-mechanical-root-cause --rubric rootCause --rationale "<rationale>"\.\n2\. Clear the documented terminal state: rm -f \.pipeline\/HALT \.pipeline\/HALT\.class\./,
+    );
+    expect(haltBody).not.toContain('cannot converge');
+    expect(await readFile(join(repo, '.pipeline/HALT.class'), 'utf8')).toBe('needs-human');
+    expect(allowanceOccurrences).toEqual([expect.objectContaining({
+      type: 'build_review_mechanical_allowance_exhausted',
+      lapId,
+      rubric: 'rootCause',
+      reason: 'provider-error',
+      consumed: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+      allowance: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+    })]);
+  }, 30000);
+
+  it('withholds the exhausted-allowance HALT when a failing lap carries no mechanical fault', async () => {
+    // Negative-path sibling of the test above (plan task rem-fr12-2). That one
+    // reaches the ceiling WITH `currentLapMechanicalFault: true`. This one
+    // reaches the same ceiling, with the same published aggregate, on a
+    // build_review dispatch failure that is NOT classified as mechanical.
+    // The terminal exhausted-allowance HALT must be withheld and the lap left
+    // to the ordinary retry path. Without the
+    // `result.currentLapMechanicalFault === true` guard this HALTs instead.
+    const fixture = await setupStaleTrackingRefFixture(dir);
+    const repo = fixture.repo;
+    await seedToBuildReview(statePath, repo);
+    const seeded = await readState(statePath);
+    await writeState(statePath, {
+      ...(seeded.ok ? seeded.value : {}),
+      run_started_at: Date.now(),
+    } as ConductState);
+    await writeKickbackLedger(repo, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0,
+          mechanicalFaults: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+          treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+
+    const allowanceOccurrences: unknown[] = [];
+    events.on('build_review_mechanical_allowance_exhausted' as never, (event) => {
+      allowanceOccurrences.push(event);
+    });
+
+    const lapId = parseBuildReviewLapId('lap-no-mechanical-fault')!;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:no-mechanical-fault',
+      results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:no-mechanical-fault', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:no-mechanical-fault', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:no-mechanical-fault', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:no-mechanical-fault', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      },
+    });
+
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        calls.push(step);
+        if (step === 'build_review') {
+          await writeFile(join(repo, '.pipeline/build-review.json'), JSON.stringify(aggregate));
+          // Dispatch failed, but nothing classified it as a mechanical fault:
+          // no `currentLapMechanicalFault` on the result.
+          return { success: false, output: 'grader dispatch failed' } as StepRunResult;
+        }
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: withPassingBuildVerification(repo, runner),
+      events,
+      projectRoot: repo,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build_review',
+    } as never).run();
+
+    // The ceiling was reached and an aggregate was published, but this lap
+    // carried no mechanical fault, so the terminal allowance HALT is withheld.
+    expect(allowanceOccurrences).toEqual([]);
+    const haltBody = await readFile(join(repo, HALT_MARKER), 'utf8').catch(() => null);
+    expect(haltBody ?? '').not.toContain('mechanical fault allowance exhausted');
+    expect(haltBody ?? '').not.toContain('record-reduced-coverage');
+  }, 30000);
+
+  it('writes reduced-coverage CLI outcomes through the external same-schema writer', async () => {
+    const lapId = parseBuildReviewLapId('lap-event-spine')!;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:event-spine',
+      results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:event-spine', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:event-spine', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:event-spine', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      },
+    });
+    const externalOccurrences: unknown[] = [];
+    const command = {
+      kind: 'record-reduced-coverage' as const,
+      feature: 'event-spine',
+      lapId,
+      rubric: 'rootCause',
+      rationale: 'The provider remains unavailable.',
+    };
+    const commonDeps = {
+      cwd: dir,
+      resolveMainRoot: async () => dir,
+      realpath: async (path: string) => path,
+      isInteractive: true,
+      resolveOperator: () => 'local-operator',
+      readFile: async () => JSON.stringify(aggregate),
+      readMechanicalFaults: async () => MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+      createStore: () => ({
+        appendReducedCoverageIfCurrent: async (_input: unknown, validate: (records: readonly unknown[]) => Promise<boolean>) => {
+          await validate([]);
+          return { ok: true as const, record: {} };
+        },
+      }),
+      appendEvent: (_worktree: string, event: unknown) => externalOccurrences.push(event),
+      print: () => {},
+    };
+    await expect(dispatchBuildReviewRecordReducedCoverage(command, commonDeps as never)).resolves.toBe(0);
+    await expect(dispatchBuildReviewRecordReducedCoverage(command, {
+      ...commonDeps,
+      isInteractive: false,
+    } as never)).resolves.toBe(1);
+
+    expect(externalOccurrences).toEqual([
+      expect.objectContaining({
+        type: 'build_review_reduced_coverage_accepted', feature: 'event-spine', lapId,
+        rubric: 'rootCause', reason: 'provider-error', operator: 'local-operator',
+      }),
+      expect.objectContaining({
+        type: 'build_review_disposition_refused', feature: 'event-spine',
+        reason: 'non-interactive-or-unidentified-operator',
+      }),
+    ]);
   }, 30000);
 });

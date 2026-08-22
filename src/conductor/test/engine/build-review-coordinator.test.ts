@@ -653,6 +653,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       "identity-mismatch": true,
       "preflight-failed": true,
       "artifact-read-failed": true,
+      "artifact-write-failed": true,
     };
     const reasons = Object.keys(pinned) as BuildReviewInfrastructureFailureReason[];
 

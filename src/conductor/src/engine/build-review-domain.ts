@@ -25,7 +25,46 @@ export type BuildReviewInfrastructureFailureReason =
   | 'stale-artifact'
   | 'identity-mismatch'
   | 'preflight-failed'
-  | 'artifact-read-failed';
+  | 'artifact-read-failed'
+  | 'artifact-write-failed';
+
+/** Closed translation from coordinator diagnostics to persisted infrastructure identity. */
+export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
+  'no-changed-tests': 'preflight-failed',
+  'no-production-changes': 'preflight-failed',
+  'missing-scoped-configuration': 'preflight-failed',
+  'materialization-failed': 'preflight-failed',
+  'missing-merge-base-file': 'preflight-failed',
+  'scoped-run-failed': 'preflight-failed',
+  'scoped-run-launch-failed': 'preflight-failed',
+  'scoped-run-timeout': 'preflight-failed',
+  'scoped-run-signaled': 'preflight-failed',
+  aborted: 'preflight-failed',
+  'cleanup-failed': 'preflight-failed',
+  'cache-read-failed': 'artifact-read-failed',
+  'cache-write-failed': 'artifact-write-failed',
+  'artifact-write-failed': 'artifact-write-failed',
+  'projection-rubric-mismatch': 'malformed-artifact',
+  'invalid-provider-result': 'malformed-artifact',
+  'provider-error': 'provider-error',
+  'missing-settlement': 'missing-artifact',
+} satisfies Record<string, BuildReviewInfrastructureFailureReason>);
+
+/** Every infrastructure-reason token the build-review coordinator may emit. */
+export type BuildReviewCoordinatorFailureReason = keyof typeof mapBuildReviewCoordinatorFailureReason;
+
+/**
+ * Derive a persisted infrastructure cause from the coordinator's closed
+ * reason. Diagnostics deliberately do not participate in this identity.
+ */
+export function deriveBuildReviewInfrastructureFailureReason(
+  branch: { readonly reason: BuildReviewCoordinatorFailureReason },
+): BuildReviewInfrastructureFailureReason {
+  if (Object.hasOwn(mapBuildReviewCoordinatorFailureReason, branch.reason)) {
+    return mapBuildReviewCoordinatorFailureReason[branch.reason];
+  }
+  throw new Error(`Build review coordinator contract defect: unmapped failure reason ${branch.reason}`);
+}
 
 export type BuildReviewFindingAnchor =
   | { rubric: 'tautology'; changedTest: string | BuildReviewContentRegionReference; exercisedBehavior: string; violationKind: string }
@@ -179,7 +218,7 @@ export type BuildReviewRubricResult =
 
 const RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness']);
 const INFRASTRUCTURE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
-  'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact', 'identity-mismatch', 'preflight-failed', 'artifact-read-failed',
+  'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact', 'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed',
 ]);
 const LAP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 

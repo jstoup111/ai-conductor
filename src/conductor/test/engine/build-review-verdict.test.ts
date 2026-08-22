@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +11,22 @@ import {
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import {
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  readKickbackLedger,
+  writeKickbackLedger,
+} from '../../src/engine/kickback-ledger.js';
+import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+import type { BuildReviewFrozenInputs } from '../../src/engine/build-review-inputs.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { HarnessConfig } from '../../src/types/config.js';
+
+vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>(),
+  coordinateBuildReviewRubrics: vi.fn(),
+}));
 
 describe('engine/build-review verdict wiring contract', () => {
   const dirs: string[] = [];
@@ -306,4 +322,248 @@ describe('engine/build-review verdict wiring contract', () => {
       reason: expect.stringContaining('[scope] The changed path is outside the approved plan.'),
     });
   });
+
+  it('leaves a mechanical lap verdict absent while its separate allowance remains', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-mechanical-lap-'));
+    dirs.push(dir);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, mechanicalFaults: 0, treeHash: null,
+          lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        { kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result', detail: 'worker response unavailable' },
+        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
+      ],
+    });
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const runner = new DefaultStepRunner(provider, 'mechanical-lap', dir, {
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest) => ({
+        version: 1, rubric, lapId, snapshotDigest,
+        result: { kind: 'judged', rubric, lapId, snapshotDigest, contractVersion: 'v3' as never, findings: [], verdict: 'PASS' },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+    const inputs = {
+      sourceSnapshot: { headSha: 'mechanical-lap', digest: 'sha256:mechanical-lap', mergeBase: 'base' },
+    } as BuildReviewFrozenInputs;
+
+    const result = await (runner as unknown as {
+      runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean }>;
+    }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+    expect(result.success).toBe(false);
+    await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(1);
+  });
+
+  it('does not consume the mechanical allowance when a mixed lap publishes a judged finding', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-mixed-lap-'));
+    dirs.push(dir);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, mechanicalFaults: 0, treeHash: null,
+          lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        { kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result', detail: 'worker response unavailable' },
+        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
+      ],
+    });
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const runner = new DefaultStepRunner(provider, 'mixed-lap', dir, {
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: dir, feature: 'mixed-lap' },
+        effective: {
+          rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: ['sha256:unresolved'],
+          skippedRubrics: [], infrastructureFailureRubrics: ['scope'],
+        },
+      }),
+      buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: rubric === 'rootCause'
+          ? {
+              kind: 'judged' as const, rubric, lapId, snapshotDigest, contractVersion: 'v1' as never,
+              findings: [{
+                concernKind: 'root-cause-unaddressed', summary: 'The defect remains.', evidenceLocations: ['src/engine.ts:1'],
+                anchor: { rubric: 'rootCause' as const, statedDefect: 'The defect is fixed.', locus: 'src/engine.ts', relation: 'root-cause-unaddressed' },
+              }], verdict: 'FAIL' as const,
+            }
+          : { kind: 'judged' as const, rubric, lapId, snapshotDigest, contractVersion: 'v3' as never, findings: [], verdict: 'PASS' as const },
+        provenance: { kind: 'fresh' as const },
+      }),
+    });
+    const inputs = {
+      sourceSnapshot: { headSha: 'mixed-lap', digest: 'sha256:mixed-lap', mergeBase: 'base' },
+    } as BuildReviewFrozenInputs;
+
+    const result = await (runner as unknown as {
+      runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; currentLapMechanicalFault?: boolean }>;
+    }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(result.currentLapMechanicalFault).toBeUndefined();
+    expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(0);
+    await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).resolves.toContain('The defect remains.');
+  });
+
+  it('clears a prior-lap aggregate instead of using it as a mechanical lap rework hint', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-mechanical-stale-aggregate-'));
+    dirs.push(dir);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, mechanicalFaults: 0, treeHash: null,
+          lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+    const previousLap = parseBuildReviewLapId('lap-previous')!;
+    const previousAggregate = joinBuildReviewRubricOutcomes({
+      lapId: previousLap,
+      snapshotDigest: 'sha256:previous',
+      results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId: previousLap, snapshotDigest: 'sha256:previous', contractVersion: 'v3' as never, findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId: previousLap, snapshotDigest: 'sha256:previous', contractVersion: 'v3' as never, findings: [{ concernKind: 'out-of-plan-change', summary: 'Prior-lap finding', evidenceLocations: ['src/old.ts:1'], anchor: { rubric: 'scope', path: 'src/old.ts', relation: 'not-authorized-by-plan' } }], verdict: 'FAIL' },
+        rootCause: { kind: 'judged', rubric: 'rootCause', lapId: previousLap, snapshotDigest: 'sha256:previous', contractVersion: 'v3' as never, findings: [], verdict: 'PASS' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId: previousLap, snapshotDigest: 'sha256:previous', contractVersion: 'v3' as never, findings: [], verdict: 'PASS' },
+      },
+    });
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, BUILD_REVIEW_VERDICT), JSON.stringify(previousAggregate));
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        { kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result', detail: 'worker response unavailable' },
+        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
+      ],
+    });
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const runner = new DefaultStepRunner(provider, 'mechanical-stale-aggregate', dir, {
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest) => ({
+        version: 1, rubric, lapId, snapshotDigest,
+        result: { kind: 'judged', rubric, lapId, snapshotDigest, contractVersion: 'v3' as never, findings: [], verdict: 'PASS' },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+    const inputs = {
+      sourceSnapshot: { headSha: 'mechanical-stale-aggregate', digest: 'sha256:mechanical-stale-aggregate', mergeBase: 'base' },
+    } as BuildReviewFrozenInputs;
+
+    const result = await (runner as unknown as {
+      runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; output: string }>;
+    }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+    expect({
+      result,
+      staleAggregate: await readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8').catch(() => null),
+    }).toEqual({
+      result: {
+        success: false,
+        output: 'build_review mechanical fault in scope (malformed-artifact): invalid-provider-result: worker response unavailable',
+        currentLapMechanicalFault: true,
+      },
+      staleAggregate: null,
+    });
+  });
+
+  it.each(['artifact-write-failed', 'cache-write-failed'] as const)(
+    'consumes the mechanical allowance when the coordinator reports %s',
+    async (reason) => {
+      const dir = await mkdtemp(join(tmpdir(), `build-review-${reason}-`));
+      dirs.push(dir);
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 0, cumulative: 0, mechanicalFaults: 0, treeHash: null,
+            lastReason: '', priorVerdict: true, resolvedBefore: 0,
+          },
+        },
+      });
+      vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+        kind: 'ready',
+        branches: [
+          { kind: 'infrastructure-failure', rubric: 'scope', reason, detail: 'disk became unavailable' },
+          ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
+        ],
+      });
+      const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+      const runner = new DefaultStepRunner(provider, 'mechanical-write-failure', dir, {
+        pipelineDir: join(dir, '.pipeline'),
+      });
+      const inputs = {
+        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base' },
+      } as BuildReviewFrozenInputs;
+
+      const result = await (runner as unknown as {
+        runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; output: string }>;
+      }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+      expect(result).toMatchObject({ success: false, output: expect.stringContaining(reason) });
+      expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(1);
+      await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  it.each(['artifact-write-failed', 'cache-write-failed'] as const)(
+    'publishes the terminal aggregate after %s exhausts the mechanical allowance',
+    async (reason) => {
+      const dir = await mkdtemp(join(tmpdir(), `build-review-exhausted-${reason}-`));
+      dirs.push(dir);
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 0, cumulative: 0, mechanicalFaults: MAX_MECHANICAL_FAULTS_BUILD_REVIEW - 1, treeHash: null,
+            lastReason: '', priorVerdict: true, resolvedBefore: 0,
+          },
+        },
+      });
+      vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+        kind: 'ready',
+        branches: [
+          { kind: 'infrastructure-failure', rubric: 'scope', reason, detail: 'disk became unavailable' },
+          ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
+        ],
+      });
+      const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+      const runner = new DefaultStepRunner(provider, 'mechanical-write-failure', dir, {
+        pipelineDir: join(dir, '.pipeline'),
+      });
+      const inputs = {
+        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base' },
+      } as BuildReviewFrozenInputs;
+
+      await (runner as unknown as {
+        runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; output: string }>;
+      }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+      expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(MAX_MECHANICAL_FAULTS_BUILD_REVIEW);
+      expect(JSON.parse(await readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8'))).toMatchObject({
+        results: { scope: { kind: 'infrastructure-failure', reason: 'artifact-write-failed' } },
+      });
+    },
+  );
 });

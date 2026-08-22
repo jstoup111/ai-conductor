@@ -937,6 +937,49 @@ A non-zero exit, or the restriction enabled while the daemon already runs inside
 means Codex has no way to spawn a shell there. Until the host grants it, route the affected steps
 to another provider; clearing the halt alone re-runs into the same denial.
 
+### build_review halted on an exhausted mechanical fault allowance
+
+**Symptom:** `.pipeline/HALT` reads:
+
+```text
+build_review mechanical fault allowance exhausted: <consumed> of 3 shared faults consumed.
+Current lap <lap>: <rubric> closed cause <reason> (<detail>).
+1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale "<rationale>".
+2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
+```
+
+and its class is `needs-human` — deliberately, so the daemon's automatic re-kick sweep does
+not clear it on its own.
+
+**Diagnosis:** a `build_review` rubric kept reporting an infrastructure failure (a tool crash,
+a `git diff` that could not run, a provider outage — never a genuine semantic FAIL) across
+repeated laps. Mechanical faults draw from a bounded allowance shared across `build_review`
+kickbacks (3 faults), tracked separately from the ordinary semantic kickback budget so an
+infrastructure blip never burns it. The allowance resets only on demonstrated progress (a
+rebase or base-branch advance), not on a bare retry — once it is exhausted the run halts
+instead of laundering the same infrastructure failure into a hollow PASS or an endless kickback
+loop.
+
+**Recovery:** the halt body names both required steps.
+
+1. Record the decision — this requires an interactive terminal and a resolvable local operator
+   identity; it derives the closed infrastructure cause itself, so it refuses if the rubric is
+   not currently an exhausted infrastructure failure (already judged, unknown rubric, allowance
+   not actually exhausted, a duplicate reduced-coverage record, or the lap/review has since gone
+   stale):
+   ```bash
+   conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> \
+     --rubric <rubric> --rationale "<why this rubric's coverage is being reduced>"
+   ```
+   This only writes the decision — it does not touch the halt marker.
+2. Clear the halt using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** the next `build_review` run treats the rubric as reduced coverage rather than
+re-raising the same infrastructure failure, the feature reaches PASS, and the shipped record at
+`.docs/shipped/<slug>.md` carries a reduced-coverage section for that rubric. A genuine semantic
+FAIL on the same rubric still blocks exactly as before — recording reduced coverage does not
+suppress a real finding.
+
 ### The feature must stop being dispatched entirely
 
 ```bash

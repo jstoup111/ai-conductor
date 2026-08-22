@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { promisify } from 'node:util';
 import {
   appendBuildReviewAcceptedRisk,
+  appendBuildReviewReducedCoverageEvidence,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
@@ -21,6 +24,10 @@ import type { BuildReviewDispositionRecord } from '../../src/engine/build-review
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import type { CostRollup } from '../../src/engine/cost-rollup.js';
 import type { TimingRollup } from '../../src/engine/timing-rollup.js';
+import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+
+const execFile = promisify(execFileCallback);
 
 /** Minimal fake tree source for exercising listShippedRecords in isolation. */
 function fakeTreeSource(files: Record<string, string>): BacklogTreeSource & {
@@ -444,6 +451,54 @@ describe('accepted build-review risk shipped projection', () => {
     expect(appended).not.toContain('2026-08-14T12:00:00.000Z');
     expect(appendBuildReviewAcceptedRisk(body, [])).toBe(body);
     expect(() => appendBuildReviewAcceptedRisk(body, [{ ...accepted, rationale: '' }])).toThrow(/unrenderable/);
+  });
+});
+
+describe('reduced build-review coverage shipped projection', () => {
+  it('carries the engine-stamped shared lap section into the shipped record unchanged', () => {
+    const section = [
+      '## Reduced build-review coverage', '', '- Rubric: `tautology`', '  Cause: `provider-error`',
+      '  Current diagnostic: provider unavailable', '  Operator: operator', '  Rationale: approved',
+      '  Decision time: 2026-08-20T00:00:00.000Z',
+    ].join('\n');
+    const body = appendBuildReviewReducedCoverageEvidence('---\nslug: feature\n---\n', section);
+    expect(body).toContain(section);
+    expect(appendBuildReviewReducedCoverageEvidence(body, undefined)).toBe(body);
+  });
+});
+
+describe('shipped-record reduced-coverage dispatch', () => {
+  it('writes rendered current-lap coverage and blocks known-but-unrenderable evidence before writing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'shipped-record-reduced-coverage-'));
+    const lapId = parseBuildReviewLapId('lap-current')!;
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:current', results: {
+      tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+      scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+      rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'provider unavailable' },
+      completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+    } });
+    const record = { kind: 'reduced-coverage', version: 'v1', feature: { version: 'v1', repository: root, feature: 'feature' }, identity: { rubric: 'rootCause', reason: 'provider-error' }, rationale: 'approved', operator: 'operator', acceptedAt: '2026-08-20T00:00:00.000Z' };
+    try {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.docs', 'plans', 'feature.md'), '# Plan\n');
+      await writeFile(join(root, '.pipeline', 'build-review.json'), JSON.stringify(aggregate));
+      await writeFile(join(root, '.pipeline', 'build-review-dispositions.json'), JSON.stringify({ version: 'v1', records: [record] }));
+      await execFile('git', ['init', '-b', 'main', root]);
+      await execFile('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
+      await execFile('git', ['-C', root, 'config', 'user.name', 'Test']);
+      await execFile('git', ['-C', root, 'add', '.']);
+      await execFile('git', ['-C', root, 'commit', '-m', 'fixture']);
+
+      await expect(dispatchShippedRecord({ kind: 'write', slug: 'feature', pr: 'local' }, root)).resolves.toBe(0);
+      await expect(readFile(join(root, '.docs', 'shipped', 'feature.md'), 'utf8')).resolves.toContain('## Reduced build-review coverage');
+
+      await writeFile(join(root, '.pipeline', 'build-review.json'), JSON.stringify({ ...aggregate, results: { ...aggregate.results, rootCause: { ...aggregate.results.rootCause, detail: '' } } }));
+      await expect(dispatchShippedRecord({ kind: 'write', slug: 'feature', pr: 'local' }, root)).resolves.toBe(1);
+      await expect(readFile(join(root, '.docs', 'shipped', 'feature.md'), 'utf8')).resolves.toContain('provider unavailable');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

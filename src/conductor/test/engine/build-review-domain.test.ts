@@ -461,6 +461,24 @@ describe('build-review domain', () => {
       kind: 'infrastructure-failure', rubric: 'tautology', reason: 'ignored', detail: 'provider unavailable',
     })).toBeUndefined();
   });
+
+  it('maps coordinator failure reasons into the closed infrastructure failure vocabulary', () => {
+    expect(buildReviewDomain.mapBuildReviewCoordinatorFailureReason).toMatchObject({
+      'missing-merge-base-file': 'preflight-failed',
+      'artifact-write-failed': 'artifact-write-failed',
+    });
+  });
+
+  it('surfaces an unmapped coordinator reason as a contract defect without reading diagnostic detail', () => {
+    const branch = {
+      reason: 'unmapped-coordinator-reason',
+      get detail(): never { throw new Error('detail must not contribute to the closed cause'); },
+    };
+
+    expect(() => buildReviewDomain.deriveBuildReviewInfrastructureFailureReason(
+      branch as unknown as { readonly reason: buildReviewDomain.BuildReviewCoordinatorFailureReason },
+    )).toThrow(/contract defect/i);
+  });
 });
 
 describe('build-review judged-result contract rendering and rejection diagnosis', () => {

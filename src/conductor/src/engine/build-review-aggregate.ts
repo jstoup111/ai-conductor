@@ -7,8 +7,10 @@ import {
 } from './build-review-domain.js';
 import {
   matchesBuildReviewDisposition,
+  matchesBuildReviewReducedCoverageDisposition,
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
+  type BuildReviewReducedCoverageDispositionRecord,
 } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 
@@ -30,6 +32,8 @@ export interface BuildReviewAggregate {
   readonly rubric: Readonly<RubricFlags>;
   readonly findings: Readonly<LegacyFindings>;
   readonly reasons: readonly string[];
+  /** Engine-stamped current-lap reduced-coverage evidence, when an allowance was used. */
+  readonly reducedCoverageEvidence?: string;
   readonly codeStamp?: string | null;
 }
 
@@ -166,8 +170,10 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   }));
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
+    ...(source.reducedCoverageEvidence === undefined ? [] : ['reducedCoverageEvidence']),
     ...(source.codeStamp === undefined ? [] : ['codeStamp']),
   ]) || source.aggregateVersion !== AGGREGATE_VERSION || !isNonEmptyString(source.snapshotDigest) ||
+    (source.reducedCoverageEvidence !== undefined && !isNonEmptyString(source.reducedCoverageEvidence)) ||
     (source.codeStamp !== undefined && source.codeStamp !== null && !isNonEmptyString(source.codeStamp))) return undefined;
   const lapId = parseBuildReviewLapId(source.lapId);
   if (!lapId) return undefined;
@@ -197,6 +203,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   return {
     aggregateVersion: AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest, results, coverage: expectedCoverage,
     verdict, rubric: expectedRubric, findings: expectedFindings, reasons: expectedReasons,
+    ...(source.reducedCoverageEvidence !== undefined ? { reducedCoverageEvidence: source.reducedCoverageEvidence as string } : {}),
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
   };
 }
@@ -209,6 +216,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
 export function deriveEffectiveBuildReviewVerdict(
   value: unknown,
   acceptedFindingIds: ReadonlySet<string> = new Set(),
+  reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -216,6 +224,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const unresolved: string[] = [];
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
+  let uncoveredInfrastructureCount = 0;
   let judgedCount = 0;
   for (const rubric of RUBRICS) {
     const result = aggregate.results[rubric];
@@ -225,6 +234,11 @@ export function deriveEffectiveBuildReviewVerdict(
     }
     if (result.kind === 'infrastructure-failure') {
       infrastructure.push(rubric);
+      if (!reducedCoverage.some((decision) => matchesBuildReviewReducedCoverageDisposition(
+        decision.feature,
+        { rubric, reason: result.reason },
+        [decision],
+      ))) uncoveredInfrastructureCount += 1;
       continue;
     }
     judgedCount += 1;
@@ -238,7 +252,7 @@ export function deriveEffectiveBuildReviewVerdict(
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
-    verdict: judgedCount > 0 && unresolved.length === 0 && infrastructure.length === 0 ? 'PASS' : 'FAIL',
+    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructureCount === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
   });
@@ -253,6 +267,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   value: unknown,
   feature: BuildReviewFeatureIdentity,
   dispositions: readonly BuildReviewDispositionRecord[],
+  reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -268,5 +283,10 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
       if (matchesBuildReviewDisposition(feature, identity, dispositions)) acceptedIds.add(identity.id);
     }
   }
-  return deriveEffectiveBuildReviewVerdict(aggregate, acceptedIds);
+  return deriveEffectiveBuildReviewVerdict(
+    aggregate,
+    acceptedIds,
+    reducedCoverage.filter((decision) => decision.kind === 'reduced-coverage' &&
+      matchesBuildReviewReducedCoverageDisposition(feature, decision.identity, [decision])),
+  );
 }

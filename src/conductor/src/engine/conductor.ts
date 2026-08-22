@@ -196,8 +196,10 @@ import {
   clearKickbackLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   readKickbackLedger,
   writeKickbackLedger,
+  type KickbackGateEntry,
   type KickbackLedger,
 } from './kickback-ledger.js';
 import {
@@ -540,6 +542,8 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** True only when this build-review lap observed an infrastructure fault. */
+  currentLapMechanicalFault?: boolean;
   /**
    * Typed only by the FINISH composition boundary. Kept unknown at this edge
    * so malformed adapter results fail closed instead of reaching remediation.
@@ -1085,6 +1089,32 @@ async function selectChangedArtifacts(
     }
   }
   return changed;
+}
+
+/**
+ * Render the operator-facing recovery for a terminal mechanical review fault.
+ * The aggregate is the current-lap authority for the rubric and closed cause;
+ * the ledger only supplies the shared allowance consumption.
+ */
+export function renderExhaustedMechanicalBuildReviewHalt(
+  entry: Pick<KickbackGateEntry, 'mechanicalFaults'>,
+  currentLap: unknown,
+): string {
+  const aggregate = parseBuildReviewAggregate(currentLap);
+  const failure = aggregate && Object.values(aggregate.results).find(
+    (result) => result.kind === 'infrastructure-failure',
+  );
+  const consumed = entry.mechanicalFaults ?? 0;
+  if (!aggregate || !failure || failure.kind !== 'infrastructure-failure') {
+    return `build_review mechanical fault allowance exhausted: ${consumed} of ` +
+      `${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed; current-lap diagnostic is unavailable`;
+  }
+  return [
+    `build_review mechanical fault allowance exhausted: ${consumed} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed.`,
+    `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
+    `1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
+    '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
+  ].join('\n');
 }
 
 function hasCompletionContract(step: StepName, config: HarnessConfig): boolean {
@@ -6731,6 +6761,56 @@ export class Conductor {
 
           if (!result.success) {
             failedStepResult = result;
+            // Task 10: the mechanical lane publishes a terminal aggregate
+            // only after consuming its separate allowance. That aggregate is
+            // the operator's diagnostic, not a retryable grader-dispatch
+            // failure, so stop here instead of entering the generic retry
+            // loop below.
+            if (step.name === 'build_review') {
+              const ledger = await readKickbackLedger(this.projectRoot);
+              const mechanicalEntry = ledger.gates.build_review;
+              const aggregateRaw = await readFile(
+                join(this.projectRoot, BUILD_REVIEW_VERDICT),
+                'utf-8',
+              ).then((content) => {
+                try {
+                  return JSON.parse(content) as unknown;
+                } catch {
+                  return undefined;
+                }
+              }).catch(() => undefined);
+              if (
+                result.currentLapMechanicalFault === true &&
+                (mechanicalEntry?.mechanicalFaults ?? 0) >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW &&
+                aggregateRaw !== undefined
+              ) {
+                const reason = renderExhaustedMechanicalBuildReviewHalt(
+                  mechanicalEntry ?? { mechanicalFaults: 0 },
+                  aggregateRaw,
+                );
+                const aggregate = parseBuildReviewAggregate(aggregateRaw);
+                const failure = aggregate && Object.values(aggregate.results).find(
+                  (result) => result.kind === 'infrastructure-failure',
+                );
+                if (failure) {
+                  await this.events.emit({
+                    type: 'build_review_mechanical_allowance_exhausted',
+                    lapId: aggregate.lapId,
+                    rubric: failure.rubric,
+                    reason: failure.reason,
+                    consumed: mechanicalEntry!.mechanicalFaults ?? 0,
+                    allowance: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+                  });
+                }
+                state[step.name] = 'failed';
+                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await this.emitLoopHalt(reason);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+            }
             // #814: an EMPTY/whitespace runner output slips past `??` (which
             // only substitutes null/undefined), so `lastError` used to become
             // '' and render as "no reason recorded" — masking a grader/subprocess
@@ -6834,6 +6914,24 @@ export class Conductor {
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
+              }
+            }
+
+            // A build-review infrastructure fault owns a separate retry
+            // allowance from ordinary step retries.  Let that lane consume
+            // its bounded ledger allowance even when this conductor was
+            // configured with fewer generic retries; its final attempt
+            // materializes the aggregate needed for the operator recovery.
+            if (step.name === 'build_review') {
+              const mechanicalFaults = (await readKickbackLedger(this.projectRoot))
+                .gates.build_review?.mechanicalFaults ?? 0;
+              if (
+                result.currentLapMechanicalFault === true &&
+                mechanicalFaults > 0 &&
+                mechanicalFaults < MAX_MECHANICAL_FAULTS_BUILD_REVIEW
+              ) {
+                attempt--;
+                continue;
               }
             }
 

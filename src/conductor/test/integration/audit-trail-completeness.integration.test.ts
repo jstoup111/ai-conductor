@@ -61,7 +61,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_rubric_skipped: 'not-audited-by-design',
   build_review_cache_hit: 'not-audited-by-design',
   build_review_rubric_infrastructure_failure: 'not-audited-by-design',
+  build_review_mechanical_allowance_exhausted: 'not-audited-by-design',
   build_review_disposition_accepted: 'not-audited-by-design',
+  build_review_reduced_coverage_accepted: 'not-audited-by-design',
   build_review_disposition_refused: 'not-audited-by-design',
   build_review_disposition_version_invalidated: 'friction-mapped',
   build_review_outer_verdict: 'not-audited-by-design',
@@ -178,7 +180,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_review_rubric_skipped: { type: 'build_review_rubric_skipped', rubric: 'scope', lapId: 'lap-1', reason: 'disabled' },
   build_review_cache_hit: { type: 'build_review_cache_hit', rubric: 'scope', lapId: 'lap-1' },
   build_review_rubric_infrastructure_failure: { type: 'build_review_rubric_infrastructure_failure', rubric: 'scope', lapId: 'lap-1', reason: 'provider-error' },
+  build_review_mechanical_allowance_exhausted: { type: 'build_review_mechanical_allowance_exhausted', lapId: 'lap-1', rubric: 'scope', reason: 'provider-error', consumed: 3, allowance: 3 },
   build_review_disposition_accepted: { type: 'build_review_disposition_accepted', feature: 'feature', lapId: 'lap-1', findingId: 'sha256:x', operator: 'operator' },
+  build_review_reduced_coverage_accepted: { type: 'build_review_reduced_coverage_accepted', feature: 'feature', lapId: 'lap-1', rubric: 'scope', reason: 'provider-error', operator: 'operator' },
   build_review_disposition_refused: { type: 'build_review_disposition_refused', feature: 'feature', reason: 'non-tty' },
   build_review_disposition_version_invalidated: { type: 'build_review_disposition_version_invalidated', feature: 'feature', findingId: 'sha256:x', rubric: 'scope', contractVersion: 'v1' },
   build_review_outer_verdict: { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
@@ -630,7 +634,9 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
       build_review_rubric_skipped: { render: false, persist: true, audit: false },
       build_review_cache_hit: { render: false, persist: true, audit: false },
       build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false },
+      build_review_mechanical_allowance_exhausted: { render: false, persist: true, audit: false },
       build_review_disposition_accepted: { render: false, persist: false, audit: false },
+      build_review_reduced_coverage_accepted: { render: false, persist: false, audit: false },
       build_review_disposition_refused: { render: false, persist: false, audit: false },
       build_review_disposition_version_invalidated: { render: false, persist: true, audit: true },
       build_review_outer_verdict: { render: false, persist: true, audit: false },
@@ -645,10 +651,12 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
       'build_review_rubric_skipped',
       'build_review_cache_hit',
       'build_review_rubric_infrastructure_failure',
+      'build_review_mechanical_allowance_exhausted',
       'build_review_outer_verdict',
     ]));
     expect(persistedEventTypes()).not.toEqual(expect.arrayContaining([
       'build_review_disposition_accepted',
+      'build_review_reduced_coverage_accepted',
       'build_review_disposition_refused',
     ]));
     expect(auditedEventTypes()).not.toEqual(expect.arrayContaining(Object.keys(buildReviewSinkExpectations)));

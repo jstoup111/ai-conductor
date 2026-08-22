@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
-import type { BuildReviewLapId } from './build-review-domain.js';
+import type {
+  BuildReviewInfrastructureFailure,
+  BuildReviewLapId,
+} from './build-review-domain.js';
+import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
 import type { RevertedProductionFileReference } from './build-review-tautology-preflight.js';
@@ -119,6 +123,88 @@ export type BuildReviewRubricProjections = {
   readonly rootCause: RootCauseProjection;
   readonly completeness: CompletenessProjection;
 };
+
+/** One current-lap reduced-coverage stamp, shared by every reader-facing surface. */
+export interface BuildReviewReducedCoverageEntry {
+  readonly rubric: BuildReviewRubricId;
+  readonly cause: BuildReviewInfrastructureFailure['reason'];
+  readonly diagnostic: string;
+  readonly operator: string;
+  readonly rationale: string;
+  readonly decisionTime: string;
+}
+
+export type BuildReviewReducedCoverageEvidenceInput =
+  | { readonly state: 'absent' | 'unreadable' }
+  | {
+      readonly state: 'known';
+      readonly records: readonly BuildReviewReducedCoverageDispositionRecord[];
+      readonly currentFailures: readonly BuildReviewInfrastructureFailure[];
+    };
+
+export type BuildReviewReducedCoverageEvidenceRenderResult =
+  | { readonly ok: true; readonly section: string | undefined }
+  | { readonly ok: false; readonly message: string };
+
+function validReducedCoverageRecord(record: BuildReviewReducedCoverageDispositionRecord): boolean {
+  return record.kind === 'reduced-coverage' && record.version === 'v1' &&
+    record.feature.version === 'v1' && record.feature.repository.trim().length > 0 && record.feature.feature.trim().length > 0 &&
+    record.rationale.trim().length > 0 && record.operator.trim().length > 0 &&
+    !Number.isNaN(Date.parse(record.acceptedAt));
+}
+
+/**
+ * Render the closed reduced-coverage publication contract from durable
+ * operator state plus the fault actually present on this lap.  Both retained
+ * PR and shipped-record writers consume this exact section rather than
+ * independently formatting a decision.  State that cannot be read is not a
+ * decision and therefore invents no reader-facing evidence; known malformed
+ * state fails closed.
+ */
+export function renderBuildReviewReducedCoverageEvidence(
+  input: BuildReviewReducedCoverageEvidenceInput,
+): BuildReviewReducedCoverageEvidenceRenderResult {
+  if (input.state !== 'known') return { ok: true, section: undefined };
+  if (input.records.some((record) => !validReducedCoverageRecord(record))) {
+    return { ok: false, message: 'reduced build-review coverage contains an unrenderable decision' };
+  }
+
+  const entries: BuildReviewReducedCoverageEntry[] = [];
+  for (const failure of input.currentFailures) {
+    const decision = input.records.find((record) =>
+      record.identity.rubric === failure.rubric && record.identity.reason === failure.reason,
+    );
+    if (!decision) continue;
+    if (failure.detail.trim().length === 0) {
+      return { ok: false, message: 'reduced build-review coverage contains an unrenderable current diagnostic' };
+    }
+    entries.push({
+      rubric: failure.rubric,
+      cause: failure.reason,
+      diagnostic: failure.detail,
+      operator: decision.operator,
+      rationale: decision.rationale,
+      decisionTime: decision.acceptedAt,
+    });
+  }
+  if (entries.length === 0) return { ok: true, section: undefined };
+  entries.sort((left, right) => `${left.rubric}\u0000${left.cause}`.localeCompare(`${right.rubric}\u0000${right.cause}`));
+  return {
+    ok: true,
+    section: [
+      '## Reduced build-review coverage',
+      '',
+      ...entries.flatMap((entry) => [
+        `- Rubric: \`${entry.rubric}\``,
+        `  Cause: \`${entry.cause}\``,
+        `  Current diagnostic: ${entry.diagnostic}`,
+        `  Operator: ${entry.operator}`,
+        `  Rationale: ${entry.rationale}`,
+        `  Decision time: ${entry.decisionTime}`,
+      ]),
+    ].join('\n'),
+  };
+}
 
 function canonicalize(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
   if (Array.isArray(value)) {

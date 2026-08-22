@@ -12,13 +12,16 @@ import {
   type BuildReviewDispositionListResult,
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
+  type BuildReviewReducedCoverageListResult,
 } from './build-review-dispositions.js';
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import type { ConductorEvent } from '../types/events.js';
+import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
+  listReducedCoverage(feature: unknown): Promise<BuildReviewReducedCoverageListResult>;
 };
 
 export interface BuildReviewEffectiveResolverDeps {
@@ -30,7 +33,13 @@ export interface BuildReviewEffectiveResolverDeps {
 }
 
 export type BuildReviewEffectiveResolution =
-  | { readonly ok: true; readonly feature: BuildReviewFeatureIdentity; readonly effective: BuildReviewEffectiveVerdict }
+  | {
+      readonly ok: true;
+      readonly feature: BuildReviewFeatureIdentity;
+      readonly effective: BuildReviewEffectiveVerdict;
+      /** Exact shared section to stamp into the current lap artifact, if any. */
+      readonly reducedCoverageEvidence?: string;
+    }
   | { readonly ok: false; readonly reason: string };
 
 function sameFeature(left: BuildReviewFeatureIdentity, right: BuildReviewFeatureIdentity): boolean {
@@ -75,12 +84,16 @@ export async function resolveEffectiveBuildReviewVerdict(
   const feature = await resolveBuildReviewFeatureIdentity(projectRoot, deps);
   if (!feature) return { ok: false, reason: 'build-review feature identity is unavailable' };
   let listed: BuildReviewDispositionListResult;
+  let reducedCoverage: BuildReviewReducedCoverageListResult;
   try {
-    listed = await (deps.createStore ?? ((root: string) => new BuildReviewDispositionStore(root)))(projectRoot).list(feature);
+    const store = (deps.createStore ?? ((root: string) => new BuildReviewDispositionStore(root)))(projectRoot);
+    listed = await store.list(feature);
+    reducedCoverage = await store.listReducedCoverage(feature);
   } catch {
     return { ok: false, reason: 'build-review disposition state is unavailable' };
   }
   if (!listed.ok) return { ok: false, reason: `build-review disposition state is unavailable: ${listed.message}` };
+  if (!reducedCoverage.ok) return { ok: false, reason: `build-review disposition state is unavailable: ${reducedCoverage.message}` };
   if (listed.records.some((record) => !sameFeature(record.feature, feature))) {
     return { ok: false, reason: 'build-review disposition state returned a foreign feature record' };
   }
@@ -95,10 +108,25 @@ export async function resolveEffectiveBuildReviewVerdict(
       });
     }
   }
-  const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records);
-  return effective
-    ? { ok: true, feature, effective }
-    : { ok: false, reason: 'build-review disposition state cannot resolve current findings' };
+  let effective: BuildReviewEffectiveVerdict | undefined;
+  try {
+    effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records, reducedCoverage.records);
+  } catch {
+    return { ok: false, reason: 'build-review disposition state is invalid' };
+  }
+  if (!effective) return { ok: false, reason: 'build-review disposition state cannot resolve current findings' };
+  const renderedReducedCoverage = renderBuildReviewReducedCoverageEvidence({
+    state: 'known',
+    records: reducedCoverage.records,
+    currentFailures: Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+  });
+  if (!renderedReducedCoverage.ok) return { ok: false, reason: renderedReducedCoverage.message };
+  return {
+    ok: true,
+    feature,
+    effective,
+    ...(renderedReducedCoverage.section === undefined ? {} : { reducedCoverageEvidence: renderedReducedCoverage.section }),
+  };
 }
 
 export type { BuildReviewAggregate, BuildReviewEffectiveVerdict, BuildReviewDispositionRecord, BuildReviewFeatureIdentity };

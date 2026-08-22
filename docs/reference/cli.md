@@ -116,6 +116,7 @@ enforcement lives in `src/conductor/src/execution/daemon-session.ts`.
 ```bash
 conduct-ts build-review findings --feature <slug> [--json]
 conduct-ts build-review accept --feature <slug> --lap <lap> --finding <id> --rationale <text>
+conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
 ```
 
 `findings` is read-only and renders the current feature's raw and effective build-review findings;
@@ -127,7 +128,12 @@ accepts back. Stale, unknown, unauthorized, or non-interactive requests are refu
 artifacts and exit 1; successful findings inspection and accepted exact-current findings exit 0.
 A refusal names the check that failed — unreadable aggregate, non-current lap, unknown finding, or a
 disposition-store rejection — and records the same reason on the feature's
-`build_review_disposition_refused` event.
+`build_review_disposition_refused` event. `record-reduced-coverage` also requires an interactive
+terminal, resolved local operator identity, exact current lap, named rubric, and non-empty rationale.
+It derives the closed infrastructure cause from the current review state; callers cannot supply one.
+It records a decision only when that rubric currently has an exhausted mechanical infrastructure
+fault. Judged, skipped, duplicate, unknown-rubric, allowance-remaining, and stale-review requests
+are refused without changing the decision state.
 
 ## `conduct-ts scope-check`
 

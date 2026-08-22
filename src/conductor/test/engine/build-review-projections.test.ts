@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { renderBuildReviewReducedCoverageEvidence } from '../../src/engine/build-review-projections.js';
 import {
   BUILD_REVIEW_PROVENANCE_KEYS,
   deriveBuildReviewRubricProjections,
@@ -295,6 +296,69 @@ const provenanceKeyCoverage: Record<(typeof BUILD_REVIEW_PROVENANCE_KEYS)[number
 };
 
 describe('build-review rubric projections', () => {
+  describe('reduced-coverage publication contract (Task 19)', () => {
+    const reducedCoverage = {
+      kind: 'reduced-coverage' as const,
+      version: 'v1' as const,
+      feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
+      identity: { rubric: 'tautology' as const, reason: 'provider-error' as const },
+      rationale: 'The provider transport was unavailable after the bounded retry.',
+      operator: 'james',
+      acceptedAt: '2026-08-20T12:00:00.000Z',
+    };
+
+    const currentFailure = {
+      kind: 'infrastructure-failure' as const,
+      rubric: 'tautology' as const,
+      reason: 'provider-error' as const,
+      detail: 'provider transport unavailable on this lap',
+    };
+
+    it('renders the same complete current-lap entry for every publication surface', () => {
+      const rendered = renderBuildReviewReducedCoverageEvidence({
+        state: 'known', records: [reducedCoverage], currentFailures: [currentFailure],
+      });
+
+      expect(rendered).toEqual({
+        ok: true,
+        section: [
+          '## Reduced build-review coverage',
+          '',
+          '- Rubric: `tautology`',
+          '  Cause: `provider-error`',
+          '  Current diagnostic: provider transport unavailable on this lap',
+          '  Operator: james',
+          '  Rationale: The provider transport was unavailable after the bounded retry.',
+          '  Decision time: 2026-08-20T12:00:00.000Z',
+        ].join('\n'),
+      });
+    });
+
+    it('re-stamps only the fault actually present on the current lap', () => {
+      const rendered = renderBuildReviewReducedCoverageEvidence({
+        state: 'known',
+        records: [reducedCoverage],
+        currentFailures: [{ ...currentFailure, detail: 'fresh current diagnostic' }],
+      });
+
+      expect(rendered).toMatchObject({ ok: true, section: expect.stringContaining('Current diagnostic: fresh current diagnostic') });
+      expect(rendered).not.toMatchObject({ section: expect.stringContaining('Current diagnostic: provider transport unavailable on this lap') });
+    });
+
+    it('fails closed when a known decision cannot be rendered', () => {
+      expect(renderBuildReviewReducedCoverageEvidence({
+        state: 'known',
+        records: [{ ...reducedCoverage, operator: '   ' }],
+        currentFailures: [currentFailure],
+      })).toEqual({ ok: false, message: 'reduced build-review coverage contains an unrenderable decision' });
+    });
+
+    it('does not invent a section for absent or unreadable decision state', () => {
+      expect(renderBuildReviewReducedCoverageEvidence({ state: 'absent' })).toEqual({ ok: true, section: undefined });
+      expect(renderBuildReviewReducedCoverageEvidence({ state: 'unreadable' })).toEqual({ ok: true, section: undefined });
+    });
+  });
+
   it('derives the four closed projections with every skill dependency and a v1 digest', () => {
     const fixture = source();
     const projections = deriveBuildReviewRubricProjections(fixture);
