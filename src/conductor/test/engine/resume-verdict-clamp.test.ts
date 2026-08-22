@@ -559,6 +559,55 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
+  // ── Story 3 (#1753): markerless resume must admit its first step ─────────
+  describe('Story 3: markerless resume walks back to a runnable prerequisite (#1753)', () => {
+    it('resumes at failed build rather than gate-blocking stale test_suite', async () => {
+      // This is the persisted residue from the incident: wiring_check was
+      // already done, while build then failed and its dependent loop gates
+      // were staled. With no verdicts on disk, the verdict clamp is inert.
+      const seed = seedDoneThrough('finish');
+      seed.build = 'failed';
+      for (const name of [
+        'test_suite',
+        'build_review',
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+        'retro',
+        'rebase',
+        'finish',
+      ] as StepName[]) {
+        seed[name] = 'stale';
+      }
+      await writeState(statePath, seed as ConductState);
+
+      const dispatched: StepName[] = [];
+      const blocked: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          dispatched.push(step);
+          return { success: false, output: 'stop after first dispatch' };
+        },
+      };
+      events.on('gate_blocked', (event) => {
+        if (event.type === 'gate_blocked') blocked.push(event.step);
+      });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        resume: true,
+        daemon: true,
+      });
+
+      await conductor.run();
+
+      expect(dispatched[0]).toBe('build');
+      expect(blocked).not.toContain('test_suite');
+    });
+  });
+
   // ── Story 5: tail selection is clamped by the entry-gate predicate ──────
   describe('Story 5: tail selection cannot enter a gate its prerequisite rejects', () => {
     async function selectTailWithTestSuiteStatus(
