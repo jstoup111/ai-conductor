@@ -119,6 +119,11 @@ import { DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS as CONFIGURED_PROVIDER_STREAM_M
 import { parseFinishPrProseJudgment } from './finish-pr-prose-judgment.js';
 import { resolvePlanPatternSource } from './plan-pattern-source.js';
 import { runCopyEquivalence } from './copy-equivalence.js';
+import {
+  renderAsBuiltPolicyPrompt,
+  resolveAsBuiltPolicy,
+  type AsBuiltPolicyConfig,
+} from './as-built-policy.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -805,6 +810,7 @@ export class DefaultStepRunner implements StepRunner {
       autonomous,
       opts?.retryReason,
       opts?.finishProsePass,
+      state.complexity_tier,
     );
 
     // Autonomous steps use invoke() (captured output) so we can detect rate
@@ -2644,6 +2650,7 @@ export class DefaultStepRunner implements StepRunner {
     autonomous: boolean,
     retryReason?: string,
     finishProsePass?: 'author' | 'judge',
+    tier?: ComplexityTier,
   ): Promise<string> {
     const stepDef = this.stepRegistry.find((candidate) => candidate.name === step)
       ?? getStepDefinition(step);
@@ -2666,6 +2673,18 @@ export class DefaultStepRunner implements StepRunner {
 
     // Effort is now controlled via CLAUDE_CODE_EFFORT_LEVEL env var (Claude's
     // native reasoning knob) — no prose hint needed in the system prompt.
+
+    if (step === 'architecture_review_as_built') {
+      const policy = await resolveAsBuiltPolicy({
+        projectRoot: this.projectDir,
+        tier,
+        // The runtime config validator already owns this accepted block. Its
+        // public HarnessConfig declaration is widened by the config task, so
+        // keep this task's prompt seam scoped to the validated policy shape.
+        config: this.config as unknown as AsBuiltPolicyConfig | undefined,
+      });
+      prompt += `\n\n${renderAsBuiltPolicyPrompt(policy)}`;
+    }
 
     // Task 14: Include quarantine context if a .pipeline/QUARANTINE sentinel exists.
     // This surfaces the quarantine ref and preserved paths to the resuming build dispatch.
