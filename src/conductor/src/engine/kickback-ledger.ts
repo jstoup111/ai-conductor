@@ -1,11 +1,26 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import type { BuildReviewRubricId } from '../types/config.js';
+import {
+  parseBuildReviewInfrastructureFailure,
+  type BuildReviewInfrastructureFailureReason,
+} from './build-review-domain.js';
+
+/** The latest infrastructure failure charged to a build-review rubric lap. */
+export interface KickbackLastMechanicalFault {
+  rubric: BuildReviewRubricId;
+  reason: BuildReviewInfrastructureFailureReason;
+  detail: string;
+  lapId: string;
+}
+
 /** Durable state for a gate's cross-dispatch kickback budget. */
 export interface KickbackGateEntry {
   count: number;
   cumulative: number;
   mechanicalFaults?: number;
+  lastMechanicalFault?: KickbackLastMechanicalFault;
   treeHash: string | null;
   lastReason: string;
   priorVerdict: boolean;
@@ -83,6 +98,20 @@ function emptyLedger(): KickbackLedger {
   return { version: 1, gates: {} };
 }
 
+function isLastMechanicalFault(value: unknown): value is KickbackLastMechanicalFault {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+
+  const fault = value as Record<string, unknown>;
+  const infrastructureFailure = parseBuildReviewInfrastructureFailure({
+    kind: 'infrastructure-failure',
+    rubric: fault.rubric,
+    reason: fault.reason,
+    detail: fault.detail,
+  });
+  return infrastructureFailure !== undefined &&
+    typeof fault.lapId === 'string' && fault.lapId.trim().length > 0;
+}
+
 function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntry {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
@@ -95,6 +124,7 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
       Number.isInteger(entry.mechanicalFaults) &&
       entry.mechanicalFaults >= 0
     )) &&
+    (entry.lastMechanicalFault === undefined || isLastMechanicalFault(entry.lastMechanicalFault)) &&
     (typeof entry.treeHash === 'string' || entry.treeHash === null) &&
     typeof entry.lastReason === 'string' &&
     typeof entry.priorVerdict === 'boolean' &&

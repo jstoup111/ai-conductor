@@ -200,6 +200,69 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     expect(existsSync(ledgerPath)).toBe(true);
   });
 
+  describe('lastMechanicalFault ledger validation (Task 1, #1740)', () => {
+    const entry = {
+      count: 1,
+      cumulative: 2,
+      mechanicalFaults: 1,
+      treeHash: null,
+      lastReason: 'a rejected rubric',
+      priorVerdict: true,
+      resolvedBefore: 1,
+    };
+
+    async function readRawLedger(gate: Record<string, unknown>) {
+      await writeFile(ledgerPath, JSON.stringify({ version: 1, gates: { build_review: gate } }), 'utf8');
+      return readKickbackLedger(dir);
+    }
+
+    it('accepts a legacy entry without lastMechanicalFault', async () => {
+      const ledger = await readRawLedger(entry);
+
+      expect(ledger.gates.build_review).toMatchObject(entry);
+      expect(ledger.gates.build_review.lastMechanicalFault).toBeUndefined();
+    });
+
+    it('preserves a well-formed lastMechanicalFault record', async () => {
+      const lastMechanicalFault = {
+        rubric: 'scope',
+        reason: 'malformed-artifact',
+        detail: 'provider result omitted the required verdict',
+        lapId: 'lap-0123456789abcdef0123456789abcdef01234567',
+      };
+
+      const ledger = await readRawLedger({ ...entry, lastMechanicalFault });
+
+      expect(ledger.gates.build_review.lastMechanicalFault).toEqual(lastMechanicalFault);
+    });
+
+    it('rejects a bogus lastMechanicalFault reason with the invalid-mechanicalFaults fallback', async () => {
+      const invalidMechanicalFaults = await readRawLedger({ ...entry, mechanicalFaults: 'one' });
+      const bogusReason = await readRawLedger({
+        ...entry,
+        lastMechanicalFault: {
+          rubric: 'scope', reason: 'bogus', detail: 'bad reason', lapId: 'lap-current',
+        },
+      });
+
+      expect(bogusReason).toEqual(invalidMechanicalFaults);
+      expect(bogusReason).toEqual({ version: 1, gates: {} });
+    });
+
+    it('rejects a lastMechanicalFault without lapId with the invalid-mechanicalFaults fallback', async () => {
+      const invalidMechanicalFaults = await readRawLedger({ ...entry, mechanicalFaults: 'one' });
+      const missingLapId = await readRawLedger({
+        ...entry,
+        lastMechanicalFault: {
+          rubric: 'scope', reason: 'malformed-artifact', detail: 'missing lap',
+        },
+      });
+
+      expect(missingLapId).toEqual(invalidMechanicalFaults);
+      expect(missingLapId).toEqual({ version: 1, gates: {} });
+    });
+  });
+
   describe('classified cap HALTs (Task 14, #984)', () => {
     it('names build_review, its cap lap, and the recorded failure reason in a needs-human HALT', async () => {
       const lastReason = 'build review says the implementation is tautological';
