@@ -70,7 +70,88 @@ describe('parsePrdAuditReport', () => {
 
     expect(parsePrdAuditReport(report)).toEqual({
       ok: false,
+      class: 'mechanical-fault',
       error: 'PRD audit finding S2.1 has an invalid Grade.',
+    });
+  });
+
+  const activePlan = '### Task 4: Existing task\n\n**Files:** src/example.ts';
+
+  it('rejects a FIXABLE finding with no owning plan task, naming the finding', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE | | Missing guard |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'PRD audit finding S2.1 is FIXABLE but has no Plan task.',
+    });
+  });
+
+  it('rejects a FIXABLE finding whose task is absent from the active plan', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE | 99 | Missing guard |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'PRD audit finding S2.1 names Plan task 99, which is absent from the active plan.',
+    });
+  });
+
+  it('rejects a finding that claims multiple grades', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE, PLAN_GAP | 4 | Missing guard |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'PRD audit finding S2.1 has an invalid Grade.',
+    });
+  });
+
+  it('accepts separate rows with one grade each', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE | 4 | Missing guard |',
+      '| S2.2 | PLAN_GAP | | No plan task owns this |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [
+          { criterion: 'S2.1', grade: 'FIXABLE', planTask: 4, evidence: 'Missing guard' },
+          { criterion: 'S2.2', grade: 'PLAN_GAP', evidence: 'No plan task owns this' },
+        ],
+      },
     });
   });
 });

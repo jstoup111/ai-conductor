@@ -34,6 +34,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
+import { parsePlanTaskPaths } from './plan-task-parse.js';
 import {
   deriveEffectiveBuildReviewVerdict,
   parseBuildReviewAggregate,
@@ -3761,7 +3762,7 @@ export interface PrdAuditReport {
 
 export type PrdAuditReportParseResult =
   | { ok: true; value: PrdAuditReport }
-  | { ok: false; error: string };
+  | { ok: false; class: 'mechanical-fault'; error: string };
 
 const PRD_AUDIT_GRADES: ReadonlySet<PrdAuditGrade> = new Set([
   'PASS',
@@ -3790,12 +3791,15 @@ function isTableSeparator(cells: readonly string[]): boolean {
  * authoritative routing contract. Invalid grade vocabulary fails closed here
  * instead of being interpreted by a later route as an implicit new grade.
  */
-export function parsePrdAuditReport(content: string): PrdAuditReportParseResult {
+export function parsePrdAuditReport(
+  content: string,
+  activePlan?: string,
+): PrdAuditReportParseResult {
   const prdMarker = content.match(
     /^\s*(?:\*{0,2}\s*PRD\s*\*{0,2}\s*:|\*{0,2}\s*PRD\s*:\s*\*{0,2})\s*(present|none)\s*$/im,
   );
   if (!prdMarker) {
-    return { ok: false, error: 'PRD audit report must declare **PRD:** present or none.' };
+    return prdAuditMechanicalFault('PRD audit report must declare **PRD:** present or none.');
   }
 
   const lines = verdictTableLines(content);
@@ -3805,7 +3809,7 @@ export function parsePrdAuditReport(content: string): PrdAuditReportParseResult 
     return cells.includes('criterion') && cells.includes('grade');
   });
   if (headerIndex === -1) {
-    return { ok: false, error: 'PRD audit report is missing its criterion-grade Verdict Table.' };
+    return prdAuditMechanicalFault('PRD audit report is missing its criterion-grade Verdict Table.');
   }
 
   const header = tableCells(lines[headerIndex]).map((cell) => cell.toLowerCase());
@@ -3813,6 +3817,9 @@ export function parsePrdAuditReport(content: string): PrdAuditReportParseResult 
   const gradeIndex = header.indexOf('grade');
   const planTaskIndex = header.indexOf('plan task');
   const evidenceIndex = header.indexOf('evidence');
+  const activePlanTaskIds = activePlan === undefined
+    ? undefined
+    : new Set(parsePlanTaskPaths(activePlan).keys());
   const findings: PrdAuditFinding[] = [];
 
   for (const line of lines.slice(headerIndex + 1)) {
@@ -3824,13 +3831,27 @@ export function parsePrdAuditReport(content: string): PrdAuditReportParseResult 
 
     const rawGrade = cells[gradeIndex]?.toUpperCase();
     if (!rawGrade || !PRD_AUDIT_GRADES.has(rawGrade as PrdAuditGrade)) {
-      return { ok: false, error: `PRD audit finding ${criterion} has an invalid Grade.` };
+      return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Grade.`);
     }
 
     const rawPlanTask = planTaskIndex === -1 ? '' : cells[planTaskIndex] ?? '';
     const planTask = rawPlanTask.trim() === '' ? undefined : Number(rawPlanTask);
     if (planTask !== undefined && (!Number.isInteger(planTask) || planTask < 1)) {
-      return { ok: false, error: `PRD audit finding ${criterion} has an invalid Plan task.` };
+      return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Plan task.`);
+    }
+    if (rawGrade === 'FIXABLE' && planTask === undefined) {
+      return prdAuditMechanicalFault(
+        `PRD audit finding ${criterion} is FIXABLE but has no Plan task.`,
+      );
+    }
+    if (
+      rawGrade === 'FIXABLE' &&
+      activePlanTaskIds !== undefined &&
+      !activePlanTaskIds.has(String(planTask))
+    ) {
+      return prdAuditMechanicalFault(
+        `PRD audit finding ${criterion} names Plan task ${planTask}, which is absent from the active plan.`,
+      );
     }
 
     findings.push({
@@ -3845,6 +3866,10 @@ export function parsePrdAuditReport(content: string): PrdAuditReportParseResult 
     ok: true,
     value: { prd: prdMarker[1].toLowerCase() as PrdAuditReport['prd'], findings },
   };
+}
+
+function prdAuditMechanicalFault(error: string): PrdAuditReportParseResult {
+  return { ok: false, class: 'mechanical-fault', error };
 }
 
 /** Return expected FR ids that have no parseable verdict row in the report. */
