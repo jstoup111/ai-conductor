@@ -96,7 +96,7 @@ spec from `/writing-system-tests`, and the existing daemon integration harness f
 
 **Done when:**
 - `parsePlanTaskDoneWhen` is exported from `src/conductor/src/engine/plan-task-parse.ts` and the four new cases in `plan-task-parse.test.ts` pass.
-- A corpus test over every landed plan on main finds exactly one plan with a non-empty map and an empty map for every other.
+- A corpus test over every landed plan on main asserts the parse, not a census: every plan whose tasks carry a `Done when:` block yields one non-empty entry per such task, every plan with no block yields an empty map, and no plan raises. The count of plans carrying the block is deliberately not asserted — it grows as plans land.
 
 **Files:**
 - src/conductor/src/engine/plan-task-parse.ts
