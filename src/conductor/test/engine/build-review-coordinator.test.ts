@@ -12,7 +12,10 @@ import {
   type BuildReviewInfrastructureFailureReason,
 } from "../../src/engine/build-review-domain.js";
 import type { BuildReviewCacheEntry } from "../../src/engine/build-review-cache.js";
-import type { BuildReviewEngineIdentity } from "../../src/engine/build-review-engine-identity.js";
+import {
+  engineStampFromEngineDir,
+  type BuildReviewEngineIdentity,
+} from "../../src/engine/build-review-engine-identity.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 import type { ResolvedBuildReviewConfig } from "../../src/engine/resolved-config.js";
@@ -477,6 +480,140 @@ describe("build-review coordinator: frozen fan-out", () => {
         { kind: "dispatched", rubric: "scope" },
         { kind: "cache-hit", rubric: "rootCause" },
         { kind: "cache-hit", rubric: "completeness" },
+      ],
+    });
+  });
+
+  it("reuses four cached rubrics with matching per-rubric identities without dispatching a model", async () => {
+    const identities = {
+      tautology: { kind: "ready" as const, identity: { engineStamp: "31b5c81beaec", skillDigest: "sha256:tautology" } as BuildReviewEngineIdentity },
+      scope: { kind: "ready" as const, identity: { engineStamp: "31b5c81beaec", skillDigest: "sha256:scope" } as BuildReviewEngineIdentity },
+      rootCause: { kind: "ready" as const, identity: { engineStamp: "31b5c81beaec", skillDigest: "sha256:root-cause" } as BuildReviewEngineIdentity },
+      completeness: { kind: "ready" as const, identity: { engineStamp: "31b5c81beaec", skillDigest: "sha256:completeness" } as BuildReviewEngineIdentity },
+    };
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const dispatchModel = vi.fn();
+    const result = await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identities,
+      preflight: vi.fn(),
+      readCache: async (branch, projection, policyFingerprint) => ({
+        version: 1, rubric: branch.rubric, contractVersion: "v3", projectionVersion: "v2",
+        projectionDigest: projection.digest, policyFingerprint, engineIdentity: identities[branch.rubric].identity,
+        result: {
+          kind: "judged", rubric: branch.rubric, lapId: parseBuildReviewLapId("cached")!, snapshotDigest: "cached-snapshot",
+          contractVersion: "v3" as never, findings: [], verdict: "PASS",
+        },
+      }),
+      dispatchModel,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+      emit,
+    });
+
+    expect({
+      dispatches: dispatchModel.mock.calls.length,
+      cacheHits: emit.mock.calls.map(([event]) => event).filter((event) => event.type === "build_review_cache_hit"),
+      branches: result.kind === "ready" ? result.branches : [],
+    }).toMatchObject({
+      dispatches: 0,
+      cacheHits: [
+        { rubric: "tautology", lapId: "lap-current" },
+        { rubric: "scope", lapId: "lap-current" },
+        { rubric: "rootCause", lapId: "lap-current" },
+        { rubric: "completeness", lapId: "lap-current" },
+      ],
+      branches: [
+        { kind: "cache-hit", rubric: "tautology", result: { lapId: "lap-current" } },
+        { kind: "cache-hit", rubric: "scope", result: { lapId: "lap-current" } },
+        { kind: "cache-hit", rubric: "rootCause", result: { lapId: "lap-current" } },
+        { kind: "cache-hit", rubric: "completeness", result: { lapId: "lap-current" } },
+      ],
+    });
+  });
+
+  it("invalidates only the rubric whose skill digest changed", async () => {
+    const identities = {
+      tautology: { kind: "ready" as const, identity: { engineStamp: "31b5c81beaec", skillDigest: "sha256:tautology" } as BuildReviewEngineIdentity },
+      scope: { kind: "ready" as const, identity: { engineStamp: "31b5c81beaec", skillDigest: "sha256:scope-current" } as BuildReviewEngineIdentity },
+      rootCause: { kind: "ready" as const, identity: { engineStamp: "31b5c81beaec", skillDigest: "sha256:root-cause" } as BuildReviewEngineIdentity },
+      completeness: { kind: "ready" as const, identity: { engineStamp: "31b5c81beaec", skillDigest: "sha256:completeness" } as BuildReviewEngineIdentity },
+    };
+    const dispatchModel = vi.fn(async (branch, projection) => ({
+      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
+    }));
+    const result = await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identities,
+      preflight: vi.fn(),
+      readCache: async (branch, projection, policyFingerprint) => ({
+        version: 1, rubric: branch.rubric, contractVersion: "v3", projectionVersion: "v2",
+        projectionDigest: projection.digest, policyFingerprint,
+        engineIdentity: branch.rubric === "scope"
+          ? { ...identities.scope.identity, skillDigest: "sha256:scope-cached" } as BuildReviewEngineIdentity
+          : identities[branch.rubric].identity,
+        result: {
+          kind: "judged", rubric: branch.rubric, lapId: parseBuildReviewLapId("cached")!, snapshotDigest: "cached-snapshot",
+          contractVersion: "v3" as never, findings: [], verdict: "PASS",
+        },
+      }),
+      dispatchModel,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    });
+
+    expect({
+      dispatched: dispatchModel.mock.calls.map(([branch]) => branch.rubric),
+      branches: result.kind === "ready" ? result.branches : [],
+    }).toMatchObject({
+      dispatched: ["scope"],
+      branches: [
+        { kind: "cache-hit", rubric: "tautology" },
+        { kind: "dispatched", rubric: "scope" },
+        { kind: "cache-hit", rubric: "rootCause" },
+        { kind: "cache-hit", rubric: "completeness" },
+      ],
+    });
+  });
+
+  it("reuses a cache entry when published engine timestamps differ but content stamps match", async () => {
+    const cachedStamp = engineStampFromEngineDir(
+      "/x/dist-versions/20260820T204302Z-31b5c81beaec/engine",
+    );
+    const currentStamp = engineStampFromEngineDir(
+      "/x/dist-versions/20260821T010203Z-31b5c81beaec/engine",
+    );
+    const identity = {
+      engineStamp: currentStamp,
+      skillDigest: "sha256:scope",
+    } as BuildReviewEngineIdentity;
+    const dispatchModel = vi.fn();
+    const result = await coordinateBuildReviewRubrics({
+      config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false }, rootCause: { ...config().rubrics.rootCause, enabled: false }, completeness: { ...config().rubrics.completeness, enabled: false } } }),
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identity,
+      preflight: vi.fn(),
+      readCache: async (branch, projection, policyFingerprint) => ({
+        version: 1, rubric: branch.rubric, contractVersion: "v3", projectionVersion: "v2",
+        projectionDigest: projection.digest, policyFingerprint,
+        engineIdentity: { ...identity, engineStamp: cachedStamp } as BuildReviewEngineIdentity,
+        result: {
+          kind: "judged", rubric: branch.rubric, lapId: parseBuildReviewLapId("cached")!, snapshotDigest: "cached-snapshot",
+          contractVersion: "v3" as never, findings: [], verdict: "PASS",
+        },
+      }),
+      dispatchModel,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    });
+
+    expect({ cachedStamp, currentStamp, dispatches: dispatchModel.mock.calls.length, branches: result.kind === "ready" ? result.branches : [] }).toMatchObject({
+      cachedStamp: "31b5c81beaec",
+      currentStamp: "31b5c81beaec",
+      dispatches: 0,
+      branches: [
+        { kind: "skipped", rubric: "tautology" },
+        { kind: "cache-hit", rubric: "scope", result: { lapId: "lap-current" } },
+        { kind: "skipped", rubric: "rootCause" },
+        { kind: "skipped", rubric: "completeness" },
       ],
     });
   });
