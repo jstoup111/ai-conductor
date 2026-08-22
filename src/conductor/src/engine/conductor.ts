@@ -1097,7 +1097,7 @@ async function selectChangedArtifacts(
  * the ledger only supplies the shared allowance consumption.
  */
 export function renderExhaustedMechanicalBuildReviewHalt(
-  entry: Pick<KickbackGateEntry, 'mechanicalFaults'>,
+  entry: Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'>,
   currentLap: unknown,
 ): string {
   const aggregate = parseBuildReviewAggregate(currentLap);
@@ -1106,8 +1106,12 @@ export function renderExhaustedMechanicalBuildReviewHalt(
   );
   const consumed = entry.mechanicalFaults ?? 0;
   if (!aggregate || !failure || failure.kind !== 'infrastructure-failure') {
+    const lastMechanicalFault = entry.lastMechanicalFault;
     return `build_review mechanical fault allowance exhausted: ${consumed} of ` +
-      `${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed; current-lap diagnostic is unavailable`;
+      `${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed; current-lap diagnostic is unavailable` +
+      (lastMechanicalFault === undefined ? '' :
+        `; Last recorded fault: ${lastMechanicalFault.rubric} closed cause ${lastMechanicalFault.reason} ` +
+        `on lap ${lastMechanicalFault.lapId} (${lastMechanicalFault.detail}).`);
   }
   return [
     `build_review mechanical fault allowance exhausted: ${consumed} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed.`,
