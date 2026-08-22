@@ -4164,6 +4164,86 @@ Task 1 → Task 2
       expect(result.reason).not.toContain('old finding');
     });
 
+    it('preserves a stamped PASS from a different HEAD when its code delta misses the gate surface', async () => {
+      const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({
+        ...makeAggregate('lap-A', false),
+        codeStamp: 'A',
+      }));
+      const stale = new Date(Date.now() - 10_000);
+      await utimes(verdictPath, stale, stale);
+
+      const result = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now(),
+        config: { gate_code_validity: { enabled: true } },
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'fixture' },
+          effective: {
+            rawVerdict: 'PASS' as const,
+            verdict: 'PASS' as const,
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            skippedRubrics: [],
+            infrastructureFailureRubrics: [],
+          },
+        }),
+        git: async (args) => {
+          if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+          if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return { exitCode: 0, stdout: '', stderr: '' };
+          if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
+          if (args[0] === 'diff' && args[2] === 'A..HEAD') return { exitCode: 0, stdout: 'docs/guide.md\n', stderr: '' };
+          if (args[0] === 'diff') return { exitCode: 0, stdout: 'src/feature.ts\n', stderr: '' };
+          throw new Error(`unexpected git command: ${args.join(' ')}`);
+        },
+      });
+
+      expect(result).toMatchObject({
+        done: true,
+        verdictFreshness: { outcome: 'preserved_surface_miss' },
+      });
+      expect(result.staleLap).toBeUndefined();
+    });
+
+    it('rejects a matching-lap FAIL whose mtime predates the session without reporting a stale lap', async () => {
+      const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-B')));
+      const stale = new Date(Date.now() - 10_000);
+      await utimes(verdictPath, stale, stale);
+
+      const result = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now(),
+        git: async () => ({ exitCode: 0, stdout: 'B\n', stderr: '' }),
+      });
+
+      expect(result).toMatchObject({
+        done: false,
+        routeClass: 'absent',
+        verdictFreshness: { outcome: 'stale_invalidated' },
+      });
+      expect(result.reason).toMatch(/not rewritten by this judging session/);
+      expect(result.staleLap).toBeUndefined();
+    });
+
+    it('keeps a pre-session stamp-less PASS aggregate absent without reporting a stale lap', async () => {
+      const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-A', false)));
+      const stale = new Date(Date.now() - 10_000);
+      await utimes(verdictPath, stale, stale);
+
+      const result = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now(),
+        git: async () => ({ exitCode: 0, stdout: 'B\n', stderr: '' }),
+      });
+
+      expect(result).toMatchObject({
+        done: false,
+        routeClass: 'absent',
+        verdictFreshness: { outcome: 'stale_invalidated' },
+      });
+      expect(result.staleLap).toBeUndefined();
+    });
+
     it('keeps a current-lap FAIL aggregate on its named route and fails open when HEAD is unavailable', async () => {
       await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-B')));
       const current = await checkStepCompletion(dir, 'build_review', {
