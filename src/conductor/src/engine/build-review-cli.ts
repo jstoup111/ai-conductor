@@ -388,15 +388,24 @@ export async function dispatchBuildReviewRecordReducedCoverage(
       if (stateRefusal) return refuse('current-rubric-lap-or-state-invalid', `build-review record-reduced-coverage: refused because ${stateRefusal}.`);
       throw new Error(appended.message);
     }
-    (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
-      type: 'build_review_reduced_coverage_accepted',
-      feature: command.feature,
-      lapId: requestedLap,
-      rubric,
-      reason: result.reason,
-      operator: operator.trim(),
-      ts: new Date().toISOString(),
-    });
+    try {
+      (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
+        type: 'build_review_reduced_coverage_accepted',
+        feature: command.feature,
+        lapId: requestedLap,
+        rubric,
+        reason: result.reason,
+        operator: operator.trim(),
+        ts: new Date().toISOString(),
+      });
+    } catch {
+      // The reduced-coverage decision is already durable; best-effort telemetry
+      // must never turn a committed recovery into a reported refusal. Without
+      // this local catch the outer handler reports failure while the record is
+      // committed, and the retry the operator is told to make then refuses as a
+      // duplicate — leaving the recovery action unusable. Mirrors the finding
+      // acceptance path above.
+    }
     print(`build-review record-reduced-coverage: recorded ${rubric} for lap ${requestedLap}.`);
     return 0;
   } catch {

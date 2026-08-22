@@ -59,6 +59,40 @@ describe('build-review findings CLI', () => {
     }, expect.any(Function));
   });
 
+  it('reports the committed decision when acceptance telemetry throws', async () => {
+    // rootCause finding (lap-01d21a67): the decision is durable once
+    // appendReducedCoverageIfCurrent commits. An event-writer throw used to
+    // fall into the outer refusal path, so the operator saw a failure for a
+    // recovery that had actually succeeded — and the retry they were told to
+    // make then refused as a duplicate, leaving the command unusable.
+    const appendReducedCoverageIfCurrent = vi.fn(async (input: never, validate: never) => {
+      await (validate as unknown as (r: unknown[]) => Promise<boolean>)([]);
+      return {
+        ok: true as const,
+        record: {
+          kind: 'reduced-coverage' as const, version: 'v1' as const,
+          feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' },
+          identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const },
+          rationale: 'risk', operator: 'local-operator', acceptedAt: '2026-08-19T12:00:00.000Z',
+        },
+      };
+    });
+    const print = vi.fn();
+
+    await expect(dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'risk',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(aggregate), readMechanicalFaults: async () => 3,
+      createStore: () => ({ appendReducedCoverageIfCurrent }),
+      print,
+      appendEvent: () => { throw new Error('closeout event sink unavailable'); },
+    })).resolves.toBe(0);
+
+    expect(appendReducedCoverageIfCurrent).toHaveBeenCalledTimes(1);
+    expect(print).toHaveBeenCalledWith(expect.stringContaining('recorded rootCause for lap lap-current'));
+  });
+
   it.each([
     ['judged rubric', aggregateWithRootCause({ kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' }), 3, [], 'infrastructure failure', false],
     ['skipped rubric', aggregateWithRootCause({ kind: 'skipped', rubric: 'rootCause', reason: 'disabled' }), 3, [], 'infrastructure failure', false],
