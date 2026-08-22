@@ -38,6 +38,10 @@ import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type Bu
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
+import {
+  appendRecordedShipmentFindings,
+  recordedShipmentFindings,
+} from './shipment-association.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -202,6 +206,27 @@ export function createProductionFinishPublicationCoordinator(
   // production, so every `record_outcome` attempt refused with "runGh not
   // implemented" and burned the FINISH retry budget instead of recording.
   const finishRecordRunners = deps.finishRecordRunners ?? makeProductionFinishRecordRunners();
+
+  const copyRecordedReviewFindingsToShippedRecord = async (slug: string): Promise<void> => {
+    const pipeline = join(deps.projectRoot, '.pipeline');
+    const [prdAudit, asBuilt] = await Promise.all([
+      readFile(join(pipeline, 'prd-audit.md'), 'utf8').catch(() => undefined),
+      readFile(join(pipeline, 'architecture-review-as-built.md'), 'utf8').catch(() => undefined),
+    ]);
+    const findings = recordedShipmentFindings({ prdAudit, asBuilt });
+    if (findings.length === 0) return;
+
+    const relativeRecordPath = join('.docs', 'shipped', `${slug}.md`);
+    const recordPath = join(deps.projectRoot, relativeRecordPath);
+    const record = await readFile(recordPath, 'utf8');
+    const next = appendRecordedShipmentFindings(record, findings);
+    if (next === record) return;
+    await writeFile(recordPath, next, 'utf8');
+    await deps.git(['add', relativeRecordPath], { cwd: deps.projectRoot });
+    await deps.git([
+      'commit', '-m', `shipped record findings: ${slug}`, '--no-verify',
+    ], { cwd: deps.projectRoot });
+  };
   // A real provider session is expensive. Retain terminal prose verdicts for
   // the exact observed title/body revision; a changed revision earns one new
   // session, while an unchanged deficient one cannot burn retries.
@@ -520,6 +545,7 @@ export function createProductionFinishPublicationCoordinator(
             if (!state.feature_desc || !state.pr_url) throw new Error('missing shipment identity');
             const status = await writeShippedRecord({ kind: 'write', slug: state.feature_desc, pr: state.pr_url }, deps.projectRoot);
             if (status !== 0) throw new Error('required shipped-record accepted-risk evidence could not be published');
+            await copyRecordedReviewFindingsToShippedRecord(state.feature_desc);
           },
           repairPresentation: async () => {
             if (!state.pr_url) throw new Error('missing PR identity');
