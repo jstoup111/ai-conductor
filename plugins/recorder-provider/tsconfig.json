@@ -7,11 +7,12 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": ".",
+    "rootDir": "../..",
     "declaration": true,
     "sourceMap": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "types": ["node"],
     "paths": {
       "../../src/conductor/src/execution/llm-provider.js": ["../../src/conductor/src/execution/llm-provider.ts"]
     }

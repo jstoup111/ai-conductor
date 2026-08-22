@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { CompletionContext } from '../../src/engine/artifacts.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -40,7 +41,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
   }
 
   async function fixture(
-    resolver: ReturnType<typeof vi.fn>,
+    resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']>,
     opts?: {
       kickbackLedger?: Record<string, unknown>;
       completenessFailure?: boolean;

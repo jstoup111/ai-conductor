@@ -80,6 +80,34 @@ else
 fi
 
 echo ""
+echo "=== conduct-ts launcher: pinned Node runtime ==="
+
+DIR_PIN=$(make_fake_conductor "node-pin")
+printf '%s\n' 'nodejs 26.7.0' > "$DIR_PIN/src/conductor/.tool-versions"
+PIN_STUBS="$TMPDIR_ROOT/node-pin-stubs"
+mkdir -p "$PIN_STUBS"
+cat > "$PIN_STUBS/asdf" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$PIN_STUBS/node" <<'EOF'
+#!/usr/bin/env bash
+printf 'PINNED_NODE:%s\n' "${ASDF_NODEJS_VERSION:-unset}"
+EOF
+chmod +x "$PIN_STUBS/asdf" "$PIN_STUBS/node"
+
+PIN_OUT=$(PATH="$PIN_STUBS:/usr/bin:/bin" "$DIR_PIN/bin/conduct-ts" 2>&1) || true
+case "$PIN_OUT" in
+  *"PINNED_NODE:26.7.0"*)
+    assert "exports the repository's pinned Node 26 runtime" 0
+    ;;
+  *)
+    echo "$PIN_OUT"
+    assert "exports the repository's pinned Node 26 runtime" 1
+    ;;
+esac
+
+echo ""
 echo "=== conduct-ts launcher: broken dist symlink ==="
 
 DIR2=$(make_fake_conductor "broken")

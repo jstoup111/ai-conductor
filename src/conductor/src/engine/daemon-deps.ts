@@ -2,7 +2,7 @@ import { execa } from 'execa';
 import { mkdir, writeFile, readFile, access, stat } from 'node:fs/promises';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import * as chokidar from 'chokidar';
+import chokidar, { type FSWatcher } from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
@@ -376,7 +376,7 @@ export function watchHaltCleared(
   const worktreePath = join(worktreeBase, slug);
   const haltPath = join(worktreePath, HALT_MARKER);
   const clearedPath = join(worktreePath, '.pipeline', 'HALT.cleared');
-  let watcher: chokidar.FSWatcher | null = null;
+  let watcher: FSWatcher | null = null;
   let disposed = false;
 
   // Start the watcher

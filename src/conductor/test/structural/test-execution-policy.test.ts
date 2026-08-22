@@ -71,7 +71,7 @@ describe('structural: test execution policy', () => {
   it('does not discover smoke tests through the default Vitest configuration', async () => {
     const vitest = await createVitest('test', { root: conductorRoot });
     try {
-      const testFiles = await vitest.globTestFiles();
+      const testFiles = await vitest.globTestSpecifications();
 
       expect(testFiles.filter(({ moduleId }) =>
         relative(conductorRoot, moduleId).startsWith('test/smoke/') || moduleId.endsWith('.smoke.test.ts'),

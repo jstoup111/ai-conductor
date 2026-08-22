@@ -61,7 +61,7 @@ afterEach(() => {
 });
 
 function warnLines(): string {
-  return warnSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+  return warnSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n');
 }
 
 function configWithLadder(ladder: readonly string[]): HarnessConfig {

@@ -105,7 +105,7 @@ async function migrateLegacyDistIfNeeded(opts) {
 // built (chicken-and-egg: it IS the build), so it can't `import` the
 // TypeScript source of `engine-store.ts` the normal way — there is no
 // compiled `dist/` yet for a first publish, and the Node version this repo
-// targets (>=20.5) has no built-in TS support. Rather than duplicate
+// target (>=26) has no built-in TS support. Rather than duplicate
 // `resolveEngineStoreRoot`/`computeVersionId` as a second implementation
 // that could drift from the real one, this loads the single source of
 // truth directly: transpile `src/engine/engine-store.ts` with esbuild (an
@@ -127,7 +127,7 @@ async function loadEngineStore() {
     write: false,
     platform: 'node',
     format: 'esm',
-    target: 'node20',
+    target: 'node26',
     packages: 'external',
   });
   const code = outputFiles[0].text;

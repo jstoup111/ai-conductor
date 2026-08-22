@@ -28,8 +28,7 @@ fi
 
 # Honor the conductor's pinned Node version via asdf, so conduct-ts works
 # from any working directory regardless of the project's own .tool-versions.
-# The conductor bundle targets node20; anything older throws on execa
-# imports (addAbortListener from node:events landed in 20).
+# The conductor bundle targets node26 and requires Node 26 or newer.
 TOOL_VERSIONS="${CONDUCTOR_DIR}/.tool-versions"
 if [ -f "$TOOL_VERSIONS" ] && command -v asdf >/dev/null 2>&1; then
   PINNED_NODE=$(awk '$1 == "nodejs" {print $2; exit}' "$TOOL_VERSIONS")

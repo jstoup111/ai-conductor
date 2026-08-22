@@ -385,7 +385,7 @@ describe('T21: flush on exit — idempotent stop() and signal handlers', () => {
     expect(p1).toBe(p2);
     await p1;
     // Spans must appear exactly once (no duplicate flush).
-    const roots = t21SpanExporter.getFinishedSpans().filter((s) => !s.parentSpanId);
+    const roots = t21SpanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
     expect(roots).toHaveLength(1);
   });
 

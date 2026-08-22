@@ -10,7 +10,7 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['./test/setup.ts'],
     pool: 'forks',
-    poolOptions: { forks: { maxForks: 3, minForks: 1 } },
+    maxWorkers: 3,
     testTimeout: 20000,
     hookTimeout: 30000,
   },
