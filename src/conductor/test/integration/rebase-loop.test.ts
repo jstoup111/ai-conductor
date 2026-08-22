@@ -17,6 +17,8 @@ import {
   emitGateInvalidationEvents,
   makeGitRunner as makeRebaseGitRunner,
 } from '../../src/engine/rebase.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 
 const gitCommandSpy = vi.hoisted(() => vi.fn());
 const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
@@ -66,6 +68,20 @@ const execFileAsync = promisify(execFile);
 // default-branch name is deterministic regardless of the host git config, and
 // read it back where the production code is expected to discover it.
 const BASE = 'main';
+
+function passingBuildReviewAggregate() {
+  const lapId = parseBuildReviewLapId('fixture-lap')!;
+  return joinBuildReviewRubricOutcomes({
+    lapId,
+    snapshotDigest: 'sha256:fixture',
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:fixture',
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+    },
+  });
+}
 
 const FRONT_DONE: ConductState = {
   complexity_tier: 'M',
@@ -202,9 +218,14 @@ describe('integration/rebase-loop', () => {
     events = new ConductorEventEmitter();
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs/specs'), { recursive: true });
+    await mkdir(join(dir, '.docs/stories'), { recursive: true });
     await writeFile(
       join(dir, '.docs/specs/add-foo.md'),
       '## Functional Requirements\n\nFR-1\n',
+    );
+    await writeFile(
+      join(dir, '.docs/stories/add-foo.md'),
+      '## Happy Path\n\n- Given a feature, when it runs, then it succeeds.\n',
     );
   });
   afterEach(async () => {
@@ -257,10 +278,7 @@ describe('integration/rebase-loop', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/build-review.json'),
-        JSON.stringify({
-          verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
-        }),
+        JSON.stringify(passingBuildReviewAggregate()),
       );
     } else if (step === 'manual_test') {
       await writeFile(

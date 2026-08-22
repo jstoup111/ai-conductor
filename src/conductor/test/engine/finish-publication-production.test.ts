@@ -22,8 +22,15 @@ const commandResult = { stdout: '' };
 describe('production FINISH publication composition', () => {
   it('upserts accepted build-review risk into the retained PR and blocks unrenderable records', async () => {
     const finding = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: {
+        rubric: 'testQuality',
+        locus: {
+          path: 'test/a.test.ts',
+          contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          display: 'test a',
+        },
+      },
     })!;
     const accepted: BuildReviewDispositionRecord = {
       version: 'v1', feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
@@ -696,9 +703,16 @@ describe('production FINISH publication composition', () => {
       const prUrl = 'https://github.com/acme/widget/pull/1173';
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const finding = canonicalizeBuildReviewFindingIdentity({
-        rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+        rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
         summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'],
-        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
+        anchor: {
+          rubric: 'testQuality',
+          locus: {
+            path: 'test/a.test.ts',
+            contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            display: 'test a',
+          },
+        },
       })!;
       const accepted: BuildReviewDispositionRecord = {
         version: 'v1', feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!,
@@ -706,16 +720,13 @@ describe('production FINISH publication composition', () => {
       };
       const coverage = {
         kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
-        identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const },
+        identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const },
         rationale: 'The provider was unavailable for this current lap.', operator: 'james', acceptedAt: '2026-08-20T00:00:00.000Z',
       };
       const currentLap = parseBuildReviewLapId('lap-current')!;
       await writeFile(join(pipeline, 'build-review.json'), JSON.stringify(joinBuildReviewRubricOutcomes({
         lapId: currentLap, snapshotDigest: 'sha256:current', results: {
-          tautology: { kind: 'judged', rubric: 'tautology', lapId: currentLap, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-          scope: { kind: 'judged', rubric: 'scope', lapId: currentLap, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-          rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'provider unavailable' },
-          completeness: { kind: 'judged', rubric: 'completeness', lapId: currentLap, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+          testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'provider unavailable' },
         },
       })));
       const edits: string[][] = [];
@@ -758,7 +769,7 @@ describe('production FINISH publication composition', () => {
       expect(body).toContain('Accepted build-review risk');
       expect(body).toContain('## Reduced build-review coverage');
       expect(body).toContain('Current diagnostic: provider unavailable');
-      expect(body).toContain(`- Finding: \`${finding.id}\` — rubric: scope`);
+      expect(body).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
       expect(body).not.toContain('**Rationale:**');
       expect(body).not.toContain('reason');
       expect(body).toContain('Operator: james');
@@ -787,7 +798,7 @@ describe('production FINISH publication composition', () => {
         '',
         '## Reduced build-review coverage',
         '',
-        'Rubric rootCause closed as provider-error.',
+        'Rubric testQuality closed as provider-error.',
         '',
         '## Test plan',
         '',
@@ -849,7 +860,7 @@ describe('production FINISH publication composition', () => {
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const coverage = {
         kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
-        identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const },
+        identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const },
         rationale: 'approved', operator: 'james', acceptedAt: '2026-08-20T00:00:00.000Z',
       };
       const gh = vi.fn(async (args: string[]) => {

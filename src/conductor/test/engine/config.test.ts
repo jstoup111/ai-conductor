@@ -1922,14 +1922,14 @@ complexity:
       });
     });
 
-    it('materializes retired rubric defaults while ignoring their configured policy', () => {
+    it('materializes the single test-quality policy and preserves its configured policy', () => {
       const defaults = validateConfig({ build_review: {} });
       const configured = validateConfig({
         build_review: {
-          maxParallel: 3,
+          maxParallel: 1,
           rubrics: {
-            tautology: {
-              enabled: false,
+            testQuality: {
+              enabled: true,
               llm_provider: ['codex', 'claude'],
               model: 'gpt-5.6-sol',
               effort: 'high',
@@ -1949,20 +1949,22 @@ complexity:
           enabled: true,
           maxParallel: 4,
           rubrics: {
-            tautology: { enabled: true },
-            scope: { enabled: true },
-            rootCause: { enabled: true },
-            completeness: { enabled: true },
+            testQuality: { enabled: false },
           },
         },
         configured: {
           enabled: true,
-          maxParallel: 3,
+          maxParallel: 1,
           rubrics: {
-            tautology: { enabled: true },
-            scope: { enabled: true },
-            rootCause: { enabled: true },
-            completeness: { enabled: true },
+            testQuality: {
+              enabled: true,
+              llm_provider: ['codex', 'claude'],
+              model: 'gpt-5.6-sol',
+              effort: 'high',
+              model_fallback_ladder: ['gpt-5.6-terra'],
+              max_retries: 2,
+              escalate: true,
+            },
           },
         },
       });
@@ -2040,14 +2042,18 @@ complexity:
 
     it('passes perTaskFloor:false through validation to the build_review resolver', () => {
       const result = validateConfig({
-        build_review: { enabled: true, perTaskFloor: false },
+        build_review: {
+          enabled: true,
+          perTaskFloor: false,
+          rubrics: { testQuality: { enabled: true } },
+        },
       });
       expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual(expect.objectContaining({
         enabled: true,
         perTaskFloor: false,
         scopeContainmentEnforced: false,
-        maxParallel: 4,
-        rubrics: expect.objectContaining({ scope: expect.objectContaining({ enabled: true }) }),
+        maxParallel: 1,
+        rubrics: expect.objectContaining({ testQuality: expect.objectContaining({ enabled: true }) }),
       }));
     });
 

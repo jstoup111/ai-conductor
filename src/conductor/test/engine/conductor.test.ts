@@ -81,6 +81,8 @@ import {
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { appendTimingSection, renderShippedRecord } from '../../src/engine/shipped-record.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -96,11 +98,51 @@ import type {
   ExecuteProviderCandidatesInput,
   ProviderExecutionResult,
 } from '../../src/engine/provider-execution.js';
+
 import type {
   InvokeOptions,
   InvokeResult,
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
+
+function passingBuildReviewAggregate() {
+  const lapId = parseBuildReviewLapId('fixture-lap')!;
+  return joinBuildReviewRubricOutcomes({
+    lapId,
+    snapshotDigest: 'sha256:fixture',
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:fixture',
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+    },
+  });
+}
+
+function failingBuildReviewAggregate(summary: string) {
+  const lapId = parseBuildReviewLapId('fixture-lap')!;
+  return joinBuildReviewRubricOutcomes({
+    lapId,
+    snapshotDigest: 'sha256:fixture',
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:fixture',
+        contractVersion: 'v3', verdict: 'FAIL',
+        findings: [{
+          concernKind: 'test-insensitive', summary, evidenceLocations: ['test/fixture.test.ts:1'],
+          anchor: {
+            rubric: 'testQuality',
+            locus: {
+              path: 'test/fixture.test.ts',
+              contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              display: 'fixture test',
+            },
+          },
+        }],
+      },
+    },
+  });
+}
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
@@ -300,17 +342,7 @@ describe('engine/conductor', () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           await writeFile(
             join(dir, '.pipeline/build-review.json'),
-            JSON.stringify({
-              verdict: 'FAIL',
-              reasons: ['tautology: fixture failure'],
-              findings: { tautology: ['fixture failure'] },
-              rubric: {
-                tautology: true,
-                scope: false,
-                rootCause: false,
-                completeness: false,
-                },
-            }),
+            JSON.stringify(failingBuildReviewAggregate('fixture failure')),
           );
         }
         return { success: true };
@@ -339,7 +371,7 @@ describe('engine/conductor', () => {
     expect(calls).toEqual(['build_review']);
     expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
     expect(haltReasons).toEqual([
-      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): tautology: fixture failure\n[tautology] fixture failure',
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): [testQuality] test-insensitive\n[testQuality] test-insensitive',
     ]);
   });
 
@@ -373,17 +405,7 @@ describe('engine/conductor', () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           await writeFile(
             join(dir, '.pipeline/build-review.json'),
-            JSON.stringify({
-              verdict: 'FAIL',
-              reasons: ['scope: unchanged tree'],
-              findings: { scope: ['unchanged tree'] },
-              rubric: {
-                tautology: false,
-                scope: true,
-                rootCause: false,
-                completeness: false,
-                },
-            }),
+            JSON.stringify(failingBuildReviewAggregate('unchanged tree')),
           );
         }
         return { success: true };
@@ -409,7 +431,7 @@ describe('engine/conductor', () => {
     await conductor.run();
 
     expect(haltReasons).toEqual([
-      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): scope: unchanged tree\n[scope] unchanged tree',
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): [testQuality] test-insensitive\n[testQuality] test-insensitive',
     ]);
     expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toContain('cumulative kickback cap');
   });
@@ -2383,10 +2405,7 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         full,
-        JSON.stringify({
-          verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
-        }),
+        JSON.stringify(passingBuildReviewAggregate()),
       );
       if (mtimeMs !== undefined) {
         const { utimes } = await import('fs/promises');
@@ -12447,11 +12466,7 @@ describe('engine/conductor', () => {
             await _mkdir(join(dir, '.pipeline'), { recursive: true });
             await _wf(
               join(dir, '.pipeline/build-review.json'),
-              JSON.stringify({
-                verdict: 'PASS',
-                reasons: [],
-                rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
-              }),
+              JSON.stringify(passingBuildReviewAggregate()),
             );
           } else if (step === 'manual_test') {
             await _wf(
