@@ -120,7 +120,7 @@ function projectionSource(inputs: Awaited<ReturnType<typeof assembleBuildReviewI
     tautology: {
       changedTestSelectors: [TEST_PATH],
       revertedProductionManifest: [],
-      preflightEvidence: { classification: 'red' },
+      preflight: { classification: 'red' },
     },
   } as never);
 }

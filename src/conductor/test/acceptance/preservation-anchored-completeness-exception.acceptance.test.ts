@@ -345,7 +345,7 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       tautology: {
         changedTestSelectors: [],
         revertedProductionManifest: [],
-        preflightEvidence: { classification: 'not-requested' },
+        preflight: { classification: 'not-requested' },
       },
     });
     expect(projections.completeness.preservationContext).toEqual(expected);

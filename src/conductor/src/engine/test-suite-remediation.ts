@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { boundedHeadTailExcerpt } from './build-review-tautology-preflight.js';
+import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js';
 
 export const BUILD_REVIEW_REPAIR_LEDGER = '.pipeline/build-review-rebase-repairs.json';
 

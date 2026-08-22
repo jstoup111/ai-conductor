@@ -8,9 +8,12 @@ import type {
 import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
-import type { RevertedProductionFileReference } from './build-review-tautology-preflight.js';
+import type {
+  RevertedProductionFileReference,
+  TestQualityPreflightEvidence,
+} from './build-review-test-quality-preflight.js';
 
-export type { RevertedProductionFileReference } from './build-review-tautology-preflight.js';
+export type { RevertedProductionFileReference } from './build-review-test-quality-preflight.js';
 
 export type BuildReviewProjectionJson =
   | null
@@ -28,8 +31,8 @@ export interface BuildReviewTautologyProjectionInput {
    * file content itself never travels in a projection.
    */
   readonly revertedProductionManifest: readonly RevertedProductionFileReference[];
-  /** Includes preflight's eligible-selector-to-removal mapping when present. */
-  readonly preflightEvidence: BuildReviewProjectionJson;
+  /** Typed counterfactual evidence; never an engine-derived finding. */
+  readonly preflight: TestQualityPreflightEvidence;
 }
 
 /** The complete engine-owned source from which the four closed projections are derived. */
@@ -88,7 +91,7 @@ export interface TautologyProjection extends CommonProjection<'tautology'> {
   readonly testSuiteProof: BuildReviewProjectionJson;
   /** By-reference reverted-production identity; never embedded file content. */
   readonly revertedProductionManifest: readonly RevertedProductionFileReference[];
-  readonly preflightEvidence: BuildReviewProjectionJson;
+  readonly preflight: TestQualityPreflightEvidence;
   /** Rebase-repair evidence is visible only to the closed Tautology contract. */
   readonly repairContext: readonly BuildReviewProjectionJson[];
 }
@@ -353,7 +356,9 @@ export function deriveChangedFileReferences(diff: string): readonly ChangedFileR
 }
 
 function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectionSource, rubric: Rubric): Omit<CommonProjection<Rubric>, 'digest'> {
-  const descriptor = getBuildReviewRubricDescriptor(rubric);
+  // The legacy stored projection envelope still has four keys during the
+  // registry migration, but its one live descriptor is testQuality.
+  const descriptor = getBuildReviewRubricDescriptor('testQuality');
   const snapshot = source.inputs.sourceSnapshot;
   return {
     rubric,
@@ -385,9 +390,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     revertedProductionManifest: canonicalArray(
       source.tautology.revertedProductionManifest as unknown as readonly BuildReviewProjectionJson[],
     ) as unknown as readonly RevertedProductionFileReference[],
-    // Preserve the engine-derived eligible-selector-to-removal mapping inside
-    // the sealed preflight evidence rather than reducing it to selector names.
-    preflightEvidence: canonicalize(source.tautology.preflightEvidence),
+    preflight: source.tautology.preflight,
     repairContext: canonicalArray(inputs.sourceSnapshot.repairContext as unknown as readonly BuildReviewProjectionJson[]),
   }) as TautologyProjection;
   const scope = seal({

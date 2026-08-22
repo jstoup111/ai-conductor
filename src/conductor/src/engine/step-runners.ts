@@ -74,7 +74,7 @@ import {
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
-import { boundedHeadTailExcerpt, classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
+import { boundedHeadTailExcerpt, classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-test-quality-preflight.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -597,7 +597,7 @@ export class DefaultStepRunner implements StepRunner {
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private providerLifecycleAttempt = 0;
   /** Bounded per-run evidence cache; failed preflights never enter it. */
-  private readonly tautologyPreflightCache = new Map<string, import('./build-review-tautology-preflight.js').TautologyCompletedPreflight>();
+  private readonly tautologyPreflightCache = new Map<string, import('./build-review-test-quality-preflight.js').TautologyCompletedPreflight>();
   callCount = 0;
 
   constructor(

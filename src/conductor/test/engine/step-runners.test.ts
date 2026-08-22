@@ -3259,7 +3259,7 @@ TIER: M`,
       const selectorMarkerEnv = 'BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER';
       const priorSelectorMarker = process.env[selectorMarkerEnv];
       let checkoutRoot: string | undefined;
-      const observedProjections: Array<{ preflightEvidence: { scopedRun?: { failureExcerpt?: string } } }> = [];
+      const observedProjections: Array<{ preflight: { scopedRun?: { failureExcerpt?: string } } }> = [];
       try {
         await execa('git', ['init', '-q', '-b', 'main'], { cwd: repository });
         await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repository });
@@ -3330,7 +3330,7 @@ TIER: M`,
         expect(await realpath(checkoutCommandDependencies)).toBe(await realpath(sourceDependencies));
         expect(await readFile(selectorMarker, 'utf8')).toBe('selector-loaded-checkout-dependencies');
         expect(observedProjections[0]).toMatchObject({
-          preflightEvidence: {
+          preflight: {
             classification: 'red',
             scopedRun: {
               exitCode: 1,
@@ -4161,7 +4161,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     rubric: 'tautology', contractVersion: 'v3', projectionVersion: 'v2',
     lapId, snapshotDigest, digest: 'sha256:projection',
     mergeBase: 'base', headSha: 'head', changedFiles: [{ path: 'test/engine/event-sinks.test.ts', changeKind: 'modified', hunks: [] }], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
-    changedTestSelectors: ['test/engine/event-sinks.test.ts'], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
+    changedTestSelectors: ['test/engine/event-sinks.test.ts'], testSuiteProof: {}, revertedProductionManifest: [], preflight: {}, repairContext: [],
   } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
   const policy = {
     enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,

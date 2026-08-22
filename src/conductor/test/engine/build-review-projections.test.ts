@@ -71,7 +71,7 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
     tautology: {
       changedTestSelectors: ['test/b.test.ts', 'test/a.test.ts'],
       revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }],
-      preflightEvidence: {
+      preflight: {
         classification: 'red',
         cacheable: true, cacheProvenance: 'miss',
         sourceIdentities: { mergeBase: 'base', headSha: 'head' },
@@ -113,10 +113,10 @@ function withPreflight(src: Source, patch: Record<string, unknown>): Source {
     ...src,
     tautology: {
       ...src.tautology,
-      preflightEvidence: {
-        ...(src.tautology.preflightEvidence as Record<string, unknown>),
+      preflight: {
+        ...(src.tautology.preflight as Record<string, unknown>),
         ...patch,
-      } as Source['tautology']['preflightEvidence'],
+      } as Source['tautology']['preflight'],
     },
   };
 }
@@ -366,7 +366,7 @@ describe('build-review rubric projections', () => {
     expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness']);
     expect(Object.keys(projections.tautology).sort()).toEqual([
       'changedFiles', 'changedTestSelectors', 'changedTestTitles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
-      'mergeBase', 'preflightEvidence', 'projectionVersion', 'removalContext', 'repairContext',
+      'mergeBase', 'preflight', 'projectionVersion', 'removalContext', 'repairContext',
       'revertedProductionManifest', 'rubric', 'snapshotDigest', 'testSuiteProof',
       'verifyOnlyContext',
     ]);
@@ -399,9 +399,9 @@ describe('build-review rubric projections', () => {
       }],
       changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
       revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }],
-      preflightEvidence: expect.any(Object), repairContext: expect.any(Array),
+      preflight: expect.any(Object), repairContext: expect.any(Array),
     });
-    expect(projections.tautology.preflightEvidence).toMatchObject({
+    expect(projections.tautology.preflight).toMatchObject({
       eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
     });
     expect(projections.scope).toMatchObject({
@@ -502,7 +502,7 @@ describe('build-review rubric projections', () => {
       },
       tautology: {
         ...original.tautology,
-        preflightEvidence: {
+        preflight: {
           classification: 'red',
           cacheable: true, cacheProvenance: 'hit',
           sourceIdentities: { mergeBase: 'rebased-merge-base', headSha: 'rebased-head' },
@@ -522,7 +522,7 @@ describe('build-review rubric projections', () => {
         headSha: 'rebased-head',
       });
     }
-    expect(rebased.tautology.preflightEvidence).toMatchObject({
+    expect(rebased.tautology.preflight).toMatchObject({
       sourceIdentities: { mergeBase: 'rebased-merge-base', headSha: 'rebased-head' },
       cacheProvenance: 'hit',
       output: { stdout: 'rebased counterfactual stdout', stderr: 'rebased counterfactual stderr' },
@@ -585,7 +585,7 @@ describe('build-review rubric projections', () => {
       },
       {
         name: 'tautology preflight evidence', affectedRubrics: ['tautology'],
-        changed: source({ tautology: { ...original.tautology, preflightEvidence: { classification: 'green' } } }),
+        changed: source({ tautology: { ...original.tautology, preflight: { classification: 'stayed-green' } } }),
       },
       {
         name: 'changed test selectors', affectedRubrics: ['tautology'],
@@ -675,7 +675,7 @@ describe('build-review rubric projections', () => {
     expect(second.tautology.testSuiteProof).toMatchObject({
       stdout: 'rerun full suite stdout', stderr: 'rerun full suite stderr',
     });
-    expect(second.tautology.preflightEvidence).toMatchObject({
+    expect(second.tautology.preflight).toMatchObject({
       output: { stdout: 'rerun counterfactual stdout', stderr: 'rerun counterfactual stderr' },
     });
   });

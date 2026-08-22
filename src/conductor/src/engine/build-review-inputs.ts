@@ -20,7 +20,7 @@ import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskVerifyOnly } from './autoheal.js';
 import { parsePlanTaskPaths, parsePlanTaskPreserves } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
-import { classifyTautologyPaths } from './build-review-tautology-preflight.js';
+import { classifyTautologyPaths } from './build-review-test-quality-preflight.js';
 import { parseCoversMarkers } from './covers-marker.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────

@@ -174,7 +174,7 @@ describe('acceptance: operator reseal reaches build_review Scope evidence (#1502
     const projections = deriveBuildReviewRubricProjections({
       lapId: 'lap-operator-reseal',
       inputs: withResealInputs,
-      tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: 'red' } },
+      tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: 'red' } },
     } as never);
     expect(projections.scope.operatorReseals).toEqual(operatorReseals(withResealInputs));
     for (const projection of [projections.tautology, projections.rootCause, projections.completeness]) {
@@ -201,7 +201,7 @@ describe('acceptance: operator reseal reaches build_review Scope evidence (#1502
     const withoutResealProjections = deriveBuildReviewRubricProjections({
       lapId: 'lap-operator-reseal',
       inputs: withoutResealInputs,
-      tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: 'red' } },
+      tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: 'red' } },
     } as never);
 
     expect(operatorReseals(withoutResealInputs)).toEqual([]);

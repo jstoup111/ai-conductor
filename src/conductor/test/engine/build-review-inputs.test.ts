@@ -996,7 +996,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         lapId: parseBuildReviewLapId('lap-input-assembly')!,
         inputs,
         tautology: {
-          changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: 'not-requested' },
+          changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: 'not-requested' },
         },
       });
 

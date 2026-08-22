@@ -12,7 +12,7 @@
  * Production call sites exercised:
  * - src/engine/step-runners.ts: DefaultStepRunner.run('build_review')
  * - src/engine/step-runners.ts: runScopedTautologyCommand
- * - src/engine/build-review-tautology-preflight.ts: materializeTautologyPreflight
+ * - src/engine/build-review-test-quality-preflight.ts: materializeTautologyPreflight
  * - src/engine/build-review-coordinator.ts: coordinateBuildReviewRubrics
  * - src/engine/event-persister.ts: EventPersister
  *
@@ -54,7 +54,7 @@ interface TautologyProjection {
   contractVersion: string;
   lapId: string;
   snapshotDigest: string;
-  preflightEvidence: {
+  preflight: {
     classification: string;
     scopedRun?: {
       runKind: string;
@@ -228,17 +228,17 @@ describe('acceptance: RSpec counterfactuals always settle the Tautology rubric (
     expect(result.success, result.output).toBe(true);
     expect(provider.invoke).toHaveBeenCalledTimes(1);
     expect(projections).toHaveLength(1);
-    expect(projections[0]!.preflightEvidence).toMatchObject({
+    expect(projections[0]!.preflight).toMatchObject({
       classification: 'red',
       scopedRun: {
         runKind: 'nonzero-exit',
         ranSelectors: [SPEC_PATH],
       },
     });
-    expect(projections[0]!.preflightEvidence.scopedRun?.failureExcerpt).toContain(
+    expect(projections[0]!.preflight.scopedRun?.failureExcerpt).toContain(
       '2 examples, 1 failure',
     );
-    expect(projections[0]!.preflightEvidence.scopedRun?.failureExcerpt).not.toMatch(
+    expect(projections[0]!.preflight.scopedRun?.failureExcerpt).not.toMatch(
       /Cannot find package|ERR_MODULE_NOT_FOUND/,
     );
 

@@ -243,8 +243,8 @@ describe("build-review semantic cache", () => {
     } as never;
     const oldLap = parseBuildReviewLapId("lap-before")!;
     const currentLap = parseBuildReviewLapId("lap-current")!;
-    const oldProjection = deriveBuildReviewRubricProjections({ lapId: oldLap, inputs: frozenInputs, tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: "not-requested" } } }).scope;
-    const currentProjection = deriveBuildReviewRubricProjections({ lapId: currentLap, inputs: frozenInputs, tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: "not-requested" } } }).scope;
+    const oldProjection = deriveBuildReviewRubricProjections({ lapId: oldLap, inputs: frozenInputs, tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: "not-requested" } } }).scope;
+    const currentProjection = deriveBuildReviewRubricProjections({ lapId: currentLap, inputs: frozenInputs, tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: "not-requested" } } }).scope;
     const dispatchModel = vi.fn(async (branch, projection) => ({ kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: "v3" as never, findings: [], verdict: "PASS" as const }));
 
     const coordination = await coordinateBuildReviewRubrics({

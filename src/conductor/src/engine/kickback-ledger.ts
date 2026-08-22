@@ -7,7 +7,7 @@ import {
   parseBuildReviewInfrastructureFailure,
   type BuildReviewInfrastructureFailureReason,
 } from './build-review-domain.js';
-import { boundedHeadTailExcerpt } from './build-review-tautology-preflight.js';
+import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {

@@ -27,12 +27,14 @@ import {
 import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import {
   deriveBuildReviewRubricProjections,
-  type BuildReviewProjectionJson,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTautologyProjectionInput,
 } from "./build-review-projections.js";
-import type { TautologyPreflightResult } from "./build-review-tautology-preflight.js";
+import {
+  projectTestQualityPreflight,
+  type TautologyPreflightResult,
+} from "./build-review-test-quality-preflight.js";
 import { runAuxiliaryGroupBranches } from "./group-core.js";
 import type {
   ResolvedBuildReviewConfig,
@@ -45,6 +47,7 @@ import { canonicalizeBuildReviewFindingSet } from "./build-review-finding-identi
 // union remains temporarily at this boundary while its stored-artifact types
 // migrate in the following tasks.
 const BUILD_REVIEW_RUBRICS = BUILD_REVIEW_RUBRIC_IDS as unknown as readonly BuildReviewRubricId[];
+const TEST_QUALITY_RUBRIC = "testQuality" as unknown as BuildReviewRubricId;
 
 /** A rubric that passed deterministic pre-dispatch classification. */
 export interface BuildReviewDispatchableRubric {
@@ -136,37 +139,18 @@ export interface BuildReviewCoordinationInput {
  * exit-code verdict plus a capped failure excerpt — never raw stdout/stderr
  * or merge-base file content, and never the same evidence twice.
  */
-function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTautologyProjectionInput {
+export function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTautologyProjectionInput {
   if (preflight.classification === "infrastructure-failure") {
     return {
       changedTestSelectors: preflight.changedTestSelectors,
       revertedProductionManifest: [],
-      preflightEvidence: {
-        classification: preflight.classification,
-        reason: preflight.reason,
-        changedPaths: preflight.changedPaths,
-        changedTestSelectors: preflight.changedTestSelectors,
-        sourceIdentities: preflight.sourceIdentities,
-        ...(preflight.failureExcerpt !== undefined ? { failureExcerpt: preflight.failureExcerpt } : {}),
-      },
+      preflight: projectTestQualityPreflight(preflight),
     };
   }
   return {
     changedTestSelectors: preflight.changedTestSelectors,
     revertedProductionManifest: preflight.revertedProductionManifest,
-    preflightEvidence: {
-      classification: preflight.classification,
-      ...(preflight.exception !== undefined ? { exception: preflight.exception } : {}),
-      changedPaths: preflight.changedPaths,
-      changedTestSelectors: preflight.changedTestSelectors,
-      ...(preflight.eligibleSelectorRemovals !== undefined
-        ? { eligibleSelectorRemovals: preflight.eligibleSelectorRemovals as unknown as BuildReviewProjectionJson }
-        : {}),
-      sourceIdentities: preflight.sourceIdentities,
-      ...(preflight.scopedRun !== undefined
-        ? { scopedRun: preflight.scopedRun as unknown as BuildReviewProjectionJson }
-        : {}),
-    },
+    preflight: projectTestQualityPreflight(preflight),
   };
 }
 
@@ -293,11 +277,11 @@ export async function coordinateBuildReviewRubrics(
   }
   if (classification.kind !== "ready") return classification;
 
-  const tautologyEnabled = classification.branches.some(
-    (branch) => !("kind" in branch) && branch.rubric === "tautology",
+  const testQualityEnabled = classification.branches.some(
+    (branch) => !("kind" in branch) && branch.rubric === TEST_QUALITY_RUBRIC,
   );
   let preflight: TautologyPreflightResult | undefined;
-  if (tautologyEnabled) {
+  if (testQualityEnabled) {
     try {
       preflight = await input.preflight();
     } catch {
@@ -308,13 +292,19 @@ export async function coordinateBuildReviewRubrics(
       };
     }
   }
-  const projections = input.projections ?? deriveBuildReviewRubricProjections({
+  const derivedProjections = deriveBuildReviewRubricProjections({
     lapId: input.lapId,
     inputs: input.inputs,
     tautology: preflight ? preflightProjection(preflight) : {
-      changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: "not-requested" },
+      changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
+  // `testQuality` is the registry id while the stored projection envelope is
+  // still migrated from its legacy tautology key.  The preflight remains the
+  // same typed evidence object across that compatibility seam.
+  const projections = input.projections ?? {
+    testQuality: { ...derivedProjections.tautology, rubric: "testQuality" },
+  } as unknown as BuildReviewRubricProjections;
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
   const misses: BuildReviewDispatchableRubric[] = [];
 
@@ -330,7 +320,7 @@ export async function coordinateBuildReviewRubrics(
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "projection-rubric-mismatch" });
       continue;
     }
-    if (branch.rubric === "tautology" && preflight?.classification === "infrastructure-failure") {
+    if (branch.rubric === TEST_QUALITY_RUBRIC && preflight?.classification === "infrastructure-failure") {
       resolved.set(branch.rubric, infrastructure(branch.rubric, preflight.reason));
       await input.emit?.({
         type: "build_review_rubric_infrastructure_failure",
