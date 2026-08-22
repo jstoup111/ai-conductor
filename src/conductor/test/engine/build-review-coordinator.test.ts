@@ -116,6 +116,30 @@ describe("build-review coordinator: registered dispatch", () => {
     });
   });
 
+  it("passes test-quality's empty frozen scope without preflight or grader dispatch", async () => {
+    const frozenInputs = inputs();
+    const input = coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          testQuality: { inScopeTests: [], unresolvedMarkers: [] },
+        },
+      },
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(result).toEqual({
+      kind: "passed",
+      verdict: "PASS",
+      reason: "test_quality_empty_scope",
+    });
+    expect(input.preflight).toHaveBeenCalledTimes(0);
+    expect(input.dispatchModel).not.toHaveBeenCalled();
+    expect(input.readCache).not.toHaveBeenCalled();
+  });
+
   it("dispatches exactly the enabled registered test-quality rubric", async () => {
     const lapId = parseBuildReviewLapId("lap-current")!;
     const frozenInputs = inputs();

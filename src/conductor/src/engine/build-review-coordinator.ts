@@ -71,6 +71,8 @@ export type BuildReviewClassification =
   | { kind: "refused"; reason: "no-enabled-rubrics" | "no-valid-judgement" }
   | { kind: "ready"; branches: readonly BuildReviewClassifiedBranch[] };
 
+type BuildReviewPassReason = "build_review_no_rubrics" | "test_quality_empty_scope";
+
 export type BuildReviewCoordinatedBranch =
   | BuildReviewSkip
   | { readonly kind: "cache-hit"; readonly rubric: BuildReviewRubricId; readonly result: BuildReviewJudgedResult }
@@ -85,7 +87,7 @@ export type BuildReviewCoordinatedBranch =
 
 export type BuildReviewCoordination =
   | { readonly kind: "gate-disabled" }
-  | { readonly kind: "passed"; readonly verdict: "PASS"; readonly reason: "build_review_no_rubrics" }
+  | { readonly kind: "passed"; readonly verdict: "PASS"; readonly reason: BuildReviewPassReason }
   | { readonly kind: "refused"; readonly reason: "no-enabled-rubrics" | "no-valid-judgement" }
   | { readonly kind: "ready"; readonly branches: readonly BuildReviewCoordinatedBranch[] };
 
@@ -266,6 +268,18 @@ function validWrittenArtifact(
 export async function coordinateBuildReviewRubrics(
   input: BuildReviewCoordinationInput,
 ): Promise<BuildReviewCoordination> {
+  const testQualityPolicy = (input.config.rubrics as unknown as Partial<Record<string, ResolvedBuildReviewRubricPolicy>>).testQuality;
+  if (input.config.enabled && testQualityPolicy?.enabled && input.inputs.sourceSnapshot.testQuality?.inScopeTests.length === 0) {
+    await input.emit?.({
+      type: "build_review_outer_verdict",
+      lapId: input.lapId,
+      rawVerdict: "PASS",
+      effectiveVerdict: "PASS",
+      reason: "test_quality_empty_scope",
+    });
+    return { kind: "passed", verdict: "PASS", reason: "test_quality_empty_scope" };
+  }
+
   const classification = classifyBuildReviewRubricBranches(input.config, []);
   if (classification.kind === "passed") {
     await input.emit?.({
