@@ -868,7 +868,7 @@ is written back (`config.ts:898-927`).
 | `build_review.perTaskFloor` | boolean | `true` | Works |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
-| `build_review.rubrics` | object | `scope`, `rootCause`, `completeness` enabled; `tautology` off | Closed canonical map: `tautology`, `scope`, `rootCause`, `completeness`. `causalIntegrity` is an input-only alias for `rootCause`. `tautology` is opt-in (`rubrics.tautology.enabled: true`): a zero exit code is green, every nonzero exit is counterfactual RED, and only launch, timeout, and signal outcomes are scoped-run infrastructure failures |
+| `build_review.rubrics` | object | `scope` and `completeness` enabled; `tautology` and `rootCause` off | Closed canonical map: `tautology`, `scope`, `rootCause`, `completeness`. `causalIntegrity` is an input-only alias for `rootCause`. `rootCause` is opt-in (`rubrics.rootCause.enabled: true`) pending its re-seating as an as-built review (#1805). `tautology` is opt-in (`rubrics.tautology.enabled: true`): a zero exit code is green, every nonzero exit is counterfactual RED, and only launch, timeout, and signal outcomes are scoped-run infrastructure failures |
 
 Normalization contract:
 
