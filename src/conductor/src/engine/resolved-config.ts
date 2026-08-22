@@ -757,11 +757,21 @@ const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'hi
  * infrastructure failure, so the rubric can never return a verdict and the
  * gate deadlocks. Projects whose framework the preflight understands enable
  * it explicitly (this repository does, in `.ai-conductor/config.yml`).
+ *
+ * rootCause is opt-in for a different reason (#1805, #1808): as a
+ * BUILD-blocking rubric it binds a free-text `statedDefect` to a code anchor
+ * with no plan reference, so unlike scope (`relation: not-authorized-by-plan`)
+ * and completeness (`planTask`) it can order work that the approved plan never
+ * authorized, and re-raise it every lap. This repository disabled it on
+ * 2026-08-22 for that reason and runs without it; shipping it on by default
+ * would hand consumers the loop the maintainer had already turned off.
+ * Re-seat it as an as-built review that can route a plan gap back to DECIDE
+ * (#1805) before defaulting it back on.
  */
 const DEFAULT_RUBRIC_ENABLED: Readonly<Record<BuildReviewRubricId, boolean>> = {
   tautology: false,
   scope: true,
-  rootCause: true,
+  rootCause: false,
   completeness: true,
 };
 

@@ -97,14 +97,14 @@ describe('engine/resolved-config', () => {
       expect(resolved.enabled).toBe(true);
     });
 
-    it('defaults the tautology rubric off and the other three rubrics on (#1682)', () => {
+    it('defaults tautology (#1682) and rootCause (#1805) off, scope and completeness on', () => {
       const resolved = resolveBuildReviewConfig(undefined);
       expect({
         tautology: resolved.rubrics.tautology.enabled,
         scope: resolved.rubrics.scope.enabled,
         rootCause: resolved.rubrics.rootCause.enabled,
         completeness: resolved.rubrics.completeness.enabled,
-      }).toEqual({ tautology: false, scope: true, rootCause: true, completeness: true });
+      }).toEqual({ tautology: false, scope: true, rootCause: false, completeness: true });
     });
 
     it('honors an explicit tautology opt-in over the off default', () => {
@@ -208,7 +208,10 @@ describe('engine/resolved-config', () => {
               max_retries: 2,
               escalate: false,
             },
-            rootCause: { effort: 'medium' },
+            // Explicit enable: this case asserts policy resolution and the
+            // fan-out clamp (3 enabled rubrics), not the shipped default,
+            // which is off for rootCause (#1805).
+            rootCause: { enabled: true, effort: 'medium' },
           },
         },
       } as HarnessConfig;
