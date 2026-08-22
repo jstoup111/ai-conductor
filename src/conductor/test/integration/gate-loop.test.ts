@@ -7,26 +7,6 @@ import { promisify } from 'util';
 
 vi.mock('execa', () => ({ execa: vi.fn(async () => ({ stdout: '' })) }));
 
-// Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): spy on
-// `runScopeFailDisposition` (the Task 7/8 disposition + HALT-bound
-// orchestrator conductor.ts now calls before rework routing) so the "wired
-// before rework routing" tests can assert it actually runs, without needing
-// a real git remote in this fixture's throwaway repo. Resolves
-// 'kicked-to-build' by default — the classic genuine-FAIL routing this
-// suite pins must stay unchanged.
-const runScopeFailDispositionMock = vi.fn(
-  async (_opts: import('../../src/engine/build-review-disposition.js').RunScopeFailDispositionOpts) =>
-    ({ kind: 'kicked-to-build' as const }),
-);
-vi.mock('../../src/engine/build-review-disposition.js', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('../../src/engine/build-review-disposition.js')>();
-  return {
-    ...actual,
-    runScopeFailDisposition: (...args: unknown[]) =>
-      runScopeFailDispositionMock(...(args as [import('../../src/engine/build-review-disposition.js').RunScopeFailDispositionOpts])),
-  };
-});
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -99,6 +79,10 @@ describe('integration/gate-loop', () => {
       mode: 'auto' as const,
       fromStep: 'build',
       maxRetries: 1,
+      // These fixtures exercise tail topology rather than PRD coverage. Keep
+      // the unrelated audit gate out of their path so a missing audit record
+      // does not mask the assertion under test.
+      config: { steps: { prd_audit: { disable: true } } },
     });
   }
 
@@ -142,7 +126,7 @@ describe('integration/gate-loop', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+          rubric: { testQuality: false },
         }),
       );
     } else if (step === 'wiring_check') {
@@ -186,7 +170,7 @@ describe('integration/gate-loop', () => {
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/architecture-review-as-built.md'),
-        '# As-Built Review\n\nVerdict: APPROVED\n',
+        '# As-Built Review\n\nVerdict: APPROVED\n\nOutcome delivered: Plan implemented as approved.\n',
       );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
@@ -370,6 +354,7 @@ describe('integration/gate-loop', () => {
           enforcement: 'gating',
           completion_artifact: marker,
         },
+        prd_audit: { disable: true },
       },
     };
     const runScenario = async (evidence: 'fresh' | 'missing' | 'stale') => {
@@ -382,11 +367,8 @@ describe('integration/gate-loop', () => {
       await writeState(scenarioStatePath, {
         ...(initialState as unknown as ConductState),
         // This scenario exercises only the custom marker's attempt freshness
-        // at the finish boundary. On the S/technical policy, every #922
-        // validation member is a valid skip, so it cannot mask that marker
-        // with unrelated validation evidence requirements.
-        complexity_tier: 'S',
-        track: 'technical',
+        // at the finish boundary; its config disables the unrelated audit.
+        complexity_tier: 'M',
       });
       if (evidence === 'stale') {
         const markerPath = join(root, marker);
@@ -450,10 +432,13 @@ describe('integration/gate-loop', () => {
     expect(results).toEqual({
       fresh: {
         customRuns: 1,
-        finishRuns: 1,
-        halted: false,
+        // Validation is its own dispatch boundary: a fresh custom gate
+        // reaches the as-built review, then a later SHIP dispatch owns
+        // finish rather than completing in the same loop.
+        finishRuns: 0,
+        halted: true,
         stepFailure: undefined,
-        done: true,
+        done: false,
       },
       missing: {
         customRuns: 2,
@@ -514,6 +499,7 @@ describe('integration/gate-loop', () => {
         mode: 'auto',
         fromStep: 'conflict_check',
         maxRetries: 1,
+        config: { steps: { prd_audit: { disable: true } } },
       });
     }
 
@@ -1259,15 +1245,18 @@ describe('integration/gate-loop', () => {
     // dispatches `build_review`. The kickback machinery (counter, retry
     // hints, navigateBack, stale cascade — Task 13) is what's under test.
     function reviewFailConfig() {
-      return { build_review: { enabled: true } };
+      return {
+        build_review: { enabled: true },
+        steps: { prd_audit: { disable: true } },
+      };
     }
 
     async function runWithGraderVerdicts(
       verdicts: Array<{
-        verdict: 'FAIL' | 'PASS';
-        reasons: string[];
-        findings?: Partial<{ tautology: string[]; scope: string[]; rootCause: string[]; completeness: string[]; wiring: string[] }>;
-        rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean };
+      verdict: 'FAIL' | 'PASS';
+      reasons: string[];
+        findings?: Partial<{ testQuality: string[] }>;
+        rubric?: { testQuality: boolean };
       }>,
       remediationDispositions?: unknown[],
     ): Promise<{
@@ -1337,9 +1326,7 @@ describe('integration/gate-loop', () => {
                 verdict: v.verdict,
                 reasons: v.reasons,
                 findings: v.findings,
-                rubric: v.rubric ?? (v.verdict === 'PASS'
-                  ? { tautology: false, scope: false, rootCause: false, completeness: false }
-                  : { tautology: true, scope: false, rootCause: false, completeness: false }),
+                rubric: v.rubric ?? { testQuality: v.verdict === 'FAIL' },
               }),
             );
             return { success: true };
@@ -1415,7 +1402,7 @@ describe('integration/gate-loop', () => {
         {
           verdict: 'PASS',
           reasons: [],
-          rubric: { tautology: false, scope: false, rootCause: false } as never,
+          rubric: {} as never,
         },
       ]);
 
@@ -1429,14 +1416,14 @@ describe('integration/gate-loop', () => {
         {
           verdict: 'FAIL',
           reasons: ['declared daemon entry point does not reach the new gate'],
-          findings: { completeness: ['daemon entry point does not reach the new gate'] },
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+          findings: { testQuality: ['changed test does not observe the new behavior'] },
+          rubric: { testQuality: true },
         },
         { verdict: 'PASS', reasons: [] },
       ]);
 
       expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
-      expect(result.retryReasons.join('\n')).toContain('[completeness] daemon entry point does not reach the new gate');
+      expect(result.retryReasons.join('\n')).toContain('[testQuality] changed test does not observe the new behavior');
       expect(result.ran).not.toContain('wiring_check');
       expect(result.completed).toBe(true);
     });
@@ -1464,22 +1451,18 @@ describe('integration/gate-loop', () => {
       );
     });
 
-    // #989: a FAIL driven by rubric.completeness is no longer assumed to be a
-    // local diff defect — the plan itself may be under-decomposed, a judgement
-    // only remediation can make. The FAIL path now resolves a structured
-    // routing decision (BUILD vs REMEDIATE) and the kickback honors it.
-    it('FAIL-completeness dispatches remediate and kicks back to the remediation target, not unconditionally to build', async () => {
+    it('test-quality FAIL ignores retired remediation dispositions and kicks back to build', async () => {
       const result = await runWithGraderVerdicts(
         [
           {
             verdict: 'FAIL',
             reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
-            rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+            rubric: { testQuality: true },
           },
           {
             verdict: 'PASS',
             reasons: [],
-            rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+            rubric: { testQuality: false },
           },
         ],
         [
@@ -1493,14 +1476,13 @@ describe('integration/gate-loop', () => {
         ],
       );
 
-      expect(result.ran).toContain('remediate');
-      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'acceptance_specs' });
-      expect(result.kicks).not.toContainEqual({ from: 'build_review', to: 'build' });
-      expect(result.retryReasons.join('\n')).toContain('cover the negative path');
+      expect(result.ran).not.toContain('remediate');
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.retryReasons.join('\n')).toContain('missing negative-path handling');
       expect(result.completed).toBe(true);
     });
 
-    it('FAIL-tautology never dispatches remediate (BUILD decision keeps today’s direct kickback)', async () => {
+    it('test-quality FAIL never dispatches retired remediation', async () => {
       const result = await runWithGraderVerdicts(
         [
           { verdict: 'FAIL', reasons: ['tautological test padding'] },
@@ -1548,116 +1530,16 @@ describe('integration/gate-loop', () => {
           verdict: 'FAIL',
           reasons: [],
           findings: {
-            rootCause: ['patched the symptom, not the cause', 'second symptom-only patch'],
+            testQuality: ['first insensitive test', 'second insensitive test'],
           },
-          rubric: { tautology: false, scope: false, rootCause: true, completeness: false },
+          rubric: { testQuality: true },
         },
         { verdict: 'PASS', reasons: [] },
       ]);
 
-      expect(result.retryReasons.join('\n')).toContain('[rootCause] patched the symptom, not the cause');
-      expect(result.retryReasons.join('\n')).toContain('[rootCause] second symptom-only patch');
+      expect(result.retryReasons.join('\n')).toContain('[testQuality] first insensitive test');
+      expect(result.retryReasons.join('\n')).toContain('[testQuality] second insensitive test');
       expect(result.completed).toBe(true);
-    });
-  });
-
-  describe('build_review scope-FAIL disposition classification (Task 8)', () => {
-    // conductor.ts wires `runScopeFailDisposition` to run before rework
-    // routing whenever a build_review dispatch assembled base-freshness
-    // evidence, and acts on its result (invalidate-and-regrade / halt /
-    // kicked-to-build). This pins: (a) it runs, (b) with the graded
-    // merge-base and the FAIL verdict's flagged paths, and (c) a
-    // `kicked-to-build` disposition leaves today's kickback-to-build
-    // routing unchanged.
-    function reviewFailConfig() {
-      return { build_review: { enabled: true } };
-    }
-
-    it('runs the disposition orchestrator on a build_review FAIL and leaves kickback-to-build routing unchanged for a kicked-to-build verdict', async () => {
-      runScopeFailDispositionMock.mockClear();
-      await writeState(statePath, { ...FRONT_DONE });
-      await mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await writeFile(join(dir, '.docs/plans/p.md'), '### Task t1\n**Story:** 1-1 (happy path)\n');
-      let reviewRuns = 0;
-      const runner: StepRunner = {
-        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
-          if (step === 'build') return satisfy('build');
-          if (step === 'build_review') {
-            const isFail = reviewRuns === 0;
-            reviewRuns++;
-            await writeFile(
-              join(dir, '.pipeline/build-review.json'),
-              JSON.stringify({
-                verdict: isFail ? 'FAIL' : 'PASS',
-                reasons: isFail ? ['diff touches merged-pr.txt which is out of scope'] : [],
-                findings: isFail ? { scope: ['diff touches merged-pr.txt which is out of scope'] } : undefined,
-                rubric: { tautology: false, scope: isFail, rootCause: false, completeness: false },
-              }),
-            );
-            // Simulate `runBuildReview` having assembled fresh-base evidence
-            // (Task 4) — required for Task 6's wiring guard to fire.
-            return {
-              success: true,
-              baseFreshness: {
-                mergeBase: 'stalemergesha0',
-                trackingRefSha: 'stalesha0',
-                remoteHeadSha: 'remotesha1',
-                fresh: false,
-              },
-            };
-          }
-          if (step === 'finish') {
-            await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
-            const state = JSON.parse(await readFile(statePath, 'utf-8'));
-            state.pr_url = 'https://example.com/pr/1';
-            await writeFile(statePath, JSON.stringify(state));
-            await mkdir(join(dir, '.pipeline'), { recursive: true });
-            await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify(state));
-            return { success: true };
-          }
-          return satisfy(step);
-        },
-      };
-      const kicks: Array<{ from: string; to: string }> = [];
-      events.on('kickback', (e) => {
-        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
-      });
-      let completed = false;
-      events.on('feature_complete', () => {
-        completed = true;
-      });
-      const fakeGit: GitRunner = async (args) =>
-        args.includes('--symbolic-full-name')
-          ? { stdout: 'refs/remotes/origin/feature/x\n' }
-          : { stdout: '' };
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: runner,
-        events,
-        projectRoot: dir,
-        verifyArtifacts: true,
-        mode: 'auto',
-        daemon: true,
-        fromStep: 'build',
-        maxRetries: 1,
-        config: reviewFailConfig(),
-        git: fakeGit,
-        shipmentEvidence: validShipmentEvidence,
-      });
-      await conductor.run();
-
-      // (a)/(b): disposition orchestrator ran, with the graded merge-base
-      // and the flagged path extracted from the FAIL verdict's reasons.
-      expect(runScopeFailDispositionMock).toHaveBeenCalled();
-      const [opts] = runScopeFailDispositionMock.mock.calls[0] as [
-        { gradedBaseSha: string; flaggedPaths: string[] },
-      ];
-      expect(opts.gradedBaseSha).toBe('stalemergesha0');
-      expect(opts.flaggedPaths).toEqual(['merged-pr.txt']);
-
-      // (c): kickback-to-build routing is unchanged today.
-      expect(kicks).toContainEqual({ from: 'build_review', to: 'build' });
-      expect(completed).toBe(true);
     });
   });
 
@@ -1772,7 +1654,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`always fails (attempt ${buildRuns})`],
-                rubric: { tautology: false, scope: true, rootCause: true, completeness: true },
+                rubric: { testQuality: true },
               }),
             );
             return { success: true };
@@ -1839,7 +1721,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`incomplete implementation (attempt ${buildRuns})`],
-                rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+                rubric: { testQuality: true },
               }),
             );
             return { success: true };
@@ -1905,7 +1787,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict,
                 reasons: verdict === 'FAIL' ? ['one-time grader nit'] : [],
-                rubric: { tautology: verdict === 'FAIL', scope: false, rootCause: false, completeness: false },
+                rubric: { testQuality: verdict === 'FAIL' },
               }),
             );
             return { success: true };
@@ -1989,7 +1871,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`always fails (attempt ${buildRuns})`],
-                rubric: { tautology: false, scope: true, rootCause: true, completeness: true },
+                rubric: { testQuality: true },
               }),
             );
             return { success: true };
@@ -2163,7 +2045,7 @@ describe('integration/gate-loop', () => {
                 JSON.stringify({
                   verdict: 'FAIL',
                   reasons: ['tighten the assertion, it currently tautologizes'],
-                  rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
+                  rubric: { testQuality: true },
                 }),
               );
               return { success: true };
@@ -2172,7 +2054,7 @@ describe('integration/gate-loop', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'PASS',
-                rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+                rubric: { testQuality: false },
               }),
             );
             return { success: true };
@@ -2477,7 +2359,7 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
     vi.resetModules();
   });
 
-  it('kicks back on a coverage-incomplete report, then converges only after every PRD FR has a verdict', async () => {
+  it('keeps a coverage-incomplete audit failed without routing it back through build', async () => {
     // This file normally mocks execa. Resetting before the dynamic import makes
     // the production tail use real git for protected-artifact sealing and PRD
     // resolution, rather than a hand-built artifact-resolution context.
@@ -2542,7 +2424,7 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
             join(repoDir, '.pipeline/build-review.json'),
             JSON.stringify({
               verdict: 'PASS',
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+              rubric: { testQuality: false },
             }),
           );
           return { success: true };
@@ -2615,12 +2497,12 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
 
     await new RealConductor(conductorOptions).run();
 
-    expect(kicks).toContainEqual({ from: 'prd_audit', to: 'build' });
-    expect(buildRuns).toBeGreaterThan(0);
-    expect(staleReportWasPresentBeforeAudit).toBe(false);
+    expect(kicks).toEqual([]);
+    expect(buildRuns).toBe(0);
+    expect(staleReportWasPresentBeforeAudit).toBe(true);
 
-    expect(auditRuns).toBe(2);
+    expect(auditRuns).toBe(1);
     const finalState = await readRealState(realStatePath);
-    expect(finalState.ok && finalState.value.prd_audit).toBe('done');
+    expect(finalState.ok && finalState.value.prd_audit).toBe('failed');
   });
 });
