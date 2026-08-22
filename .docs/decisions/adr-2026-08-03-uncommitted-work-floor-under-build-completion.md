@@ -183,3 +183,5 @@ that moment, a pre-fix run whose digest was later invalidated, or provider-sandb
 (the same event tail carried `Refusing to create helper binaries under temporary dir "/tmp"`). **No
 part of this design depends on resolving it** — outcomes 1, 2 and 4 follow from the dirty-tree fact
 alone, and Decision 7 deliberately adds a label rather than machinery built on the unverified chain.
+
+> **Amended 2026-08-22 by #1805:** build_review's completeness rubric is retired; prd_audit at SHIP is the completion authority (adr-2026-08-22-one-owner-per-review-question). Every other decision here stands.

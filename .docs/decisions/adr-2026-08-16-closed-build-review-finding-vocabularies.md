@@ -257,3 +257,5 @@ Drop `concernKind` and every prose field from the hash, keying on rubric plus pa
   visible if a stale one is ever encountered.
 - Six of seven FAIL-block exits change what they read. D6's grep-derived enumeration and the
   preserved HALT reasons are the guard against that becoming a routing regression.
+
+> **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).

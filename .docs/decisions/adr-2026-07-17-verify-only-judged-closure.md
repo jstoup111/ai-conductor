@@ -96,3 +96,5 @@ trigger for the verify-only class — the judged closure runs in-loop on the gat
 - The `0/N` progress symptom disappears as a side effect of rows flipping; no display change.
 - Adds one LLM dispatch per stranded verify-only residue evaluation — bounded, and strictly
   cheaper than the 3 full-pipeline retries it replaces.
+
+> **Amended 2026-08-22 by #1805:** task close records Done-when: evidence when the task carries the block; verify-only and Evidence: skipped closures satisfy checks by their existing path (adr-2026-08-22-done-when-evidence-at-task-close).

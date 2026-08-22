@@ -114,3 +114,5 @@ semantics, and build_review judges the real diff regardless.
       `done` and reaches build_review (the #859 shape).
 - [ ] Genuine-stall fixture: tasks unresolved, count unmoved ⇒ `no_task_progress` HALT unchanged.
 - [ ] Same-PR doc sync per Decision 6.
+
+> **Amended 2026-08-22 by #1805:** build_review's completeness rubric is retired; prd_audit at SHIP is the completion authority (adr-2026-08-22-one-owner-per-review-question). Every other decision here stands.

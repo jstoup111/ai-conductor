@@ -256,3 +256,5 @@ trigger — not restoring a PASS reset to this entry.
   implemented on this base. D1 and D2 are written to clear and credit whichever convergence fields
   the entry carries, so this change is correct both before and after that implementation lands. The
   ordering hazard is conflict-check's to adjudicate.
+
+> **Amended 2026-08-22 by #1805:** architecture_review_as_built runs on every tier with per-check policy, gains a PLAN_GAP verdict, and never kicks back to BUILD (adr-2026-08-22-as-built-review-runs-always-with-plan-gap).

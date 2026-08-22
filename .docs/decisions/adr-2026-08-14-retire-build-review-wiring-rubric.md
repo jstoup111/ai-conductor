@@ -65,3 +65,5 @@ reintroduce the `Unknown step` hazard that ADR exists to prevent.
   key. The fail-closed intent is preserved.
 - `architecture-review`'s `## Wiring Surface` section is untouched and remains a Medium/Large tier
   DECIDE requirement. Whether it survives its own cost-benefit review is a separate decision.
+
+> **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).

@@ -302,3 +302,5 @@ subagents. No unconfirmed load-bearing assumption remains.
 - [ ] Add bounded per-rubric semantic-result caching and current-lap cache provenance.
 - [ ] Add write-disjoint result validation and the backward-compatible aggregate join.
 - [ ] Add event, report, publication, documentation, and migration coverage.
+
+> **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).

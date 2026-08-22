@@ -113,3 +113,5 @@ dedup, owner-gate provenance, push-evidence finish guard.
       `Task:`-trailered commits (and/or `conduct task done`), NOT `applyDerivedCompletion`/
       `reconcileStatusFromStamps`. (Surfaced by conflict-check 2026-07-21; the "keep telemetry"
       decision is unchanged — this only names the surviving mechanism.)
+
+> **Amended 2026-08-22 by #1805:** stamping stays telemetry; Done when: evidence at task close (adr-2026-08-22-done-when-evidence-at-task-close) is a criteria record, not a trailer gate.

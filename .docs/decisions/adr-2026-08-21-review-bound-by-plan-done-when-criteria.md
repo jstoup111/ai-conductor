@@ -164,3 +164,5 @@ by grep at implementation time (adr-2026-08-16 D6), never from this text.
 - [ ] `/stories` and `/plan` carry D1–D6 as stated; the plan must not restate the exit list.
 - [ ] Note on #1718: the tautology-relocation case is covered only insofar as Tautology now binds
       to criteria; lap-monotonic machinery (Option C) remains open if that proves insufficient.
+
+> **Amended 2026-08-22 by #1805:** D1 narrowed: Done when: is additionally evidenced at BUILD task close when the block exists, never required of legacy plans (adr-2026-08-22-done-when-evidence-at-task-close); D2/D6 contracts now apply to registered rubrics only; the beyond record kind is retained for #1810.
