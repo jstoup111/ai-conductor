@@ -173,6 +173,7 @@ import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
   type CriterionBoundRemediationGap,
 } from './remediation-append.js';
+import { KICKBACK_CAP_HALT_CLASS, type KickbackCapHaltClass } from './halt-classification.js';
 import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
@@ -203,7 +204,9 @@ import {
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  readGrowth,
   readKickbackLedger,
+  recordGrowth,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
@@ -500,6 +503,16 @@ export function remediationLapCapForGate(
   return (config as HarnessConfig & {
     prd_audit?: { max_remediation_laps?: number };
   }).prd_audit?.max_remediation_laps ?? 1;
+}
+
+/** The prd-audit cap is both an absolute count and a fraction of authored plan work. */
+export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: number): number {
+  const prdAudit = (config as HarnessConfig & {
+    prd_audit?: { max_appended_tasks?: number; max_appended_ratio?: number };
+  }).prd_audit;
+  const maximum = prdAudit?.max_appended_tasks ?? 5;
+  const ratio = prdAudit?.max_appended_ratio ?? 0.25;
+  return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
 }
 
 /**
@@ -1327,9 +1340,17 @@ export class Conductor {
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
-    haltClass: Parameters<typeof writeHaltMarker>[2],
+    haltClass: Parameters<typeof writeHaltMarker>[2] | KickbackCapHaltClass,
   ) {
-    return writeHaltMarker(this.projectRoot, body, haltClass, this.events);
+    // `kickback-cap` is an operator-owned remediation halt. Older readers
+    // conservatively treat an unknown class as operator action, so introducing
+    // this narrower machine-readable reason does not make it re-kickable.
+    return writeHaltMarker(
+      this.projectRoot,
+      body,
+      haltClass as Parameters<typeof writeHaltMarker>[2],
+      this.events,
+    );
   }
 
   /** Emit through the existing spine while retaining the conductor's open execution state. */
@@ -2686,7 +2707,7 @@ export class Conductor {
     hintSource: { source: string; evidenceFile: string },
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
-    | { kind: 'halt'; detail: string; kickbackOutcome?: string }
+    | { kind: 'halt'; detail: string; haltClass?: KickbackCapHaltClass; kickbackOutcome?: string }
     | { kind: 'none' }
   > {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
@@ -2773,6 +2794,11 @@ export class Conductor {
 
     const appendGaps: CriterionBoundRemediationGap[] = [];
     const allTasks: Array<{ id: string; title: string }> = [];
+    // A `.pipeline/prd-audit.md` path alone is not evidence of a current
+    // criterion verdict. Preserve ordinary remediation routing for stale or
+    // missing audit artifacts; only validated FIXABLE findings consume this
+    // gate's bounded append allowance.
+    const prdAuditCapEnforced = prdAuditRemediation && prdAuditFindings.size > 0;
     for (const gap of gaps) {
       if (
         !sealedArtifactGapIds.has(gap.id) &&
@@ -2801,20 +2827,33 @@ export class Conductor {
 
     if (allTasks.length > 0) {
       let priorPrdAuditLaps = 0;
+      let prdAuditGrowth: Awaited<ReturnType<typeof readGrowth>> | undefined;
+      let prdAuditGrowthCap = 0;
       const hasCriterionBoundGaps = appendGaps.some(
         (gap) => gap.criterion !== undefined && gap.parentTask !== undefined,
       );
-      if (prdAuditRemediation) {
+      if (prdAuditCapEnforced) {
         const ledger = await readKickbackLedger(this.projectRoot);
         priorPrdAuditLaps = (
           ledger.gates.prd_audit as (KickbackGateEntry & { laps?: number }) | undefined
         )?.laps ?? 0;
-        if (priorPrdAuditLaps >= prdAuditLapCap) {
+        prdAuditGrowthCap = prdAuditAppendCap(
+          this.config,
+          activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0,
+        );
+        prdAuditGrowth = await readGrowth(this.projectRoot, prdAuditGrowthCap);
+        const findings = [...new Set(appendGaps.map((gap) => gap.criterion ?? gap.id))];
+        const findingList = findings.length > 0 ? findings.join(', ') : 'unattributed FIXABLE findings';
+        if (priorPrdAuditLaps >= prdAuditLapCap || allTasks.length > prdAuditGrowth.remaining) {
+          const capReason = priorPrdAuditLaps >= prdAuditLapCap
+            ? `lap cap reached (${priorPrdAuditLaps}/${prdAuditLapCap})`
+            :
+              `growth cap reached (${prdAuditGrowth.added}/${prdAuditGrowthCap} appended; ` +
+              `${allTasks.length} requested, ${prdAuditGrowth.remaining} remaining)`;
           return {
             kind: 'halt',
-            detail:
-              `prd_audit remediation lap cap reached (${priorPrdAuditLaps}/${prdAuditLapCap}) ` +
-              'before appending fix tasks',
+            haltClass: KICKBACK_CAP_HALT_CLASS,
+            detail: `prd_audit remediation ${capReason} before appending fix tasks. Findings: ${findingList}.`,
           };
         }
       }
@@ -2827,7 +2866,7 @@ export class Conductor {
         });
         if (appendResult.success) {
           appendAttempted = true;
-          if (prdAuditRemediation) {
+          if (prdAuditCapEnforced) {
             const ledger = await readKickbackLedger(this.projectRoot);
             const existing = ledger.gates.prd_audit;
             const next: KickbackGateEntry & { laps: number } = {
@@ -2845,6 +2884,21 @@ export class Conductor {
               ...ledger,
               gates: { ...ledger.gates, prd_audit: next },
             });
+            if (prdAuditGrowth) {
+              const priorGateGrowth = prdAuditGrowth.byGate.prd_audit ?? 0;
+              await recordGrowth(
+                this.projectRoot,
+                {
+                  authored: prdAuditGrowth.authored,
+                  added: prdAuditGrowth.added + allTasks.length,
+                  byGate: {
+                    ...prdAuditGrowth.byGate,
+                    prd_audit: priorGateGrowth + allTasks.length,
+                  },
+                },
+                { cap: prdAuditGrowthCap, events: this.events },
+              );
+            }
           }
           // Record the appended ids so the build completion predicate can
           // reject a later removal of their headings from the plan.
@@ -8511,7 +8565,7 @@ export class Conductor {
                 }
                 if (outcome.kind === 'halt') {
                   const reason = 'prd-audit halted: needs human DECIDE — ' + outcome.detail;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.writeHaltMarker(reason + '\n', outcome.haltClass ?? 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
