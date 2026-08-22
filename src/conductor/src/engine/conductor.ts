@@ -1898,11 +1898,37 @@ export class Conductor {
   ): Promise<void> {
     const result = await this.stateStore.applyBatch(batch);
     if ('message' in result) throw new Error(result.message);
+    this.recordPersistedFields(batch.mutations);
   }
 
   private async applyStateMutation(mutation: StateMutation<ConductState>): Promise<void> {
     const result = await this.stateStore.apply(mutation);
     if ('message' in result) throw new Error(result.message);
+    this.recordPersistedFields([mutation]);
+  }
+
+  /**
+   * Advance the lost-update baseline over exactly the fields a store write just
+   * made durable.
+   *
+   * `persistPendingStateChanges` derives every mutation's `expected` from this
+   * snapshot, so a durable write that leaves the snapshot behind poisons the
+   * NEXT ordinary transition: it submits a stale `expected` for a field the
+   * conductor itself already persisted, the store reports a conflict, and the
+   * run halts on a phantom concurrent writer. (Observed as
+   * `Expected prd_audit to match before persist conductor transition` after the
+   * selector tail-skip batch marked a track-skipped gate mid-process.)
+   *
+   * Only the written fields are adopted — never a whole-state copy — so
+   * in-memory changes that have NOT been persisted still diff against their
+   * true baseline and genuine peer updates are still caught.
+   */
+  private recordPersistedFields(mutations: readonly StateMutation<ConductState>[]): void {
+    const snapshot = this.persistedStateSnapshot as Record<string, unknown> | undefined;
+    if (!snapshot) return;
+    for (const mutation of mutations) {
+      snapshot[mutation.field as string] = mutation.next;
+    }
   }
 
   /**
