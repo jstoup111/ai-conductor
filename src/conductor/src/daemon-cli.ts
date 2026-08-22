@@ -2139,6 +2139,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} failed (try ${event.retryCount}): ${event.error}`)}`,
       );
       break;
+    case 'step_refused':
+      log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.step} refused (${event.kind}): ${event.reason}`)}`);
+      break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
       const deltaFragment = delta ? ' ' + delta : '';

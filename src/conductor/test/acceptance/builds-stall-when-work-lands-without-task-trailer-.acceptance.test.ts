@@ -664,12 +664,11 @@ describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
     expect(routedState.build).toBe('done');
     expect(gateState.build).toBe(routedState.build);
 
-    // Same next-step scheduling shape: from `build` onward, both runs pick
-    // the identical sequence of steps (the SAME advanceTail selection code
-    // path — a divergent second advance path could plausibly pick a
-    // different next step, insert/skip a transition, or otherwise diverge).
-    const gateBuildIdx = stepStartsGate.indexOf('build');
-    const routedBuildIdx = stepStartsRouted.indexOf('build');
+    // Same next-step scheduling shape: after each run's final BUILD attempt,
+    // both pick the identical tail through the SAME advanceTail selection
+    // code. The routed case legitimately has earlier BUILD retry attempts.
+    const gateBuildIdx = stepStartsGate.lastIndexOf('build');
+    const routedBuildIdx = stepStartsRouted.lastIndexOf('build');
     expect(gateBuildIdx).toBeGreaterThanOrEqual(0);
     expect(routedBuildIdx).toBeGreaterThanOrEqual(0);
     expect(stepStartsGate.slice(gateBuildIdx)).toEqual(stepStartsRouted.slice(routedBuildIdx));

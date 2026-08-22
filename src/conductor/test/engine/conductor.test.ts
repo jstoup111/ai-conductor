@@ -6165,6 +6165,60 @@ describe('engine/conductor', () => {
     expect(blockedEvents[0].reason).toContain('architecture_review');
   });
 
+  it('writes a needs-human HALT naming residual blocked prerequisites in daemon mode', async () => {
+    await writeState(statePath, {
+      build: 'failed',
+      plan: 'pending',
+    } as ConductState);
+
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHalts.push(event.reason);
+    });
+    const runner = createMockStepRunner();
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      daemon: true,
+      fromStep: 'test_suite',
+    });
+
+    await conductor.run();
+
+    const expectedReason = 'Prerequisite gate blocked test_suite: build (status: failed)';
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(expectedReason);
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+    expect(loopHalts).toContain(expectedReason);
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it('keeps the residual gate HALT classifiable with corrupted breadcrumb data', async () => {
+    await writeState(statePath, { build: 'failed', plan: 'pending' } as ConductState);
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      daemon: true,
+      fromStep: 'test_suite',
+    });
+    events.on('gate_blocked', () => {
+      (conductor as unknown as { _breadcrumb: Record<string, unknown> })._breadcrumb = {
+        lastAdvancedStep: 'garbage',
+        lastEventType: 'garbage',
+      };
+    });
+
+    await conductor.run();
+
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(
+      'Prerequisite gate blocked test_suite: build (status: failed)',
+    );
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+  });
+
   it('passes gate when prerequisite is done', async () => {
     // architecture_review=done satisfies the stories prerequisite
     await writeState(statePath, { architecture_review: 'done' } as ConductState);

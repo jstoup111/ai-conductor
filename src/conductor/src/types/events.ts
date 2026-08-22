@@ -13,6 +13,9 @@ import type { SchedulingUnitRef } from './scheduling-unit.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Closed pre-dispatch refusal classifications. */
+export type RefusalKind = 'protected-artifact' | 'missing-worktree' | 'live-boundary';
+
 /** Identity is deliberately explicit when a retention decision has no readable lease. */
 type ScratchCleanupIdentityValue = string | 'unknown';
 type ScratchCleanupAttempt = number | 'unknown';
@@ -250,6 +253,13 @@ export type ConductorEvent =
       error: string;
       retryCount: number;
       observedIntervals?: readonly ObservedInterval[];
+    }
+  | {
+      /** The step could not be dispatched because a named precondition refused it. */
+      type: 'step_refused';
+      step: StepName;
+      kind: RefusalKind;
+      reason: string;
     }
   | ProviderAttemptEvent
   | ProviderStreamProgressEvent
