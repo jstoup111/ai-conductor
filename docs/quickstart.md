@@ -19,12 +19,12 @@ one is missing, so install them first.
 | `gh`, authenticated | opening spec and implementation PRs | `gh auth status` |
 | `tmux` | `conduct-ts daemon start/stop/restart/connect/debug` | `tmux -V` |
 | `python3` | writing permissions and hooks into `~/.claude/settings.json` | `python3 --version` |
-| Node >= 20.5.0 (repo pins 20.19.2) | building and running the engine, and reading/writing the markdown-viewer and mermaid-renderer config | `node --version` |
+| Node >= 26.0.0 (repo pins 26.7.0) | building and running the engine, and reading/writing the markdown-viewer and mermaid-renderer config | `node --version` |
 | `npm` | `npm ci` + `npm run build` for the engine | `npm --version` |
 | `claude` and/or `codex` | executing steps — at least one is required | `claude --version` / `codex --version` |
 
-Node is pinned to `20.19.2` in `.tool-versions` and `src/conductor/.tool-versions`. Install it
-with `asdf install nodejs 20.19.2` or any equivalent version manager. `bin/conduct-ts` exports
+Node is pinned to `26.7.0` in `.tool-versions` and `src/conductor/.tool-versions`. Install it
+with `asdf install nodejs 26.7.0` or any equivalent version manager. `bin/conduct-ts` exports
 `ASDF_NODEJS_VERSION` from that pin **only when `asdf` is on `PATH`** — without asdf, whatever
 `node` resolves first runs the engine.
 
@@ -193,17 +193,17 @@ run `tsup` directly — the publish guard refuses it.
 The installer skips the engine build rather than failing:
 
 ```text
-  ⚠ Node >=20.5 not active (repo pins 20.19.2 via .tool-versions) — skipping conduct-ts build
+  ⚠ Node >=26 not active (repo pins 26.7.0 via .tool-versions) — skipping conduct-ts build
 ```
 
 and later:
 
 ```text
-  ⚠ conduct-ts bundle not found and Node >=20.5 is not active (the repo pins 20.19.2 via
-    .tool-versions). Install it (e.g. 'asdf install nodejs 20.19.2'), then re-run bin/install.
+  ⚠ conduct-ts bundle not found and Node >=26 is not active (the repo pins 26.7.0 via
+    .tool-versions). Install it (e.g. 'asdf install nodejs 26.7.0'), then re-run bin/install.
 ```
 
-The install "succeeds" and `conduct-ts` is simply never symlinked. Install Node 20.19.2 and re-run
+The install "succeeds" and `conduct-ts` is simply never symlinked. Install Node 26.7.0 and re-run
 `./bin/install`.
 
 ### Missing `gh` authentication
