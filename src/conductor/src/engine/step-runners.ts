@@ -1,6 +1,7 @@
 import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LLMProvider, ProviderStreamObservation } from '../execution/llm-provider.js';
@@ -64,7 +65,6 @@ import {
   SkillDigestUnavailable,
   type RubricSkillFileReader,
 } from './build-review-engine-identity.js';
-import { resolveHarnessRoot } from './install-freshness.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
@@ -474,7 +474,7 @@ export interface StepRunnerOptions {
     engineIdentity: BuildReviewRubricIdentities,
   ) => Promise<StepRunResult>;
   /** Injected identity seams keep build_review runner tests filesystem-free. */
-  resolveBuildReviewHarnessRoot?: () => Promise<string | null>;
+  resolveBuildReviewSkillRoot?: (providerKey: string) => Promise<string | null>;
   resolveBuildReviewEngineStamp?: (engineDir: string) => string;
   readBuildReviewRubricSkill?: RubricSkillFileReader;
   /** Shared raw-aggregate/disposition join. Tests inject a bounded fake store. */
@@ -547,6 +547,22 @@ export const RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES = 8_192;
 /** Byte cap for the raw-output diagnostic detail on a final rubric shape failure. */
 export const RUBRIC_FAILURE_DETAIL_CAP_BYTES = 2_048;
 
+/**
+ * Return the provider home whose installed `skills/` directory the rubric
+ * invocation will load from. Self-host dispatches set the provider home to a
+ * throwaway directory containing that same `skills/` directory; normal Codex
+ * installs use the active ~/.agents home.
+ */
+async function resolveInstalledBuildReviewSkillRoot(providerKey: string): Promise<string | null> {
+  if (providerKey === 'claude') {
+    return process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+  }
+  if (providerKey === 'codex') {
+    return process.env.CODEX_HOME ?? join(homedir(), '.agents');
+  }
+  return null;
+}
+
 export function extractJudgedResultCandidate(output: string): unknown {
   const candidates: string[] = [output.trim()];
   const fence = output.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
@@ -585,7 +601,7 @@ export class DefaultStepRunner implements StepRunner {
   private planPathOverride?: string;
   private buildReviewInputOptions?: BuildReviewInputOptions;
   private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
-  private resolveBuildReviewHarnessRoot: NonNullable<StepRunnerOptions['resolveBuildReviewHarnessRoot']>;
+  private resolveBuildReviewSkillRoot: NonNullable<StepRunnerOptions['resolveBuildReviewSkillRoot']>;
   private resolveBuildReviewEngineStamp: NonNullable<StepRunnerOptions['resolveBuildReviewEngineStamp']>;
   private readBuildReviewRubricSkill: RubricSkillFileReader;
   private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
@@ -642,7 +658,7 @@ export class DefaultStepRunner implements StepRunner {
     this.planPathOverride = options?.planPath;
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
     this.buildReviewCoordinator = options?.buildReviewCoordinator;
-    this.resolveBuildReviewHarnessRoot = options?.resolveBuildReviewHarnessRoot ?? resolveHarnessRoot;
+    this.resolveBuildReviewSkillRoot = options?.resolveBuildReviewSkillRoot ?? resolveInstalledBuildReviewSkillRoot;
     this.resolveBuildReviewEngineStamp = options?.resolveBuildReviewEngineStamp ?? engineStampFromEngineDir;
     this.readBuildReviewRubricSkill = options?.readBuildReviewRubricSkill ?? (async (path) => readFile(path));
     this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
@@ -2099,7 +2115,6 @@ export class DefaultStepRunner implements StepRunner {
     config: ReturnType<typeof resolveBuildReviewConfig>,
   ): Promise<BuildReviewRubricIdentities> {
     const engineDir = dirname(fileURLToPath(import.meta.url));
-    const harnessRoot = await this.resolveBuildReviewHarnessRoot();
     const engineStamp = this.resolveBuildReviewEngineStamp(engineDir);
     const identities = {} as Record<keyof typeof BUILD_REVIEW_RUBRIC_REGISTRY, BuildReviewRubricIdentities[keyof BuildReviewRubricIdentities]>;
 
@@ -2113,8 +2128,19 @@ export class DefaultStepRunner implements StepRunner {
         continue;
       }
       try {
+        const providerKey = normalizeProviderSelection(config.rubrics[rubric].llm_provider)[0];
+        const skillRoot = providerKey === undefined
+          ? null
+          : await this.resolveBuildReviewSkillRoot(providerKey);
+        if (skillRoot === null) {
+          identities[rubric] = {
+            kind: 'unavailable',
+            path: `<unresolved ${providerKey ?? 'provider'} skill root>/skills/${descriptor.skillName}/SKILL.md`,
+          };
+          continue;
+        }
         const skillDigest = await digestRubricSkill({
-          harnessRoot: harnessRoot ?? this.projectDir,
+          harnessRoot: skillRoot,
           skillName: descriptor.skillName,
           readFile: this.readBuildReviewRubricSkill,
         });

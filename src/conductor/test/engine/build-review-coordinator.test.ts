@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   classifyBuildReviewRubricBranches,
-  coordinateBuildReviewRubrics,
+  coordinateBuildReviewRubrics as coordinateBuildReviewRubricsImpl,
+  type BuildReviewRubricIdentities,
   type BuildReviewCoordinationInput,
   type BuildReviewCoordinatorHooks,
 } from "../../src/engine/build-review-coordinator.js";
@@ -131,6 +132,34 @@ const engineIdentity = {
   engineStamp: "current-engine",
   skillDigest: "sha256:current-skill",
 } as BuildReviewEngineIdentity;
+
+const rubricIdentities: BuildReviewRubricIdentities = {
+  tautology: { kind: "ready", identity: engineIdentity },
+  scope: { kind: "ready", identity: engineIdentity },
+  rootCause: { kind: "ready", identity: engineIdentity },
+  completeness: { kind: "ready", identity: engineIdentity },
+};
+
+// Most coordinator scenarios predate identity injection and are concerned with
+// another branch. Give those fixtures the same complete dispatch-site value;
+// tests that exercise identity behavior pass their explicit per-rubric value.
+function coordinateBuildReviewRubrics(
+  input: Omit<BuildReviewCoordinationInput, "engineIdentity"> & {
+    engineIdentity?: BuildReviewRubricIdentities | BuildReviewEngineIdentity;
+  },
+) {
+  const identity = input.engineIdentity === undefined
+    ? rubricIdentities
+    : "tautology" in input.engineIdentity
+      ? input.engineIdentity
+      : {
+        tautology: { kind: "ready" as const, identity: input.engineIdentity },
+        scope: { kind: "ready" as const, identity: input.engineIdentity },
+        rootCause: { kind: "ready" as const, identity: input.engineIdentity },
+        completeness: { kind: "ready" as const, identity: input.engineIdentity },
+      };
+  return coordinateBuildReviewRubricsImpl({ ...input, engineIdentity: identity });
+}
 
 describe("build-review coordinator: frozen fan-out", () => {
   it("emits each rubric occurrence exactly once in branch settlement order", async () => {
@@ -286,7 +315,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(result).toMatchObject({ kind: "ready" });
   });
 
-  it("emits no discard for legacy or unrelated cache misses and completes without an emitter", async () => {
+  it("emits no discard for missing, projection, policy, or invalid cache misses and completes without an emitter", async () => {
     const cases: Array<[string, unknown]> = [
       ["missing", undefined],
       ["projection", { projectionDigest: "sha256:other" }],
@@ -338,6 +367,42 @@ describe("build-review coordinator: frozen fan-out", () => {
       writeCache: async () => undefined,
     })).resolves.toMatchObject({ kind: "ready" });
     expect(dispatched.mock.calls.map(([branch]) => branch.rubric)).toContain("scope");
+  });
+
+  it("discards a legacy cache entry without a cached engine stamp before dispatching it", async () => {
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const dispatchModel = vi.fn(async (branch, projection) => ({
+      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
+    }));
+
+    await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+      preflight: vi.fn(),
+      readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
+        version: 1, rubric: "scope", contractVersion: "v3", projectionVersion: "v2",
+        projectionDigest: projection.digest, policyFingerprint,
+        result: {
+          kind: "judged", rubric: "scope", lapId: parseBuildReviewLapId("cached")!, snapshotDigest: "cached-snapshot",
+          contractVersion: "v3" as never, findings: [], verdict: "PASS",
+        },
+      } : undefined,
+      dispatchModel,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+      emit,
+    });
+
+    const events = emit.mock.calls.map(([event]) => event);
+    const discarded = events.find((event) => event.type === "build_review_cache_discarded");
+    expect(discarded).toEqual({
+      type: "build_review_cache_discarded", rubric: "scope", lapId: "lap-current",
+      reason: "engine-version-mismatch", currentEngineStamp: engineIdentity.engineStamp,
+    });
+    expect(discarded).not.toHaveProperty("cachedEngineStamp");
+    expect(events.findIndex((event) => event.type === "build_review_cache_discarded"))
+      .toBeLessThan(events.findIndex((event) => event.type === "build_review_rubric_started" && event.rubric === "scope"));
+    expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).toContain("scope");
   });
 
   it("rematerializes an exact cache hit with provenance without rewriting its semantic entry", async () => {

@@ -48,15 +48,6 @@ const BUILD_REVIEW_RUBRICS: readonly BuildReviewRubricId[] = [
   "completeness",
 ];
 
-// The runner supplies the actual identity once per dispatch.  Keep this
-// transition fallback so callers compiled before that wiring lands still
-// produce schema-valid cache entries rather than turning a cache write into an
-// infrastructure failure.
-const TRANSITIONAL_ENGINE_IDENTITY = {
-  engineStamp: "dev",
-  skillDigest: "unresolved",
-} as BuildReviewEngineIdentity;
-
 export type BuildReviewRubricIdentity =
   | { readonly kind: "ready"; readonly identity: BuildReviewEngineIdentity }
   | { readonly kind: "unavailable"; readonly path: string };
@@ -117,7 +108,7 @@ export interface BuildReviewCoordinationInput {
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
   /** Per-rubric cache identity resolved by the dispatch site before coordination. */
-  readonly engineIdentity?: BuildReviewRubricIdentities | BuildReviewEngineIdentity;
+  readonly engineIdentity: BuildReviewRubricIdentities;
   /** Test seam for an engine-held projection corruption at branch settlement. */
   readonly projections?: BuildReviewRubricProjections;
   readonly preflight: () => Promise<TautologyPreflightResult>;
@@ -337,9 +328,7 @@ export async function coordinateBuildReviewRubrics(
       });
       continue;
     }
-    const identity = input.engineIdentity !== undefined && "tautology" in input.engineIdentity
-      ? input.engineIdentity[branch.rubric]
-      : { kind: "ready" as const, identity: input.engineIdentity ?? TRANSITIONAL_ENGINE_IDENTITY };
+    const identity = input.engineIdentity[branch.rubric];
     if (identity.kind === "unavailable") {
       resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed", identity.path));
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed" });

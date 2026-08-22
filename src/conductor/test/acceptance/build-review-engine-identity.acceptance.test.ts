@@ -17,6 +17,7 @@ import {
   type BuildReviewCoordinationInput,
 } from '../../src/engine/build-review-coordinator.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import type { BuildReviewEngineIdentity } from '../../src/engine/build-review-engine-identity.js';
 import type { BuildReviewFrozenInputs } from '../../src/engine/build-review-inputs.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import type { ResolvedBuildReviewConfig } from '../../src/engine/resolved-config.js';
@@ -84,6 +85,48 @@ afterEach(async () => {
 });
 
 describe('acceptance: build_review cache identity follows the running engine', () => {
+  it('settles an unresolved installed rubric skill root as cache-read-failed without cache reuse or writes', async () => {
+    const currentIdentity = {
+      engineStamp: '31b5c81beaec',
+      skillDigest: `sha256:${'b'.repeat(64)}`,
+    } as BuildReviewEngineIdentity;
+    const readCache = vi.fn(async () => undefined);
+    const writeCache = vi.fn(async () => undefined);
+    const dispatchModel = vi.fn(async (_branch, projection) => ({
+      findings: [], lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+    }));
+
+    const result = await coordinateBuildReviewRubrics({
+      config: config(),
+      inputs: inputs(),
+      lapId: parseBuildReviewLapId('lap-unavailable-installed-root')!,
+      engineIdentity: {
+        tautology: { kind: 'ready', identity: currentIdentity },
+        scope: { kind: 'unavailable', path: '<unresolved claude skill root>/skills/build-review-scope/SKILL.md' },
+        rootCause: { kind: 'ready', identity: currentIdentity },
+        completeness: { kind: 'ready', identity: currentIdentity },
+      },
+      preflight: vi.fn(),
+      readCache,
+      dispatchModel,
+      writeArtifact: (async (artifact) => ({ version: 1, ...artifact })) as BuildReviewCoordinationInput['writeArtifact'],
+      writeCache,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'ready',
+      branches: expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'infrastructure-failure', rubric: 'scope', reason: 'cache-read-failed',
+          detail: expect.stringContaining('build-review-scope/SKILL.md'),
+        }),
+      ]),
+    });
+    expect(readCache).not.toHaveBeenCalled();
+    expect(writeCache).not.toHaveBeenCalled();
+    expect(dispatchModel).not.toHaveBeenCalled();
+  });
+
   it('re-judges a stale cached rubric and persists its engine-version discard before dispatch', async () => {
     const root = await mkdtemp(join(tmpdir(), 'build-review-engine-identity-'));
     roots.push(root);

@@ -3252,7 +3252,7 @@ TIER: M`,
 
     it('resolves one engine stamp and one skill digest per enabled rubric before injecting identities into the coordinator', async () => {
       const provider = createMockProvider();
-      const resolveHarnessRoot = vi.fn(async () => '/fixture-harness');
+      const resolveSkillRoot = vi.fn(async () => '/fixture-provider');
       const resolveEngineStamp = vi.fn(() => 'engine-1759');
       const readRubricSkill = vi.fn(async (path: string) => Buffer.from(path));
       const coordinate = vi.fn(async (_inputs, _config, engineIdentity) => {
@@ -3274,7 +3274,7 @@ TIER: M`,
           },
         } as HarnessConfig,
         buildReviewCoordinator: coordinate,
-        resolveBuildReviewHarnessRoot: resolveHarnessRoot,
+        resolveBuildReviewSkillRoot: resolveSkillRoot,
         resolveBuildReviewEngineStamp: resolveEngineStamp,
         readBuildReviewRubricSkill: readRubricSkill,
         buildReviewInputOptions: {
@@ -3286,14 +3286,14 @@ TIER: M`,
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
 
-      expect(resolveHarnessRoot).toHaveBeenCalledOnce();
+      expect(resolveSkillRoot).toHaveBeenCalledTimes(4);
       expect(resolveEngineStamp).toHaveBeenCalledOnce();
       expect(readRubricSkill).toHaveBeenCalledTimes(4);
       expect(readRubricSkill.mock.calls.map(([path]) => path)).toEqual([
-        '/fixture-harness/skills/build-review-tautology/SKILL.md',
-        '/fixture-harness/skills/build-review-scope/SKILL.md',
-        '/fixture-harness/skills/build-review-root-cause/SKILL.md',
-        '/fixture-harness/skills/build-review-completeness/SKILL.md',
+        '/fixture-provider/skills/build-review-tautology/SKILL.md',
+        '/fixture-provider/skills/build-review-scope/SKILL.md',
+        '/fixture-provider/skills/build-review-root-cause/SKILL.md',
+        '/fixture-provider/skills/build-review-completeness/SKILL.md',
       ]);
       expect(coordinate).toHaveBeenCalledOnce();
     });
@@ -3302,7 +3302,7 @@ TIER: M`,
       const provider = createMockProvider();
       const coordinate = vi.fn(async (_inputs, _config, engineIdentity) => {
         expect(engineIdentity.scope).toEqual({
-          kind: 'unavailable', path: '/fixture-harness/skills/build-review-scope/SKILL.md',
+          kind: 'unavailable', path: '/fixture-provider/skills/build-review-scope/SKILL.md',
         });
         return { success: true, output: 'unavailable identity injected' };
       });
@@ -3313,7 +3313,7 @@ TIER: M`,
           build_review: { perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
         } as HarnessConfig,
         buildReviewCoordinator: coordinate,
-        resolveBuildReviewHarnessRoot: async () => '/fixture-harness',
+        resolveBuildReviewSkillRoot: async () => '/fixture-provider',
         resolveBuildReviewEngineStamp: () => 'engine-1759',
         readBuildReviewRubricSkill: async (path) => {
           if (path.endsWith('/build-review-scope/SKILL.md')) throw new Error('EACCES');
