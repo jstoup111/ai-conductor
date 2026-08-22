@@ -18,7 +18,7 @@ import {
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskVerifyOnly } from './autoheal.js';
-import { parsePlanTaskPaths, parsePlanTaskPreserves } from './plan-task-parse.js';
+import { parsePlanTaskDoneWhen, parsePlanTaskPaths, parsePlanTaskPreserves } from './plan-task-parse.js';
 import { classifyTautologyPaths } from './build-review-tautology-preflight.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
@@ -92,6 +92,10 @@ export interface BuildReviewPreservationContext {
   readonly taskId: string;
   readonly behavior: string;
 }
+export interface BuildReviewDoneWhenContext {
+  readonly taskId: string;
+  readonly criteria: readonly { readonly hash: string; readonly occurrence: number; readonly text: string }[];
+}
 
 /** Inputs returned after the proof gate has frozen a source snapshot. */
 export interface BuildReviewFrozenInputs extends BuildReviewInputs {
@@ -124,6 +128,7 @@ export interface BuildReviewSourceSnapshot {
   readonly verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
   /** Engine-parsed preserved-behavior plan evidence frozen with the source read. */
   readonly preservationContext?: readonly BuildReviewPreservationContext[];
+  readonly doneWhenContext?: readonly BuildReviewDoneWhenContext[];
   /** Static title evidence read from the graded HEAD, never the live worktree. */
   readonly changedTestTitles?: readonly BuildReviewChangedTestTitle[];
 }
@@ -252,9 +257,9 @@ function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'co
 
 function contentSnapshotDigest(snapshot: Pick<
   BuildReviewSourceSnapshot,
-  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'verifyOnlyContext' | 'preservationContext'
+  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'verifyOnlyContext' | 'preservationContext' | 'doneWhenContext'
 >): string {
-  const { diff, planBody, repairContext, removalContext, verifyOnlyContext, preservationContext } = snapshot;
+  const { diff, planBody, repairContext, removalContext, verifyOnlyContext, preservationContext, doneWhenContext } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff: withoutDiffBlobIdentities(diff),
     planBody,
@@ -262,6 +267,7 @@ function contentSnapshotDigest(snapshot: Pick<
     removalContext,
     verifyOnlyContext,
     preservationContext,
+    doneWhenContext,
   })).digest('hex')}`;
 }
 
@@ -538,6 +544,18 @@ export async function assembleBuildReviewInputs(
     }));
   const preservationContext = [...parsePlanTaskPreserves(planBody)]
     .flatMap(([taskId, behaviors]) => behaviors.map((behavior) => ({ taskId, behavior })));
+  const doneWhenContext = [...parsePlanTaskDoneWhen(planBody)].map(([taskId, criteria]) => {
+    const occurrences = new Map<string, number>();
+    return {
+      taskId,
+      criteria: criteria.map((text) => {
+        const normalized = text.replaceAll(/\s+/g, ' ').trim();
+        const occurrence = occurrences.get(normalized) ?? 0;
+        occurrences.set(normalized, occurrence + 1);
+        return { text, occurrence, hash: `sha256:${createHash('sha256').update(normalized).digest('hex')}` };
+      }),
+    };
+  });
 
   const featureRoot = dirname(dirname(dirname(planPath)));
   const planIsInFeatureRoot =
@@ -595,6 +613,10 @@ export async function assembleBuildReviewInputs(
     preservationContext: Object.freeze(preservationContext.map((context) => Object.freeze({
       taskId: context.taskId,
       behavior: context.behavior,
+    }))),
+    doneWhenContext: Object.freeze(doneWhenContext.map((context) => Object.freeze({
+      taskId: context.taskId,
+      criteria: Object.freeze(context.criteria.map((criterion) => Object.freeze({ ...criterion }))),
     }))),
     changedTestTitles,
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;

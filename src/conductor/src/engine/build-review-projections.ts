@@ -79,9 +79,12 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly removalContext: BuildReviewSourceSnapshot['removalContext'];
   /** Engine-parsed verify-only task evidence, kept inline as compact ids and paths. */
   readonly verifyOnlyContext: BuildReviewSourceSnapshot['verifyOnlyContext'];
+  /** Falsifiable task criteria every rubric may bind a finding to. */
+  readonly doneWhenContext: BuildReviewSourceSnapshot['doneWhenContext'];
 }
 
 export interface TautologyProjection extends CommonProjection<'tautology'> {
+  readonly planBody: string;
   readonly changedTestSelectors: readonly string[];
   /** Frozen declared title chains, with an explicit selector-hash fallback marker. */
   readonly changedTestTitles: BuildReviewSourceSnapshot['changedTestTitles'];
@@ -367,6 +370,7 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
     changedFiles: deriveChangedFileReferences(snapshot.diff),
     removalContext: snapshot.removalContext,
     verifyOnlyContext: snapshot.verifyOnlyContext,
+    doneWhenContext: snapshot.doneWhenContext,
   };
 }
 
@@ -379,6 +383,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
   const inputs = source.inputs;
   const tautology = seal({
     ...common(source, 'tautology'),
+    planBody: inputs.sourceSnapshot.planBody,
     changedTestSelectors: canonicalArray(source.tautology.changedTestSelectors) as readonly string[],
     changedTestTitles: inputs.sourceSnapshot.changedTestTitles,
     testSuiteProof: canonicalize(json(inputs.testSuiteProof)),

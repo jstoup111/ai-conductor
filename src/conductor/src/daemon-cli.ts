@@ -153,6 +153,7 @@ import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
 import type { PrMergeState } from './engine/pr-labels.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
+import { reconcileBeyondRecords } from './engine/beyond-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
@@ -1751,6 +1752,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // (daemon.ts guards with ?.()), same failure mode as sweepMergeableLabels below.
       reconcileHaltPrs: async () => {
         await reconcileHaltPrs({ projectRoot, log, cache: haltPrSweepCache });
+        await reconcileBeyondRecords({ projectRoot, tracker, gh: ownerGh, log, emit: (event) => events.emit(event) });
       },
       // adr-2026-07-27 Decisions 4 + 6: the sweep only converges if BOTH
       // hand-off seams are supplied here. `requestRecordRepair` is the ST-916

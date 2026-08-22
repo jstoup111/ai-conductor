@@ -51,6 +51,8 @@ Return exactly one JSON object whose only top-level field is `findings`, an arra
 the `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot
 identity after validating this findings-only payload.
 Return every independent finding; an empty array means a PASS for this rubric. Each finding contains:
+It may include `boundTo`: use `"beyond"` for a concern outside every `Done when:` criterion; otherwise
+use a content-region reference to the applicable criterion. Omit it when the task has no criteria.
 
 **Closed vocabulary:** `root-cause-unaddressed`, `symptom-only-fix`,
 `provenance-sensitive-cache-identity`.

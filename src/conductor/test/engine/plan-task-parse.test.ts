@@ -4,14 +4,20 @@
 // must be able to import these from the new module directly, so a later
 // phase can gut autoheal.ts's evidence-derivation logic without breaking the
 // wiring-reachability gate.
+import { execFile as execFileCallback } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import {
+  parsePlanTaskDoneWhen,
   parsePlanTaskPaths,
   parsePlanTaskPreserves,
   TASK_HEADER_PATTERN,
   TASK_ID_PATTERN,
 } from '../../src/engine/plan-task-parse.js';
 import { parsePlanTaskVerifyOnly } from '../../src/engine/autoheal.js';
+
+const execFile = promisify(execFileCallback);
 
 describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)', () => {
   it('parses one preserved behavior from its task block', () => {
@@ -36,6 +42,80 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
       'the ungated TokenMeter wrapper transparency',
       'the provider-facing TokenMeter metric name',
     ]]]));
+  });
+
+  it('parses the two, three, and five Done when criteria from their task blocks', () => {
+    const result = parsePlanTaskDoneWhen(`### Task 1: Two criteria
+**Done when:**
+- first criterion
+- second criterion
+
+### Task 2: Three criteria
+**Done when:**
+- first criterion
+- second criterion
+- third criterion
+
+### Task 3: Five criteria
+**Done when:**
+- first criterion
+- second criterion
+- third criterion
+- fourth criterion
+- fifth criterion
+`);
+
+    expect(result).toEqual(new Map([
+      ['1', ['first criterion', 'second criterion']],
+      ['2', ['first criterion', 'second criterion', 'third criterion']],
+      ['3', ['first criterion', 'second criterion', 'third criterion', 'fourth criterion', 'fifth criterion']],
+    ]));
+  });
+
+  it('normalizes Markdown emphasis and trailing whitespace in Done when criteria', () => {
+    expect(parsePlanTaskDoneWhen(`### Task 1: Normalization
+**Done when:**
+- **the observable result**${'   '}
+- _the failure result_\t
+`)).toEqual(new Map([['1', ['the observable result', 'the failure result']]]));
+  });
+
+  it('ignores a Done when block inside a fenced code example', () => {
+    expect(parsePlanTaskDoneWhen(`### Task 1: Fenced example
+\`\`\`markdown
+**Done when:**
+- example criterion
+- another example criterion
+\`\`\`
+`)).toEqual(new Map());
+  });
+
+  it('omits a task that has no Done when block', () => {
+    expect(parsePlanTaskDoneWhen(`### Task 1: Has criteria
+**Done when:**
+- observable result
+- observable failure
+
+### Task 2: No criteria
+**Files:** src/example.ts
+`)).toEqual(new Map([['1', ['observable result', 'observable failure']]]));
+  });
+
+  it('parses each non-empty Done when map across landed plans on main', async () => {
+    const { stdout } = await execFile('git', ['ls-tree', '-r', '--name-only', 'main', '--', '.docs/plans'], {
+      cwd: fileURLToPath(new URL('../../../..', import.meta.url)),
+    });
+    const planPaths = stdout.trim().split('\n').filter(Boolean);
+    const maps = await Promise.all(planPaths.map(async (planPath) => {
+      const { stdout: plan } = await execFile('git', ['show', `main:${planPath}`], {
+        cwd: fileURLToPath(new URL('../../../..', import.meta.url)),
+      });
+      return { planPath, doneWhen: parsePlanTaskDoneWhen(plan) };
+    }));
+
+    const nonEmpty = maps.filter(({ doneWhen }) => doneWhen.size > 0);
+    expect(nonEmpty.length).toBeGreaterThan(0);
+    expect(nonEmpty.every(({ doneWhen }) => [...doneWhen.values()].every((criteria) => criteria.every(Boolean)))).toBe(true);
   });
 
   it('exports TASK_ID_PATTERN matching the H9 id grammar', () => {

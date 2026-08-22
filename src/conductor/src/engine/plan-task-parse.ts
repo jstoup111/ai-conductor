@@ -45,6 +45,9 @@ export interface ParsedPlanTaskPaths extends Map<string, Set<string>> {
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 const PRESERVES_LINE = /^\s*(?:[-*]\s+)?\*\*Preserves\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+const DONE_WHEN_LINE = /^\s*(?:[-*]\s+)?\*\*Done when\s*:?\s*\*\*\s*:?\s*$/i;
+const MARKDOWN_HEADER_LINE = /^\s*\*\*[^*]+\*\*\s*:?[\t ]*$/;
+const FENCE_LINE = /^\s*(`{3,}|~{3,})/;
 
 // Retired **Wired-into:** metadata must remain excluded from legacy fallback
 // paths in historical plans. This preserves only the old line grammar (case,
@@ -113,6 +116,68 @@ export function parsePlanTaskPreserves(text: string): Map<string, string[]> {
       if (behaviors) behaviors.push(behavior);
       else result.set(id, [behavior]);
     }
+  }
+
+  return result;
+}
+
+function stripMarkdownEmphasis(value: string): string {
+  let normalized = value.trim();
+  while (true) {
+    const match = normalized.match(/^(\*\*|__|\*|_)([\s\S]*?)\1$/);
+    if (!match) return normalized;
+    normalized = match[2].trim();
+  }
+}
+
+/**
+ * Parses each task's Done when criteria, ignoring Markdown code fences.
+ *
+ * A present block is represented even when it contains no criterion lines so
+ * callers can distinguish an empty block from a task with no block at all.
+ */
+export function parsePlanTaskDoneWhen(text: string): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  let currentIds: string[] = [];
+  let collecting = false;
+  let fence: string | null = null;
+
+  for (const line of text.split('\n')) {
+    const fenceMatch = line.match(FENCE_LINE);
+    if (fenceMatch) {
+      const delimiter = fenceMatch[1];
+      if (!fence) fence = delimiter[0];
+      else if (delimiter[0] === fence) fence = null;
+      continue;
+    }
+    if (fence) continue;
+
+    const headerMatch = line.match(TASK_HEADER_PATTERN);
+    if (headerMatch) {
+      currentIds = expandTaskIds(
+        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+      );
+      collecting = false;
+      continue;
+    }
+    if (currentIds.length === 0) continue;
+
+    if (DONE_WHEN_LINE.test(line)) {
+      collecting = true;
+      for (const id of currentIds) result.set(id, []);
+      continue;
+    }
+    if (!collecting) continue;
+    if (MARKDOWN_HEADER_LINE.test(line)) {
+      collecting = false;
+      continue;
+    }
+    if (!line.trim()) continue;
+
+    const criterion = stripMarkdownEmphasis(
+      (line.match(/^\s*(?:[-*]|\d+[.)])\s*(.*)$/)?.[1] ?? line).trim(),
+    );
+    for (const id of currentIds) result.get(id)?.push(criterion);
   }
 
   return result;

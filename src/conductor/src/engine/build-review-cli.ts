@@ -3,7 +3,7 @@ import { userInfo } from 'node:os';
 import { join } from 'node:path';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate } from './build-review-aggregate.js';
-import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, type BuildReviewBeyondDispositionRecord, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { parseBuildReviewLapId } from './build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
@@ -47,6 +47,7 @@ export interface BuildReviewRecordReducedCoverageCommand {
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
   listReducedCoverage?(feature: unknown): Promise<BuildReviewReducedCoverageListResult>;
+  listBeyond?(feature: unknown): Promise<{ ok: true; records: readonly BuildReviewBeyondDispositionRecord[] } | { ok: false; message: string }>;
   append(input: Parameters<BuildReviewDispositionStore['append']>[0]): Promise<BuildReviewDispositionAppendResult>;
   appendIfCurrent?: BuildReviewDispositionStore['appendIfCurrent'];
 };
@@ -135,6 +136,7 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     `Accepted findings: ${effective.acceptedFindingIds.join(', ') || 'none'}`,
     ...accepted.map(({ findingId, disposition }) => `Accepted disposition: ${findingId} (lap ${disposition.sourceLapId}; operator ${disposition.operator}; rationale: ${disposition.rationale})`),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
+    `Beyond findings: ${effective.beyondFindingIds.join(', ') || 'none'}`,
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
     ...(faults.length === 0 ? [] : [
@@ -184,6 +186,8 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       ? await store.listReducedCoverage(feature)
       : { ok: true as const, records: [] as BuildReviewReducedCoverageDispositionRecord[] };
     if (!reducedCoverage.ok) throw new Error(reducedCoverage.message);
+    const beyond = store.listBeyond ? await store.listBeyond(feature) : { ok: true as const, records: [] as BuildReviewBeyondDispositionRecord[] };
+    if (!beyond.ok) throw new Error(beyond.message);
     const readMechanicalFaults = deps.readMechanicalFaults ?? (async (root: string) =>
       (await readKickbackLedger(root)).gates.build_review?.mechanicalFaults);
     const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, reducedCoverage.records);
@@ -192,9 +196,10 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const faults = exhaustedMechanicalFaults(aggregate, (await readMechanicalFaults(worktree)) ?? 0);
     const output = {
       feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...effective, acceptedDispositions: accepted,
+      beyondRecords: beyond.records,
       ...(faults.length > 0 ? { exhaustedMechanicalFaults: faults } : {}),
     };
-    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, faults));
+    print(command.format === 'json' ? JSON.stringify(output) : [renderHuman(command.feature, aggregate, effective, accepted, faults), ...beyond.records.map((record) => `Beyond record: ${record.findingId}; ${record.summary}; ${record.issueUrl ?? record.status}`)].join('\n'));
     return 0;
   } catch {
     print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}'.`);
@@ -265,6 +270,9 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     return refuse('finding-not-current', `build-review accept: refused for '${command.feature}'; '${command.findingId}' is not a current judged finding on lap '${aggregate.lapId}'.`);
   }
   const identity = currentFinding.identity;
+  if (currentFinding.finding.boundTo === 'beyond') {
+    return refuse('finding-not-actionable', `build-review accept: refused for '${command.feature}'; '${command.findingId}' is not an unresolved finding on lap '${aggregate.lapId}'.`);
+  }
   try {
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.finding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
