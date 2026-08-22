@@ -305,6 +305,30 @@ describe('build-review findings CLI', () => {
     });
   });
 
+  it('renders the ledger\'s last mechanical fault only when the record is present', async () => {
+    const fault = { rubric: 'rootCause' as const, reason: 'malformed-artifact' as const, detail: 'response omitted a verdict', lapId: 'lap-rejected' };
+    const deps = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      readKickbackGateEntry: async () => ({ mechanicalFaults: 1, lastMechanicalFault: fault }),
+    };
+    const machine = vi.fn();
+    const human = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, { ...deps, print: machine })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, { ...deps, print: human })).resolves.toBe(0);
+
+    const machineOutput = JSON.parse(machine.mock.calls[0]![0]);
+    expect(machineOutput.lastMechanicalFault).toEqual(fault);
+    expect(Object.keys(machineOutput).sort()).toEqual([
+      'acceptedDispositions', 'acceptedFindingIds', 'feature', 'infrastructureFailureRubrics', 'lapId', 'lastMechanicalFault',
+      'rawVerdict', 'skippedRubrics', 'snapshotDigest', 'unresolvedFindingIds', 'verdict',
+    ]);
+    expect(human).toHaveBeenCalledWith(expect.stringContaining(
+      'Last mechanical fault: rootCause; cause: malformed-artifact; lap: lap-rejected; diagnostic: response omitted a verdict',
+    ));
+  });
+
   it('does not label a mixed lap exhausted while allowance remains, and applies recorded reduced coverage to its effective verdict', async () => {
     const print = vi.fn();
     const decision = {
@@ -327,7 +351,7 @@ describe('build-review findings CLI', () => {
     expect(JSON.parse(print.mock.calls[0]![0]).exhaustedMechanicalFaults).toBeUndefined();
   });
 
-  it('keeps a fault-free report byte-identical to the existing output', async () => {
+  it('keeps a report without a ledger fault byte-identical to the existing output', async () => {
     const faultFree = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: {
         tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
@@ -336,17 +360,30 @@ describe('build-review findings CLI', () => {
         completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
       },
     });
-    const print = vi.fn();
+    const machine = vi.fn();
+    const human = vi.fn();
+    const deps = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(faultFree), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      readKickbackGateEntry: async () => ({ mechanicalFaults: 0 }),
+    };
 
     await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
-      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
-      readFile: async () => JSON.stringify(faultFree), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }), print,
+      ...deps, print: machine,
+    })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      ...deps, print: human,
     })).resolves.toBe(0);
 
-    expect(print).toHaveBeenCalledWith(JSON.stringify({
+    expect(machine).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
       acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
     }));
+    expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
+    expect(human).toHaveBeenCalledWith([
+      'Build review findings: review-rubrics', 'Lap: lap-current', 'Raw verdict: PASS', 'Effective verdict: PASS',
+      'Accepted findings: none', 'Unresolved findings: none', 'Skipped rubrics: none', 'Infrastructure failures: none',
+    ].join('\n'));
   });
 
   it('uses the live runner canonical identity for both findings reads and acceptance writes through an alternate main root', async () => {
