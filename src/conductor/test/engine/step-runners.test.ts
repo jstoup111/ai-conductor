@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -3320,6 +3321,83 @@ TIER: M`,
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
       expect(coordinate).toHaveBeenCalledOnce();
+    });
+
+    it('uses each prepared fallback home for cache lookup and writes only the successful candidate identity', async () => {
+      const claudeHome = join(dir, 'prepared-claude');
+      const codexHome = join(dir, 'prepared-codex');
+      await Promise.all([
+        mkdir(join(claudeHome, 'skills', 'build-review-scope'), { recursive: true }),
+        mkdir(join(codexHome, 'skills', 'build-review-scope'), { recursive: true }),
+      ]);
+      await writeFile(join(claudeHome, 'skills', 'build-review-scope', 'SKILL.md'), 'claude rubric bytes');
+      await writeFile(join(codexHome, 'skills', 'build-review-scope', 'SKILL.md'), 'codex rubric bytes');
+      const unavailable = vi.fn(async (): Promise<InvokeResult> => ({
+        success: false, output: 'claude unavailable', exitCode: 127,
+        providerUnavailable: true, providerUnavailableScope: 'run',
+      }));
+      const succeeded = vi.fn(async (): Promise<InvokeResult> => ({
+        success: true, output: JSON.stringify({ findings: [] }), exitCode: 0,
+      }));
+      const claudeRuntime = {
+        key: 'claude', provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke: unavailable, invokeInteractive: vi.fn() },
+        policy: CLAUDE_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+      };
+      const codexRuntime = {
+        key: 'codex', provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke: succeeded, invokeInteractive: vi.fn() },
+        policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      };
+      const prepared = vi.fn(async (candidate: { providerKey: string }) => ({
+        executable: candidate.providerKey,
+        args: [],
+        env: candidate.providerKey === 'claude'
+          ? { CLAUDE_CONFIG_DIR: claudeHome }
+          : { CODEX_HOME: codexHome },
+        teardown: async () => undefined,
+      }));
+      const runner = new DefaultStepRunner(createMockProvider(), 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath,
+        config: {
+          llm_provider: ['claude', 'codex'],
+          build_review: {
+            perTaskFloor: false,
+            rubrics: {
+              tautology: { enabled: false },
+              scope: { enabled: true, llm_provider: ['claude', 'codex'] },
+              rootCause: { enabled: false },
+              completeness: { enabled: false },
+            },
+          },
+        } as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([claudeRuntime, codexRuntime]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['claude', 'codex'],
+        providerExecution: { prepareCandidateSelfHost: prepared } as any,
+        resolveBuildReviewEngineStamp: () => '31b5c81beaec',
+        buildReviewEffectiveResolver: async (_projectRoot, aggregate) => ({
+          ok: true,
+          effective: { verdict: aggregate.verdict },
+        }) as never,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          } as never),
+        },
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
+
+      expect(unavailable).toHaveBeenCalledOnce();
+      expect(succeeded).toHaveBeenCalledOnce();
+      expect(prepared.mock.calls.map(([candidate]) => candidate.providerKey)).toEqual(['claude', 'codex']);
+      const cached = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review', 'cache', 'scope.json'), 'utf8'));
+      expect(cached.engineIdentity).toEqual({
+        engineStamp: '31b5c81beaec',
+        skillDigest: `sha256:${createHash('sha256').update('codex rubric bytes').digest('hex')}`,
+      });
+      expect(cached.engineIdentity.skillDigest).not.toBe(
+        `sha256:${createHash('sha256').update('claude rubric bytes').digest('hex')}`,
+      );
     });
 
     it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {

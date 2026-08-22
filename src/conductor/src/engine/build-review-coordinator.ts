@@ -115,9 +115,12 @@ export interface BuildReviewCoordinationInput {
   readonly config: ResolvedBuildReviewConfig;
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
-  /** Compatibility seam for coordinator-only tests; production omits this so
-   * identities are resolved exclusively from prepared candidates. */
-  readonly engineIdentity?: BuildReviewRubricIdentities;
+  /**
+   * Each enabled rubric either carries a ready identity for coordinator-only
+   * callers, an unavailable path, or an engine stamp whose digest will be
+   * resolved from the prepared provider candidate.
+   */
+  readonly engineIdentity: BuildReviewRubricIdentities;
   /** Test seam for an engine-held projection corruption at branch settlement. */
   readonly projections?: BuildReviewRubricProjections;
   readonly preflight: () => Promise<TautologyPreflightResult>;
@@ -381,7 +384,7 @@ export async function coordinateBuildReviewRubrics(
           await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
           return { kind: "cache-hit", result };
         };
-        const legacyIdentity = input.engineIdentity?.[rubric];
+        const legacyIdentity = input.engineIdentity[rubric];
         if (legacyIdentity?.kind === "unavailable") {
           return { rubric, branch: infrastructure(rubric, "cache-read-failed", legacyIdentity.path) };
         }

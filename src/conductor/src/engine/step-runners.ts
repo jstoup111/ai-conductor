@@ -1946,6 +1946,7 @@ export class DefaultStepRunner implements StepRunner {
       config,
       inputs,
       lapId,
+      engineIdentity,
       preflight: async () => this.runTautologyPreflight(inputs),
       readCache: async (branch) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
         readFile: async (path) => readFile(path, 'utf-8'),
