@@ -482,6 +482,33 @@ describe('executeProviderCandidates', () => {
     expect(teardown).toHaveBeenCalledOnce();
   });
 
+  it('closes a candidate stream observer when self-host preparation rejects', async () => {
+    const close = vi.fn();
+    const provider = {
+      invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'must not run', exitCode: 0 })),
+      invokeInteractive: vi.fn(async () => {}),
+    };
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await expect(executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', provider)]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('session')),
+      options: {
+        prompt: 'build',
+        cwd: '/workspace',
+        providerStreamObserverForCandidate: () => ({ onProviderStream: vi.fn(), close }),
+      },
+      prepareCandidateSelfHost: async () => { throw new Error('self-host preparation failed'); },
+    })).rejects.toThrow('self-host preparation failed');
+
+    expect({ close: close.mock.calls.length, providerCalls: provider.invoke.mock.calls.length }).toEqual({
+      close: 1,
+      providerCalls: 0,
+    });
+  });
+
   it('never resumes into a freshly provisioned self-host home, even after the session was created earlier in the step', async () => {
     // Each self-host dispatch provisions its own throwaway provider home and
     // tears it down afterwards, so no rollout/session state survives into the

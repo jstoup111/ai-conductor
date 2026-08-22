@@ -407,6 +407,34 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(out).not.toContain('children: 0');
   });
 
+  it('clears live provider progress after a failed candidate so a silent fallback cannot display stale totals', async () => {
+    await makeStateful('fallback-without-stream', { build: 'in_progress' });
+    const pipeline = join(worktreeBase, 'fallback-without-stream', '.pipeline');
+    await writeFile(
+      join(pipeline, 'events.jsonl'),
+      [
+        { type: 'step_started', step: 'build', index: 12, ts: '2026-08-21T12:00:00.000Z' },
+        {
+          type: 'provider_stream_progress', step: 'build', provider: 'claude',
+          childObservability: 'observed', activeChildren: 2, uncachedInputTokens: 89, outputTokens: 13,
+          ts: '2026-08-21T12:00:01.000Z',
+        },
+        {
+          type: 'provider_attempt', step: 'build', provider: 'claude', outcome: 'unavailable',
+          invoked: true, reason: 'provider unavailable',
+        },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({ worktreeBase, processedDir, discover: async () => [] });
+
+    const dashboard = renderDashboard(state);
+    expect(dashboard).toContain('fallback-without-stream @build');
+    expect(dashboard).toContain('(children: unknown) (tokens: unavailable)');
+    expect(dashboard).not.toContain('(children: 2)');
+  });
+
   it('reads the current lifecycle phase and attempt evidence for an in-progress feature', async () => {
     await makeStateful('preparing', { build: 'in_progress' });
     await makeStateful('running', { build: 'in_progress' });

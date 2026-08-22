@@ -56,6 +56,9 @@ const BUILD_REVIEW_RUBRIC_IDS = [
   'completeness',
 ] as const;
 
+/** Default hard floor for live provider-stream observation emission. */
+export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
+
 function normalizeKeyedBlock(
   blockName: string,
   raw: unknown,
@@ -358,6 +361,8 @@ export function validateConfig(
     'otel',
     // Intra-step build progress events (poll/quiet/heartbeat cadence).
     'build_progress',
+    // Live provider-stream observation cadence.
+    'provider_stream',
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
@@ -988,6 +993,22 @@ export function validateConfig(
     if (err) return { ok: false, error: err };
   }
 
+  // provider_stream — live provider-observation cadence. A zero or negative
+  // interval deliberately requests the documented default rather than a busy loop.
+  if (obj.provider_stream !== undefined) {
+    const err = validateProviderStreamBlock(obj.provider_stream);
+    if (err) return { ok: false, error: err };
+  }
+  if (obj.provider_stream !== undefined || materializeDefaults) {
+    const configured = obj.provider_stream as Record<string, unknown> | undefined;
+    const minInterval = configured?.min_interval_ms;
+    obj.provider_stream = {
+      min_interval_ms: typeof minInterval === 'number' && Number.isFinite(minInterval) && minInterval > 0
+        ? minInterval
+        : DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS,
+    };
+  }
+
   // conflict_check — ADR corpus scope for conflict-check. The default keeps
   // consumer checks bounded to ADRs in the current change set.
   if (obj.conflict_check !== undefined) {
@@ -1548,6 +1569,25 @@ function validateBuildProgressBlock(raw: unknown): ConfigError | null {
     };
   }
 
+  return null;
+}
+
+function validateProviderStreamBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'provider_stream must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (key !== 'min_interval_ms') {
+      return { type: 'validation_error', message: `Unknown key in provider_stream: "${key}"` };
+    }
+  }
+  if (
+    obj.min_interval_ms !== undefined &&
+    (typeof obj.min_interval_ms !== 'number' || !Number.isFinite(obj.min_interval_ms))
+  ) {
+    return { type: 'validation_error', message: 'provider_stream.min_interval_ms must be a finite number' };
+  }
   return null;
 }
 

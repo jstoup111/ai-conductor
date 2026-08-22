@@ -619,15 +619,18 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **91 variants** across **90** event types (`self_host_containment_verdict`
+`ConductorEvent` defines **95 variants** across **94** event types (`self_host_containment_verdict`
 declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
-subscribes to the **63** event types marked `persist: true` in `event-sinks.ts` and writes only
+subscribes to the **67** event types marked `persist: true` in `event-sinks.ts` and writes only
 those:
 
-`contained_live_checkout_drift`, `self_host_containment_verdict`,
+`contained_live_checkout_drift`, `self_host_containment_verdict`, `containment_check_unresolved`,
+`operator_rewind`,
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
 `build_review_cache_hit`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
+`build_review_disposition_version_invalidated`,
 `step_started`, `deprecated_step`, `step_completed`, `step_failed`, `provider_attempt`,
+`provider_stream_progress`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,

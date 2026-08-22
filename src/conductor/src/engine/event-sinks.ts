@@ -31,6 +31,8 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   step_completed: { render: true, persist: true, audit: true },
   step_failed: { render: true, persist: true, audit: false },
   provider_attempt: { render: true, persist: true, audit: false },
+  // Per-interval progress would flood .daemon/daemon.log; daemon status reads the ledger directly.
+  provider_stream_progress: { render: false, persist: true, audit: false },
   scratch_cleanup_reclaimed: { render: true, persist: true, audit: false },
   scratch_cleanup_retained: { render: true, persist: true, audit: false },
   scratch_cleanup_failed: { render: true, persist: true, audit: false },

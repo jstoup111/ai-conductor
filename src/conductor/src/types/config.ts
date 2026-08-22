@@ -277,6 +277,12 @@ export interface BuildProgressConfig {
   enabled?: boolean;
 }
 
+/** Live provider-stream observation cadence. Non-positive intervals use the default. */
+export interface ProviderStreamConfig {
+  /** Minimum milliseconds between progress events. Defaults to 5000 when absent or non-positive. */
+  min_interval_ms?: number;
+}
+
 /**
  * Progress-aware build halt/park config (build_progress_halt): raises the
  * retry ceiling while a build keeps resolving tasks, so a build resolving
@@ -465,6 +471,8 @@ export interface HarnessConfig {
    * enabled: true }. See `resolveBuildProgressConfig` in engine/config.ts.
    */
   build_progress?: BuildProgressConfig;
+  /** Live provider-stream observation cadence. See `provider_stream` in the configuration reference. */
+  provider_stream?: ProviderStreamConfig;
   /**
    * Progress-aware build halt/park config. Absent block resolves to defaults
    * owned by runtime resolution (not this type). See `BuildProgressHaltConfig`.

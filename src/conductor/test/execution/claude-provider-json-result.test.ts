@@ -1,7 +1,19 @@
-import { describe, it, expect } from 'vitest';
-import { parseJsonResult } from '../../src/execution/claude-provider';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ClaudeProvider, parseJsonResult } from '../../src/execution/claude-provider';
 
-describe('parseJsonResult', () => {
+vi.mock('execa', () => ({
+  execa: vi.fn(),
+}));
+
+import { execa } from 'execa';
+
+const mockExeca = vi.mocked(execa);
+
+describe('Claude stream JSON result parsing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('parses a full result object with usage into output + tokenUsage', () => {
     const stdout = JSON.stringify({
       type: 'result',
@@ -61,5 +73,42 @@ describe('parseJsonResult', () => {
 
     expect(result.output).toBe(stdout);
     expect(result.tokenUsage).toBeUndefined();
+  });
+
+  it('passes through a stream with no terminal result record', async () => {
+    const stdout = [
+      JSON.stringify({ type: 'system', subtype: 'init' }),
+      JSON.stringify({ type: 'assistant', message: { content: [] } }),
+    ].join('\n');
+    mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
+
+    const result = await new ClaudeProvider().invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
+
+    expect(result).toMatchObject({ output: stdout, tokenUsage: undefined });
+  });
+
+  it('leaves token usage undefined when the terminal result omits input tokens', async () => {
+    const stdout = JSON.stringify({
+      type: 'result',
+      result: 'text without complete usage',
+      usage: { output_tokens: 7 },
+    });
+    mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
+
+    const result = await new ClaudeProvider().invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
+
+    expect(result).toMatchObject({ output: 'text without complete usage', tokenUsage: undefined });
+  });
+
+  it('passes through raw stdout when the terminal stream line is malformed', async () => {
+    const stdout = [
+      JSON.stringify({ type: 'result', result: 'stale result', usage: { input_tokens: 1, output_tokens: 1 } }),
+      '{"type":"result","result":',
+    ].join('\n');
+    mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
+
+    const result = await new ClaudeProvider().invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
+
+    expect(result).toMatchObject({ output: stdout, tokenUsage: undefined });
   });
 });

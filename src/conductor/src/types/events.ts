@@ -5,6 +5,7 @@ import type {
   AuthenticationSource,
   CodexProbeFailureKind,
   CodexProbeParserRejection,
+  ProviderStreamObservation,
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
@@ -141,6 +142,17 @@ export interface ProviderAttemptEvent {
   lifecycle?: ProviderLifecycleEventMetadata;
 }
 
+/**
+ * Live intra-step provider signal. An absent `activeChildren` is unobserved,
+ * never zero; this observation carries no terminal usage authority.
+ */
+export type ProviderStreamProgressEvent = ProviderStreamObservation & {
+  type: 'provider_stream_progress';
+  step: StepName;
+  provider: string;
+  ts: string;
+};
+
 export type ConductorEvent =
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
@@ -239,6 +251,7 @@ export type ConductorEvent =
       observedIntervals?: readonly ObservedInterval[];
     }
   | ProviderAttemptEvent
+  | ProviderStreamProgressEvent
   | {
       /** A provider scratch home was removed during a daemon sweep or legacy collection. */
       type: 'scratch_cleanup_reclaimed';

@@ -72,6 +72,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
   provider_attempt: 'not-audited-by-design',
+  provider_stream_progress: 'not-audited-by-design',
   scratch_cleanup_reclaimed: 'not-audited-by-design',
   scratch_cleanup_retained: 'not-audited-by-design',
   scratch_cleanup_failed: 'not-audited-by-design',
@@ -200,6 +201,16 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     provider: 'claude',
     outcome: 'success',
     invoked: true,
+  },
+  provider_stream_progress: {
+    type: 'provider_stream_progress',
+    step: 'build',
+    provider: 'claude',
+    childObservability: 'observed',
+    activeChildren: 1,
+    uncachedInputTokens: 12,
+    outputTokens: 3,
+    ts: '2026-08-20T12:00:00.000Z',
   },
   scratch_cleanup_reclaimed: {
     type: 'scratch_cleanup_reclaimed',

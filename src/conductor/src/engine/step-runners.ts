@@ -2,7 +2,7 @@ import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { join, relative } from 'node:path';
-import type { LLMProvider } from '../execution/llm-provider.js';
+import type { LLMProvider, ProviderStreamObservation } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
@@ -115,6 +115,7 @@ import {
   createProviderLifecycleEpisodeStore,
   type ProviderLifecycleEpisodeStore,
 } from './provider-lifecycle-store.js';
+import { DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS as CONFIGURED_PROVIDER_STREAM_MIN_INTERVAL_MS } from './config.js';
 import { parseFinishPrProseJudgment } from './finish-pr-prose-judgment.js';
 import { resolvePlanPatternSource } from './plan-pattern-source.js';
 import { runCopyEquivalence } from './copy-equivalence.js';
@@ -134,6 +135,88 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
   'build',
   'remediate', // conductor-dispatched gap-remediation planner — runs unattended
 ]);
+
+/** Default hard floor for live provider-stream observation emission. */
+export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = CONFIGURED_PROVIDER_STREAM_MIN_INTERVAL_MS;
+
+/** Slow cadence for unchanged provider-stream observations. */
+export const DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS = 5 * 60_000;
+
+/** Resolve the optional provider-stream cadence, rejecting non-positive values. */
+export function resolveProviderStreamMinIntervalMs(config: HarnessConfig | undefined): number {
+  const value = config?.provider_stream?.min_interval_ms;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS;
+}
+
+export function createProviderStreamThrottle<T>(
+  emit: (observation: T) => void,
+  options: { minIntervalMs: number; heartbeatMs?: number; now?: () => number },
+): ((observation: T) => void) & { flush: () => void; heartbeat: () => void } {
+  const now = options.now ?? Date.now;
+  const minIntervalMs = options.minIntervalMs > 0
+    ? options.minIntervalMs
+    : DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS;
+  const heartbeatMs = options.heartbeatMs ?? minIntervalMs;
+  let lastEmissionMs = Number.NEGATIVE_INFINITY;
+  let lastObservation: string | undefined;
+  let latestObservation: T | undefined;
+  let pendingFlush = false;
+  let flushed = false;
+  let wakeUp: ReturnType<typeof setTimeout> | undefined;
+  const clearWakeUp = () => {
+    if (wakeUp === undefined) return;
+    clearTimeout(wakeUp);
+    wakeUp = undefined;
+  };
+  const scheduleWakeUp = () => {
+    if (wakeUp !== undefined || flushed) return;
+    const remainingMs = Math.max(0, minIntervalMs - (now() - lastEmissionMs));
+    wakeUp = setTimeout(() => {
+      wakeUp = undefined;
+      if (latestObservation !== undefined) emitIfAdmissible(latestObservation);
+    }, remainingMs);
+    wakeUp.unref?.(); // portability-ok: candidate-owned wake-up is cleared at candidate close
+  };
+  const emitIfAdmissible = (observation: T) => {
+    if (flushed) return;
+    const current = now();
+    const serialized = JSON.stringify(observation);
+    const changed = serialized !== lastObservation;
+    if (current - lastEmissionMs < minIntervalMs) {
+      if (changed) scheduleWakeUp();
+      else clearWakeUp();
+      return;
+    }
+    if (!changed && current - lastEmissionMs < heartbeatMs) return;
+    clearWakeUp();
+    lastEmissionMs = current;
+    lastObservation = serialized;
+    emit(observation);
+    pendingFlush = false;
+  };
+  const throttle = (observation: T) => {
+    if (flushed) return;
+    latestObservation = observation;
+    pendingFlush = true;
+    emitIfAdmissible(observation);
+  };
+  throttle.heartbeat = () => {
+    if (latestObservation !== undefined) emitIfAdmissible(latestObservation);
+  };
+  throttle.flush = () => {
+    if (flushed || !pendingFlush || latestObservation === undefined) return;
+    flushed = true;
+    clearWakeUp();
+    try {
+      emit(latestObservation);
+    } catch {
+      // Close-boundary telemetry never changes dispatch completion.
+    }
+  };
+  return throttle;
+}
 
 // Steps where the skill design requires a back-and-forth conversation (the
 // user refines scope with Claude), not a single one-shot response. These are
@@ -1020,6 +1103,7 @@ export class DefaultStepRunner implements StepRunner {
     ) => Promise<ProviderExecutionResult>,
   ): Promise<ProviderExecutionResult> {
     const pulse = createHeartbeatPulse(this.projectDir, step);
+    const providerStreamIntervalMs = resolveProviderStreamMinIntervalMs(this.config);
     const nextAttempt = () => ({
       logicalStep: step,
       id: `${this.runId}:${step}:${++this.providerLifecycleAttempt}`,
@@ -1038,17 +1122,34 @@ export class DefaultStepRunner implements StepRunner {
         createReplacementAttempt: () => nextAttempt(),
       },
     });
-    const result = await supervisor.supervise((lease) =>
-      run({
-        ...baseOptions,
-        onActivity: pulse,
-        spawnPermit: lease.spawnPermit,
-      }),
-    );
-    if (isProviderLifecycleHalted(result)) {
-      return mapProviderLifecycleHalt(result, this.configuredProviders[0] ?? 'unknown');
+    try {
+      const result = await supervisor.supervise((lease) =>
+        run({
+          ...baseOptions,
+          onActivity: pulse,
+          providerStreamObserverForCandidate: (provider) => {
+            const throttle = createProviderStreamThrottle<ProviderStreamObservation>(
+              (observation) => {
+                void this.events?.emit({
+                  type: 'provider_stream_progress', step, provider, ...observation,
+                  ts: new Date().toISOString(),
+                }).catch(() => {});
+              },
+              { minIntervalMs: providerStreamIntervalMs },
+            );
+            const heartbeat = setInterval(throttle.heartbeat, DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS);
+            heartbeat.unref(); // portability-ok: candidate-owned telemetry heartbeat is cleared at candidate close
+            return { onProviderStream: throttle, close: () => { clearInterval(heartbeat); throttle.flush(); } };
+          },
+          spawnPermit: lease.spawnPermit,
+        }),
+      );
+      if (isProviderLifecycleHalted(result)) {
+        return mapProviderLifecycleHalt(result, this.configuredProviders[0] ?? 'unknown');
+      }
+      return result;
+    } finally {
     }
-    return result;
   }
 
   private withFeatureDiagnosticLog(

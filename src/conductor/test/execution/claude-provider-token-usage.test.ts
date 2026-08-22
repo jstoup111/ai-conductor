@@ -107,7 +107,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
     expect(result.tokenUsage?.cacheRead).toBe(0);
   });
 
-  it('invokes claude with --output-format json (not text)', async () => {
+  it('invokes claude with verbose stream-json output (not text)', async () => {
     mockExeca.mockResolvedValue({
       stdout: JSON.stringify({ result: 'ok' }),
       stderr: '',
@@ -119,7 +119,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
 
     expect(mockExeca).toHaveBeenCalledWith(
       'claude',
-      expect.arrayContaining(['--print', '--output-format', 'json']),
+      expect.arrayContaining(['--print', '--output-format', 'stream-json', '--verbose']),
       expect.anything()
     );
     const [, args] = mockExeca.mock.calls[0];

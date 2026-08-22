@@ -72,6 +72,8 @@ export interface InProgressEntry {
   heartbeatAgeMs?: number;
   /** Elapsed time since the current dispatch's `step_started` event. */
   elapsedStepTimeMs?: number;
+  /** Latest live provider observation from the current dispatch only. */
+  providerStreamProgress?: import('../execution/llm-provider.js').ProviderStreamObservation;
   /** Most recent validated aggregate test outcome, when run evidence exists. */
   lastTestOutcome?: 'PASS' | 'FAIL';
   /**
@@ -393,6 +395,7 @@ async function readDispatchActivity(
     state: 'required' | 'pending' | 'satisfied' | 'rejected';
     reason?: string;
   };
+  providerStreamProgress?: import('../execution/llm-provider.js').ProviderStreamObservation;
 }> {
   let content: string;
   try {
@@ -407,6 +410,7 @@ async function readDispatchActivity(
     state: 'required' | 'pending' | 'satisfied' | 'rejected';
     reason?: string;
   } | undefined;
+  let providerStreamProgress: import('../execution/llm-provider.js').ProviderStreamObservation | undefined;
   for (const line of content.split('\n')) {
     let event: unknown;
     try {
@@ -420,6 +424,7 @@ async function readDispatchActivity(
       startedAtMs = timestamp;
       completionUnmet = false;
       acceptanceRed = undefined;
+      providerStreamProgress = undefined;
       continue;
     }
     if (startedAtMs !== undefined && event.type === 'acceptance_red' && isAcceptanceRedState(event.state)) {
@@ -429,8 +434,31 @@ async function readDispatchActivity(
       };
       completionUnmet = event.state === 'pending' || event.state === 'rejected';
     }
+    if (
+      startedAtMs !== undefined
+      && event.type === 'provider_attempt'
+      && event.invoked === true
+      && (event.outcome === 'failure' || event.outcome === 'unavailable')
+    ) {
+      // A fallback candidate owns fresh live totals. Until it emits an
+      // observation, retaining the failed candidate's data would misreport
+      // stale children and token burn as current progress.
+      providerStreamProgress = undefined;
+      continue;
+    }
+    if (startedAtMs !== undefined && event.type === 'provider_stream_progress'
+      && (event.childObservability === 'observed' || event.childObservability === 'unsupported')
+      && typeof event.uncachedInputTokens === 'number' && typeof event.outputTokens === 'number') {
+      providerStreamProgress = {
+        childObservability: event.childObservability,
+        ...(typeof event.activeChildren === 'number' ? { activeChildren: event.activeChildren } : {}),
+        uncachedInputTokens: event.uncachedInputTokens,
+        ...(typeof event.cachedInputTokens === 'number' ? { cachedInputTokens: event.cachedInputTokens } : {}),
+        outputTokens: event.outputTokens,
+      };
+    }
   }
-  return { startedAtMs, completionUnmet, acceptanceRed };
+  return { startedAtMs, completionUnmet, acceptanceRed, providerStreamProgress };
 }
 
 function isAcceptanceRedState(
@@ -634,6 +662,7 @@ export async function scanInheritedState(
       if (activity.startedAtMs !== undefined) {
         entry.elapsedStepTimeMs = Math.max(0, now() - activity.startedAtMs);
       }
+      if (activity.providerStreamProgress) entry.providerStreamProgress = activity.providerStreamProgress;
       const testEvidence = await readFullSuiteEvidence(wt);
       if ('evidence' in testEvidence && testEvidence.evidence) {
         entry.lastTestOutcome = testEvidence.evidence.outcome;
@@ -766,10 +795,21 @@ function activityStateSuffix(entry: InProgressEntry): string {
   return redState ? ` (${redState})` : '';
 }
 
-function childWorkSuffix(): string {
-  // The provider layer cannot observe child work; do not fabricate a zero count (#1441).
-  // See jstoup111/ai-conductor#1441.
+function childWorkSuffix(entry: InProgressEntry): string {
+  const progress = entry.providerStreamProgress;
+  if (
+    progress?.childObservability === 'observed'
+    && typeof progress.activeChildren === 'number'
+  ) {
+    return ` (children: ${progress.activeChildren})`;
+  }
   return ' (children: unknown)';
+}
+
+function tokenBurnSuffix(entry: InProgressEntry): string {
+  const progress = entry.providerStreamProgress;
+  if (!progress) return ' (tokens: unavailable)';
+  return ` (tokens: ${progress.uncachedInputTokens} in / ${progress.outputTokens} out)`;
 }
 
 function lifecycleSuffix(lifecycle?: ProviderLifecycleDiagnostic): string {
@@ -912,7 +952,7 @@ export function renderDashboard(
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix()}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix(p)}${tokenBurnSuffix(p)}${prSuffix(p.prUrl)}`);
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(

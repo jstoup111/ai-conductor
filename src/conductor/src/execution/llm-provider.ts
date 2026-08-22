@@ -17,6 +17,26 @@ export interface TokenUsage {
   durationMs?: number;
 }
 
+/** A provider-neutral, best-effort observation from an autonomous output stream. */
+export interface ProviderStreamObservation {
+  /** Present only when the provider can observe child lifecycle activity. */
+  activeChildren?: number;
+  /** Whether this provider can observe child lifecycle activity. */
+  childObservability: 'observed' | 'unsupported';
+  /** Fresh (non-cached) input tokens observed so far. */
+  uncachedInputTokens: number;
+  /** Cached input tokens observed so far, when the provider reports them. */
+  cachedInputTokens?: number;
+  /** Output tokens observed so far. */
+  outputTokens: number;
+}
+
+/** Candidate-owned provider-stream observer with a close-boundary flush. */
+export interface ProviderStreamCandidateObserver {
+  onProviderStream: (observation: ProviderStreamObservation) => void;
+  close: () => void;
+}
+
 export type ProviderUnavailableScope = 'run';
 
 /** The credential mechanism selected by the Codex provider for a run. */
@@ -268,6 +288,17 @@ export interface InvokeOptions {
    * a throwing handler must never affect provider dispatch.
    */
   onActivity?: () => void;
+  /**
+   * Fired for each best-effort provider stream observation. It is observation
+   * only: it grants no timeout, kill, retry, or lifecycle authority. The
+   * callback must not affect provider dispatch.
+   */
+  onProviderStream?: (observation: ProviderStreamObservation) => void;
+  /**
+   * Internal candidate boundary: supplies a fresh observer for each invoked
+   * provider, preventing fallback candidates from inheriting stream state.
+   */
+  providerStreamObserverForCandidate?: (provider: string) => ProviderStreamCandidateObserver;
   /**
    * Optional, best-effort notification fired synchronously once the provider
    * subprocess has spawned. It is observation only: it grants no timeout,

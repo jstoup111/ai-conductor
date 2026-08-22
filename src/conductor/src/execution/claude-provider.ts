@@ -14,6 +14,11 @@ import {
   type ObservedInterval,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import {
+  accumulateProviderStreamTokens,
+  ProviderStreamChildTracker,
+  ProviderStreamAssembler,
+} from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
@@ -430,10 +435,9 @@ function parseTokenUsage(stdout: string): TokenUsage | undefined {
 }
 
 /**
- * Parse the payload produced by `claude --print --output-format json`: a
- * single JSON result object on stdout (not the stream-json per-line format
- * handled by parseTokenUsage above). Falls back to raw stdout passthrough
- * on any parse failure — never fabricates a zero-cost tokenUsage.
+ * Parse a terminal result object selected from `claude --print --output-format
+ * stream-json` stdout. Falls back to raw stdout passthrough on any parse
+ * failure — never fabricates a zero-cost tokenUsage.
  */
 export function parseJsonResult(
   stdout: string,
@@ -478,6 +482,29 @@ export function parseJsonResult(
   }
 }
 
+/** Return the final terminal result record from completed stream-json stdout. */
+function selectTerminalResult(stdout: string): string | undefined {
+  const assembler = new ProviderStreamAssembler();
+  let terminalResult: unknown;
+
+  // stdout is complete here, so its final record can be treated as newline-delimited
+  // even when the subprocess did not include a final newline.
+  for (const record of assembler.push(`${stdout}\n`)) {
+    if (typeof record === 'object' && record !== null && (record as Record<string, unknown>).type === 'result') {
+      terminalResult = record;
+    }
+  }
+
+  const terminalLine = stdout.trimEnd().split('\n').at(-1) ?? '';
+  try {
+    JSON.parse(terminalLine);
+  } catch {
+    return undefined;
+  }
+
+  return terminalResult === undefined ? undefined : JSON.stringify(terminalResult);
+}
+
 function unresolvedCommandName(output: string, prompt: string | undefined): string | undefined {
   const command = prompt?.trim().split(/\s+/, 1)[0];
   if (!command?.startsWith('/')) return undefined;
@@ -517,9 +544,9 @@ export class ClaudeProvider implements LLMProvider {
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
   ) {
-    const { diagnosticLog, onActivity, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
+    const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
       throw new Error(`Claude process spawn denied: ${permit.reason}`);
@@ -537,17 +564,48 @@ export class ClaudeProvider implements LLMProvider {
     // lifecycle authority and never affect provider dispatch.
     try {
       onSpawn?.();
-      subprocess.stdout?.on('data', () => onActivity?.());
-      subprocess.stderr?.on('data', () => onActivity?.());
+      const streamAssembler = new ProviderStreamAssembler();
+      const childTracker = new ProviderStreamChildTracker();
+      let uncachedInputTokens = 0;
+      let cachedInputTokens = 0;
+      let outputTokens = 0;
+      subprocess.stdout?.on('data', (chunk: Buffer | string) => {
+        try {
+          onActivity?.();
+          for (const record of streamAssembler.push(String(chunk))) {
+            childTracker.observe(record);
+            const tokenTotals = accumulateProviderStreamTokens([record]);
+            uncachedInputTokens += tokenTotals.uncachedInputTokens;
+            cachedInputTokens += tokenTotals.cachedInputTokens;
+            outputTokens += tokenTotals.outputTokens;
+            onProviderStream?.({
+              childObservability: childTracker.childObservability,
+              activeChildren: childTracker.activeChildren,
+              uncachedInputTokens,
+              cachedInputTokens,
+              outputTokens,
+            });
+          }
+        } catch {
+          // Stream callbacks are observational; dispatch keeps its authority.
+        }
+      });
+      subprocess.stderr?.on('data', () => {
+        try {
+          onActivity?.();
+        } catch {
+          // Stream callbacks are observational; dispatch keeps its authority.
+        }
+      });
     } catch {
       // Watchdog wiring is best-effort; never affects provider dispatch.
     }
     const result = await subprocess;
     if (diagnosticLog) {
       for (const output of [result.stdout, result.stderr]) {
-        // `--print --output-format json` stdout is one enormous machine
-        // envelope. Summarize it for the operator-facing daemon log; anything
-        // unrecognized (prose, stderr, crash traces) passes through verbatim.
+        // Machine-readable provider stdout can be large. Summarize it for the
+        // operator-facing daemon log; anything unrecognized (prose, stderr,
+        // crash traces) passes through verbatim.
         if (typeof output === 'string' && output.length > 0) {
           diagnosticLog(summarizeProviderDiagnostic('claude', output));
         }
@@ -578,7 +636,7 @@ export class ClaudeProvider implements LLMProvider {
     // from stdin when no positional prompt is given, which has no length limit.
     const hasPrompt = typeof options.prompt === 'string' && options.prompt.length > 0;
     if (hasPrompt) {
-      args.push('--print', '--output-format', 'json');
+      args.push('--print', '--output-format', 'stream-json', '--verbose');
     }
 
     // Stream stdout/stderr to terminal while also capturing for analysis.
@@ -594,6 +652,7 @@ export class ClaudeProvider implements LLMProvider {
           cwd: options.cwd,
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
+          onProviderStream: options.onProviderStream,
           onSpawn: options.onSpawn,
           selfHost: options.selfHost,
           spawnPermit: options.spawnPermit,
@@ -605,6 +664,7 @@ export class ClaudeProvider implements LLMProvider {
           cwd: options.cwd,
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
+          onProviderStream: options.onProviderStream,
           onSpawn: options.onSpawn,
           selfHost: options.selfHost,
           spawnPermit: options.spawnPermit,
@@ -677,7 +737,7 @@ export class ClaudeProvider implements LLMProvider {
     const exitCode = (result.exitCode ?? 1) as number;
 
     const parsed = jsonOutput
-      ? parseJsonResult(stdout)
+      ? parseJsonResult(selectTerminalResult(stdout) ?? stdout)
       : { output: stdout, tokenUsage: undefined };
 
     // Combine stdout + stderr so the caller has full context
