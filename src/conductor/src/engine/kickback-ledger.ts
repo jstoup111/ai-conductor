@@ -6,6 +6,7 @@ import {
   parseBuildReviewInfrastructureFailure,
   type BuildReviewInfrastructureFailureReason,
 } from './build-review-domain.js';
+import { boundedHeadTailExcerpt } from './build-review-tautology-preflight.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {
@@ -54,6 +55,9 @@ export const MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW = 5;
 /** Mechanical build-review faults allowed before human intervention is required. */
 export const MAX_MECHANICAL_FAULTS_BUILD_REVIEW = 3;
 
+/** Matches the raw rubric diagnostic cap before its detail reaches durable state. */
+const RUBRIC_FAILURE_DETAIL_CAP_BYTES = 2_048;
+
 export interface BumpKickbackGateInput {
   treeHash: string | null;
   resolvedCount: number;
@@ -84,8 +88,9 @@ function isLapCountingValue(value: unknown): value is number | Record<string, nu
  * per-tree budget or the state used to determine that budget.
  */
 export function creditKickbackGateLaps<Entry extends KickbackGateEntry>(entry: Entry): Entry {
+  const { lastMechanicalFault: _lastMechanicalFault, ...lapCreditEntry } = entry;
   return Object.fromEntries(
-    Object.entries(entry).map(([field, value]) => [
+    Object.entries(lapCreditEntry).map(([field, value]) => [
       field,
       !NON_LAP_COUNTING_GATE_ENTRY_FIELDS.has(field) && isLapCountingValue(value)
         ? (typeof value === 'number' ? 0 : {})
@@ -266,13 +271,22 @@ export async function bumpKickbackGateInLedger(
   return result;
 }
 /** Purely consume one build-review mechanical-fault allowance. */
-export function bumpMechanicalFaults(entry: KickbackGateEntry): KickbackGateEntry {
+export function bumpMechanicalFaults(
+  entry: KickbackGateEntry,
+  fault?: KickbackLastMechanicalFault,
+): KickbackGateEntry {
   return {
     ...entry,
     mechanicalFaults: Math.min(
       (entry.mechanicalFaults ?? 0) + 1,
       MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
     ),
+    ...(fault === undefined ? {} : {
+      lastMechanicalFault: {
+        ...fault,
+        detail: boundedHeadTailExcerpt(fault.detail, RUBRIC_FAILURE_DETAIL_CAP_BYTES),
+      },
+    }),
   };
 }
 
@@ -280,6 +294,7 @@ export function bumpMechanicalFaults(entry: KickbackGateEntry): KickbackGateEntr
 export async function bumpMechanicalFaultsInLedger(
   projectRoot: string,
   gate: string,
+  fault?: KickbackLastMechanicalFault,
 ): Promise<KickbackGateEntry> {
   const ledger = await readKickbackLedger(projectRoot);
   const entry = ledger.gates[gate] ?? {
@@ -292,7 +307,7 @@ export async function bumpMechanicalFaultsInLedger(
     resolvedBefore: 0,
   };
 
-  const nextEntry = bumpMechanicalFaults(entry);
+  const nextEntry = bumpMechanicalFaults(entry, fault);
   await writeKickbackLedger(projectRoot, {
     ...ledger,
     gates: { ...ledger.gates, [gate]: nextEntry },

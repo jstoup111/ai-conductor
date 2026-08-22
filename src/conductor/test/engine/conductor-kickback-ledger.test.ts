@@ -6,12 +6,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import {
+  bumpMechanicalFaults,
+  bumpMechanicalFaultsInLedger,
   bumpKickbackGateInLedger,
+  creditKickbackGateLaps,
   KICKBACK_LEDGER_PATH,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
   writeKickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
+import { RUBRIC_FAILURE_DETAIL_CAP_BYTES } from '../../src/engine/step-runners.js';
 import { HALT_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -260,6 +264,67 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
 
       expect(missingLapId).toEqual(invalidMechanicalFaults);
       expect(missingLapId).toEqual({ version: 1, gates: {} });
+    });
+  });
+
+  describe('lastMechanicalFault lifecycle (Task 2, #1740)', () => {
+    const entry = {
+      count: 1,
+      cumulative: 2,
+      mechanicalFaults: 0,
+      treeHash: null,
+      lastReason: 'a rejected rubric',
+      priorVerdict: true,
+      resolvedBefore: 1,
+    };
+    const fault = {
+      rubric: 'scope' as const,
+      reason: 'malformed-artifact' as const,
+      detail: 'provider result omitted the required verdict',
+      lapId: 'lap-0123456789abcdef0123456789abcdef01234567',
+    };
+
+    it('records and replaces the latest mechanical fault while incrementing its allowance', () => {
+      const first = bumpMechanicalFaults(entry, fault);
+      const secondFault = {
+        ...fault,
+        rubric: 'completeness' as const,
+        reason: 'malformed-artifact' as const,
+        detail: 'response was not valid JSON',
+      };
+      const second = bumpMechanicalFaults(first, secondFault);
+
+      expect(first).toMatchObject({ mechanicalFaults: 1, lastMechanicalFault: fault });
+      expect(second).toMatchObject({ mechanicalFaults: 2, lastMechanicalFault: secondFault });
+    });
+
+    it('bounds a persisted mechanical-fault diagnostic and writes it through the ledger helper', async () => {
+      const detail = `${'head '.repeat(300)}${'tail '.repeat(300)}`;
+
+      const updated = await bumpMechanicalFaultsInLedger(dir, 'build_review', { ...fault, detail });
+
+      expect(updated.mechanicalFaults).toBe(1);
+      expect(updated.lastMechanicalFault).toMatchObject({ ...fault, detail: expect.any(String) });
+      expect(Buffer.byteLength(updated.lastMechanicalFault?.detail ?? '', 'utf8'))
+        .toBeLessThanOrEqual(RUBRIC_FAILURE_DETAIL_CAP_BYTES);
+      expect(updated.lastMechanicalFault?.detail).toContain('[...truncated ');
+      expect((await readKickbackLedger(dir)).gates.build_review).toEqual(updated);
+    });
+
+    it('credits every lap counter and removes the recorded mechanical fault', () => {
+      const result = creditKickbackGateLaps(bumpMechanicalFaults(entry, fault));
+
+      expect(result.mechanicalFaults).toBe(0);
+      expect('lastMechanicalFault' in result).toBe(false);
+    });
+
+    it('retains the recorded fault through a build_review PASS', async () => {
+      const initialEntry = bumpMechanicalFaults(entry, fault);
+      await writeKickbackLedger(dir, { version: 1, gates: { build_review: initialEntry } });
+
+      await settleBuildReview('PASS');
+
+      expect((await readKickbackLedger(dir)).gates.build_review).toEqual(initialEntry);
     });
   });
 
