@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -28,6 +28,11 @@ describe('step refusal event spine', () => {
     ),
     build_review: buildReview,
   });
+
+  const CLOSED_HALT_CLASSES = new Set(['needs-human', 'mechanical', 'protected-artifact']);
+
+  const pipelineEntries = async (projectRoot: string) =>
+    (await readdir(join(projectRoot, '.pipeline'))).sort();
 
   it('returns the protected-artifact refusal result used by the seal dispatch seam', () => {
     const dispatchIssue = 'Protected artifact changed: .docs/plans/feature.md';
@@ -75,6 +80,9 @@ describe('step refusal event spine', () => {
     const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
     const dispatchIssue = 'Protected artifact changed: .docs/plans/feature.md';
     await writeFile(statePath, JSON.stringify({ plan: 'done', build: 'done' }), 'utf8');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(join(projectRoot, '.pipeline', 'task-evidence.json'), '{}', 'utf8');
+    await writeFile(join(projectRoot, '.pipeline', 'phase-active'), 'BUILD build\n', 'utf8');
     vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
     let stateAtSealCheck: string | undefined;
     vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockImplementation(async () => {
@@ -121,6 +129,7 @@ describe('step refusal event spine', () => {
         failures: records.filter((record) => record.type === 'step_failed'),
         halt: await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8'),
         haltClass: await readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8'),
+        pipelineEntries: await pipelineEntries(projectRoot),
       }).toEqual({
         build: 'done',
         stateBytes: stateAtSealCheck,
@@ -134,7 +143,9 @@ describe('step refusal event spine', () => {
         failures: [],
         halt: dispatchIssue,
         haltClass: 'protected-artifact',
+        pipelineEntries: ['HALT', 'HALT.class', 'events.jsonl', 'phase-active', 'task-evidence.json'],
       });
+      expect(CLOSED_HALT_CLASSES.has(await readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8'))).toBe(true);
     } finally {
       persister.stop();
       await rm(projectRoot, { recursive: true, force: true });
@@ -198,6 +209,7 @@ describe('step refusal event spine', () => {
     const statePath = join(stateDir, 'conduct-state.json');
     const missingRoot = join(stateDir, 'removed-worktree');
     const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(stateDir, '.pipeline', 'events.jsonl'), events);
     const reason = `Cannot dispatch 'build_review': its working directory ${missingRoot} does not exist. ` +
       'The feature worktree was removed while the run was in flight. The BRANCH is the ' +
       'source of truth — recreate the worktree from it and recover the .pipeline evidence ' +
@@ -219,6 +231,7 @@ describe('step refusal event spine', () => {
       if (event.type === 'loop_halt') haltReasons.push(event.reason);
     });
 
+    persister.start();
     try {
       await new Conductor({
         stateFilePath: statePath,
@@ -237,14 +250,22 @@ describe('step refusal event spine', () => {
         refusals,
         failures,
         haltReason: haltReasons[0],
+        pipelineEntries: await pipelineEntries(stateDir),
+        persistedRefusals: (await readFile(join(stateDir, '.pipeline', 'events.jsonl'), 'utf8'))
+          .trim().split('\n').map((line) => JSON.parse(line)).filter((record) => record.type === 'step_refused'),
       }).toEqual({
         buildReview: 'done',
         runnerCalls: [],
         refusals: [expect.objectContaining({ step: 'build_review', kind: 'missing-worktree', reason })],
         failures: [],
         haltReason: reason,
+        // The worktree is absent, so no HALT marker can be safely created beneath it.
+        // The occurrence is nevertheless durable on the existing event spine.
+        pipelineEntries: ['events.jsonl'],
+        persistedRefusals: [expect.objectContaining({ step: 'build_review', kind: 'missing-worktree', reason })],
       });
     } finally {
+      persister.stop();
       await rm(stateDir, { recursive: true, force: true });
     }
   });
@@ -286,6 +307,7 @@ describe('step refusal event spine', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'step-refusal-live-boundary-'));
     const statePath = join(projectRoot, 'conduct-state.json');
     const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
     const reason = 'live checkout changed during self-host execution';
     await writeFile(statePath, JSON.stringify({ plan: 'done', build: 'done' }), 'utf8');
     const run = vi.fn(async () => {
@@ -327,6 +349,7 @@ describe('step refusal event spine', () => {
       'surfaceRemediationPr',
     ).mockResolvedValue(undefined);
 
+    persister.start();
     try {
       await conductor.run();
 
@@ -338,6 +361,9 @@ describe('step refusal event spine', () => {
         haltReason: haltReasons[0],
         halt: await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8'),
         haltClass: await readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8'),
+        pipelineEntries: await pipelineEntries(projectRoot),
+        persistedRefusals: (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+          .trim().split('\n').map((line) => JSON.parse(line)).filter((record) => record.type === 'step_refused'),
       }).toEqual({
         build: 'done',
         runnerCalls: [],
@@ -346,8 +372,12 @@ describe('step refusal event spine', () => {
         haltReason: reason,
         halt: `${reason}\n`,
         haltClass: 'mechanical',
+        pipelineEntries: ['HALT', 'HALT.class', 'events.jsonl'],
+        persistedRefusals: [expect.objectContaining({ step: 'build', kind: 'live-boundary', reason })],
       });
+      expect(CLOSED_HALT_CLASSES.has(await readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8'))).toBe(true);
     } finally {
+      persister.stop();
       await rm(projectRoot, { recursive: true, force: true });
     }
   });
