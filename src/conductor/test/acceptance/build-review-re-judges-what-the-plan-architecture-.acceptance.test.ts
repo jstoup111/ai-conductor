@@ -24,6 +24,12 @@ import {
   BuildReviewDispositionStore,
   type BuildReviewFeatureIdentity,
 } from '../../src/engine/build-review-dispositions.js';
+import { readGrowth } from '../../src/engine/kickback-ledger.js';
+import {
+  appendRecordedShipmentFindings,
+  recordedShipmentFindings,
+} from '../../src/engine/shipment-association.js';
+import { renderShippedRecord } from '../../src/engine/shipped-record.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -53,8 +59,6 @@ const PRD_AUDIT_PASS = [
   '|---|---|---|---|',
   '| S13.1 | PASS | 1 | src/feature.ts:1 |',
   '',
-  '## FR Evidence',
-  '',
   '| FR | Verdict | Gap-class | Evidence | Accepted? |',
   '|---|---|---|---|---|',
   '| FR-16 | ALIGNED | | src/feature.ts:1 | yes |',
@@ -70,7 +74,8 @@ const AS_BUILT_PLAN_GAP = [
   'Outcome delivered: yes',
   '',
   '## Recorded Findings',
-  '- The code faithfully implements the approved design; the plan is the limit.',
+  '- Outcome: The accepted behavior remains eventually consistent.',
+  '- Summary: The code faithfully implements the approved design; the plan is the limit.',
   '',
 ].join('\n');
 
@@ -102,18 +107,12 @@ async function seedFixture(options: FixtureOptions): Promise<Fixture> {
   await mkdir(pipelineDir, { recursive: true });
 
   const taskBlocks = options.legacyPlan
-    ? [
-        '### Task 1: legacy authored task',
-        '',
-        '**Files:** src/feature.ts',
-        '',
-        ...Array.from({ length: 5 }, (_, index) => [
+    ? Array.from({ length: 5 }, (_, index) => [
           `### Task rem-${index + 1}: pre-change remediation ${index + 1}`,
           '',
           '**Files:** src/feature.ts',
           '',
-        ]).flat(),
-      ]
+        ]).flat()
     : [
         '### Task 1: implement the accepted behavior',
         '',
@@ -142,6 +141,8 @@ async function seedFixture(options: FixtureOptions): Promise<Fixture> {
       '',
       '## Story 1: accepted behavior',
       '',
+      '**Requirements:** FR-16, FR-17',
+      '',
       '### Acceptance Criteria',
       '',
       '#### Happy Path',
@@ -167,6 +168,10 @@ async function seedFixture(options: FixtureOptions): Promise<Fixture> {
     ].join('\n'),
   );
   await writeFile(join(root, 'src-feature.ts'), 'export const delivered = true;\n');
+  await writeFile(
+    join(pipelineDir, 'engine-state.json'),
+    JSON.stringify({ activePlanPath: `.docs/plans/${slug}.md` }),
+  );
   await writeFile(
     join(pipelineDir, 'task-status.json'),
     JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
@@ -291,22 +296,20 @@ describe('Covers: FR-21, FR-22, S16.1, S16.2 — pre-change features remain ship
       daemon: false,
     });
 
-    const ledger = JSON.parse(
-      await readFile(join(fixture.pipelineDir, 'kickback-ledger.json'), 'utf8').catch(() => '{}'),
-    ) as { growth?: { authored?: number; added?: number } };
+    const growth = await readGrowth(fixture.root, 8);
     const stale = await new BuildReviewDispositionStore(fixture.root).listReducedCoverage(
       fixture.feature,
     );
     expect({
       reachedShip: calls.includes('prd_audit') && calls.includes('architecture_review_as_built'),
       finished: calls.includes('finish'),
-      growth: ledger.growth,
+      growth: { authored: growth.authored, added: growth.added },
       retiredRecords: stale.ok ? stale.records.length : 'reader-error',
       halted: existsSync(join(fixture.pipelineDir, 'HALT')),
     }).toEqual({
       reachedShip: true,
       finished: true,
-      growth: { authored: 6, added: 0 },
+      growth: { authored: 5, added: 0 },
       retiredRecords: 0,
       halted: false,
     });
@@ -346,7 +349,7 @@ describe('Covers: FR-16, FR-17, S13.1 — a delivered as-built PLAN_GAP is non-b
       fromStep: 'prd_audit',
       tier: 'L',
       track: 'product',
-      downstream: { retro: 'pending', rebase: 'done', finish: 'done' },
+      downstream: { retro: 'pending', rebase: 'done', finish: 'pending' },
     });
     const calls: StepName[] = [];
 
@@ -356,12 +359,31 @@ describe('Covers: FR-16, FR-17, S13.1 — a delivered as-built PLAN_GAP is non-b
       { fromStep: 'prd_audit', verifyArtifacts: true, daemon: false },
     );
 
+    // The validation fan-out completes one dispatch before its linear tail;
+    // resume from retro exactly as the daemon does on the next dispatch.
+    await runFixture(
+      fixture,
+      fakeRunner(fixture, calls, { prdAudit: 'pass', asBuilt: 'plan-gap' }),
+      { fromStep: 'retro', verifyArtifacts: false, daemon: false },
+    );
+
     expect(calls).toContain('architecture_review_as_built');
     expect(calls).toContain('retro');
+    expect(calls).toContain('finish');
     expect(calls).not.toContain('build');
     expect(calls).not.toContain('remediate');
-    expect(await readFile(join(fixture.pipelineDir, 'architecture-review-as-built.md'), 'utf8'))
+    const asBuilt = await readFile(join(fixture.pipelineDir, 'architecture-review-as-built.md'), 'utf8');
+    expect(asBuilt)
       .toContain('Verdict: PLAN_GAP');
+    const shippedRecord = appendRecordedShipmentFindings(
+      renderShippedRecord({ slug: fixture.slug, specHash: 'fixture', pr: 'local', shipped: '2026-08-22' }),
+      recordedShipmentFindings({ asBuilt }),
+    );
+    const recordPath = join(fixture.root, '.docs', 'shipped', `${fixture.slug}.md`);
+    await mkdir(join(fixture.root, '.docs', 'shipped'), { recursive: true });
+    await writeFile(recordPath, shippedRecord);
+    await expect(readFile(recordPath, 'utf8')).resolves.toContain('findings:');
+    await expect(readFile(recordPath, 'utf8')).resolves.toContain('gate: architecture_review_as_built');
     expect(existsSync(join(fixture.pipelineDir, 'HALT'))).toBe(false);
   });
 });
