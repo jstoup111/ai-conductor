@@ -660,6 +660,15 @@ export interface StepRunResult {
   repairProvenance?: BuildReviewRepairProvenance;
 }
 
+/** Build a structured outcome when the protected-artifact seal prevents dispatch. */
+export function protectedArtifactRefusalResult(dispatchIssue: string): StepRunResult {
+  return {
+    success: false,
+    output: dispatchIssue,
+    refused: { kind: 'protected-artifact', reason: dispatchIssue },
+  };
+}
+
 export interface SpotAuditDispatchResult {
   success: boolean;
   output?: string;
@@ -6267,7 +6276,7 @@ export class Conductor {
             buildWatcher?.stop();
             closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
-            result = { success: false, output: dispatchIssue };
+            result = protectedArtifactRefusalResult(dispatchIssue);
             // Write the HALT marker directly rather than relying solely on
             // the generic "retries exhausted" flow below. Gated on `attempt
             // >= 2` — the SAME literal threshold the pre-existing stall
