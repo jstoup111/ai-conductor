@@ -5,6 +5,7 @@ import {
   coordinateBuildReviewRubrics,
   type BuildReviewCoordinationInput,
   type BuildReviewCoordinatorHooks,
+  type BuildReviewRubricIdentities,
 } from "../../src/engine/build-review-coordinator.js";
 import {
   parseBuildReviewInfrastructureFailure,
@@ -147,6 +148,21 @@ function identitiesFor(identity: BuildReviewEngineIdentity): BuildReviewRubricId
     completeness: { kind: "ready", identity },
   };
 }
+
+describe("build-review coordinator: identity input contract", () => {
+  it("requires resolved per-rubric identities and rejects a shared identity", () => {
+    type EngineIdentityIsRequired = {} extends Pick<BuildReviewCoordinationInput, "engineIdentity">
+      ? false
+      : true;
+    const engineIdentityIsRequired: EngineIdentityIsRequired = true;
+    const acceptsOnlyPerRubric = (_identity: BuildReviewCoordinationInput["engineIdentity"]) => undefined;
+
+    expect(engineIdentityIsRequired).toBe(true);
+    expect(acceptsOnlyPerRubric(rubricIdentities)).toBeUndefined();
+    // @ts-expect-error A shared identity cannot identify individual rubric skill revisions.
+    acceptsOnlyPerRubric(engineIdentity);
+  });
+});
 
 
 describe("build-review coordinator: frozen fan-out", () => {
