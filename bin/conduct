@@ -16,7 +16,10 @@ set -euo pipefail
 #   conduct --step bootstrap
 #   conduct --from plan
 
-HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve the real script path so the binary works when symlinked into
+# ~/.local/bin (otherwise dirname resolves to ~/.local/bin and the
+# bin/lib/ lookup breaks). Matches bin/conduct-ts.
+HARNESS_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 # shellcheck source=bin/lib/harness-common.sh
 source "${HARNESS_DIR}/bin/lib/harness-common.sh"
 ORIGINAL_CWD="$(pwd)"
