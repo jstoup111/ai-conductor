@@ -455,6 +455,63 @@ describe('prd_audit completion predicate coverage', () => {
     });
   });
 
+  it('fails closed when the resolved stories file has no parseable criteria', async () => {
+    await mkdir(join(root, '.docs/stories'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/stories/current-feature.md'),
+      '## Story 1: Unreadable criteria\n\n**Requirement:** FR-1',
+    );
+    await writeFile(
+      join(root, '.pipeline/prd-audit.md'),
+      [
+        '| FR | Verdict | Gap-class | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| FR-1 | ALIGNED | — | Covered |',
+        '| FR-2 | ALIGNED | — | Covered |',
+        '| FR-3 | ALIGNED | — | Covered |',
+        '| FR-4 | ALIGNED | — | Covered |',
+        '| FR-5 | ALIGNED | — | Covered |',
+      ].join('\n'),
+    );
+
+    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toMatchObject({
+      done: false,
+      reason: expect.stringContaining('.docs/stories/current-feature.md'),
+    });
+  });
+
+  it('requires a PLAN_GAP row for a PRD requirement without a covering story', async () => {
+    await mkdir(join(root, '.docs/stories'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/stories/current-feature.md'),
+      [
+        '## Story 1: Covered requirement',
+        '',
+        '**Requirement:** FR-1',
+        '',
+        '### Happy Path',
+        '- Given a valid request, when it is handled, then the result is visible.',
+      ].join('\n'),
+    );
+    await writeFile(
+      join(root, '.pipeline/prd-audit.md'),
+      [
+        '| FR | Verdict | Gap-class | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| FR-1 | ALIGNED | — | Covered |',
+        '| FR-2 | ALIGNED | — | Covered |',
+        '| FR-3 | ALIGNED | — | Covered |',
+        '| FR-4 | ALIGNED | — | Covered |',
+        '| FR-5 | ALIGNED | — | Covered |',
+      ].join('\n'),
+    );
+
+    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toMatchObject({
+      done: false,
+      reason: expect.stringContaining('FR-2'),
+    });
+  });
+
   it('keeps a report done when a prior-cycle history table carries a stale DIVERGED verdict', async () => {
     await writeFile(
       join(root, '.pipeline/prd-audit.md'),

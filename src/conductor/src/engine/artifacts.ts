@@ -779,11 +779,9 @@ async function sweptArtifactStillValid(
       // spare a report that does not itself currently read clean.
       const report = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
       if (findUnalignedFrRows(report).length > 0) return false;
-      return (await prdAuditCoverageGap(
-        dir,
-        artifactResolution ?? (await buildArtifactResolutionContext(dir, { git })),
-        report,
-      )) === null;
+      const resolution = artifactResolution ?? (await buildArtifactResolutionContext(dir, { git }));
+      if ((await prdAuditCoverageGap(dir, resolution, report)) !== null) return false;
+      return (await prdAuditStoryCoverageGap(dir, resolution, undefined, report)) === null;
     }
     if (step === 'architecture_review_as_built') {
       const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
@@ -1324,6 +1322,34 @@ export function parseAsBuiltVerdict(content: string): string | null {
   if (!m) return null;
   const value = m[1].replace(/\*+/g, '').trim();
   return value.length > 0 ? value : null;
+}
+
+/** The terminal interpretation of a fresh as-built review report. */
+export type AsBuiltReviewOutcome =
+  | { kind: 'approved' }
+  | { kind: 'plan-gap-delivered' }
+  | { kind: 'plan-gap-undelivered' }
+  | { kind: 'blocked' }
+  | { kind: 'invalid' };
+
+/**
+ * Classify the as-built review's explicit verdict without giving its prose any
+ * routing authority. A PLAN_GAP may ship only when the report also records
+ * `Outcome delivered: yes`; an explicit `no` is the operator-facing plan-gap
+ * halt, while an omitted/malformed outcome remains fail-closed as invalid.
+ */
+export function classifyAsBuiltReviewOutcome(content: string): AsBuiltReviewOutcome {
+  const verdict = parseAsBuiltVerdict(content);
+  if (verdict === null) return { kind: 'invalid' };
+  if (/^APPROVED\b/i.test(verdict)) return { kind: 'approved' };
+  if (/^BLOCKED\b/i.test(verdict)) return { kind: 'blocked' };
+  if (!/^PLAN_GAP\b/i.test(verdict)) return { kind: 'invalid' };
+
+  const outcome = content.match(/^[^\S\n]*\*{0,2}\s*Outcome delivered\s*\*{0,2}\s*:+\s*(yes|no)\s*$/im)?.[1]
+    ?.toLowerCase();
+  if (outcome === 'yes') return { kind: 'plan-gap-delivered' };
+  if (outcome === 'no') return { kind: 'plan-gap-undelivered' };
+  return { kind: 'invalid' };
 }
 
 /**
@@ -2739,7 +2765,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                 const report = await readFile(f, 'utf-8');
                 if (
                   findUnalignedFrRows(report).length > 0 ||
-                  (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null
+                  (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null ||
+                  (await prdAuditStoryCoverageGap(dir, artifactResolution, ctx.featureDesc, report)) !== null
                 ) {
                   stillClean = false;
                   break;
@@ -2803,15 +2830,20 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         featureDesc: ctx.featureDesc,
         git: ctx.git,
       }));
-    const coverageGap = await prdAuditCoverageGap(
+    const passReport = await readFile(passF, 'utf-8');
+    const coverageGap = await prdAuditCoverageGap(dir, artifactResolution, passReport);
+    const storyCoverageGap = await prdAuditStoryCoverageGap(
       dir,
       artifactResolution,
-      await readFile(passF, 'utf-8'),
+      ctx.featureDesc,
+      passReport,
     );
-    if (blockingReason || coverageGap) {
+    if (blockingReason || coverageGap || storyCoverageGap) {
       return {
         done: false,
-        reason: [blockingReason, coverageGap].filter((reason): reason is string => Boolean(reason)).join('; '),
+        reason: [blockingReason, coverageGap, storyCoverageGap]
+          .filter((reason): reason is string => Boolean(reason))
+          .join('; '),
       };
     }
     const verdictFreshness = await verdictFreshnessFor(passF, ctx, 'rewritten');
@@ -2855,8 +2887,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             const preCheckFiles = await findArtifactFiles(dir, 'architecture_review_as_built');
             if (preCheckFiles.length > 0) {
               const content = await readFile(preCheckFiles[0], 'utf-8');
-              const verdict = parseAsBuiltVerdict(content);
-              if (verdict !== null && /^APPROVED\b/i.test(verdict)) {
+              if (classifyAsBuiltReviewOutcome(content).kind === 'approved') {
                 const artifact = preCheckFiles[0];
                 return {
                   done: true,
@@ -2896,21 +2927,31 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     for (const f of fresh) {
       const content = await readFile(f, 'utf-8');
-      const verdict = parseAsBuiltVerdict(content);
-      if (verdict === null) {
+      const outcome = classifyAsBuiltReviewOutcome(content);
+      if (outcome.kind === 'invalid') {
         return {
           done: false,
-          reason: 'as-built review has no parseable `Verdict:` line — expected APPROVED / APPROVED WITH DRIFT NOTES / BLOCKED; re-run the as-built review',
+          reason: 'as-built review must record `Verdict:` plus `Outcome delivered: yes|no` for PLAN_GAP; re-run the as-built review',
           routeClass: 'absent',
         };
       }
-      // Clean pass iff the verdict begins with APPROVED (covers both
-      // "APPROVED" and "APPROVED WITH DRIFT NOTES"). Everything else —
-      // BLOCKED or any other string — keeps the gate unsatisfied.
-      if (!/^APPROVED\b/i.test(verdict)) {
+      if (outcome.kind === 'plan-gap-delivered') {
+        return {
+          done: true,
+          verdictFreshness: await verdictFreshnessFor(f, ctx, 'rewritten'),
+        };
+      }
+      if (outcome.kind === 'plan-gap-undelivered') {
         return {
           done: false,
-          reason: `as-built review verdict is "${verdict}" — not a clean APPROVED (BLOCKED means shipped code violates an APPROVED ADR; an unrecognized verdict means the review may have found no ADRs to check). Fix the code or supersede the ADR (human-approved), then re-run`,
+          reason: 'as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome',
+          routeClass: 'named-route',
+        };
+      }
+      if (outcome.kind === 'blocked') {
+        return {
+          done: false,
+          reason: 'as-built review verdict is BLOCKED — shipped code violates an approved architecture decision',
           routeClass: 'named-route',
         };
       }
@@ -3914,6 +3955,87 @@ export async function prdAuditCoverageGap(
   );
   const missing = findFrIdsWithoutRows(reportContent, expectedIds);
   return missing.length === 0 ? null : `PRD audit report is missing verdict rows for ${missing.join(', ')}.`;
+}
+
+/**
+ * Refuse a PRD audit that cannot establish its story-criteria authority, or
+ * that silently treats an uncovered PRD requirement as covered. Stories remain
+ * the audit key; an FR that no story traces must instead be explicitly called
+ * out with a PLAN_GAP row in the report.
+ */
+async function prdAuditStoryCoverageGap(
+  projectRoot: string,
+  context: ArtifactResolutionContext,
+  featureDesc: string | undefined,
+  reportContent: string,
+): Promise<string | null> {
+  const storyIdentity = featureDesc
+    ?? context.featureDesc
+    ?? (context.activePlanPath ? planStem(context.activePlanPath) : undefined)
+    ?? (context.planPath ? planStem(context.planPath) : undefined);
+  const storiesPath = await resolveFeatureStoriesPath(projectRoot, storyIdentity);
+  // Preserve the legacy PRD-only predicate contract for callers whose feature
+  // has no resolvable stories artifact. Once a stories file is resolved it is
+  // authoritative and must be readable.
+  if (!storiesPath) return null;
+
+  let storiesText: string;
+  try {
+    storiesText = await readFile(storiesPath, 'utf-8');
+  } catch {
+    return `PRD audit cannot read story criteria at ${relative(projectRoot, storiesPath)}.`;
+  }
+
+  const criteria = extractAuthoritativeStoryCriteria(storiesText);
+  if (criteria.length === 0) {
+    return `PRD audit cannot parse story criteria in ${relative(projectRoot, storiesPath)}.`;
+  }
+
+  const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
+  if (prdPaths.length === 0) return null;
+
+  let expectedIds: Set<string>;
+  try {
+    expectedIds = new Set(
+      (await Promise.all(prdPaths.map(async (path) => extractPrdFrIds(await readFile(path, 'utf8')))))
+        .flatMap((ids) => [...ids]),
+    );
+  } catch {
+    // prdAuditCoverageGap owns the primary unreadable-PRD diagnostic.
+    return null;
+  }
+
+  const covered = extractStoryCoveredFrIds(storiesText);
+  const uncovered = [...expectedIds].filter((id) => !covered.has(id));
+  const missingPlanGaps = findFrIdsWithoutPlanGapRows(reportContent, uncovered);
+  return missingPlanGaps.length === 0
+    ? null
+    : `PRD audit report is missing PLAN_GAP rows for PRD requirements without story coverage: ${missingPlanGaps.join(', ')}.`;
+}
+
+function extractStoryCoveredFrIds(storiesText: string): Set<string> {
+  const ids = new Set<string>();
+  for (const block of splitStoryBlocks(storiesText)) {
+    for (const match of block.text.matchAll(/^\s*\*\*Requirements?\s*:\*\*\s*(.+?)\s*$/gim)) {
+      for (const id of match[1].matchAll(/\bFR-\d+[A-Za-z]?\b/gi)) {
+        ids.add(id[0].toUpperCase());
+      }
+    }
+  }
+  return ids;
+}
+
+function findFrIdsWithoutPlanGapRows(content: string, expectedIds: readonly string[]): string[] {
+  const declared = new Set<string>();
+  for (const line of verdictTableLines(content)) {
+    if (!/^\s*\|/.test(line)) continue;
+    const cells = tableCells(line);
+    if (isTableSeparator(cells) || !cells.some((cell) => /\bPLAN_GAP\b/i.test(cell))) continue;
+    for (const id of expectedIds) {
+      if (cells.some((cell) => new RegExp(`\\b${id}\\b`, 'i').test(cell))) declared.add(id);
+    }
+  }
+  return expectedIds.filter((id) => !declared.has(id));
 }
 
 /**

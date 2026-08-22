@@ -154,6 +154,7 @@ import {
   remediationDispositionAppendsToPlan,
   remediationDispositionStep,
   sweepStaleReviewArtifacts,
+  classifyAsBuiltReviewOutcome,
   parseTrack,
   parseIntakeSourceRef,
   planStem,
@@ -5396,6 +5397,61 @@ export class Conductor {
               continue;
             }
 
+            // The as-built review owns architecture/plan-limit judgement. It
+            // never re-opens BUILD: a BLOCKED report halts directly, while an
+            // undelivered PLAN_GAP is a classified plan-gap halt. If prd_audit
+            // independently found a FIXABLE issue in this same validation
+            // round, let its planner append that authorized task first, but
+            // deliberately ignore the planner's route — the as-built halt is
+            // still terminal for this run.
+            const asBuiltMember = membership.dispatchable.find(
+              (member) => member.name === 'architecture_review_as_built',
+            );
+            const asBuiltUnsatisfied =
+              asBuiltMember !== undefined &&
+              this.verifyArtifacts &&
+              gateVerdicts.get('architecture_review_as_built')?.satisfied !== true;
+            if (asBuiltUnsatisfied) {
+              const prdAuditUnsatisfied = membership.dispatchable.some((member, idx) =>
+                member.name === 'prd_audit' &&
+                outcomes[idx]?.kind === 'verdict' &&
+                outcomes[idx]?.verdict === 'pass' &&
+                gateVerdicts.get('prd_audit')?.satisfied !== true,
+              );
+              if (this.daemon && prdAuditUnsatisfied && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+                remediationRounds++;
+                await this.planRemediation(
+                  state,
+                  steps,
+                  'Blocking prd_audit gap at .pipeline/prd-audit.md. Plan remediation per the ' +
+                    '/remediate skill and write .pipeline/remediation.json.',
+                  { source: 'validation-group', evidenceFile: '.pipeline/prd-audit.md' },
+                );
+              }
+              const asBuiltFiles = await findArtifactFilesForStep(
+                this.projectRoot,
+                'architecture_review_as_built',
+              );
+              const asBuiltOutcome = asBuiltFiles[0]
+                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
+                : { kind: 'invalid' as const };
+              const asBuiltReason = gateVerdicts.get('architecture_review_as_built')?.reason ??
+                'as-built architecture review gate unsatisfied';
+              const reason = `Validation group "${step.name}" halted: ${asBuiltReason}`;
+              await this.writeHaltMarker(
+                reason + '\n',
+                asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
+              );
+              await this.commitStateChanges(state, `fail ${step.name} validation group`, {
+                [step.name]: 'failed',
+                last_step: step.name,
+              });
+              await this.emitLoopHalt(reason);
+              process.off('SIGINT', sigintHandler);
+              if (!this.daemon) process.off('SIGTERM', sigterm);
+              return;
+            }
+
             // Task 20 (adr-2026-07-10-validation-group-join.md): MT-only
             // failure — deterministic kickback parity. When manual_test is
             // the group's ONLY objective failure (its own FAIL rows) and
@@ -8504,18 +8560,36 @@ export class Conductor {
               return;
             }
 
-            // Finish/as-built remediation (daemon only): give the same /remediate
+            // As-built reports never route to BUILD. Their architecture/plan-limit
+            // judgement halts directly: an undelivered PLAN_GAP is classified for
+            // the operator, and BLOCKED/malformed reports remain needs-human.
+            if (step.name === 'architecture_review_as_built') {
+              const asBuiltFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
+              const asBuiltOutcome = asBuiltFiles[0]
+                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
+                : { kind: 'invalid' as const };
+              const reason = `as-built architecture review halted: ${lastError}`;
+              await this.writeHaltMarker(
+                reason + '\n',
+                asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
+              );
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+
+            // Finish remediation (daemon only): give the same /remediate
             // planner that routes a blocking prd_audit a shot at a failed finish
-            // verification or a BLOCKED as-built review before the generic HALT.
-            // The technical track skips prd_audit entirely, so without this hook
-            // these gates dead-end in a HALT even when the gap is routable (e.g.
-            // collateral test failures after an intentional contract change).
+            // verification before the generic HALT.
             if (
               this.daemon &&
-              (step.name === 'finish' || step.name === 'architecture_review_as_built') &&
+              step.name === 'finish' &&
               remediationRounds < MAX_KICKBACKS_PER_GATE
             ) {
-              const finishGate = step.name === 'finish';
+              const finishGate = true;
               // D2: this gate re-failing right after a prior kickback-to-build
               // cycle that made zero net progress on an unchanged verdict
               // escalates to HALT here instead of spending another
