@@ -143,6 +143,7 @@ import {
   resolveArtifactFiles,
   extraArtifactGlobs,
   resolveFeaturePlanPath,
+  resolveFeatureStoriesPath,
   recordAppendedRemediationTaskIds,
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
@@ -513,6 +514,99 @@ export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: numb
   const maximum = prdAudit?.max_appended_tasks ?? 5;
   const ratio = prdAudit?.max_appended_ratio ?? 0.25;
   return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
+}
+
+export interface RecordedPrdAuditFinding {
+  gate: 'prd_audit';
+  grade: 'PLAN_GAP';
+  criterion: string;
+  summary: string;
+}
+
+export type PrdAuditPlanGapRoute =
+  | { kind: 'none' }
+  | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
+  | { kind: 'halt'; haltClass: 'plan-gap'; detail: string; findings: RecordedPrdAuditFinding[] };
+
+function criterionStorySection(
+  storiesText: string,
+  criterion: string,
+): 'happy' | 'negative' | undefined {
+  const escapedCriterion = criterion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const criterionPattern = new RegExp(`\\b${escapedCriterion}\\b`, 'i');
+  let section: 'happy' | 'negative' | undefined;
+  for (const line of storiesText.split('\n')) {
+    const heading = line.match(/^#{1,6}\s+(.+?)\s*$/);
+    if (heading) {
+      if (/happy\s*path/i.test(heading[1]!)) section = 'happy';
+      else if (/negative\s*paths?/i.test(heading[1]!)) section = 'negative';
+      else section = undefined;
+      continue;
+    }
+    if (section !== undefined && criterionPattern.test(line)) return section;
+  }
+  return undefined;
+}
+
+/**
+ * A PLAN_GAP on a main path needs an operator to amend the approved plan;
+ * an edge-case gap is durable review information unless the feature opts in
+ * to stopping on every plan gap. Unknown locations deliberately fail closed
+ * as main-path gaps.
+ */
+export function routePrdAuditPlanGaps(
+  reportText: string,
+  storiesText: string,
+  config: HarnessConfig,
+): PrdAuditPlanGapRoute {
+  const parsed = parsePrdAuditReport(reportText);
+  if (!parsed.ok) return { kind: 'none' };
+
+  const findings = parsed.value.findings
+    .filter((finding) => finding.grade === 'PLAN_GAP')
+    .map((finding) => ({
+      gate: 'prd_audit' as const,
+      grade: 'PLAN_GAP' as const,
+      criterion: finding.criterion,
+      summary: finding.evidence.trim() || `No approved plan task covers ${finding.criterion}.`,
+    }));
+  if (findings.length === 0) return { kind: 'none' };
+
+  const haltOnAnyPlanGap = (config as HarnessConfig & {
+    prd_audit?: { halt_on_any_plan_gap?: boolean };
+  }).prd_audit?.halt_on_any_plan_gap === true;
+  const blocking = findings.filter(
+    (finding) => haltOnAnyPlanGap || criterionStorySection(storiesText, finding.criterion) !== 'negative',
+  );
+  if (blocking.length > 0) {
+    return {
+      kind: 'halt',
+      haltClass: 'plan-gap',
+      detail: `PLAN_GAP on ${blocking.map((finding) => finding.criterion).join(', ')}.`,
+      findings,
+    };
+  }
+
+  const hasOtherBlockingGrade = parsed.value.findings.some(
+    (finding) => finding.grade !== 'PASS' && finding.grade !== 'PLAN_GAP',
+  );
+  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings };
+}
+
+function recordedPrdAuditFindingsBlock(findings: readonly RecordedPrdAuditFinding[]): string {
+  return `## Recorded Findings\n\n\`\`\`json\n${JSON.stringify({ findings }, null, 2)}\n\`\`\``;
+}
+
+async function persistPrdAuditRecordedFindings(
+  reportPath: string,
+  reportText: string,
+  findings: readonly RecordedPrdAuditFinding[],
+): Promise<void> {
+  const recordedBlock = recordedPrdAuditFindingsBlock(findings);
+  const next = reportText.match(/^## Recorded Findings\s*$/im)
+    ? reportText.replace(/^## Recorded Findings\s*$[\s\S]*$/im, recordedBlock)
+    : `${reportText.trimEnd()}\n\n${recordedBlock}\n`;
+  await writeFile(reportPath, next, 'utf8');
 }
 
 /**
@@ -2690,6 +2784,26 @@ export class Conductor {
     failure: { reason: string; message: string },
   ): Promise<Awaited<ReturnType<typeof recordGateRepair>>> {
     return recordGateRepair(this.projectRoot, gate, { ...failure, observedAt: Date.now() });
+  }
+
+  /** Read the current verdict and its authoritative story sections as one route decision. */
+  private async routeCurrentPrdAuditPlanGaps(state: ConductState): Promise<PrdAuditPlanGapRoute> {
+    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
+    if (!reportPath) return { kind: 'none' };
+
+    let reportText: string;
+    try {
+      reportText = await readFile(reportPath, 'utf8');
+    } catch {
+      return { kind: 'none' };
+    }
+    const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
+    const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
+    const route = routePrdAuditPlanGaps(reportText, storiesText, this.config);
+    if (route.kind === 'record') {
+      await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+    }
+    return route;
   }
 
   /**
@@ -7253,6 +7367,26 @@ export class Conductor {
             // re-checks below, the next step, or an idle/backstop caller)
             // as a stale "in-flight attempt" timestamp.
             this.currentAttemptStartedAt = undefined;
+
+            if (step.name === 'prd_audit') {
+              const planGapRoute = await this.routeCurrentPrdAuditPlanGaps(state);
+              if (planGapRoute.kind === 'halt') {
+                const reason = `prd-audit halted: needs human DECIDE — ${planGapRoute.detail}`;
+                await this.writeHaltMarker(reason + '\n', planGapRoute.haltClass);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              if (planGapRoute.kind === 'record') {
+                // Negative-path plan gaps are explicit accepted risk, not a
+                // repair request. Preserve the fresh-verdict metadata while
+                // letting the SHIP tail settle this gate as satisfied.
+                completion = { ...completion, done: true, reason: undefined, missing: undefined };
+              }
+            }
 
             // Auto-heal hook removed (feature #773, Task 11). It used to
             // reconcile .pipeline/task-status.json against git-trailer

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   Conductor,
   remediationLapCapForGate,
+  routePrdAuditPlanGaps,
   type StepRunner,
 } from '../src/engine/conductor.js';
 import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
@@ -14,6 +15,28 @@ import type { ConductState } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 
 const dirs: string[] = [];
+
+function planGapReport(criterion: string, summary = 'The approved plan has no task for this behavior.') {
+  return [
+    '**PRD:** present',
+    '',
+    '## Verdict Table',
+    '| Criterion | Grade | Plan task | Evidence |',
+    '| --- | --- | --- | --- |',
+    `| ${criterion} | PLAN_GAP | | ${summary} |`,
+  ].join('\n');
+}
+
+function storiesWithCriterion(section: 'Happy Path' | 'Negative Paths', criterion: string) {
+  return [
+    '# Stories',
+    '',
+    '## Story 2: behavior',
+    '',
+    `#### ${section}`,
+    `- **${criterion}:** Given input, when exercised, then the expected behavior occurs.`,
+  ].join('\n');
+}
 
 async function createPrdAuditRemediationFixture(input: {
   taskCount: number;
@@ -241,5 +264,51 @@ describe('prd_audit kickback', () => {
     const appended = await readFile(fixture.planPath, 'utf8');
     for (const criterion of criteria) expect(appended).toContain(`**Criterion:** ${criterion}`);
     expect(appended.match(/^\*\*Criterion:\*\*/gm)).toHaveLength(6);
+  });
+
+  it('halts a PLAN_GAP for a happy-path criterion with a plan-gap class', () => {
+    const route = routePrdAuditPlanGaps(
+      planGapReport('S2.1'),
+      storiesWithCriterion('Happy Path', 'S2.1'),
+      {} as never,
+    );
+
+    expect(route).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
+    if (route.kind !== 'halt') throw new Error('expected happy-path plan gap to halt');
+    expect(route.detail).toContain('S2.1');
+  });
+
+  it('records a negative-path PLAN_GAP finding and lets the gate pass', () => {
+    const route = routePrdAuditPlanGaps(
+      planGapReport('S2.2', 'An edge case is not in the approved plan.'),
+      storiesWithCriterion('Negative Paths', 'S2.2'),
+      {} as never,
+    );
+
+    expect(route).toMatchObject({
+      kind: 'record',
+      findings: [{
+        grade: 'PLAN_GAP',
+        criterion: 'S2.2',
+        summary: 'An edge case is not in the approved plan.',
+        gate: 'prd_audit',
+      }],
+    });
+  });
+
+  it('treats an unclassifiable PLAN_GAP criterion as happy-path and halts', () => {
+    const route = routePrdAuditPlanGaps(planGapReport('S2.3'), '# Stories\n', {} as never);
+
+    expect(route).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
+  });
+
+  it('halts a negative-path PLAN_GAP when halt_on_any_plan_gap is enabled', () => {
+    const route = routePrdAuditPlanGaps(
+      planGapReport('S2.4'),
+      storiesWithCriterion('Negative Paths', 'S2.4'),
+      { prd_audit: { halt_on_any_plan_gap: true } } as never,
+    );
+
+    expect(route).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
   });
 });
