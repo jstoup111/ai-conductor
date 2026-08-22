@@ -63,17 +63,17 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
     expect(await readdir(fakeRealTmpdir)).toHaveLength(1);
   });
 
-  it('gives a nested Vitest coordinator a root of its own', async () => {
+  it('lets a nested Vitest coordinator borrow its parent root without taking ownership', async () => {
     const parentEnv: NodeJS.ProcessEnv = {};
     const parentRoot = ensureRunTmpRootSync(fakeRealTmpdir, parentEnv, 'parent-pid');
     const childEnv: NodeJS.ProcessEnv = { ...parentEnv };
 
     const childRoot = ensureRunTmpRootSync(fakeRealTmpdir, childEnv, 'child-pid');
 
-    expect(childRoot).not.toBe(parentRoot);
-    expect(childEnv[RUN_TMP_ROOT_ENV]).toBe(childRoot);
-    expect(childEnv[RUN_TMP_ROOT_OWNER_PID_ENV]).toBe('child-pid');
-    expect(await readdir(fakeRealTmpdir)).toHaveLength(2);
+    expect(childRoot).toBe(parentRoot);
+    expect(childEnv[RUN_TMP_ROOT_ENV]).toBe(parentRoot);
+    expect(childEnv[RUN_TMP_ROOT_OWNER_PID_ENV]).toBe('parent-pid');
+    expect(await readdir(fakeRealTmpdir)).toHaveLength(1);
   });
 
   it('canonicalizes the run root and appends it to the Git ceiling directories', async () => {

@@ -44,9 +44,10 @@ export const RUN_TMP_ROOT_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT';
 /**
  * Process id of the Vitest coordinator that owns `RUN_TMP_ROOT_ENV`.
  *
- * A full-suite verifier can launch Vitest from inside an already-running
- * Vitest process. Its child inherits the parent's environment, but it must
- * never reuse (and subsequently delete) the parent's run root.
+ * A Vitest process that inherits this value borrows the parent's root; only
+ * this coordinator may reclaim it. That keeps child workers and the parent
+ * suite in one contained tree without letting child teardown delete the
+ * parent's root.
  */
 export const RUN_TMP_ROOT_OWNER_PID_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT_OWNER_PID';
 
@@ -155,9 +156,11 @@ export function ensureRunTmpRootSync(
   const existing = env[RUN_TMP_ROOT_ENV];
   const ownsExistingRoot =
     existing !== undefined && env[RUN_TMP_ROOT_OWNER_PID_ENV] === ownerPid;
-  const createdRunRoot = ownsExistingRoot
-    ? existing
-    : mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
+  // A nested Vitest coordinator's workers inherit their environment before
+  // its config has run. Reusing the inherited root keeps those workers within
+  // the same tree as the coordinator, while the owner marker prevents the
+  // nested teardown from reclaiming the parent's root.
+  const createdRunRoot = existing ?? mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
   let runRoot: string;
 
   try {
@@ -173,7 +176,7 @@ export function ensureRunTmpRootSync(
   }
 
   env[RUN_TMP_ROOT_ENV] = runRoot;
-  env[RUN_TMP_ROOT_OWNER_PID_ENV] = ownerPid;
+  if (!existing || ownsExistingRoot) env[RUN_TMP_ROOT_OWNER_PID_ENV] = ownerPid;
   env.TMPDIR = runRoot;
 
   const ceilings = env.GIT_CEILING_DIRECTORIES;
