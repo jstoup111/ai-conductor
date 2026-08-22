@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parsePlanTaskPaths,
+  parsePlanTaskDoneWhen,
   parsePlanTaskPreserves,
   TASK_HEADER_PATTERN,
   TASK_ID_PATTERN,
@@ -14,6 +15,42 @@ import {
 import { parsePlanTaskVerifyOnly } from '../../src/engine/autoheal.js';
 
 describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)', () => {
+  describe('parsePlanTaskDoneWhen', () => {
+    it('returns ordered Done when checks only for tasks that declare the block', () => {
+      const result = parsePlanTaskDoneWhen(`# Plan
+
+### Task 1: Has verifiable completion criteria
+**Done when:**
+- First check
+- Second check
+- Third check
+
+**Files:** src/one.ts
+
+### Task 2: Keeps the legacy close rule
+**Files:** src/two.ts
+`);
+
+      expect(result).toEqual(new Map([['1', [
+        'First check',
+        'Second check',
+        'Third check',
+      ]]]));
+      expect(result.malformedTaskIds).toEqual(new Set());
+    });
+
+    it('marks an empty Done when block malformed instead of treating it as absent', () => {
+      const result = parsePlanTaskDoneWhen(`### Task 1: Incomplete metadata
+**Done when:**
+
+**Files:** src/one.ts
+`);
+
+      expect(result.has('1')).toBe(false);
+      expect(result.malformedTaskIds).toEqual(new Set(['1']));
+    });
+  });
+
   it('parses one preserved behavior from its task block', () => {
     const result = parsePlanTaskPreserves(`# Plan
 
