@@ -67,9 +67,13 @@ describe('step refusal event spine', () => {
     const dispatchIssue = 'Protected artifact changed: .docs/plans/feature.md';
     await writeFile(statePath, JSON.stringify({ plan: 'done', build: 'done' }), 'utf8');
     vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
-    vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
-      ok: false,
-      reason: dispatchIssue,
+    let stateAtSealCheck: string | undefined;
+    vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockImplementation(async () => {
+      stateAtSealCheck ??= await readFile(statePath, 'utf8');
+      return {
+        ok: false,
+        reason: dispatchIssue,
+      };
     });
     const run = vi.fn(async () => {
       throw new Error('protected-artifact refusal must prevent dispatch');
@@ -85,6 +89,12 @@ describe('step refusal event spine', () => {
       mode: 'default',
       maxRetries: 2,
     });
+    const saveStepStatus = vi.spyOn(
+      conductor as unknown as {
+        saveConductorStepStatus: (state: unknown, step: string, status: string) => Promise<void>;
+      },
+      'saveConductorStepStatus',
+    );
 
     persister.start();
     try {
@@ -94,6 +104,9 @@ describe('step refusal event spine', () => {
 
       expect({
         build: JSON.parse(await readFile(statePath, 'utf8')).build,
+        stateBytes: await readFile(statePath, 'utf8'),
+        stateAtSealCheck,
+        buildStatusWrites: saveStepStatus.mock.calls.filter(([, step]) => step === 'build'),
         runnerCalls: run.mock.calls,
         refusals: records.filter((record) => record.type === 'step_refused'),
         failures: records.filter((record) => record.type === 'step_failed'),
@@ -101,6 +114,9 @@ describe('step refusal event spine', () => {
         haltClass: await readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8'),
       }).toEqual({
         build: 'done',
+        stateBytes: stateAtSealCheck,
+        stateAtSealCheck: expect.stringContaining('"build": "done"'),
+        buildStatusWrites: [],
         runnerCalls: [],
         refusals: [
           expect.objectContaining({ step: 'build', kind: 'protected-artifact', reason: dispatchIssue }),
