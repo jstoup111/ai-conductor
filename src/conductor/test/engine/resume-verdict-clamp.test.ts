@@ -209,6 +209,38 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
         expect.objectContaining({ from: 'finish', to: 'manual_test' }),
       );
     });
+
+    it('an explicit --from-step test_suite remains targeted when build failed', async () => {
+      const seed = seedDoneThrough('build');
+      seed.build = 'failed';
+      await writeState(statePath, seed as ConductState);
+
+      const dispatched: StepName[] = [];
+      const blocked: StepName[] = [];
+      events.on('gate_blocked', (event) => {
+        if (event.type === 'gate_blocked') blocked.push(event.step);
+      });
+      const runner: StepRunner = {
+        run: async (step) => {
+          dispatched.push(step);
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'test_suite',
+      });
+
+      await conductor.run();
+
+      // `--from-step` intentionally bypasses resume's backward-only walk.
+      // The regular entry gate still refuses test_suite because build failed.
+      expect(blocked).toEqual(['test_suite']);
+      expect(dispatched).toEqual([]);
+    });
   });
 
   // ── Story 2: the in_progress resume branch is clamped too ─────────────────
