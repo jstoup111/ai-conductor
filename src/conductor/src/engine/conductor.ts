@@ -2216,6 +2216,56 @@ export class Conductor {
     this.registerAbortController = opts.registerAbortController;
   }
 
+  /** Records non-blocking beyond findings without changing the gate verdict. */
+  private async recordBeyondBuildReviewFindings(
+    verdictRaw: unknown,
+    resolution: BuildReviewEffectiveResolution,
+  ): Promise<void> {
+    if (!rawBuildReviewFailIsEffectivelyAccepted(resolution) || !resolution.ok) return;
+    const aggregate = parseBuildReviewAggregate(verdictRaw);
+    if (!aggregate) return;
+
+    const findings = new Map<string, {
+      rubric: import('../types/config.js').BuildReviewRubricId;
+      summary: string;
+      evidenceLocations: readonly string[];
+    }>();
+    for (const result of Object.values(aggregate.results)) {
+      if (result.kind !== 'judged') continue;
+      for (const finding of result.findings) {
+        const identity = canonicalizeBuildReviewFindingIdentity({
+          rubric: result.rubric,
+          contractVersion: result.contractVersion,
+          concernKind: finding.concernKind,
+          anchor: finding.anchor,
+        });
+        if (identity) findings.set(identity.id, {
+          rubric: result.rubric,
+          summary: finding.summary,
+          evidenceLocations: finding.evidenceLocations,
+        });
+      }
+    }
+
+    const store = new BuildReviewDispositionStore(this.projectRoot);
+    for (const findingId of resolution.effective.beyondFindingIds ?? []) {
+      const finding = findings.get(findingId);
+      if (!finding) continue;
+      try {
+        const appended = await store.appendBeyondIfAbsent({
+          feature: resolution.feature,
+          findingId,
+          rubric: finding.rubric,
+          summary: finding.summary,
+          evidenceLocations: finding.evidenceLocations,
+        });
+        if (!appended.ok) this.log?.(`build_review beyond record deferred: ${appended.message}`);
+      } catch (error) {
+        this.log?.(`build_review beyond record deferred: ${String(error)}`);
+      }
+    }
+  }
+
   private async surfaceProtectedArtifactRebaseline(
     event: ProtectedArtifactSealRebaselineEvent,
   ): Promise<void> {
@@ -7052,6 +7102,26 @@ export class Conductor {
             // to derive here — a build-gate miss just falls through to the
             // normal retry path below.
 
+            if (step.name === 'build_review') {
+              try {
+                const verdictRaw = JSON.parse(
+                  await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'),
+                );
+                const parsed = validateBuildReviewVerdict(verdictRaw);
+                if (parsed.ok && parsed.verdict === 'FAIL') {
+                  const resolution = await (
+                    this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+                  )(this.projectRoot, verdictRaw, {
+                    emit: async (event) => { await this.events.emit(event); },
+                  });
+                  await this.recordBeyondBuildReviewFindings(verdictRaw, resolution);
+                }
+              } catch {
+                // Effective verdict resolution remains authoritative; recording
+                // beyond findings must never change a completed gate outcome.
+              }
+            }
+
             if (step.name === 'acceptance_specs') {
               const viaException =
                 'viaException' in completion && completion.viaException === true;
@@ -7969,39 +8039,7 @@ export class Conductor {
                     });
                     if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
                     if (!resolution.ok) return false;
-                    const aggregate = parseBuildReviewAggregate(verdictRaw);
-                    if (aggregate) {
-                      const findings = new Map<string, { rubric: import('../types/config.js').BuildReviewRubricId; summary: string; evidenceLocations: readonly string[] }>();
-                      for (const result of Object.values(aggregate.results)) {
-                        if (result.kind !== 'judged') continue;
-                        for (const finding of result.findings) {
-                          const identity = canonicalizeBuildReviewFindingIdentity({
-                            rubric: result.rubric,
-                            contractVersion: result.contractVersion,
-                            concernKind: finding.concernKind,
-                            anchor: finding.anchor,
-                          });
-                          if (identity) findings.set(identity.id, {
-                            rubric: result.rubric,
-                            summary: finding.summary,
-                            evidenceLocations: finding.evidenceLocations,
-                          });
-                        }
-                      }
-                      const store = new BuildReviewDispositionStore(this.projectRoot);
-                      for (const findingId of resolution.effective.beyondFindingIds ?? []) {
-                        const finding = findings.get(findingId);
-                        if (!finding) continue;
-                        const appended = await store.appendBeyondIfAbsent({
-                          feature: resolution.feature,
-                          findingId,
-                          rubric: finding.rubric,
-                          summary: finding.summary,
-                          evidenceLocations: finding.evidenceLocations,
-                        });
-                        if (!appended.ok) this.log?.(`build_review beyond record deferred: ${appended.message}`);
-                      }
-                    }
+                    await this.recordBeyondBuildReviewFindings(verdictRaw, resolution);
                   } catch {
                     // Resolver failures retain the legacy raw-aggregate exit.
                     return false;

@@ -73,6 +73,10 @@ import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import {
   creditKickbackGateLaps,
   readKickbackLedger,
@@ -129,6 +133,48 @@ const RED_EVIDENCE_JSON = JSON.stringify({
   ranAt: '2026-08-10T00:00:00.000Z',
   intentRationale: 'The feature acceptance spec executed and failed before implementation.',
 });
+
+function beyondFindingFixture() {
+  const lapId = parseBuildReviewLapId('lap-beyond-recording')!;
+  const first: BuildReviewFinding = {
+    concernKind: 'out-of-plan-change',
+    summary: 'First beyond-plan observation.',
+    evidenceLocations: ['src/first.ts:10'],
+    anchor: { rubric: 'scope', path: 'src/first.ts', relation: 'not-authorized-by-plan' },
+  };
+  const second: BuildReviewFinding = {
+    concernKind: 'out-of-plan-change',
+    summary: 'Second beyond-plan observation.',
+    evidenceLocations: ['src/second.ts:20'],
+    anchor: { rubric: 'scope', path: 'src/second.ts', relation: 'not-authorized-by-plan' },
+  };
+  const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness', findings: readonly BuildReviewFinding[] = []) => ({
+    kind: 'judged' as const,
+    rubric,
+    lapId,
+    snapshotDigest: 'sha256:beyond-recording',
+    contractVersion: 'v3' as never,
+    findings,
+    verdict: findings.length === 0 ? 'PASS' as const : 'FAIL' as const,
+  });
+  const aggregate = joinBuildReviewRubricOutcomes({
+    lapId,
+    snapshotDigest: 'sha256:beyond-recording',
+    results: {
+      tautology: judged('tautology'),
+      scope: judged('scope', [first, second]),
+      rootCause: judged('rootCause'),
+      completeness: judged('completeness'),
+    },
+  });
+  const beyondFindingIds = [first, second].map((finding) => canonicalizeBuildReviewFindingIdentity({
+    rubric: 'scope',
+    contractVersion: 'v3',
+    concernKind: finding.concernKind,
+    anchor: finding.anchor,
+  })!.id);
+  return { aggregate, beyondFindingIds };
+}
 
 describe('engine/conductor', () => {
   let dir: string;
@@ -2511,6 +2557,88 @@ describe('engine/conductor', () => {
 
       const result = await readState(statePath);
       expect(result.ok && result.value.build_review).toBe('done');
+    });
+  });
+
+  describe('beyond finding recording (Task 13)', () => {
+    const feature = {
+      version: 'v1' as const,
+      repository: 'github.com/acme/conductor',
+      feature: 'beyond-recording',
+    };
+
+    async function runBeyondLap(log = vi.fn()): Promise<void> {
+      const { aggregate, beyondFindingIds } = beyondFindingFixture();
+      const state: Record<string, unknown> = { complexity_tier: 'M' };
+      for (const step of ALL_STEPS) state[step.name] = step.name === 'build_review' ? 'pending' : 'done';
+      await writeState(statePath, state as ConductState);
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'build_review') {
+              await mkdir(join(dir, '.pipeline'), { recursive: true });
+              await writeFile(join(dir, '.pipeline', 'build-review.json'), JSON.stringify(aggregate));
+            }
+            return { success: true };
+          },
+        },
+        events,
+        fromStep: 'build_review',
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        log,
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature,
+          effective: {
+            rawVerdict: 'FAIL' as const,
+            verdict: 'PASS' as const,
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            beyondFindingIds,
+            skippedRubrics: [],
+            infrastructureFailureRubrics: [],
+          },
+        }),
+      });
+      await conductor.run();
+    }
+
+    it('records each beyond finding once after an effective build_review verdict', async () => {
+      await runBeyondLap();
+
+      const recorded = await new BuildReviewDispositionStore(dir).listBeyond(feature);
+      expect(recorded).toMatchObject({
+        ok: true,
+        records: [
+          { findingId: beyondFindingFixture().beyondFindingIds[0], rubric: 'scope', summary: 'First beyond-plan observation.', evidenceLocations: ['src/first.ts:10'], status: 'unfiled' },
+          { findingId: beyondFindingFixture().beyondFindingIds[1], rubric: 'scope', summary: 'Second beyond-plan observation.', evidenceLocations: ['src/second.ts:20'], status: 'unfiled' },
+        ],
+      });
+    });
+
+    it('does not append duplicate beyond records when the same lap is re-run', async () => {
+      await runBeyondLap();
+      await runBeyondLap();
+
+      const recorded = await new BuildReviewDispositionStore(dir).listBeyond(feature);
+      expect(recorded.ok && recorded.records).toHaveLength(2);
+    });
+
+    it('logs a beyond-record lease failure without changing the effective verdict', async () => {
+      const log = vi.fn();
+      const store = new BuildReviewDispositionStore(dir);
+      await store.withLease(async () => {
+        await runBeyondLap(log);
+      });
+
+      const state = await readState(statePath);
+      expect(state.ok && state.value.build_review).toBe('done');
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/build_review beyond record deferred:.*lease/i));
+      await expect(store.listBeyond(feature)).resolves.toMatchObject({ ok: true, records: [] });
     });
   });
 
