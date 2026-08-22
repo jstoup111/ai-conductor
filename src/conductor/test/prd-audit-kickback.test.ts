@@ -7,8 +7,15 @@ import {
   Conductor,
   remediationLapCapForGate,
   routePrdAuditPlanGaps,
+  routePrdAuditOverScope,
+  prdAuditScopeProjection,
   type StepRunner,
 } from '../src/engine/conductor.js';
+import {
+  acceptClearedOverScopeHalt,
+  readAcceptedWidenings,
+  renderOverScopeAcceptanceCandidate,
+} from '../src/engine/accepted-widenings.js';
 import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import type { ConductState } from '../src/types/index.js';
@@ -35,6 +42,21 @@ function storiesWithCriterion(section: 'Happy Path' | 'Negative Paths', criterio
     '',
     `#### ${section}`,
     `- **${criterion}:** Given input, when exercised, then the expected behavior occurs.`,
+  ].join('\n');
+}
+
+function overScopeReport(
+  criterion: string,
+  relation: 'within' | 'outside-harmless' | 'outside-visible',
+  summary = 'The change adds behavior beyond the approved plan.',
+) {
+  return [
+    '**PRD:** present',
+    '',
+    '## Verdict Table',
+    '| Criterion | Grade | Plan task | Evidence | Intent relation |',
+    '| --- | --- | --- | --- | --- |',
+    `| ${criterion} | OVER_SCOPE | | ${summary} | ${relation} |`,
   ].join('\n');
 }
 
@@ -310,5 +332,61 @@ describe('prd_audit kickback', () => {
     );
 
     expect(route).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
+  });
+
+  it('records an in-intent OVER_SCOPE finding as an accepted widening and passes', () => {
+    const route = routePrdAuditOverScope(overScopeReport('S3.1', 'within'), []);
+
+    expect(route).toMatchObject({
+      kind: 'record',
+      findings: [{ grade: 'OVER_SCOPE', criterion: 'S3.1', accepted: true }],
+    });
+  });
+
+  it('records a harmless out-of-intent OVER_SCOPE finding and passes', () => {
+    const route = routePrdAuditOverScope(overScopeReport('S3.2', 'outside-harmless'), []);
+
+    expect(route).toMatchObject({
+      kind: 'record',
+      findings: [{ grade: 'OVER_SCOPE', criterion: 'S3.2', accepted: false }],
+    });
+  });
+
+  it('halts a visible out-of-intent OVER_SCOPE finding with its own class', () => {
+    const route = routePrdAuditOverScope(overScopeReport('S3.3', 'outside-visible'), []);
+
+    expect(route).toMatchObject({ kind: 'halt', haltClass: 'over-scope' });
+  });
+
+  it('records an operator acceptance from a cleared over-scope halt and regrades it within intent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'accepted-widenings-'));
+    dirs.push(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const report = overScopeReport('S3.4', 'outside-visible', 'A visible optional feature.');
+    await writeFile(
+      join(root, '.pipeline', 'HALT.cleared'),
+      `prd-audit halted\n\n${renderOverScopeAcceptanceCandidate({
+        criterion: 'S3.4',
+        summary: 'A visible optional feature.',
+      })}\n`,
+    );
+
+    await acceptClearedOverScopeHalt(root);
+    const accepted = await readAcceptedWidenings(root);
+    expect(accepted.entries).toHaveLength(1);
+    expect(routePrdAuditOverScope(report, accepted.entries)).toMatchObject({
+      kind: 'record',
+      findings: [{ criterion: 'S3.4', accepted: true }],
+    });
+  });
+
+  it('keeps reseal and Scope trailer evidence in the prd_audit projection', () => {
+    expect(prdAuditScopeProjection({
+      resealEvidence: [{ path: '.docs/plans/feature.md', reason: 'corrected plan' }],
+      scopeTrailers: [{ path: 'src/optional.ts', rationale: 'supports the optional behavior' }],
+    })).toEqual({
+      resealEvidence: [{ path: '.docs/plans/feature.md', reason: 'corrected plan' }],
+      scopeTrailers: [{ path: 'src/optional.ts', rationale: 'supports the optional behavior' }],
+    });
   });
 });

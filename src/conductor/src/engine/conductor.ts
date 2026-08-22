@@ -174,7 +174,20 @@ import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
   type CriterionBoundRemediationGap,
 } from './remediation-append.js';
-import { KICKBACK_CAP_HALT_CLASS, type KickbackCapHaltClass } from './halt-classification.js';
+import {
+  KICKBACK_CAP_HALT_CLASS,
+  OVER_SCOPE_HALT_CLASS,
+  type KickbackCapHaltClass,
+  type OverScopeHaltClass,
+} from './halt-classification.js';
+import {
+  acceptClearedOverScopeHalt,
+  readAcceptedWidenings,
+  renderOverScopeAcceptanceCandidate,
+  type AcceptedWidening,
+} from './accepted-widenings.js';
+import type { ScopeTrailer } from './scope-trailer.js';
+import { resolveScopeWideningRationale } from './scope-widening-rationale.js';
 import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
@@ -518,9 +531,10 @@ export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: numb
 
 export interface RecordedPrdAuditFinding {
   gate: 'prd_audit';
-  grade: 'PLAN_GAP';
+  grade: 'PLAN_GAP' | 'OVER_SCOPE';
   criterion: string;
   summary: string;
+  accepted?: boolean;
 }
 
 export type PrdAuditPlanGapRoute =
@@ -591,6 +605,110 @@ export function routePrdAuditPlanGaps(
     (finding) => finding.grade !== 'PASS' && finding.grade !== 'PLAN_GAP',
   );
   return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings };
+}
+
+type IntentRelation = 'within' | 'outside-harmless' | 'outside-visible';
+
+function prdAuditTableCells(line: string): string[] {
+  return line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
+}
+
+function overScopeRelations(reportText: string): Map<string, IntentRelation> {
+  const lines = reportText.split('\n');
+  const headerIndex = lines.findIndex((line) => {
+    if (!/^\s*\|/.test(line)) return false;
+    const header = prdAuditTableCells(line).map((cell) => cell.toLowerCase());
+    return header.includes('criterion') && header.includes('grade');
+  });
+  if (headerIndex === -1) return new Map();
+  const header = prdAuditTableCells(lines[headerIndex]!).map((cell) => cell.toLowerCase());
+  const criterionIndex = header.indexOf('criterion');
+  const gradeIndex = header.indexOf('grade');
+  const relationIndex = header.findIndex((cell) => cell === 'intent relation' || cell === 'intentrelation');
+  const evidenceIndex = header.indexOf('evidence');
+  const relations = new Map<string, IntentRelation>();
+  for (const line of lines.slice(headerIndex + 1)) {
+    if (!/^\s*\|/.test(line)) continue;
+    const cells = prdAuditTableCells(line);
+    if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
+    if (cells[gradeIndex]?.trim().toUpperCase() !== 'OVER_SCOPE') continue;
+    const criterion = cells[criterionIndex]?.trim().toUpperCase();
+    if (!criterion) continue;
+    const source = relationIndex === -1 ? cells[evidenceIndex] ?? '' : cells[relationIndex] ?? '';
+    const relation = source.trim().toLowerCase();
+    if (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible') {
+      relations.set(criterion, relation);
+    }
+  }
+  return relations;
+}
+
+export type PrdAuditOverScopeRoute =
+  | { kind: 'none' }
+  | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
+  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[] };
+
+/** Route OVER_SCOPE findings through intent relation and prior operator acceptance. */
+export function routePrdAuditOverScope(
+  reportText: string,
+  acceptedWidenings: readonly AcceptedWidening[],
+): PrdAuditOverScopeRoute {
+  const parsed = parsePrdAuditReport(reportText);
+  if (!parsed.ok) return { kind: 'none' };
+  const relations = overScopeRelations(reportText);
+  const findings = parsed.value.findings
+    .filter((finding) => finding.grade === 'OVER_SCOPE')
+    .map((finding) => {
+      const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
+      const accepted =
+        relations.get(finding.criterion) === 'within' ||
+        acceptedWidenings.some(
+          (entry) => entry.criterion === finding.criterion && entry.summary === summary,
+        );
+      return {
+        gate: 'prd_audit' as const,
+        grade: 'OVER_SCOPE' as const,
+        criterion: finding.criterion,
+        summary,
+        accepted,
+        relation: accepted ? 'within' as const : relations.get(finding.criterion) ?? 'outside-visible' as const,
+      };
+    });
+  if (findings.length === 0) return { kind: 'none' };
+
+  const visible = findings.filter((finding) => finding.relation === 'outside-visible');
+  const recorded = findings.map(({ relation: _relation, ...finding }) => finding);
+  if (visible.length > 0) {
+    return {
+      kind: 'halt',
+      haltClass: OVER_SCOPE_HALT_CLASS,
+      detail: `OVER_SCOPE visible behavior on ${visible.map((finding) => finding.criterion).join(', ')}.`,
+      findings: recorded,
+    };
+  }
+  const hasOtherBlockingGrade = parsed.value.findings.some(
+    (finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE',
+  );
+  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings: recorded };
+}
+
+/** Direct, immutable scope evidence passed to the PRD-audit reviewer. */
+export function prdAuditScopeProjection(input: {
+  resealEvidence: readonly { path: string; reason: string }[];
+  scopeTrailers: readonly ScopeTrailer[];
+}): {
+  resealEvidence: readonly { path: string; reason: string }[];
+  scopeTrailers: readonly ScopeTrailer[];
+} {
+  return {
+    resealEvidence: input.resealEvidence.map((entry) => ({ ...entry })),
+    // Reuse the common widening rationale precedence: a matching `Scope:`
+    // trailer is authored evidence, not an engine-invented explanation.
+    scopeTrailers: input.scopeTrailers.map((entry) => ({
+      path: entry.path,
+      rationale: resolveScopeWideningRationale(entry.path, input.scopeTrailers, '').rationale,
+    })),
+  };
 }
 
 function recordedPrdAuditFindingsBlock(findings: readonly RecordedPrdAuditFinding[]): string {
@@ -1434,7 +1552,7 @@ export class Conductor {
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
-    haltClass: Parameters<typeof writeHaltMarker>[2] | KickbackCapHaltClass,
+    haltClass: Parameters<typeof writeHaltMarker>[2] | KickbackCapHaltClass | OverScopeHaltClass,
   ) {
     // `kickback-cap` is an operator-owned remediation halt. Older readers
     // conservatively treat an unknown class as operator action, so introducing
@@ -2800,6 +2918,25 @@ export class Conductor {
     const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
     const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
     const route = routePrdAuditPlanGaps(reportText, storiesText, this.config);
+    if (route.kind === 'record') {
+      await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+    }
+    return route;
+  }
+
+  /** Read OVER_SCOPE verdict rows after incorporating an operator-cleared halt acceptance. */
+  private async routeCurrentPrdAuditOverScope(): Promise<PrdAuditOverScopeRoute> {
+    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
+    if (!reportPath) return { kind: 'none' };
+    let reportText: string;
+    try {
+      reportText = await readFile(reportPath, 'utf8');
+    } catch {
+      return { kind: 'none' };
+    }
+    await acceptClearedOverScopeHalt(this.projectRoot);
+    const accepted = await readAcceptedWidenings(this.projectRoot);
+    const route = routePrdAuditOverScope(reportText, accepted.entries);
     if (route.kind === 'record') {
       await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
     }
@@ -7384,6 +7521,26 @@ export class Conductor {
                 // Negative-path plan gaps are explicit accepted risk, not a
                 // repair request. Preserve the fresh-verdict metadata while
                 // letting the SHIP tail settle this gate as satisfied.
+                completion = { ...completion, done: true, reason: undefined, missing: undefined };
+              }
+              const overScopeRoute = await this.routeCurrentPrdAuditOverScope();
+              if (overScopeRoute.kind === 'halt') {
+                const candidate = overScopeRoute.findings.find((finding) => !finding.accepted);
+                const reason =
+                  `prd-audit halted: user-visible scope requires operator acceptance — ` +
+                  `${overScopeRoute.detail}` +
+                  (candidate
+                    ? `\n\n${renderOverScopeAcceptanceCandidate(candidate)}`
+                    : '');
+                await this.writeHaltMarker(reason + '\n', overScopeRoute.haltClass);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              if (overScopeRoute.kind === 'record') {
                 completion = { ...completion, done: true, reason: undefined, missing: undefined };
               }
             }
