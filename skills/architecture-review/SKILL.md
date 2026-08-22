@@ -79,7 +79,8 @@ Skip:
   directly when it needs them
 - Do NOT dispatch a third agent for decisions/ADRs (read `.docs/decisions/` directly if needed)
 
-For **Small** features, architecture-review is skipped entirely by `/conduct`.
+For **Small** features, the DECIDE-time architecture review is skipped by `/conduct`. This does
+not skip the §12 as-built compliance gate at SHIP.
 For **Large** features, run the full review (all sections).
 
 ## Practices
@@ -319,8 +320,8 @@ As-Built Compliance Gate's production reachability sweep, which independently ve
 the two checks run at different phases against different evidence (a stated intent here vs.
 an observed caller there).
 
-Not required for **Small** tier features (architecture-review is skipped entirely for Small
-per the Lightweight Mode section above).
+Not required for **Small** tier features (the DECIDE-time review is skipped for Small per the
+Lightweight Mode section above; §12 still runs at SHIP).
 
 **Early overlap scan (Medium/Large tier):** Before `/plan` runs, run `conduct-ts overlap-scan
 --files <Wiring Surface candidate paths>` over the paths named in `## Wiring Surface` above.
@@ -382,10 +383,17 @@ echo "verdict: APPROVED_WITH_CONDITIONS, new ADRs: 2" > .pipeline/review-require
 Invoked at **SHIP** as `/architecture-review --as-built`, a member of the concurrent
 validation group — fanned out alongside `/manual-test` and `/prd-audit` in daemon/auto
 runs; in interactive runs it runs serially, after `/prd-audit` and before `/retro` and
-`/finish`. This is the final architectural drift sweep: it checks the
-**shipped code** against **APPROVED** ADRs and the approved architecture only. It is lightweight —
-it does **no** new design, creates no new feasibility/complexity assessment, and reuses the drift
-logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
+`/finish`. It runs for **every feature**, including Small features and features whose DECIDE-time
+architecture review was skipped. This is the final architectural drift sweep. It is lightweight —
+it does **no** new design or feasibility/complexity assessment, and reuses the drift logic of §10
+(Recurring Review) and the ADR lifecycle of §7b.
+
+**Per-check policy:** Read the supplied `AS-BUILT CHECK POLICY` before reviewing. Apply every
+check marked `on`, do not infer obligations from a check marked `off`, and record each off check
+with its supplied reason. By default, `reachability` and `planGap` apply at every tier;
+`adrCompliance` applies only when APPROVED ADRs exist; and `diagramDrift` applies only when
+diagrams exist. Operator configuration can disable any check for a tier. Missing ADRs or diagrams
+therefore disable only their respective check — never this SHIP gate.
 
 **Relationship to BUILD-time judgement:** [ADR: The build_review wiring rubric is
 retired](../../.docs/decisions/adr-2026-08-14-retire-build-review-wiring-rubric.md) removes static
@@ -396,12 +404,13 @@ independently verifies the approved architecture against the shipped source and 
 authoritative for the SHIP compliance verdict. It never relied on BUILD proof as authority.
 
 **Scope (only this):**
-- Load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`) and the approved
-  architecture diagrams (`.docs/architecture/`). DRAFT/SUPERSEDED ADRs are not authoritative and
-  are not gated against (per §7b).
-- Compare the as-shipped code to those approved decisions: were new structural patterns that embody
-  a structural decision introduced without an ADR? Are domain boundaries respected in the actual
-  code? Do diagrams still match reality?
+- For `adrCompliance`, load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`).
+  DRAFT/SUPERSEDED ADRs are not authoritative and are not gated against (per §7b). For
+  `diagramDrift`, compare the shipped code with the approved architecture diagrams
+  (`.docs/architecture/`).
+- For each enabled check, compare the shipped source with its governing evidence: new structural
+  patterns without an ADR, domain-boundary violations, or diagram drift are relevant only when the
+  corresponding check is on.
 - **Production reachability sweep (green-but-unwired guard).** For each primitive this
   feature's diff introduces or materially changes — exported functions/modules, hook scripts,
   config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
@@ -431,6 +440,9 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
     behavior; a primary code path whose fallback carries 100% of production traffic because the
     primary's precondition is never produced. All are green under unit tests and invisible to a
     conformance-only review.
+- **Plan-gap check.** When the shipped code faithfully implements the approved design but that
+  design is itself the limit that prevents a stated outcome, issue `PLAN_GAP`. Record the affected
+  outcome and whether it was delivered; do not send unplanned work back to BUILD.
 - Do NOT re-run §2/§3/§5 (feasibility/complexity/domain pre-checks) — those belong to the DECIDE
   pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
   deliberately cheap.
@@ -440,8 +452,13 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
 - **APPROVED WITH DRIFT NOTES** — minor, non-violating drift (e.g. a diagram is now slightly stale,
   a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR only
   when it makes or changes a structural decision; otherwise no ADR is needed, and it does not block.
-- **BLOCKED** — shipped code **violates an APPROVED ADR**. The loop HALTS. A human must resolve it:
-  either fix the code to comply, or supersede the ADR with a new, human-APPROVED ADR
+- **PLAN_GAP** — the shipped code faithfully implements the approved design, but the design is the
+  limit preventing a stated outcome. Include `Outcome delivered: yes` when acceptance criteria
+  still pass; record the gap and proceed. Include `Outcome delivered: no` when the stated outcome
+  is not delivered; the loop HALTS for a human. Never turn this finding into unplanned BUILD work.
+- **BLOCKED** — an enabled check found an architectural violation, such as an APPROVED-ADR
+  violation or an unreachable production rung. The loop HALTS. A human must resolve it: fix the
+  code to comply, or for an ADR violation supersede the ADR with a new, human-APPROVED ADR
   (`Supersedes: <old>`, old → `Status: SUPERSEDED`). **Never silently downgrade** an APPROVED ADR
   or auto-resolve the violation. After resolution, re-run the as-built gate.
 
@@ -465,27 +482,29 @@ review remain in `.docs/decisions/`):
 **Date:** YYYY-MM-DD
 **Mode:** as-built (SHIP compliance gate)
 **APPROVED ADRs checked:** [list]
-**Verdict:** APPROVED | APPROVED WITH DRIFT NOTES | BLOCKED
+**Applied check policy:** [each check: on/off — reason]
+Verdict: APPROVED | APPROVED WITH DRIFT NOTES | PLAN_GAP | BLOCKED
+Outcome delivered: yes | no (required for PLAN_GAP)
 
 ## Production Reachability (every new/changed primitive → its production caller, file:line;
 same-file exceptions independently cite root → caller → export at the reviewed HEAD;
 UNEXERCISED entries carry their observation signature)
 ## Drift Notes (if any)
+## Recorded Findings (if PLAN_GAP — affected outcome and why the approved design is the limit)
 ## Blocking Violations (if BLOCKED — which APPROVED ADR or unreachable rung, file:line)
 ## Resolution (if BLOCKED — code fix OR superseding ADR; human-approved)
 ```
 
 The conductor's objective gate reads the `Verdict:` line and is **fail-closed**: only an explicit
-`APPROVED` or `APPROVED WITH DRIFT NOTES` passes. `BLOCKED`, a missing `Verdict:` line, or any
-other verdict keeps the gate unsatisfied so the SHIP tail cannot reach finish — always write a
-clean, recognizable verdict. (The conductor also skips this gate entirely when the DECIDE-phase
-`architecture_review` was skipped — Small tier, or config/`when:` skip — since there are no
-APPROVED ADRs to audit.)
+`APPROVED` or `APPROVED WITH DRIFT NOTES` passes. A `PLAN_GAP` passes only with
+`Outcome delivered: yes`; with `Outcome delivered: no` it HALTs for a human. `BLOCKED`, a missing
+`Verdict:` line, or any malformed verdict keeps the gate unsatisfied so the SHIP tail cannot reach
+finish — always write a clean, recognizable verdict.
 
 **Review marker:** review mode for this step is **conditional**. Write
 `.pipeline/review-required-architecture-as-built` (existence = signal) whenever the verdict is not a
-clean `APPROVED` — i.e. on `APPROVED WITH DRIFT NOTES` or `BLOCKED`, or when an ADR was superseded
-to resolve a violation. On a clean `APPROVED`, do NOT write the marker.
+clean `APPROVED` — i.e. on `APPROVED WITH DRIFT NOTES`, `PLAN_GAP`, or `BLOCKED`, or when an ADR
+was superseded to resolve a violation. On a clean `APPROVED`, do NOT write the marker.
 
 ```bash
 # Example: write the marker when the as-built sweep was not clean
@@ -511,7 +530,10 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
 - [ ] `.pipeline/review-required-architecture_review` marker written IF
       verdict ≠ clean APPROVED, or any ADR was drafted/superseded, or any
       High-impact risk was registered (skip only on truly clean APPROVED)
-- [ ] **As-built mode:** at SHIP, shipped code checked against APPROVED ADRs only (no new design)
+- [ ] **As-built mode:** at SHIP, each enabled check compares shipped code with its governing
+      evidence only (no new design)
+- [ ] **As-built mode:** runs for every feature; each enabled check follows the supplied policy and
+      each disabled check records its reason
 - [ ] **As-built mode:** every diff-introduced primitive cites a production caller (`file:line`)
       from a real entry point; no caller ⇒ BLOCKED as an unreachable rung
 - [ ] **As-built mode:** a same-file caller counts only after independently verifying the exact
@@ -520,7 +542,9 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
 - [ ] **As-built mode:** statically-reachable-but-unobserved behavior recorded as `UNEXERCISED`
       with its greppable observation signature
 - [ ] **As-built mode:** verdict written to `.pipeline/architecture-review-as-built.md`
-- [ ] **As-built mode:** BLOCKED on any APPROVED-ADR violation; resolved by code fix or
+- [ ] **As-built mode:** PLAN_GAP records the affected outcome and `Outcome delivered: yes|no`;
+      no as-built finding sends unplanned work back to BUILD
+- [ ] **As-built mode:** BLOCKED on any enabled APPROVED-ADR violation; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
 - [ ] **As-built mode:** `.pipeline/review-required-architecture-as-built` marker written when the
       verdict is not a clean APPROVED
