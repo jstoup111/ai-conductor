@@ -43,6 +43,7 @@ export class TerminalSubscriber implements UISubscriber {
       'mode_skip',
       'build_progress',
       'unattributed_progress',
+      'build_review_cache_discarded',
       'build_no_progress',
       'pipeline_closeout',
       'build_stall',

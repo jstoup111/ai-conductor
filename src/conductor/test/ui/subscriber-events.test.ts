@@ -57,6 +57,20 @@ describe('TerminalSubscriber event forwarding', () => {
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
 
+  it('forwards discarded build-review cache verdicts', async () => {
+    const event = {
+      type: 'build_review_cache_discarded',
+      rubric: 'scope',
+      lapId: 'lap-1',
+      reason: 'engine-version-mismatch',
+      currentEngineStamp: 'current-engine',
+    } satisfies ConductorEvent;
+
+    await emitter.emit(event);
+
+    expect(renderCallback).toHaveBeenCalledWith(event);
+  });
+
   it('forwards closed probe-failure recovery progress', async () => {
     const event = {
       type: 'credentials_park_progress',
