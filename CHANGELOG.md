@@ -29,6 +29,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Acceptance-spec authoring is disposition-driven — criteria proven at a lower layer complete the acceptance_specs gate with grounded disposition records instead of fabricated specs, and BUILD prefers applicable local patterns. ([implementation PR #1678](https://github.com/jstoup111/ai-conductor/pull/1678)).
 - The plan skill requires every task to carry a "Done when:" block of falsifiable completion checks, closing unbounded outcome language at DECIDE so completion review has a definite stopping point. ([implementation PR #1764](https://github.com/jstoup111/ai-conductor/pull/1764)).
 - build_review rubric results are engine-stamped from findings-only provider payloads, with honest per-field rejection diagnosis and a behavioral (execute-the-parser) contract drift guard, ending the invalid-provider-result rejection loop. ([implementation PR #1748](https://github.com/jstoup111/ai-conductor/pull/1748)).
+- The `rootCause` build-review rubric now ships disabled by default; enable it explicitly with `build_review.rubrics.rootCause.enabled: true`. ([implementation PR #1816](https://github.com/jstoup111/ai-conductor/pull/1816)).
 
 ### Fixed
 
@@ -55,6 +56,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - `conduct-ts plan-protected-targets` now catches a protected-artifact reference named in a task's prose even when that task declares a `**Files:**` set, and `.docs/decisions/` is now a protected directory alongside architecture, plans, specs, and stories. ([implementation PR #1750](https://github.com/jstoup111/ai-conductor/pull/1750)).
 - A conductor run no longer halts with a phantom "Expected <field> to match before persist conductor transition" conflict after the engine skips a track- or tier-skipped gate mid-run. ([implementation PR #1793](https://github.com/jstoup111/ai-conductor/pull/1793)).
 - build_review no longer reuses a stale prior-lap FAIL verdict as the current lap's outcome, and mechanical-fault HALTs and `build-review findings` output now name the last recorded infrastructure fault. ([implementation PR #1801](https://github.com/jstoup111/ai-conductor/pull/1801)).
+- `conduct` now works when invoked through the `~/.local/bin` symlink created by `bin/install`, instead of failing to locate its own harness directory. ([implementation PR #1814](https://github.com/jstoup111/ai-conductor/pull/1814)).
 
 ## [0.103.0] - 2026-08-17
 
