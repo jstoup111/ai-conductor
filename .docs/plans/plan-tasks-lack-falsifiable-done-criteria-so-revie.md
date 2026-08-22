@@ -1,0 +1,486 @@
+# Implementation Plan: Review is bound by each plan task's Done when: criteria
+
+**Date:** 2026-08-21
+**Design:** .docs/decisions/adr-2026-08-21-review-bound-by-plan-done-when-criteria.md
+**Stories:** .docs/stories/plan-tasks-lack-falsifiable-done-criteria-so-revie.md
+**Conflict check:** Clean as of 2026-08-21 (one degrading accepted)
+
+## Summary
+
+Adds a land-time shape gate for plan `Done when:` blocks, an optional per-finding `boundTo` binding
+under contract v3, one reducer relaxation so `beyond` findings never block, a `beyond` record kind
+for filing bookkeeping, and a daemon reconciliation that files each record as intake. 19 tasks.
+
+## Technical Approach
+
+- **Sequencing.** Rebase onto main after PRs #1734 (#1629) and #1750 merge; every seam below is
+  named by symbol on #1734's branch and must be re-resolved on the rebased HEAD (Task 1).
+- **Parser.** `parsePlanTaskDoneWhen(text): Map<taskId, string[]>` in `plan-task-parse.ts`, shaped
+  after `parsePlanTaskPreserves`: same task-header split, fenced code stripped first (the fence
+  behavior `plan-task-parse-fence.test.ts` already pins), lines of the `**Done when:**` block
+  collected until the next `**Header:**` line or task boundary, each line trimmed with Markdown
+  emphasis stripped. Pure; no I/O.
+- **Gate.** `validatePlanDoneWhen(planText)` in a new pure module `plan-done-when.ts` returns
+  `{taskId, reason: 'missing'|'too-few'|'too-many'|'blank'}[]`; `landSpec` throws a `landSpec:`
+  error naming each task, placed after `validateArtifactContent('plan')` beside
+  `scanPlanProtectedTargets`. Not wired into `daemon-backlog.ts` or the conductor plan gate.
+- **Criteria evidence.** `BuildReviewSourceSnapshot` gains optional `doneWhenContext: {taskId,
+  criteria: {hash, occurrence, text}[]}[]` read alongside `preservationContext` in
+  `build-review-inputs.ts`; projections carry it additively (all four) under `projectionVersion
+  'v2'`; `TautologyProjection` also gains `planBody`. Hash = sha256 of the normalized line (the
+  same normalization the `content-region` anchor uses).
+- **Binding.** `BuildReviewFinding.boundTo?: 'beyond' | BuildReviewFindingAnchor (content-region)`.
+  `parseFindings` accepts absent, the literal, or a content-region whose `contentHash`+`occurrence`
+  resolve in `doneWhenContext` for the task the finding's anchor names; anything else rejects the
+  envelope through the existing shape-diagnosis path with the allowed forms listed. Identity
+  (`build-review-finding-identity.ts`) is untouched: `boundTo` is stripped before hashing, the
+  `exactKeys` payload stays `{rubric, contractVersion, concernKind, anchor}`.
+- **Reducer.** In `deriveEffectiveBuildReviewVerdict` the per-finding loop routes
+  `boundTo === 'beyond'` into a new `beyondFindingIds` bucket; `unresolvedFindingIds` and
+  `uncoveredInfrastructureCount` otherwise unchanged; PASS predicate unchanged. The exit list that
+  reads the verdict is re-derived by grep in Task 10.
+- **Record.** Third record kind `beyond` in `build-review-dispositions.ts` following the
+  `reduced-coverage` template: `{kind:'beyond', version, feature, findingId, rubric, summary,
+  evidenceLocations, status:'unfiled'|'filed', issueUrl?, recordedAt, filedAt?}`, closed status
+  vocabulary, `listBeyond`, `appendBeyondIfAbsent`, `markBeyondFiled`; `listReducedCoverage`
+  narrowed to `kind === 'reduced-coverage'`.
+- **Write point.** After the effective verdict is resolved in the conductor's `build_review` block
+  (the call through `buildReviewEffectiveResolver`), append one `beyond` record per new beyond id;
+  skipped when the fresh-base exit discards the lap.
+- **Filer.** `reconcileBeyondRecords({projectRoot, tracker, log})` beside `reconcileHaltPrs` in
+  `daemon-cli.ts`: for each feature store with `unfiled` records call `fileIntakeIssue` with
+  `interactive:false`, `sourceRef` = `<slug>:<findingId>`, then `markBeyondFiled` and emit
+  `build_review_beyond_filed`. Wrapped so a thrown ledger refusal or tracker error logs and leaves
+  the record `unfiled`.
+- **Surfaces.** `build-review findings` renders beyond records with status; the shipped record and
+  retained PR body render them through the same evidence section path `reducedCoverageEvidence`
+  uses, fail-closed (a record that cannot render blocks like an unrenderable acceptance).
+- **Contracts.** The `boundTo` grammar is added to the four rubric result-contract sections and to
+  `renderBuildReviewJudgedResultShape`; `build-review-rubric-skills.test.ts` pins it.
+
+Test layer per story: unit tests beside each module (vitest, existing file names), the acceptance
+spec from `/writing-system-tests`, and the existing daemon integration harness for the filer.
+
+## Prerequisites
+- PRs #1734 and #1750 merged to main; this branch rebased onto that main.
+
+## Tasks
+
+### Task 1: Rebase and re-resolve every named seam
+**Story:** 4
+**Type:** infrastructure
+**Verify-only:** yes
+
+**Steps:**
+1. Confirm `git merge-base --is-ancestor` for the merge commits of PRs #1734 and #1750 against HEAD.
+2. Grep for each symbol named in Technical Approach (`parsePlanTaskPreserves`, `scanPlanProtectedTargets`, `deriveEffectiveBuildReviewVerdict`, `matchesBuildReviewReducedCoverageDisposition`, `listReducedCoverage`, `reconcileHaltPrs`, `renderBuildReviewJudgedResultShape`, `fileIntakeIssue`, `preservationContext`) and record the current file for each in the commit message.
+3. Commit empty with trailer `Evidence: skipped rebase-verification`.
+
+**Done when:**
+- `git log --oneline main..HEAD` contains no commit from PR #1734 or #1750 (both are ancestors).
+- Each of the nine symbols above resolves to exactly one defining file on HEAD and the commit message lists them.
+
+**Files:** none
+
+**Dependencies:** none
+
+### Task 2: Parse the Done when: block per task
+**Story:** 1
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing tests in `plan-task-parse.test.ts`: a plan with Tasks 1–3 carrying 2, 3, and 5 criteria lines yields a map of those arrays; emphasis and trailing whitespace are stripped; a block inside a fenced code block is ignored; a task without the block is absent from the map.
+2. Verify RED.
+3. Implement `parsePlanTaskDoneWhen` in `plan-task-parse.ts` shaped after `parsePlanTaskPreserves` (same task split, same fence stripping).
+4. Verify GREEN; commit "feat(plan-task-parse): parse each task's Done when: block".
+
+**Done when:**
+- `parsePlanTaskDoneWhen` is exported from `src/conductor/src/engine/plan-task-parse.ts` and the four new cases in `plan-task-parse.test.ts` pass.
+- A corpus test over every landed plan on main finds exactly one plan with a non-empty map and an empty map for every other.
+
+**Files:**
+- src/conductor/src/engine/plan-task-parse.ts
+- src/conductor/test/engine/plan-task-parse.test.ts
+
+**Dependencies:** 1
+
+### Task 3: Validate block shape as a pure rule
+**Story:** 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in a new `plan-done-when.test.ts`: a plan where every task has 2–5 non-empty lines yields no violations; missing → `missing`; one line → `too-few`; six → `too-many`; lines all whitespace → `blank`; fenced example ignored.
+2. Verify RED.
+3. Implement `validatePlanDoneWhen` in new `src/conductor/src/engine/plan-done-when.ts`, consuming `parsePlanTaskDoneWhen` and the task id list from the task-header split.
+4. Verify GREEN; commit "feat(plan-done-when): shape rule for Done when: blocks".
+
+**Done when:**
+- `validatePlanDoneWhen` returns `[]` for the compliant fixture and one `{taskId, reason}` per offending task for the four reasons, each asserted in `plan-done-when.test.ts`.
+- The module imports nothing that performs I/O.
+
+**Files:**
+- src/conductor/src/engine/plan-done-when.ts
+- src/conductor/test/engine/plan-done-when.test.ts
+
+**Dependencies:** 2
+
+### Task 4: Land rejects a plan that fails the shape rule, naming the task
+**Story:** 1
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in the land-spec test suite: landing a spec whose plan Task 3 lacks the block throws `landSpec: plan task 3 has no Done when: block …` and leaves the worktree in place; a compliant plan lands; a Small-tier spec is checked identically.
+2. Verify RED.
+3. In `landSpec`, after `validateArtifactContent('plan', …)`, call `validatePlanDoneWhen(planContent)` and throw naming every violation and its reason.
+4. Verify GREEN; commit "feat(land): reject plan tasks without a Done when: block".
+
+**Done when:**
+- The three land-spec cases pass and the error message contains the task id and reason for each violation.
+- `grep -n validatePlanDoneWhen src/conductor/src` lists exactly `plan-done-when.ts` and `engineer/land-spec.ts` — no daemon-backlog or conductor caller.
+
+**Files:**
+- src/conductor/src/engine/engineer/land-spec.ts
+- src/conductor/test/engine/engineer/land-spec.test.ts
+
+**Dependencies:** 3
+
+### Task 5: Criteria evidence on the frozen snapshot
+**Story:** 2
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `build-review-inputs.test.ts`: a plan with Task 4 carrying three criteria freezes `doneWhenContext` with one entry for Task 4 holding three `{hash, occurrence, text}` items; two identical lines in different tasks produce the same hash with distinct task ids; two identical lines in one task produce occurrences 1 and 2; a plan with no blocks freezes an empty array.
+2. Verify RED.
+3. Add `doneWhenContext` to `BuildReviewSourceSnapshot`, populated next to `preservationContext` from `parsePlanTaskDoneWhen(planBody)`; hash with the same normalization the content-region anchor uses.
+4. Verify GREEN; commit "feat(build-review): freeze Done when: criteria on the source snapshot".
+
+**Done when:**
+- The four inputs cases pass and `doneWhenContext` appears in the snapshot's frozen key list beside `preservationContext`.
+- A snapshot written before this change (fixture without the field) still parses.
+
+**Files:**
+- src/conductor/src/engine/build-review-inputs.ts
+- src/conductor/test/engine/build-review-inputs.test.ts
+
+**Dependencies:** 2
+
+### Task 6: Projections carry criteria additively; Tautology gains the plan body
+**Story:** 2
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `build-review-projections.test.ts`: all four projections carry `doneWhenContext`; `TautologyProjection` carries `planBody`; the digest for each rubric differs from the pre-change fixture digest exactly once; a stored pre-change verdict fixture still parses through the aggregate.
+2. Verify RED.
+3. Extend the projection interfaces and `deriveBuildReviewRubricProjections`; leave `projectionVersion: 'v2'` and the registry untouched.
+4. Verify GREEN; commit "feat(build-review): criteria evidence in all projections, plan body for tautology".
+
+**Done when:**
+- `projectionVersion` in `build-review-registry.ts` is unchanged (`git diff` shows no edit to that file).
+- The projection tests assert `doneWhenContext` on all four and `planBody` on tautology, and the digest-change assertion passes.
+
+**Files:**
+- src/conductor/src/engine/build-review-projections.ts
+- src/conductor/test/engine/build-review-projections.test.ts
+
+**Dependencies:** 5
+
+### Task 7: Parse an optional boundTo on each finding
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `build-review-domain.test.ts`: a finding with `boundTo: 'beyond'` parses; a finding with a content-region `boundTo` whose hash and occurrence resolve in the reference context's `doneWhenContext` for the finding's task parses; a finding with no `boundTo` parses unchanged.
+2. Verify RED.
+3. Add `boundTo?` to `BuildReviewFinding`; extend `BuildReviewFindingReferenceContext` with `doneWhenContext`; accept the three forms in `parseFindings`; add the field to `renderBuildReviewJudgedResultShape`.
+4. Verify GREEN; commit "feat(build-review): optional boundTo binding on findings".
+
+**Done when:**
+- The three domain cases pass and `renderBuildReviewJudgedResultShape` output contains `boundTo`.
+- `CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION` is still `'v3'`.
+
+**Files:**
+- src/conductor/src/engine/build-review-domain.ts
+- src/conductor/test/engine/build-review-domain.test.ts
+
+**Dependencies:** 6
+
+### Task 8: Reject a malformed or unresolvable boundTo with a listing diagnosis
+**Story:** 3
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `build-review-domain.test.ts`: a `boundTo` whose hash is absent from `doneWhenContext` rejects the whole envelope; a `boundTo` naming a criterion of a different task than the finding's anchor rejects naming the mismatch; a line-number or hunk-offset form rejects with a diagnosis listing `beyond` and `content-region`; a judged result with a second top-level field still rejects.
+2. Verify RED.
+3. Implement the rejections in `parseFindings` and the shape-diagnosis path.
+4. Verify GREEN; commit "feat(build-review): boundTo rejections list the allowed forms".
+
+**Done when:**
+- The four rejection cases pass and each diagnosis string names the offending finding index.
+- A coordinator test asserts a rejected envelope classifies as `absent` (rerun) and records no kickback.
+
+**Files:**
+- src/conductor/src/engine/build-review-domain.ts
+- src/conductor/test/engine/build-review-domain.test.ts
+- src/conductor/test/engine/build-review-coordinator.test.ts
+
+**Dependencies:** 7
+
+### Task 9: boundTo never enters the finding identity
+**Story:** 3
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `build-review-finding-identity.test.ts`: two findings equal except `boundTo` (`beyond` vs bound vs absent) yield the same id; the canonical payload still has exactly the four keys; a stored disposition written before this change rehydrates unchanged.
+2. Verify RED.
+3. Strip `boundTo` before canonicalization; leave `exactKeys` as is.
+4. Verify GREEN; commit "feat(build-review): exclude boundTo from finding identity".
+
+**Done when:**
+- The three identity cases pass.
+- `build-review-finding-identity.ts` has no reference to `boundTo` other than the strip.
+
+**Files:**
+- src/conductor/src/engine/build-review-finding-identity.ts
+- src/conductor/test/engine/build-review-finding-identity.test.ts
+
+**Dependencies:** 7
+
+### Task 10: Beyond findings leave the blocking set
+**Story:** 4
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `build-review-effective.test.ts` and `build-review-verdict.test.ts`: beyond-only lap → PASS with `beyondFindingIds` listing them and `unresolvedFindingIds` empty; one bound + two beyond → FAIL with one unresolved; absent `boundTo` → unresolved; a mechanical fault beside beyond-only findings → still blocked by the infrastructure branch; a pre-change stored disposition still binds.
+2. Verify RED.
+3. In `deriveEffectiveBuildReviewVerdict`, route `boundTo === 'beyond'` to `beyondFindingIds` on `BuildReviewEffectiveVerdict`; leave the PASS predicate and reduced-coverage branch unchanged.
+4. Grep every caller of `resolveEffectiveBuildReviewVerdict` / `deriveEffectiveBuildReviewVerdict` and list them in the commit message; confirm each treats the beyond-only verdict as PASS.
+5. Verify GREEN; commit "feat(build-review): beyond findings never block".
+
+**Done when:**
+- The five effective/verdict cases pass.
+- The commit message lists every caller found by grep and a conductor test asserts a beyond-only lap consumes no kickback and advances no `KickbackGateEntry` counter.
+
+**Files:**
+- src/conductor/src/engine/build-review-aggregate.ts
+- src/conductor/src/engine/build-review-effective.ts
+- src/conductor/test/engine/build-review-effective.test.ts
+- src/conductor/test/engine/build-review-verdict.test.ts
+- src/conductor/test/engine/conductor-kickback-ledger.test.ts
+
+**Dependencies:** 9
+
+### Task 11: accept refuses a beyond finding; a stale-base lap records nothing
+**Story:** 4
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `build-review-cli.test.ts` (accept against a beyond finding id is refused with the existing not-unresolved message) and `conductor.test.ts` (a lap discarded by the fresh-base exit appends no beyond record).
+2. Verify RED.
+3. Implement: the accept path checks `beyondFindingIds` before `unresolvedFindingIds`; the conductor write point (Task 13) is placed after the fresh-base exit.
+4. Verify GREEN; commit "fix(build-review): accept refuses beyond; stale-base laps record nothing".
+
+**Done when:**
+- Both cases pass.
+- The accept refusal string for a beyond id equals the existing refusal string for any non-unresolved id.
+
+**Files:**
+- src/conductor/src/engine/build-review-cli.ts
+- src/conductor/test/engine/build-review-cli.test.ts
+- src/conductor/test/engine/conductor.test.ts
+
+**Dependencies:** 10
+
+### Task 12: A beyond record kind in the disposition store
+**Story:** 5
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing tests in `build-review-dispositions.test.ts`: `appendBeyondIfAbsent` writes a record with status `unfiled` once and is a no-op for the same finding id; `listBeyond` returns only beyond records; `listReducedCoverage` excludes beyond records; `markBeyondFiled` sets status and URL; an unknown status reads as malformed; a held lease fails the append with the lease message.
+2. Verify RED.
+3. Add the record kind, closed status set, parsers, and the three functions following the `reduced-coverage` template; narrow `listReducedCoverage` to `kind === 'reduced-coverage'`.
+4. Verify GREEN; commit "feat(build-review): beyond record kind in the disposition store".
+
+**Done when:**
+- The six store cases pass and `STORE_VERSION` is unchanged.
+- `listReducedCoverage`'s filter reads `kind === 'reduced-coverage'` (asserted by the exclusion test).
+
+**Files:**
+- src/conductor/src/engine/build-review-dispositions.ts
+- src/conductor/test/engine/build-review-dispositions.test.ts
+
+**Dependencies:** 1
+
+### Task 13: The conductor records beyond findings after the lap
+**Story:** 5
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `conductor.test.ts`: after an effective verdict with two beyond ids, two `unfiled` records exist; a re-run lap with the same ids appends nothing; a lease failure logs and does not change the verdict.
+2. Verify RED.
+3. After the effective verdict resolves in the `build_review` block, call `appendBeyondIfAbsent` for each `beyondFindingIds` entry with the finding's rubric, summary, and evidence locations.
+4. Verify GREEN; commit "feat(conductor): record beyond findings as unfiled".
+
+**Done when:**
+- The three conductor cases pass.
+- `grep -n TrackerClient src/conductor/src/engine/conductor.ts` returns nothing.
+
+**Files:**
+- src/conductor/src/engine/conductor.ts
+- src/conductor/test/engine/conductor.test.ts
+
+**Dependencies:** 10, 12
+
+### Task 14: Render beyond records in findings, the PR body, and the shipped record
+**Story:** 5
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: `build-review-cli.test.ts` findings output lists each beyond record with summary and `unfiled`/URL; `shipped-record.test.ts` and the finish-publication test render a beyond section beside reduced coverage; an unrenderable beyond record blocks publication with the existing fail-closed message.
+2. Verify RED.
+3. Extend the findings renderer and the evidence-section path `reducedCoverageEvidence` travels through.
+4. Verify GREEN; commit "feat(build-review): render beyond records where a reader meets them".
+
+**Done when:**
+- The three render cases pass.
+- A shipped record fixture with one filed and one unfiled beyond record contains both lines verbatim.
+
+**Files:**
+- src/conductor/src/engine/build-review-cli.ts
+- src/conductor/src/engine/build-review-effective.ts
+- src/conductor/src/engine/shipped-record.ts
+- src/conductor/src/engine/finish-publication-production.ts
+- src/conductor/test/engine/build-review-cli.test.ts
+- src/conductor/test/engine/shipped-record.test.ts
+- src/conductor/test/engine/finish-publication-production.test.ts
+
+**Dependencies:** 12
+
+### Task 15: The build_review_beyond_filed event and its sink row
+**Story:** 6
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing tests in `event-sinks.test.ts`: the member exists with `{feature, lapId, rubric, findingId, issueUrl}` and its sink row is `{render:false, persist:true, audit:true}`.
+2. Verify RED.
+3. Add the member to `ConductorEvent` in `types/events.ts` and the row to `EVENT_SINKS`.
+4. Verify GREEN; commit "feat(events): build_review_beyond_filed".
+
+**Done when:**
+- Type-check passes with the new member (the `Record` is total).
+- The sink test asserts the exact row.
+
+**Files:**
+- src/conductor/src/types/events.ts
+- src/conductor/src/engine/event-sinks.ts
+- src/conductor/test/engine/event-sinks.test.ts
+
+**Dependencies:** 1
+
+### Task 16: Daemon reconciliation files unfiled beyond records
+**Story:** 6
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in a new `beyond-reconciliation.test.ts` with a fake tracker and fake store: one unfiled record → one `fileIntakeIssue` call with `interactive:false`, `sourceRef` `<slug>:<findingId>`, record marked filed with the URL, one event emitted; two records → two issues; a filed record → no call, no event.
+2. Verify RED.
+3. Implement `reconcileBeyondRecords` in new `src/conductor/src/engine/beyond-reconciliation.ts` and call it beside `reconcileHaltPrs` in `daemon-cli.ts` with the daemon's existing `tracker`.
+4. Verify GREEN; commit "feat(daemon): file beyond records as intake".
+
+**Done when:**
+- The three reconciliation cases pass.
+- `daemon-cli.ts` calls `reconcileBeyondRecords` in the same cycle as `reconcileHaltPrs`, asserted by `daemon-session-enforcement.test.ts` or the daemon integration harness.
+
+**Files:**
+- src/conductor/src/engine/beyond-reconciliation.ts
+- src/conductor/src/daemon-cli.ts
+- src/conductor/test/engine/beyond-reconciliation.test.ts
+
+**Dependencies:** 12, 15
+
+### Task 17: Filing failures leave the record unfiled and never block
+**Story:** 6
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `beyond-reconciliation.test.ts`: ledger refusal (thrown) → record stays unfiled, error logged, no event; tracker unreachable → same, and the following reconciliation in the cycle still runs; ledger dedup refusing a duplicate `sourceRef` → record marked filed with the existing issue; stamp failure after a successful file → next cycle does not create a second issue.
+2. Verify RED.
+3. Wrap each record's filing in try/catch; map the ledger's duplicate refusal to the existing issue.
+4. Verify GREEN; commit "fix(daemon): beyond filing degrades without blocking".
+
+**Done when:**
+- The four failure cases pass.
+- No code path in `beyond-reconciliation.ts` rethrows out of the per-record loop.
+
+**Files:**
+- src/conductor/src/engine/beyond-reconciliation.ts
+- src/conductor/test/engine/beyond-reconciliation.test.ts
+
+**Dependencies:** 16
+
+### Task 18: Rubric contracts state the binding grammar and the drift guard pins it
+**Story:** 7
+**Type:** happy-path
+
+**Steps:**
+1. Extend `build-review-rubric-skills.test.ts` to require, in each of the four result-contract sections, the `boundTo` bullet with the `beyond` literal and the content-region form, and the binding instruction sentence; run — RED.
+2. Edit `skills/build-review-scope/SKILL.md`, `skills/build-review-root-cause/SKILL.md`, `skills/build-review-completeness/SKILL.md`, `skills/build-review-tautology/SKILL.md`: add the grammar to the result contract, the instruction "a finding is blocking only when it names a `Done when:` check the diff fails; anything else is `beyond`; a task with no block is judged as before", and the criteria evidence block description.
+3. Verify GREEN; run `test/test_harness_integrity.sh`; commit "feat(rubrics): bind findings to Done when: criteria".
+
+**Done when:**
+- `build-review-rubric-skills.test.ts` passes with the new assertions and fails when any one SKILL.md loses the bullet.
+- `test/test_harness_integrity.sh` passes.
+
+**Files:**
+- skills/build-review-scope/SKILL.md
+- skills/build-review-root-cause/SKILL.md
+- skills/build-review-completeness/SKILL.md
+- skills/build-review-tautology/SKILL.md
+- src/conductor/test/engine/build-review-rubric-skills.test.ts
+
+**Dependencies:** 7
+
+### Task 19: A task without criteria is judged as before
+**Story:** 7
+**Type:** negative-path
+
+**Steps:**
+1. Write a failing coordinator test: with empty `doneWhenContext`, a provider fixture returning unbound findings parses and blocks; a fixture returning a content-region `boundTo` rejects (nothing to resolve against).
+2. Verify RED.
+3. Confirm the parser path needs no change beyond Tasks 7–8; adjust the diagnosis text if the rejection does not name the empty evidence.
+4. Verify GREEN; commit "test(build-review): no-criteria tasks grade unchanged".
+
+**Done when:**
+- Both coordinator cases pass.
+- The rejection diagnosis for a binding against empty evidence says the task has no criteria.
+
+**Files:**
+- src/conductor/test/engine/build-review-coordinator.test.ts
+- src/conductor/src/engine/build-review-domain.ts
+
+**Dependencies:** 8
+
+## Task Dependency Graph
+
+```
+1 ─┬─ 2 ─┬─ 3 ── 4
+   │     └─ 5 ── 6 ── 7 ─┬─ 8 ── 19
+   │                     ├─ 9 ── 10 ── 11
+   │                     └─ 18
+   ├─ 12 ─┬─ 13 (also needs 10)
+   │      ├─ 14
+   │      └─ 16 (also needs 15) ── 17
+   └─ 15
+```
+
+## Integration Points
+- After Task 4: a spec with a criteria-less task cannot land.
+- After Task 10: a beyond-only lap passes in the engine.
+- After Task 13: beyond records appear in the feature's disposition store.
+- After Task 16: the daemon files them as intake issues.
+
+## Verification
+- [ ] All happy path criteria covered by at least one task
+- [ ] All negative path criteria covered by at least one task
+- [ ] No task exceeds 5 minutes of work
+- [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
+- [ ] Dependencies are explicit and acyclic
