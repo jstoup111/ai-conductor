@@ -53,6 +53,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - FINISH no longer halts on genuine PR prose when the authoring pass leaves the engine's body-floor marker in place; a floored body is now recognized by its content, not by marker presence alone. ([implementation PR #1773](https://github.com/jstoup111/ai-conductor/pull/1773)).
 - prd-audit reads FR verdicts only from the report's Verdict Table section, so a prior-cycle history table can no longer block an all-ALIGNED audit. ([implementation PR #1780](https://github.com/jstoup111/ai-conductor/pull/1780)).
 - `conduct-ts plan-protected-targets` now catches a protected-artifact reference named in a task's prose even when that task declares a `**Files:**` set, and `.docs/decisions/` is now a protected directory alongside architecture, plans, specs, and stories. ([implementation PR #1750](https://github.com/jstoup111/ai-conductor/pull/1750)).
+- A conductor run no longer halts with a phantom "Expected <field> to match before persist conductor transition" conflict after the engine skips a track- or tier-skipped gate mid-run. ([implementation PR #1793](https://github.com/jstoup111/ai-conductor/pull/1793)).
 
 ## [0.103.0] - 2026-08-17
 
