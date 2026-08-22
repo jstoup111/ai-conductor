@@ -239,13 +239,6 @@ export async function landSpec(
   }
   validateArtifactContent('stories', storiesContent, idea);
   validateArtifactContent('plan', planContent, idea);
-  const doneWhenViolations = validatePlanDoneWhen(planContent);
-  if (doneWhenViolations.length > 0) {
-    throw new Error(`landSpec: ${doneWhenViolations.map(({ taskId, reason }) =>
-      `plan task ${taskId} has ${reason === 'missing' ? 'no Done when: block' : `an invalid Done when: block (${reason})`}`,
-    ).join('; ')}`);
-  }
-
   const protectedTargetViolations = scanPlanProtectedTargets(planContent, planStem(planFile));
   if (protectedTargetViolations.length > 0) {
     const targets = protectedTargetViolations
@@ -253,8 +246,15 @@ export async function landSpec(
       .join(', ');
     throw new Error(
       `landSpec: plan targets sealed artifacts owned by another feature: ${targets}. ` +
-        'Amend accepted artifacts during DECIDE, then re-author the plan.',
+      'Amend accepted artifacts during DECIDE, then re-author the plan.',
     );
+  }
+
+  const doneWhenViolations = validatePlanDoneWhen(planContent);
+  if (doneWhenViolations.length > 0) {
+    throw new Error(`landSpec: ${doneWhenViolations.map(({ taskId, reason }) =>
+      `plan task ${taskId} has ${reason === 'missing' ? 'no Done when: block' : `an invalid Done when: block (${reason})`}`,
+    ).join('; ')}`);
   }
 
   // Land and daemon discovery must agree on the exact stories artifact. Resolve

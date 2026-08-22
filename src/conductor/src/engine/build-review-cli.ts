@@ -136,7 +136,7 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     `Accepted findings: ${effective.acceptedFindingIds.join(', ') || 'none'}`,
     ...accepted.map(({ findingId, disposition }) => `Accepted disposition: ${findingId} (lap ${disposition.sourceLapId}; operator ${disposition.operator}; rationale: ${disposition.rationale})`),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
-    `Beyond findings: ${effective.beyondFindingIds.join(', ') || 'none'}`,
+    `Beyond findings: ${effective.beyondFindingIds?.join(', ') || 'none'}`,
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
     ...(faults.length === 0 ? [] : [

@@ -365,24 +365,24 @@ describe('build-review rubric projections', () => {
 
     expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness']);
     expect(Object.keys(projections.tautology).sort()).toEqual([
-      'changedFiles', 'changedTestSelectors', 'changedTestTitles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
-      'mergeBase', 'preflightEvidence', 'projectionVersion', 'removalContext', 'repairContext',
+      'changedFiles', 'changedTestSelectors', 'changedTestTitles', 'contentDigest', 'contractVersion', 'digest', 'doneWhenContext', 'headSha', 'lapId',
+      'mergeBase', 'planBody', 'preflightEvidence', 'projectionVersion', 'removalContext', 'repairContext',
       'revertedProductionManifest', 'rubric', 'snapshotDigest', 'testSuiteProof',
       'verifyOnlyContext',
     ]);
     expect(Object.keys(projections.scope).sort()).toEqual([
-      'acceptedWidenings', 'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
+      'acceptedWidenings', 'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'doneWhenContext', 'headSha', 'lapId',
       'mergeBase', 'operatorReseals', 'planBody', 'projectionVersion', 'removalContext',
       'repairContext', 'rubric', 'snapshotDigest',
       'verifyOnlyContext',
     ]);
     expect(Object.keys(projections.rootCause).sort()).toEqual([
-      'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
+      'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'doneWhenContext', 'headSha', 'lapId', 'mergeBase', 'planBody',
       'projectionVersion', 'removalContext', 'repairContext', 'rubric', 'snapshotDigest',
       'verifyOnlyContext',
     ]);
     expect(Object.keys(projections.completeness).sort()).toEqual([
-      'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
+      'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'doneWhenContext', 'headSha', 'lapId', 'mergeBase', 'planBody',
       'preservationContext', 'projectionVersion', 'removalContext', 'rubric', 'snapshotDigest', 'verifyOnlyContext',
     ]);
     expect(projections.tautology).toMatchObject({
@@ -424,7 +424,7 @@ describe('build-review rubric projections', () => {
       expect(JSON.stringify(projection)).not.toContain('embedded-diff-body-line');
       expect(projection.verifyOnlyContext).toEqual(fixture.inputs.sourceSnapshot.verifyOnlyContext);
     }
-    expect(projections.tautology).not.toHaveProperty('planBody');
+    expect(projections.tautology.planBody).toBe(fixture.inputs.sourceSnapshot.planBody);
     for (const projection of [projections.tautology, projections.rootCause, projections.completeness]) {
       expect(projection).not.toHaveProperty('operatorReseals');
     }
@@ -606,6 +606,8 @@ describe('build-review rubric projections', () => {
         const expectation = affectedRubrics.includes(rubric) ? 'not' : '';
         if (expectation === 'not') {
           expect(changedProjections[rubric].digest, name).not.toBe(first[rubric].digest);
+        } else if (name === 'plan body') {
+          expect(changedProjections.tautology.digest, name).not.toBe(first.tautology.digest);
         } else {
           expect(changedProjections[rubric].digest, name).toBe(first[rubric].digest);
         }

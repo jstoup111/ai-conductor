@@ -345,7 +345,7 @@ describe('build-review findings CLI', () => {
 
     expect(print).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
-      acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
+      acceptedFindingIds: [], unresolvedFindingIds: [], beyondFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [], beyondRecords: [],
     }));
   });
 

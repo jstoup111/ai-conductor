@@ -50,7 +50,8 @@ export interface BuildReviewEffectiveVerdict {
   readonly verdict: 'PASS' | 'FAIL';
   readonly acceptedFindingIds: readonly string[];
   readonly unresolvedFindingIds: readonly string[];
-  readonly beyondFindingIds: readonly string[];
+  /** Additive: legacy resolver fixtures and serialized verdicts omit this. */
+  readonly beyondFindingIds?: readonly string[];
   readonly skippedRubrics: readonly BuildReviewRubricId[];
   readonly infrastructureFailureRubrics: readonly BuildReviewRubricId[];
 }
