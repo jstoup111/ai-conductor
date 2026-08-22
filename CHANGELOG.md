@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.104.0] - 2026-08-21
+## [0.104.0] - 2026-08-22
 
 ### Added
 
@@ -20,6 +20,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build-review configuration accepts causalIntegrity as an input alias for rootCause. ([implementation PR #1766](https://github.com/jstoup111/ai-conductor/pull/1766)).
 - Adds `conduct-ts rewind --to <step>` to return a halted feature to an earlier pipeline step, and rebase- or resume-invalidated test-suite and build-review proofs are now mechanically re-verified instead of halting the pipeline on a stale proof. ([implementation PR #1741](https://github.com/jstoup111/ai-conductor/pull/1741)).
 - `bin/install` gains a `--channel` flag and `AI_CONDUCTOR_CHANNEL` environment variable to explicitly select the first-run update channel, with clear guidance when it silently falls back to stable. ([implementation PR #1720](https://github.com/jstoup111/ai-conductor/pull/1720)).
+- build_review now treats infrastructure failures (mechanical rubric faults) as their own recoverable lane, with a bounded automatic retry and a new `conduct-ts build-review record-reduced-coverage` action for operators to record a reduced-coverage decision when retries are exhausted. ([implementation PR #1734](https://github.com/jstoup111/ai-conductor/pull/1734)).
+- The daemon's IN-PROGRESS dashboard now shows live active-subagent counts and running input/output token totals for in-flight steps, sourced from a new throttled provider-stream observation and configurable via the new `provider_stream.min_interval_ms` setting. ([implementation PR #1742](https://github.com/jstoup111/ai-conductor/pull/1742)).
 
 ### Changed
 
@@ -50,6 +52,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can accept build_review findings on every rubric; identity round-trip no longer rejects the engine's own output. ([implementation PR #1770](https://github.com/jstoup111/ai-conductor/pull/1770)).
 - FINISH no longer halts on genuine PR prose when the authoring pass leaves the engine's body-floor marker in place; a floored body is now recognized by its content, not by marker presence alone. ([implementation PR #1773](https://github.com/jstoup111/ai-conductor/pull/1773)).
 - prd-audit reads FR verdicts only from the report's Verdict Table section, so a prior-cycle history table can no longer block an all-ALIGNED audit. ([implementation PR #1780](https://github.com/jstoup111/ai-conductor/pull/1780)).
+- `conduct-ts plan-protected-targets` now catches a protected-artifact reference named in a task's prose even when that task declares a `**Files:**` set, and `.docs/decisions/` is now a protected directory alongside architecture, plans, specs, and stories. ([implementation PR #1750](https://github.com/jstoup111/ai-conductor/pull/1750)).
 
 ## [0.103.0] - 2026-08-17
 
