@@ -240,10 +240,10 @@ export class OtelVisualizer implements VisualizerPlugin {
     // exportTimeoutMillis bounds how long a single export call may run before
     // being abandoned (T19). Default: EXPORT_TIMEOUT_MS (5 s).
     const exportTimeoutMillis = ctx.exportTimeoutMillis ?? EXPORT_TIMEOUT_MS;
-    this.tracerProvider = new BasicTracerProvider({ resource });
-    this.tracerProvider.addSpanProcessor(
-      new BatchSpanProcessor(spanExporter, { exportTimeoutMillis }),
-    );
+    this.tracerProvider = new BasicTracerProvider({
+      resource,
+      spanProcessors: [new BatchSpanProcessor(spanExporter, { exportTimeoutMillis })],
+    });
 
     // MeterProvider with PeriodicExportingMetricReader (export is async; R1).
     const reader = new PeriodicExportingMetricReader({

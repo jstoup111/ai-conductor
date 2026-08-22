@@ -109,17 +109,17 @@ describe('OTel Observability — Phase 1 acceptance', () => {
       await vis.stop();
 
       const spans = allSpans(spanExporter);
-      const roots = spans.filter((s) => !s.parentSpanId);
+      const roots = spans.filter((s) => !s.parentSpanContext);
       expect(roots).toHaveLength(1); // single root run span (FR-2)
 
-      const stepSpans = spans.filter((s) => s.parentSpanId);
+      const stepSpans = spans.filter((s) => s.parentSpanContext);
       expect(stepSpans.map((s) => s.name).sort()).toEqual(
         ['bootstrap', 'explore', 'plan'].sort(),
       );
       // all step spans share the root's trace id (one trace per run)
       for (const s of stepSpans) {
         expect(s.spanContext().traceId).toBe(roots[0].spanContext().traceId);
-        expect(s.parentSpanId).toBe(roots[0].spanContext().spanId);
+        expect(s.parentSpanContext?.spanId).toBe(roots[0].spanContext().spanId);
       }
     });
 
@@ -128,7 +128,7 @@ describe('OTel Observability — Phase 1 acceptance', () => {
       await emitRepresentativeRun(emitter);
       await vis.stop();
 
-      for (const s of allSpans(spanExporter).filter((x) => x.parentSpanId)) {
+      for (const s of allSpans(spanExporter).filter((x) => x.parentSpanContext)) {
         const durNs = s.duration[0] * 1e9 + s.duration[1];
         expect(durNs).toBeGreaterThan(0);
         expect(s.status.code).not.toBe(2 /* ERROR */);
