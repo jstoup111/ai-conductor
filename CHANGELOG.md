@@ -54,6 +54,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - prd-audit reads FR verdicts only from the report's Verdict Table section, so a prior-cycle history table can no longer block an all-ALIGNED audit. ([implementation PR #1780](https://github.com/jstoup111/ai-conductor/pull/1780)).
 - `conduct-ts plan-protected-targets` now catches a protected-artifact reference named in a task's prose even when that task declares a `**Files:**` set, and `.docs/decisions/` is now a protected directory alongside architecture, plans, specs, and stories. ([implementation PR #1750](https://github.com/jstoup111/ai-conductor/pull/1750)).
 - A conductor run no longer halts with a phantom "Expected <field> to match before persist conductor transition" conflict after the engine skips a track- or tier-skipped gate mid-run. ([implementation PR #1793](https://github.com/jstoup111/ai-conductor/pull/1793)).
+- build_review no longer reuses a stale prior-lap FAIL verdict as the current lap's outcome, and mechanical-fault HALTs and `build-review findings` output now name the last recorded infrastructure fault. ([implementation PR #1801](https://github.com/jstoup111/ai-conductor/pull/1801)).
 
 ## [0.103.0] - 2026-08-17
 
