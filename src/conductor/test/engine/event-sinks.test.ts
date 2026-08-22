@@ -93,6 +93,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_result',
   'build_review_rubric_skipped',
   'build_review_cache_hit',
+  'build_review_cache_discarded',
   'build_review_rubric_infrastructure_failure',
   'build_review_mechanical_allowance_exhausted',
   'build_review_disposition_version_invalidated',
@@ -170,6 +171,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'rebase_conflict_halt',
   'ci_failed',
   'build_review_base',
+  'build_review_cache_discarded',
   'build_review_stale_mirage_regrade',
   'auto_park_contradiction',
   'verdict_freshness',
@@ -412,6 +414,20 @@ describe('event sink subscriptions', () => {
     });
   });
 
+  it('routes discarded build-review cache verdicts to every sink', () => {
+    expect({
+      sink: EVENT_SINKS.build_review_cache_discarded,
+      persisted: persistedEventTypes().includes('build_review_cache_discarded'),
+      audited: auditedEventTypes().includes('build_review_cache_discarded'),
+      rendered: renderedEventTypes().includes('build_review_cache_discarded'),
+    }).toEqual({
+      sink: { render: true, persist: true, audit: true },
+      persisted: true,
+      audited: true,
+      rendered: true,
+    });
+  });
+
   it('defines provider-neutral operator park boundary telemetry without completion authority', () => {
     const boundaries = [
       { kind: 'step', name: 'memory' },
@@ -541,6 +557,7 @@ describe('event sink subscriptions', () => {
       'verdict_freshness',
       'halt_marker_write_failed',
       'build_review_disposition_version_invalidated',
+      'build_review_cache_discarded',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
     ]));
