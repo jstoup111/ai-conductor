@@ -5839,18 +5839,6 @@ export class Conductor {
           return preDispatchPark;
         }
 
-        // Mark in_progress before running
-        await this.saveConductorStepStatus(state, step.name, 'in_progress');
-
-        await emitTracked({ type: 'step_started', step: step.name, index: i });
-        if (step.deprecated && step.name !== 'wiring_check') {
-          await emitTracked({
-            type: 'deprecated_step',
-            step: step.name,
-            adr: step.deprecated.adr,
-          });
-        }
-
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →
         // `stale`), never on a clean first run. Such a step ran before, so a
@@ -6317,7 +6305,18 @@ export class Conductor {
               freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
               await freshEvidence.write();
             }
-          } else
+          } else {
+          // Mark in_progress only once pre-dispatch refusals have cleared.
+          // A refusal is not a started step and must leave its prior status intact.
+          await this.saveConductorStepStatus(state, step.name, 'in_progress');
+          await emitTracked({ type: 'step_started', step: step.name, index: i });
+          if (step.deprecated && step.name !== 'wiring_check') {
+            await emitTracked({
+              type: 'deprecated_step',
+              step: step.name,
+              adr: step.deprecated.adr,
+            });
+          }
           try {
             if (
               step.name !== 'complexity' &&
@@ -6386,6 +6385,22 @@ export class Conductor {
             // just below (it needs a live attemptStartedAt to gate verdict
             // freshness) — cleared unconditionally right after that check
             // completes, further down.
+          }
+          }
+
+          if (result.refused) {
+            await emitTracked({
+              type: 'step_refused',
+              step: step.name,
+              kind: result.refused.kind,
+              reason: result.refused.reason,
+            });
+            if (result.refused.kind === 'protected-artifact' && attempt < stepMaxRetries) {
+              continue;
+            }
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
           }
 
           // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o):
