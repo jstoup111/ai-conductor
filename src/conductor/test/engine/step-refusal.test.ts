@@ -167,4 +167,67 @@ describe('step refusal event spine', () => {
       await rm(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it('keeps a genuine build failure on the failed path when the seal passes', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'step-refusal-'));
+    const statePath = join(projectRoot, 'conduct-state.json');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    await writeFile(statePath, JSON.stringify({ plan: 'done', build: 'pending' }), 'utf8');
+    vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
+    vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue('tree-witness');
+    vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
+      ok: true,
+      seal: { version: 2, baselineCommit: 'approved-commit', protectedArtifacts: [], rebaselines: [] },
+      selfAmendments: [],
+    });
+    vi.spyOn(protectedArtifactSeal, 'createProtectedArtifactSeal').mockResolvedValue({
+      version: 2,
+      baselineCommit: 'approved-commit',
+      protectedArtifacts: [],
+      rebaselines: [],
+    });
+    const run = vi.fn(async () => ({ success: false, output: 'boom' }));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      projectRoot,
+      config: {} as never,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 2,
+    });
+
+    persister.start();
+    try {
+      await conductor.run();
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      const outcome = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'build-outcome.json'), 'utf8')) as {
+        records: Array<Record<string, unknown>>;
+      };
+
+      expect({
+        build: JSON.parse(await readFile(statePath, 'utf8')).build,
+        runnerCalls: run.mock.calls,
+        refusals: records.filter((record) => record.type === 'step_refused'),
+        failures: records.filter((record) => record.type === 'step_failed'),
+        terminalOutcome: outcome.records.at(-1)?.terminalOutcome,
+      }).toEqual({
+        build: 'failed',
+        runnerCalls: [
+          expect.any(Array),
+          expect.any(Array),
+        ],
+        refusals: [],
+        failures: [expect.objectContaining({ step: 'build', error: 'boom' })],
+        terminalOutcome: 'failed',
+      });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });
