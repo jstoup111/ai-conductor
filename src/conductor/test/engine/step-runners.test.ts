@@ -3257,10 +3257,10 @@ TIER: M`,
       const readRubricSkill = vi.fn(async (path: string) => Buffer.from(path));
       const coordinate = vi.fn(async (_inputs, _config, engineIdentity) => {
         expect(engineIdentity).toEqual({
-          tautology: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } },
-          scope: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } },
-          rootCause: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } },
-          completeness: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } },
+          tautology: { kind: 'candidate-bound', engineStamp: 'engine-1759' },
+          scope: { kind: 'candidate-bound', engineStamp: 'engine-1759' },
+          rootCause: { kind: 'candidate-bound', engineStamp: 'engine-1759' },
+          completeness: { kind: 'candidate-bound', engineStamp: 'engine-1759' },
         });
         return { success: true, output: 'identity injected' };
       });
@@ -3295,7 +3295,7 @@ TIER: M`,
     it('does not probe an ambient provider home for coordinator-only identity injection', async () => {
       const provider = createMockProvider();
       const coordinate = vi.fn(async (_inputs, _config, engineIdentity) => {
-        expect(engineIdentity.scope).toEqual({ kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } });
+        expect(engineIdentity.scope).toEqual({ kind: 'candidate-bound', engineStamp: 'engine-1759' });
         return { success: true, output: 'unavailable identity injected' };
       });
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -4405,5 +4405,77 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(repairPrompt).toContain(
       'Your previous response (bounded excerpt):\nRuntime-candidates repair output marker.',
     );
+  });
+
+  it('recomputes cache identity after each prepared fallback candidate and retains only the successful candidate identity', async () => {
+    const unavailable = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'claude unavailable',
+      exitCode: 127,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+    }));
+    const succeeded = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: JSON.stringify({ findings: [] }),
+      exitCode: 0,
+    }));
+    const claudeRuntime = {
+      key: 'claude',
+      provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke: unavailable, invokeInteractive: vi.fn() },
+      policy: CLAUDE_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+    };
+    const codexRuntime = {
+      key: 'codex',
+      provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke: succeeded, invokeInteractive: vi.fn() },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    };
+    const resolveSkillRoot = vi.fn(async (_provider: string, env?: NodeJS.ProcessEnv) => env?.BUILD_REVIEW_SKILL_ROOT ?? null);
+    const readRubricSkill = vi.fn(async (path: string) => Buffer.from(path));
+    const resolveEngineStamp = vi.fn(() => 'must-not-be-read');
+    const prepared = vi.fn(async (candidate: { providerKey: string }) => ({
+      executable: candidate.providerKey,
+      args: [],
+      env: { BUILD_REVIEW_SKILL_ROOT: `/prepared/${candidate.providerKey}` },
+      teardown: async () => undefined,
+    }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project', {
+      config: { llm_provider: ['claude', 'codex'] },
+      providerRuntimes: new ProviderRuntimeSet([claudeRuntime, codexRuntime]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude', 'codex'],
+      providerExecution: { prepareCandidateSelfHost: prepared } as any,
+      resolveBuildReviewSkillRoot: resolveSkillRoot,
+      resolveBuildReviewEngineStamp: resolveEngineStamp,
+      readBuildReviewRubricSkill: readRubricSkill,
+    });
+    const identities: Array<{ engineStamp: string; skillDigest: string }> = [];
+
+    const result = await (runner as any).dispatchBuildReviewRubric(
+      { ...branch, policy: { ...policy, llm_provider: ['claude', 'codex'] } },
+      projection,
+      async (identity: { engineStamp: string; skillDigest: string }) => {
+        identities.push(identity);
+        return { kind: 'miss' };
+      },
+      '31b5c81beaec',
+    );
+
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', verdict: 'PASS' });
+    expect(identities).toEqual([
+      { engineStamp: '31b5c81beaec', skillDigest: expect.stringMatching(/^sha256:/) },
+      { engineStamp: '31b5c81beaec', skillDigest: expect.stringMatching(/^sha256:/) },
+    ]);
+    expect(identities[0]!.skillDigest).not.toBe(identities[1]!.skillDigest);
+    expect(readRubricSkill.mock.calls.map(([path]) => path)).toEqual([
+      '/prepared/claude/skills/build-review-tautology/SKILL.md',
+      '/prepared/codex/skills/build-review-tautology/SKILL.md',
+    ]);
+    expect((runner as any).buildReviewDispatchIdentities.get('tautology')).toEqual(identities[1]);
+    expect(resolveEngineStamp).not.toHaveBeenCalled();
   });
 });

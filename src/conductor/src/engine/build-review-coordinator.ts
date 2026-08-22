@@ -50,6 +50,9 @@ const BUILD_REVIEW_RUBRICS: readonly BuildReviewRubricId[] = [
 
 export type BuildReviewRubricIdentity =
   | { readonly kind: "ready"; readonly identity: BuildReviewEngineIdentity }
+  /** The engine stamp is known before dispatch, but the skill digest must be
+   * derived from the provider candidate's prepared invocation home. */
+  | { readonly kind: "candidate-bound"; readonly engineStamp: string }
   | { readonly kind: "unavailable"; readonly path: string };
 
 export type BuildReviewRubricIdentities = Readonly<Record<
@@ -127,6 +130,7 @@ export interface BuildReviewCoordinationInput {
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
     onCandidatePrepared: (identity: BuildReviewEngineIdentity) => Promise<BuildReviewCandidateCacheDecision>,
+    engineStamp?: string,
   ) => Promise<unknown | { readonly result: unknown; readonly engineIdentity: BuildReviewEngineIdentity } | { readonly kind: "cache-hit"; readonly result: BuildReviewJudgedResult } | { readonly kind: "infrastructure-failure"; readonly detail?: string }>;
   /** Persist and return the validated, current-lap branch evidence. */
   readonly writeArtifact: (
@@ -393,7 +397,12 @@ export async function coordinateBuildReviewRubrics(
         if (legacyDecision?.kind === "infrastructure-failure") {
           return { rubric, branch: infrastructure(rubric, "cache-read-failed", legacyDecision.detail) };
         }
-        const dispatched = await input.dispatchModel(branch, projection, settleCandidate);
+        const dispatched = await input.dispatchModel(
+          branch,
+          projection,
+          settleCandidate,
+          legacyIdentity?.kind === "candidate-bound" ? legacyIdentity.engineStamp : undefined,
+        );
         const candidateDispatch = dispatched as { kind?: string; result?: BuildReviewJudgedResult; detail?: string } | undefined;
         if (candidateDispatch?.kind === "cache-hit" && candidateDispatch.result !== undefined) {
           return { rubric, branch: { kind: "cache-hit", rubric, result: candidateDispatch.result } as BuildReviewCoordinatedBranch };

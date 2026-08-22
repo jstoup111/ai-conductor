@@ -1953,8 +1953,8 @@ export class DefaultStepRunner implements StepRunner {
         writeFile,
         rename,
       }),
-      dispatchModel: async (branch, projection, onCandidatePrepared) => {
-        const result = await this.dispatchBuildReviewRubric(branch, projection, onCandidatePrepared);
+      dispatchModel: async (branch, projection, onCandidatePrepared, engineStamp) => {
+        const result = await this.dispatchBuildReviewRubric(branch, projection, onCandidatePrepared, engineStamp);
         const identity = this.buildReviewDispatchIdentities.get(branch.rubric);
         return identity === undefined ? result : { result, engineIdentity: identity };
       },
@@ -2139,7 +2139,7 @@ export class DefaultStepRunner implements StepRunner {
       // replace them), so an identity resolved here would be ambient and
       // unsound. The coordinator's production path receives the real identity
       // only from the candidate-prepared callback immediately before invoke.
-      identities[rubric] = { kind: 'ready', identity: { engineStamp, skillDigest: 'deferred-candidate' } as never };
+      identities[rubric] = { kind: 'candidate-bound', engineStamp };
     }
     return identities as BuildReviewRubricIdentities;
   }
@@ -2148,6 +2148,7 @@ export class DefaultStepRunner implements StepRunner {
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
     onCandidatePrepared: (identity: import('./build-review-engine-identity.js').BuildReviewEngineIdentity) => Promise<BuildReviewCandidateCacheDecision> = async () => ({ kind: 'miss' }),
+    preparedEngineStamp?: string,
   ): Promise<unknown> {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
       tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness',
@@ -2181,7 +2182,10 @@ export class DefaultStepRunner implements StepRunner {
           }
           try {
             const skillDigest = await digestRubricSkill({ harnessRoot: skillRoot, skillName: branch.skillName, readFile: this.readBuildReviewRubricSkill });
-            const identity = { engineStamp: this.resolveBuildReviewEngineStamp(dirname(fileURLToPath(import.meta.url))), skillDigest } as never;
+            const identity = {
+              engineStamp: preparedEngineStamp ?? this.resolveBuildReviewEngineStamp(dirname(fileURLToPath(import.meta.url))),
+              skillDigest,
+            } as never;
             preparedIdentities.set(candidate.providerKey, identity);
             cacheDecision = await onCandidatePrepared(identity);
             if (cacheDecision.kind === 'cache-hit') return { success: true, exitCode: 0, output: 'candidate cache hit' };
@@ -2232,7 +2236,7 @@ export class DefaultStepRunner implements StepRunner {
           : { success: verified.success };
       }
       const legacyIdentity = {
-        engineStamp: this.resolveBuildReviewEngineStamp(dirname(fileURLToPath(import.meta.url))),
+        engineStamp: preparedEngineStamp ?? this.resolveBuildReviewEngineStamp(dirname(fileURLToPath(import.meta.url))),
         skillDigest: 'legacy-provider',
       } as never;
       cacheDecision = await onCandidatePrepared(legacyIdentity);
