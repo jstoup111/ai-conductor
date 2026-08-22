@@ -1929,6 +1929,27 @@ export class DefaultStepRunner implements StepRunner {
     if (coordination.kind === 'gate-disabled') {
       return { success: true, output: 'build_review disabled' };
     }
+    if (coordination.kind === 'passed') {
+      const verdict = {
+        verdict: 'PASS' as const,
+        reason: coordination.reason,
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      };
+      const verdictPath = join(effectivePipelineDir, 'build-review.json');
+      try {
+        await mkdir(effectivePipelineDir, { recursive: true });
+        const temporaryPath = `${verdictPath}.${randomUUID()}.tmp`;
+        await writeFile(temporaryPath, `${JSON.stringify(verdict, null, 2)}\n`, 'utf-8');
+        await rename(temporaryPath, verdictPath);
+      } catch (error) {
+        return {
+          success: false,
+          output: `build_review empty-set PASS publication failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      await this.stampBuildReviewVerdict();
+      return { success: true, output: JSON.stringify(verdict) };
+    }
     if (coordination.kind === 'refused') {
       return { success: false, output: `build_review refused: ${coordination.reason}` };
     }

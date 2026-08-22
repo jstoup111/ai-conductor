@@ -208,7 +208,14 @@ export type ConductorEvent =
     }
   | { type: 'build_review_disposition_refused'; feature: string; reason: string }
   | { type: 'build_review_disposition_version_invalidated'; feature: string; findingId: string; rubric: string; contractVersion: string }
-  | { type: 'build_review_outer_verdict'; lapId: string; rawVerdict: 'PASS' | 'FAIL'; effectiveVerdict: 'PASS' | 'FAIL' }
+  | {
+      type: 'build_review_outer_verdict';
+      lapId: string;
+      rawVerdict: 'PASS' | 'FAIL';
+      effectiveVerdict: 'PASS' | 'FAIL';
+      /** Deterministic container-level PASS cause, when no rubric ran. */
+      reason?: string;
+    }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | { type: 'step_started'; step: StepName; index: number }
   | {

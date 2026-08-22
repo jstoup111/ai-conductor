@@ -3402,6 +3402,37 @@ TIER: M`,
       }));
     });
 
+    it('publishes an empty registered-rubric set as a reasoned PASS without dispatch', async () => {
+      const provider = createMockProvider();
+      const events = { emit: vi.fn(async () => undefined) } as any;
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+        events,
+        ...currentBuildReviewProof(),
+      });
+      const dispatch = vi.spyOn(runner as any, 'dispatchBuildReviewRubric');
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: expect.stringContaining('build_review_no_rubrics'),
+      });
+
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject({
+        verdict: 'PASS',
+        reason: 'build_review_no_rubrics',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      });
+      expect(events.emit).toHaveBeenCalledWith({
+        type: 'build_review_outer_verdict',
+        lapId: 'lap-head',
+        rawVerdict: 'PASS',
+        effectiveVerdict: 'PASS',
+        reason: 'build_review_no_rubrics',
+      });
+    });
+
     it('leaves a missing current-lap branch artifact absent until the mechanical allowance is exhausted', async () => {
       const provider = createMockProvider();
       const events = { emit: vi.fn(async () => undefined) } as any;
