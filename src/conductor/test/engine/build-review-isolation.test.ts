@@ -12,7 +12,6 @@ import {
   type BuildReviewFrozenInputs,
   type BuildReviewInputOptions,
 } from '../../src/engine/build-review-inputs.js';
-import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
@@ -28,16 +27,9 @@ vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) =
 
 // ── Structural input-isolation test (build_review) ───────────────────────
 //
-// The build_review grader must see ONLY the diff + plan body — never the
-// maker's `.pipeline/task-status.json` or any transcript. This is enforced
-// two ways:
-//   1. Structurally: assembleBuildReviewInputs(git, planPath) and
-//      buildGraderPrompt(inputs) have signatures that admit no state/summary
-//      parameter at all (a compile-level guarantee — see the type-only
-//      assertions below).
-//   2. At runtime: seed a fixture repo whose tree contains a maker "summary"
-//      sentinel in task-status.json and a transcript-like file, assemble the
-//      full grader prompt from it, and assert the sentinel never appears.
+// Build-review input assembly must never read the maker's
+// `.pipeline/task-status.json` or any transcript. The fixture seeds both
+// sentinel-bearing files and asserts that the frozen inputs exclude them.
 
 const TASK_STATUS_SENTINEL = 'TASK_STATUS_SENTINEL_12345';
 const TRANSCRIPT_SENTINEL = 'TRANSCRIPT_SENTINEL_12345';
@@ -127,12 +119,10 @@ describe('build_review input isolation', () => {
     await rm(mainDir, { recursive: true, force: true });
   });
 
-  it('never leaks task status, transcript, or maker-summary content into assembled inputs or the grader prompt', async () => {
+  it('never leaks task status, transcript, or maker-summary content into assembled inputs', async () => {
     const inputs = await assembleBuildReviewInputs(realGit(), planPath, {
       inspectTestSuite: async () => CURRENT_PROOF,
     });
-    const prompt = buildGraderPrompt(inputs);
-
     // Sanity check: the sentinel-bearing files are real, on disk, in the
     // same working tree the diff was computed from — this test would only
     // pass trivially (not meaningfully) if they didn't actually exist.
@@ -140,7 +130,7 @@ describe('build_review input isolation', () => {
     expect(inputs.diff).not.toContain('task-status.json');
     expect(inputs.diff).not.toContain('transcript.log');
 
-    const assembledContent = JSON.stringify({ inputs, prompt });
+    const assembledContent = JSON.stringify(inputs);
     for (const sentinel of [
       TASK_STATUS_SENTINEL,
       TRANSCRIPT_SENTINEL,
@@ -154,7 +144,7 @@ describe('build_review input isolation', () => {
     })).rejects.toBeInstanceOf(TestSuiteProofError);
   });
 
-  it('admits only git, plan, and proof inspection / inputs at the type level — no state parameter exists', () => {
+  it('admits only git, plan, and proof inspection at the type level — no state parameter exists', () => {
     // Compile-level check: these assignments only type-check if the
     // functions' parameter lists are exactly as narrow as documented. If a
     // future maintainer adds a `state`/`summary` parameter, this file fails
@@ -162,19 +152,14 @@ describe('build_review input isolation', () => {
     type Equal<Left, Right> =
       (<T>() => T extends Left ? 1 : 2) extends (<T>() => T extends Right ? 1 : 2) ? true : false;
     type Expect<Value extends true> = Value;
-    type PromptParams = Parameters<typeof buildGraderPrompt>;
-
     // Exact equality makes a merge-base-era `(git, planPath)` signature fail
     // the typecheck: proof inspection is now a required supported seam.
     type _AssembleSignature = Expect<Equal<
       typeof assembleBuildReviewInputs,
       (git: GitRunner, planPath: string, options?: BuildReviewInputOptions) => Promise<BuildReviewFrozenInputs>
     >>;
-    const promptArity: PromptParams extends [unknown] ? true : false = true;
-
     const assembleSignature: _AssembleSignature = true;
     expect(assembleSignature).toBe(true);
-    expect(promptArity).toBe(true);
   });
 
   it('keeps scoped verification agent-owned and preserves the broad-fallback contract', async () => {

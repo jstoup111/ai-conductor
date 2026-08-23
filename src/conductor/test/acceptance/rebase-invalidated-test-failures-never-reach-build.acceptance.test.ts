@@ -10,7 +10,7 @@
  * - Stories 4/5: durable advance history -> deterministic gate failure ->
  *   gate-agnostic repair ledger, with unrelated failures left unattributed.
  * - Stories 6/7: repair ledger -> production build-review input assembly ->
- *   grader prompt + the grading-provenance disposition the conductor persists.
+ *   the grading-provenance disposition the conductor persists.
  *
  * Single-operation classifier, schema, malformed-ledger, lock, and legacy-
  * normalization cases remain owned by the plan's lower-layer TDD tasks.
@@ -20,7 +20,6 @@
  * - src/engine/event-persister.ts: EventPersister.start
  * - src/engine/test-suite-remediation.ts: deterministic failure attribution
  * - src/engine/build-review-inputs.ts: assembleBuildReviewInputs
- * - src/engine/build-review-prompt.ts: buildGraderPrompt
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
@@ -30,7 +29,6 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { assembleBuildReviewInputs, TestSuiteProofError } from '../../src/engine/build-review-inputs.js';
-import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import {
@@ -289,15 +287,7 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
       });
       expect(proofInspections).toBe(1);
       expect(inputs.testSuiteProof).toMatchObject({ provenanceHeadSha: 'fixture-head', outcome: 'PASS' });
-      const prompt = buildGraderPrompt(inputs);
-
       expect(inputs.repairContext).toHaveLength(2);
-      for (const repair of inputs.repairContext ?? []) {
-        expect(prompt).toContain(repair.id);
-        expect(prompt).toContain(repair.diagnostic);
-      }
-      expect(prompt).toContain('This context is evidence, not an exemption');
-      expect(prompt).toContain('Unmatched work remains subject to every rubric');
       // The provenance the conductor persists as `build_review_repair_context`.
       // Its emission leg (StepRunResult -> conductor -> ledger) is pinned by
       // test/integration/gate-loop.test.ts's "build_review grading provenance".

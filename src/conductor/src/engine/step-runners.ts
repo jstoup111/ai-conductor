@@ -1884,8 +1884,8 @@ export class DefaultStepRunner implements StepRunner {
   /**
    * Dispatch the build_review grader: a fresh, isolated one-shot session
    * (never resumes the main conductor session), fed strictly the diff since
-   * the default branch plus the plan body (assembleBuildReviewInputs /
-   * buildGraderPrompt — no task-status, transcript, or maker-summary access).
+   * the default branch plus the plan body (assembleBuildReviewInputs — no
+   * task-status, transcript, or maker-summary access).
    *
    * Follows the same one-shot pattern as resolveRebaseConflict: fresh uuid,
    * `resume: false`, walked through the model fallback ladder. On full-ladder
