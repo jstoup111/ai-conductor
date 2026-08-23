@@ -92,7 +92,7 @@ describe('build-review current-lap branch artifacts', () => {
     const projection = {
       rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot',
       contentDigest: 'sha256:content', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
-      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, verifyOnlyContext: [],
+      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
       planBody: '# Plan', repairContext: [], acceptedWidenings: [], operatorReseals: [],
     } as never;
     const stamped = stampBuildReviewDispatchedCandidate({ findings: [] }, 'testQuality', projection);
