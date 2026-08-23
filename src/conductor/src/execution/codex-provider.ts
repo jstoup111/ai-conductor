@@ -883,6 +883,21 @@ export class CodexProvider implements LLMProvider {
     if (unattended) {
       args.push(
         '--config', 'sandbox_mode="workspace-write"',
+        // Egress inside the workspace-write sandbox. Without it every network
+        // call — `gh`, `git push`, a registry fetch — must escape the sandbox,
+        // which raises an approval that `auto_review` denies or lets time out
+        // (see CODEX_PERMISSION_DECISION_RE above). That made every
+        // GitHub-touching step unroutable to codex: `finish`, `rebase`, and
+        // `release-disposition` all had to be pinned to claude.
+        //
+        // This is parity, not a loosening: claude dispatches already run with
+        // `dangerouslySkipPermissions: true` (step-runners.ts), i.e. no sandbox
+        // at all. Codex was the only provider paying a confinement cost, and it
+        // paid it as capability loss rather than as safety anyone relied on.
+        //
+        // Both providers should become config-gated and lockable together —
+        // tracked as intake; do not treat this default as settled.
+        '--config', 'sandbox_workspace_write.network_access=true',
         '--config', 'approval_policy="on-request"',
         '--config', 'approvals_reviewer="auto_review"',
         '--config', 'shell_environment_policy.ignore_default_excludes=false',
