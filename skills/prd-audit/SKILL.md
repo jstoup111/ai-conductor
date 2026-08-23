@@ -78,12 +78,12 @@ contract. Per-FR evidence may appear below the table, but never replaces the cri
 
 ## Verdict Table
 
-| Criterion | Grade | Plan task | PRD: | Evidence |
-| --- | --- | --- | --- | --- |
-| S6.1 | PASS | — | FR-7 | src/engine/example.ts:42 — implements the criterion |
-| S6.2 | FIXABLE | 4 | FR-7 | src/engine/example.ts:58 — missing guard |
-| S6.3 | PLAN_GAP | — | FR-7 | No active task owns the missing behavior |
-| S9.2 | OVER_SCOPE | — | FR-9 | src/engine/example.ts:77 — outside intent, user-visible |
+| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| S6.1 | PASS | — | FR-7 | — | src/engine/example.ts:42 — implements the criterion |
+| S6.2 | FIXABLE | 4 | FR-7 | — | src/engine/example.ts:58 — missing guard |
+| S6.3 | PLAN_GAP | — | FR-7 | — | No active task owns the missing behavior |
+| S9.2 | OVER_SCOPE | — | FR-9 | outside-visible | src/engine/example.ts:77 — outside intent, user-visible |
 
 ## Criterion detail
 ### S6.2 — <criterion summary>
@@ -95,8 +95,10 @@ contract. Per-FR evidence may appear below the table, but never replaces the cri
 
 The Verdict Table needs one row for every readable story criterion. Use `—` for an absent Plan task,
 but only FIXABLE rows may name a task and that task must exist in the active plan. `PRD:` records the
-intent FR(s) when known and `none` when there is no PRD. If report evidence is malformed or
-incomplete, surface it as BLOCKED rather than fabricating a grade.
+intent FR(s) when known and `none` when there is no PRD. `Intent relation` is machine-readable:
+every OVER_SCOPE row must use exactly one of `within`, `outside-harmless`, or `outside-visible`; use
+`—` for other grades. Do not encode this relation in Evidence prose. If report evidence is malformed
+or incomplete, surface it as BLOCKED rather than fabricating a grade.
 
 For OVER_SCOPE rows, add the intent judgement and reseal rationale to the detail: which source was
 consulted, whether the behavior is user-visible, and why any Scope/reseal rationale does or does not
@@ -112,5 +114,5 @@ the policy to this evidence.
 - [ ] Every FIXABLE row names its existing owning plan task and its criterion
 - [ ] Unreadable criteria and PRD-to-story coverage gaps are surfaced, never silently passed
 - [ ] Each finding cites `file:line` evidence and has calibrated confidence where ambiguous
-- [ ] OVER_SCOPE detail judges intent, user visibility, Scope trailers, and reseal rationale
+- [ ] Every OVER_SCOPE row carries an `Intent relation` of `within`, `outside-harmless`, or `outside-visible`; detail judges intent, user visibility, Scope trailers, and reseal rationale
 - [ ] Report written to `.pipeline/prd-audit.md`; no implementation, plan mutation, or routing performed

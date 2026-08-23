@@ -625,7 +625,7 @@ function overScopeRelations(reportText: string): Map<string, IntentRelation> {
   const criterionIndex = header.indexOf('criterion');
   const gradeIndex = header.indexOf('grade');
   const relationIndex = header.findIndex((cell) => cell === 'intent relation' || cell === 'intentrelation');
-  const evidenceIndex = header.indexOf('evidence');
+  if (relationIndex === -1) return new Map();
   const relations = new Map<string, IntentRelation>();
   for (const line of lines.slice(headerIndex + 1)) {
     if (!/^\s*\|/.test(line)) continue;
@@ -634,8 +634,7 @@ function overScopeRelations(reportText: string): Map<string, IntentRelation> {
     if (cells[gradeIndex]?.trim().toUpperCase() !== 'OVER_SCOPE') continue;
     const criterion = cells[criterionIndex]?.trim().toUpperCase();
     if (!criterion) continue;
-    const source = relationIndex === -1 ? cells[evidenceIndex] ?? '' : cells[relationIndex] ?? '';
-    const relation = source.trim().toLowerCase();
+    const relation = (cells[relationIndex] ?? '').trim().toLowerCase();
     if (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible') {
       relations.set(criterion, relation);
     }
@@ -656,12 +655,14 @@ export function routePrdAuditOverScope(
   const parsed = parsePrdAuditReport(reportText);
   if (!parsed.ok) return { kind: 'none' };
   const relations = overScopeRelations(reportText);
-  const findings = parsed.value.findings
-    .filter((finding) => finding.grade === 'OVER_SCOPE')
+  const overScopeFindings = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
+  if (overScopeFindings.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
+  const findings = overScopeFindings
     .map((finding) => {
       const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
+      const relation = relations.get(finding.criterion) as IntentRelation;
       const accepted =
-        relations.get(finding.criterion) === 'within' ||
+        relation === 'within' ||
         acceptedWidenings.some(
           (entry) => entry.criterion === finding.criterion && entry.summary === summary,
         );
@@ -671,7 +672,7 @@ export function routePrdAuditOverScope(
         criterion: finding.criterion,
         summary,
         accepted,
-        relation: accepted ? 'within' as const : relations.get(finding.criterion) ?? 'outside-visible' as const,
+        relation: accepted ? 'within' as const : relation,
       };
     });
   if (findings.length === 0) return { kind: 'none' };

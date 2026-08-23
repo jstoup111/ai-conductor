@@ -51,14 +51,24 @@ function overScopeReport(
   criterion: string,
   relation: 'within' | 'outside-harmless' | 'outside-visible',
   summary = 'The change adds behavior beyond the approved plan.',
+  includeIntentRelation = true,
 ) {
+  const header = includeIntentRelation
+    ? '| Criterion | Grade | Plan task | Evidence | Intent relation |'
+    : '| Criterion | Grade | Plan task | Evidence |';
+  const separator = includeIntentRelation
+    ? '| --- | --- | --- | --- | --- |'
+    : '| --- | --- | --- | --- |';
+  const row = includeIntentRelation
+    ? `| ${criterion} | OVER_SCOPE | | ${summary} | ${relation} |`
+    : `| ${criterion} | OVER_SCOPE | | ${summary} |`;
   return [
     '**PRD:** present',
     '',
     '## Verdict Table',
-    '| Criterion | Grade | Plan task | Evidence | Intent relation |',
-    '| --- | --- | --- | --- | --- |',
-    `| ${criterion} | OVER_SCOPE | | ${summary} | ${relation} |`,
+    header,
+    separator,
+    row,
   ].join('\n');
 }
 
@@ -358,6 +368,15 @@ describe('prd_audit kickback', () => {
     const route = routePrdAuditOverScope(overScopeReport('S3.3', 'outside-visible'), []);
 
     expect(route).toMatchObject({ kind: 'halt', haltClass: 'over-scope' });
+  });
+
+  it('requires the explicit Intent relation field instead of inferring within intent from evidence', () => {
+    const route = routePrdAuditOverScope(
+      overScopeReport('S3.4', 'within', 'within', false),
+      [],
+    );
+
+    expect(route).toEqual({ kind: 'none' });
   });
 
   it('records an operator acceptance from a cleared over-scope halt and regrades it within intent', async () => {
