@@ -1116,7 +1116,7 @@ export function validateConfig(
       const resolvedBuildReview = {
         ...br,
         enabled: typeof br.enabled === 'boolean' ? br.enabled : true,
-        maxParallel: typeof br.maxParallel === 'number' ? br.maxParallel : 4,
+        maxParallel: typeof br.maxParallel === 'number' ? br.maxParallel : 1,
         rubrics: Object.fromEntries(
           BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
             rubricId,
@@ -1137,14 +1137,14 @@ export function validateConfig(
       );
       obj.build_review = {
         enabled: true,
-        maxParallel: 4,
+        maxParallel: 1,
         rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
       };
     }
   } else if (obj.build_review === null || materializeDefaults) {
     obj.build_review = {
       enabled: true,
-      maxParallel: 4,
+      maxParallel: 1,
       rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
     };
   }

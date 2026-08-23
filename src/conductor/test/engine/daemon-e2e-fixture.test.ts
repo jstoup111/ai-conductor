@@ -143,22 +143,39 @@ function createFixtureAgentFake(
 ) {
   return createCodexProviderFake((options) => {
     if (options.prompt.includes('Build Review ') && options.prompt.includes('"rubric"')) {
+      const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as {
+        rubric: string;
+        lapId: string;
+        snapshotDigest: string;
+      };
       return {
         success: true,
-        output: JSON.stringify({ findings: [] }),
+        output: JSON.stringify({
+          kind: 'judged',
+          rubric: projection.rubric,
+          lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest,
+          contractVersion: 'v3',
+          findings: [],
+          verdict: 'PASS',
+        }),
         exitCode: 0,
       };
     }
 
-    if (options.prompt.includes('$prd-audit')) {
+    if (options.prompt.includes('You are running step: PRD Audit.')) {
       mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
       writeFileSync(
         join(worktreeDir, '.pipeline/prd-audit.md'),
-        '**PRD:** none\n\n'
+        '**PRD:** present\n\n'
           + '## Verdict Table\n\n'
           + '| Criterion | Grade | Plan task | Evidence |\n'
           + '| --- | --- | --- | --- |\n'
-          + '| S1.1 | PASS | 1 | test/fixtures/daemon-e2e/touched.txt |\n',
+          + '| S1.1 | PASS | 1 | test/fixtures/daemon-e2e/touched.txt |\n\n'
+          + '## FR Evidence\n\n'
+          + '| FR | Verdict | Gap-class | Evidence | Accepted? |\n'
+          + '| --- | --- | --- | --- | --- |\n'
+          + '| FR-1 | ALIGNED | impl-gap | test/fixtures/daemon-e2e/touched.txt | no |\n',
         'utf-8',
       );
       return {
@@ -168,7 +185,7 @@ function createFixtureAgentFake(
       };
     }
 
-    if (options.prompt.includes('$architecture-review --as-built')) {
+    if (options.prompt.includes('You are running step: Architecture Review (as-built).')) {
       mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
       writeFileSync(
         join(worktreeDir, '.pipeline/architecture-review-as-built.md'),
@@ -182,7 +199,7 @@ function createFixtureAgentFake(
       };
     }
 
-    if (options.prompt.includes('$finish')) {
+    if (options.prompt.includes('You are running step: Finish.')) {
       mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
       writeFileSync(join(worktreeDir, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
       return {
@@ -312,11 +329,13 @@ describe('daemon E2E fixture', () => {
       await initTestRepo(worktreeDir);
       await mkdir(join(worktreeDir, '.docs/plans'), { recursive: true });
       await mkdir(join(worktreeDir, '.docs/stories'), { recursive: true });
+      await mkdir(join(worktreeDir, '.docs/specs'), { recursive: true });
       await mkdir(join(worktreeDir, 'test/fixtures/daemon-e2e'), {
         recursive: true,
       });
       await copyFile(fixturePlanPath, planPath);
       await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
+      await writeFile(join(worktreeDir, `.docs/specs/${slug}.md`), '# PRD\n\n## Functional Requirements\n\n- **FR-1:** The fixture behavior is delivered.\n');
       await copyFile(
         fixtureTouchedPath,
         join(worktreeDir, 'test/fixtures/daemon-e2e/touched.txt'),
@@ -384,15 +403,14 @@ describe('daemon E2E fixture', () => {
 
       // Bounded Conductor fixture:
       // 1. First runnable step: build (all prior steps are pre-resolved).
-      // 2. Expected dispatches: build, the sole test-quality build-review
-      //    branch, both SHIP validators, and finish; wiring, test_suite,
-      //    tier-skipped validators, and rebase stay native.
+      // 2. Expected dispatches: build, the always-on as-built review, and
+      //    finish; this small technical fixture explicitly skips PRD audit.
       // 3. Terminal condition: finish records the local keep equivalent and
       //    the daemon Conductor writes DONE.
       // 4. Required artifacts: authoritative plan/stories plus the T0 baseline
       //    commit, Task 1's real commit, a fresh build-review verdict, aggregate
       //    verifier evidence, and the fresh finish-choice marker.
-      const daemonResult = await runDaemon(
+      const daemonPromise = runDaemon(
         {
           discoverBacklog: async () => [{ slug, tier: 'S', track: 'technical' }],
           runFeature: async (item) => {
@@ -406,6 +424,10 @@ describe('daemon E2E fixture', () => {
               mode: 'auto',
               daemon: true,
               verifyArtifacts: false,
+              config: {
+                build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+                steps: { prd_audit: { disable: true } },
+              },
               buildReviewEffectiveResolver,
               fullSuiteVerifier: {
                 ensure: async () => ({
@@ -418,6 +440,7 @@ describe('daemon E2E fixture', () => {
                 }),
               },
               escalateBuildFailure: async () => ({}),
+              sleepFn: vi.fn(async () => {}),
             });
             await conductor.run();
             return { slug: item.slug, status: 'done' };
@@ -426,6 +449,7 @@ describe('daemon E2E fixture', () => {
         },
         { concurrency: 1, once: true },
       );
+      const daemonResult = await daemonPromise;
       const state = JSON.parse(await readFile(statePath, 'utf-8')) as {
         build?: string;
         build_review?: string;
@@ -451,7 +475,7 @@ describe('daemon E2E fixture', () => {
       }).toEqual({
         claimed: true,
         processed: [slug],
-        providerCalls: 5,
+        providerCalls: 3,
         build: 'done',
         buildReview: 'done',
         finish: 'done',

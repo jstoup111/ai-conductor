@@ -96,6 +96,10 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       selfHostRunId: () => 'harness-daemon-profile-run',
       run: vi.fn(async (step: StepName) => {
         seen.push({ step });
+        if (step === 'architecture_review_as_built') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), 'Verdict: APPROVED\n', 'utf-8');
+        }
         if (step === 'finish') {
           await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
         }
@@ -140,7 +144,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
         },
         steps: {
           manual_test: { disable: true },
-          architecture_review_as_built: { disable: true },
+          prd_audit: { disable: true },
         },
       },
     } as ConstructorParameters<typeof Conductor>[0]);
@@ -250,6 +254,10 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       selfHostRunId: () => 'harness-daemon-profile-run',
       run: vi.fn(async (step: StepName) => {
         seen.push({ step });
+        if (step === 'architecture_review_as_built') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), 'Verdict: APPROVED\n', 'utf-8');
+        }
         if (step === 'finish') {
           await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
         }
@@ -288,7 +296,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
         },
         steps: {
           manual_test: { disable: true },
-          architecture_review_as_built: { disable: true },
+          prd_audit: { disable: true },
         },
       },
     } as ConstructorParameters<typeof Conductor>[0]);

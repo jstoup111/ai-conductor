@@ -703,7 +703,7 @@ export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMer
 
 const DEFAULT_BUILD_REVIEW_ENABLED = true;
 const DEFAULT_SCOPE_CONTAINMENT_ENFORCED = false;
-const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 4;
+const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 1;
 const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = ['testQuality'];
 
 /** Concrete execution policy for one independently-dispatched review rubric. */

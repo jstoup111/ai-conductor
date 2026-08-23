@@ -1947,7 +1947,7 @@ complexity:
       }).toEqual({
         defaults: {
           enabled: true,
-          maxParallel: 4,
+          maxParallel: 1,
           rubrics: {
             testQuality: { enabled: false },
           },

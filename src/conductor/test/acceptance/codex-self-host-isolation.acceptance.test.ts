@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
@@ -29,6 +29,15 @@ const DONE_TO_BUILD: ConductState = {
   architecture_review: 'done', acceptance_specs: 'done', complexity_tier: 'M',
   track: 'technical', feature_desc: 'codex-self-host-acceptance',
 } as ConductState;
+
+async function seedFreshAsBuiltEvidence(projectRoot: string): Promise<void> {
+  const pipeline = join(projectRoot, '.pipeline');
+  await mkdir(pipeline, { recursive: true });
+  const report = join(pipeline, 'architecture-review-as-built.md');
+  await writeFile(report, 'Verdict: APPROVED\n', 'utf-8');
+  const future = new Date(Date.now() + 60_000);
+  await utimes(report, future, future);
+}
 
 function fullSuiteVerifierStub() {
   return {
@@ -64,6 +73,7 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       rebase: 'done',
       finish: 'done',
     } as ConductState);
+    await seedFreshAsBuiltEvidence(projectRoot);
     const relink = vi.fn(async () => {});
     const provisionSandbox = vi.fn(async () => ({
       configDir: '/tmp/should-not-exist', childEnv: () => ({}), teardown: vi.fn(async () => {}),
@@ -91,7 +101,11 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       fullSuiteVerifier: fullSuiteVerifierStub(),
       config: {
         harness_self_host: { build_auth: { mode: 'api-key' } },
-        steps: { build: { llm_provider: 'codex' } },
+        steps: {
+          build: { llm_provider: 'codex' },
+          manual_test: { disable: true },
+          prd_audit: { disable: true },
+        },
       } as never,
     }).run();
 
@@ -105,10 +119,18 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
   it('runs common release gates at the self-host finish boundary', async () => {
     const finishState = {
       ...DONE_TO_BUILD,
+      build: 'done',
+      wiring_check: 'done',
+      build_review: 'done',
       test_suite: 'done',
+      manual_test: 'done',
+      prd_audit: 'done',
+      architecture_review_as_built: 'done',
       rebase: 'done',
+      finish: 'pending',
     } as ConductState;
     await writeState(stateFilePath, finishState as ConductState);
+    await seedFreshAsBuiltEvidence(projectRoot);
     const versionGate = vi.fn(async () => ({ ok: true as const }));
     const releaseGate = vi.fn(async () => ({ ok: true as const }));
     const guardrails: SelfHostGuardrails = {
@@ -137,7 +159,7 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       config: {
         steps: {
           manual_test: { disable: true },
-          architecture_review_as_built: { disable: true },
+          prd_audit: { disable: true },
         },
       } as never,
     }).run();

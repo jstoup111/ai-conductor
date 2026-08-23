@@ -62,8 +62,8 @@ describe('as-built SHIP routing', () => {
       mkdir(join(dir, '.docs', 'stories'), { recursive: true }),
       mkdir(join(dir, '.docs', 'specs'), { recursive: true }),
     ]);
-    await writeFile(join(dir, '.docs', 'plans', `${slug}.md`), '# Plan\n\n### Task 1: existing work\n\n**Files:** src/feature.ts\n');
-    await writeFile(join(dir, '.docs', 'stories', `${slug}.md`), '# Stories\n\n## Story 1\n\n### Acceptance Criteria\n\n- Given x, when y, then z.\n');
+    await writeFile(join(dir, '.docs', 'plans', `${slug}.md`), '# Plan\n\n### Task 1: existing work\n\n**Files:** src/feature.ts\n\n**Criterion:** S1.1\n');
+    await writeFile(join(dir, '.docs', 'stories', `${slug}.md`), '# Stories\n\n## Story 1\n\n### Acceptance Criteria\n\n- **S1.1:** Given x, when y, then z.\n');
     await writeFile(join(dir, '.docs', 'specs', `${slug}.md`), '# PRD\n\n## Functional Requirements\n\n- **FR-1:** The requested result exists.\n');
     await writeFile(join(pipeline, 'task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }));
 
@@ -110,11 +110,11 @@ describe('as-built SHIP routing', () => {
         } else if (step === 'remediate') {
           await writeFile(join(pipeline, 'remediation.json'), JSON.stringify({
             dispositions: [{
-              id: 'FR-1',
+              id: 'S1.1',
               disposition: 'build',
               category: null,
               rationale: 'implement the existing planned task',
-              tasks: [{ id: 'FR-1-fix', title: 'Implement the missing planned behavior' }],
+              tasks: [{ id: 'S1.1-fix', title: 'Implement the missing planned behavior' }],
             }],
           }));
         }
@@ -132,6 +132,9 @@ describe('as-built SHIP routing', () => {
       fromStep: 'manual_test',
       verifyArtifacts: true,
       maxRetries: 1,
+      config: {
+        prd_audit: { max_appended_ratio: 1 },
+      } as never,
       git: async (args) => args.includes('--symbolic-full-name') ? { stdout: 'refs/remotes/origin/feature/as-built-verdict\n' } : { stdout: '' },
     });
 
@@ -141,6 +144,6 @@ describe('as-built SHIP routing', () => {
     expect(calls).not.toContain('build');
     expect(kicks).not.toContainEqual(expect.objectContaining({ to: 'build' }));
     await expect(readFile(join(pipeline, 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
-    await expect(readFile(join(dir, '.docs', 'plans', `${slug}.md`), 'utf8')).resolves.toContain('FR-1-fix');
+    await expect(readFile(join(dir, '.docs', 'plans', `${slug}.md`), 'utf8')).resolves.toContain('rem-prd-audit-S1.1-fix');
   });
 });

@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -45,6 +45,10 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
       'architecture_review_as_built', 'retro', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
     await writeState(stateFilePath, state as ConductState);
+    const asBuiltReport = join(pipelineDir, 'architecture-review-as-built.md');
+    await writeFile(asBuiltReport, 'Verdict: APPROVED\n');
+    const future = new Date(Date.now() + 60_000);
+    await utimes(asBuiltReport, future, future);
   });
 
   afterEach(async () => {
@@ -104,6 +108,12 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
       daemon: true,
       maxRetries: 3,
       verifyArtifacts: false,
+      config: {
+        steps: {
+          manual_test: { disable: true },
+          prd_audit: { disable: true },
+        },
+      },
       events: new ConductorEventEmitter(),
       git,
       gh,

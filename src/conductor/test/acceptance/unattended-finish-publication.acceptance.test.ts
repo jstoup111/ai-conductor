@@ -31,7 +31,7 @@
  *   - src/conductor/src/engine/step-runners.ts#runDispatch
  */
 
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -747,6 +747,13 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     await writeState(stateFilePath, state as ConductState);
     await mkdir(join(conductorRoot, '.docs', 'shipped'), { recursive: true });
     await writeFile(join(conductorRoot, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+    const asBuiltReport = join(pipeline, 'architecture-review-as-built.md');
+    await writeFile(asBuiltReport, 'Verdict: APPROVED\n');
+    // The publication fence evaluates this pre-seeded result in the session
+    // that starts below. Keep the fixture's already-complete SHIP validator
+    // evidence fresh for that session without dispatching an unrelated review.
+    const future = new Date(Date.now() + 60_000);
+    await utimes(asBuiltReport, future, future);
     const prosePasses = { author: 0, judge: 0 };
     const gh = vi.fn(async (args: string[]) => {
       if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
@@ -791,6 +798,12 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       daemon,
       fromStep: 'finish',
       verifyArtifacts: false,
+      config: {
+        steps: {
+          manual_test: { disable: true },
+          prd_audit: { disable: true },
+        },
+      },
       finishPublication: createProductionFinishPublicationCoordinator({
         projectRoot: conductorRoot,
         stateFilePath,

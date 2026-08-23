@@ -7,7 +7,9 @@
 As a harness maintainer, I want the fixture agent to touch the declared file
 so that daemon task evidence can be corroborated against a real commit.
 
+**Requirements:** FR-1
+
 ### Acceptance Criteria
 
-- Given the fixture feature is dispatched, when Task 1 runs, then the agent
-  touches `test/fixtures/daemon-e2e/touched.txt`.
+- **S1.1:** Given the fixture feature is dispatched, when Task 1 runs, then
+  the agent touches `test/fixtures/daemon-e2e/touched.txt`.
