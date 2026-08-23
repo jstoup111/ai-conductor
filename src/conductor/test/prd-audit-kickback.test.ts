@@ -77,6 +77,7 @@ async function createPrdAuditRemediationFixture(input: {
   criteria: string[];
   config?: Record<string, unknown>;
   priorLaps?: number;
+  report?: string;
 }) {
   const root = await mkdtemp(join(tmpdir(), 'prd-audit-kickback-'));
   dirs.push(root);
@@ -94,7 +95,7 @@ async function createPrdAuditRemediationFixture(input: {
   );
   await writeFile(
     join(root, '.pipeline', 'prd-audit.md'),
-    [
+    input.report ?? [
       '**PRD:** present',
       '',
       '## Verdict Table',
@@ -140,10 +141,17 @@ async function createPrdAuditRemediationFixture(input: {
       return { success: true };
     },
   };
+  const events = new ConductorEventEmitter();
+  const gateBlocks: Array<{ step: string; reason: string }> = [];
+  events.on('gate_blocked', (event) => {
+    if (event.type === 'gate_blocked') {
+      gateBlocks.push({ step: event.step, reason: event.reason });
+    }
+  });
   const conductor = new Conductor({
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
     stepRunner: runner,
-    events: new ConductorEventEmitter(),
+    events,
     projectRoot: root,
     mode: 'auto',
     daemon: true,
@@ -166,7 +174,7 @@ async function createPrdAuditRemediationFixture(input: {
     { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
   );
 
-  return { outcome, plan, planPath, root };
+  return { outcome, plan, planPath, root, gateBlocks };
 }
 
 describe('prd_audit kickback', () => {
@@ -262,6 +270,32 @@ describe('prd_audit kickback', () => {
       remediationLapCapForGate('prd_audit', { prd_audit: { max_remediation_laps: 1 } } as never, 0),
     ).toBe(1);
     expect(remediationLapCapForGate('manual_test', {} as never, 0)).toBe(0);
+  });
+
+  it('halts a malformed PRD-audit report before remediation can append its task', async () => {
+    const fixture = await createPrdAuditRemediationFixture({
+      taskCount: 1,
+      criteria: ['S2.1'],
+      report: [
+        '**PRD:** present',
+        '',
+        '## Verdict Table',
+        '| Criterion | Grade | Plan task | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| S2.1 | MAYBE | 1 | Missing behavior |',
+      ].join('\n'),
+    });
+
+    expect(fixture.outcome).toMatchObject({
+      kind: 'halt',
+      haltClass: 'mechanical',
+      detail: 'PRD audit report mechanical fault: PRD audit finding S2.1 has an invalid Grade.',
+    });
+    expect(fixture.gateBlocks).toEqual([{
+      step: 'prd_audit',
+      reason: 'PRD audit report mechanical fault: PRD audit finding S2.1 has an invalid Grade.',
+    }]);
+    expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
   });
 
   it('halts without appending when FIXABLE work exceeds the growth cap, listing every finding', async () => {

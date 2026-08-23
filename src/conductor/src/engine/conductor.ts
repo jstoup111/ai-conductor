@@ -2959,7 +2959,7 @@ export class Conductor {
     hintSource: { source: string; evidenceFile: string },
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
-    | { kind: 'halt'; detail: string; haltClass?: KickbackCapHaltClass; kickbackOutcome?: string }
+    | { kind: 'halt'; detail: string; haltClass?: KickbackCapHaltClass | 'mechanical'; kickbackOutcome?: string }
     | { kind: 'none' }
   > {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
@@ -3028,14 +3028,17 @@ export class Conductor {
         activePlanText = await readFile(planPath, 'utf8');
         const report = await readFile(join(this.projectRoot, hintSource.evidenceFile), 'utf8');
         const parsed = parsePrdAuditReport(report, activePlanText);
-        if (parsed.ok) {
-          for (const finding of parsed.value.findings) {
-            if (finding.grade === 'FIXABLE' && finding.planTask !== undefined) {
-              prdAuditFindings.set(finding.criterion, {
-                criterion: finding.criterion,
-                parentTask: finding.planTask,
-              });
-            }
+        if (!parsed.ok) {
+          const detail = `PRD audit report mechanical fault: ${parsed.error}`;
+          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
+          return { kind: 'halt', haltClass: 'mechanical', detail };
+        }
+        for (const finding of parsed.value.findings) {
+          if (finding.grade === 'FIXABLE' && finding.planTask !== undefined) {
+            prdAuditFindings.set(finding.criterion, {
+              criterion: finding.criterion,
+              parentTask: finding.planTask,
+            });
           }
         }
       } catch {
@@ -5997,7 +6000,7 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
@@ -6138,7 +6141,7 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
