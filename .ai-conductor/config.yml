@@ -48,6 +48,14 @@ build_progress_halt:
 # putting counterfactual/plan-holistic judgement on the strongest reasoner.
 # rootCause inherits the engine's medium-effort default (narrowest rubric).
 build_review:
+  # Gate disabled 2026-08-23 by operator decision, for this feature only.
+  # Required in addition to the per-rubric flags below: main's coordinator
+  # returns `refused: no-enabled-rubrics` when every registered rubric is off
+  # (build-review-coordinator.ts:443), whereas `enabled: false` takes the clean
+  # `gate-disabled` path (:440). This branch retires the four-rubric container
+  # and its replacement, test-quality, is not in the running engine's registry,
+  # so there is no rubric left for this gate to run here.
+  enabled: false
   # Enable this repository's advisory containment recordings. The shipped
   # default remains false, so consumer repositories must opt in explicitly.
   scopeContainmentEnforced: true
@@ -71,11 +79,31 @@ build_review:
       llm_provider: claude
       model: opus
       effort: high
+    # completeness and scope are disabled on 2026-08-23 by operator decision,
+    # for the duration of this feature only. This branch is the one retiring the
+    # four-rubric container: it has already deleted skills/build-review-completeness
+    # and skills/build-review-scope, so both rubrics are grading the very diff
+    # that removes them, under an engine built from main that still registers
+    # them.
+    #
+    # Measured cost on this feature: completeness returned
+    # invalid-provider-result 7 consecutive times and twice exhausted its
+    # 3-attempt mechanical allowance, producing no verdict all day. scope's
+    # findings ordered the deletion of daemon-observe-cli.ts:464,526 and
+    # skills/writing-system-tests/SKILL.md:409 — work that pending tasks
+    # rem-fr19-1 and rem-fr4-4 already own — which deadlocked remediation
+    # ("no dispatchable build work; the implicated task(s) are already
+    # evidence-complete") and halted the loop needing a human.
+    #
+    # Task 32 makes this permanent by enabling test-quality only; this edit is
+    # the interim unblock, not that task's deliverable.
     completeness:
+      enabled: false
       llm_provider: claude
       model: opus
       effort: high
     scope:
+      enabled: false
       llm_provider: codex
       model: gpt-5.6-sol
     # rootCause is disabled on 2026-08-22 by operator decision, as the interim
