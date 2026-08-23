@@ -1250,18 +1250,36 @@ describe('ClaudeProvider', () => {
       expect(opts.env?.CLAUDE_CODE_EFFORT_LEVEL).toBe('high');
     });
 
-    it('ignores stdin in print mode so `claude -p` cannot hang on TTY stdin', async () => {
+    it('delivers the print-mode prompt on stdin, never as a -p argv value (#829)', async () => {
       mockExeca.mockResolvedValue({ exitCode: 0 } as any);
       await provider.invokeInteractive({ ...baseOptions, interactive: false });
       const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts).toMatchObject({
-        stdin: 'ignore',
+        input: 'Do the thing',
         stdout: ['pipe', 'inherit'],
         stderr: ['pipe', 'inherit'],
       });
-      expect(args).toEqual(expect.arrayContaining(['-p', 'Do the thing']));
+      // Print mode is still selected — `-p` used to do that implicitly.
+      expect(args).toContain('--print');
+      expect(args).not.toContain('-p');
+      expect(args).not.toContain('Do the thing');
       expect(args).not.toContain('--verbose');
       expect(args).not.toContain('stream-json');
+    });
+
+    it('keeps a prompt larger than MAX_ARG_STRLEN out of argv entirely', async () => {
+      // A single argv entry is capped at 32 * PAGE_SIZE (128 KiB on Linux).
+      // Exceeding it makes exec() fail with E2BIG before claude starts, which
+      // surfaces as a 0-turn empty result the engine reads as a malformed
+      // provider artifact — three of those exhaust build_review's mechanical
+      // fault allowance and HALT the feature.
+      const oversized = 'x'.repeat(200_000);
+      mockExeca.mockResolvedValue({ exitCode: 0 } as any);
+      await provider.invokeInteractive({ ...baseOptions, prompt: oversized, interactive: false });
+      const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(opts).toMatchObject({ input: oversized });
+      const longestArg = Math.max(...args.map((a) => Buffer.byteLength(a, 'utf8')));
+      expect(longestArg).toBeLessThan(131_072);
     });
 
     it('inherits REPL input while streaming and capturing output', async () => {
@@ -1417,7 +1435,10 @@ describe('ClaudeProvider', () => {
           waitSeconds:
             'waitSeconds' in expected ? expected.waitSeconds : undefined,
         },
-        stdin: name === 'missing executable' ? 'inherit' : 'ignore',
+        // Print mode now carries the prompt on `input`, so no explicit stdin
+        // mode is set; the interactive ('missing executable') case still
+        // inherits the terminal.
+        stdin: name === 'missing executable' ? 'inherit' : undefined,
         stdout: ['pipe', 'inherit'],
         stderr: ['pipe', 'inherit'],
       })),
