@@ -66,6 +66,19 @@ const PRD_AUDIT_PASS = [
   '',
 ].join('\n');
 
+const PRD_AUDIT_NO_PRD_PASS = [
+  '# PRD Audit',
+  '',
+  '**PRD:** none',
+  '',
+  '## Verdict Table',
+  '',
+  '| Criterion | Grade | Plan task | Evidence |',
+  '|---|---|---|---|',
+  '| S1.1 | PASS | | src-feature.ts:1 |',
+  '',
+].join('\n');
+
 const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 const AS_BUILT_PLAN_GAP = [
   '# As-Built Architecture Review',
@@ -153,20 +166,22 @@ async function seedFixture(options: FixtureOptions): Promise<Fixture> {
       '',
     ].join('\n'),
   );
-  await writeFile(
-    join(root, '.docs', 'specs', `${slug}.md`),
-    [
-      '# PRD',
-      '',
-      '**Status:** Approved',
-      '',
-      '## Functional Requirements',
-      '',
-      '- **FR-16:** A delivered plan gap is recorded and ships.',
-      '- **FR-17:** No SHIP gate directs unplanned work back to BUILD.',
-      '',
-    ].join('\n'),
-  );
+  if (options.track === 'product') {
+    await writeFile(
+      join(root, '.docs', 'specs', `${slug}.md`),
+      [
+        '# PRD',
+        '',
+        '**Status:** Approved',
+        '',
+        '## Functional Requirements',
+        '',
+        '- **FR-16:** A delivered plan gap is recorded and ships.',
+        '- **FR-17:** No SHIP gate directs unplanned work back to BUILD.',
+        '',
+      ].join('\n'),
+    );
+  }
   await writeFile(join(root, 'src-feature.ts'), 'export const delivered = true;\n');
   await writeFile(
     join(pipelineDir, 'engine-state.json'),
@@ -200,7 +215,7 @@ async function seedFixture(options: FixtureOptions): Promise<Fixture> {
 }
 
 interface RunnerOptions {
-  prdAudit?: 'pass' | 'missing';
+  prdAudit?: 'pass' | 'no-prd' | 'missing';
   asBuilt?: 'approved' | 'plan-gap';
 }
 
@@ -216,7 +231,10 @@ function fakeRunner(fixture: Fixture, calls: StepName[], options: RunnerOptions 
       } else if (step === 'manual_test') {
         await writeFile(join(fixture.pipelineDir, 'manual-test-results.md'), MANUAL_TEST_PASS);
       } else if (step === 'prd_audit' && options.prdAudit !== 'missing') {
-        await writeFile(join(fixture.pipelineDir, 'prd-audit.md'), PRD_AUDIT_PASS);
+        await writeFile(
+          join(fixture.pipelineDir, 'prd-audit.md'),
+          options.prdAudit === 'no-prd' ? PRD_AUDIT_NO_PRD_PASS : PRD_AUDIT_PASS,
+        );
       } else if (step === 'architecture_review_as_built') {
         await writeFile(
           join(fixture.pipelineDir, 'architecture-review-as-built.md'),
@@ -389,7 +407,7 @@ describe('Covers: FR-16, FR-17, S13.1 — a delivered as-built PLAN_GAP is non-b
 });
 
 describe('Covers: FR-8, S7.1 — S-tier technical work is still audited', () => {
-  it('cannot reach finish when prd_audit returns success without its required verdict artifact', async () => {
+  it('finishes only after prd_audit records a no-PRD story-criterion verdict', async () => {
     const fixture = await seedFixture({
       fromStep: 'prd_audit',
       tier: 'S',
@@ -403,15 +421,20 @@ describe('Covers: FR-8, S7.1 — S-tier technical work is still audited', () => 
     });
     const calls: StepName[] = [];
 
-    await runFixture(
-      fixture,
-      fakeRunner(fixture, calls, { prdAudit: 'missing', asBuilt: 'approved' }),
-      { fromStep: 'prd_audit', verifyArtifacts: true, daemon: true },
-    );
+    await runFixture(fixture, fakeRunner(fixture, calls, { prdAudit: 'no-prd', asBuilt: 'approved' }), {
+      fromStep: 'prd_audit',
+      verifyArtifacts: true,
+      daemon: false,
+    });
 
     expect(calls).toContain('prd_audit');
     expect(calls).toContain('architecture_review_as_built');
-    expect(calls).not.toContain('finish');
-    expect(existsSync(join(fixture.pipelineDir, 'HALT'))).toBe(true);
+    expect(calls).toContain('finish');
+    await expect(readFile(join(fixture.pipelineDir, 'prd-audit.md'), 'utf8')).resolves.toContain('**PRD:** none');
+    await expect(readFile(join(fixture.pipelineDir, 'prd-audit.md'), 'utf8')).resolves.toContain(
+      '| S1.1 | PASS | | src-feature.ts:1 |',
+    );
+    expect(existsSync(join(fixture.root, '.docs', 'specs', `${fixture.slug}.md`))).toBe(false);
+    expect(existsSync(join(fixture.pipelineDir, 'HALT'))).toBe(false);
   });
 });
