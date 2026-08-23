@@ -3325,20 +3325,13 @@ export class Conductor {
       };
     }
     const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
-    // Build-stall answers are not requests to expand the approved plan. Their
-    // raw answer remains the retry hint, including the zero-work variant which
-    // shares the same in-loop recovery behavior.
+    // Build-stall answers are not requests to expand the approved plan. Only
+    // the two established build-stall sources retain their raw retry hint.
     const buildStallSource =
       hintSource.source === 'build_stall' ||
-      hintSource.source === 'build-stall' ||
-      hintSource.source === 'build_stall_zero_work';
-    // Production gates always provide provenance, so only build-stall answers
-    // retain their raw-fixes fallback. Keep the unprovenanced private seam
-    // compatible for its direct policy tests; it cannot represent a routed
-    // production gate.
-    const routedFixes =
-      buildStallSource || remediationEvidenceSources.length === 0 ? fixes : admittedFixes;
-    if (requiresPlanGrowthAllowance && fixes.length > 0 && routedFixes.length === 0) {
+      hintSource.source === 'build-stall';
+    const routedFixes = buildStallSource ? fixes : admittedFixes;
+    if (fixes.length > 0 && routedFixes.length === 0) {
       return {
         kind: 'halt',
         haltClass: KICKBACK_CAP_HALT_CLASS,
