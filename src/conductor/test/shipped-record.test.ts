@@ -6,7 +6,7 @@ import {
 } from '../src/engine/shipment-association.js';
 
 describe('shipped-record recorded review findings', () => {
-  it('copies recorded prd-audit and delivered as-built PLAN_GAP findings into frontmatter', () => {
+  it('copies recorded non-blocking prd-audit and delivered as-built findings into frontmatter', () => {
     const findings = recordedShipmentFindings({
       prdAudit: [
         '**PRD:** present',
@@ -19,6 +19,18 @@ describe('shipped-record recorded review findings', () => {
           grade: 'PLAN_GAP',
           criterion: 'S2.2',
           summary: 'The retry edge case is outside the approved plan.',
+        }, {
+          gate: 'prd_audit',
+          grade: 'OVER_SCOPE',
+          criterion: 'S2.3',
+          summary: 'The added diagnostic is harmless outside the approved intent.',
+          accepted: false,
+        }, {
+          gate: 'prd_audit',
+          grade: 'OVER_SCOPE',
+          criterion: 'S2.4',
+          summary: 'The operator accepted the visible optional behavior.',
+          accepted: true,
         }] }),
         '```',
       ].join('\n'),
@@ -38,6 +50,20 @@ describe('shipped-record recorded review findings', () => {
         grade: 'PLAN_GAP',
         criterion: 'S2.2',
         summary: 'The retry edge case is outside the approved plan.',
+      },
+      {
+        gate: 'prd_audit',
+        grade: 'OVER_SCOPE',
+        criterion: 'S2.3',
+        summary: 'The added diagnostic is harmless outside the approved intent.',
+        accepted: false,
+      },
+      {
+        gate: 'prd_audit',
+        grade: 'OVER_SCOPE',
+        criterion: 'S2.4',
+        summary: 'The operator accepted the visible optional behavior.',
+        accepted: true,
       },
       {
         gate: 'architecture_review_as_built',
@@ -60,6 +86,16 @@ describe('shipped-record recorded review findings', () => {
       '    grade: PLAN_GAP',
       '    criterion: S2.2',
       '    summary: "The retry edge case is outside the approved plan."',
+      '  - gate: prd_audit',
+      '    grade: OVER_SCOPE',
+      '    criterion: S2.3',
+      '    summary: "The added diagnostic is harmless outside the approved intent."',
+      '    accepted: false',
+      '  - gate: prd_audit',
+      '    grade: OVER_SCOPE',
+      '    criterion: S2.4',
+      '    summary: "The operator accepted the visible optional behavior."',
+      '    accepted: true',
       '  - gate: architecture_review_as_built',
       '    grade: PLAN_GAP',
       '    outcome: "Retry status remains eventually consistent."',

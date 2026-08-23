@@ -32,6 +32,14 @@ export type RecordedShipmentFinding =
     summary: string;
   }
   | {
+    gate: 'prd_audit';
+    grade: 'OVER_SCOPE';
+    criterion: string;
+    summary: string;
+    /** False for harmless scope additions; true for an operator-accepted widening. */
+    accepted: boolean;
+  }
+  | {
     gate: 'architecture_review_as_built';
     grade: 'PLAN_GAP';
     outcome: string;
@@ -68,6 +76,7 @@ export function appendRecordedShipmentFindings(
       ? `    criterion: ${yamlScalar(finding.criterion)}`
       : `    outcome: ${yamlScalar(finding.outcome)}`,
     `    summary: ${yamlScalar(finding.summary)}`,
+    ...('accepted' in finding ? [`    accepted: ${finding.accepted}`] : []),
   ].join('\n')).join('\n');
   return `${record.slice(0, frontmatterEnd)}\nfindings:\n${rendered}${record.slice(frontmatterEnd)}`;
 }
@@ -104,11 +113,17 @@ function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentF
     const findings = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)
       ? (parsed as { findings: unknown[] }).findings
       : [];
-    return findings.flatMap((finding) => {
-      if (!isObject(finding) || finding.gate !== 'prd_audit' || finding.grade !== 'PLAN_GAP') return [];
+    return findings.flatMap<RecordedShipmentFinding>((finding) => {
+      if (!isObject(finding) || finding.gate !== 'prd_audit') return [];
       const criterion = nonEmptyString(finding.criterion);
       const summary = nonEmptyString(finding.summary);
-      return criterion && summary ? [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion, summary }] : [];
+      if (!criterion || !summary) return [];
+      if (finding.grade === 'PLAN_GAP') {
+        return [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion, summary }];
+      }
+      return finding.grade === 'OVER_SCOPE' && typeof finding.accepted === 'boolean'
+        ? [{ gate: 'prd_audit', grade: 'OVER_SCOPE', criterion, summary, accepted: finding.accepted }]
+        : [];
     });
   } catch {
     return [];
