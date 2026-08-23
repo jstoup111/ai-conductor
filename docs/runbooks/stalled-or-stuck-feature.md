@@ -985,10 +985,64 @@ loop.
 2. Clear the halt using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
 
 **Verification:** the next `build_review` run treats the rubric as reduced coverage rather than
-re-raising the same infrastructure failure, the feature reaches PASS, and the shipped record at
+halting on the same infrastructure failure, the feature reaches PASS, and the shipped record at
 `.docs/shipped/<slug>.md` carries a reduced-coverage section for that rubric. A genuine semantic
 FAIL on the same rubric still blocks exactly as before — recording reduced coverage does not
 suppress a real finding.
+
+**The record stops the halt, not the dispatch.** An excused rubric is still dispatched on every
+later lap and still reports the same infrastructure failure each time; what changes is that the
+failure no longer halts the run. Expect to keep seeing
+`build_review_rubric_infrastructure_failure` events for it in `.pipeline/events.jsonl` — on
+2026-08-23 a `completeness` record accepted at 12:16:42Z was followed by three more identical
+dispatches at 12:20:39Z, 13:07:12Z and 16:46:00Z. That is the documented behavior, not a sign the
+record failed to take; confirm the record itself in `.pipeline/build-review-dispositions.json`.
+Issue #1832 tracks suppressing the redundant dispatches.
+
+### Remediation routed the work but the engine found nothing to dispatch
+
+**Symptom:** `.pipeline/HALT` ends with this clause, and `.pipeline/HALT.class` reads `needs-human`:
+
+```text
+— remediation produced no dispatchable build work; the implicated task(s) are already
+evidence-complete — human needed
+```
+
+**Diagnosis:** this is not a remediation failure, and reading it as one wastes time. Check
+`.pipeline/remediation.json` first: in this class every disposition is `build`, each names an
+existing plan task that admits the finding, and none asks for a plan widening or a HALT.
+Remediation did its job. The engine then declined to dispatch, because the plan tasks named as
+owners already carry completion evidence, so it had no open task to attach the work to.
+
+```bash
+python3 -c "
+import json
+d = json.load(open('.worktrees/<slug>/.pipeline/remediation.json'))
+for x in d['dispositions']:
+    print(x['id'], x['disposition'], '|', x['rationale'][:120])
+"
+```
+
+Distinguish it from the superficially similar case where remediation genuinely emitted nothing —
+there the dispositions are absent, empty, or all `halt`, and the fix is a remediation problem
+rather than a dispatch one.
+
+**Recovery:** the owning tasks named in the rationales still need the work, and clearing the halt
+alone will reproduce it on the next lap if the same gate re-raises the same findings. Either:
+
+1. Address the named findings directly, commit, then clear the halt using
+   [the resume procedure](#clear-a-halt-and-let-the-feature-resume); or
+2. If the gate that raised them should not be running for this feature at all — for example a
+   rubric this branch is itself retiring — disable it in the feature worktree's
+   `.ai-conductor/config.yml`, commit that as an operator decision with its rationale, and clear
+   the halt. Disabling every registered rubric is not sufficient on its own: the coordinator
+   returns `refused: no-enabled-rubrics` when the enabled set is empty
+   (`build-review-coordinator.ts:443`), so set `build_review.enabled: false` to take the
+   `gate-disabled` path (`:440`).
+
+**Verification:** the feature re-dispatches and advances past the gate that halted it. Issue #1831
+tracks the durable fix — re-opening an evidence-complete task with the new finding attached instead
+of halting.
 
 ### The feature must stop being dispatched entirely
 
