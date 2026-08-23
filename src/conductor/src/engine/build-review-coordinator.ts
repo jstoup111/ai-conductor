@@ -250,7 +250,8 @@ export async function coordinateBuildReviewRubrics(
   input: BuildReviewCoordinationInput,
 ): Promise<BuildReviewCoordination> {
   const testQualityPolicy = input.config.rubrics.testQuality;
-  if (input.config.enabled && testQualityPolicy?.enabled && input.inputs.sourceSnapshot.testQuality?.inScopeTests.length === 0) {
+  const inScopeTests = input.inputs.sourceSnapshot.testQuality?.inScopeTests ?? [];
+  if (input.config.enabled && testQualityPolicy?.enabled && inScopeTests.length === 0) {
     await input.emit?.({
       type: "build_review_outer_verdict",
       lapId: input.lapId,
@@ -289,10 +290,20 @@ export async function coordinateBuildReviewRubrics(
       };
     }
   }
+  const inScopeTestSet = new Set(inScopeTests);
+  const projectionInputs: BuildReviewFrozenInputs = {
+    ...input.inputs,
+    sourceSnapshot: {
+      ...input.inputs.sourceSnapshot,
+      changedTestTitles: input.inputs.sourceSnapshot.changedTestTitles?.filter(
+        (title) => inScopeTestSet.has(title.selector),
+      ),
+    },
+  };
   const derivedProjections = deriveBuildReviewRubricProjections({
     lapId: input.lapId,
-    inputs: input.inputs,
-    testQuality: preflight ? preflightProjection(preflight) : {
+    inputs: projectionInputs,
+    testQuality: preflight ? { ...preflightProjection(preflight), changedTestSelectors: inScopeTests } : {
       changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });

@@ -60,6 +60,7 @@ function inputs(): BuildReviewFrozenInputs {
       headSha: "head",
       ...sourceContent,
       acceptedWidenings: [],
+      testQuality: { inScopeTests: ["test/a.test.ts"], unresolvedMarkers: [] },
     },
   };
 }
@@ -138,6 +139,65 @@ describe("build-review coordinator: registered dispatch", () => {
     expect(input.preflight).toHaveBeenCalledTimes(0);
     expect(input.dispatchModel).not.toHaveBeenCalled();
     expect(input.readCache).not.toHaveBeenCalled();
+  });
+
+  it("excludes a relocated refactor-preserving test from the grader and rejects a finding anchored there", async () => {
+    const inScopeTest = "test/feature-behavior.test.ts";
+    const relocatedTest = "test/relocated-legacy.test.ts";
+    const inScopeTitle = "feature behavior remains sensitive";
+    const relocatedTitle = "legacy behavior remains preserved after relocation";
+    const frozenInputs = inputs();
+    const dispatchModel = vi.fn(async () => ({
+      findings: [{
+        concernKind: "test-insensitive",
+        summary: "The relocated preservation test is insensitive.",
+        evidenceLocations: [`${relocatedTest}:12`],
+        anchor: {
+          rubric: "testQuality",
+          locus: {
+            path: relocatedTest,
+            contentHash: `sha256:${createHash("sha256").update(relocatedTitle).digest("hex")}`,
+            display: relocatedTitle,
+          },
+        },
+      }],
+    }));
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          changedTestTitles: [
+            { selector: inScopeTest, titleText: inScopeTitle, staticExtractionFallback: false },
+            { selector: relocatedTest, titleText: relocatedTitle, staticExtractionFallback: false },
+          ],
+          testQuality: { inScopeTests: [inScopeTest], unresolvedMarkers: [] },
+        },
+      },
+      preflight: vi.fn(async () => ({
+        classification: "stayed-green",
+        cacheable: true,
+        cacheProvenance: "miss",
+        changedPaths: ["src/feature.ts", inScopeTest, relocatedTest],
+        changedTestSelectors: [inScopeTest, relocatedTest],
+        revertedProductionManifest: [],
+        sourceIdentities: { mergeBase: "base", headSha: "head" },
+        scopedRun: { exitCode: 0, runKind: "passed", ranSelectors: [inScopeTest, relocatedTest], failureExcerpt: "" },
+      } as const)),
+      dispatchModel,
+    }));
+
+    expect(dispatchModel).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric: "testQuality" }),
+      expect.objectContaining({
+        changedTestSelectors: [inScopeTest],
+        changedTestTitles: [{ selector: inScopeTest, titleText: inScopeTitle, staticExtractionFallback: false }],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "ready",
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" }],
+    });
   });
 
   it("dispatches exactly the enabled registered test-quality rubric", async () => {
