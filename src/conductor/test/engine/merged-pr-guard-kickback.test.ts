@@ -302,6 +302,9 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
       state.build_review = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'skipped';
       state.pr_url = PR_URL;
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -325,6 +328,13 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
             await writeFile(
               join(dir, '.pipeline/manual-test-results.md'),
               '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n',
+            );
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n');
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
             );
           }
           return { success: true };
@@ -613,9 +623,9 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'FAIL',
-                reasons: ['missing wiring from command to handler'],
-                rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
-                findings: { completeness: ['missing wiring from command to handler'] },
+                reasons: ['changed test does not observe the new behavior'],
+                rubric: { testQuality: true },
+                findings: { testQuality: ['changed test does not observe the new behavior'] },
               }),
             );
           } else if (step === 'manual_test') {
@@ -653,7 +663,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
       expect(calls).not.toContain('wiring_check');
       const verdict = JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'));
-      expect(verdict.findings.completeness).toContain('missing wiring from command to handler');
+      expect(verdict.findings.testQuality).toContain('changed test does not observe the new behavior');
       expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
       expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
     });
@@ -696,6 +706,9 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
       state.build_review = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'skipped';
       state.pr_url = PR_URL;
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -728,6 +741,13 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
                 '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
               );
             }
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n');
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+            );
           }
           return { success: true };
         }),
@@ -775,6 +795,9 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       kickbackState.complexity_tier = 'L';
       kickbackState.feature_desc = 'feat';
       kickbackState.build_review = 'skipped';
+      kickbackState.retro = 'skipped';
+      kickbackState.rebase = 'skipped';
+      kickbackState.finish = 'skipped';
       kickbackState.pr_url = PR_URL;
       await writeState(statePath, kickbackState as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -808,6 +831,13 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
                 '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
               );
             }
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n');
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+            );
           }
           return { success: true };
         }),
@@ -849,6 +879,8 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       // validation work after the second guard query.
       rebaseState.complexity_tier = 'S';
       rebaseState.track = 'technical';
+      delete rebaseState.rebase;
+      rebaseState.finish = 'skipped';
       rebaseState.pr_url = PR_URL;
       await writeState(statePath, rebaseState as unknown as ConductState);
 

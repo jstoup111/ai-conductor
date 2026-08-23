@@ -123,13 +123,8 @@ describe('#1336 disputed wiring kickback build outcome', () => {
       JSON.stringify({
         verdict: 'FAIL',
         reasons: ['productionEntry is unreachable'],
-        rubric: {
-          tautology: true,
-          scope: false,
-          rootCause: false,
-          completeness: false,
-          },
-        findings: { tautology: ['productionEntry is unreachable'] },
+        rubric: { testQuality: true },
+        findings: { testQuality: ['productionEntry is unreachable'] },
       }),
     );
   }

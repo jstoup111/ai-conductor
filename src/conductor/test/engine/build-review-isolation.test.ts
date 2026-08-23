@@ -243,7 +243,7 @@ describe('build_review input isolation', () => {
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
-      config: { build_review: { enabled: true } } as HarnessConfig,
+      config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
       buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
         version: 1,
@@ -278,39 +278,6 @@ describe('build_review input isolation', () => {
     );
   });
 
-  it('keeps skipped rubrics out of the mechanical lane', async () => {
-    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
-    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
-      kind: 'ready',
-      branches: [
-        { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
-      ],
-    });
-    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
-      gitRunner: realGit(), planPath,
-      config: { build_review: { enabled: true } } as HarnessConfig,
-      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
-      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
-        version: 1,
-        rubric,
-        lapId,
-        snapshotDigest,
-        result: {
-          kind: 'judged', rubric, lapId, snapshotDigest,
-          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
-        },
-        provenance: { kind: 'fresh' },
-      }),
-    });
-
-    const result = await runner.run('build_review', {} as never);
-    expect(result).toMatchObject({ success: true });
-    expect(result.currentLapMechanicalFault).toBeUndefined();
-    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
-      '"kind": "skipped"',
-    );
-  });
-
   it('publishes an exhausted malformed artifact as the current lap mechanical failure', async () => {
     const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
@@ -319,7 +286,7 @@ describe('build_review input isolation', () => {
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
-      config: { build_review: { enabled: true } } as HarnessConfig,
+      config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
       buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
         version: 1,

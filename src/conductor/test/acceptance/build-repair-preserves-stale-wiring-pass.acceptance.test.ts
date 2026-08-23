@@ -82,11 +82,7 @@ describe('BUILD repair re-dispatches every verification member without stranding
             JSON.stringify({
               verdict: 'PASS',
               reasons: [],
-              rubric: {
-                tautology: false,
-                scope: false,
-                rootCause: false,
-                completeness: false },
+              rubric: { testQuality: false },
             }),
           );
           return { success: true };

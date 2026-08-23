@@ -166,7 +166,7 @@ function frontDone(): ConductState {
 }
 
 /** The kickback vehicle. `build_review` is the deterministic BUILD gate that
- * still routes an unsatisfied verdict back to `build`: a non-completeness
+ * still routes an unsatisfied verdict back to `build`: a test-quality
  * rubric FAIL takes `buildReviewFailRoute -> 'build'`, which is the cap path
  * this file bounds. (`wiring_check`, the original 2026-07-26 vehicle, is now a
  * deprecated no-op that never kicks back —
@@ -174,8 +174,8 @@ function frontDone(): ConductState {
 const FAIL_VERDICT = (message: string): string =>
   JSON.stringify({
     verdict: 'FAIL',
-    rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
-    findings: { tautology: [message] },
+    rubric: { testQuality: true },
+    findings: { testQuality: [message] },
   });
 
 describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
@@ -230,7 +230,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+          rubric: { testQuality: false },
         }),
       );
     } else if (step === 'manual_test') {
@@ -759,15 +759,15 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       const runner: StepRunner = {
         run: async (step) => {
           if (step === 'build_review') {
-            // A non-completeness rubric FAIL routes straight back to `build`
+            // A test-quality rubric FAIL routes straight back to `build`
             // (buildReviewFailRoute → 'build'), so this exercises the cap path
             // rather than the remediation planner.
             await writeFile(
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'FAIL',
-                rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
-                findings: { tautology: ['assertion restates the implementation'] },
+                rubric: { testQuality: true },
+                findings: { testQuality: ['assertion restates the implementation'] },
               }),
             );
             return { success: true };
