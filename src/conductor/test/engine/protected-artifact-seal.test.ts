@@ -86,7 +86,13 @@ async function makeRepo(files: Record<string, string>): Promise<string> {
 
 afterEach(async () => {
   failGitDiff.value = false;
-  while (scratches.length > 0) await rm(scratches.pop()!, { recursive: true, force: true });
+  // `force: true` only swallows ENOENT. These scratches are real git repos, so
+  // a still-settling git process can create a file mid-teardown and `rm` throws
+  // ENOTEMPTY (observed in CI on `.git/info`). `maxRetries` is Node's documented
+  // remedy — it retries EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM with a backoff.
+  while (scratches.length > 0) {
+    await rm(scratches.pop()!, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
 });
 
 it('exports protected artifact directory and feature-name helpers', () => {
