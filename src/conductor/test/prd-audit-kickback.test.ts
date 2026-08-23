@@ -18,7 +18,7 @@ import {
 } from '../src/engine/accepted-widenings.js';
 import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
-import type { ConductState } from '../src/types/index.js';
+import type { ConductState, StepName } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { DefaultStepRunner } from '../src/engine/step-runners.js';
 import { PROTECTED_ARTIFACT_SEAL_PATH } from '../src/engine/protected-artifact-seal.js';
@@ -165,13 +165,19 @@ async function createPrdAuditRemediationFixture(input: {
       state: ConductState,
       steps: typeof ALL_STEPS,
       dispatchContext: string,
-      hintSource: { source: string; evidenceFile: string },
+      hintSource: {
+        source: string;
+        evidence: Array<{ gate: StepName; evidenceFile: string }>;
+      },
     ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
   }).planRemediation(
     { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
     ALL_STEPS,
     'prd audit blocked',
-    { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+    {
+      source: 'prd-audit',
+      evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+    },
   );
 
   return { outcome, plan, planPath, root, gateBlocks };
@@ -245,13 +251,19 @@ describe('prd_audit kickback', () => {
         state: ConductState,
         steps: typeof ALL_STEPS,
         dispatchContext: string,
-        hintSource: { source: string; evidenceFile: string },
+        hintSource: {
+          source: string;
+          evidence: Array<{ gate: StepName; evidenceFile: string }>;
+        },
       ) => Promise<{ kind: string; target?: string }>;
     }).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'prd audit blocked',
-      { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+      {
+        source: 'prd-audit',
+        evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+      },
     );
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });

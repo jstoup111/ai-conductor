@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkStepCompletion } from '../src/engine/artifacts.js';
 import { Conductor, type StepRunner } from '../src/engine/conductor.js';
+import { readKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import { writeState } from '../src/engine/state.js';
 import type { ConductState, StepName } from '../src/types/index.js';
@@ -52,7 +53,7 @@ describe('as-built verdict gate', () => {
 });
 
 describe('as-built SHIP routing', () => {
-  it('plans only the prd_audit FIXABLE task, then halts the validation group on as-built BLOCKED without a BUILD kickback', async () => {
+  it('records only the capped prd_audit addition from a validation group with prd and as-built evidence, then halts on as-built BLOCKED', async () => {
     const dir = await fixture();
     const pipeline = join(dir, '.pipeline');
     const statePath = join(pipeline, 'conduct-state.json');
@@ -81,13 +82,14 @@ describe('as-built SHIP routing', () => {
     await writeState(statePath, state as ConductState);
 
     const calls: StepName[] = [];
+    const remediationReasons: string[] = [];
     const events = new ConductorEventEmitter();
     const kicks: Array<{ from: string; to: string }> = [];
     events.on('kickback', (event) => {
       if (event.type === 'kickback') kicks.push({ from: event.from, to: event.to });
     });
     const runner: StepRunner = {
-      run: vi.fn(async (step) => {
+      run: vi.fn(async (step, _state, options) => {
         calls.push(step);
         if (step === 'manual_test') {
           await writeFile(join(pipeline, 'manual-test-results.md'), '| Story | Result |\n|---|---|\n| S1 | PASS |\n');
@@ -108,6 +110,7 @@ describe('as-built SHIP routing', () => {
         } else if (step === 'architecture_review_as_built') {
           await writeAsBuilt(dir, 'Verdict: BLOCKED\n');
         } else if (step === 'remediate') {
+          remediationReasons.push(options?.retryReason ?? '');
           await writeFile(join(pipeline, 'remediation.json'), JSON.stringify({
             dispositions: [{
               id: 'S1.1',
@@ -115,6 +118,12 @@ describe('as-built SHIP routing', () => {
               category: null,
               rationale: 'implement the existing planned task',
               tasks: [{ id: 'S1.1-fix', title: 'Implement the missing planned behavior' }],
+            }, {
+              id: 'ARCH-1',
+              disposition: 'build',
+              category: null,
+              rationale: 'This as-built concern remains terminal in this round.',
+              tasks: [{ id: 'arch-fix', title: 'Do not append this as-built task' }],
             }],
           }));
         }
@@ -143,7 +152,17 @@ describe('as-built SHIP routing', () => {
     expect(calls).toContain('remediate');
     expect(calls).not.toContain('build');
     expect(kicks).not.toContainEqual(expect.objectContaining({ to: 'build' }));
+    expect(remediationReasons).toEqual([
+      expect.stringContaining('.pipeline/prd-audit.md'),
+    ]);
+    expect(remediationReasons[0]).toContain('.pipeline/architecture-review-as-built.md');
     await expect(readFile(join(pipeline, 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
-    await expect(readFile(join(dir, '.docs', 'plans', `${slug}.md`), 'utf8')).resolves.toContain('rem-prd-audit-S1.1-fix');
+    const plan = await readFile(join(dir, '.docs', 'plans', `${slug}.md`), 'utf8');
+    expect(plan).toContain('rem-prd-audit-S1.1-fix');
+    expect(plan).not.toContain('architecture-review-as-built');
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { prd_audit: { laps: 1 } },
+      growth: { added: 1, byGate: { prd_audit: 1 } },
+    });
   });
 });

@@ -508,6 +508,22 @@ export function isEngineComputedStep(step: StepName): boolean {
 // times per feature before the loop HALTs for a human.
 const MAX_KICKBACKS_PER_GATE = 2;
 
+/**
+ * Identifies the gate evidence that authorized a remediation dispatch. A
+ * validation-group round can carry more than one gate, so this deliberately
+ * preserves each gate-to-artifact pairing rather than flattening it into a
+ * comma-delimited filename string.
+ */
+interface RemediationGateProvenance {
+  gate: StepName;
+  evidenceFile: string;
+}
+
+interface RemediationHintSource {
+  source: string;
+  evidence: readonly RemediationGateProvenance[];
+}
+
 /** PRD-audit owns its configured remediation allowance; other gates share the generic cap. */
 export function remediationLapCapForGate(
   gate: string,
@@ -2960,7 +2976,7 @@ export class Conductor {
     state: ConductState,
     steps: StepDefinition[],
     dispatchContext: string,
-    hintSource: { source: string; evidenceFile: string },
+    hintSource: RemediationHintSource,
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
     | { kind: 'halt'; detail: string; haltClass?: KickbackCapHaltClass | 'mechanical'; kickbackOutcome?: string }
@@ -3023,14 +3039,17 @@ export class Conductor {
     // plan work, and appending it would amend `.docs/plans/<slug>.md` — a
     // protected artifact — producing self-amendment warnings for a change that
     // never belonged in the plan.
-    const prdAuditRemediation = hintSource.evidenceFile === '.pipeline/prd-audit.md';
+    const prdAuditEvidenceFile = hintSource.evidence.find(
+      (provenance) => provenance.gate === 'prd_audit',
+    )?.evidenceFile;
+    const prdAuditRemediation = prdAuditEvidenceFile !== undefined;
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
     let activePlanText = '';
     if (planPath && prdAuditRemediation) {
       try {
         activePlanText = await readFile(planPath, 'utf8');
-        const report = await readFile(join(this.projectRoot, hintSource.evidenceFile), 'utf8');
+        const report = await readFile(join(this.projectRoot, prdAuditEvidenceFile), 'utf8');
         const parsed = parsePrdAuditReport(report, activePlanText);
         if (!parsed.ok) {
           const detail = `PRD audit report mechanical fault: ${parsed.error}`;
@@ -3058,6 +3077,7 @@ export class Conductor {
     // missing audit artifacts; only validated FIXABLE findings consume this
     // gate's bounded append allowance.
     const prdAuditCapEnforced = prdAuditRemediation && prdAuditFindings.size > 0;
+    const prdAuditTasks: Array<{ id: string; title: string }> = [];
     for (const gap of gaps) {
       if (
         !sealedArtifactGapIds.has(gap.id) &&
@@ -3071,6 +3091,7 @@ export class Conductor {
           ...(finding === undefined ? {} : finding),
         });
         allTasks.push(...gap.tasks);
+        if (finding !== undefined) prdAuditTasks.push(...gap.tasks);
       }
     }
 
@@ -3088,7 +3109,7 @@ export class Conductor {
       let priorPrdAuditLaps = 0;
       let prdAuditGrowth: Awaited<ReturnType<typeof readGrowth>> | undefined;
       let prdAuditGrowthCap = 0;
-      const hasCriterionBoundGaps = appendGaps.some(
+      const criterionBoundGaps = appendGaps.filter(
         (gap) => gap.criterion !== undefined && gap.parentTask !== undefined,
       );
       if (prdAuditCapEnforced) {
@@ -3103,12 +3124,15 @@ export class Conductor {
         prdAuditGrowth = await readGrowth(this.projectRoot, prdAuditGrowthCap);
         const findings = [...new Set(appendGaps.map((gap) => gap.criterion ?? gap.id))];
         const findingList = findings.length > 0 ? findings.join(', ') : 'unattributed FIXABLE findings';
-        if (priorPrdAuditLaps >= prdAuditLapCap || allTasks.length > prdAuditGrowth.remaining) {
+        if (
+          priorPrdAuditLaps >= prdAuditLapCap ||
+          prdAuditTasks.length > prdAuditGrowth.remaining
+        ) {
           const capReason = priorPrdAuditLaps >= prdAuditLapCap
             ? `lap cap reached (${priorPrdAuditLaps}/${prdAuditLapCap})`
             :
               `growth cap reached (${prdAuditGrowth.added}/${prdAuditGrowthCap} appended; ` +
-              `${allTasks.length} requested, ${prdAuditGrowth.remaining} remaining)`;
+              `${prdAuditTasks.length} requested, ${prdAuditGrowth.remaining} remaining)`;
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
@@ -3119,8 +3143,8 @@ export class Conductor {
       // Append remediation tasks to the plan
       if (planPath) {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
-          ...(hasCriterionBoundGaps
-            ? { criterionBoundGaps: appendGaps, gateSource: 'prd-audit' }
+          ...(criterionBoundGaps.length > 0
+            ? { criterionBoundGaps, gateSource: 'prd-audit' }
             : {}),
         });
         if (appendResult.success) {
@@ -3137,7 +3161,7 @@ export class Conductor {
                 priorVerdict: true,
                 resolvedBefore: 0,
               }),
-              laps: priorPrdAuditLaps + 1,
+              laps: priorPrdAuditLaps + (prdAuditTasks.length > 0 ? 1 : 0),
             };
             await writeKickbackLedger(this.projectRoot, {
               ...ledger,
@@ -3149,10 +3173,10 @@ export class Conductor {
                 this.projectRoot,
                 {
                   authored: prdAuditGrowth.authored,
-                  added: prdAuditGrowth.added + allTasks.length,
+                  added: prdAuditGrowth.added + prdAuditTasks.length,
                   byGate: {
                     ...prdAuditGrowth.byGate,
-                    prd_audit: priorGateGrowth + allTasks.length,
+                    prd_audit: priorGateGrowth + prdAuditTasks.length,
                   },
                 },
                 { cap: prdAuditGrowthCap, events: this.events },
@@ -3339,7 +3363,11 @@ export class Conductor {
       return {
         kind: 'route',
         target,
-        hint: buildRemediationHint(fixes, hintSource.source, hintSource.evidenceFile),
+        hint: buildRemediationHint(
+          fixes,
+          hintSource.source,
+          hintSource.evidence.map((provenance) => provenance.evidenceFile).join(' and '),
+        ),
         evidence: remediationEvidence,
       };
     }
@@ -5829,9 +5857,19 @@ export class Conductor {
                 await this.planRemediation(
                   state,
                   steps,
-                  'Blocking prd_audit gap at .pipeline/prd-audit.md. Plan remediation per the ' +
+                  'Blocking validation-group gaps at .pipeline/prd-audit.md and ' +
+                    '.pipeline/architecture-review-as-built.md. Plan remediation per the ' +
                     '/remediate skill and write .pipeline/remediation.json.',
-                  { source: 'validation-group', evidenceFile: '.pipeline/prd-audit.md' },
+                  {
+                    source: 'validation-group',
+                    evidence: [
+                      { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
+                      {
+                        gate: 'architecture_review_as_built',
+                        evidenceFile: '.pipeline/architecture-review-as-built.md',
+                      },
+                    ],
+                  },
                 );
               }
               const asBuiltFiles = await findArtifactFilesForStep(
@@ -5933,22 +5971,25 @@ export class Conductor {
               // budget runs out).
               if (gapMemberNamesForMerge.length > 0 && remediationRounds < MAX_KICKBACKS_PER_GATE) {
                 mtMergeHandled = true;
-                const evidenceFiles: string[] = [];
+                const evidence: RemediationGateProvenance[] = [];
                 if (gapMemberNamesForMerge.includes('prd_audit' as StepName)) {
-                  evidenceFiles.push('.pipeline/prd-audit.md');
+                  evidence.push({ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' });
                 }
                 if (gapMemberNamesForMerge.includes('architecture_review_as_built' as StepName)) {
-                  evidenceFiles.push('.pipeline/architecture-review-as-built.md');
+                  evidence.push({
+                    gate: 'architecture_review_as_built',
+                    evidenceFile: '.pipeline/architecture-review-as-built.md',
+                  });
                 }
                 const dispatchContext =
-                  `Blocking validation-group gaps at ${evidenceFiles.join(' and ')}. ` +
+                  `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
                   '.pipeline/remediation.json.';
 
                 remediationRounds++;
                 const remediationOutcome = await this.planRemediation(state, steps, dispatchContext, {
                   source: 'validation-group',
-                  evidenceFile: evidenceFiles.join(', '),
+                  evidence,
                 });
 
                 if (remediationOutcome.kind === 'route') {
@@ -6087,22 +6128,25 @@ export class Conductor {
                     return;
                   }
                 }
-                const evidenceFiles: string[] = [];
+                const evidence: RemediationGateProvenance[] = [];
                 if (gapMemberNames.includes('prd_audit' as StepName)) {
-                  evidenceFiles.push('.pipeline/prd-audit.md');
+                  evidence.push({ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' });
                 }
                 if (gapMemberNames.includes('architecture_review_as_built' as StepName)) {
-                  evidenceFiles.push('.pipeline/architecture-review-as-built.md');
+                  evidence.push({
+                    gate: 'architecture_review_as_built',
+                    evidenceFile: '.pipeline/architecture-review-as-built.md',
+                  });
                 }
                 const dispatchContext =
-                  `Blocking validation-group gaps at ${evidenceFiles.join(' and ')}. ` +
+                  `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
                   '.pipeline/remediation.json.';
 
                 remediationRounds++;
                 const remediationOutcome = await this.planRemediation(state, steps, dispatchContext, {
                   source: 'validation-group',
-                  evidenceFile: evidenceFiles.join(', '),
+                  evidence,
                 });
 
                 if (remediationOutcome.kind === 'route') {
@@ -7988,7 +8032,7 @@ export class Conductor {
                         `Remediate build stall: ${effectiveQuestion}`,
                         {
                           source: isZeroWorkStall ? 'build_stall_zero_work' : 'build_stall',
-                          evidenceFile: '.pipeline/build-stall-question.md',
+                          evidence: [{ gate: 'build', evidenceFile: '.pipeline/build-stall-question.md' }],
                         },
                       );
                     } catch (err) {
@@ -8642,7 +8686,10 @@ export class Conductor {
                         (activePlanPath ? `Active plan: ${activePlanPath}. ` : '') +
                         `Plan remediation per the /remediate ` +
                         `skill and write .pipeline/remediation.json.` + pointerContext,
-                      { source: 'build_review', evidenceFile: BUILD_REVIEW_VERDICT },
+                      {
+                        source: 'build_review',
+                        evidence: [{ gate: 'build_review', evidenceFile: BUILD_REVIEW_VERDICT }],
+                      },
                     );
                     if (outcome.kind === 'halt') {
                       if (await reenterBuildReviewIfEffectivePass()) continue;
@@ -8737,7 +8784,10 @@ export class Conductor {
                   'Build stall detected. Agent needs input to proceed. A question is at ' +
                     '.pipeline/halt-user-input-required. Plan remediation per the /remediate ' +
                     'skill and write .pipeline/remediation.json.',
-                  { source: 'build-stall', evidenceFile: '.pipeline/halt-user-input-required' },
+                  {
+                    source: 'build-stall',
+                    evidence: [{ gate: 'build', evidenceFile: '.pipeline/halt-user-input-required' }],
+                  },
                 );
 
                 if (outcome.kind === 'route') {
@@ -8831,7 +8881,10 @@ export class Conductor {
                     'review may be at .pipeline/architecture-review-as-built.md). Plan ' +
                     'remediation per the /remediate skill and write ' +
                     '.pipeline/remediation.json.',
-                  { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+                  {
+                    source: 'prd-audit',
+                    evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+                  },
                 );
                 if (outcome.kind === 'route') {
                   remediationRounds++;
@@ -9064,10 +9117,16 @@ export class Conductor {
                       '.pipeline/architecture-review-as-built.md. Plan remediation per ' +
                       'the /remediate skill and write .pipeline/remediation.json.',
                 finishGate
-                  ? { source: 'finish-verification', evidenceFile: '.pipeline/test-failures.md' }
+                  ? {
+                      source: 'finish-verification',
+                      evidence: [{ gate: 'finish', evidenceFile: '.pipeline/test-failures.md' }],
+                    }
                   : {
                       source: 'as-built architecture review',
-                      evidenceFile: '.pipeline/architecture-review-as-built.md',
+                      evidence: [{
+                        gate: 'architecture_review_as_built',
+                        evidenceFile: '.pipeline/architecture-review-as-built.md',
+                      }],
                     },
               );
               if (outcome.kind === 'route') {
