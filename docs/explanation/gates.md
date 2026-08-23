@@ -306,6 +306,14 @@ halts instead of dispatching an empty route to the builder. The one exception is
 there the answer legitimately lives in the gap's `rationale` with `tasks: []`, so a taskless `build` is
 accepted only when the gap's source is a build-stall.
 
+Remediation tasks must not order a regression. A task that removes, replaces, rewrites, or relaxes
+existing code, tests, or assertions has to name the completed plan task or story criterion whose
+delivered behavior and coverage survive the change, and — unless the evidence shows that coverage is
+redundant — carry the replacement in the same task as the removal. Removing a workaround does not
+license dropping the assertion beside it: the next audit re-raises the lost coverage and the lap is
+spent restoring it. This applies to every remediation trigger, not only the `finish` verification's
+test failures.
+
 A remediation gap that requires amending another feature's sealed DECIDE artifact is not eligible for
 `build` or `acceptance_specs`. It returns to the owning DECIDE step; in daemon mode the existing
 DECIDE kickback policy reaches the operator gate rather than attempting a BUILD-side bypass.

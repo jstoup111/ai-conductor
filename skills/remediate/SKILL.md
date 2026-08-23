@@ -127,6 +127,14 @@ Judgment rules:
   TEST to the new contract — never a task that weakens the production code to appease the old
   test. A test that reveals a real implementation bug gets impl-fix tasks. Reserve `halt` for a
   failure that evidences a genuine design ambiguity, not mere uncertainty about the fix.
+- **Never task a regression — this applies to every trigger, not only finish failures.** A task that
+  removes, replaces, rewrites, or relaxes existing code, tests, or assertions must name, in the task
+  title or the disposition `rationale`, the completed plan task or story criterion whose delivered
+  behavior and coverage survive the change. Removing a workaround does not license removing the
+  assertion the workaround stood beside: unless the evidence shows the coverage is genuinely
+  redundant, task the replacement in the SAME task as the removal. A remediation task that drops
+  coverage a completed task already delivered is invalid — the next audit re-raises it and the lap
+  is wasted.
 - **Sibling trigger routes remain unchanged.** A clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`. A `build_stall` question answerable from committed artifacts routes `build`; a question needing architecture, product, or unanswerable judgment routes `halt`.
 - An `intended-drift` is `halt: product-scope` **only** if it reflects unplanned product
   functionality; if it preserves approved architecture, it is `build`. Route to
@@ -240,6 +248,8 @@ Headers re-parse via the Task 18 grammar and must include:
       missing `Closes`) uses `publication`, never `build` — and `publication` is not used for any
       gap that requires a code, test, spec, or configuration change
 - [ ] Every `build` disposition (gap) has ≥1 concrete, file-scoped task drawn from the evidence; stall-question answers have `tasks: []` and the answer in `rationale`
+- [ ] No emitted task removes, replaces, or relaxes existing code, tests, or assertions without
+      naming the completed plan task or criterion whose coverage it preserves
 - [ ] `category` set iff `disposition == "halt"`; `tasks` empty iff `disposition == "halt"` OR (stall-question answer with `disposition == "build"`)
 - [ ] For a stall-question answer (`build_stall` disposition `build`), the `rationale` clearly answers the original question and cites the artifacts that support it
 - [ ] A gap requiring another feature's sealed-artifact amendment routes to its owning DECIDE step,
