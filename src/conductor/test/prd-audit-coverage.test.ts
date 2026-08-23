@@ -346,13 +346,29 @@ describe('prdAuditCoverageGap', () => {
     expect(coverageResults).toEqual([null, expect.stringContaining('FR-2'), null]);
   });
 
+  it('accepts a conformant no-PRD report when no approved PRD resolves', async () => {
+    const report = [
+      '**PRD:** none',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S1.1 | PASS | | Implemented |',
+    ].join('\n');
+
+    await expect(
+      prdAuditCoverageGap(root, context({ activePlanPath: '.docs/plans/current-feature.md' }), report),
+    ).resolves.toBeNull();
+  });
+
   it.each([
     {
-      name: 'no PRD resolves for the feature',
+      name: 'the no-PRD report has a malformed PRD declaration',
       featureContext: context({ activePlanPath: '.docs/plans/current-feature.md' }),
       setup: async () => undefined,
-      report: '',
-      expectedGap: 'unresolvable',
+      report: '**PRD:** unavailable',
+      expectedGap: 'must declare **PRD:** present or none',
     },
     {
       name: 'a resolved PRD cannot be read',
@@ -455,7 +471,8 @@ describe('prd_audit completion predicate coverage', () => {
     });
   });
 
-  it('fails closed when the resolved stories file has no parseable criteria', async () => {
+  it('continues story-criterion coverage when no approved PRD resolves', async () => {
+    await rm(join(root, '.docs/specs/current-feature.md'));
     await mkdir(join(root, '.docs/stories'), { recursive: true });
     await writeFile(
       join(root, '.docs/stories/current-feature.md'),
@@ -464,13 +481,13 @@ describe('prd_audit completion predicate coverage', () => {
     await writeFile(
       join(root, '.pipeline/prd-audit.md'),
       [
-        '| FR | Verdict | Gap-class | Evidence |',
+        '**PRD:** none',
+        '',
+        '## Verdict Table',
+        '',
+        '| Criterion | Grade | Plan task | Evidence |',
         '| --- | --- | --- | --- |',
-        '| FR-1 | ALIGNED | — | Covered |',
-        '| FR-2 | ALIGNED | — | Covered |',
-        '| FR-3 | ALIGNED | — | Covered |',
-        '| FR-4 | ALIGNED | — | Covered |',
-        '| FR-5 | ALIGNED | — | Covered |',
+        '| S1.1 | PASS | | Covered |',
       ].join('\n'),
     );
 

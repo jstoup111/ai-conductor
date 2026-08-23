@@ -3927,7 +3927,11 @@ export async function prdAuditCoverageGap(
 
   const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
   if (prdPaths.length === 0) {
-    return 'PRD audit coverage is unresolvable: no approved PRD could be resolved for the feature.';
+    const parsed = parsePrdAuditReport(reportContent);
+    if (!parsed.ok) return parsed.error;
+    return parsed.value.prd === 'none'
+      ? null
+      : 'PRD audit report declares **PRD:** present but no approved PRD could be resolved for the feature.';
   }
 
   let frIdSets: Set<string>[];
