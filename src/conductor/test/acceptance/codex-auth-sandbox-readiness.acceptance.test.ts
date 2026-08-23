@@ -155,6 +155,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       const [, args] = mockExeca.mock.calls[index];
       expect(args).toEqual(expect.arrayContaining([
         'sandbox_mode="workspace-write"',
+        'sandbox_workspace_write.network_access=true',
         'approval_policy="on-request"',
         'approvals_reviewer="auto_review"',
         'shell_environment_policy.ignore_default_excludes=false',
@@ -329,6 +330,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     expect(result.success).toBe(false);
     expect(args).toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.network_access=true',
       'approval_policy="on-request"',
       'approvals_reviewer="auto_review"',
       'shell_environment_policy.ignore_default_excludes=false',
@@ -351,6 +353,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     expect(command).toBe('codex');
     expect(args).toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.network_access=true',
       'approval_policy="on-request"',
       'approvals_reviewer="auto_review"',
     ]));

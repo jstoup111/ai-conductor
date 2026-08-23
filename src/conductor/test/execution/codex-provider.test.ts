@@ -405,6 +405,7 @@ describe('CodexProvider', () => {
           ...isolatedHomeArgs,
           'exec',
           '--config', 'sandbox_mode="workspace-write"',
+          '--config', 'sandbox_workspace_write.network_access=true',
           '--config', 'approval_policy="on-request"',
           '--config', 'approvals_reviewer="auto_review"',
           '--config', 'shell_environment_policy.ignore_default_excludes=false',
@@ -460,6 +461,7 @@ describe('CodexProvider', () => {
             ...contained.args,
             'exec',
             '--config', 'sandbox_mode="workspace-write"',
+            '--config', 'sandbox_workspace_write.network_access=true',
             '--config', 'approval_policy="on-request"',
             '--config', 'approvals_reviewer="auto_review"',
             '--config', 'shell_environment_policy.ignore_default_excludes=false',
@@ -618,6 +620,7 @@ describe('CodexProvider', () => {
     expect(args).toEqual(expect.arrayContaining(['--config', 'model_reasoning_effort="high"']));
     expect(args).toEqual(expect.arrayContaining([
       '--config', 'sandbox_mode="workspace-write"',
+      '--config', 'sandbox_workspace_write.network_access=true',
       '--config', 'approval_policy="on-request"',
       '--config', 'approvals_reviewer="auto_review"',
       '--config', 'shell_environment_policy.ignore_default_excludes=false',
@@ -648,6 +651,7 @@ describe('CodexProvider', () => {
     expect(args).toEqual(expect.arrayContaining(['--cd', '/workspace/project']));
     expect(args).toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.network_access=true',
       'approval_policy="on-request"',
       'approvals_reviewer="auto_review"',
       'shell_environment_policy.ignore_default_excludes=false',
@@ -678,6 +682,7 @@ describe('CodexProvider', () => {
       const [, args, options] = mockExeca.mock.calls[0];
       expect(args).toEqual(expect.arrayContaining([
         'sandbox_mode="workspace-write"',
+        'sandbox_workspace_write.network_access=true',
         'approval_policy="on-request"',
         'approvals_reviewer="auto_review"',
         'shell_environment_policy.ignore_default_excludes=false',
