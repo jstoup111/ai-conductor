@@ -293,7 +293,7 @@ describe('prd_audit kickback', () => {
     expect(ledger.growth).toMatchObject({ added: 3, byGate: { prd_audit: 3 } });
   });
 
-  it('keeps non-prd_audit remediation on its generic route without consuming prd_audit allowance', async () => {
+  it('halts a non-prd_audit task append without consuming prd_audit allowance', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-cross-gate-'));
     dirs.push(root);
     const planPath = join(root, '.docs', 'plans', 'feature.md');
@@ -334,12 +334,13 @@ describe('prd_audit kickback', () => {
       { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
     );
 
-    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
-    expect(await readFile(planPath, 'utf8')).toContain('rem-arch');
-
-    await writeFile(planPath, `${await readFile(planPath, 'utf8')}\n### Task rem-foreign: legacy foreign append\n`);
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      detail: expect.stringContaining('no plan-growth allowance'),
+    });
+    expect(await readFile(planPath, 'utf8')).not.toContain('rem-arch');
     await expect(readGrowth(root, 4)).resolves.toEqual({
-      authored: 3, added: 1, byGate: { prd_audit: 1 }, remaining: 3,
+      authored: 2, added: 1, byGate: { prd_audit: 1 }, remaining: 3,
     });
   });
 

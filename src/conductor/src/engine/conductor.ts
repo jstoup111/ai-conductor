@@ -3128,6 +3128,24 @@ export class Conductor {
       }
     }
 
+    // The approved remediation contract gives prd_audit the sole authority
+    // to grow the sealed plan, and only after the current FIXABLE findings
+    // establish their parent-task and criterion bounds. Production callers
+    // identify their gate provenance structurally; older direct callers have
+    // no such provenance and retain their compatibility behavior. The
+    // canonical as-built source is likewise unadmitted even for direct calls.
+    const requiresPlanGrowthAllowance =
+      remediationEvidenceSources.length > 0 || hintSource.source === 'architecture-review-as-built';
+    if (allTasks.length > 0 && requiresPlanGrowthAllowance && !prdAuditCapEnforced) {
+      return {
+        kind: 'halt',
+        haltClass: KICKBACK_CAP_HALT_CLASS,
+        detail:
+          `${hintSource.source} remediation requested ${allTasks.length} plan task${allTasks.length === 1 ? '' : 's'} ` +
+          'with no plan-growth allowance; only validated prd_audit FIXABLE findings may append remediation work.',
+      };
+    }
+
     // Tracks whether the append attempt (when one was needed) actually ran
     // and succeeded — used below to gate the D1 no-op guard. When there was
     // nothing to append (`allTasks.length === 0`) there is nothing the

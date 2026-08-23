@@ -174,8 +174,9 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
 
       await conductor.run();
 
-      // Guard queried the recorded PR at least once.
-      expect(ghCalls.length).toBeGreaterThan(0);
+      // Finish has no task-growth allowance, so it halts before merged-PR
+      // re-entry can query the recorded PR.
+      expect(ghCalls).toHaveLength(0);
 
       // No further build dispatch after the guard observes MERGED.
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
@@ -195,10 +196,10 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       ['CLOSED', { state: 'CLOSED' }],
       ['NOTFOUND', { state: 'NOTFOUND' }],
       ['UNKNOWN', { state: 'UNKNOWN' }],
-    ] as const)('negative: %s verdict — rewind proceeds, no synthetic markers written', async (_label, ghOpts) => {
+    ] as const)('negative: %s verdict — unadmitted finish work halts before re-entry', async (_label, ghOpts) => {
       await seedShipTail();
       const { runner, calls } = remediateToBuildRunner();
-      const { runGh } = makeGhFake(ghOpts);
+      const { runGh, calls: ghCalls } = makeGhFake(ghOpts);
 
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -216,9 +217,8 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
 
       await conductor.run();
 
-      // Build WAS re-dispatched (rewind proceeded unchanged).
-      expect(calls.filter((s) => s === 'build').length).toBeGreaterThan(0);
-      // The guard must never write the synthetic markers on a non-MERGED verdict.
+      expect(ghCalls).toHaveLength(0);
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
       expect(await markerExists(dir, '.pipeline/finish-choice')).toBe(false);
     });
 
@@ -249,7 +249,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
     });
 
-    it('negative: no pr_url recorded — zero gh invocations, rewind proceeds', async () => {
+    it('negative: no pr_url recorded — zero gh invocations and no re-entry', async () => {
       await seedShipTail({ pr_url: undefined });
       const { runner, calls } = remediateToBuildRunner();
       const { runGh, calls: ghCalls } = makeGhFake({ state: 'MERGED' });
@@ -271,7 +271,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       await conductor.run();
 
       expect(ghCalls).toHaveLength(0);
-      expect(calls.filter((s) => s === 'build').length).toBeGreaterThan(0);
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
     });
 
     it('negative: interactive (daemon:false) run with pr_url set — zero gh calls, behavior identical to today', async () => {
