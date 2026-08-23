@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, access, readFile, writeFile } from 'fs/promises';
+import { mkdtemp, rm, access, readFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
@@ -144,6 +144,19 @@ function releaseDispositionRunner(projectRoot: string) {
   });
 }
 
+async function writeValidatorArtifact(projectRoot: string, step: StepName): Promise<void> {
+  if (step === 'prd_audit') {
+    await mkdir(join(projectRoot, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(projectRoot, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs', 'specs', 'self-build-feat.md'), '# PRD\n\n- FR-1: Self-host build completes.\n');
+    await writeFile(join(projectRoot, '.docs', 'stories', 'self-build-feat.md'), '# Stories\n\n## Story 1: Self-host build\n\n**Requirement:** FR-1\n\n### Happy Path\n\n- Given a self-host build, when it finishes, then it is complete.\n');
+    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | Evidence |\n| --- | --- | --- | --- |\n| S1.1 | PASS | 1 | fixture |\n\n| FR | Verdict | Gap-class | Evidence | Accepted? |\n| --- | --- | --- | --- | --- |\n| FR-1 | ALIGNED | n/a | fixture | — |\n');
+  }
+  if (step === 'architecture_review_as_built') {
+    await writeFile(join(projectRoot, '.pipeline', 'architecture-review-as-built.md'), '# As-Built Review\n\nVerdict: APPROVED\n');
+  }
+}
+
 describe('self-host wiring — default bundle members forward to the real primitives', () => {
   it('resolveInstalledHarnessRoot is exposed on the bundle and forwards to the real function', async () => {
     const { defaultSelfHostGuardrails } = await import('../../../src/engine/self-host/wiring.js');
@@ -238,7 +251,13 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     }));
     return new Conductor({
       stateFilePath: statePath,
-      stepRunner: runner,
+      stepRunner: {
+        ...runner,
+        run: async (step, state, options) => {
+          await writeValidatorArtifact(dir, step);
+          return runner.run(step, state, options);
+        },
+      },
       events,
       projectRoot: dir,
       mode: 'auto',

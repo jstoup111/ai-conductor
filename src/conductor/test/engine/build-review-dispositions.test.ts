@@ -46,9 +46,10 @@ function lock(result: Awaited<ReturnType<ConductStateLease['acquire']>>): Conduc
 
 const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
 const otherFeature = { ...feature, feature: 'other-feature' };
+const testContentHash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const finding = canonicalizeBuildReviewFindingIdentity({
-  rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive',
-  anchor: { rubric: 'testQuality', locus: { path: 'test/engine/build-review-dispositions.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
+  rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+  anchor: { rubric: 'testQuality', locus: { path: 'test/engine/build-review-dispositions.test.ts', contentHash: testContentHash, display: 'fixture test' } },
 })!;
 
 describe('build-review dispositions', () => {
@@ -278,8 +279,8 @@ describe('build-review dispositions', () => {
       summary: 'Earlier wording at src/a.ts:8', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
     };
     const changed = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
-      anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'out-of-plan-change' },
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: { rubric: 'testQuality', locus: { path: 'test/engine/other.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'other test' } },
     })!;
 
     expect(matchesBuildReviewDisposition(feature, finding, [accepted])).toBe(true);
@@ -323,41 +324,22 @@ describe('build-review dispositions', () => {
   });
 
   const currentContractFindings = [
-    ['tautology', {
-      rubric: 'tautology', contractVersion: 'v3', concernKind: 'assertion-insensitive-to-production',
+    ['testQuality', {
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
       anchor: {
-        rubric: 'tautology', exercisedBehavior: 'persists state', violationKind: 'assertion-insensitive-to-production',
-        changedTest: {
+        rubric: 'testQuality',
+        locus: {
           path: 'test/widget.test.ts',
-          contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          contentHash: testContentHash,
           display: 'widget persists state',
         },
       },
     }],
-    ['scope', {
-      rubric: 'scope', contractVersion: 'v3', concernKind: 'out-of-plan-change',
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
-    }],
-    ['rootCause', {
-      rubric: 'rootCause', contractVersion: 'v3', concernKind: 'root-cause-unaddressed',
-      anchor: {
-        rubric: 'rootCause', statedDefect: 'state is not persisted', relation: 'root-cause-unaddressed',
-        locus: {
-          path: 'src/handler.ts',
-          contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-          display: 'persistence return branch',
-        },
-      },
-    }],
-    ['completeness', {
-      rubric: 'completeness', contractVersion: 'v3', concernKind: 'missing-deliverable',
-      anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state', missingKind: 'missing-deliverable' },
-    }],
   ] as const;
 
   // Regression for #1769: the store validated an engine-produced canonical
-  // payload with the grader-facing anchor parser, so only `scope` — whose
-  // canonical anchor happens to equal its grader anchor — could be accepted.
+  // payload with the grader-facing anchor parser.  The store must instead
+  // validate the engine-produced canonical anchor on its own schema.
   it.each(currentContractFindings)('accepts, persists, and re-matches an engine-produced %s identity', async (_rubric, input) => {
     const engineIdentity = canonicalizeBuildReviewFindingIdentity(input)!;
     const filesystem = new MemoryFilesystem();
@@ -391,7 +373,7 @@ describe('build-review dispositions', () => {
     const forgedJson = await store.append({ ...input, finding: { ...engineIdentity, canonicalJson: '{}' } });
     const forgedPayload = await store.append({
       ...input,
-      finding: { ...engineIdentity, canonicalPayload: { ...engineIdentity.canonicalPayload, anchor: { rubric: 'tautology', violationKind: 'source-text-mirror' } } as never },
+      finding: { ...engineIdentity, canonicalPayload: { ...engineIdentity.canonicalPayload, anchor: { rubric: 'testQuality', locus: { path: 'test/widget.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' } } } as never },
     });
 
     expect(forgedId).toEqual({ ok: false, kind: 'invalid', message: 'build-review disposition input is invalid' });
@@ -401,13 +383,12 @@ describe('build-review dispositions', () => {
   });
 
   it('keeps a stored disposition matched when the same finding is re-reported with drifted prose', () => {
-    const original = canonicalizeBuildReviewFindingIdentity(currentContractFindings[2][1])!;
+    const original = canonicalizeBuildReviewFindingIdentity(currentContractFindings[0][1])!;
     const reReported = canonicalizeBuildReviewFindingIdentity({
-      ...currentContractFindings[2][1],
+      ...currentContractFindings[0][1],
       anchor: {
-        ...currentContractFindings[2][1].anchor,
-        statedDefect: 'a differently worded account of the same defect',
-        locus: { ...currentContractFindings[2][1].anchor.locus, display: 'persistence return branch after rebase' },
+        ...currentContractFindings[0][1].anchor,
+        locus: { ...currentContractFindings[0][1].anchor.locus, display: 'widget persists state after rebase' },
       },
     })!;
     const accepted: BuildReviewDispositionRecord = {

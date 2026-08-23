@@ -51,6 +51,28 @@ const PASS_EVIDENCE: FullSuitePassEvidence = {
   stderr: '',
 };
 
+async function writeGreenShipValidatorEvidence(dir: string): Promise<void> {
+  await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+  await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+  await mkdir(join(dir, '.pipeline'), { recursive: true });
+  await writeFile(
+    join(dir, '.docs', 'specs', 'finish-publication.md'),
+    '# PRD\n\n## Functional Requirements\n\n- FR-1: The feature can finish.\n',
+  );
+  await writeFile(
+    join(dir, '.docs', 'stories', 'finish-publication.md'),
+    '# Stories\n\n## Story 1: Finish publication\n\n**Requirement:** FR-1\n\n### Happy Path\n\n- Given a ready feature, when it finishes, then it is published.\n',
+  );
+  await writeFile(
+    join(dir, '.pipeline', 'prd-audit.md'),
+    '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | Evidence |\n| --- | --- | --- | --- |\n| S1.1 | PASS | 1 | finish evidence |\n\n| FR | Verdict | Gap-class | Evidence | Accepted? |\n| --- | --- | --- | --- | --- |\n| FR-1 | ALIGNED | n/a | finish evidence | — |\n',
+  );
+  await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), '# As-Built Review\n\nVerdict: APPROVED\n');
+  const fresh = new Date(Date.now() + 60_000);
+  await utimes(join(dir, '.pipeline', 'prd-audit.md'), fresh, fresh);
+  await utimes(join(dir, '.pipeline', 'architecture-review-as-built.md'), fresh, fresh);
+}
+
 describe('Conductor FINISH publication routing', () => {
   let dir: string;
   let statePath: string;
@@ -165,6 +187,7 @@ describe('Conductor FINISH publication routing', () => {
 
   it('keeps a done manual_test with FAIL rows non-green before the coordinator can publish', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeGreenShipValidatorEvidence(dir);
     await writeFile(
       join(dir, '.pipeline', 'manual-test-results.md'),
       '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| Story 1 | FAIL |\n',
@@ -196,7 +219,7 @@ describe('Conductor FINISH publication routing', () => {
 
     await new Conductor({
       stateFilePath: statePath, stepRunner: runner, finishPublication: { advance }, events,
-      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: true,
       git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
     }).run();
 
@@ -245,7 +268,7 @@ describe('Conductor FINISH publication routing', () => {
       stepRunner: runner,
       finishPublication: { advance },
       events,
-      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: true,
       git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
     }).run();
 
@@ -262,6 +285,7 @@ describe('Conductor FINISH publication routing', () => {
 
   it('preserves green validator evidence across repeated docs-only FINISH laps without rerunning test_suite', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeGreenShipValidatorEvidence(dir);
     await writeFile(
       join(dir, '.pipeline', 'manual-test-results.md'),
       '# Manual Test Results\n\n## Attempt 1 — 2026-08-16T00:00:00Z\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
@@ -269,11 +293,6 @@ describe('Conductor FINISH publication routing', () => {
     await writeFile(join(dir, '.pipeline', 'manual-test-fail-evidence.json'), JSON.stringify({ codeStamp: 'baseline' }));
     const persisted = await readState(statePath);
     if (!persisted.ok) throw new Error('test fixture state must be readable');
-    await writeFile(
-      join(dir, '.pipeline', 'prd-audit.md'),
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | ALIGNED | n/a | test.ts:1 | — |\n',
-    );
-    await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), '# As-Built Review\n\nVerdict: APPROVED\n');
     await writeFile(join(dir, '.pipeline', 'prd-audit-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
     await writeFile(join(dir, '.pipeline', 'architecture-review-as-built-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
     await writeState(statePath, {
@@ -325,6 +344,7 @@ describe('Conductor FINISH publication routing', () => {
       fromStep: 'finish',
       mode: 'default',
       daemon: true,
+      verifyArtifacts: true,
       fullSuiteVerifier: { ensure, inspect },
       git: async (args) => ({
         stdout: args[0] === 'diff' ? 'docs/notes.md\n' : '',
@@ -402,7 +422,7 @@ describe('Conductor FINISH publication routing', () => {
 
     await new Conductor({
       stateFilePath: statePath, stepRunner: runner, finishPublication: { advance }, events,
-      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: true,
       git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
     }).run();
 
@@ -709,6 +729,7 @@ describe('Conductor FINISH publication routing', () => {
       isDraft: true,
     };
     await mkdir(pipeline);
+    await writeGreenShipValidatorEvidence(dir);
     await mkdir(join(dir, '.docs', 'shipped'), { recursive: true });
     await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), 'shipped\n');
     const state: Record<string, unknown> = {
@@ -728,14 +749,9 @@ describe('Conductor FINISH publication routing', () => {
       'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'retro', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
-    // The as-built review now runs even without an upstream DECIDE review;
-    // an empty ADR corpus yields an approved report.
+    // The as-built review now runs even without an upstream DECIDE review.
     state.architecture_review = 'skipped';
     await writeState(productionStatePath, state as ConductState);
-    await writeFile(
-      join(pipeline, 'architecture-review-as-built.md'),
-      '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
-    );
     const runner: StepRunner = {
       run: vi.fn(async () => {
         pullRequest = {
@@ -789,12 +805,11 @@ describe('Conductor FINISH publication routing', () => {
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  // Regression: a technical-track feature resolves manual_test and prd_audit by
-  // SKIPPING them — there is no UI to test and no PRD to audit. The production
+  // Regression: a small-tier feature resolves manual_test by SKIPPING it. The production
   // evidence observers compared those statuses to 'done' alone, so a skip read
   // as missing evidence, preflight raised `ship_evidence_invalid`, and the
   // router halted needs-human on a feature whose work was entirely green.
-  it('treats a skipped SHIP step as resolved evidence rather than a missing-evidence HALT', async () => {
+  it('treats a skipped manual-test step as resolved evidence rather than a missing-evidence HALT', async () => {
     const pipeline = join(dir, '.pipeline');
     const productionStatePath = join(pipeline, 'conduct-state.json');
     const prUrl = 'https://example.test/pr/18';
@@ -805,10 +820,11 @@ describe('Conductor FINISH publication routing', () => {
       isDraft: true,
     };
     await mkdir(pipeline);
+    await writeGreenShipValidatorEvidence(dir);
     await mkdir(join(dir, '.docs', 'shipped'), { recursive: true });
     await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), 'shipped\n');
     const state: Record<string, unknown> = {
-      complexity_tier: 'M',
+      complexity_tier: 'S',
       track: 'technical',
       feature_desc: 'finish-publication',
       worktree_branch: 'feat/finish-publication',
@@ -822,14 +838,9 @@ describe('Conductor FINISH publication routing', () => {
     ] satisfies StepName[]) state[step] = 'done';
     // The as-built review runs independently of an upstream DECIDE review.
     state.architecture_review = 'skipped';
-    // The two other SHIP validators a technical-track feature legitimately skips.
+    // S-tier features legitimately skip manual testing; the other validators remain green.
     state.manual_test = 'skipped';
-    state.prd_audit = 'skipped';
     await writeState(productionStatePath, state as ConductState);
-    await writeFile(
-      join(pipeline, 'architecture-review-as-built.md'),
-      '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
-    );
     const runner: StepRunner = {
       run: vi.fn(async () => {
         pullRequest = {
