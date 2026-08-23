@@ -18,6 +18,7 @@ import {
 } from '../src/engine/accepted-widenings.js';
 import { readGrowth, readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
+import { readState, writeState } from '../src/engine/state.js';
 import type { ConductState, StepName } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { DefaultStepRunner } from '../src/engine/step-runners.js';
@@ -195,6 +196,71 @@ describe('prd_audit kickback', () => {
   afterEach(async () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
+
+  async function runGroupedPrdAudit(report: string, stories: string) {
+    const root = await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
+    dirs.push(root);
+    const statePath = join(root, '.pipeline', 'conduct-state.json');
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(root, '.docs', 'stories', 'feature.md'), stories);
+    await writeFile(
+      join(root, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+    );
+
+    const state: Record<string, unknown> = {
+      feature_desc: 'feature',
+      complexity_tier: 'M',
+      track: 'product',
+      run_started_at: Date.now() - 1_000,
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'manual_test') break;
+      state[step.name] = 'done';
+    }
+    await writeState(statePath, state as ConductState);
+
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        calls.push(step);
+        if (step === 'manual_test') {
+          await writeFile(
+            join(root, '.pipeline', 'manual-test-results.md'),
+            '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+          );
+        } else if (step === 'prd_audit') {
+          await writeFile(join(root, '.pipeline', 'prd-audit.md'), report);
+          if (report.includes('S13.4')) {
+            await writeFile(join(root, '.pipeline', 's13.4-probe-file'), 'keep this review finding\n');
+          }
+        } else if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(root, '.pipeline', 'architecture-review-as-built.md'),
+            '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
+          );
+        }
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'manual_test',
+    });
+    await conductor.run();
+    return { root, calls, state: await readState(statePath) };
+  }
 
   it('appends the first capped lap of FIXABLE work with criterion-bound completion checks', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-kickback-'));
@@ -505,6 +571,66 @@ describe('prd_audit kickback', () => {
     const route = routePrdAuditOverScope(overScopeReport('S3.3', 'outside-visible'), []);
 
     expect(route).toMatchObject({ kind: 'halt', haltClass: 'over-scope' });
+  });
+
+  it('joins a negative-path PLAN_GAP as a recorded, satisfied prd_audit member', async () => {
+    const stories = [
+      '# Stories', '', '## Story 11: negative boundary', '', '#### Negative Paths',
+      '- Given an unsupported condition, when it occurs, then it is recorded.',
+    ].join('\n');
+    const fixture = await runGroupedPrdAudit(planGapReport('S11.1'), stories);
+
+    expect(fixture.calls).not.toContain('remediate');
+    expect(fixture.state.ok && fixture.state.value.prd_audit).toBe('done');
+    expect(await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).toContain(
+      '"grade": "PLAN_GAP"',
+    );
+  });
+
+  it('joins a within-intent OVER_SCOPE finding as a recorded, satisfied prd_audit member', async () => {
+    const fixture = await runGroupedPrdAudit(
+      overScopeReport('S9.1', 'within'),
+      storiesWithCriterion('Happy Path'),
+    );
+
+    expect(fixture.calls).not.toContain('remediate');
+    expect(fixture.state.ok && fixture.state.value.prd_audit).toBe('done');
+    expect(await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).toContain(
+      '"accepted": true',
+    );
+  });
+
+  it('records the S13.4 outside-harmless probe-file finding without deleting its evidence', async () => {
+    const fixture = await runGroupedPrdAudit(
+      overScopeReport(
+        'S13.4',
+        'outside-harmless',
+        'Unadmitted .pipeline/s13.4-probe-file is outside intent but harmless.',
+      ),
+      storiesWithCriterion('Happy Path'),
+    );
+
+    expect(fixture.calls).not.toContain('remediate');
+    expect(fixture.state.ok && fixture.state.value.prd_audit).toBe('done');
+    await expect(readFile(join(fixture.root, '.pipeline', 's13.4-probe-file'), 'utf8')).resolves.toBe(
+      'keep this review finding\n',
+    );
+    expect(await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).toContain(
+      '"criterion": "S13.4"',
+    );
+  });
+
+  it('halts a grouped outside-visible OVER_SCOPE finding with the serial over-scope class', async () => {
+    const fixture = await runGroupedPrdAudit(
+      overScopeReport('S9.6', 'outside-visible'),
+      storiesWithCriterion('Happy Path'),
+    );
+
+    expect(fixture.calls).not.toContain('remediate');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('over-scope');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'user-visible scope requires operator acceptance',
+    );
   });
 
   it('requires the explicit Intent relation field instead of inferring within intent from evidence', () => {

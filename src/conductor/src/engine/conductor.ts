@@ -666,6 +666,19 @@ export type PrdAuditOverScopeRoute =
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
   | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[] };
 
+/**
+ * One PRD-audit route result shared by the serial SHIP walk and the
+ * validation-group join. A recorded finding is an explicit accepted risk;
+ * a halted finding keeps its route-specific operator decision. Keeping this
+ * result above either execution shape prevents their gate-satisfaction logic
+ * from drifting apart.
+ */
+type CurrentPrdAuditRoute =
+  | { kind: 'none' }
+  | { kind: 'record' }
+  | { kind: 'plan-gap-halt'; route: Extract<PrdAuditPlanGapRoute, { kind: 'halt' }> }
+  | { kind: 'over-scope-halt'; route: Extract<PrdAuditOverScopeRoute, { kind: 'halt' }> };
+
 /** Route OVER_SCOPE findings through intent relation and prior operator acceptance. */
 export function routePrdAuditOverScope(
   reportText: string,
@@ -2959,6 +2972,24 @@ export class Conductor {
       await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
     }
     return route;
+  }
+
+  /**
+   * Apply Task 24/25's PRD-audit exception routes once, for either the
+   * serial tail or the concurrent SHIP join. Route order deliberately
+   * mirrors the serial baseline: a blocking PLAN_GAP is surfaced before an
+   * OVER_SCOPE decision from the same report.
+   */
+  private async routeCurrentPrdAudit(state: ConductState): Promise<CurrentPrdAuditRoute> {
+    const planGapRoute = await this.routeCurrentPrdAuditPlanGaps(state);
+    if (planGapRoute.kind === 'halt') return { kind: 'plan-gap-halt', route: planGapRoute };
+
+    const overScopeRoute = await this.routeCurrentPrdAuditOverScope();
+    if (overScopeRoute.kind === 'halt') return { kind: 'over-scope-halt', route: overScopeRoute };
+
+    return planGapRoute.kind === 'record' || overScopeRoute.kind === 'record'
+      ? { kind: 'record' }
+      : { kind: 'none' };
   }
 
   /**
@@ -5842,6 +5873,32 @@ export class Conductor {
               ? await readManualTestFailRows(this.projectRoot)
               : [];
 
+            // Tasks 24/25: the serial SHIP tail treats recorded negative-path
+            // PLAN_GAP and harmless/within-intent OVER_SCOPE findings as an
+            // explicit pass, and routes their halt variants directly. Apply
+            // that exact same route result before this join decides whether
+            // prd_audit is a failed sibling. The objective verdict remains
+            // the evidence baseline on disk; only this round's join receives
+            // the serial route's accepted-risk override.
+            let prdAuditRoute: CurrentPrdAuditRoute | undefined;
+            const prdAuditIdx = membership.dispatchable.findIndex(
+              (member) => member.name === 'prd_audit',
+            );
+            const prdAuditOutcome = prdAuditIdx === -1 ? undefined : outcomes[prdAuditIdx];
+            if (
+              this.verifyArtifacts &&
+              prdAuditOutcome?.kind === 'verdict' &&
+              prdAuditOutcome.verdict === 'pass'
+            ) {
+              prdAuditRoute = await this.routeCurrentPrdAudit(state);
+              if (prdAuditRoute.kind === 'record') {
+                const verdict = gateVerdicts.get('prd_audit');
+                if (verdict) {
+                  gateVerdicts.set('prd_audit', { ...verdict, satisfied: true, reason: undefined });
+                }
+              }
+            }
+
             const allGreen = outcomes.every((outcome, idx) => {
               if (outcome.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
               if (!this.verifyArtifacts) return true;
@@ -5888,6 +5945,32 @@ export class Conductor {
               if (!this.daemon) {
                 process.off('SIGTERM', sigterm);
               }
+              return;
+            }
+
+            if (prdAuditRoute?.kind === 'plan-gap-halt') {
+              const reason = `prd-audit halted: needs human DECIDE — ${prdAuditRoute.route.detail}`;
+              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+
+            if (prdAuditRoute?.kind === 'over-scope-halt') {
+              const candidate = prdAuditRoute.route.findings.find((finding) => !finding.accepted);
+              const reason =
+                `prd-audit halted: user-visible scope requires operator acceptance — ` +
+                `${prdAuditRoute.route.detail}` +
+                (candidate ? `\n\n${renderOverScopeAcceptanceCandidate(candidate)}` : '');
+              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
 
@@ -7646,10 +7729,10 @@ export class Conductor {
             this.currentAttemptStartedAt = undefined;
 
             if (step.name === 'prd_audit') {
-              const planGapRoute = await this.routeCurrentPrdAuditPlanGaps(state);
-              if (planGapRoute.kind === 'halt') {
-                const reason = `prd-audit halted: needs human DECIDE — ${planGapRoute.detail}`;
-                await this.writeHaltMarker(reason + '\n', planGapRoute.haltClass);
+              const prdAuditRoute = await this.routeCurrentPrdAudit(state);
+              if (prdAuditRoute.kind === 'plan-gap-halt') {
+                const reason = `prd-audit halted: needs human DECIDE — ${prdAuditRoute.route.detail}`;
+                await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.emitLoopHalt(reason, prUrl);
@@ -7657,22 +7740,15 @@ export class Conductor {
                 process.off('SIGTERM', sigterm);
                 return;
               }
-              if (planGapRoute.kind === 'record') {
-                // Negative-path plan gaps are explicit accepted risk, not a
-                // repair request. Preserve the fresh-verdict metadata while
-                // letting the SHIP tail settle this gate as satisfied.
-                completion = { ...completion, done: true, reason: undefined, missing: undefined };
-              }
-              const overScopeRoute = await this.routeCurrentPrdAuditOverScope();
-              if (overScopeRoute.kind === 'halt') {
-                const candidate = overScopeRoute.findings.find((finding) => !finding.accepted);
+              if (prdAuditRoute.kind === 'over-scope-halt') {
+                const candidate = prdAuditRoute.route.findings.find((finding) => !finding.accepted);
                 const reason =
                   `prd-audit halted: user-visible scope requires operator acceptance — ` +
-                  `${overScopeRoute.detail}` +
+                  `${prdAuditRoute.route.detail}` +
                   (candidate
                     ? `\n\n${renderOverScopeAcceptanceCandidate(candidate)}`
                     : '');
-                await this.writeHaltMarker(reason + '\n', overScopeRoute.haltClass);
+                await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.emitLoopHalt(reason, prUrl);
@@ -7680,7 +7756,11 @@ export class Conductor {
                 process.off('SIGTERM', sigterm);
                 return;
               }
-              if (overScopeRoute.kind === 'record') {
+              if (prdAuditRoute.kind === 'record') {
+                // Recorded negative-path PLAN_GAP and harmless/within-intent
+                // OVER_SCOPE findings are explicit accepted risk, not repair
+                // requests. Preserve fresh-verdict metadata while allowing
+                // the SHIP tail to settle this gate as satisfied.
                 completion = { ...completion, done: true, reason: undefined, missing: undefined };
               }
             }
