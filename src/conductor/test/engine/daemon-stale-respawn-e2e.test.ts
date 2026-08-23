@@ -9,7 +9,6 @@ import {
   newDetachedSession,
   killSession,
   hasSession,
-  isPaneDead,
   setRemainOnExit,
   respawnPane,
   defaultTmuxRunner,
@@ -50,6 +49,26 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 
   }
   if (!(await predicate())) {
     throw new Error(`waitFor: predicate did not become true within ${timeoutMs}ms`);
+  }
+}
+
+/**
+ * Check if a process is alive using process.kill(pid, 0).
+ * Returns true if alive, false if dead (ESRCH) or error (EPERM → conservative, assume alive).
+ */
+function isProcessAlive(pid: number): boolean {
+  try {
+    // Sending signal 0 checks if the process exists without actually sending a signal
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    // ESRCH = process doesn't exist
+    if (err.code === 'ESRCH') {
+      return false;
+    }
+    // EPERM = we don't have permission; process likely exists but we can't signal it
+    // Conservative approach: assume it's alive
+    return true;
   }
 }
 
@@ -786,7 +805,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
 
         // Simple daemon command that prints its PID and stays running.
-        const bootCmd = "bash -c 'echo DAEMON_PID_$$; while true; do sleep 1; done'";
+        const bootCmd = 'bash -c "echo DAEMON_PID_$$; while true; do sleep 1; done"';
 
         function captureScrollback(): string {
           const result = defaultTmuxRunner(
@@ -808,9 +827,8 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           expect(prePidMatch).not.toBeNull();
           const prePid = parseInt(prePidMatch![1], 10);
 
-          // Pane liveness is the portable process boundary: tmux may run in
-          // a PID namespace the Vitest worker cannot inspect with kill(0).
-          expect(await isPaneDead(sessionName)).toBe(false);
+          // Verify initial daemon is alive
+          expect(isProcessAlive(prePid)).toBe(true);
 
           // 2. Invalidate engine identity on disk by modifying the engine identity marker.
           //    In production, this simulates a build change detected by the stale-engine checker.
@@ -856,14 +874,20 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           expect(newPid).not.toBeNull();
           expect(newPid).not.toBe(prePid);
 
+          // 4. Verify steady-state after respawn. Proceed as soon as the
+          // predecessor is gone instead of paying a fixed wall-clock delay.
+          await waitFor(() => !isProcessAlive(prePid), 3000);
+
           // 4a. Verify session is still alive (never stopped)
           expect(await hasSession(sessionName)).toBe(true);
 
-          // 4b. The successor pane is live. PID comparison above proves a
-          // new daemon generation without crossing tmux's PID namespace.
-          expect(await isPaneDead(sessionName)).toBe(false);
+          // 4b. Verify predecessor is dead (ESRCH)
+          expect(isProcessAlive(prePid)).toBe(false);
 
-          // 4c. Verify marker was written (underscore marker)
+          // 4c. Verify successor daemon is alive
+          expect(isProcessAlive(newPid!)).toBe(true);
+
+          // 4d. Verify marker was written (underscore marker)
           expect(existsSync(markerPath)).toBe(true);
           const storedMarker = JSON.parse(await readFile(markerPath, 'utf-8'));
           expect(storedMarker.reason).toBe('stale-engine');
