@@ -314,6 +314,20 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
   const matchesPlan = !derived.resolved || stored.authored + stored.added === derived.growth.authored;
   if (growthTotalsAgree(stored) && matchesPlan) return withRemaining(stored, cap);
 
+  // A plan can contain an old unrecorded foreign append from before append
+  // authorization was centralized. Preserve every recorded addition rather
+  // than reclassifying it as authored and refunding its allowance.
+  if (growthTotalsAgree(stored) && derived.resolved) {
+    const reconciled = {
+      authored: Math.max(0, derived.growth.authored - stored.added),
+      added: stored.added,
+      byGate: { ...stored.byGate },
+    };
+    console.warn('[kickback-ledger] plan count diverged; preserving recorded growth allowance');
+    await writeKickbackLedger(projectRoot, { ...ledger, growth: reconciled });
+    return withRemaining(reconciled, cap);
+  }
+
   console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
   await writeKickbackLedger(projectRoot, { ...ledger, growth: derived.growth });
   return withRemaining(derived.growth, cap);

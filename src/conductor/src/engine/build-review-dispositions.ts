@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
   createConductStateLease,
   type ConductStateLease,
@@ -132,9 +133,7 @@ const REDUCED_COVERAGE_REASONS = new Set<BuildReviewInfrastructureFailureReason>
 ]);
 
 /** Retired, shipped rubric ids are tolerated only for compatibility reads. */
-const RETIRED_BUILD_REVIEW_RUBRIC_IDS = new Set([
-  'scope', 'rootCause', 'causalIntegrity', 'completeness', 'wiring',
-]);
+const RETIRED_BUILD_REVIEW_RUBRIC_IDS = new Set<string>(DEPRECATED_BUILD_REVIEW_RUBRIC_IDS);
 export function isRetiredBuildReviewRubric(value: unknown): value is string {
   return typeof value === 'string' && RETIRED_BUILD_REVIEW_RUBRIC_IDS.has(value);
 }

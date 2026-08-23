@@ -16,7 +16,7 @@ import {
   readAcceptedWidenings,
   renderOverScopeAcceptanceCandidate,
 } from '../src/engine/accepted-widenings.js';
-import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
+import { readGrowth, readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import type { ConductState, StepName } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
@@ -290,6 +290,57 @@ describe('prd_audit kickback', () => {
     }
     const ledger = await readKickbackLedger(root);
     expect((ledger.gates.prd_audit as { laps?: number } | undefined)?.laps).toBe(1);
+    expect(ledger.growth).toMatchObject({ added: 3, byGate: { prd_audit: 3 } });
+  });
+
+  it('keeps non-prd_audit remediation on its generic route without consuming prd_audit allowance', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'prd-audit-cross-gate-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(planPath, [
+      '### Task 1: authored', '### Task 2: authored', '### Task rem-prd: recorded prd addition',
+    ].join('\n'));
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: {},
+      growth: { authored: 2, added: 1, byGate: { prd_audit: 1 } },
+    });
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline/remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'arch-gap', disposition: 'build', category: null, rationale: 'Foreign append.',
+            tasks: [{ id: 'rem-arch', title: 'Unbounded architecture task' }],
+          }],
+        }));
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(await readFile(planPath, 'utf8')).toContain('rem-arch');
+
+    await writeFile(planPath, `${await readFile(planPath, 'utf8')}\n### Task rem-foreign: legacy foreign append\n`);
+    await expect(readGrowth(root, 4)).resolves.toEqual({
+      authored: 3, added: 1, byGate: { prd_audit: 1 }, remaining: 3,
+    });
   });
 
   it('uses its configured lap cap even when the generic cap is unavailable', () => {

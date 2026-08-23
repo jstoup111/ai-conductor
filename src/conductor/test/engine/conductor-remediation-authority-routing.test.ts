@@ -30,7 +30,7 @@ describe('planRemediation implementation-only authority routing', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it('routes an ADR-keyed implementation-only remediation to BUILD and seeds its pending task', async () => {
+  it('rejects an ADR-keyed remediation task from a gate without a growth allowance', async () => {
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
       run: async (step) => {
@@ -92,26 +92,21 @@ describe('planRemediation implementation-only authority routing', () => {
       },
     );
 
-    const taskStatus = JSON.parse(
-      await readFile(join(projectRoot, '.pipeline/task-status.json'), 'utf8'),
-    ) as { tasks: Array<{ id: string; status: string }> };
     const observation = {
       outcome,
       dispatched,
       taskAppended: (await readFile(planPath, 'utf8')).includes(
         '### Task rem-adr-1250-1: src/provider-home.ts:42 — align implementation and tests with the approved provider lifecycle',
       ),
-      seededTask: taskStatus.tasks.find((task) => task.id === 'rem-adr-1250-1'),
       decideHaltWritten: await access(join(projectRoot, '.pipeline/halt-user-input-required'))
         .then(() => true)
         .catch(() => false),
     };
 
     expect(observation).toMatchObject({
-      outcome: { kind: 'route', target: 'build' },
+      outcome: { kind: 'halt', detail: expect.stringContaining('no plan-growth allowance') },
       dispatched: ['remediate'],
-      taskAppended: true,
-      seededTask: { id: 'rem-adr-1250-1', status: 'pending' },
+      taskAppended: false,
       decideHaltWritten: false,
     });
   });
@@ -172,6 +167,66 @@ describe('planRemediation implementation-only authority routing', () => {
       kind: 'halt',
       detail: expect.stringContaining('ordinary BUILD disposition with no concrete task'),
     });
+  });
+
+  it('sends BUILD only the criterion-bound prd_audit remediation gaps', async () => {
+    await writeFile(
+      planPath,
+      Array.from({ length: 20 }, (_, index) => `### Task ${index + 1}: authored work\n`).join(''),
+      'utf8',
+    );
+    await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
+      '# Stories', '', '## Story 1: remediation', '', '#### Happy Path',
+      '- Given input, when repaired, then it holds.',
+    ].join('\n'), 'utf8');
+    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
+      '**PRD:** present', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      '| S1.1 | FIXABLE | 1 | FR-7 | Missing implementation |',
+    ].join('\n'), 'utf8');
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
+          dispositions: [
+            {
+              id: 'FR-7', disposition: 'build', category: null,
+              rationale: 'Repair the authorized criterion.',
+              tasks: [{ id: 'rem-authorized', title: 'Implement the authorized repair' }],
+            },
+            {
+              id: 'FR-42', disposition: 'build', category: null,
+              rationale: 'Invented unmatched work.',
+              tasks: [{ id: 'rem-unmatched', title: 'Implement the unmatched repair' }],
+            },
+          ],
+        }), 'utf8');
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 } } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string; hint?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'prd audit blocked',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(outcome.hint).toContain('FR-7');
+    expect(outcome.hint).not.toContain('FR-42');
+    const plan = await readFile(planPath, 'utf8');
+    expect(plan).toContain('rem-authorized');
+    expect(plan).not.toContain('rem-unmatched');
   });
 
   it.each([

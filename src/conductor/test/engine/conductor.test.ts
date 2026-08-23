@@ -4911,7 +4911,7 @@ describe('engine/conductor', () => {
       return writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify(plan));
     }
 
-    it('finish verification failure routes to build via /remediate, then ships on the healed re-run', async () => {
+    it('halts finish remediation that attempts unbounded plan growth', async () => {
       await seedShipTail();
       // First finish refuses (no finish-choice — the skill found real test
       // failures). /remediate plans a build fix; after build re-runs, finish
@@ -4985,29 +4985,22 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect(kickbacks).toEqual([{ from: 'finish', to: 'build' }]);
+      expect(kickbacks).toEqual([]);
       // The remediate dispatch names the finish gap artifact.
       const remediateReasons = vi
         .mocked(runner.run)
         .mock.calls.filter((c) => c[0] === 'remediate')
         .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
       expect(remediateReasons.some((r) => r.includes('.pipeline/test-failures.md'))).toBe(true);
-      // BUILD received the concrete task + the finish-verification hint source.
+      // Finish cannot append unbounded work on its own remediation route.
       const buildReasons = vi
         .mocked(runner.run)
         .mock.calls.filter((c) => c[0] === 'build')
         .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
-      expect(
-        buildReasons.some(
-          (r) =>
-            r.includes('update loop-intake.test.ts to inject ownerConfig') &&
-            r.includes('finish-verification') &&
-            r.includes('.pipeline/test-failures.md'),
-        ),
-      ).toBe(true);
-      expect(halted).toBe(false);
+      expect(buildReasons).toEqual([]);
+      expect(halted).toBe(true);
       const result = await readState(statePath);
-      expect(result.ok && result.value.finish).toBe('done');
+      expect(result.ok && result.value.finish).toBe('failed');
     });
 
     it('finish remediation HALTs for a human category without rebuilding', async () => {
@@ -10113,6 +10106,10 @@ describe('engine/conductor', () => {
 
   it('skips steps with steps.<name>.disable=true', async () => {
     const stepsRun: StepName[] = [];
+    const configSkips: Array<{ step: StepName; reason?: string }> = [];
+    events.on('config_skip', (event) => {
+      if (event.type === 'config_skip') configSkips.push(event);
+    });
     const runner: StepRunner = {
       run: async (step: StepName) => {
         stepsRun.push(step);
@@ -10128,6 +10125,7 @@ describe('engine/conductor', () => {
         steps: {
           memory: { disable: true },
           explore: { disable: true },
+          prd_audit: { disable: true },
         },
       },
     });
@@ -10136,13 +10134,18 @@ describe('engine/conductor', () => {
 
     expect(stepsRun).not.toContain('memory');
     expect(stepsRun).not.toContain('explore');
+    expect(stepsRun).not.toContain('prd_audit');
 
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value['memory']).toBe('skipped');
       expect(result.value['explore']).toBe('skipped');
+      expect(result.value['prd_audit']).toBe('skipped');
     }
+    const disabledSetting = 'steps.prd_audit.disable: true';
+    expect(await readFile(join(dir, '.pipeline/gates/prd_audit.json'), 'utf8')).toContain(disabledSetting);
+    expect(configSkips).toContainEqual({ type: 'config_skip', step: 'prd_audit', reason: disabledSetting });
   });
 
   it('disabled step satisfies downstream gate', async () => {

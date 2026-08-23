@@ -197,7 +197,6 @@ import {
 } from './full-suite-verifier.js';
 import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
 import {
-  buildReviewFailRoute,
   extractFlaggedPaths,
   runScopeFailDisposition,
   readRegradeCount,
@@ -3396,7 +3395,10 @@ export class Conductor {
         kind: 'route',
         target,
         hint: buildRemediationHint(
-          fixes,
+          // Taskless stall answers have no append authorization to filter;
+          // retain their actual answer while BUILD-bound task additions use
+          // only the admitted plan work.
+          allTasks.length === 0 ? fixes : appendGaps,
           hintSource.source,
           remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
         ),
@@ -5122,9 +5124,9 @@ export class Conductor {
 
         // Check if step is disabled via config
         if (resolved.disabled) {
-          const configPath = `steps.${step.name}.enabled`;
-          await this.recordStepSkip(state, step, `disabled in config (${configPath}: false)`);
-          await emitTracked({ type: 'config_skip', step: step.name, reason: `${configPath}: false` });
+          const configSetting = `steps.${step.name}.disable: true`;
+          await this.recordStepSkip(state, step, `disabled in config (${configSetting})`);
+          await emitTracked({ type: 'config_skip', step: step.name, reason: configSetting });
           continue;
         }
 
@@ -8693,57 +8695,14 @@ export class Conductor {
                   const pointerLines = await this.buildReviewPointerLines(verdictRaw);
                   const pointerContext = pointerLines.length > 0 ? `\n${pointerLines.join('\n')}` : '';
 
-                  // #989: a build_review FAIL resolves a structured routing
-                  // decision instead of assuming `build`. A completeness
-                  // failure implicates the PLAN (the diff does not cover what
-                  // the plan describes), so it dispatches the existing
-                  // remediation planner, which chooses the target step per gap
-                  // — or HALTs for a human. Every other rubric item is a local
-                  // diff defect and keeps kicking straight back to `build`.
-                  // Kickback counting semantics are deliberately unchanged
-                  // (that is #984's territory).
-                  let reworkTarget: StepName = 'build';
-                  let reworkHint =
+                  // Test-quality FAILs are local diff defects and re-enter BUILD.
+                  // Kickback counting semantics are deliberately unchanged.
+                  const reworkTarget: StepName = 'build';
+                  const reworkHint =
                     `build_review FAILED with these reasons:\n${evidence}\nFix the ` +
                     `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
                     `this build.` + pointerContext;
-                  let reworkEvidence = evidence;
-                  if (buildReviewFailRoute(parsed) === 'remediate') {
-                    const activePlanPath = await this.getActivePlanPath();
-                    const outcome = await this.planRemediation(
-                      state,
-                      steps,
-                      `build_review FAILED on completeness:\n${evidence}\nThe plan task ` +
-                        `requires review. Check the approved plan’s existing tasks before ` +
-                        `proposing a plan-level change. ` +
-                        (activePlanPath ? `Active plan: ${activePlanPath}. ` : '') +
-                        `Plan remediation per the /remediate ` +
-                        `skill and write .pipeline/remediation.json.` + pointerContext,
-                      {
-                        source: 'build_review',
-                        evidence: [{ gate: 'build_review', evidenceFile: BUILD_REVIEW_VERDICT }],
-                      },
-                    );
-                    if (outcome.kind === 'halt') {
-                      if (await reenterBuildReviewIfEffectivePass()) continue;
-                      const reason =
-                        `build_review completeness FAIL needs a human: ${outcome.detail}`;
-                      await this.writeHaltMarker(reason + '\n', 'needs-human');
-                      await this.persistPendingStateChanges(state, 'persist conductor transition');
-                      const prUrl = await this.surfaceRemediationPr(reason);
-                      await this.emitLoopHalt(reason, prUrl);
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
-                    }
-                    if (outcome.kind === 'route') {
-                      reworkTarget = outcome.target;
-                      reworkHint = outcome.hint;
-                      reworkEvidence = outcome.evidence;
-                    }
-                    // outcome.kind === 'none' — no usable remediation plan;
-                    // fall through to the unchanged kickback-to-build path.
-                  }
+                  const reworkEvidence = evidence;
 
                   if (await reenterBuildReviewIfEffectivePass()) continue;
 
@@ -11035,7 +10994,7 @@ export function buildRemediationHint(
   // A publication-only plan is a prose defect. The generic wording below tells
   // the agent to "make the code/spec changes", which is exactly how a PR-body
   // gap turned into implementation work.
-  if (fixes.every((g) => g.disposition === REMEDIATION_PUBLICATION_DISPOSITION)) {
+  if (fixes.length > 0 && fixes.every((g) => g.disposition === REMEDIATION_PUBLICATION_DISPOSITION)) {
     return (
       `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
       `${evidenceFile}). These are PUBLICATION gaps: the implementation is complete and ` +

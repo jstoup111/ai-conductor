@@ -239,12 +239,10 @@ export async function runScopeFailDisposition(
 /**
  * Where a `build_review` verdict should send the loop next.
  *
- * `'build'`  — a local diff defect the builder can fix in place (today's path).
- * `'remediate'` — the failure implicates the PLAN, not just the diff; dispatch
- *                 the remediation planner and let it choose the target step.
- * `'none'`   — nothing to route (a PASS verdict).
+ * `'build'` — a local diff defect the builder can fix in place.
+ * `'none'`  — nothing to route (a PASS verdict).
  */
-export type BuildReviewFailRoute = 'build' | 'remediate' | 'none';
+export type BuildReviewFailRoute = 'build' | 'none';
 
 /**
  * Derive the routing decision deterministically from the grader verdict that
@@ -253,11 +251,7 @@ export type BuildReviewFailRoute = 'build' | 'remediate' | 'none';
  * The remaining test-quality judgement is a local diff defect and routes to
  * `build`. Kickback counting semantics are untouched (see #984).
  */
-export function buildReviewFailRoute(verdict: {
-  verdict: string;
-  rubric?: { testQuality?: boolean };
-  findings?: { testQuality?: string[] };
-}): BuildReviewFailRoute {
+export function buildReviewFailRoute(verdict: { verdict: string }): BuildReviewFailRoute {
   if (verdict.verdict !== 'FAIL') return 'none';
   return 'build';
 }
