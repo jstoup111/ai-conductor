@@ -321,6 +321,22 @@ cannot drift again — the stronger fix wherever the evidence supports it. A pai
 diverges stays invisible until something reads both and fails, which is one audit lap later than the
 task that split them.
 
+Remediation tasks close the class, not the cited instance. A gap's evidence records where the
+auditor looked, not how far the defect reaches, so a task is swept for every site of the same shape
+before it is emitted — sibling sites carrying the same wrong predicate, missing guard, or stale
+literal, and whatever a removal orphans, such as the deleted arm's last caller or its fixtures.
+This is the main defence against audit cycling: a task that repairs one site of a class buys a
+single cycle and generates its own successor at the next site, which is how a feature whose
+blocking-gap count is genuinely falling can still spend four cycles on one requirement.
+
+The sweep is bounded by plan admission and does not widen the diff on its own authority. A sibling
+site is included only when an existing plan task admits it — the same coverage test remediation
+applies before selecting `plan` — and one that no task admits is recorded in the disposition's
+rationale as found-and-excluded rather than fixed. That boundary is deliberate: closing a class by
+adding work the plan does not cover is what a scope review reports as `not-authorized-by-plan`, and
+an unauthorized addition can leave remediation with nothing dispatchable at all, which costs more
+than the audit cycle the sweep was meant to save.
+
 A remediation gap that requires amending another feature's sealed DECIDE artifact is not eligible for
 `build` or `acceptance_specs`. It returns to the owning DECIDE step; in daemon mode the existing
 DECIDE kickback policy reaches the operator gate rather than attempting a BUILD-side bypass.
