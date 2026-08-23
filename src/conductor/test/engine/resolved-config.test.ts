@@ -199,10 +199,7 @@ describe('engine/resolved-config', () => {
               max_retries: 2,
               escalate: false,
             },
-            // Explicit enable: this case asserts policy resolution and the
-            // fan-out clamp (3 enabled rubrics), not the shipped default,
-            // which is off for rootCause (#1805).
-            rootCause: { enabled: true, effort: 'medium' },
+            rootCause: { effort: 'medium' },
           },
         },
       } as HarnessConfig;

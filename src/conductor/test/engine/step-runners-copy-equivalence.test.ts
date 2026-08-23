@@ -61,7 +61,7 @@ describe('build_review copy equivalence', () => {
         planPath,
         gitRunner,
         // #1682: tautology defaults off; these tests exercise four-rubric laps.
-        config: { build_review: { rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } } } as HarnessConfig,
+        config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
         buildReviewInputOptions: {
           inspectTestSuite: async () => ({
             status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },

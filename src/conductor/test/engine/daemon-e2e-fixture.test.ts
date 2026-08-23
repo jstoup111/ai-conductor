@@ -451,9 +451,7 @@ describe('daemon E2E fixture', () => {
       }).toEqual({
         claimed: true,
         processed: [slug],
-        // build + finish + the two default-enabled rubrics (scope,
-        // completeness). rootCause defaults off (#1805).
-        providerCalls: 4,
+        providerCalls: 5,
         build: 'done',
         buildReview: 'done',
         finish: 'done',
