@@ -16,6 +16,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Fixed
 
 - A build_review rubric prompt larger than 128 KiB no longer fails to start on the Claude provider, which previously exhausted the mechanical fault allowance and halted the feature. ([implementation PR #1821](https://github.com/jstoup111/ai-conductor/pull/1821)).
+- Codex dispatches can now reach the network inside their sandbox, so steps that use `gh` or `git push` no longer fail as approval denials. ([implementation PR #1828](https://github.com/jstoup111/ai-conductor/pull/1828)).
 
 ## [0.104.0] - 2026-08-22
 
