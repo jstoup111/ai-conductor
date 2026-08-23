@@ -31,7 +31,6 @@ import {
 import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt, CiFailureContext, CiFailureAttempt } from './rebase.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
-  findArtifactFiles,
   resolveFeaturePlanPath,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
@@ -1938,25 +1937,7 @@ export class DefaultStepRunner implements StepRunner {
       return { success: true, output: 'build_review disabled' };
     }
     if (coordination.kind === 'passed') {
-      const verdict = {
-        verdict: 'PASS' as const,
-        reason: coordination.reason,
-        rubric: { testQuality: false },
-      };
-      const verdictPath = join(effectivePipelineDir, 'build-review.json');
-      try {
-        await mkdir(effectivePipelineDir, { recursive: true });
-        const temporaryPath = `${verdictPath}.${randomUUID()}.tmp`;
-        await writeFile(temporaryPath, `${JSON.stringify(verdict, null, 2)}\n`, 'utf-8');
-        await rename(temporaryPath, verdictPath);
-      } catch (error) {
-        return {
-          success: false,
-          output: `build_review empty-set PASS publication failed: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      await this.stampBuildReviewVerdict();
-      return { success: true, output: JSON.stringify(verdict) };
+      return this.publishBuildReviewPass(coordination.reason);
     }
     if (coordination.kind === 'refused') {
       return { success: false, output: `build_review refused: ${coordination.reason}` };
@@ -2356,27 +2337,22 @@ export class DefaultStepRunner implements StepRunner {
     // resolveFeaturePlanPath) built the correct feature. Mirror the build step:
     // prefer the caller's override, else the slug-scoped resolver, which fails
     // closed on ambiguity rather than grading someone else's plan.
+    const buildReviewConfig = resolveBuildReviewConfig(this.config, this.modelPolicy, {
+      modelCliOverride: this.modelOverride,
+      effortCliOverride: this.effortOverride,
+    });
     let planPath = this.planPathOverride;
     if (!planPath) {
       planPath = await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
     }
     if (!planPath) {
-      const planFiles = await findArtifactFiles(this.projectDir, 'plan');
-      const detail =
-        planFiles.length === 0
-          ? 'no .docs/plans/*.md present'
-          : `could not scope this feature's plan among ${planFiles.length} in .docs/plans/ ` +
-            `(feature_desc="${this.featureDesc}")`;
-      return {
-        success: false,
-        output: `${detail} — build_review has no plan to grade the diff against`,
-      };
+      return this.publishBuildReviewPass(
+        buildReviewConfig.rubrics.testQuality.enabled
+          ? 'test_quality_empty_scope'
+          : 'build_review_no_rubrics',
+      );
     }
 
-    const buildReviewConfig = resolveBuildReviewConfig(this.config, this.modelPolicy, {
-      modelCliOverride: this.modelOverride,
-      effortCliOverride: this.effortOverride,
-    });
     let containmentReport: ContainmentFloorReport | undefined;
     if (buildReviewConfig.scopeContainmentEnforced) {
       try {
@@ -2534,6 +2510,31 @@ export class DefaultStepRunner implements StepRunner {
     return withBaseFreshness(withContainmentAdvisory(
       await this.runRubricBuildReview(inputs, buildReviewConfig),
     ));
+  }
+
+  private async publishBuildReviewPass(
+    reason: 'build_review_no_rubrics' | 'test_quality_empty_scope',
+  ): Promise<StepRunResult> {
+    const verdict = {
+      verdict: 'PASS' as const,
+      reason,
+      rubric: { testQuality: false },
+    };
+    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const verdictPath = join(effectivePipelineDir, 'build-review.json');
+    try {
+      await mkdir(effectivePipelineDir, { recursive: true });
+      const temporaryPath = `${verdictPath}.${randomUUID()}.tmp`;
+      await writeFile(temporaryPath, `${JSON.stringify(verdict, null, 2)}\n`, 'utf-8');
+      await rename(temporaryPath, verdictPath);
+    } catch (error) {
+      return {
+        success: false,
+        output: `build_review empty-set PASS publication failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    await this.stampBuildReviewVerdict();
+    return { success: true, output: JSON.stringify(verdict) };
   }
 
   private async stampBuildReviewVerdict(): Promise<void> {

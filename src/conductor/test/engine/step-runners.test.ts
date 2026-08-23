@@ -3250,6 +3250,23 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
+    it('empty-passes opted-in test quality when no feature plan resolves', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        ...testQualityOptIn(),
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: expect.stringContaining('test_quality_empty_scope'),
+      });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).resolves.toContain(
+        '"reason": "test_quality_empty_scope"',
+      );
+    });
+
     it.skip('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
       const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
       const featureRoot = join(repository, '.worktrees', 'feature');
