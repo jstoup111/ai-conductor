@@ -30,6 +30,97 @@ describe('planRemediation implementation-only authority routing', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
+  type RemediationOutcome = {
+    kind: string;
+    target?: StepName;
+    hint?: string;
+    evidence?: string;
+    detail?: string;
+    haltClass?: string;
+  };
+
+  const prdAuditSource = {
+    source: 'prd-audit',
+    evidence: [{ gate: 'prd_audit' as StepName, evidenceFile: '.pipeline/prd-audit.md' }],
+  };
+  const asBuiltSource = {
+    source: 'as-built architecture review',
+    evidence: [{
+      gate: 'architecture_review_as_built' as StepName,
+      evidenceFile: '.pipeline/architecture-review-as-built.md',
+    }],
+  };
+  const finishSource = {
+    source: 'finish-verification',
+    evidence: [{ gate: 'finish' as StepName, evidenceFile: '.pipeline/test-failures.md' }],
+  };
+
+  async function preparePrdAuditAuthorityFixture(): Promise<void> {
+    await writeFile(
+      planPath,
+      Array.from({ length: 20 }, (_, index) => `### Task ${index + 1}: authored work\n`).join(''),
+      'utf8',
+    );
+    await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
+      '# Stories', '', '## Story 1: remediation', '', '#### Happy Path',
+      '- Given input, when repaired, then it holds.',
+    ].join('\n'), 'utf8');
+    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
+      '**PRD:** present', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      '| S1.1 | FIXABLE | 1 | FR-7 | Missing implementation |',
+    ].join('\n'), 'utf8');
+  }
+
+  async function driveRemediation(
+    dispositions: unknown[],
+    hintSource: unknown,
+  ): Promise<{ outcome: RemediationOutcome; plan: string }> {
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(
+          join(projectRoot, '.pipeline/remediation.json'),
+          JSON.stringify({ dispositions }),
+          'utf8',
+        );
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+      config: {
+        prd_audit: {
+          max_remediation_laps: 3,
+          max_appended_tasks: 5,
+          max_appended_ratio: 1,
+        },
+      } as never,
+    });
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        source: unknown,
+      ) => Promise<RemediationOutcome>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'remediation authority routing',
+      hintSource,
+    );
+    return { outcome, plan: await readFile(planPath, 'utf8') };
+  }
+
   it('rejects an ADR-keyed remediation task from a gate without a growth allowance', async () => {
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
@@ -300,7 +391,7 @@ describe('planRemediation implementation-only authority routing', () => {
       ALL_STEPS,
       'as-built architecture review blocked',
       {
-        source: 'architecture-review-as-built',
+        source: 'as-built architecture review',
         evidence: [{
           gate: 'architecture_review_as_built',
           evidenceFile: '.pipeline/architecture-review-as-built.md',
@@ -312,6 +403,181 @@ describe('planRemediation implementation-only authority routing', () => {
       kind: 'halt',
       detail: expect.stringContaining('no admitted remediation gap'),
     });
+  });
+
+  it('routes only the admitted prd_audit gap when a mixed plan also names an unbound DECIDE gap', async () => {
+    await preparePrdAuditAuthorityFixture();
+
+    const { outcome, plan } = await driveRemediation([
+      {
+        id: 'FR-7', disposition: 'build', category: null,
+        rationale: 'Repair the authorized criterion.',
+        tasks: [{ id: 'rem-mixed-authorized', title: 'Implement the authorized repair' }],
+      },
+      {
+        id: 'FR-99', disposition: 'plan', category: null,
+        rationale: 'The approved plan omits an in-scope need entirely.', tasks: [],
+      },
+    ], prdAuditSource);
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(outcome.hint).toContain('FR-7');
+    expect(outcome.hint).not.toContain('FR-99');
+    expect(plan).toContain('rem-mixed-authorized');
+  });
+
+  it('halts an as-built publication mix when its unadmitted BUILD gap requests plan growth', async () => {
+    const { outcome, plan } = await driveRemediation([
+      {
+        id: 'G-1', disposition: 'publication', category: null,
+        rationale: 'Repair the pull request prose.', tasks: [],
+      },
+      {
+        id: 'G-2', disposition: 'build', category: null,
+        rationale: 'Perform off-plan code work.',
+        tasks: [{ id: 'rem-as-built-unadmitted', title: 'Perform off-plan code work' }],
+      },
+    ], asBuiltSource);
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      haltClass: 'kickback-cap',
+      detail: expect.stringContaining('no plan-growth allowance'),
+    });
+    expect(plan).not.toContain('rem-as-built-unadmitted');
+  });
+
+  it('routes only publication in an as-built mix with an unadmitted taskless gap', async () => {
+    const { outcome } = await driveRemediation([
+      {
+        id: 'G-1', disposition: 'publication', category: null,
+        rationale: 'Repair the pull request prose.', tasks: [],
+      },
+      {
+        id: 'G-2', disposition: 'acceptance_specs', category: null,
+        rationale: 'Perform off-plan acceptance-spec work.', tasks: [],
+      },
+    ], asBuiltSource);
+
+    expect(outcome).toMatchObject({
+      kind: 'route',
+      target: 'finish',
+      evidence: 'G-1→publication',
+    });
+    expect(outcome.hint).toContain('G-1 [publication]');
+    expect(outcome.hint).not.toContain('G-2');
+  });
+
+  it.each([
+    {
+      caseName: 'taskless acceptance-spec work',
+      disposition: 'acceptance_specs',
+      tasks: [],
+      detail: 'no admitted remediation gap',
+      taskId: undefined,
+    },
+    {
+      caseName: 'taskless BUILD work',
+      disposition: 'build',
+      tasks: [],
+      detail: 'ordinary BUILD disposition with no concrete task',
+      taskId: undefined,
+    },
+    {
+      caseName: 'tasked BUILD work',
+      disposition: 'build',
+      tasks: [{ id: 'rem-finish-unadmitted', title: 'Repair the failing test' }],
+      detail: 'no plan-growth allowance',
+      taskId: 'rem-finish-unadmitted',
+    },
+  ])('halts finish-verification remediation that requests $caseName', async ({ disposition, tasks, detail, taskId }) => {
+    const { outcome, plan } = await driveRemediation([
+      {
+        id: 'TEST-FAIL-1', disposition, category: null,
+        rationale: 'Repair the failing verification.', tasks,
+      },
+    ], finishSource);
+
+    expect(outcome).toMatchObject({ kind: 'halt', detail: expect.stringContaining(detail) });
+    if (taskId !== undefined) expect(plan).not.toContain(taskId);
+  });
+
+  it('uses prd_audit criterion authority when validation-group provenance includes multiple gates', async () => {
+    await preparePrdAuditAuthorityFixture();
+    const validationGroupSource = {
+      source: 'validation-group',
+      evidence: [
+        ...prdAuditSource.evidence,
+        ...asBuiltSource.evidence,
+      ],
+    };
+
+    const { outcome, plan } = await driveRemediation([
+      {
+        id: 'FR-7', disposition: 'build', category: null,
+        rationale: 'Repair the authorized criterion.',
+        tasks: [{ id: 'rem-validation-group', title: 'Implement the authorized repair' }],
+      },
+    ], validationGroupSource);
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build', evidence: 'FR-7→build' });
+    expect(plan).toContain('rem-validation-group');
+  });
+
+  it.each([
+    { caseName: 'prd_audit', source: prdAuditSource, id: 'ANYTHING-GOES' },
+    { caseName: 'as-built review', source: asBuiltSource, id: 'G-1' },
+  ])('routes an admitted publication-only $caseName remediation to finish', async ({ source, id }) => {
+    await preparePrdAuditAuthorityFixture();
+
+    const { outcome } = await driveRemediation([
+      {
+        id, disposition: 'publication', category: null,
+        rationale: 'Repair the pull request prose only.', tasks: [],
+      },
+    ], source);
+
+    expect(outcome).toMatchObject({
+      kind: 'route',
+      target: 'finish',
+      evidence: `${id}→publication`,
+    });
+    expect(outcome.hint).toContain('implementation is complete and must not change');
+  });
+
+  it('matches lowercase prd_audit gap ids to their uppercase criterion authority', async () => {
+    await preparePrdAuditAuthorityFixture();
+
+    const { outcome, plan } = await driveRemediation([
+      {
+        id: 'fr-7', disposition: 'build', category: null,
+        rationale: 'Repair the authorized criterion.',
+        tasks: [{ id: 'rem-lowercase', title: 'Implement the authorized repair' }],
+      },
+    ], prdAuditSource);
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build', evidence: 'fr-7→build' });
+    expect(plan).toContain('rem-lowercase');
+  });
+
+  it('halts mechanically when prd_audit provenance points to a missing authorization artifact', async () => {
+    await preparePrdAuditAuthorityFixture();
+    await rm(join(projectRoot, '.pipeline/prd-audit.md'));
+
+    const { outcome, plan } = await driveRemediation([
+      {
+        id: 'FR-7', disposition: 'build', category: null,
+        rationale: 'Repair the authorized criterion.',
+        tasks: [{ id: 'rem-stale-artifact', title: 'Implement the authorized repair' }],
+      },
+    ], prdAuditSource);
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      haltClass: 'mechanical',
+      detail: expect.stringContaining('could not be read for remediation authorization'),
+    });
+    expect(plan).not.toContain('rem-stale-artifact');
   });
 
   it.each([
