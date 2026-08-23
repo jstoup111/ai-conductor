@@ -3314,7 +3314,7 @@ TIER: M`,
           planPath: join(featureRoot, '.docs/plans/feature.md'),
           pipelineDir: join(featureRoot, '.pipeline'),
           config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
-            enabled: true, perTaskFloor: false,
+            enabled: true,
             rubrics: { testQuality: { enabled: true } },
           } } as HarnessConfig,
           buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' } } as never) },

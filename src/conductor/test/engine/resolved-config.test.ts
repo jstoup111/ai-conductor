@@ -109,17 +109,6 @@ describe('engine/resolved-config', () => {
       expect(resolveBuildReviewConfig(config).rubrics.testQuality.enabled).toBe(true);
     });
 
-    it('keeps the retired perTaskFloor surface disabled when field is absent', () => {
-      const config: HarnessConfig = { build_review: { enabled: true } } as HarnessConfig;
-      const resolved = resolveBuildReviewConfig(config);
-      expect(resolved.perTaskFloor).toBe(false);
-    });
-
-    it('keeps the retired perTaskFloor surface disabled when build_review is absent', () => {
-      const resolved = resolveBuildReviewConfig(undefined);
-      expect(resolved.perTaskFloor).toBe(false);
-    });
-
     it('applies the registered test-quality default effort when nothing is authored', () => {
       const resolved = resolveBuildReviewConfig(undefined);
       expect({
@@ -160,22 +149,6 @@ describe('engine/resolved-config', () => {
       > & { scopeContainmentEnforced?: boolean };
 
       expect(resolved.scopeContainmentEnforced).toBe(true);
-    });
-
-    it('honors an explicit perTaskFloor: false opt-out', () => {
-      const config: HarnessConfig = {
-        build_review: { enabled: true, perTaskFloor: false },
-      } as HarnessConfig;
-      const resolved = resolveBuildReviewConfig(config);
-      expect(resolved.perTaskFloor).toBe(false);
-    });
-
-    it('keeps the retired perTaskFloor surface disabled when malformed', () => {
-      const config = {
-        build_review: { enabled: true, perTaskFloor: 'nope' as unknown as boolean },
-      } as HarnessConfig;
-      const resolved = resolveBuildReviewConfig(config);
-      expect(resolved.perTaskFloor).toBe(false);
     });
 
     it('resolves a closed rubric policy map by inheriting the outer policy, applying independent overrides, and clamping fan-out', () => {

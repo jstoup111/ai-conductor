@@ -235,11 +235,11 @@ describe("build-review semantic cache", () => {
 
   it("keeps a pre-change cache entry reusable when only lap provenance changes", async () => {
     const policy = { enabled: true, llm_provider: "claude" as const, model: "sonnet", effort: "medium" as const, model_fallback_ladder: ["sonnet"], max_retries: 1, escalate: false };
-    const config = { enabled: true, perTaskFloor: true, scopeContainmentEnforced: false, maxParallel: 5, rubrics: { testQuality: policy } } as never;
+    const config = { enabled: true, scopeContainmentEnforced: false, maxParallel: 5, rubrics: { testQuality: policy } } as never;
     const frozenInputs = {
       diff: "diff --git a/src/a.ts b/src/a.ts", planBody: "# Plan\n", mergeBase: "base", baseRef: "origin/main", baseKind: "remote", trackingRefSha: "base", remoteHeadSha: "base", fresh: true,
       repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" },
-      sourceSnapshot: { digest: "sha256:snapshot-current", contentDigest: "sha256:content", baseRef: "origin/main", mergeBase: "base", headSha: "head", diff: "diff --git a/src/a.ts b/src/a.ts", planBody: "# Plan\n", repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] } },
+      sourceSnapshot: { digest: "sha256:snapshot-current", contentDigest: "sha256:content", baseRef: "origin/main", mergeBase: "base", headSha: "head", diff: "diff --git a/src/a.ts b/src/a.ts", planBody: "# Plan\n", repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testQuality: { inScopeTests: ["test/a.test.ts"], unresolvedMarkers: [] } },
     } as never;
     const oldLap = parseBuildReviewLapId("lap-before")!;
     const currentLap = parseBuildReviewLapId("lap-current")!;

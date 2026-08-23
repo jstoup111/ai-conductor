@@ -1976,9 +1976,9 @@ complexity:
       });
     });
 
-    it('keeps legacy keys tolerant and treats retired rubric policy as a no-op', () => {
+    it('keeps retired keys tolerant and treats retired policy as a no-op', () => {
       const legacy = validateConfig({
-        build_review: { enabled: 'not-a-boolean', perTaskFloor: 'not-a-boolean' },
+        build_review: { enabled: 'not-a-boolean', perTaskFloor: false },
       });
       const rubricPolicy = validateConfig({
         build_review: { rubrics: { completeness: { max_retries: 'many' } } },
@@ -1997,7 +1997,7 @@ complexity:
           buildReview: expect.objectContaining({ enabled: true }),
           warnings: [
             expect.stringMatching(/build_review\.enabled/),
-            expect.stringMatching(/build_review\.perTaskFloor/),
+            'build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
           ],
         },
         rubricPolicy: [
@@ -2022,45 +2022,22 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
-    it('preserves enabled:false with perTaskFloor:false without warnings', () => {
+    it('accepts perTaskFloor as a deprecated no-op without retaining it in the resolved config', () => {
       const result = validateConfig({
         build_review: { enabled: false, perTaskFloor: false },
       });
       expect(result.ok && {
         build_review: result.config.build_review,
         warnings: result.warnings,
+        deprecatedKeys: result.deprecatedKeys,
       }).toEqual({
-        build_review: expect.objectContaining({ enabled: false, perTaskFloor: false }),
-        warnings: [],
+        build_review: { enabled: false, maxParallel: 1, rubrics: { testQuality: { enabled: false } } },
+        warnings: ['build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).'],
+        deprecatedKeys: [{
+          key: 'build_review.perTaskFloor',
+          adr: 'adr-2026-08-22-build-review-opt-in-rubric-container',
+        }],
       });
-    });
-
-    it('defaults enabled after preserving a partial perTaskFloor:false block', () => {
-      const result = validateConfig({ build_review: { perTaskFloor: false } });
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
-        build_review: expect.objectContaining({ enabled: true, perTaskFloor: false }),
-        warnings: [],
-      });
-    });
-
-    it('passes perTaskFloor:false through validation to the build_review resolver', () => {
-      const result = validateConfig({
-        build_review: {
-          enabled: true,
-          perTaskFloor: false,
-          rubrics: { testQuality: { enabled: true } },
-        },
-      });
-      expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual(expect.objectContaining({
-        enabled: true,
-        perTaskFloor: false,
-        scopeContainmentEnforced: false,
-        maxParallel: 1,
-        rubrics: expect.objectContaining({ testQuality: expect.objectContaining({ enabled: true }) }),
-      }));
     });
 
     it('preserves an explicit boolean scope-containment enforcement mode', () => {
@@ -2151,32 +2128,6 @@ complexity:
       expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
     });
 
-    it('drops an invalid enabled value while retaining perTaskFloor', () => {
-      const result = validateConfig({
-        build_review: { enabled: 'banana', perTaskFloor: false },
-      });
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
-        build_review: expect.objectContaining({ enabled: true, perTaskFloor: false }),
-        warnings: [expect.stringMatching(/build_review\.enabled/)],
-      });
-    });
-
-    it('drops an invalid perTaskFloor value while retaining enabled', () => {
-      const result = validateConfig({
-        build_review: { enabled: false, perTaskFloor: 'sometimes' },
-      });
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
-        build_review: expect.objectContaining({ enabled: false }),
-        warnings: [expect.stringMatching(/build_review\.perTaskFloor/)],
-      });
-    });
-
     it('is total across build_review shapes', () => {
       const testCases: Array<[string, Record<string, unknown>]> = [
         ['absent', {}],
@@ -2185,9 +2136,8 @@ complexity:
         ['string', { build_review: 'yes' }],
         ['number', { build_review: 1 }],
         ['array', { build_review: [] }],
-        ['valid', { build_review: { enabled: false, perTaskFloor: false } }],
-        ['partially valid', { build_review: { perTaskFloor: false } }],
-        ['fully invalid', { build_review: { enabled: 'no', perTaskFloor: 'no' } }],
+        ['retired key', { build_review: { enabled: false, perTaskFloor: false } }],
+        ['retired key with an invalid value', { build_review: { perTaskFloor: 'no' } }],
       ];
       for (const [, testCase] of testCases) {
         expect(() => validateConfig(testCase)).not.toThrow();

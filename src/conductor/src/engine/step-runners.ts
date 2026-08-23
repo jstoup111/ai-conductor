@@ -46,9 +46,7 @@ import {
 } from './build-review-inputs.js';
 import {
   runContainmentFloor,
-  runPerTaskCommitFloor,
   renderContainmentFloorReport,
-  renderPerTaskFloorReport,
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
@@ -2380,7 +2378,7 @@ export class DefaultStepRunner implements StepRunner {
       effortCliOverride: this.effortOverride,
     });
     let containmentReport: ContainmentFloorReport | undefined;
-    if (buildReviewConfig.perTaskFloor) {
+    if (buildReviewConfig.scopeContainmentEnforced) {
       try {
         containmentReport = await runContainmentFloor({
           projectRoot: this.projectDir,
@@ -2437,37 +2435,22 @@ export class DefaultStepRunner implements StepRunner {
       return repairProvenance ? { ...withFreshness, repairProvenance } : withFreshness;
     };
 
-    // Per-task "work happened at all" floor (#781): purely additive,
-    // non-blocking telemetry computed alongside the grader dispatch. It
-    // NEVER feeds buildGraderPrompt/inputs, never changes `success`, and
-    // never triggers a kickback — it only prepends advisory lines to this
-    // step's own `output` and writes a sidecar artifact for observability.
-    // Guarded end-to-end: runPerTaskCommitFloor is already fail-soft
-    // internally, but the try/catch here ensures literally nothing from this
-    // telemetry path can throw and fail the build_review step.
-    let floorAdvisoryLines: string[] = [];
-    if (buildReviewConfig.perTaskFloor) {
+    // Containment telemetry is non-blocking: it never changes `success` or
+    // triggers a kickback. Guard it so an observability failure cannot fail
+    // build_review.
+    let containmentAdvisoryLines: string[] = [];
+    if (buildReviewConfig.scopeContainmentEnforced) {
       try {
         // Fall back to the relative `.pipeline` dir when this.pipelineDir is
         // unset (mirrors the finish-record fallback above): the daemon always
         // passes the worktree's absolute pipelineDir, but callers that don't
         // (e.g. direct/test invocation) still get a usable artifact path.
         const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
-        const floorReport = await runPerTaskCommitFloor({
-          projectRoot: this.projectDir,
-          planPath,
-          taskStatusPath: join(effectivePipelineDir, 'task-status.json'),
-        });
         if (this.pipelineDir) {
           await this.ensurePipelineDir();
         } else {
           await mkdir(effectivePipelineDir, { recursive: true });
         }
-        await writeFile(
-          join(effectivePipelineDir, 'per-task-floor.json'),
-          JSON.stringify(floorReport, null, 2),
-          'utf-8',
-        );
         containmentReport ??= await runContainmentFloor({
           projectRoot: this.projectDir,
           planPath,
@@ -2478,14 +2461,9 @@ export class DefaultStepRunner implements StepRunner {
           JSON.stringify(containmentReport, null, 2),
           'utf-8',
         );
-        floorAdvisoryLines = [
-          ...renderPerTaskFloorReport(floorReport),
-          ...(buildReviewConfig.scopeContainmentEnforced
-            ? renderContainmentFloorReport(containmentReport)
-            : []),
-        ];
-        if (floorAdvisoryLines.length > 0) {
-          for (const line of floorAdvisoryLines) {
+        containmentAdvisoryLines = renderContainmentFloorReport(containmentReport);
+        if (containmentAdvisoryLines.length > 0) {
+          for (const line of containmentAdvisoryLines) {
             this.log(`WARNING: ${line}`);
           }
         }
@@ -2541,19 +2519,19 @@ export class DefaultStepRunner implements StepRunner {
     // The lifecycle still exposes one public build_review step. Its
     // coordinator owns the bounded auxiliary fan-out and receives the one
     // frozen snapshot. The injectable coordinator remains a narrow test seam.
-    const withFloorAdvisory = (result: StepRunResult): StepRunResult => ({
+    const withContainmentAdvisory = (result: StepRunResult): StepRunResult => ({
       ...result,
-      ...(typeof result.output === 'string' && floorAdvisoryLines.length > 0
-        ? { output: `${floorAdvisoryLines.join('\n')}\n\n${result.output}` }
+      ...(typeof result.output === 'string' && containmentAdvisoryLines.length > 0
+        ? { output: `${containmentAdvisoryLines.join('\n')}\n\n${result.output}` }
         : {}),
     });
     if (this.buildReviewCoordinator) {
-      return withBaseFreshness(withFloorAdvisory(
+      return withBaseFreshness(withContainmentAdvisory(
         await this.buildReviewCoordinator(inputs, buildReviewConfig),
       ));
     }
 
-    return withBaseFreshness(withFloorAdvisory(
+    return withBaseFreshness(withContainmentAdvisory(
       await this.runRubricBuildReview(inputs, buildReviewConfig),
     ));
   }

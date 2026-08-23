@@ -98,7 +98,7 @@ export const DEPRECATED_BUILD_REVIEW_RUBRIC_IDS = [
 const DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET = new Set<string>(
   DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
 );
-const DEPRECATED_BUILD_REVIEW_RUBRIC_ADR =
+const DEPRECATED_BUILD_REVIEW_ADR =
   'adr-2026-08-22-build-review-opt-in-rubric-container';
 
 /** Default hard floor for live provider-stream observation emission. */
@@ -165,9 +165,9 @@ function validateBuildReviewRubrics(
     const path = `build_review.rubrics.${rubricId}`;
     if (DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId)) {
       warnings.push(
-        `${path} is retired and ignored (${DEPRECATED_BUILD_REVIEW_RUBRIC_ADR}).`,
+        `${path} is retired and ignored (${DEPRECATED_BUILD_REVIEW_ADR}).`,
       );
-      deprecatedKeys.push({ key: path, adr: DEPRECATED_BUILD_REVIEW_RUBRIC_ADR });
+      deprecatedKeys.push({ key: path, adr: DEPRECATED_BUILD_REVIEW_ADR });
       continue;
     }
     if (!BUILD_REVIEW_RUBRIC_IDS.includes(rubricId as (typeof BUILD_REVIEW_RUBRIC_IDS)[number])) {
@@ -1122,13 +1122,25 @@ export function validateConfig(
         obj.build_review,
         [
           { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
-          { key: 'perTaskFloor', isValid: (value) => typeof value === 'boolean' },
+          // Compatibility-only: accept every historical shape, then remove it
+          // before the resolved config can observe it.
+          { key: 'perTaskFloor', isValid: () => true },
           { key: 'scopeContainmentEnforced', isValid: (value) => typeof value === 'boolean' },
           { key: 'maxParallel', isValid: () => true },
           { key: 'rubrics', isValid: () => true },
         ],
         warnings,
       );
+      if (Object.hasOwn(br, 'perTaskFloor')) {
+        warnings.push(
+          `build_review.perTaskFloor is retired and ignored (${DEPRECATED_BUILD_REVIEW_ADR}).`,
+        );
+        deprecatedKeys.push({
+          key: 'build_review.perTaskFloor',
+          adr: DEPRECATED_BUILD_REVIEW_ADR,
+        });
+        delete br.perTaskFloor;
+      }
       const rubricInput = br.rubrics;
       const rubricError = validateBuildReviewRubrics(
         br.maxParallel,

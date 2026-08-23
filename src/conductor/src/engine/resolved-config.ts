@@ -720,7 +720,6 @@ export interface ResolvedBuildReviewRubricPolicy {
 /** Fully-resolved build_review settings (no optional fields). */
 export interface ResolvedBuildReviewConfig {
   enabled: boolean;
-  perTaskFloor: boolean;
   scopeContainmentEnforced: boolean;
   maxParallel: number;
   rubrics: Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
@@ -833,7 +832,6 @@ export function resolveBuildReviewConfig(
 
   return {
     enabled: block?.enabled ?? DEFAULT_BUILD_REVIEW_ENABLED,
-    perTaskFloor: false,
     scopeContainmentEnforced:
       typeof block?.scopeContainmentEnforced === 'boolean'
         ? block.scopeContainmentEnforced

@@ -672,8 +672,6 @@ export type BuildReviewRubricsConfig = Partial<
 export interface BuildReviewConfig {
   /** Enable the build_review gate. Default: true. */
   enabled?: boolean;
-  /** Enable the per-task work-happened commit floor gate. Default: true (on, fail-safe). */
-  perTaskFloor?: boolean;
   /**
    * Refuse commits whose staged paths exceed the active plan task's declared
    * scope. Default: false (report-only).
