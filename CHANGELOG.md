@@ -19,6 +19,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Codex dispatches can now reach the network inside their sandbox, so steps that use `gh` or `git push` no longer fail as approval denials. ([implementation PR #1828](https://github.com/jstoup111/ai-conductor/pull/1828)).
 - Remediation tasks may no longer order a removal that drops coverage a completed plan task delivered — the removal must name the surviving plan task or criterion and carry its replacement. ([implementation PR #1829](https://github.com/jstoup111/ai-conductor/pull/1829)).
 - Remediation tasks that change one side of a duplicated enumeration, registry, or id list must now name the counterpart or derive both from one source, so the pair cannot silently diverge. ([implementation PR #1830](https://github.com/jstoup111/ai-conductor/pull/1830)).
+- Remediation tasks now sweep for sibling sites of the same defect class and for what a removal orphans, bounded to sites an existing plan task admits, so a repaired defect stops reappearing at the next site on the following audit cycle. ([implementation PR #1837](https://github.com/jstoup111/ai-conductor/pull/1837)).
 
 ## [0.104.0] - 2026-08-22
 
