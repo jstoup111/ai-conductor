@@ -167,15 +167,11 @@ function createFixtureAgentFake(
       mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
       writeFileSync(
         join(worktreeDir, '.pipeline/prd-audit.md'),
-        '**PRD:** present\n\n'
+        '**PRD:** none\n\n'
           + '## Verdict Table\n\n'
           + '| Criterion | Grade | Plan task | Evidence |\n'
           + '| --- | --- | --- | --- |\n'
-          + '| S1.1 | PASS | 1 | test/fixtures/daemon-e2e/touched.txt |\n\n'
-          + '## FR Evidence\n\n'
-          + '| FR | Verdict | Gap-class | Evidence | Accepted? |\n'
-          + '| --- | --- | --- | --- | --- |\n'
-          + '| FR-1 | ALIGNED | impl-gap | test/fixtures/daemon-e2e/touched.txt | no |\n',
+          + '| S1.1 | PASS | 1 | test/fixtures/daemon-e2e/touched.txt |\n',
         'utf-8',
       );
       return {
@@ -329,13 +325,19 @@ describe('daemon E2E fixture', () => {
       await initTestRepo(worktreeDir);
       await mkdir(join(worktreeDir, '.docs/plans'), { recursive: true });
       await mkdir(join(worktreeDir, '.docs/stories'), { recursive: true });
-      await mkdir(join(worktreeDir, '.docs/specs'), { recursive: true });
       await mkdir(join(worktreeDir, 'test/fixtures/daemon-e2e'), {
         recursive: true,
       });
       await copyFile(fixturePlanPath, planPath);
-      await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
-      await writeFile(join(worktreeDir, `.docs/specs/${slug}.md`), '# PRD\n\n## Functional Requirements\n\n- **FR-1:** The fixture behavior is delivered.\n');
+      await writeFile(
+        join(worktreeDir, `.docs/stories/${slug}.md`),
+        '# Stories: Daemon E2E fixture feature\n\n'
+          + '## Story 1: touch the declared fixture file\n\n'
+          + '**Requirements:** FR-1\n\n'
+          + '### Happy Path\n\n'
+          + '- Given the fixture feature is dispatched, when Task 1 runs, then the agent touches '
+          + '`test/fixtures/daemon-e2e/touched.txt`.\n',
+      );
       await copyFile(
         fixtureTouchedPath,
         join(worktreeDir, 'test/fixtures/daemon-e2e/touched.txt'),
@@ -403,13 +405,14 @@ describe('daemon E2E fixture', () => {
 
       // Bounded Conductor fixture:
       // 1. First runnable step: build (all prior steps are pre-resolved).
-      // 2. Expected dispatches: build, the always-on as-built review, and
-      //    finish; this small technical fixture explicitly skips PRD audit.
+      // 2. Expected dispatches: build, prd_audit, the always-on as-built
+      //    review, and finish.
       // 3. Terminal condition: finish records the local keep equivalent and
       //    the daemon Conductor writes DONE.
       // 4. Required artifacts: authoritative plan/stories plus the T0 baseline
-      //    commit, Task 1's real commit, a fresh build-review verdict, aggregate
-      //    verifier evidence, and the fresh finish-choice marker.
+      //    commit, Task 1's real commit, a no-PRD criterion verdict, a fresh
+      //    build-review verdict, aggregate verifier evidence, and the fresh
+      //    finish-choice marker.
       const daemonPromise = runDaemon(
         {
           discoverBacklog: async () => [{ slug, tier: 'S', track: 'technical' }],
@@ -426,7 +429,6 @@ describe('daemon E2E fixture', () => {
               verifyArtifacts: false,
               config: {
                 build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
-                steps: { prd_audit: { disable: true } },
               },
               buildReviewEffectiveResolver,
               fullSuiteVerifier: {
@@ -453,8 +455,10 @@ describe('daemon E2E fixture', () => {
       const state = JSON.parse(await readFile(statePath, 'utf-8')) as {
         build?: string;
         build_review?: string;
+        prd_audit?: string;
         finish?: string;
       };
+      const prdAuditReport = await readFile(join(pipelineDir, 'prd-audit.md'), 'utf-8');
       const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], {
         cwd: worktreeDir,
       });
@@ -465,8 +469,11 @@ describe('daemon E2E fixture', () => {
         providerCalls: fake.calls.length,
         build: state.build,
         buildReview: state.build_review,
+        prdAudit: state.prd_audit,
         finish: state.finish,
         wiringCheckPrompt: fake.calls.some((call) => call.prompt.includes('wiring_check')),
+        prdAuditPrompt: fake.calls.some((call) => call.prompt.includes('You are running step: PRD Audit.')),
+        prdAuditReport,
         commitBody: commitBody.trim(),
         done: existsSync(join(pipelineDir, 'DONE')),
         halt: existsSync(join(pipelineDir, 'HALT')),
@@ -475,11 +482,14 @@ describe('daemon E2E fixture', () => {
       }).toEqual({
         claimed: true,
         processed: [slug],
-        providerCalls: 3,
+        providerCalls: 4,
         build: 'done',
         buildReview: 'done',
+        prdAudit: 'done',
         finish: 'done',
         wiringCheckPrompt: false,
+        prdAuditPrompt: true,
+        prdAuditReport: expect.stringMatching(/\*\*PRD:\*\* none[\s\S]*\| S1\.1 \| PASS \| 1 \|/),
         commitBody: 'test: complete fixture task\n\nTask: 1',
         done: true,
         halt: false,
