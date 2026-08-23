@@ -120,30 +120,26 @@ describe('engine/resolved-config', () => {
       expect(resolved.perTaskFloor).toBe(true);
     });
 
-    it('applies per-rubric default efforts only when nothing is authored', () => {
+    it('applies the registered test-quality default effort when nothing is authored', () => {
       const resolved = resolveBuildReviewConfig(undefined);
       expect({
-        tautology: resolved.rubrics.tautology.effort,
-        scope: resolved.rubrics.scope.effort,
-        rootCause: resolved.rubrics.rootCause.effort,
-        completeness: resolved.rubrics.completeness.effort,
-      }).toEqual({ tautology: 'high', scope: 'medium', rootCause: 'medium', completeness: 'high' });
+        testQuality: resolved.rubrics.testQuality.effort,
+      }).toEqual({ testQuality: 'high' });
     });
 
     it('lets an authored step effort override every rubric default', () => {
       const resolved = resolveBuildReviewConfig({
         steps: { build_review: { effort: 'low' } },
       } as HarnessConfig);
-      expect(resolved.rubrics.rootCause.effort).toBe('low');
-      expect(resolved.rubrics.tautology.effort).toBe('low');
+      expect(resolved.rubrics.testQuality.effort).toBe('low');
     });
 
     it('lets an authored rubric effort override both the step and the default', () => {
       const resolved = resolveBuildReviewConfig({
         steps: { build_review: { effort: 'low' } },
-        build_review: { rubrics: { rootCause: { effort: 'high' } } },
+        build_review: { rubrics: { testQuality: { effort: 'high' } } },
       } as HarnessConfig);
-      expect(resolved.rubrics.rootCause.effort).toBe('high');
+      expect(resolved.rubrics.testQuality.effort).toBe('high');
     });
 
     it('defaults scope containment enforcement to report-only', () => {
@@ -310,11 +306,11 @@ describe('engine/resolved-config', () => {
       const resolved = resolveBuildReviewConfig({
         llm_provider: 'claude',
         build_review: {
-          rubrics: { scope: { llm_provider: 'codex', effort: 'max' } },
+          rubrics: { testQuality: { llm_provider: 'codex', effort: 'max' } },
         },
       } as HarnessConfig, CLAUDE_MODEL_POLICY);
 
-      expect(resolved.rubrics.scope).toMatchObject({
+      expect(resolved.rubrics.testQuality).toMatchObject({
         llm_provider: 'codex',
         model: 'gpt-5.6-sol',
         effort: 'max',

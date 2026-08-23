@@ -300,8 +300,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       {
         config: {
           llm_provider: ['claude', 'codex'],
-          // #1682: tautology defaults off; this test exercises the four-rubric lap.
-          build_review: { rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } },
+          build_review: { rubrics: { testQuality: { enabled: true } } },
           steps: {
             build_review: { llm_provider: 'codex' },
             attribution_verify: { llm_provider: 'codex' },
@@ -334,7 +333,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     });
 
     // Session reuse was removed by design: every provider invocation — across
-    // all four build_review rubric branches and the attribution dispatch —
+    // the build_review branch and the attribution dispatch —
     // must carry a unique, freshly minted UUID, never the store's ids above.
     // (2026-08-14: store-derived ids resumed a shared ~1.28M-token session.)
     const invocationSessionIds = codexInvoke.mock.calls.map(
@@ -371,8 +370,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       capturedCalls: { invoke: [], interactive: [] },
       claudeRuntimeCalls: { invoke: [], interactive: [] },
       beginBranchCalls: expect.arrayContaining([
-        ['build-review:tautology'], ['build-review:scope'],
-        ['build-review:rootCause'], ['build-review:completeness'],
+        ['build-review:testQuality'],
         ['attribution_verify'],
       ]),
       codexCalls: expect.arrayContaining([

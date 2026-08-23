@@ -47,8 +47,8 @@ function lock(result: Awaited<ReturnType<ConductStateLease['acquire']>>): Conduc
 const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
 const otherFeature = { ...feature, feature: 'other-feature' };
 const finding = canonicalizeBuildReviewFindingIdentity({
-  rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
-  anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
+  rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive',
+  anchor: { rubric: 'testQuality', locus: { path: 'test/engine/build-review-dispositions.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
 })!;
 
 describe('build-review dispositions', () => {
@@ -130,7 +130,7 @@ describe('build-review dispositions', () => {
     });
 
     const appended = await store.appendReducedCoverageIfCurrent({
-      feature, rubric: 'tautology', reason: 'preflight-failed',
+      feature, rubric: 'testQuality', reason: 'preflight-failed',
       rationale: 'The merge-base fixture is unavailable in this worktree.', operator: 'james',
     }, async () => true);
 
@@ -138,13 +138,13 @@ describe('build-review dispositions', () => {
       ok: true,
       record: expect.objectContaining({
         kind: 'reduced-coverage', version: 'v1', feature,
-        identity: { rubric: 'tautology', reason: 'preflight-failed' },
+        identity: { rubric: 'testQuality', reason: 'preflight-failed' },
         rationale: 'The merge-base fixture is unavailable in this worktree.',
         operator: 'james', acceptedAt: '2026-08-19T12:00:00.000Z',
       }),
     });
     expect((appended as { record: BuildReviewReducedCoverageDispositionRecord }).record.identity)
-      .toEqual({ rubric: 'tautology', reason: 'preflight-failed' });
+      .toEqual({ rubric: 'testQuality', reason: 'preflight-failed' });
 
     filesystem.files.set('/repo/.pipeline/build-review.json', '{"stale":true}');
     filesystem.files.delete('/repo/.pipeline/build-review.json');
@@ -156,7 +156,7 @@ describe('build-review dispositions', () => {
     await expect(freshProcessStore.listReducedCoverage(feature)).resolves.toEqual({
       ok: true,
       records: [expect.objectContaining({
-        kind: 'reduced-coverage', identity: { rubric: 'tautology', reason: 'preflight-failed' },
+        kind: 'reduced-coverage', identity: { rubric: 'testQuality', reason: 'preflight-failed' },
       })],
     });
   });
@@ -169,7 +169,7 @@ describe('build-review dispositions', () => {
     });
 
     await expect(store.appendReducedCoverageIfCurrent({
-      feature, rubric: 'tautology', reason: 'preflight-failed', rationale: '   ', operator: 'james',
+      feature, rubric: 'testQuality', reason: 'preflight-failed', rationale: '   ', operator: 'james',
     }, async () => true)).resolves.toMatchObject({ ok: false, kind: 'invalid' });
 
     expect(filesystem.writes).toEqual([]);
@@ -183,7 +183,7 @@ describe('build-review dispositions', () => {
       lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
     });
     const input = {
-      feature, rubric: 'tautology' as const, reason: 'preflight-failed' as const, rationale: 'reason', operator: 'james',
+      feature, rubric: 'testQuality' as const, reason: 'preflight-failed' as const, rationale: 'reason', operator: 'james',
     };
 
     await expect(store.appendReducedCoverageIfCurrent(input, async () => false)).resolves.toMatchObject({ ok: false, kind: 'invalid' });
@@ -203,7 +203,7 @@ describe('build-review dispositions', () => {
       lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
     });
     const input = {
-      feature, rubric: 'tautology' as const, reason: 'preflight-failed' as const, rationale: 'reason', operator: 'james',
+      feature, rubric: 'testQuality' as const, reason: 'preflight-failed' as const, rationale: 'reason', operator: 'james',
     };
 
     await expect(unreadable.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: false, kind: 'unreadable' });

@@ -10,20 +10,24 @@ import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispo
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
-const finding = { concernKind: 'out-of-plan-change', summary: 'src/a.ts is outside the plan', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
-const aggregate = joinBuildReviewRubricOutcomes({
+const finding = { concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
+const infrastructureAggregate = joinBuildReviewRubricOutcomes({
   lapId, snapshotDigest: 'sha256:snapshot',
   results: {
-    tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-    scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [finding], verdict: 'FAIL' },
-    rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
-    completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
+    testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'offline' },
   },
 });
 
-function aggregateWithRootCause(result: BuildReviewRubricResult) {
+const aggregate = joinBuildReviewRubricOutcomes({
+  lapId, snapshotDigest: 'sha256:snapshot',
+  results: {
+    testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [finding], verdict: 'FAIL' },
+  },
+});
+
+function aggregateWithTestQuality(result: BuildReviewRubricResult) {
   return joinBuildReviewRubricOutcomes({
-    lapId, snapshotDigest: 'sha256:snapshot', results: { ...aggregate.results, rootCause: result },
+    lapId, snapshotDigest: 'sha256:snapshot', results: { ...infrastructureAggregate.results, testQuality: result },
   });
 }
 
@@ -47,20 +51,20 @@ describe('build-review findings CLI', () => {
     const store = { appendReducedCoverageIfCurrent };
 
     await expect(dispatchBuildReviewRecordReducedCoverage({
-      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'Provider is unavailable.',
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'Provider is unavailable.',
     }, {
       cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
-      readFile: async () => JSON.stringify(aggregate), readMechanicalFaults: async () => 3, createStore: () => store, print: vi.fn(), appendEvent: vi.fn(),
+      readFile: async () => JSON.stringify(infrastructureAggregate), readMechanicalFaults: async () => 3, createStore: () => store, print: vi.fn(), appendEvent: vi.fn(),
     })).resolves.toBe(0);
 
     expect(appendReducedCoverageIfCurrent).toHaveBeenCalledWith({
-      feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, rubric: 'rootCause', reason: 'provider-error',
+      feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, rubric: 'testQuality', reason: 'provider-error',
       rationale: 'Provider is unavailable.', operator: 'local-operator',
     }, expect.any(Function));
   });
 
   it('reports the committed decision when acceptance telemetry throws', async () => {
-    // rootCause finding (lap-01d21a67): the decision is durable once
+    // A recorded finding disposition is durable once
     // appendReducedCoverageIfCurrent commits. An event-writer throw used to
     // fall into the outer refusal path, so the operator saw a failure for a
     // recovery that had actually succeeded — and the retry they were told to
@@ -72,7 +76,7 @@ describe('build-review findings CLI', () => {
         record: {
           kind: 'reduced-coverage' as const, version: 'v1' as const,
           feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' },
-          identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const },
+          identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const },
           rationale: 'risk', operator: 'local-operator', acceptedAt: '2026-08-19T12:00:00.000Z',
         },
       };
@@ -80,24 +84,24 @@ describe('build-review findings CLI', () => {
     const print = vi.fn();
 
     await expect(dispatchBuildReviewRecordReducedCoverage({
-      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'risk',
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'risk',
     }, {
       cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
-      readFile: async () => JSON.stringify(aggregate), readMechanicalFaults: async () => 3,
+      readFile: async () => JSON.stringify(infrastructureAggregate), readMechanicalFaults: async () => 3,
       createStore: () => ({ appendReducedCoverageIfCurrent }),
       print,
       appendEvent: () => { throw new Error('closeout event sink unavailable'); },
     })).resolves.toBe(0);
 
     expect(appendReducedCoverageIfCurrent).toHaveBeenCalledTimes(1);
-    expect(print).toHaveBeenCalledWith(expect.stringContaining('recorded rootCause for lap lap-current'));
+    expect(print).toHaveBeenCalledWith(expect.stringContaining('recorded testQuality for lap lap-current'));
   });
 
   it.each([
-    ['judged rubric', aggregateWithRootCause({ kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' }), 3, [], 'infrastructure failure', false],
-    ['skipped rubric', aggregateWithRootCause({ kind: 'skipped', rubric: 'rootCause', reason: 'disabled' }), 3, [], 'infrastructure failure', false],
-    ['remaining allowance', aggregate, 2, [], 'allowance', true],
-    ['duplicate decision', aggregate, 3, [{ kind: 'reduced-coverage' as const, version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' }, identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const }, rationale: 'already accepted', operator: 'james', acceptedAt: '2026-08-19T12:00:00.000Z' }], 'already recorded', true],
+    ['judged rubric', aggregateWithTestQuality({ kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' }), 3, [], 'infrastructure failure', false],
+    ['skipped rubric', aggregateWithTestQuality({ kind: 'skipped', rubric: 'testQuality', reason: 'disabled' }), 3, [], 'infrastructure failure', false],
+    ['remaining allowance', infrastructureAggregate, 2, [], 'allowance', true],
+    ['duplicate decision', infrastructureAggregate, 3, [{ kind: 'reduced-coverage' as const, version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' }, identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const }, rationale: 'already accepted', operator: 'james', acceptedAt: '2026-08-19T12:00:00.000Z' }], 'already recorded', true],
   ])('refuses %s without storing a reduced-coverage decision', async (_caseName, currentAggregate, mechanicalFaults, records, reason, entersLease) => {
     const persisted = [...records];
     const appendReducedCoverageIfCurrent = vi.fn(async (_input, validate) => {
@@ -106,7 +110,7 @@ describe('build-review findings CLI', () => {
     });
     const print = vi.fn();
     await expect(dispatchBuildReviewRecordReducedCoverage({
-      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'risk',
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'risk',
     }, {
       cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
       readFile: async () => JSON.stringify(currentAggregate), readMechanicalFaults: async () => mechanicalFaults,
@@ -132,10 +136,7 @@ describe('build-review findings CLI', () => {
 
     const nextLap = joinBuildReviewRubricOutcomes({
       lapId: parseBuildReviewLapId('lap-next')!, snapshotDigest: 'sha256:next', results: {
-        tautology: { kind: 'judged', rubric: 'tautology', lapId: parseBuildReviewLapId('lap-next')!, snapshotDigest: 'sha256:next', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-        scope: { kind: 'judged', rubric: 'scope', lapId: parseBuildReviewLapId('lap-next')!, snapshotDigest: 'sha256:next', contractVersion: 'v2' as never, findings: [finding], verdict: 'FAIL' },
-        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
-        completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
+        testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'offline' },
       },
     });
     let reads = 0;
@@ -145,10 +146,10 @@ describe('build-review findings CLI', () => {
     });
     const stalePrint = vi.fn();
     await expect(dispatchBuildReviewRecordReducedCoverage({
-      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'risk',
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'risk',
     }, {
       cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
-      readFile: async () => JSON.stringify(++reads === 1 ? aggregate : nextLap), readMechanicalFaults: async () => 3,
+      readFile: async () => JSON.stringify(++reads === 1 ? infrastructureAggregate : nextLap), readMechanicalFaults: async () => 3,
       createStore: () => ({ appendReducedCoverageIfCurrent }), print: stalePrint,
     })).resolves.toBe(1);
     expect(stalePrint).toHaveBeenCalledWith(expect.stringMatching(/review lap changed/i));
@@ -163,7 +164,7 @@ describe('build-review findings CLI', () => {
       { isInteractive: true, resolveOperator: () => undefined },
     ]) {
       await expect(dispatchBuildReviewRecordReducedCoverage({
-        kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'risk',
+        kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'risk',
       }, {
         cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
         readFile, createStore, appendEvent, print: vi.fn(), ...deps,
@@ -179,7 +180,7 @@ describe('build-review findings CLI', () => {
   });
 
   it('accepts exactly one unresolved finding for a verified interactive operator and leaves siblings untouched', async () => {
-    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!;
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
     const append = vi.fn(async (input) => ({
       ok: true as const,
       record: { version: 'v1' as const, ...input, acceptedAt: '2026-08-14T12:00:00.000Z' },
@@ -223,8 +224,8 @@ describe('build-review findings CLI', () => {
   });
 
   it('refuses malformed state, lock failure, and a replacement lap observed after waiting for the shared store', async () => {
-    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!;
-    const nextLap = { ...aggregate, lapId: parseBuildReviewLapId('lap-next')!, results: { ...aggregate.results, scope: { ...aggregate.results.scope, lapId: parseBuildReviewLapId('lap-next')! } } };
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const nextLap = { ...aggregate, lapId: parseBuildReviewLapId('lap-next')!, results: { ...aggregate.results, testQuality: { ...aggregate.results.testQuality, lapId: parseBuildReviewLapId('lap-next')! } } };
     const append = vi.fn();
     const store = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append };
     let reads = 0;
@@ -243,7 +244,7 @@ describe('build-review findings CLI', () => {
   });
 
   it('reads the canonical feature worktree and deterministically renders raw, accepted, unresolved, skipped, and infrastructure state', async () => {
-    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!;
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
     const print = vi.fn();
     const store = { list: vi.fn(async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' }, finding: identity, sourceLapId: lapId, summary: 'accepted', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T12:00:00.000Z' }] })), append: vi.fn() };
     const readFile = vi.fn(async (_path: string) => JSON.stringify(aggregate));
@@ -257,8 +258,8 @@ describe('build-review findings CLI', () => {
     ]);
     expect(store.list).toHaveBeenCalledWith({ version: 'v1', repository: '/main', feature: 'review-rubrics' });
     expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({
-      feature: 'review-rubrics', lapId: 'lap-current', rawVerdict: 'FAIL', verdict: 'FAIL',
-      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['completeness'], infrastructureFailureRubrics: ['rootCause'],
+      feature: 'review-rubrics', lapId: 'lap-current', rawVerdict: 'FAIL', verdict: 'PASS',
+      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [],
       acceptedDispositions: [{
         findingId: identity.id,
         disposition: expect.objectContaining({
@@ -280,10 +281,7 @@ describe('build-review findings CLI', () => {
   it('reports an exhausted mechanical fault separately from unresolved findings in machine and human output', async () => {
     const faultOnly = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: {
-        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
-        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'offline' },
       },
     });
     const deps = {
@@ -299,17 +297,17 @@ describe('build-review findings CLI', () => {
     expect({ machine: JSON.parse(machine.mock.calls[0]![0]), human: human.mock.calls[0]![0] }).toEqual({
       machine: expect.objectContaining({
         verdict: 'FAIL', unresolvedFindingIds: [],
-        exhaustedMechanicalFaults: [{ rubric: 'rootCause', cause: 'provider-error', diagnostic: 'offline' }],
+        exhaustedMechanicalFaults: [{ rubric: 'testQuality', cause: 'provider-error', diagnostic: 'offline' }],
       }),
-      human: expect.stringMatching(/Blocked by exhausted mechanical faults, not unresolved findings\.[\s\S]*Exhausted mechanical fault: rootCause; cause: provider-error; diagnostic: offline/),
+      human: expect.stringMatching(/Blocked by exhausted mechanical faults, not unresolved findings\.[\s\S]*Exhausted mechanical fault: testQuality; cause: provider-error; diagnostic: offline/),
     });
   });
 
   it('renders the ledger\'s last mechanical fault only when the record is present', async () => {
-    const fault = { rubric: 'rootCause' as const, reason: 'malformed-artifact' as const, detail: 'response omitted a verdict', lapId: 'lap-rejected' };
+    const fault = { rubric: 'testQuality' as const, reason: 'malformed-artifact' as const, detail: 'response omitted a verdict', lapId: 'lap-rejected' };
     const deps = {
       cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
-      readFile: async () => JSON.stringify(aggregate), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      readFile: async () => JSON.stringify(infrastructureAggregate), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
       readKickbackGateEntry: async () => ({ mechanicalFaults: 1, lastMechanicalFault: fault }),
     };
     const machine = vi.fn();
@@ -325,7 +323,7 @@ describe('build-review findings CLI', () => {
       'rawVerdict', 'skippedRubrics', 'snapshotDigest', 'unresolvedFindingIds', 'verdict',
     ]);
     expect(human).toHaveBeenCalledWith(expect.stringContaining(
-      'Last mechanical fault: rootCause; cause: malformed-artifact; lap: lap-rejected; diagnostic: response omitted a verdict',
+      'Last mechanical fault: testQuality; cause: malformed-artifact; lap: lap-rejected; diagnostic: response omitted a verdict',
     ));
   });
 
@@ -334,7 +332,7 @@ describe('build-review findings CLI', () => {
     const decision = {
       kind: 'reduced-coverage' as const, version: 'v1' as const,
       feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' },
-      identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const },
+      identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const },
       rationale: 'approved', operator: 'operator', acceptedAt: '2026-08-20T00:00:00.000Z',
     };
     await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
@@ -354,10 +352,7 @@ describe('build-review findings CLI', () => {
   it('keeps a report without a ledger fault byte-identical to the existing output', async () => {
     const faultFree = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: {
-        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-        rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' },
       },
     });
     const machine = vi.fn();
@@ -387,7 +382,7 @@ describe('build-review findings CLI', () => {
   });
 
   it('uses the live runner canonical identity for both findings reads and acceptance writes through an alternate main root', async () => {
-    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!;
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
     const realpath = async (path: string) => path
       .replace('/alternate-main', '/canonical-main');
     const findingsStore = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append: vi.fn() };
@@ -459,33 +454,28 @@ describe('build-review findings CLI', () => {
   });
 });
 
-describe('build-review accept on every rubric', () => {
-  const tautologyFinding = {
-    concernKind: 'assertion-insensitive-to-production',
+describe('build-review accept', () => {
+  const testQualityFinding = {
+    concernKind: 'test-insensitive',
     summary: 'the assertion cannot fail',
     evidenceLocations: ['test/widget.test.ts:12'],
     anchor: {
-      rubric: 'tautology' as const,
-      exercisedBehavior: 'persists state',
-      violationKind: 'assertion-insensitive-to-production',
-      changedTest: {
+      rubric: 'testQuality' as const,
+      locus: {
         path: 'test/widget.test.ts',
         contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         display: 'widget persists state',
       },
     },
   };
-  const tautologyAggregate = joinBuildReviewRubricOutcomes({
+  const testQualityAggregate = joinBuildReviewRubricOutcomes({
     lapId, snapshotDigest: 'sha256:snapshot',
     results: {
-      tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [tautologyFinding], verdict: 'FAIL' },
-      scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' },
-      rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' },
-      completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [testQualityFinding], verdict: 'FAIL' },
     },
   });
-  const tautologyIdentity = canonicalizeBuildReviewFindingIdentity({
-    rubric: 'tautology', contractVersion: 'v3', concernKind: tautologyFinding.concernKind, anchor: tautologyFinding.anchor,
+  const testQualityIdentity = canonicalizeBuildReviewFindingIdentity({
+    rubric: 'testQuality', contractVersion: 'v3', concernKind: testQualityFinding.concernKind, anchor: testQualityFinding.anchor,
   })!;
 
   let root: string;
@@ -502,35 +492,32 @@ describe('build-review accept on every rubric', () => {
     return {
       cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator',
       resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
-      readFile: async () => JSON.stringify(tautologyAggregate),
+      readFile: async () => JSON.stringify(testQualityAggregate),
       createStore: () => new BuildReviewDispositionStore(root),
       appendEvent: vi.fn(),
       ...overrides,
     };
   }
 
-  // Regression for #1769: only `scope` findings could be accepted, because the
-  // store re-validated the engine's canonical payload with the grader-facing
-  // anchor parser.
-  it('accepts a current tautology finding through the real disposition store and reports it accepted', async () => {
+  it('accepts a current test-quality finding through the real disposition store and reports it accepted', async () => {
     const print = vi.fn();
     const appendEvent = vi.fn();
 
     await expect(dispatchBuildReviewAccept(
-      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: tautologyIdentity.id, rationale: 'Accepted risk' },
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'Accepted risk' },
       deps({ print, appendEvent }),
     )).resolves.toBe(0);
 
-    expect(print).toHaveBeenCalledWith(`build-review accept: accepted ${tautologyIdentity.id} for lap lap-current.`);
+    expect(print).toHaveBeenCalledWith(`build-review accept: accepted ${testQualityIdentity.id} for lap lap-current.`);
     expect(appendEvent).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', expect.objectContaining({
-      type: 'build_review_disposition_accepted', findingId: tautologyIdentity.id,
+      type: 'build_review_disposition_accepted', findingId: testQualityIdentity.id,
     }));
 
     const findings = vi.fn();
     await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, deps({ print: findings }))).resolves.toBe(0);
     expect(JSON.parse(findings.mock.calls[0]![0] as string)).toMatchObject({
-      rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [tautologyIdentity.id], unresolvedFindingIds: [],
-      acceptedDispositions: [{ findingId: tautologyIdentity.id }],
+      rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [testQualityIdentity.id], unresolvedFindingIds: [],
+      acceptedDispositions: [{ findingId: testQualityIdentity.id }],
     });
   });
 
@@ -546,13 +533,13 @@ describe('build-review accept on every rubric', () => {
 
     const unreadable = collect();
     await expect(dispatchBuildReviewAccept(
-      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: tautologyIdentity.id, rationale: 'risk' },
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'risk' },
       deps({ readFile: async () => 'not json', ...unreadable }),
     )).resolves.toBe(1);
 
     const staleLap = collect();
     await expect(dispatchBuildReviewAccept(
-      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-previous', findingId: tautologyIdentity.id, rationale: 'risk' },
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-previous', findingId: testQualityIdentity.id, rationale: 'risk' },
       deps({ ...staleLap }),
     )).resolves.toBe(1);
 
@@ -563,12 +550,12 @@ describe('build-review accept on every rubric', () => {
     )).resolves.toBe(1);
 
     await expect(dispatchBuildReviewAccept(
-      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: tautologyIdentity.id, rationale: 'risk' },
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'risk' },
       deps({ print: vi.fn() }),
     )).resolves.toBe(0);
     const alreadyAccepted = collect();
     await expect(dispatchBuildReviewAccept(
-      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: tautologyIdentity.id, rationale: 'risk' },
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'risk' },
       deps({ ...alreadyAccepted }),
     )).resolves.toBe(1);
 

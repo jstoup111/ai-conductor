@@ -55,28 +55,25 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
 
   function buildReviewAggregate(lap: string, verdict: 'PASS' | 'FAIL') {
     const lapId = parseBuildReviewLapId(lap)!;
-    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness') => ({
+    const judged = () => ({
       kind: 'judged' as const,
-      rubric,
+      rubric: 'testQuality' as const,
       lapId,
       snapshotDigest: 'sha256:snapshot',
       contractVersion: 'v2' as never,
-      findings: rubric === 'scope' && verdict === 'FAIL' ? [{
-        concernKind: 'out-of-plan-change' as const,
+      findings: verdict === 'FAIL' ? [{
+        concernKind: 'test-insensitive' as const,
         summary: 'stale finding',
         evidenceLocations: ['src/a.ts:1'],
-        anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' as const },
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/engine/conductor-gate-loop.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
       }] : [],
-      verdict: rubric === 'scope' ? verdict : 'PASS' as const,
+      verdict,
     });
     return joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: 'sha256:snapshot',
       results: {
-        tautology: judged('tautology'),
-        scope: judged('scope'),
-        rootCause: judged('rootCause'),
-        completeness: judged('completeness'),
+        testQuality: judged(),
       },
     });
   }

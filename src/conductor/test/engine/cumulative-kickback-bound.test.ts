@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
-import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+import { coordinateBuildReviewRubrics, type BuildReviewCoordination } from '../../src/engine/build-review-coordinator.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import type { BuildReviewFrozenInputs } from '../../src/engine/build-review-inputs.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
@@ -71,8 +72,8 @@ describe('cumulative build-review kickback bound', () => {
           if (step === 'build_review') {
             await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
               verdict: 'FAIL',
-              rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
-              findings: { tautology: ['semantic failure remains'] },
+              rubric: { testQuality: true },
+              findings: { testQuality: ['test-insensitive'] },
             }));
           }
           if (step === 'build') {
@@ -165,12 +166,11 @@ describe('cumulative build-review kickback bound', () => {
     };
     await writeKickbackLedger(dir, { version: 1, gates: { build_review: semanticEntry } });
     let mixedLap = false;
-    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async () => ({
+    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async (): Promise<BuildReviewCoordination> => ({
       kind: 'ready',
-      branches: [
-        { kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result', detail: 'worker response unavailable' },
-        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
-      ],
+      branches: mixedLap
+        ? [{ kind: 'dispatched', rubric: 'testQuality', result: { kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'sha256:fixture', contractVersion: 'v3', findings: [], verdict: 'PASS' } }]
+        : [{ kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-provider-result', detail: 'worker response unavailable' }],
     }));
     const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
     const makeRunner = () => new DefaultStepRunner(provider, 'mechanical-lap', dir, {
@@ -180,7 +180,7 @@ describe('cumulative build-review kickback bound', () => {
         feature: { version: 'v1', repository: dir, feature: 'cumulative-kickback-bound' },
         effective: {
           rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [],
-          skippedRubrics: [], infrastructureFailureRubrics: ['scope'],
+          skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'],
         },
       }),
       buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest, _fs) => ({
@@ -193,11 +193,11 @@ describe('cumulative build-review kickback bound', () => {
           rubric,
           lapId,
           snapshotDigest,
-          contractVersion: 'v3' as never,
-          findings: mixedLap && rubric === 'rootCause'
-            ? [{ concernKind: 'symptom-only-fix', summary: 'The root cause remains unresolved.', evidenceLocations: ['src/fix.ts:1'], anchor: { rubric: 'rootCause' as const, statedDefect: 'The root cause remains unresolved.', locus: { path: 'src/fix.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'unresolved root-cause region' }, relation: 'symptom-only-fix' } }]
+          contractVersion: 'v3',
+          findings: mixedLap
+            ? [{ concernKind: 'test-insensitive', summary: 'The changed test remains insensitive to the expected behavior.', evidenceLocations: ['test/fix.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/fix.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'unresolved test-quality region' } } }]
             : [],
-          verdict: mixedLap && rubric === 'rootCause' ? 'FAIL' as const : 'PASS' as const,
+          verdict: mixedLap ? 'FAIL' as const : 'PASS' as const,
         },
         provenance: { kind: 'fresh' as const },
       }),
@@ -237,7 +237,7 @@ describe('cumulative build-review kickback bound', () => {
         ok: true,
         effective: {
           rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [],
-          skippedRubrics: [], infrastructureFailureRubrics: ['scope'],
+          skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'],
         },
       }),
       stepRunner: {

@@ -27,39 +27,39 @@ function filesystem(files: Record<string, string> = {}): BuildReviewArtifactFile
 
 function judged(contractVersion: 'v1' | 'v2' = 'v1') {
   return {
-    kind: 'judged' as const, rubric: 'scope' as const, lapId, snapshotDigest: 'sha256:snapshot',
+    kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot',
     contractVersion: contractVersion as never, findings: [], verdict: 'PASS' as const,
   };
 }
 
-const persistedV1ScopeArtifact = {
+const persistedV1Artifact = {
     version: 1,
-    rubric: 'scope',
+    rubric: 'testQuality',
     lapId,
     snapshotDigest: 'sha256:snapshot',
     result: {
-      kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1',
+      kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1',
       findings: [{
-        concernKind: 'out-of-plan-change', summary: 'A change is outside the approved plan.',
+        concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.',
         evidenceLocations: ['src/conductor/src/engine/build-review-artifacts.ts:1'],
-        anchor: { rubric: 'scope', path: 'src/conductor/src/engine/build-review-artifacts.ts', relation: 'out-of-plan-change' },
+        anchor: { rubric: 'testQuality', locus: { path: 'src/conductor/test/engine/build-review-artifacts.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
       }],
       verdict: 'FAIL',
     },
     provenance: { kind: 'fresh' },
 } as const;
 
-const persistedV2ScopeArtifact = {
+const persistedV2Artifact = {
     version: 1,
-    rubric: 'scope',
+    rubric: 'testQuality',
     lapId,
     snapshotDigest: 'sha256:snapshot',
     result: {
-      kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2',
+      kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2',
       findings: [{
-        concernKind: 'out-of-plan-change', summary: 'A change is outside the approved plan.',
+        concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.',
         evidenceLocations: ['src/conductor/src/engine/build-review-artifacts.ts:1'],
-        anchor: { rubric: 'scope', path: 'src/conductor/src/engine/build-review-artifacts.ts', relation: 'not-authorized-by-plan' },
+        anchor: { rubric: 'testQuality', locus: { path: 'src/conductor/test/engine/build-review-artifacts.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
       }],
       verdict: 'FAIL',
     },
@@ -67,84 +67,82 @@ const persistedV2ScopeArtifact = {
 } as const;
 
 describe('build-review current-lap branch artifacts', () => {
-  it('uses a write-disjoint path for every rubric and lap', () => {
+  it('uses a write-disjoint path for every lap', () => {
     expect([
-      buildReviewBranchArtifactPath('/feature', lapId, 'scope'),
-      buildReviewBranchArtifactPath('/feature', lapId, 'tautology'),
-      buildReviewBranchArtifactPath('/feature', parseBuildReviewLapId('lap-next')!, 'scope'),
+      buildReviewBranchArtifactPath('/feature', lapId, 'testQuality'),
+      buildReviewBranchArtifactPath('/feature', parseBuildReviewLapId('lap-next')!, 'testQuality'),
     ]).toEqual([
-      '/feature/.pipeline/build-review/lap-current/scope.json',
-      '/feature/.pipeline/build-review/lap-current/tautology.json',
-      '/feature/.pipeline/build-review/lap-next/scope.json',
+      '/feature/.pipeline/build-review/lap-current/testQuality.json',
+      '/feature/.pipeline/build-review/lap-next/testQuality.json',
     ]);
   });
 
   it('stamps engine-owned identity and atomically writes only the addressed branch', async () => {
     const fs = filesystem();
     const artifact = await writeBuildReviewBranchArtifact('/feature', {
-      rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result: judged(), provenance: { kind: 'fresh' },
+      rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: judged(), provenance: { kind: 'fresh' },
     }, fs);
 
-    expect(artifact).toMatchObject({ rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result: judged() });
-    expect(Object.keys(fs.files)).toEqual(['/feature/.pipeline/build-review/lap-current/scope.json']);
-    expect(await readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
+    expect(artifact).toMatchObject({ rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: judged() });
+    expect(Object.keys(fs.files)).toEqual(['/feature/.pipeline/build-review/lap-current/testQuality.json']);
+    expect(await readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
   });
 
   async function exerciseLiveV3StampBoundary(fs: BuildReviewArtifactFilesystem): Promise<void> {
     const projection = {
-      rubric: 'scope', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot',
+      rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot',
       contentDigest: 'sha256:content', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
       removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, verifyOnlyContext: [],
       planBody: '# Plan', repairContext: [], acceptedWidenings: [], operatorReseals: [],
     } as never;
-    const stamped = stampBuildReviewDispatchedCandidate({ findings: [] }, 'scope', projection);
-    const result = validateBuildReviewDispatchedResult(stamped, 'scope', projection)!;
+    const stamped = stampBuildReviewDispatchedCandidate({ findings: [] }, 'testQuality', projection);
+    const result = validateBuildReviewDispatchedResult(stamped, 'testQuality', projection)!;
     const artifact = await writeBuildReviewBranchArtifact('/feature', {
-      rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result, provenance: { kind: 'fresh' },
+      rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result, provenance: { kind: 'fresh' },
     }, fs);
     expect(artifact.result).toMatchObject({ contractVersion: 'v3', lapId, snapshotDigest: 'sha256:snapshot', findings: [] });
   }
 
-  it('stamps a live v3 envelope before parsing a persisted v1-only scope relation at rest', async () => {
-    const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
-    const fs = filesystem({ [path]: JSON.stringify(persistedV1ScopeArtifact) });
+  it('stamps a live v3 envelope before parsing a persisted v1 artifact at rest', async () => {
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'testQuality');
+    const fs = filesystem({ [path]: JSON.stringify(persistedV1Artifact) });
 
     await exerciseLiveV3StampBoundary(filesystem());
-    await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
-      result: { contractVersion: 'v1', findings: [{ anchor: { relation: 'out-of-plan-change' } }] },
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
+      result: { contractVersion: 'v1', findings: [{ anchor: { rubric: 'testQuality' } }] },
     });
   });
 
-  it('stamps a live v3 envelope before parsing a persisted v2-only scope relation at rest', async () => {
-    const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
-    const fs = filesystem({ [path]: JSON.stringify(persistedV2ScopeArtifact) });
+  it('stamps a live v3 envelope before parsing a persisted v2 artifact at rest', async () => {
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'testQuality');
+    const fs = filesystem({ [path]: JSON.stringify(persistedV2Artifact) });
 
     await exerciseLiveV3StampBoundary(filesystem());
-    await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
-      result: { contractVersion: 'v2', findings: [{ anchor: { relation: 'not-authorized-by-plan' } }] },
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
+      result: { contractVersion: 'v2', findings: [{ anchor: { rubric: 'testQuality' } }] },
     });
   });
 
   it.each([
     ['malformed JSON', '{not json'],
-    ['unknown envelope field', JSON.stringify({ version: 1, rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result: judged(), provenance: { kind: 'fresh' }, extra: true })],
-    ['mismatched result identity', JSON.stringify({ version: 1, rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result: { ...judged(), rubric: 'tautology' }, provenance: { kind: 'fresh' } })],
-    ['missing result', JSON.stringify({ version: 1, rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', provenance: { kind: 'fresh' } })],
+    ['unknown envelope field', JSON.stringify({ version: 1, rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: judged(), provenance: { kind: 'fresh' }, extra: true })],
+    ['mismatched result identity', JSON.stringify({ version: 1, rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: { ...judged(), rubric: 'scope' }, provenance: { kind: 'fresh' } })],
+    ['missing result', JSON.stringify({ version: 1, rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', provenance: { kind: 'fresh' } })],
   ])('rejects %s without promoting it to a current branch', async (_name, raw) => {
-    const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'testQuality');
     const fs = filesystem({ [path]: raw });
     if (raw.startsWith('{not json')) {
       expect(() => JSON.parse(raw)).toThrow();
     } else {
       expect(parseBuildReviewBranchArtifact(JSON.parse(raw))).toBeUndefined();
     }
-    await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toBeUndefined();
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toBeUndefined();
   });
 
   it('accepts cache provenance only when the rematerialized result names the current lap and snapshot', async () => {
     const artifact = {
       version: 1,
-      rubric: 'scope',
+      rubric: 'testQuality',
       lapId,
       snapshotDigest: 'sha256:snapshot',
       result: judged(),

@@ -438,13 +438,13 @@ describe('appendTimingSection', () => {
 
 describe('accepted build-review risk shipped projection', () => {
   it('reuses the deterministic accepted-risk section without changing frontmatter or cost blocks', () => {
-    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } })!;
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } } })!;
     const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
     const body = '---\nslug: feature\n---\n\n## Cost\ninput: 1\n\n## Time\nstate: measured\n';
 
     const appended = appendBuildReviewAcceptedRisk(body, [accepted]);
     expect(appended).toContain('## Accepted build-review risk');
-    expect(appended).toContain(`- Finding: \`${finding.id}\` — rubric: scope`);
+    expect(appended).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
     expect(appended).not.toContain('summary');
     expect(appended).not.toContain('reason');
     expect(appended).not.toContain('james');
@@ -457,7 +457,7 @@ describe('accepted build-review risk shipped projection', () => {
 describe('reduced build-review coverage shipped projection', () => {
   it('carries the engine-stamped shared lap section into the shipped record unchanged', () => {
     const section = [
-      '## Reduced build-review coverage', '', '- Rubric: `tautology`', '  Cause: `provider-error`',
+      '## Reduced build-review coverage', '', '- Rubric: `testQuality`', '  Cause: `provider-error`',
       '  Current diagnostic: provider unavailable', '  Operator: operator', '  Rationale: approved',
       '  Decision time: 2026-08-20T00:00:00.000Z',
     ].join('\n');
@@ -472,12 +472,9 @@ describe('shipped-record reduced-coverage dispatch', () => {
     const root = await mkdtemp(join(tmpdir(), 'shipped-record-reduced-coverage-'));
     const lapId = parseBuildReviewLapId('lap-current')!;
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:current', results: {
-      tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-      scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-      rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'provider unavailable' },
-      completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:current', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+      testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'provider unavailable' },
     } });
-    const record = { kind: 'reduced-coverage', version: 'v1', feature: { version: 'v1', repository: root, feature: 'feature' }, identity: { rubric: 'rootCause', reason: 'provider-error' }, rationale: 'approved', operator: 'operator', acceptedAt: '2026-08-20T00:00:00.000Z' };
+    const record = { kind: 'reduced-coverage', version: 'v1', feature: { version: 'v1', repository: root, feature: 'feature' }, identity: { rubric: 'testQuality', reason: 'provider-error' }, rationale: 'approved', operator: 'operator', acceptedAt: '2026-08-20T00:00:00.000Z' };
     try {
       await mkdir(join(root, '.docs', 'plans'), { recursive: true });
       await mkdir(join(root, '.pipeline'), { recursive: true });
@@ -493,7 +490,7 @@ describe('shipped-record reduced-coverage dispatch', () => {
       await expect(dispatchShippedRecord({ kind: 'write', slug: 'feature', pr: 'local' }, root)).resolves.toBe(0);
       await expect(readFile(join(root, '.docs', 'shipped', 'feature.md'), 'utf8')).resolves.toContain('## Reduced build-review coverage');
 
-      await writeFile(join(root, '.pipeline', 'build-review.json'), JSON.stringify({ ...aggregate, results: { ...aggregate.results, rootCause: { ...aggregate.results.rootCause, detail: '' } } }));
+      await writeFile(join(root, '.pipeline', 'build-review.json'), JSON.stringify({ ...aggregate, results: { ...aggregate.results, testQuality: { ...aggregate.results.testQuality, detail: '' } } }));
       await expect(dispatchShippedRecord({ kind: 'write', slug: 'feature', pr: 'local' }, root)).resolves.toBe(1);
       await expect(readFile(join(root, '.docs', 'shipped', 'feature.md'), 'utf8')).resolves.toContain('provider unavailable');
     } finally {

@@ -460,10 +460,9 @@ export async function runLiveE2ERunBody(
           }));
           const runner = createLiveE2EStepRunner(meter!, descriptor, 'daemon-e2e-live-session', liveWorktreeDir, {
             featureDesc: slug, pipelineDir, planPath, mode: 'auto',
-            // The tautology preflight (#1618) fails instantly in a standalone
-            // temp repository with missing-scoped-configuration; disable only
-            // that branch — the other three fan-out branches still run live.
-            config: { build_review: { maxParallel: 4, rubrics: { tautology: { enabled: false } } } },
+            // The test-quality preflight cannot run in this standalone temp
+            // repository, so disable the sole optional rubric.
+            config: { build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: false } } } },
             buildReviewInputOptions: {
               inspectTestSuite: async () => ({
                 status: 'CURRENT',

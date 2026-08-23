@@ -975,7 +975,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect((await assembleBuildReviewInputs(realGit(), scopedPlanPath)).sourceSnapshot.operatorReseals).toEqual([]);
     });
 
-    it('keeps shared rubric snapshot identity stable while a real operator reseal invalidates Scope only', async () => {
+    it('keeps test-quality snapshot identity stable while a real operator reseal changes unrelated provenance', async () => {
       const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
@@ -995,7 +995,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const project = (inputs: BuildReviewFrozenInputs) => deriveBuildReviewRubricProjections({
         lapId: parseBuildReviewLapId('lap-input-assembly')!,
         inputs,
-        tautology: {
+        testQuality: {
           changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: 'not-requested' },
         },
       });
@@ -1008,10 +1008,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const second = project(secondInputs);
 
       expect(secondInputs.sourceSnapshot.digest).toBe(firstInputs.sourceSnapshot.digest);
-      expect(second.scope.digest).not.toBe(first.scope.digest);
-      expect(second.tautology).toEqual(first.tautology);
-      expect(second.rootCause).toEqual(first.rootCause);
-      expect(second.completeness).toEqual(first.completeness);
+      expect(second.testQuality).toEqual(first.testQuality);
     });
 
     it('renders a #1502 sealed-artifact amendment only when its operator reseal is persisted', async () => {

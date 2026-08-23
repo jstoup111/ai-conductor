@@ -84,7 +84,7 @@ describe('renderExhaustedMechanicalBuildReviewHalt', () => {
   const entry = {
     mechanicalFaults: 3,
     lastMechanicalFault: {
-      rubric: 'scope' as const,
+      rubric: 'testQuality' as const,
       reason: 'provider-error' as const,
       lapId: 'lap-ledger-fault',
       detail: 'provider returned a malformed rubric payload',
@@ -93,7 +93,7 @@ describe('renderExhaustedMechanicalBuildReviewHalt', () => {
 
   it('falls back to the ledger record when the current-lap aggregate is unavailable', () => {
     expect(renderExhaustedMechanicalBuildReviewHalt(entry, { malformed: true })).toContain(
-      'Last recorded fault: scope closed cause provider-error on lap lap-ledger-fault (provider returned a malformed rubric payload).',
+      'Last recorded fault: testQuality closed cause provider-error on lap lap-ledger-fault (provider returned a malformed rubric payload).',
     );
   });
 
@@ -102,17 +102,14 @@ describe('renderExhaustedMechanicalBuildReviewHalt', () => {
       lapId: 'lap-current' as never,
       snapshotDigest: 'sha256:current',
       results: {
-        tautology: { kind: 'infrastructure-failure', rubric: 'tautology', reason: 'provider-error', detail: 'current diagnostic' },
-        scope: { kind: 'skipped', rubric: 'scope', reason: 'disabled' },
-        rootCause: { kind: 'skipped', rubric: 'rootCause', reason: 'disabled' },
-        completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
+        testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'current diagnostic' },
       },
     } as never);
 
     expect(renderExhaustedMechanicalBuildReviewHalt(entry, aggregate)).toBe([
       'build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.',
-      'Current lap lap-current: tautology closed cause provider-error (current diagnostic).',
-      '1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <feature-slug> --lap lap-current --rubric tautology --rationale "<rationale>".',
+      'Current lap lap-current: testQuality closed cause provider-error (current diagnostic).',
+      '1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <feature-slug> --lap lap-current --rubric testQuality --rationale "<rationale>".',
       '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
     ].join('\n'));
   });

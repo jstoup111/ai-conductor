@@ -205,18 +205,14 @@ describe('build_review input isolation', () => {
       kind: 'ready',
       branches: [
         {
-          kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result',
-          detail: 'the rubric worker lost its response payload',
+          kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-provider-result',
+          detail: 'the test-quality worker lost its response payload',
         },
-        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({
-          kind: 'dispatched' as const, rubric,
-          result: {} as never,
-        })),
       ],
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
-      config: { build_review: { enabled: true, rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } } } as HarnessConfig,
+      config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
       buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
         version: 1,
@@ -233,7 +229,7 @@ describe('build_review input isolation', () => {
 
     await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({
       success: false,
-      output: 'build_review mechanical fault in scope (malformed-artifact): invalid-provider-result: the rubric worker lost its response payload',
+      output: 'build_review mechanical fault in testQuality (malformed-artifact): invalid-provider-result: the test-quality worker lost its response payload',
       currentLapMechanicalFault: true,
     });
     await expect(readFile(join(dir, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
@@ -243,9 +239,7 @@ describe('build_review input isolation', () => {
     const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
-      branches: (['tautology', 'scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
-        kind: 'dispatched' as const, rubric, result: {} as never,
-      })),
+      branches: [{ kind: 'dispatched' as const, rubric: 'testQuality', result: {} as never }],
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
@@ -259,13 +253,13 @@ describe('build_review input isolation', () => {
         result: {
           kind: 'judged', rubric, lapId, snapshotDigest,
           contractVersion: 'v3' as never,
-          findings: rubric === 'scope' ? [{
-            concernKind: 'out-of-plan-change',
+          findings: [{
+            concernKind: 'test-insensitive',
             summary: 'The environment cannot load this change safely.',
             evidenceLocations: ['feature.txt:1'],
-            anchor: { rubric: 'scope', path: 'feature.txt', relation: 'not-authorized-by-plan' },
-          }] : [],
-          verdict: rubric === 'scope' ? 'FAIL' : 'PASS',
+            anchor: { rubric: 'testQuality', locus: { path: 'feature.txt', contentHash: 'sha256:fixture', display: 'fixture test' } },
+          }],
+          verdict: 'FAIL',
         },
         provenance: { kind: 'fresh' },
       }),
@@ -289,10 +283,7 @@ describe('build_review input isolation', () => {
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
       branches: [
-        { kind: 'skipped', rubric: 'tautology', reason: 'disabled' },
-        ...(['scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
-          kind: 'dispatched' as const, rubric, result: {} as never,
-        })),
+        { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
       ],
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
@@ -324,9 +315,7 @@ describe('build_review input isolation', () => {
     const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
-      branches: (['tautology', 'scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
-        kind: 'dispatched' as const, rubric, result: {} as never,
-      })),
+      branches: [{ kind: 'dispatched' as const, rubric: 'testQuality', result: {} as never }],
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
@@ -337,10 +326,7 @@ describe('build_review input isolation', () => {
         rubric,
         lapId,
         snapshotDigest,
-        result: rubric === 'scope' ? { kind: 'not-a-rubric-result' } as never : {
-          kind: 'judged', rubric, lapId, snapshotDigest,
-          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
-        },
+        result: { kind: 'not-a-rubric-result' } as never,
         provenance: { kind: 'fresh' },
       }),
     });

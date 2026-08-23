@@ -44,24 +44,21 @@ describe('ConductorEvent union includes pipeline closeout events', () => {
     const engineLedger = join(worktree, '.pipeline', 'events.jsonl');
     const lapId = parseBuildReviewLapId('lap-current')!;
     const finding = {
-      concernKind: 'out-of-plan-change',
-      summary: 'src/a.ts is outside the plan',
+      concernKind: 'test-insensitive',
+      summary: 'A changed test does not observe the behavior it should.',
       evidenceLocations: ['src/a.ts:1'],
-      anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' },
+      anchor: { rubric: 'testQuality' as const, locus: { path: 'test/closeout-event.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
     };
     const identity = canonicalizeBuildReviewFindingIdentity({
       ...finding,
-      rubric: 'scope',
+      rubric: 'testQuality',
       contractVersion: 'v2',
     })!;
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: 'sha256:snapshot',
       results: {
-        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [finding], verdict: 'FAIL' },
-        rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
-        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [finding], verdict: 'FAIL' },
       },
     });
     const engineRecords = [

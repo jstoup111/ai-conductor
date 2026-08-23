@@ -3351,7 +3351,7 @@ TIER: M`,
       let rawAggregate: unknown;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(), planPath, events,
-        buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+        buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest, _fs) => ({
           version: 1,
           rubric,
           lapId,
@@ -3363,12 +3363,12 @@ TIER: M`,
             lapId,
             snapshotDigest,
             contractVersion: 'v3' as never,
-            findings: rubric === 'scope' ? [{
-              concernKind: 'out-of-plan-change', summary: 'The changed path is outside the approved plan.',
+            findings: [{
+              concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
               evidenceLocations: ['x:1'],
-              anchor: { rubric: 'scope', path: 'x', relation: 'not-authorized-by-plan' },
-            }] : [],
-            verdict: rubric === 'scope' ? 'FAIL' as const : 'PASS' as const,
+              anchor: { rubric: 'testQuality', locus: { path: 'test/engine/step-runners.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
+            }],
+            verdict: 'FAIL' as const,
           },
         }),
         buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
@@ -3388,12 +3388,12 @@ TIER: M`,
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
         contractVersion: 'v3',
-        findings: branch.rubric === 'scope' ? [{
-          concernKind: 'out-of-plan-change', summary: 'The changed path is outside the approved plan.',
+        findings: [{
+          concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
           evidenceLocations: ['x:1'],
-          anchor: { rubric: 'scope', path: 'x', relation: 'not-authorized-by-plan' },
-        }] : [],
-        verdict: branch.rubric === 'scope' ? 'FAIL' : 'PASS',
+          anchor: { rubric: 'testQuality', locus: { path: 'test/engine/step-runners.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
+        }],
+        verdict: 'FAIL',
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });

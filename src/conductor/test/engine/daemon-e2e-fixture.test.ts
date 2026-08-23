@@ -143,13 +143,41 @@ function createFixtureAgentFake(
 ) {
   return createCodexProviderFake((options) => {
     if (options.prompt.includes('Build Review ') && options.prompt.includes('"rubric"')) {
-      const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
       return {
         success: true,
-        output: JSON.stringify({
-          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [], verdict: 'PASS',
-        }),
+        output: JSON.stringify({ findings: [] }),
+        exitCode: 0,
+      };
+    }
+
+    if (options.prompt.includes('$prd-audit')) {
+      mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
+      writeFileSync(
+        join(worktreeDir, '.pipeline/prd-audit.md'),
+        '**PRD:** none\n\n'
+          + '## Verdict Table\n\n'
+          + '| Criterion | Grade | Plan task | Evidence |\n'
+          + '| --- | --- | --- | --- |\n'
+          + '| S1.1 | PASS | 1 | test/fixtures/daemon-e2e/touched.txt |\n',
+        'utf-8',
+      );
+      return {
+        success: true,
+        output: 'fixture prd audit recorded aligned evidence',
+        exitCode: 0,
+      };
+    }
+
+    if (options.prompt.includes('$architecture-review --as-built')) {
+      mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
+      writeFileSync(
+        join(worktreeDir, '.pipeline/architecture-review-as-built.md'),
+        '# As-Built Review\n\nVerdict: APPROVED\n',
+        'utf-8',
+      );
+      return {
+        success: true,
+        output: 'fixture as-built review recorded approval',
         exitCode: 0,
       };
     }
@@ -341,10 +369,9 @@ describe('daemon E2E fixture', () => {
           pipelineDir,
           planPath,
           providerKey: 'codex',
-          // This fixture has no runnable scoped-test command in its isolated
-          // temporary repository. Disable only the tautology branch; the
-          // other three fan-out branches still exercise the daemon join.
-          config: { build_review: { maxParallel: 4, rubrics: { tautology: { enabled: false } } } },
+          // The fixture supplies current aggregate evidence, so it can exercise
+          // the sole supported build-review branch without running a command.
+          config: { build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: true } } } },
           buildReviewInputOptions: {
             inspectTestSuite: async () => ({
               status: 'CURRENT', evidence: { provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(), outcome: 'PASS' },
@@ -357,8 +384,9 @@ describe('daemon E2E fixture', () => {
 
       // Bounded Conductor fixture:
       // 1. First runnable step: build (all prior steps are pre-resolved).
-      // 2. Expected dispatches: build, build_review, and finish; wiring,
-      //    test_suite, tier/track-skipped validators, and rebase stay native.
+      // 2. Expected dispatches: build, the sole test-quality build-review
+      //    branch, both SHIP validators, and finish; wiring, test_suite,
+      //    tier-skipped validators, and rebase stay native.
       // 3. Terminal condition: finish records the local keep equivalent and
       //    the daemon Conductor writes DONE.
       // 4. Required artifacts: authoritative plan/stories plus the T0 baseline
