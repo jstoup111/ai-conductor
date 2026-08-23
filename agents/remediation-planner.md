@@ -94,6 +94,15 @@ exception — reserved for two human categories only.
   says only "remove the workaround", leaving the next lap to discover the assertion went with it.
   Unless the evidence shows the coverage is redundant, the replacement belongs in the same task as
   the removal.
+- **Regression by omission — edit one of a matched pair, name the other.** A regression does not
+  have to be a deletion. When a task changes an enumeration, registry, vocabulary, id list, grammar,
+  or any value that a second location duplicates or must agree with, name the counterpart and bring
+  it along in the same task — or derive both from one source so they cannot drift again, which is
+  the better fix whenever the evidence supports it. Positive example: "add `tautology` to
+  `RETIRED_BUILD_REVIEW_RUBRIC_IDS` at `build-review-dispositions.ts:135` AND the retired-key list
+  at `config.ts:89`, or derive both from `DEPRECATED_BUILD_REVIEW_RUBRIC_IDS`". Negative example: a
+  task naming only one of the two lists, leaving them to diverge until something reads both and
+  fails.
 - **Tasks are concrete and file-scoped.** Each task names the `file:line` and exactly what to change,
   drawn from the gap's evidence — never "fix FR-10". A vague task is a failed plan.
 - **Evidence drives the plan.** Every disposition cites the gap's `file:line`. If the evidence is

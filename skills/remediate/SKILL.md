@@ -135,6 +135,13 @@ Judgment rules:
   redundant, task the replacement in the SAME task as the removal. A remediation task that drops
   coverage a completed task already delivered is invalid — the next audit re-raises it and the lap
   is wasted.
+- **A regression by omission counts too — edit one of a matched pair, name the other.** Not every
+  regression is a removal. When a task changes an enumeration, registry, vocabulary, id list,
+  grammar, or any value a second location duplicates or must agree with, the task must name that
+  counterpart and bring it along in the same task — or state that both are being derived from one
+  source so they cannot drift again. Prefer the single source when the evidence supports it: two
+  lists that must agree are a defect waiting for the next lap, and the pair that silently diverges
+  is invisible until something reads both.
 - **Sibling trigger routes remain unchanged.** A clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`. A `build_stall` question answerable from committed artifacts routes `build`; a question needing architecture, product, or unanswerable judgment routes `halt`.
 - An `intended-drift` is `halt: product-scope` **only** if it reflects unplanned product
   functionality; if it preserves approved architecture, it is `build`. Route to
@@ -250,6 +257,9 @@ Headers re-parse via the Task 18 grammar and must include:
 - [ ] Every `build` disposition (gap) has ≥1 concrete, file-scoped task drawn from the evidence; stall-question answers have `tasks: []` and the answer in `rationale`
 - [ ] No emitted task removes, replaces, or relaxes existing code, tests, or assertions without
       naming the completed plan task or criterion whose coverage it preserves
+- [ ] No emitted task edits one side of a matched pair — an enumeration, registry, vocabulary, id
+      list, or grammar duplicated elsewhere — without naming the counterpart or deriving both from
+      one source
 - [ ] `category` set iff `disposition == "halt"`; `tasks` empty iff `disposition == "halt"` OR (stall-question answer with `disposition == "build"`)
 - [ ] For a stall-question answer (`build_stall` disposition `build`), the `rationale` clearly answers the original question and cites the artifacts that support it
 - [ ] A gap requiring another feature's sealed-artifact amendment routes to its owning DECIDE step,
