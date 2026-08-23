@@ -229,6 +229,91 @@ describe('planRemediation implementation-only authority routing', () => {
     expect(plan).not.toContain('rem-unmatched');
   });
 
+  it('halts an all-unbound prd_audit remediation instead of sending it to BUILD', async () => {
+    await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
+      '# Stories', '', '## Story 1: remediation', '', '#### Happy Path',
+      '- Given input, when repaired, then it holds.',
+    ].join('\n'), 'utf8');
+    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
+      '**PRD:** present', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      '| S1.1 | FIXABLE | 1 | FR-7 | Missing implementation |',
+    ].join('\n'), 'utf8');
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'INVENTED-9', disposition: 'build', category: null,
+            rationale: 'Off-plan telemetry work.',
+            tasks: [{ id: 'rem-invented', title: 'Build off-plan telemetry' }],
+          }],
+        }), 'utf8');
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'prd audit blocked',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      detail: expect.stringContaining('no admitted remediation gap'),
+    });
+    expect(await readFile(planPath, 'utf8')).not.toContain('rem-invented');
+  });
+
+  it('halts a taskless unbound as-built remediation instead of routing its target', async () => {
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'INVENTED-9', disposition: 'architecture_review', category: null,
+            rationale: 'Off-plan publication work.', tasks: [],
+          }],
+        }), 'utf8');
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built architecture review blocked',
+      {
+        source: 'architecture-review-as-built',
+        evidence: [{
+          gate: 'architecture_review_as_built',
+          evidenceFile: '.pipeline/architecture-review-as-built.md',
+        }],
+      },
+    );
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      detail: expect.stringContaining('no admitted remediation gap'),
+    });
+  });
+
   it.each([
     { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' },
     { source: 'build-stall', evidenceFile: '.pipeline/halt-user-input-required' },

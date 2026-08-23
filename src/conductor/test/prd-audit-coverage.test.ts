@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
   checkStepCompletion,
-  findFrIdsWithoutRows,
   parsePrdAuditReport,
   prdAuditCoverageGap,
   resolveFeaturePrdPaths,
@@ -307,77 +306,6 @@ describe('resolveFeaturePrdPaths', () => {
     await expect(
       resolveFeaturePrdPaths(root, context({ featureIdentities: ['csv-export-single-account'] })),
     ).resolves.toEqual([join(root, '.docs/specs/2026-08-09-csv-export-single-account.md')]);
-  });
-});
-
-describe('findFrIdsWithoutRows', () => {
-  it('returns no ids when every expected FR has a verdict row', () => {
-    const content = [
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-      '| FR-2A | ALIGNED | — | Covered |',
-    ].join('\n');
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2A']))).toEqual([]);
-  });
-
-  it('matches an expected FR suffix case-insensitively', () => {
-    const content = '| fr-2a | ALIGNED | — | Covered |';
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-2A']))).toEqual([]);
-  });
-
-  it('returns the two expected ids that have no verdict rows', () => {
-    const content = [
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-      '| FR-3 | ALIGNED | — | Covered |',
-    ].join('\n');
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2', 'FR-3', 'FR-4']))).toEqual([
-      'FR-2',
-      'FR-4',
-    ]);
-  });
-
-  it('returns every expected id when the report is empty', () => {
-    expect(findFrIdsWithoutRows('', new Set(['FR-1', 'FR-2A']))).toEqual(['FR-1', 'FR-2A']);
-  });
-
-  it('ignores rows outside the Verdict Table section when the heading is present', () => {
-    const content = [
-      '## What moved since cycle 4',
-      '',
-      '| FR | Cycle 4 | Cycle 5 |',
-      '| --- | --- | --- |',
-      '| FR-2 | DIVERGED | ALIGNED |',
-      '',
-      '## Verdict Table',
-      '',
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-    ].join('\n');
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2']))).toEqual(['FR-2']);
-  });
-
-  it('stops the Verdict Table section at the next heading', () => {
-    const content = [
-      '## Verdict Table',
-      '',
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-      '',
-      '## Per-FR Detail',
-      '',
-      '| FR-2 | ALIGNED | — | narrative recap |',
-    ].join('\n');
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2']))).toEqual(['FR-2']);
   });
 });
 

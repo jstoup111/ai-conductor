@@ -15,8 +15,7 @@ export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
 // Shared task-header grammar for parsers that identify task blocks without
 // requiring a title. Keep every consumer on this expression so a supported
-// heading form cannot silently drift between Files, Preserves, and
-// Verify-only metadata.
+// heading form cannot silently drift between Files and Verify-only metadata.
 export const TASK_HEADER_PATTERN =
   /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
 
@@ -50,7 +49,6 @@ export interface ParsedPlanTaskDoneWhen extends Map<string, string[]> {
 // shorthand to inherit an earlier task's set. Matches `**Files:**`,
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
-const PRESERVES_LINE = /^\s*(?:[-*]\s+)?\*\*Preserves\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 const DONE_WHEN_LINE = /^\s*\*\*Done when\s*:\s*\*\*\s*$/i;
 const LIST_ITEM_LINE = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/;
 
@@ -151,39 +149,6 @@ export function parsePlanTaskDoneWhen(text: string): ParsedPlanTaskDoneWhen {
 
   finishBlock();
   result.malformedTaskIds = malformedTaskIds;
-  return result;
-}
-
-/**
- * Parses the preserved behavior declared by each plan task.
- *
- * This intentionally uses the same task-header grammar as
- * `parsePlanTaskVerifyOnly`; malformed or empty clauses produce no entry.
- */
-export function parsePlanTaskPreserves(text: string): Map<string, string[]> {
-  const result = new Map<string, string[]>();
-  let currentIds: string[] = [];
-
-  for (const line of text.split('\n')) {
-    const headerMatch = line.match(TASK_HEADER_PATTERN);
-    if (headerMatch) {
-      currentIds = expandTaskIds(
-        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
-      );
-      continue;
-    }
-    if (currentIds.length === 0) continue;
-
-    const preservesMatch = line.match(PRESERVES_LINE);
-    const behavior = preservesMatch?.[1].trim();
-    if (!behavior) continue;
-    for (const id of currentIds) {
-      const behaviors = result.get(id);
-      if (behaviors) behaviors.push(behavior);
-      else result.set(id, [behavior]);
-    }
-  }
-
   return result;
 }
 

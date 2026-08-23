@@ -3103,6 +3103,11 @@ export class Conductor {
     }
 
     const appendGaps: CriterionBoundRemediationGap[] = [];
+    // This is the complete set a bounded remediation route may act on. A
+    // criterion-bound append is admitted by the validated PRD-audit finding;
+    // sealed-artifact redirects, publication, and halt dispositions require no
+    // plan growth, so they remain independently admissible.
+    const admittedGaps: RemediationGap[] = [];
     const allTasks: Array<{ id: string; title: string }> = [];
     // A `.pipeline/prd-audit.md` path alone is not evidence of a current
     // criterion verdict. Preserve ordinary remediation routing for stale or
@@ -3111,6 +3116,14 @@ export class Conductor {
     const prdAuditCapEnforced = prdAuditRemediation && prdAuditValidated;
     const prdAuditTasks: Array<{ id: string; title: string }> = [];
     for (const gap of gaps) {
+      if (
+        sealedArtifactGapIds.has(gap.id) ||
+        gap.disposition === REMEDIATION_PUBLICATION_DISPOSITION ||
+        gap.disposition === 'halt'
+      ) {
+        admittedGaps.push(gap);
+        continue;
+      }
       if (
         !sealedArtifactGapIds.has(gap.id) &&
         remediationDispositionAppendsToPlan(gap.disposition) &&
@@ -3122,7 +3135,9 @@ export class Conductor {
         // finding and its existing parent plan task.  The planner's FR-N id
         // is associated above through the report's PRD: column.
         if (prdAuditRemediation && (!finding || !prdAuditValidated)) continue;
-        appendGaps.push({ ...gap, ...(finding === undefined ? {} : finding) });
+        const admittedGap = { ...gap, ...(finding === undefined ? {} : finding) };
+        appendGaps.push(admittedGap);
+        admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
         if (finding !== undefined) prdAuditTasks.push(...gap.tasks);
       }
@@ -3309,8 +3324,31 @@ export class Conductor {
         detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; '),
       };
     }
-    if (fixes.length > 0) {
-      const { target, unresolved } = earliestRemediationTarget(fixes, steps);
+    const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
+    // Build-stall answers are not requests to expand the approved plan. Their
+    // raw answer remains the retry hint, including the zero-work variant which
+    // shares the same in-loop recovery behavior.
+    const buildStallSource =
+      hintSource.source === 'build_stall' ||
+      hintSource.source === 'build-stall' ||
+      hintSource.source === 'build_stall_zero_work';
+    // Production gates always provide provenance, so only build-stall answers
+    // retain their raw-fixes fallback. Keep the unprovenanced private seam
+    // compatible for its direct policy tests; it cannot represent a routed
+    // production gate.
+    const routedFixes =
+      buildStallSource || remediationEvidenceSources.length === 0 ? fixes : admittedFixes;
+    if (requiresPlanGrowthAllowance && fixes.length > 0 && routedFixes.length === 0) {
+      return {
+        kind: 'halt',
+        haltClass: KICKBACK_CAP_HALT_CLASS,
+        detail:
+          `${hintSource.source} remediation requested no admitted remediation gap; ` +
+          'only criterion-bound appends and non-appending publication or halt gaps may route.',
+      };
+    }
+    if (routedFixes.length > 0) {
+      const { target, unresolved } = earliestRemediationTarget(routedFixes, steps);
       if (unresolved.length > 0) {
         return {
           kind: 'halt',
@@ -3351,7 +3389,7 @@ export class Conductor {
           satisfied = 'unknown';
         }
       }
-      const remediationEvidence = fixes.map((g) => `${g.id}→${g.disposition}`).join('; ');
+      const remediationEvidence = routedFixes.map((g) => `${g.id}→${g.disposition}`).join('; ');
       const disposition = await this.resolveDecideEntryDisposition({
         target,
         steps,
@@ -3399,7 +3437,7 @@ export class Conductor {
           return {
             kind: 'halt',
             detail:
-              fixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
+              routedFixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
               ' — remediation produced no dispatchable build work; the implicated task(s) ' +
               'are already evidence-complete — human needed',
             // #647 D3: this HALT is specifically the D1 no-op guard (target
@@ -3413,10 +3451,7 @@ export class Conductor {
         kind: 'route',
         target,
         hint: buildRemediationHint(
-          // Taskless stall answers have no append authorization to filter;
-          // retain their actual answer while BUILD-bound task additions use
-          // only the admitted plan work.
-          allTasks.length === 0 ? fixes : appendGaps,
+          routedFixes,
           hintSource.source,
           remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
         ),

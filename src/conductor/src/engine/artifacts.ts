@@ -3942,16 +3942,6 @@ function prdAuditMechanicalFault(error: string): PrdAuditReportParseResult {
   return { ok: false, class: 'mechanical-fault', error };
 }
 
-/** Return expected FR ids that have no parseable verdict row in the report. */
-export function findFrIdsWithoutRows(content: string, expectedIds: ReadonlySet<string>): string[] {
-  const present = new Set<string>();
-  for (const line of verdictTableLines(content)) {
-    const row = parseFrVerdictRow(line);
-    if (row) present.add(row.fr);
-  }
-  return [...expectedIds].filter((id) => !present.has(id.toUpperCase()));
-}
-
 /** Return a diagnostic when a resolved PRD requirement lacks an audit verdict row. */
 export async function prdAuditCoverageGap(
   projectRoot: string,

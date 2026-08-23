@@ -233,25 +233,3 @@ export async function runScopeFailDisposition(
   const regradeResult = await regrade();
   return { kind: 'invalidated', freshBaseSha, regradeResult };
 }
-
-// ── build_review FAIL routing decision (#989) ─────────────────────────────────
-
-/**
- * Where a `build_review` verdict should send the loop next.
- *
- * `'build'` — a local diff defect the builder can fix in place.
- * `'none'`  — nothing to route (a PASS verdict).
- */
-export type BuildReviewFailRoute = 'build' | 'none';
-
-/**
- * Derive the routing decision deterministically from the grader verdict that
- * is already on disk — no extra LLM-judged field, no prompt change.
- *
- * The remaining test-quality judgement is a local diff defect and routes to
- * `build`. Kickback counting semantics are untouched (see #984).
- */
-export function buildReviewFailRoute(verdict: { verdict: string }): BuildReviewFailRoute {
-  if (verdict.verdict !== 'FAIL') return 'none';
-  return 'build';
-}

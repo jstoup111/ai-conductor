@@ -167,7 +167,7 @@ function frontDone(): ConductState {
 
 /** The kickback vehicle. `build_review` is the deterministic BUILD gate that
  * still routes an unsatisfied verdict back to `build`: a test-quality
- * rubric FAIL takes `buildReviewFailRoute -> 'build'`, which is the cap path
+ * rubric FAIL re-enters `build` directly, which is the cap path
  * this file bounds. (`wiring_check`, the original 2026-07-26 vehicle, is now a
  * deprecated no-op that never kicks back —
  * adr-2026-08-11-wiring-judged-in-build-review.) */
@@ -760,7 +760,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
         run: async (step) => {
           if (step === 'build_review') {
             // A test-quality rubric FAIL routes straight back to `build`
-            // (buildReviewFailRoute → 'build'), so this exercises the cap path
+            // directly, so this exercises the cap path
             // rather than the remediation planner.
             await writeFile(
               join(dir, '.pipeline/build-review.json'),

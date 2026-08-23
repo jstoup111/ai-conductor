@@ -3229,11 +3229,10 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // HALT with the gap ledger + the DECIDE target it would have rewound to.
+      // A taskless, unbound PRD-audit gap halts before it can rewind into DECIDE.
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/Requested target:  architecture_review/);
-      expect(halt).toMatch(/FR-1→architecture_review/);
+      expect(halt).toMatch(/no admitted remediation gap/);
       // No rewind: no kickback into the DECIDE tail, DECIDE steps never re-ran.
       expect(kickbacks).toHaveLength(0);
       expect(calls.filter((s) => s === 'architecture_review')).toHaveLength(0);
@@ -3277,8 +3276,7 @@ describe('engine/conductor', () => {
 
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/Requested target:  plan/);
-      expect(halt).toMatch(/FR-9→plan/);
+      expect(halt).toMatch(/no admitted remediation gap/);
       expect(kickbacks).toHaveLength(0);
       expect(calls.filter((s) => s === 'plan')).toHaveLength(0);
     });
