@@ -210,16 +210,15 @@ describe('engine/selector — selectNextGate', () => {
       manual_test: VSAT,
       prd_audit: VSAT,
       rebase: VSAT,
-      // no as-built verdict; it is pending but must be skipped
+      // no as-built verdict; it is pending and now runs on every tier
     };
     const d = selectNextGate(input(state, verdicts));
-    expect(d).toMatchObject({ kind: 'run', step: 'finish' });
+    expect(d).toMatchObject({ kind: 'run', step: 'architecture_review_as_built' });
   });
 
-  it('skips architecture_review_as_built when architecture_review was skipped on Medium (config/when skip)', () => {
-    // Even on a tier where as-built is not tier-skipped, a skipped upstream
-    // architecture_review (config-disabled or when:-skipped) means no ADRs —
-    // skipWhenSkipped ties the as-built gate to the review.
+  it('runs architecture_review_as_built when architecture_review was skipped on Medium', () => {
+    // As-built has independent reachability and PLAN_GAP checks, so an absent
+    // DECIDE review no longer suppresses its SHIP dispatch.
     const state: ConductState = {
       ...frontDone(),
       complexity_tier: 'M',
@@ -234,10 +233,10 @@ describe('engine/selector — selectNextGate', () => {
       prd_audit: VSAT,
       retro: VSAT,
       rebase: VSAT,
-      // no as-built verdict; pending but tied to the skipped review
+      // no as-built verdict; pending despite the skipped DECIDE review
     };
     const d = selectNextGate(input(state, verdicts));
-    expect(d).toMatchObject({ kind: 'run', step: 'finish' });
+    expect(d).toMatchObject({ kind: 'run', step: 'architecture_review_as_built' });
   });
 
   it('runs architecture_review_as_built on Medium when architecture_review ran', () => {

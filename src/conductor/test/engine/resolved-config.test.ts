@@ -73,7 +73,7 @@ describe('engine/resolved-config', () => {
     });
   });
 
-  describe('resolveBuildReviewConfig (#773 Task 4 — completeness default-on)', () => {
+  describe('resolveBuildReviewConfig (opt-in test-quality rubric)', () => {
     it('defaults to enabled when no build_review block is present at all', () => {
       const resolved = resolveBuildReviewConfig(undefined);
       expect(resolved.enabled).toBe(true);
@@ -109,15 +109,15 @@ describe('engine/resolved-config', () => {
       expect(resolveBuildReviewConfig(config).rubrics.testQuality.enabled).toBe(true);
     });
 
-    it('defaults perTaskFloor to true when field is absent', () => {
+    it('keeps the retired perTaskFloor surface disabled when field is absent', () => {
       const config: HarnessConfig = { build_review: { enabled: true } } as HarnessConfig;
       const resolved = resolveBuildReviewConfig(config);
-      expect(resolved.perTaskFloor).toBe(true);
+      expect(resolved.perTaskFloor).toBe(false);
     });
 
-    it('defaults perTaskFloor to true when build_review block is absent entirely', () => {
+    it('keeps the retired perTaskFloor surface disabled when build_review is absent', () => {
       const resolved = resolveBuildReviewConfig(undefined);
-      expect(resolved.perTaskFloor).toBe(true);
+      expect(resolved.perTaskFloor).toBe(false);
     });
 
     it('applies the registered test-quality default effort when nothing is authored', () => {
@@ -170,12 +170,12 @@ describe('engine/resolved-config', () => {
       expect(resolved.perTaskFloor).toBe(false);
     });
 
-    it('fails open to true when perTaskFloor is malformed (wrong type)', () => {
+    it('keeps the retired perTaskFloor surface disabled when malformed', () => {
       const config = {
         build_review: { enabled: true, perTaskFloor: 'nope' as unknown as boolean },
       } as HarnessConfig;
       const resolved = resolveBuildReviewConfig(config);
-      expect(resolved.perTaskFloor).toBe(true);
+      expect(resolved.perTaskFloor).toBe(false);
     });
 
     it('resolves a closed rubric policy map by inheriting the outer policy, applying independent overrides, and clamping fan-out', () => {
@@ -190,8 +190,7 @@ describe('engine/resolved-config', () => {
         build_review: {
           maxParallel: 99,
           rubrics: {
-            tautology: { enabled: false },
-            scope: {
+            testQuality: {
               llm_provider: ['codex', 'claude'],
               model: 'gpt-5.6-sol',
               effort: 'max',
@@ -199,7 +198,6 @@ describe('engine/resolved-config', () => {
               max_retries: 2,
               escalate: false,
             },
-            rootCause: { effort: 'medium' },
           },
         },
       } as HarnessConfig;
@@ -220,19 +218,10 @@ describe('engine/resolved-config', () => {
         maxParallel: resolved.maxParallel,
         rubrics: resolved.rubrics,
       }).toEqual({
-        maxParallel: 3,
+        maxParallel: 0,
         rubrics: {
-          tautology: {
+          testQuality: {
             enabled: false,
-            llm_provider: ['claude', 'codex'],
-            model: 'opus',
-            effort: 'high',
-            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
-            max_retries: 4,
-            escalate: true,
-          },
-          scope: {
-            enabled: true,
             llm_provider: ['codex', 'claude'],
             model: 'gpt-5.6-sol',
             effort: 'max',
@@ -240,60 +229,23 @@ describe('engine/resolved-config', () => {
             max_retries: 2,
             escalate: false,
           },
-          rootCause: {
-            enabled: true,
-            llm_provider: ['claude', 'codex'],
-            model: 'opus',
-            effort: 'medium',
-            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
-            max_retries: 4,
-            escalate: true,
-          },
-          completeness: {
-            enabled: true,
-            llm_provider: ['claude', 'codex'],
-            model: 'opus',
-            effort: 'high',
-            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
-            max_retries: 4,
-            escalate: true,
-          },
         },
       });
     });
 
-    it('resolves a provider-only rubric from its Codex-native policy without changing sibling policies', () => {
+    it('resolves the provider-only test-quality rubric from its Codex-native policy', () => {
       const resolved = resolveBuildReviewConfig({
         llm_provider: 'claude',
         build_review: {
-          rubrics: { scope: { llm_provider: 'codex' } },
+          rubrics: { testQuality: { llm_provider: 'codex' } },
         },
       } as HarnessConfig, CLAUDE_MODEL_POLICY);
 
       expect(resolved.rubrics).toMatchObject({
-        tautology: {
-          llm_provider: 'claude',
-          model: 'opus',
-          effort: 'high',
-          model_fallback_ladder: ['fable', 'opus', 'sonnet'],
-        },
-        rootCause: {
-          llm_provider: 'claude',
-          model: 'opus',
-          // Narrowest rubric: the per-rubric default effort applies (medium).
-          effort: 'medium',
-          model_fallback_ladder: ['fable', 'opus', 'sonnet'],
-        },
-        completeness: {
-          llm_provider: 'claude',
-          model: 'opus',
-          effort: 'high',
-          model_fallback_ladder: ['fable', 'opus', 'sonnet'],
-        },
-        scope: {
+        testQuality: {
           llm_provider: 'codex',
           model: 'gpt-5.6-sol',
-          effort: 'medium',
+          effort: 'high',
           model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
         },
       });

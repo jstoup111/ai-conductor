@@ -52,7 +52,11 @@ describe('build_review copy equivalence', () => {
     const gitRunner = async (args: string[]) => {
       if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
       if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
-      if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
+      if (args[0] === 'diff') return { exitCode: 0, stdout: [
+        'diff --git a/src/foo.ts b/src/foo.ts',
+        'diff --git a/test/foo.test.ts b/test/foo.test.ts',
+      ].join('\n'), stderr: '' };
+      if (args[0] === 'show') return { exitCode: 0, stdout: '// Covers: task:1\n', stderr: '' };
       return { exitCode: 1, stdout: '', stderr: '' };
     };
     return {
@@ -60,8 +64,9 @@ describe('build_review copy equivalence', () => {
       runner: new DefaultStepRunner(provider, 'session', projectDir, {
         planPath,
         gitRunner,
-        // #1682: tautology defaults off; these tests exercise four-rubric laps.
-        config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+        // The active test-quality rubric is opt-in; these tests exercise the
+        // one-shot judged branch after the replication preflight.
+        config: { build_review: { rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
         buildReviewInputOptions: {
           inspectTestSuite: async () => ({
             status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
@@ -112,37 +117,7 @@ describe('build_review copy equivalence', () => {
 
     expect(result.success).toBe(true);
     expect(runCopyEquivalence).not.toHaveBeenCalled();
-    expect(invoke).toHaveBeenCalledTimes(4);
-  });
-
-  it('rejects a malformed rubric response before accepting valid branch results', async () => {
-    await writeFile(planPath, '# Plan\n\nNo declared replication.\n');
-    let malformed = true;
-    const invoke = vi.fn(async (options) => {
-      if (malformed) return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
-      const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
-      return { success: true, output: JSON.stringify({
-        kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-        snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [], verdict: 'PASS',
-      }), exitCode: 0 };
-    });
-    const { runner: subject } = runner(invoke);
-
-    await expect(subject.run('build_review', {})).resolves.toMatchObject({
-      success: false,
-      output: expect.stringMatching(/judged-result repair was byte-identical to the rejected output/i),
-    });
-
-    malformed = false;
-    await expect(subject.run('build_review', {})).resolves.toMatchObject({
-      success: true,
-    });
-    // Rebase fixture repair: the first run makes four malformed rubric
-    // responses, each with one bounded shape-repair turn (8 calls); the
-    // second run accepts four valid responses (4 calls). This expectation
-    // tracks the pre-existing repair-loop contract, not cache identity.
-    expect(invoke).toHaveBeenCalledTimes(12);
-    expect(runCopyEquivalence).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('fails before equivalence or grading when the declaration is malformed', async () => {

@@ -728,11 +728,14 @@ describe('Conductor FINISH publication routing', () => {
       'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'retro', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
-    // A technical feature with no approved architecture decision has no
-    // as-built review to run; its downstream validator is skipped by the
-    // ordinary upstream-skip rule.
+    // The as-built review now runs even without an upstream DECIDE review;
+    // an empty ADR corpus yields an approved report.
     state.architecture_review = 'skipped';
     await writeState(productionStatePath, state as ConductState);
+    await writeFile(
+      join(pipeline, 'architecture-review-as-built.md'),
+      '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
+    );
     const runner: StepRunner = {
       run: vi.fn(async () => {
         pullRequest = {
@@ -817,13 +820,16 @@ describe('Conductor FINISH publication routing', () => {
       'worktree', 'acceptance_specs', 'build', 'build_review',
       'wiring_check', 'test_suite', 'architecture_review_as_built', 'retro', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
-    // This feature has no approved architecture decision, so its as-built
-    // validator is legitimately skipped through the upstream-skip rule.
+    // The as-built review runs independently of an upstream DECIDE review.
     state.architecture_review = 'skipped';
     // The two other SHIP validators a technical-track feature legitimately skips.
     state.manual_test = 'skipped';
     state.prd_audit = 'skipped';
     await writeState(productionStatePath, state as ConductState);
+    await writeFile(
+      join(pipeline, 'architecture-review-as-built.md'),
+      '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
+    );
     const runner: StepRunner = {
       run: vi.fn(async () => {
         pullRequest = {

@@ -244,6 +244,14 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       mode: 'auto',
       daemon: opts.daemon ?? true,
       selfHost: opts.selfHost ?? true,
+      // These tests isolate self-host wiring. The fake runner is the success
+      // authority, so artifact-driven gates must not keep the conductor in
+      // unrelated BUILD/SHIP retries.
+      verifyArtifacts: false,
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED' as const, evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT' as const, evidence: {} as never }),
+      },
       baseBranch: 'main',
       fromStep: 'build',
       selfHostGuardrails: guardrails,

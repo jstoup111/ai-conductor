@@ -919,7 +919,7 @@ describe('operator park boundary contract', () => {
       parallelStarts,
       runnerCalls: run.mock.calls,
     }).toEqual({
-      membership: ['manual_test'],
+      membership: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
       result: {
         kind: 'operator-parked',
         boundary: { kind: 'pre-first-unit' },
