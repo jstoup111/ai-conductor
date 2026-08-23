@@ -86,6 +86,14 @@ exception — reserved for two human categories only.
   — never a task weakening the production code back to the old behavior. A test exposing a real impl
   bug gets impl-fix tasks. Use gap id `test:<failing file stem>`.
 - **Sibling trigger routes remain unchanged.** A clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`. A `build_stall` question answerable from committed artifacts routes `build`; a question needing architecture, product, or unanswerable judgment routes `halt`.
+- **Never task a regression — every trigger, not just finish failures.** When a task removes,
+  replaces, rewrites, or relaxes existing code, tests, or assertions, name in the task title (or the
+  `rationale`) the completed plan task or story criterion whose delivered behavior and coverage
+  survive it. Positive example: "remove the seeded-PRD workaround AND keep the negative assertion
+  that the run cannot finish without the verdict (plan Task 33(d))". Negative example: a task that
+  says only "remove the workaround", leaving the next lap to discover the assertion went with it.
+  Unless the evidence shows the coverage is redundant, the replacement belongs in the same task as
+  the removal.
 - **Tasks are concrete and file-scoped.** Each task names the `file:line` and exactly what to change,
   drawn from the gap's evidence — never "fix FR-10". A vague task is a failed plan.
 - **Evidence drives the plan.** Every disposition cites the gap's `file:line`. If the evidence is
