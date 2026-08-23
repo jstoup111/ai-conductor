@@ -150,6 +150,7 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
   parsePrdAuditReport,
+  extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   readRemediationPlan,
   REMEDIATION_PUBLICATION_DISPOSITION,
@@ -546,18 +547,21 @@ function criterionStorySection(
   storiesText: string,
   criterion: string,
 ): 'happy' | 'negative' | undefined {
-  const escapedCriterion = criterion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const criterionPattern = new RegExp(`\\b${escapedCriterion}\\b`, 'i');
-  let section: 'happy' | 'negative' | undefined;
-  for (const line of storiesText.split('\n')) {
-    const heading = line.match(/^#{1,6}\s+(.+?)\s*$/);
-    if (heading) {
-      if (/happy\s*path/i.test(heading[1]!)) section = 'happy';
-      else if (/negative\s*paths?/i.test(heading[1]!)) section = 'negative';
-      else section = undefined;
-      continue;
-    }
-    if (section !== undefined && criterionPattern.test(line)) return section;
+  const id = criterion.match(/^S(\d+)\.(\d+)$/i);
+  if (!id) return undefined;
+
+  const [, storyId, ordinal] = id;
+  const storyPrefix = `Story ${storyId} `;
+  const storyCriteria = extractAuthoritativeStoryCriteria(storiesText).filter((candidate) =>
+    candidate.toLowerCase().startsWith(storyPrefix.toLowerCase()),
+  );
+  const matchedCriterion = storyCriteria[Number(ordinal) - 1];
+  if (!matchedCriterion) return undefined;
+  if (matchedCriterion.toLowerCase().startsWith(`${storyPrefix}happy:`.toLowerCase())) {
+    return 'happy';
+  }
+  if (matchedCriterion.toLowerCase().startsWith(`${storyPrefix}negative:`.toLowerCase())) {
+    return 'negative';
   }
   return undefined;
 }

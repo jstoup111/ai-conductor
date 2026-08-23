@@ -1729,7 +1729,11 @@ async function groundDispositionOnlyEvidence(
   return null;
 }
 
-function extractAuthoritativeStoryCriteria(storiesText: string): string[] {
+/**
+ * Return each parseable story criterion in the stable story/section order
+ * that makes the stories artifact the authoritative criterion mapping.
+ */
+export function extractAuthoritativeStoryCriteria(storiesText: string): string[] {
   const criteria: string[] = [];
   for (const block of splitStoryBlocks(storiesText)) {
     for (const type of ['happy', 'negative'] as const) {

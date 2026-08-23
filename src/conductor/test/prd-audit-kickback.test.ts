@@ -36,14 +36,14 @@ function planGapReport(criterion: string, summary = 'The approved plan has no ta
   ].join('\n');
 }
 
-function storiesWithCriterion(section: 'Happy Path' | 'Negative Paths', criterion: string) {
+function storiesWithCriterion(section: 'Happy Path' | 'Negative Paths') {
   return [
     '# Stories',
     '',
     '## Story 2: behavior',
     '',
     `#### ${section}`,
-    `- **${criterion}:** Given input, when exercised, then the expected behavior occurs.`,
+    '- Given input, when exercised, then the expected behavior occurs.',
   ].join('\n');
 }
 
@@ -337,7 +337,7 @@ describe('prd_audit kickback', () => {
   it('halts a PLAN_GAP for a happy-path criterion with a plan-gap class', () => {
     const route = routePrdAuditPlanGaps(
       planGapReport('S2.1'),
-      storiesWithCriterion('Happy Path', 'S2.1'),
+      storiesWithCriterion('Happy Path'),
       {} as never,
     );
 
@@ -348,8 +348,8 @@ describe('prd_audit kickback', () => {
 
   it('records a negative-path PLAN_GAP finding and lets the gate pass', () => {
     const route = routePrdAuditPlanGaps(
-      planGapReport('S2.2', 'An edge case is not in the approved plan.'),
-      storiesWithCriterion('Negative Paths', 'S2.2'),
+      planGapReport('S2.1', 'An edge case is not in the approved plan.'),
+      storiesWithCriterion('Negative Paths'),
       {} as never,
     );
 
@@ -357,7 +357,7 @@ describe('prd_audit kickback', () => {
       kind: 'record',
       findings: [{
         grade: 'PLAN_GAP',
-        criterion: 'S2.2',
+        criterion: 'S2.1',
         summary: 'An edge case is not in the approved plan.',
         gate: 'prd_audit',
       }],
@@ -370,10 +370,34 @@ describe('prd_audit kickback', () => {
     expect(route).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
   });
 
+  it('uses the finding story and ordinal when another story has the same criterion prose', () => {
+    const sharedCriterion = 'Given a request, when it is malformed, then the engine refuses it.';
+    const stories = [
+      '# Stories',
+      '',
+      '## Story 1: primary flow',
+      '',
+      '#### Happy Path',
+      `- ${sharedCriterion}`,
+      '',
+      '## Story 2: edge flow',
+      '',
+      '#### Negative Paths',
+      `- ${sharedCriterion}`,
+    ].join('\n');
+
+    const route = routePrdAuditPlanGaps(planGapReport('S2.1'), stories, {} as never);
+
+    expect(route).toMatchObject({
+      kind: 'record',
+      findings: [expect.objectContaining({ criterion: 'S2.1', grade: 'PLAN_GAP' })],
+    });
+  });
+
   it('halts a negative-path PLAN_GAP when halt_on_any_plan_gap is enabled', () => {
     const route = routePrdAuditPlanGaps(
-      planGapReport('S2.4'),
-      storiesWithCriterion('Negative Paths', 'S2.4'),
+      planGapReport('S2.1'),
+      storiesWithCriterion('Negative Paths'),
       { prd_audit: { halt_on_any_plan_gap: true } } as never,
     );
 
