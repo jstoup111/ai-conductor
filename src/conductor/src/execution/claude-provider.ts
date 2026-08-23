@@ -692,21 +692,36 @@ export class ClaudeProvider implements LLMProvider {
     options = enforceFreshSessionOptions(options, 'claude');
     const args = this.buildArgs(options);
 
-    if (options.prompt) {
-      if (options.interactive) {
-        // REPL mode — positional arg; session stays open until user /quits.
-        args.push(options.prompt);
-      } else {
-        // Print mode — auto-exit when done.
-        args.push('-p', options.prompt);
-      }
+    // Print mode delivers the prompt on STDIN for the same reason `invoke()`
+    // does (#829): a single argv string is capped at MAX_ARG_STRLEN (128 KiB
+    // on Linux), and the build_review grader's projection routinely exceeds
+    // it, so `-p <prompt>` makes exec() fail with E2BIG BEFORE claude starts —
+    // 0 turns, ~30ms, $0.00, an empty result the engine can only classify as a
+    // malformed provider artifact. #829 closed that hole in `invoke()` and
+    // left it open here, and `step-runners.ts` routes rubric dispatch through
+    // this method. REPL mode keeps the positional argument: it is operator-
+    // typed, short, and stdin must stay attached to the terminal.
+    const promptOnStdin =
+      typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
+
+    if (options.prompt && options.interactive) {
+      // REPL mode — positional arg; session stays open until user /quits.
+      args.push(options.prompt);
+    } else if (promptOnStdin) {
+      // `-p <prompt>` both selected print mode and carried the prompt. With the
+      // prompt on stdin, print mode must be selected explicitly or the CLI
+      // opens a REPL and never exits. Output stays plain text: this path's
+      // classifyCompletion() call passes jsonOutput=false.
+      args.push('--print');
     }
 
     // Capture while inheriting output so classification remains available only
     // after the visibly streamed process completes.
     const observed = await observeInterval(this.intervalClock, () =>
       this.runClaude(args, {
-        stdin: options.interactive ? 'inherit' : 'ignore',
+        ...(promptOnStdin
+          ? { input: options.prompt }
+          : { stdin: options.interactive ? 'inherit' as const : 'ignore' as const }),
         reject: false,
         env: this.buildEnv(options),
         cwd: options.cwd,
