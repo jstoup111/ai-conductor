@@ -715,7 +715,23 @@ Exact edges are the `**Dependencies:**` lines; this picture is the reading aid.
 ### Task rem-fr11-1: src/conductor/src/engine/conductor.ts:3025-3052 — handle a rejected prd_audit parse as a surfaced mechanical gate failure that appends zero tasks, preserve the parser error in halt/event evidence, and add the Task 17 regression proving malformed reports never reach appendRemediationTasks
 ### Task rem-fr14-1: src/conductor/src/engine/conductor.ts:545-561 — replace literal unscoped Sx.y searching with the authoritative story-and-criterion prose mapping from src/conductor/src/engine/artifacts.ts:1732-1749, then test happy, negative, unclassifiable, and duplicate-prose-in-another-story cases
 ### Task rem-fr17-1: src/conductor/src/engine/conductor.ts:4726-4800 — add an approved plan task to replace handleManualTestFailKickback's direct BUILD navigation with criterion-bound, growth-accounted routing that cannot order work absent from the plan, plus happy and negative manual_test routing tests
+
+> **Amended 2026-08-23 by #1805 (operator decision):** NOT DELIVERED HERE — deferred to #1826.
+> This task asks for "an approved plan task", which is the point: manual_test appears zero times in
+> this feature's plan, stories, and coherence mapping, so the work it names is outside the approved
+> plan. prd_audit correctly classified FR-17 as a plan-gap and refused to route it to BUILD; the PRD
+> was amended in the same change set to scope FR-17 to the prd_audit and as-built gates this plan
+> authorizes. The heading is retained (a removed remediation heading blocks completion); the task is
+> resolved as deferred, not implemented.
 ### Task rem-fr17-2: src/conductor/src/engine/conductor.ts:8872-8917 — add an approved plan task to bring the prd_audit impl-only fallback under the same lap and growth cap as the main prd_audit remediation path, with a zero-uncounted-appends regression
+
+> **Amended 2026-08-23 by #1805 (operator decision):** NOT DELIVERED HERE — deferred to #1826.
+> This task asks for "an approved plan task", which is the point: the prd_audit impl-only fallback appears zero times in
+> this feature's plan, stories, and coherence mapping, so the work it names is outside the approved
+> plan. prd_audit correctly classified FR-17 as a plan-gap and refused to route it to BUILD; the PRD
+> was amended in the same change set to scope FR-17 to the prd_audit and as-built gates this plan
+> authorizes. The heading is retained (a removed remediation heading blocks completion); the task is
+> resolved as deferred, not implemented.
 ### Task rem-fr18-1: src/conductor/src/engine/conductor.ts:3021,3113,5943 — replace comma-joined evidence-file identity with structured per-gate remediation provenance, apply the plan-growth bound before every appendRemediationTasks authority, and test a validation-group round containing both prd_audit and as-built evidence for capped, lapped, recorded prd_audit additions only
 ### Task rem-fr19-1: src/conductor/src/engine/event-sinks.ts:11, src/conductor/src/daemon-cli.ts:2072-2088, and src/conductor/src/engine/daemon-observe-cli.ts:455-500 — render plan_growth and show each active feature's authored, added by gate, remaining, and cap counts in daemon status, with event-render and status integration assertions including legacy-ledger recomputation
 ### Task rem-fr23-1: src/conductor/src/engine/build-review-prompt.ts:72-146 — delete the dead four-rubric buildGraderPrompt path and its test-only caller so retired grading instructions no longer compile or ship
