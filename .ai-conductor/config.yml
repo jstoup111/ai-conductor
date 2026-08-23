@@ -181,6 +181,26 @@ steps:
   coherence_check:
     llm_provider: codex
   prd_audit:
+    # Disabled 2026-08-23 by operator decision, for this feature only, AFTER the
+    # audit itself returned PASS. The gate failure is a report-contract mismatch,
+    # not a finding: this branch makes the stories' 84 acceptance criteria the
+    # audit key with FR-1..23 as intent context, so the report carries 0 FR-N
+    # verdict rows and 84 criterion rows (83 PASS, 1 OVER_SCOPE — the unplanned
+    # probe test files, graded outside-harmless). The running engine is built
+    # from main, whose artifacts.ts still requires one FR-N verdict row per PRD
+    # FR, so it reported 20 rows missing and scraped FR-6/FR-16/FR-19 out of the
+    # PRD column of PASS rows as un-ALIGNED.
+    #
+    # This is the self-host bootstrap condition, not a compatibility break. The
+    # spec's backward-compatibility requirements are all new-engine-reads-old-data
+    # (FR-20 retired config keys, FR-21 pre-change plans, FR-22 persisted retired
+    # dispositions) and all hold. Old-engine-reads-new-report is not required by
+    # any FR; FR-7 is the requirement to change that parser, so report and parser
+    # land in the same merge and a consumer updating normally never sees this.
+    #
+    # RE-ENABLE once this feature merges and the daemon respawns onto an engine
+    # carrying the FR-7 parser. Nothing else should inherit this key.
+    disable: true
     llm_provider: claude
   architecture_review_as_built:
     llm_provider: claude
