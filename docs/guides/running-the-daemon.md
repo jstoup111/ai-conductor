@@ -828,17 +828,18 @@ surface its verdict depends on, and only a delta that lands inside that surface 
 | `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
 | `prd_audit`, `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
 
-`build_review` grades the feature's own diff against its plan, so a delta made up entirely of
-foreign, main-side paths cannot change that grade and its verdict is preserved — a rebase that only
-merges in unrelated base work no longer pays for an LLM re-grade. Its own test files DO re-open it,
-because the completeness rubric grades whether the plan's tests were written. `test_suite`
-deliberately stays maximally aggressive: it proves the exact tree, so any delta at all makes that
-proof stale, and it runs no model, so re-running it is cheap.
+`build_review` grades the feature's own code and tests — currently only the opt-in `testQuality`
+rubric's judgement of whether a changed test is insensitive to the behavior it claims to cover — so a
+delta made up entirely of foreign, main-side paths cannot change that grade and its verdict is preserved:
+a rebase that only merges in unrelated base work no longer pays for an LLM re-grade. Its own test files
+DO re-open it, since those are exactly what `testQuality` judges. `test_suite` deliberately stays
+maximally aggressive: it proves the exact tree, so any delta at all makes that proof stale, and it runs
+no model, so re-running it is cheap.
 
 If aggregate verification then exposes a base-induced repair, the daemon records its sanitized
 failure identity in `.pipeline/build-review-rebase-repairs.json`. Entries accumulate across repeated
-rebases. The next `build_review` uses them as context when judging whether an otherwise out-of-plan
-test or compatibility hunk belongs to the rebase repair; unrelated work is not waived.
+rebases, but the retained `testQuality` rubric does not currently consume them as judgement context —
+see [gates](../explanation/gates.md#where-a-build_review-fail-goes).
 
 `build` is the exception. Its predicate re-derives mechanically from the rebased history — the union
 of `Task:` commit trailers with the `.pipeline/task-status.json` rows — so the daemon re-evaluates it

@@ -192,8 +192,8 @@ Verification also tolerates these cases without halting:
 
 - **Own-feature amendment** — a changed artifact whose filename stem names the current feature
   (a date prefix on either side is ignored). The engine logs a warning naming each amended path;
-  the mutation is not blocked, but `build_review`'s Scope rubric item judges the diff and fails
-  it unless the approved plan justifies the change.
+  the mutation is not blocked, but `prd_audit`'s scope-as-intent judgement grades it `OVER_SCOPE`
+  unless the change stays within the PRD's or stories' stated intent.
 - **Base-branch inheritance** — a changed or newly appeared artifact whose current workspace content
   is byte-identical to that path as committed at the base branch tip (`origin/<base>`, falling back
   to the local `<base>`). This is the content the feature's own rebase brought in, and the base
@@ -337,8 +337,9 @@ reconstruction and restores every plan task carrying a `Task: <id>` trailer on a
 branch as `status: "completed"`, stamped with that `commit` and `restored_from: "task-trailer"`.
 Tasks with no such trailer stay `pending`. This grants no new authority — `resolveTaskIds` already
 resolves those exact task ids from the same trailers for build-step routing
-(adr-2026-07-23-trailer-union-build-step-routing), and `build_review`'s completeness rubric still
-re-judges the real diff — it only stops a row-only reader from redoing finished, committed work. An
+(adr-2026-07-23-trailer-union-build-step-routing), and the per-task `Done when:` evidence check at task
+close and `prd_audit`'s criterion-level grading still re-judge the real work — it only stops a row-only
+reader from redoing finished, committed work. An
 **existing** file with rows is never trailer-backfilled, so a row deliberately reverted to `pending`
 stays that way.
 
@@ -388,7 +389,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `attribution-verdict.json` | `{ schema?, anchor?: { head?, residue?[] }, results? }` | `attribution-verdict.ts` |
 | `audit-trail/` | Per-task `review.json`, `rework-N.json`, `commit.txt`, `summary.json`, plus `events.jsonl` and a `WRITE-FAILED` marker | `audit-trail.ts`, `pipeline` skill |
 | `bootstrap-detection.json`, `bootstrap-inventory.md` | Stack detection output | `bootstrap` skill |
-| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { tautology, scope, rootCause, completeness }, codeStamp? }`. A `rubric.<item>: true` means that item failed. A missing or malformed item fails closed; an unknown item (such as the retired `wiring`) is ignored, so a verdict written before the rubric changed still parses. | `build_review` step |
+| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { testQuality }, codeStamp? }`. A `rubric.<item>: true` means that item failed. A missing or malformed item fails closed; an unknown item (such as a retired rubric — `tautology`, `scope`, `rootCause`, `completeness`, `wiring`) is ignored, so a verdict written before the rubric consolidation still parses. | `build_review` step |
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
@@ -397,7 +398,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `manual-test-results.md` | Per-story PASS/FAIL rows. The gate fails on any FAIL row in the latest attempt, and on an mtime older than session start | `manual-test` skill |
 | `manual-test-fail-evidence.json` | Failure detail for the above | engine |
 | `per-task-floor.json` | Per-task commit-floor telemetry | `step-runners.ts` |
-| `prd-audit.md` | Markdown table `\| FR \| Verdict \| Gap-class \| Evidence \| Accepted? \|`. Verdicts `ALIGNED`, `MISSING`, `PARTIAL`, `DIVERGED`; gap classes `impl-gap`, `intended-drift`, `plan-gap`, `unknown`. The verdict is read from the verdict **cell**, not from anywhere else in the row | `prd-audit` skill |
+| `prd-audit.md` | A `## Verdict Table` with one graded row per story acceptance criterion: `Criterion`, `Grade` (`PASS`\|`FIXABLE`\|`PLAN_GAP`\|`OVER_SCOPE`), `Plan task` (required for `FIXABLE`), `FR`, `Intent relation` (required for `OVER_SCOPE`: `within`\|`outside-harmless`\|`outside-visible`), `Evidence`. The grade is read from the verdict **cell**, not from anywhere else in the row | `prd-audit` skill |
 | `prd-audit-code-stamp.json` | The HEAD sha the audit was formed against | engine |
 | `protected-artifact-seal.json` | See above | `protected-artifact-seal.ts` |
 | `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
@@ -541,8 +542,9 @@ are the same id.
 
 A task evidenced **only** by a `Task:` trailer, whose `task-status.json` row was never flipped,
 therefore satisfies the build gate. That union is deliberate — it fixed a false halt at 100% real
-completion. Final completion authority still rests with `build_review`'s completeness rubric, which
-compares the plan against the diff rather than trusting any self-report.
+completion. Final completion authority rests with each task's `Done when:` evidence, shown true before
+the task counts as complete, and — once behavior ships — `prd_audit`'s criterion-level grading against
+the stories' acceptance criteria, rather than trusting any self-report.
 
 **`Evidence: satisfied-by <sha>` / `Evidence: skipped <reason>`** is telemetry only. The values are
 extracted by `commit-msg` and never acted on. This is distinct from the `EvidenceStamp` records in

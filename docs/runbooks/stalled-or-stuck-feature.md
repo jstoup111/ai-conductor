@@ -711,14 +711,14 @@ The note is additive: retain the original text and create no separate record. St
 
 **Annotate history-shaped artifacts; rewrite state-shaped ones.** The additive-note rule above is
 for artifacts that downstream machinery reads as *history* — a plan's executed tasks are the ledger
-the completeness grader matches landed commits against, so deleting one orphans its diff. But
-`prd_audit` and the as-built architecture review re-judge the PRD's functional requirements,
-stories' scenarios, and the component diagram as *current state*, comparing what the artifact
-states verbatim against the shipped implementation. An amendment note asking the reader to
+`prd_audit`'s `FIXABLE` findings match against, so deleting one orphans its diff. But
+`prd_audit` and the as-built architecture review re-judge the stories' acceptance criteria, the PRD's
+functional requirements when one exists, and the component diagram as *current state*, comparing what
+the artifact states verbatim against the shipped implementation. An amendment note asking the reader to
 substitute new meaning leaves the stated requirement contradicting the code, and every downstream
 re-judgement risks a finding. For state-shaped artifacts, rewrite the statement outright and keep a
 one-line dated provenance marker. (Precedent: the 2026-08-14 wiring-rubric retirement — the
-rewritten FR-1 and diagram passed `prd_audit` all-ALIGNED on the first pass; the earlier
+rewritten FR-1 and diagram passed `prd_audit` all-`PASS` on the first pass; the earlier
 annotation-only draft would have shipped an FR still claiming five rubrics.) Re-author the plan
 without a task targeting the other feature's sealed artifact, then run
 `conduct-ts plan-protected-targets .docs/plans/<feature>.md` before landing. A clean result is
@@ -770,9 +770,8 @@ unrelated changes into the seal. On success it writes a new baseline at the curr
 `rebaselines` entry recording the trigger (`operator-reseal`) and rationale, and writes a
 `protected_artifact_reseal` audit record with an `operator` origin — so the override is auditable
 rather than silent. `--clear-halt` also clears the worktree's HALT in the same step, once its class is
-the protected-artifact class. The rationale is not only an audit record: the next `build_review` on
-this feature also renders it, alongside the resealed paths and commit range, in the grader's prompt —
-see [operator-authorized protected-artifact reseals](../explanation/gates.md#operator-authorized-protected-artifact-reseals).
+the protected-artifact class — see
+[operator-authorized protected-artifact reseals](../explanation/gates.md#operator-authorized-protected-artifact-reseals).
 
 The reseal survives later rebaselines. When the base branch subsequently moves and the seal rebaselines
 onto the feature's new merge base, a resealed path is no longer refused as a feature-authored DECIDE
