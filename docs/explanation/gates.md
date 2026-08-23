@@ -314,6 +314,13 @@ license dropping the assertion beside it: the next audit re-raises the lost cove
 spent restoring it. This applies to every remediation trigger, not only the `finish` verification's
 test failures.
 
+The same bar covers regression by omission. When a task changes an enumeration, registry,
+vocabulary, id list, grammar, or any value a second location duplicates or must agree with, it has to
+name that counterpart and bring it along in the same task, or derive both from one source so they
+cannot drift again — the stronger fix wherever the evidence supports it. A pair that silently
+diverges stays invisible until something reads both and fails, which is one audit lap later than the
+task that split them.
+
 A remediation gap that requires amending another feature's sealed DECIDE artifact is not eligible for
 `build` or `acceptance_specs`. It returns to the owning DECIDE step; in daemon mode the existing
 DECIDE kickback policy reaches the operator gate rather than attempting a BUILD-side bypass.
