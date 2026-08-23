@@ -3037,7 +3037,11 @@ export class Conductor {
     // plan work, and appending it would amend `.docs/plans/<slug>.md` — a
     // protected artifact — producing self-amendment warnings for a change that
     // never belonged in the plan.
-    const prdAuditEvidenceFile = hintSource.evidence.find(
+    // All production callers supply the provenance array. Keep the private
+    // routing seam tolerant of legacy direct callers while the older fixture
+    // shape is still in use; absent provenance is simply not prd_audit work.
+    const remediationEvidenceSources = hintSource.evidence ?? [];
+    const prdAuditEvidenceFile = remediationEvidenceSources.find(
       (provenance) => provenance.gate === 'prd_audit',
     )?.evidenceFile;
     const prdAuditRemediation = prdAuditEvidenceFile !== undefined;
@@ -3391,7 +3395,7 @@ export class Conductor {
         hint: buildRemediationHint(
           fixes,
           hintSource.source,
-          hintSource.evidence.map((provenance) => provenance.evidenceFile).join(' and '),
+          remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
         ),
         evidence: remediationEvidence,
       };
