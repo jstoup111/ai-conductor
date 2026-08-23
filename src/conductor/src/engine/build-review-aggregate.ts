@@ -93,7 +93,24 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
  */
 export function validateBuildReviewVerdictEnvelope(value: unknown): BuildReviewVerdictEnvelopeValidation {
   const result = strictResult(value);
-  if (!result) return { kind: 'invalid' };
+  if (!result) {
+    const candidate = record(value);
+    if (candidate?.kind === 'judged' && isNonEmptyString(candidate.rubric) && !isRegisteredRubric(candidate.rubric)) {
+      return {
+        kind: 'mechanical-fault',
+        fault: {
+          kind: 'infrastructure-failure',
+          // The current aggregate has one registered slot. Preserve the rejected
+          // id in detail while routing its bad envelope through that slot's
+          // established mechanical-fault lane.
+          rubric: 'testQuality',
+          reason: 'malformed-artifact',
+          detail: `unregistered build-review rubric: ${candidate.rubric}`,
+        },
+      };
+    }
+    return { kind: 'invalid' };
+  }
   if (result.kind !== 'judged' || isRegisteredRubric(result.rubric)) return { kind: 'valid', result };
   return {
     kind: 'mechanical-fault',
@@ -115,8 +132,10 @@ function parseResults(
   if (!source || !exactKeys(source, RUBRICS)) return undefined;
   const results = {} as Record<BuildReviewRubricId, BuildReviewRubricResult>;
   for (const rubric of RUBRICS) {
-    const result = strictResult(source[rubric]);
-    if (!result || result.rubric !== rubric) return undefined;
+    const envelope = validateBuildReviewVerdictEnvelope(source[rubric]);
+    if (envelope.kind === 'invalid') return undefined;
+    const result = envelope.kind === 'mechanical-fault' ? envelope.fault : envelope.result;
+    if (envelope.kind === 'valid' && result.rubric !== rubric) return undefined;
     if (result.kind === 'judged' && (result.lapId !== lapId || result.snapshotDigest !== snapshotDigest)) return undefined;
     results[rubric] = result;
   }

@@ -6,12 +6,16 @@ import type { LLMProvider, ProviderStreamObservation } from '../execution/llm-pr
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
+import { prdAuditScopeProjection } from './conductor.js';
 import type {
   ComplexityAssessment,
   StepRunner,
   StepRunResult,
   StepRunOptions,
 } from './conductor.js';
+import { listCommitsWithTrailers } from './autoheal.js';
+import { readOperatorReseals } from './protected-artifact-seal.js';
+import { parseScopeTrailers } from './scope-trailer.js';
 import { ALL_STEPS, buildStepRegistry, getStepDefinition, tryGetStepIndex } from './steps.js';
 import {
   resolveStepConfig,
@@ -2682,6 +2686,29 @@ export class DefaultStepRunner implements StepRunner {
         config: this.config as unknown as AsBuiltPolicyConfig | undefined,
       });
       prompt += `\n\n${renderAsBuiltPolicyPrompt(policy)}`;
+    }
+
+    if (step === 'prd_audit') {
+      const [operatorReseals, featureCommits] = await Promise.all([
+        readOperatorReseals(this.projectDir),
+        listCommitsWithTrailers(this.projectDir),
+      ]);
+      const scopeTrailers = featureCommits.flatMap((commit) =>
+        (commit.trailers.Scope ?? []).flatMap((trailer) =>
+          parseScopeTrailers(`Scope: ${trailer}`),
+        ),
+      );
+      const scopeEvidence = prdAuditScopeProjection({
+        resealEvidence: operatorReseals.flatMap((reseal) =>
+          reseal.paths.map((path) => ({ path, reason: reseal.reason })),
+        ),
+        scopeTrailers,
+      });
+      prompt +=
+        '\n\nPRD-AUDIT SCOPE EVIDENCE — judge operator reseal rationales and feature-commit Scope: '
+        + 'trailer rationales only as OVER_SCOPE intent evidence. This evidence is immutable; do not invent '
+        + 'a widening rationale.\n```json\n'
+        + `${JSON.stringify(scopeEvidence, null, 2)}\n` + '```';
     }
 
     // Task 14: Include quarantine context if a .pipeline/QUARANTINE sentinel exists.

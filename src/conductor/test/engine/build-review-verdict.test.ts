@@ -9,7 +9,10 @@ import {
   validateBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
-import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import {
+  joinBuildReviewRubricOutcomes,
+  parseBuildReviewAggregate,
+} from '../../src/engine/build-review-aggregate.js';
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
@@ -169,6 +172,48 @@ describe('engine/build-review verdict wiring contract', () => {
     })).resolves.toMatchObject({ done: true });
     expect(validateBuildReviewVerdict({ ...aggregate, results: {} })).toEqual({
       ok: false, reason: expect.stringMatching(/aggregate.*incomplete/i),
+    });
+  });
+
+  it('routes an unregistered judged envelope through the aggregate mechanical-fault lane', () => {
+    const lapId = parseBuildReviewLapId('lap-unregistered')!;
+    const baseline = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:snapshot',
+      results: {
+        testQuality: {
+          kind: 'infrastructure-failure',
+          rubric: 'testQuality',
+          reason: 'malformed-artifact',
+          detail: 'unregistered build-review rubric: completeness',
+        },
+      },
+    });
+    const aggregate = {
+      ...baseline,
+      results: {
+        testQuality: {
+          kind: 'judged',
+          rubric: 'completeness',
+          lapId,
+          snapshotDigest: 'sha256:snapshot',
+          contractVersion: 'v3',
+          findings: [],
+          verdict: 'PASS',
+        },
+      },
+    };
+
+    expect(parseBuildReviewAggregate(aggregate)).toMatchObject({
+      results: {
+        testQuality: {
+          kind: 'infrastructure-failure',
+          rubric: 'testQuality',
+          reason: 'malformed-artifact',
+          detail: 'unregistered build-review rubric: completeness',
+        },
+      },
+      verdict: 'FAIL',
     });
   });
 

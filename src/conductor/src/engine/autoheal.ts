@@ -455,8 +455,9 @@ export function parseTrailers(trailerText: string): Record<string, string[]> {
     const key = match[1];
     const value = match[2];
 
-    // Only capture Task and Evidence trailers
-    if (key !== 'Task' && key !== 'Evidence') continue;
+    // These evidence-range consumers own Task, Evidence, and Scope trailers.
+    // Scope becomes reviewer input for the PRD-audit intent judgment.
+    if (key !== 'Task' && key !== 'Evidence' && key !== 'Scope') continue;
 
     if (!result[key]) {
       result[key] = [];

@@ -1908,6 +1908,12 @@ complexity:
       expect(retiredScope.ok && retiredScope.warnings).toEqual([
         'build_review.rubrics.scope is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
       ]);
+      expect(retiredScope.ok && retiredScope.deprecatedKeys).toEqual([
+        {
+          key: 'build_review.rubrics.scope',
+          adr: 'adr-2026-08-22-build-review-opt-in-rubric-container',
+        },
+      ]);
       expect(emptyContainer.ok).toBe(true);
       expect(oldAliases.ok && oldAliases.warnings).toEqual([
         'build_review.rubrics.rootCause is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',

@@ -1,14 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 
 import {
   Conductor,
   remediationLapCapForGate,
   routePrdAuditPlanGaps,
   routePrdAuditOverScope,
-  prdAuditScopeProjection,
   type StepRunner,
 } from '../src/engine/conductor.js';
 import {
@@ -20,6 +20,8 @@ import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-
 import { ALL_STEPS } from '../src/engine/steps.js';
 import type { ConductState } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
+import { DefaultStepRunner } from '../src/engine/step-runners.js';
+import { PROTECTED_ARTIFACT_SEAL_PATH } from '../src/engine/protected-artifact-seal.js';
 
 const dirs: string[] = [];
 
@@ -380,13 +382,53 @@ describe('prd_audit kickback', () => {
     });
   });
 
-  it('keeps reseal and Scope trailer evidence in the prd_audit projection', () => {
-    expect(prdAuditScopeProjection({
-      resealEvidence: [{ path: '.docs/plans/feature.md', reason: 'corrected plan' }],
-      scopeTrailers: [{ path: 'src/optional.ts', rationale: 'supports the optional behavior' }],
-    })).toEqual({
-      resealEvidence: [{ path: '.docs/plans/feature.md', reason: 'corrected plan' }],
-      scopeTrailers: [{ path: 'src/optional.ts', rationale: 'supports the optional behavior' }],
-    });
+  it('passes reseal and feature-commit Scope rationale evidence into the prd_audit prompt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'prd-audit-scope-prompt-'));
+    dirs.push(root);
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: root });
+    await writeFile(join(root, 'base.ts'), 'export const base = true;\n');
+    await execa('git', ['add', 'base.ts'], { cwd: root });
+    await execa('git', ['commit', '-q', '-m', 'base'], { cwd: root });
+    await writeFile(join(root, 'optional.ts'), 'export const optional = true;\n');
+    await execa('git', ['add', 'optional.ts'], { cwd: root });
+    await execa('git', [
+      'commit',
+      '-q',
+      '-m',
+      'add optional behavior\n\nScope: optional.ts — supports the optional behavior',
+    ], { cwd: root });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(root, PROTECTED_ARTIFACT_SEAL_PATH),
+      JSON.stringify({
+        version: 2,
+        baselineCommit: 'baseline',
+        protectedArtifacts: [],
+        rebaselines: [{
+          fromCommit: 'before',
+          toCommit: 'after',
+          trigger: 'operator-reseal',
+          paths: ['.docs/plans/feature.md'],
+          reason: 'corrected plan',
+        }],
+      }),
+    );
+    const invokeInteractive = vi.fn().mockResolvedValue(undefined);
+    const runner = new DefaultStepRunner({
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(),
+      invokeInteractive,
+    }, 'session', root, { pipelineDir: join(root, '.pipeline') });
+
+    await runner.run('prd_audit', {});
+
+    const prompt = invokeInteractive.mock.calls[0][0].systemPrompt as string;
+    expect(prompt).toContain('PRD-AUDIT SCOPE EVIDENCE');
+    expect(prompt).toContain('.docs/plans/feature.md');
+    expect(prompt).toContain('corrected plan');
+    expect(prompt).toContain('optional.ts');
+    expect(prompt).toContain('supports the optional behavior');
   });
 });

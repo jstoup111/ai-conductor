@@ -17,24 +17,31 @@ export function deriveBuildReviewInfrastructureFailureReason(branch: { readonly 
 export interface BuildReviewContentRegionReference { readonly path: string; readonly contentHash: string; readonly display: string; readonly occurrence?: number; }
 export type BuildReviewFindingAnchor = { readonly rubric: 'testQuality'; readonly locus: BuildReviewContentRegionReference };
 export interface BuildReviewFindingReferenceContext { readonly changedTests: readonly string[]; readonly changedTestRegions?: readonly BuildReviewContentRegionReference[]; readonly changedPaths: readonly string[]; readonly planTasks: readonly string[]; }
-export const BUILD_REVIEW_FINDING_REFERENCE_KINDS = Object.freeze(['content-region'] as const);
-export const BUILD_REVIEW_FINDING_REFERENCE_BINDINGS = Object.freeze({ testQuality: Object.freeze({ locus: 'content-region' }) });
 export interface BuildReviewFinding { readonly concernKind: string; readonly summary: string; readonly evidenceLocations: readonly string[]; readonly anchor: BuildReviewFindingAnchor; }
 export interface BuildReviewJudgedResult { readonly kind: 'judged'; readonly rubric: BuildReviewRubricId; readonly lapId: BuildReviewLapId; readonly snapshotDigest: string; readonly contractVersion: BuildReviewRubricContractVersion; readonly findings: readonly BuildReviewFinding[]; readonly verdict: 'PASS' | 'FAIL'; }
 export interface BuildReviewSkip { readonly kind: 'skipped'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewSkipReason; }
 export interface BuildReviewInfrastructureFailure { readonly kind: 'infrastructure-failure'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewInfrastructureFailureReason; readonly detail: string; }
 export type BuildReviewRubricResult = BuildReviewJudgedResult | BuildReviewSkip | BuildReviewInfrastructureFailure;
-export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({ testQuality: Object.freeze({ members: Object.freeze(['test-insensitive']), concernKinds: Object.freeze(['test-insensitive']), anchorFields: Object.freeze({}) }) });
+export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
+  testQuality: Object.freeze({
+    members: Object.freeze(['test-insensitive']),
+    concernKinds: Object.freeze(['test-insensitive']),
+    anchorFields: Object.freeze({}),
+  }),
+});
 export function normalizeBuildReviewFindingVocabularyMember(value: string): string { return value.toLowerCase().replaceAll('_', '-'); }
-export function parseBuildReviewFindingConcernKind(value: unknown, rubric: BuildReviewRubricId): string | undefined { const normalized = typeof value === 'string' ? normalizeBuildReviewFindingVocabularyMember(value) : ''; return rubric === 'testQuality' && normalized === 'test-insensitive' ? normalized : undefined; }
-export function parseBuildReviewFindingAnchorClassification(_value: unknown, _rubric: BuildReviewRubricId, _field: 'violationKind' | 'relation' | 'missingKind'): string | undefined { return undefined; }
+export function parseBuildReviewFindingConcernKind(value: unknown, rubric: BuildReviewRubricId): string | undefined {
+  const normalized = typeof value === 'string' ? normalizeBuildReviewFindingVocabularyMember(value) : '';
+  return BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds.includes(normalized)
+    ? normalized
+    : undefined;
+}
 
 const PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?\/)[A-Za-z0-9.][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9.][A-Za-z0-9._/@+-]*)*$/;
 const LAP = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
 export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined { return typeof value === 'string' && PATH.test(value) ? value : undefined; }
-export function parseBuildReviewCanonicalPlanTaskReference(_value: unknown): string | undefined { return undefined; }
 export function parseBuildReviewLapId(value: unknown): BuildReviewLapId | undefined { return typeof value === 'string' && LAP.test(value) ? value as BuildReviewLapId : undefined; }
 export function parseBuildReviewRubricContractVersion(value: unknown): BuildReviewRubricContractVersion | undefined { return value === 'v1' || value === 'v2' || value === 'v3' ? value : undefined; }
 function region(value: unknown): BuildReviewContentRegionReference | undefined { const source = object(value); if (!source || !text(source.path) || !PATH.test(source.path) || !text(source.contentHash) || !text(source.display) || (source.occurrence !== undefined && (!Number.isInteger(source.occurrence) || (source.occurrence as number) < 1))) return undefined; return { path: source.path, contentHash: source.contentHash, display: source.display, ...(source.occurrence === undefined ? {} : { occurrence: source.occurrence as number }) }; }

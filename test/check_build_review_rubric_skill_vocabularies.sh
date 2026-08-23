@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep the provider-facing closed vocabularies and anchor reference grammars in
-# the four rubric SKILL.md contracts equal to the engine's single source of
+# Keep the provider-facing closed vocabulary and anchor reference grammar in
+# the active rubric SKILL.md contract equal to the engine's single source of
 # truth — by EXECUTING that source, never by reading it.
 #
 # The engine side of every comparison comes from a probe that imports the
@@ -61,37 +61,15 @@ const OBJ = Object.freeze({
   display: 'probe region',
 });
 const PATH = 'src/probe.ts';
-const TASK = '11';
-const TASK_WORDY = 'rem-scope-2';
-const TITLED = 'Task 11: probe outcome';
 const GARBAGE = '::: not a reference :::';
 
-// Reference fields under test, plus the non-reference specimens the parser
-// needs alongside them. Classification members are read from the module's own
-// exported vocabulary when present, so the probe follows the engine.
-function member(rubric: string, field: string, fallback: string): string {
-  const anchorFields = (vocabularies[rubric] as { anchorFields?: Record<string, readonly string[]> } | undefined)?.anchorFields;
-  return anchorFields?.[field]?.[0] ?? fallback;
-}
 const RUBRICS: Record<string, { referenceFields: string[]; fixed: Record<string, string> }> = {
   testQuality: {
     referenceFields: ['locus'],
     fixed: {},
   },
-  scope: {
-    referenceFields: ['path'],
-    fixed: { relation: member('scope', 'relation', 'not-authorized-by-plan') },
-  },
-  rootCause: {
-    referenceFields: ['locus'],
-    fixed: { statedDefect: 'probe defect', relation: member('rootCause', 'relation', 'symptom-only-fix') },
-  },
-  completeness: {
-    referenceFields: ['planTask', 'missingSurface'],
-    fixed: { missingOutcome: 'probe outcome', missingKind: member('completeness', 'missingKind', 'missing-deliverable') },
-  },
 };
-const SPECIMENS: Record<string, unknown> = { OBJ, PATH, TASK, TASK_WORDY, TITLED, GARBAGE };
+const SPECIMENS: Record<string, unknown> = { OBJ, PATH, GARBAGE };
 const BASELINE_CANDIDATES = ['OBJ', 'PATH', 'TASK'];
 
 function vocabLeaves(value: unknown, out: Set<string>): void {
@@ -288,21 +266,9 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
   testQuality: Object.freeze({
     concernKinds: Object.freeze(['test-insensitive']),
   }),
-  scope: Object.freeze({
-    concernKinds: Object.freeze(['out-of-plan-change']),
-  }),
-  rootCause: Object.freeze({
-    concernKinds: Object.freeze(['root-cause-unaddressed']),
-  }),
-  completeness: Object.freeze({
-    concernKinds: Object.freeze(['missing-deliverable']),
-  }),
 });
 
-const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 const CANONICAL_PATH_REFERENCE = /^(?!\/)(?!.*(?:^|\/)\.?(?:\/|$))(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9.][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9.][A-Za-z0-9._/@+-]*)*$/;
-const CANONICAL_PLAN_TASK_REFERENCE = new RegExp(`^${TASK_ID_PATTERN}$`);
-const TITLED_PLAN_TASK_REFERENCE = new RegExp(`^Task\\s+(${TASK_ID_PATTERN}):\\s+.+$`);
 
 function parseContentRegionReference(value: unknown): unknown {
   const source = value as Record<string, unknown> | null;
@@ -313,34 +279,15 @@ function parseContentRegionReference(value: unknown): unknown {
     ? source
     : undefined;
 }
-function parseBuildReviewCanonicalPathReference(value: unknown): unknown {
-  return typeof value === 'string' && CANONICAL_PATH_REFERENCE.test(value) ? value : undefined;
-}
-function parseBuildReviewCanonicalPlanTaskReference(value: unknown): unknown {
-  if (typeof value !== 'string') return undefined;
-  return value.match(TITLED_PLAN_TASK_REFERENCE)?.[1] ??
-    (CANONICAL_PLAN_TASK_REFERENCE.test(value) ? value : undefined);
-}
-function verifiedReference(value: unknown, parser: (candidate: unknown) => unknown): unknown { return parser(value); }
-
 export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): unknown {
   const source = value;
-  switch (source.rubric) {
-    case 'testQuality':
-      return parseContentRegionReference(source.locus);
-    case 'scope':
-      return verifiedReference(source.path, parseBuildReviewCanonicalPathReference);
-    case 'rootCause':
-      return parseContentRegionReference(source.locus);
-    case 'completeness': {
-      const planTask = verifiedReference(source.planTask, parseBuildReviewCanonicalPlanTaskReference);
-      return verifiedReference(source.missingSurface, parseBuildReviewCanonicalPathReference) && planTask;
-    }
-  }
+  return source.rubric === 'testQuality'
+    ? parseContentRegionReference(source.locus)
+    : undefined;
 }
 EOF
 
-for rubric in test-quality scope root-cause completeness; do
+for rubric in test-quality; do
   mkdir -p "$fixture_harness/skills/build-review-$rubric"
 done
 
@@ -348,18 +295,6 @@ printf '%s\n' '**Closed vocabulary:** `test-insensitive`' \
   >"$fixture_harness/skills/build-review-test-quality/SKILL.md"
 printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
   >>"$fixture_harness/skills/build-review-test-quality/SKILL.md"
-printf '%s\n' '**Closed vocabulary:** `out-of-plan-change`' \
-  >"$fixture_harness/skills/build-review-scope/SKILL.md"
-printf '\n%s\n' '**Reference grammar:** `anchor.path` is a `path` reference.' \
-  >>"$fixture_harness/skills/build-review-scope/SKILL.md"
-printf '%s\n' '**Closed vocabulary:** `root-cause-unaddressed`' \
-  >"$fixture_harness/skills/build-review-root-cause/SKILL.md"
-printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
-  >>"$fixture_harness/skills/build-review-root-cause/SKILL.md"
-printf '%s\n' '**Closed vocabulary:** `missing-deliverable`' \
-  >"$fixture_harness/skills/build-review-completeness/SKILL.md"
-printf '\n%s\n' '**Reference grammar:** `anchor.planTask` is a `plan-task` reference; `anchor.missingSurface` is a `path` reference.' \
-  >>"$fixture_harness/skills/build-review-completeness/SKILL.md"
 
 # The aligned fixture must pass both checks before any drift scenario runs.
 if ! check_vocabulary_drift "$fixture_domain" "$fixture_harness" >/dev/null; then

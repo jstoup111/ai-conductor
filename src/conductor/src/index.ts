@@ -47,7 +47,11 @@ import {
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
 import { ConductorEventEmitter } from './ui/events.js';
-import { loadConfig, loadMergedConfig } from './engine/config.js';
+import {
+  emitDeprecatedConfigKeyEvents,
+  loadConfig,
+  loadMergedConfig,
+} from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
 import { readState } from './engine/state.js';
 import {
@@ -919,6 +923,7 @@ async function main(): Promise<void> {
   // region around each readline prompt so dashboard and prompts don't fight
   // for the terminal.
   const liveRegion = createLiveRegion();
+  const events = new ConductorEventEmitter();
 
   // Load config (optional — conductor works without it)
   const configResult = await loadConfig(projectRoot);
@@ -1186,9 +1191,6 @@ async function main(): Promise<void> {
   } catch {
     sessionId = uuidv4();
   }
-
-
-  const events = new ConductorEventEmitter();
   const mode = deriveMode(opts);
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
@@ -1255,6 +1257,7 @@ async function main(): Promise<void> {
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
+  await emitDeprecatedConfigKeyEvents(configResult, events);
 
   // Wire AuditTrailWriter: appends friction/positive-evidence records to
   // .pipeline/audit-trail/events.jsonl, rooted at the resolved projectRoot

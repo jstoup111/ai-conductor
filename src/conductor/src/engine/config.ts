@@ -27,6 +27,7 @@ import { validateWhenSyntax } from './when-expression.js';
 import type { PluginRegistry } from './plugin-registry.js';
 import { FALLBACK_RETRIES } from './resolved-config.js';
 import { resolveProviderModelPolicy } from './provider-model-policy.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -35,14 +36,36 @@ export type ConfigError = {
 
 export type ConfigWarning = string;
 
+/** A compatibility key accepted during config loading and reported on the event spine. */
+export type DeprecatedConfigKey = {
+  key: string;
+  adr: string;
+};
+
 type KeySpec = {
   key: string;
   isValid: (value: unknown) => boolean;
 };
 
 export type ConfigResult =
-  | { ok: true; config: HarnessConfig; warnings: ConfigWarning[] }
+  | {
+      ok: true;
+      config: HarnessConfig;
+      warnings: ConfigWarning[];
+      deprecatedKeys?: readonly DeprecatedConfigKey[];
+    }
   | { ok: false; error: ConfigError };
+
+/** Emit each deprecated-key occurrence once after the event persister subscribes. */
+export async function emitDeprecatedConfigKeyEvents(
+  result: ConfigResult,
+  events: ConductorEventEmitter,
+): Promise<void> {
+  if (!result.ok) return;
+  for (const deprecatedKey of result.deprecatedKeys ?? []) {
+    await events.emit({ type: 'config_deprecated_key', ...deprecatedKey });
+  }
+}
 
 const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP']);
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -110,6 +133,7 @@ function validateBuildReviewRubrics(
   maxParallel: unknown,
   rubrics: unknown,
   warnings: ConfigWarning[],
+  deprecatedKeys: DeprecatedConfigKey[],
 ): ConfigError | null {
   if (
     maxParallel !== undefined &&
@@ -143,6 +167,7 @@ function validateBuildReviewRubrics(
       warnings.push(
         `${path} is retired and ignored (${DEPRECATED_BUILD_REVIEW_RUBRIC_ADR}).`,
       );
+      deprecatedKeys.push({ key: path, adr: DEPRECATED_BUILD_REVIEW_RUBRIC_ADR });
       continue;
     }
     if (!BUILD_REVIEW_RUBRIC_IDS.includes(rubricId as (typeof BUILD_REVIEW_RUBRIC_IDS)[number])) {
@@ -357,7 +382,7 @@ export function validateConfig(
   const materializeDefaults = opts.materializeDefaults ?? true;
 
   if (raw === null || raw === undefined) {
-    return { ok: true, config: {}, warnings: [] };
+    return { ok: true, config: {}, warnings: [], deprecatedKeys: [] };
   }
 
   if (typeof raw !== 'object') {
@@ -369,6 +394,7 @@ export function validateConfig(
 
   const obj = cloneForValidation(raw) as Record<string, unknown>;
   const warnings: ConfigWarning[] = [];
+  const deprecatedKeys: DeprecatedConfigKey[] = [];
 
   const knownTopLevelKeys = new Set([
     'harness_version',
@@ -1104,7 +1130,12 @@ export function validateConfig(
         warnings,
       );
       const rubricInput = br.rubrics;
-      const rubricError = validateBuildReviewRubrics(br.maxParallel, rubricInput, warnings);
+      const rubricError = validateBuildReviewRubrics(
+        br.maxParallel,
+        rubricInput,
+        warnings,
+        deprecatedKeys,
+      );
       if (rubricError) return { ok: false, error: rubricError };
       const activeRubricInput = isPlainObject(rubricInput)
         ? Object.fromEntries(
@@ -1257,7 +1288,7 @@ export function validateConfig(
     }
   }
 
-  return { ok: true, config: obj as HarnessConfig, warnings };
+  return { ok: true, config: obj as HarnessConfig, warnings, deprecatedKeys };
 }
 
 const SELF_HOST_ACTIVATIONS = new Set(['auto', 'force_on', 'force_off']);
@@ -2234,7 +2265,22 @@ export async function loadMergedConfig(
     ok: true,
     config: validated.config,
     warnings: [...projectResult.warnings, ...validated.warnings],
+    deprecatedKeys: uniqueDeprecatedConfigKeys([
+      ...(projectResult.deprecatedKeys ?? []),
+      ...(validated.deprecatedKeys ?? []),
+    ]),
   };
+}
+
+function uniqueDeprecatedConfigKeys(
+  deprecatedKeys: readonly DeprecatedConfigKey[],
+): DeprecatedConfigKey[] {
+  const seen = new Set<string>();
+  return deprecatedKeys.filter(({ key }) => {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function errVal(message: string): ConfigResult {
