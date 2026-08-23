@@ -63,6 +63,40 @@ describe('parsePrdAuditReport', () => {
     });
   });
 
+  it('accepts the mandated em-dash placeholder for grades without a Plan task', () => {
+    const report = [
+      '# PRD Audit',
+      '',
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      '| S6.1 | PASS | — | FR-7 | Implemented |',
+      '| S6.2 | FIXABLE | 4 | FR-7 | Missing guard |',
+      '| S6.3 | PLAN_GAP | — | FR-7 | No active task owns the missing behavior |',
+      '| S9.2 | OVER_SCOPE | — | FR-9 | Outside intent |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [
+          { criterion: 'S6.1', grade: 'PASS', evidence: 'Implemented' },
+          { criterion: 'S6.2', grade: 'FIXABLE', planTask: 4, evidence: 'Missing guard' },
+          {
+            criterion: 'S6.3',
+            grade: 'PLAN_GAP',
+            evidence: 'No active task owns the missing behavior',
+          },
+          { criterion: 'S9.2', grade: 'OVER_SCOPE', evidence: 'Outside intent' },
+        ],
+      },
+    });
+  });
+
   it('reads a no-PRD verdict report', () => {
     const report = [
       '**PRD:** none',

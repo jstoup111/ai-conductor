@@ -3865,7 +3865,9 @@ export function parsePrdAuditReport(
     }
 
     const rawPlanTask = planTaskIndex === -1 ? '' : cells[planTaskIndex] ?? '';
-    const planTask = rawPlanTask.trim() === '' ? undefined : Number(rawPlanTask);
+    const planTask = rawPlanTask.trim() === '' || rawPlanTask.trim() === '—'
+      ? undefined
+      : Number(rawPlanTask);
     if (planTask !== undefined && (!Number.isInteger(planTask) || planTask < 1)) {
       return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Plan task.`);
     }
