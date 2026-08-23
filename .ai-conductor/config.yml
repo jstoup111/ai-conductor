@@ -163,8 +163,12 @@ steps:
   # seal remain true but catch only the resolutions that fail loudly.
   rebase:
     llm_provider: claude
+  # Routed to codex 2026-08-23, after PR #1828 granted the codex sandbox
+  # network egress. The claude pin existed because `gh pr create` had to escape
+  # the sandbox and lost the auto_review approval — a permissions limit, not a
+  # capability one. Revert this pin if publication quality regresses.
   finish:
-    llm_provider: claude
+    llm_provider: codex
   manual_test:
     disable: true
   # Codex builds every feature (28/28 in the eval corpus). Raise it off the
@@ -184,10 +188,14 @@ steps:
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
-  # Provider pinned so `claude` resolves ahead of the run-level codex entry (#1285).
+  # Routed to codex 2026-08-23 (was pinned to claude ahead of the run-level
+  # codex entry, #1285). Same rationale as `finish`: the failure was `gh`
+  # egress under the workspace-write sandbox, fixed by PR #1828. The output is
+  # a fixed-grammar Release-* block validated by a required CI check that fails
+  # closed, so a wrong answer is caught rather than shipped.
   release-disposition:
-    llm_provider: claude
-    model: sonnet
+    llm_provider: codex
+    model: gpt-5.6-terra
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
