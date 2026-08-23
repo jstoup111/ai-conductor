@@ -103,8 +103,24 @@ exception — reserved for two human categories only.
   at `config.ts:89`, or derive both from `DEPRECATED_BUILD_REVIEW_RUBRIC_IDS`". Negative example: a
   task naming only one of the two lists, leaving them to diverge until something reads both and
   fails.
+- **Close the class, not the cited instance.** This is the single biggest cause of audit cycling.
+  The gap's evidence tells you where the auditor looked, not how far the defect reaches. Sweep for
+  every site of the same shape and put them all in the one task. Positive example: the gap cites a
+  routing branch keyed on `allTasks.length` at `conductor.ts:3139` — grep the file, find `:3419`
+  keyed the same way, and task both. Positive example: a task deletes a dead code arm — it also
+  covers what that deletion orphans, so the arm's last caller and its fixtures go with it instead
+  of becoming residue. Negative example: task exactly the one `file:line` the auditor quoted, and
+  watch the next cycle raise the sibling site as a fresh finding.
+- **The sweep stops where plan admission stops.** Include a sibling site only when an existing plan
+  task admits it — the same coverage test you apply before selecting `plan`. Name every sibling you
+  found but excluded in the `rationale`, with the reason, so it is recorded rather than lost. Do
+  not widen the diff on your own authority to close a class: work a plan task does not admit is
+  what a scope review flags as `not-authorized-by-plan`, and an unauthorized addition can deadlock
+  remediation outright, which costs more than the extra audit cycle it was meant to save. An
+  excluded sibling that turns out to matter is a plan question, not a task you quietly add.
 - **Tasks are concrete and file-scoped.** Each task names the `file:line` and exactly what to change,
-  drawn from the gap's evidence — never "fix FR-10". A vague task is a failed plan.
+  drawn from the gap's evidence — never "fix FR-10". A vague task is a failed plan. Naming more
+  sites than the evidence cites is not vagueness — it is the sweep above, and it is required.
 - **Evidence drives the plan.** Every disposition cites the gap's `file:line`. If the evidence is
   insufficient to determine a fix AND the uncertainty is a real design question, that is
   `architectural-clarity`; if it's just thin evidence for an obvious bug, still plan the `build` task.

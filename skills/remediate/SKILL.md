@@ -142,6 +142,23 @@ Judgment rules:
   source so they cannot drift again. Prefer the single source when the evidence supports it: two
   lists that must agree are a defect waiting for the next lap, and the pair that silently diverges
   is invisible until something reads both.
+- **Close the class, not the cited instance — this is what stops audit cycling.** A gap's evidence
+  names where the auditor happened to look, never the extent of the defect. Before emitting a task,
+  sweep for every other site with the same shape and name them all in the one task. Two forms
+  recur: **a sibling site** — the same wrong predicate, missing guard, or stale literal at another
+  `file:line` — and **what a removal orphans**, where deleting the cited code leaves its last
+  caller, its now-unreferenced helper, or its fixtures behind. An unstated remainder is not out of
+  scope, it is the next lap's finding: a task that repairs one site of a class buys one audit cycle
+  and produces its own successor, which is how a converging feature still spends four cycles on the
+  same FR.
+
+  **The sweep is bounded by plan admission, and never widens the diff on its own authority.** A
+  sibling site is included only when an existing plan task admits it — the same test the
+  plan-coverage rule above applies before selecting `plan`. A sibling site that no plan task admits
+  is named in the `rationale` as found-and-excluded, with the reason; it is never quietly fixed.
+  Sweeping past that boundary trades an audit cycle for a review finding that the change is not
+  authorized by the plan, which is the worse deal: an unauthorized addition can deadlock
+  remediation, while an excluded sibling is at least recorded where the next reader can see it.
 - **Sibling trigger routes remain unchanged.** A clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`. A `build_stall` question answerable from committed artifacts routes `build`; a question needing architecture, product, or unanswerable judgment routes `halt`.
 - An `intended-drift` is `halt: product-scope` **only** if it reflects unplanned product
   functionality; if it preserves approved architecture, it is `build`. Route to
@@ -260,6 +277,8 @@ Headers re-parse via the Task 18 grammar and must include:
 - [ ] No emitted task edits one side of a matched pair — an enumeration, registry, vocabulary, id
       list, or grammar duplicated elsewhere — without naming the counterpart or deriving both from
       one source
+- [ ] Every task was swept for sibling sites of the same shape, and for what any removal orphans;
+      sites found and deliberately excluded are named in the `rationale` with why
 - [ ] `category` set iff `disposition == "halt"`; `tasks` empty iff `disposition == "halt"` OR (stall-question answer with `disposition == "build"`)
 - [ ] For a stall-question answer (`build_stall` disposition `build`), the `rationale` clearly answers the original question and cites the artifacts that support it
 - [ ] A gap requiring another feature's sealed-artifact amendment routes to its owning DECIDE step,
