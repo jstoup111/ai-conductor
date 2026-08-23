@@ -11,6 +11,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.104.1] - 2026-08-23
+
+### Fixed
+
+- A build_review rubric prompt larger than 128 KiB no longer fails to start on the Claude provider, which previously exhausted the mechanical fault allowance and halted the feature. ([implementation PR #1821](https://github.com/jstoup111/ai-conductor/pull/1821)).
+
 ## [0.104.0] - 2026-08-22
 
 ### Added
