@@ -18,6 +18,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A build_review rubric prompt larger than 128 KiB no longer fails to start on the Claude provider, which previously exhausted the mechanical fault allowance and halted the feature. ([implementation PR #1821](https://github.com/jstoup111/ai-conductor/pull/1821)).
 - Codex dispatches can now reach the network inside their sandbox, so steps that use `gh` or `git push` no longer fail as approval denials. ([implementation PR #1828](https://github.com/jstoup111/ai-conductor/pull/1828)).
 - Remediation tasks may no longer order a removal that drops coverage a completed plan task delivered — the removal must name the surviving plan task or criterion and carry its replacement. ([implementation PR #1829](https://github.com/jstoup111/ai-conductor/pull/1829)).
+- Remediation tasks that change one side of a duplicated enumeration, registry, or id list must now name the counterpart or derive both from one source, so the pair cannot silently diverge. ([implementation PR #1830](https://github.com/jstoup111/ai-conductor/pull/1830)).
 
 ## [0.104.0] - 2026-08-22
 
