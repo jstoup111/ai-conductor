@@ -3326,10 +3326,17 @@ export class Conductor {
     }
     const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
     // Build-stall answers are not requests to expand the approved plan. Only
-    // the two established build-stall sources retain their raw retry hint.
-    const buildStallSource =
-      hintSource.source === 'build_stall' ||
-      hintSource.source === 'build-stall';
+    // the two established sources, carrying their matching build provenance,
+    // retain their raw retry hint.
+    const buildStallEvidenceFile = hintSource.source === 'build_stall'
+      ? '.pipeline/build-stall-question.md'
+      : hintSource.source === 'build-stall'
+        ? '.pipeline/halt-user-input-required'
+        : undefined;
+    const buildStallSource = buildStallEvidenceFile !== undefined && remediationEvidenceSources.some(
+      (provenance) =>
+        provenance.gate === 'build' && provenance.evidenceFile === buildStallEvidenceFile,
+    );
     const routedFixes = buildStallSource ? fixes : admittedFixes;
     if (fixes.length > 0 && routedFixes.length === 0) {
       return {

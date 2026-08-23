@@ -315,8 +315,14 @@ describe('planRemediation implementation-only authority routing', () => {
   });
 
   it.each([
-    { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' },
-    { source: 'build-stall', evidenceFile: '.pipeline/halt-user-input-required' },
+    {
+      source: 'build_stall',
+      evidenceFile: '.pipeline/build-stall-question.md',
+    },
+    {
+      source: 'build-stall',
+      evidenceFile: '.pipeline/halt-user-input-required',
+    },
   ])('preserves a taskless BUILD answer to an admitted $source build-stall question', async ({ source, evidenceFile }) => {
     const runner: StepRunner = {
       run: async () => {
@@ -354,7 +360,10 @@ describe('planRemediation implementation-only authority routing', () => {
         state: ConductState,
         steps: typeof ALL_STEPS,
         dispatchContext: string,
-        hintSource: { source: string; evidenceFile: string },
+        hintSource: {
+          source: string;
+          evidence: Array<{ gate: StepName; evidenceFile: string }>;
+        },
       ) => Promise<{ kind: string; target?: string }>;
     }).planRemediation(
       {
@@ -365,7 +374,7 @@ describe('planRemediation implementation-only authority routing', () => {
       'Remediate build stall: which validation boundary applies?',
       {
         source,
-        evidenceFile,
+        evidence: [{ gate: 'build' as StepName, evidenceFile }],
       },
     );
 
@@ -420,6 +429,64 @@ describe('planRemediation implementation-only authority routing', () => {
       'Remediate zero-work build stall: which validation boundary applies?',
       {
         source: 'build_stall_zero_work',
+        evidenceFile: '.pipeline/build-stall-question.md',
+      },
+    );
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      detail: expect.stringContaining('no admitted remediation gap'),
+    });
+  });
+
+  it('halts an unprovenanced taskless build_stall remediation instead of routing raw fixes', async () => {
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(
+          join(projectRoot, '.pipeline/remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: 'stall:validation-layer',
+                disposition: 'build',
+                category: null,
+                rationale: 'The committed boundary contract answers the stall question.',
+                tasks: [],
+              },
+            ],
+          }),
+          'utf8',
+        );
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidenceFile: string },
+      ) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      {
+        session_started_at: Date.now() - 1_000,
+        feature_desc: 'feature',
+      } as ConductState,
+      ALL_STEPS,
+      'Remediate build stall: which validation boundary applies?',
+      {
+        source: 'build_stall',
         evidenceFile: '.pipeline/build-stall-question.md',
       },
     );
