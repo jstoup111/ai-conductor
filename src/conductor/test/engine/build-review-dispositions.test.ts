@@ -123,6 +123,25 @@ describe('build-review dispositions', () => {
     }
   });
 
+  it('ignores a retired reduced-coverage record before strict decoding current records', async () => {
+    const filesystem = new MemoryFilesystem();
+    filesystem.files.set('/repo/.pipeline/build-review-dispositions.json', JSON.stringify({
+      version: 'v1',
+      records: [{
+        kind: 'reduced-coverage', version: 'v1', feature,
+        identity: { rubric: 'scope', reason: 'provider-error' },
+        rationale: 'accepted before rubric retirement', operator: 'james',
+        acceptedAt: '2026-08-21T12:00:00.000Z',
+      }],
+    }));
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(store.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
+  });
+
   it('durably stores a reduced-coverage decision by its closed rubric-and-cause identity independent of the aggregate', async () => {
     const filesystem = new MemoryFilesystem();
     const store = new BuildReviewDispositionStore('/repo', {

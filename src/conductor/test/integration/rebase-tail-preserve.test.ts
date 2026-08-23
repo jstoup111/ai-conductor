@@ -190,7 +190,18 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/prd-audit.md'),
-        '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
+        [
+          '# PRD Audit',
+          '',
+          '**PRD:** present',
+          '',
+          '## Verdict Table',
+          '',
+          '| Criterion | Grade | Plan task | PRD | Evidence |',
+          '|---|---|---|---|---|',
+          '| S1.1 | PASS | | FR-1 | foo.ts:1 |',
+          '',
+        ].join('\n'),
       );
     } else if (step === 'architecture_review_as_built') {
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });

@@ -229,6 +229,22 @@ function parseStoredDispositionRecord(value: unknown): BuildReviewStoredDisposit
     : parseDispositionRecord(value);
 }
 
+/**
+ * Retired rubric records are compatibility-only state: they must not make a
+ * whole otherwise-readable store malformed before the list readers can ignore
+ * them. Inspect only the raw rubric discriminator here; every current record
+ * still goes through the strict parser below.
+ */
+function isRetiredStoredDispositionRecord(value: unknown): boolean {
+  const source = record(value);
+  if (!source) return false;
+  const reducedCoverageIdentity = record(source.identity);
+  const finding = record(source.finding);
+  const canonicalPayload = record(finding?.canonicalPayload);
+  return isRetiredBuildReviewRubric(reducedCoverageIdentity?.rubric) ||
+    isRetiredBuildReviewRubric(canonicalPayload?.rubric);
+}
+
 function isFindingDispositionRecord(value: BuildReviewStoredDispositionRecord): value is BuildReviewDispositionRecord {
   return !('kind' in value);
 }
@@ -237,6 +253,7 @@ function parseState(value: unknown): BuildReviewDispositionState | undefined {
   const source = record(value);
   if (!source || !exactKeys(source, ['version', 'records']) || source.version !== STORE_VERSION || !Array.isArray(source.records)) return undefined;
   const records = source.records.flatMap((entry) => {
+    if (isRetiredStoredDispositionRecord(entry)) return [];
     const parsed = parseStoredDispositionRecord(entry);
     return parsed ? [parsed] : [undefined];
   });

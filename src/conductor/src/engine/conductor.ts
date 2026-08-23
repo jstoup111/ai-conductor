@@ -3051,7 +3051,10 @@ export class Conductor {
     let activePlanText = '';
     if (planPath && prdAuditRemediation) {
       try {
-        activePlanText = await readFile(planPath, 'utf8');
+        activePlanText = await readFile(
+          isAbsolute(planPath) ? planPath : join(this.projectRoot, planPath),
+          'utf8',
+        );
         const report = await readFile(join(this.projectRoot, prdAuditEvidenceFile), 'utf8');
         const parsed = parsePrdAuditReport(report, activePlanText);
         if (!parsed.ok) {

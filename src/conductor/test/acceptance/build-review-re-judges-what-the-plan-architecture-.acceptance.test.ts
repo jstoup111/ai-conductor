@@ -57,7 +57,8 @@ const PRD_AUDIT_PASS = [
   '',
   '| Criterion | Grade | Plan task | Evidence |',
   '|---|---|---|---|',
-  '| S13.1 | PASS | 1 | src/feature.ts:1 |',
+  '| S1.1 | PASS | 1 | src/feature.ts:1 |',
+  '| S1.2 | PASS | 1 | src/feature.ts:1 |',
   '',
   '| FR | Verdict | Gap-class | Evidence | Accepted? |',
   '|---|---|---|---|---|',
@@ -76,6 +77,7 @@ const PRD_AUDIT_NO_PRD_PASS = [
   '| Criterion | Grade | Plan task | Evidence |',
   '|---|---|---|---|',
   '| S1.1 | PASS | | src-feature.ts:1 |',
+  '| S1.2 | PASS | | src-feature.ts:1 |',
   '',
 ].join('\n');
 
