@@ -608,6 +608,20 @@ with a `PLAN_GAP` verdict, and keeps old config and old plans working. 32 tasks.
 **Story:** 2
 **Type:** infrastructure
 
+> **Amended 2026-08-22 by #1805 (operator decision):** this task no longer edits this
+> repository's own `.ai-conductor/config.yml`. That edit is deferred to a follow-up PR
+> landed after this feature merges. Rationale: the daemon resolves gate policy from the
+> feature worktree's config but runs the engine built from `main`, so a config naming
+> `build_review.rubrics.testQuality` is validated by an engine whose rubric ids are still
+> `tautology, scope, rootCause, completeness`. The result was a deterministic
+> `invalid_config: Unknown rubric ID: build_review.rubrics.testQuality` at `test_suite`,
+> which re-opened `build` every lap and could never converge (observed 2026-08-23T00:06
+> and 00:11 in `.daemon/daemon.log`). The scaffolder template, engine rubric-id, and test
+> halves of this task are unchanged and still required; only the repository's own
+> enablement moves. **Done when** is amended accordingly: the `.ai-conductor/config.yml`
+> clause does not apply on this branch; the scaffolder-test and migration-block clauses
+> still do.
+
 **Steps:**
 1. Write failing test: config scaffolder output contains no retired rubric key and sets `testQuality.enabled: false`; a default-resolution test asserts test-quality off with no overrides.
 2. Verify RED.
