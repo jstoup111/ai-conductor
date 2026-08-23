@@ -2,7 +2,9 @@
 export type CoversReference =
   | { readonly kind: 'fr'; readonly id: string }
   | { readonly kind: 'criterion'; readonly id: string }
-  | { readonly kind: 'task'; readonly id: string };
+  | { readonly kind: 'task'; readonly id: string }
+  /** A malformed marker is advisory evidence, never an input-assembly failure. */
+  | { readonly kind: 'unresolved'; readonly id: string };
 
 const COVERS_MARKER = /\bCovers\s*:\s*([^\r\n]*)/g;
 const FR_REFERENCE = /^FR-\d+$/;
@@ -30,7 +32,7 @@ export function parseCoversMarkers(text: string): CoversReference[] {
         if (task) {
           references.push({ kind: 'task', id: task[1] });
         } else {
-          throw new Error(`Invalid Covers reference: ${token}`);
+          references.push({ kind: 'unresolved', id: token });
         }
       }
     }

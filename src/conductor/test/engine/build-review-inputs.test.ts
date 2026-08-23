@@ -786,6 +786,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         writeFile(join(dir, 'test/task.test.ts'), '// Covers: task:7\nit(\'task\', () => {});\n'),
         writeFile(join(dir, 'test/unmarked.test.ts'), 'it(\'unmarked\', () => {});\n'),
         writeFile(join(dir, 'test/unresolved.test.ts'), '// Covers: S9.9\nit(\'unresolved\', () => {});\n'),
+        writeFile(join(dir, 'test/malformed.test.ts'), '// Covers: FR-, S3, task:\nit(\'malformed\', () => {});\n'),
       ]);
       await git('add', 'test');
       await git('commit', '-m', 'add feature tests');
@@ -800,7 +801,12 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(beforeRebase.sourceSnapshot.testQuality).toEqual({
         inScopeTests: ['test/criterion.test.ts', 'test/task.test.ts'],
-        unresolvedMarkers: [{ selector: 'test/unresolved.test.ts', reference: 'S9.9' }],
+        unresolvedMarkers: [
+          { selector: 'test/malformed.test.ts', reference: 'FR-' },
+          { selector: 'test/malformed.test.ts', reference: 'S3' },
+          { selector: 'test/malformed.test.ts', reference: 'task:' },
+          { selector: 'test/unresolved.test.ts', reference: 'S9.9' },
+        ],
       });
 
       // Another feature's test reaches the base before this feature is rebased.

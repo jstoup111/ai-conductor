@@ -18,7 +18,9 @@ describe('parseCoversMarkers', () => {
       .toEqual(expectedReferences);
   });
 
-  it.each(['S3', 'task:'])('rejects malformed token %s by name', (token) => {
-    expect(() => parseCoversMarkers(`Covers: ${token}`)).toThrow(token);
+  it.each(['FR-', 'S3', 'task:'])('contains malformed token %s as unresolved', (token) => {
+    expect(parseCoversMarkers(`Covers: ${token}`)).toEqual([
+      { kind: 'unresolved', id: token },
+    ]);
   });
 });

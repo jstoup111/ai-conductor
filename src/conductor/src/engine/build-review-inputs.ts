@@ -352,7 +352,9 @@ async function snapshotTestQualityScope(
         ? criterionIds.has(reference.id.toUpperCase())
         : reference.kind === 'fr'
           ? frIds.has(reference.id.toUpperCase())
-          : taskIds.has(reference.id);
+          : reference.kind === 'task'
+            ? taskIds.has(reference.id)
+            : false;
       if (resolved) bound = true;
       else unresolvedMarkers.push({ selector, reference: markerReference(reference) });
     }
