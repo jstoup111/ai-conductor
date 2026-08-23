@@ -468,6 +468,13 @@ describe('planRemediation implementation-only authority routing', () => {
         evidence: [{ gate: 'architecture_review_as_built' as StepName, evidenceFile: '.pipeline/build-stall-question.md' }],
       },
     },
+    {
+      caseName: 'when build_stall_zero_work carries canonical build provenance',
+      hintSource: {
+        source: 'build_stall_zero_work',
+        evidence: [{ gate: 'build' as StepName, evidenceFile: '.pipeline/build-stall-question.md' }],
+      },
+    },
   ])('halts an unadmitted taskless build-stall remediation $caseName', async ({ hintSource }) => {
     const runner: StepRunner = {
       run: async () => {
