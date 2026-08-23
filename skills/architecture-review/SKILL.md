@@ -483,8 +483,8 @@ review remain in `.docs/decisions/`):
 **Mode:** as-built (SHIP compliance gate)
 **APPROVED ADRs checked:** [list]
 **Applied check policy:** [each check: on/off — reason]
-Verdict: APPROVED | APPROVED WITH DRIFT NOTES | PLAN_GAP | BLOCKED
-Outcome delivered: yes | no (required for PLAN_GAP)
+Verdict: <exactly one of APPROVED, APPROVED WITH DRIFT NOTES, PLAN_GAP, BLOCKED>
+Outcome delivered: <yes or no; required for PLAN_GAP>
 
 ## Production Reachability (every new/changed primitive → its production caller, file:line;
 same-file exceptions independently cite root → caller → export at the reviewed HEAD;

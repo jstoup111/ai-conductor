@@ -50,7 +50,6 @@ function inputs(): BuildReviewFrozenInputs {
     trackingRefSha: "base",
     remoteHeadSha: "base",
     fresh: true,
-    acceptedWidenings: [],
     testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" } as never,
     sourceSnapshot: {
       digest: "sha256:snapshot",
@@ -59,7 +58,6 @@ function inputs(): BuildReviewFrozenInputs {
       mergeBase: "base",
       headSha: "head",
       ...sourceContent,
-      acceptedWidenings: [],
       testQuality: { inScopeTests: ["test/a.test.ts"], unresolvedMarkers: [] },
     },
   };

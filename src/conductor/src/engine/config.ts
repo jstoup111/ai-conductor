@@ -140,11 +140,11 @@ function validateBuildReviewRubrics(
     (typeof maxParallel !== 'number' ||
       !Number.isInteger(maxParallel) ||
       maxParallel < 1 ||
-      maxParallel > BUILD_REVIEW_RUBRIC_IDS.length)
+      maxParallel > 4)
   ) {
     return {
       type: 'validation_error',
-      message: `build_review.maxParallel must be an integer between 1 and ${BUILD_REVIEW_RUBRIC_IDS.length}`,
+      message: 'build_review.maxParallel must be an integer between 1 and 4',
     };
   }
   if (rubrics === undefined) return null;

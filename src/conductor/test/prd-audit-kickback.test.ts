@@ -84,11 +84,19 @@ async function createPrdAuditRemediationFixture(input: {
   const planPath = join(root, '.docs', 'plans', 'feature.md');
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(root, '.docs', 'stories'), { recursive: true });
   const plan = Array.from(
     { length: input.taskCount },
     (_, index) => `### Task ${index + 1}: authored work ${index + 1}\n`,
   ).join('\n');
   await writeFile(planPath, plan);
+  const maxOrdinal = Math.max(0, ...input.criteria.map((criterion) => Number(criterion.match(/^S2\.(\d+)$/)?.[1] ?? 0)));
+  await writeFile(
+    join(root, '.docs', 'stories', 'feature.md'),
+    ['# Stories', '', '## Story 2: remediation', '', '#### Happy Path',
+      ...Array.from({ length: maxOrdinal }, (_, index) => `- Given S2.${index + 1}, when repaired, then it holds.`),
+    ].join('\n'),
+  );
   await writeFile(
     join(root, '.pipeline', 'engine-state.json'),
     JSON.stringify({ activePlanPath: planPath }),
@@ -194,11 +202,18 @@ describe('prd_audit kickback', () => {
     const planPath = join(root, '.docs', 'plans', 'feature.md');
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(root, '.docs', 'stories'), { recursive: true });
     const plan = Array.from(
       { length: 20 },
       (_, index) => `### Task ${index + 1}: authored work ${index + 1}\n`,
     ).join('\n');
     await writeFile(planPath, plan);
+    await writeFile(join(root, '.docs', 'stories', 'feature.md'), [
+      '# Stories', '', '## Story 2: remediation', '', '#### Happy Path',
+      '- Given S2.1, when repaired, then it holds.',
+      '- Given S2.2, when repaired, then it holds.',
+      '- Given S2.3, when repaired, then it holds.',
+    ].join('\n'));
     await writeFile(
       join(root, '.pipeline', 'engine-state.json'),
       JSON.stringify({ activePlanPath: planPath }),

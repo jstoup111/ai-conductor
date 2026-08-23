@@ -7,6 +7,7 @@ import {
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
 import { isRegisteredRubric } from './build-review-registry.js';
+import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 import {
   matchesBuildReviewDisposition,
   matchesBuildReviewReducedCoverageDisposition,
@@ -200,9 +201,9 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   // four rubrics rather than be rejected as inconsistent. The relaxation is
   // scoped to aggregates that verifiably carried the retired member — a
   // four-rubric aggregate with a mismatched verdict is still corruption.
-  const carriedRetiredWiring = !!raw && (
+  const carriedRetiredRubric = !!raw && (
     (['results', 'coverage', 'rubric', 'findings'] as const)
-      .some((key) => { const memberMap = record(raw[key]); return !!memberMap && 'wiring' in memberMap; })
+      .some((key) => { const memberMap = record(raw[key]); return !!memberMap && Object.keys(memberMap).some(isRetiredBuildReviewRubric); })
   );
   const source = raw && Object.fromEntries(Object.entries(raw).map(([key, entry]) => {
     const memberMap = key === 'results' || key === 'coverage' || key === 'rubric' || key === 'findings'
@@ -210,9 +211,9 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
       : undefined;
     // A retired Wiring member also contributed legacy reason strings.  Drop
     // those alongside its derived maps before validating the four-rubric view.
-    return [key, carriedRetiredWiring && key === 'reasons' && Array.isArray(entry)
-      ? entry.filter((reason) => typeof reason !== 'string' || !reason.startsWith('[wiring]'))
-      : carriedRetiredWiring && memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => member !== 'wiring')) : entry];
+    return [key, carriedRetiredRubric && key === 'reasons' && Array.isArray(entry)
+      ? entry.filter((reason) => typeof reason !== 'string' || !/^\[(scope|rootCause|causalIntegrity|completeness|wiring)\]/.test(reason))
+      : carriedRetiredRubric && memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => !isRetiredBuildReviewRubric(member))) : entry];
   }));
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
@@ -242,7 +243,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
   }
   const verdict = aggregateVerdict(results);
-  const verdictTolerated = carriedRetiredWiring && (source.verdict === 'PASS' || source.verdict === 'FAIL');
+  const verdictTolerated = carriedRetiredRubric && (source.verdict === 'PASS' || source.verdict === 'FAIL');
   if ((source.verdict !== verdict && !verdictTolerated) || JSON.stringify(coverage) !== JSON.stringify(expectedCoverage) ||
     JSON.stringify(rubric) !== JSON.stringify(expectedRubric) || JSON.stringify(findings) !== JSON.stringify(expectedFindings) ||
     JSON.stringify(source.reasons) !== JSON.stringify(expectedReasons)) return undefined;

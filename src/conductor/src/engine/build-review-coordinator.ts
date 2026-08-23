@@ -140,12 +140,14 @@ export function preflightProjection(preflight: TautologyPreflightResult): BuildR
   if (preflight.classification === "infrastructure-failure") {
     return {
       changedTestSelectors: preflight.changedTestSelectors,
+      unresolvedMarkers: [],
       revertedProductionManifest: [],
       preflight: projectTestQualityPreflight(preflight),
     };
   }
   return {
     changedTestSelectors: preflight.changedTestSelectors,
+    unresolvedMarkers: [],
     revertedProductionManifest: preflight.revertedProductionManifest,
     preflight: projectTestQualityPreflight(preflight),
   };
@@ -251,6 +253,7 @@ export async function coordinateBuildReviewRubrics(
 ): Promise<BuildReviewCoordination> {
   const testQualityPolicy = input.config.rubrics.testQuality;
   const inScopeTests = input.inputs.sourceSnapshot.testQuality?.inScopeTests ?? [];
+  const unresolvedMarkers = input.inputs.sourceSnapshot.testQuality?.unresolvedMarkers ?? [];
   if (input.config.enabled && testQualityPolicy?.enabled && inScopeTests.length === 0) {
     await input.emit?.({
       type: "build_review_outer_verdict",
@@ -258,6 +261,7 @@ export async function coordinateBuildReviewRubrics(
       rawVerdict: "PASS",
       effectiveVerdict: "PASS",
       reason: "test_quality_empty_scope",
+      ...(unresolvedMarkers.length > 0 ? { unresolvedMarkers } : {}),
     });
     return { kind: "passed", verdict: "PASS", reason: "test_quality_empty_scope" };
   }
@@ -270,6 +274,7 @@ export async function coordinateBuildReviewRubrics(
       rawVerdict: "PASS",
       effectiveVerdict: "PASS",
       reason: classification.reason,
+      ...(unresolvedMarkers.length > 0 ? { unresolvedMarkers } : {}),
     });
     return classification;
   }
@@ -303,8 +308,8 @@ export async function coordinateBuildReviewRubrics(
   const derivedProjections = deriveBuildReviewRubricProjections({
     lapId: input.lapId,
     inputs: projectionInputs,
-    testQuality: preflight ? { ...preflightProjection(preflight), changedTestSelectors: inScopeTests } : {
-      changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
+    testQuality: preflight ? { ...preflightProjection(preflight), changedTestSelectors: inScopeTests, unresolvedMarkers } : {
+      changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
   const projections = input.projections ?? derivedProjections;

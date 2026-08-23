@@ -683,9 +683,7 @@ export function routePrdAuditOverScope(
       const relation = relations.get(finding.criterion) as IntentRelation;
       const accepted =
         relation === 'within' ||
-        acceptedWidenings.some(
-          (entry) => entry.criterion === finding.criterion && entry.summary === summary,
-        );
+        acceptedWidenings.some((entry) => entry.criterion === finding.criterion);
       return {
         gate: 'prd_audit' as const,
         grade: 'OVER_SCOPE' as const,
@@ -3045,6 +3043,7 @@ export class Conductor {
     const prdAuditRemediation = prdAuditEvidenceFile !== undefined;
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
+    let prdAuditValidated = false;
     let activePlanText = '';
     if (planPath && prdAuditRemediation) {
       try {
@@ -3056,17 +3055,44 @@ export class Conductor {
           await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
           return { kind: 'halt', haltClass: 'mechanical', detail };
         }
+        const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
+        const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
+        const criterionOrdinalByStory = new Map<string, number>();
+        const criteria = new Set(extractAuthoritativeStoryCriteria(storiesText).flatMap((criterion) => {
+          const story = criterion.match(/^Story\s+(\d+)\s+/i)?.[1];
+          if (!story) return [];
+          const ordinal = (criterionOrdinalByStory.get(story) ?? 0) + 1;
+          criterionOrdinalByStory.set(story, ordinal);
+          return [`S${story}.${ordinal}`];
+        }));
+        const unresolvedCriteria = parsed.value.findings
+          .map((finding) => finding.criterion)
+          .filter((criterion) => !criteria.has(criterion));
+        if (criteria.size === 0 || unresolvedCriteria.length > 0) {
+          const detail = criteria.size === 0
+            ? 'PRD audit remediation cannot resolve the active story criteria.'
+            : `PRD audit report names criteria absent from the active stories: ${[...new Set(unresolvedCriteria)].join(', ')}.`;
+          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
+          return { kind: 'halt', haltClass: 'mechanical', detail };
+        }
         for (const finding of parsed.value.findings) {
           if (finding.grade === 'FIXABLE' && finding.planTask !== undefined) {
-            prdAuditFindings.set(finding.criterion, {
+            const boundFinding = {
               criterion: finding.criterion,
               parentTask: finding.planTask,
-            });
+            };
+            // Planner gap ids are FR-N by contract; reports are criterion
+            // keyed. Bind both identities so every report association remains
+            // available for the cap and append authorization.
+            prdAuditFindings.set(finding.criterion, boundFinding);
+            for (const frId of finding.prdIds) prdAuditFindings.set(frId, boundFinding);
           }
         }
-      } catch {
-        // Existing remediation validation owns unreadable artifacts. Retain the
-        // ordinary append shape when this optional annotation cannot be read.
+        prdAuditValidated = true;
+      } catch (error) {
+        const detail = `PRD audit report could not be read for remediation authorization: ${error instanceof Error ? error.message : String(error)}`;
+        await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
+        return { kind: 'halt', haltClass: 'mechanical', detail };
       }
     }
 
@@ -3076,7 +3102,7 @@ export class Conductor {
     // criterion verdict. Preserve ordinary remediation routing for stale or
     // missing audit artifacts; only validated FIXABLE findings consume this
     // gate's bounded append allowance.
-    const prdAuditCapEnforced = prdAuditRemediation && prdAuditFindings.size > 0;
+    const prdAuditCapEnforced = prdAuditRemediation && prdAuditValidated;
     const prdAuditTasks: Array<{ id: string; title: string }> = [];
     for (const gap of gaps) {
       if (
@@ -3086,10 +3112,11 @@ export class Conductor {
         gap.tasks.length > 0
       ) {
         const finding = prdAuditFindings.get(gap.id.toUpperCase());
-        appendGaps.push({
-          ...gap,
-          ...(finding === undefined ? {} : finding),
-        });
+        // A prd_audit repair may append only work owned by a parsed FIXABLE
+        // finding and its existing parent plan task.  The planner's FR-N id
+        // is associated above through the report's PRD: column.
+        if (prdAuditRemediation && (!finding || !prdAuditValidated)) continue;
+        appendGaps.push({ ...gap, ...(finding === undefined ? {} : finding) });
         allTasks.push(...gap.tasks);
         if (finding !== undefined) prdAuditTasks.push(...gap.tasks);
       }
@@ -3122,7 +3149,7 @@ export class Conductor {
           activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0,
         );
         prdAuditGrowth = await readGrowth(this.projectRoot, prdAuditGrowthCap);
-        const findings = [...new Set(appendGaps.map((gap) => gap.criterion ?? gap.id))];
+        const findings = [...new Set([...prdAuditFindings.values()].map((finding) => finding.criterion))];
         const findingList = findings.length > 0 ? findings.join(', ') : 'unattributed FIXABLE findings';
         if (
           priorPrdAuditLaps >= prdAuditLapCap ||
@@ -3143,9 +3170,7 @@ export class Conductor {
       // Append remediation tasks to the plan
       if (planPath) {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
-          ...(criterionBoundGaps.length > 0
-            ? { criterionBoundGaps, gateSource: 'prd-audit' }
-            : {}),
+          ...(prdAuditRemediation ? { criterionBoundGaps, gateSource: 'prd-audit' } : {}),
         });
         if (appendResult.success) {
           appendAttempted = true;
@@ -5090,8 +5115,9 @@ export class Conductor {
 
         // Check if step is disabled via config
         if (resolved.disabled) {
-          await this.recordStepSkip(state, step, 'disabled in config');
-          await emitTracked({ type: 'config_skip', step: step.name });
+          const configPath = `steps.${step.name}.enabled`;
+          await this.recordStepSkip(state, step, `disabled in config (${configPath}: false)`);
+          await emitTracked({ type: 'config_skip', step: step.name, reason: `${configPath}: false` });
           continue;
         }
 

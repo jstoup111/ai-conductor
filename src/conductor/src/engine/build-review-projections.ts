@@ -6,7 +6,7 @@ import type {
   BuildReviewLapId,
 } from './build-review-domain.js';
 import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
-import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot } from './build-review-inputs.js';
+import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot, BuildReviewUnresolvedMarker } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
 import type {
   RevertedProductionFileReference,
@@ -25,6 +25,8 @@ export type BuildReviewProjectionJson =
 
 export interface BuildReviewTestQualityProjectionInput {
   readonly changedTestSelectors: readonly string[];
+  /** Declared Covers references that did not resolve in the active feature. */
+  readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
   /**
    * Content-free identity of each reverted production file. The grader
    * recovers any file's merge-base bytes with `git show <mergeBase>:<path>`;
@@ -82,6 +84,7 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
 
 export interface TestQualityProjection extends CommonProjection<'testQuality'> {
   readonly changedTestSelectors: readonly string[];
+  readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
   /** Frozen declared title chains, with an explicit selector-hash fallback marker. */
   readonly changedTestTitles: BuildReviewSourceSnapshot['changedTestTitles'];
   readonly testSuiteProof: BuildReviewProjectionJson;
@@ -352,6 +355,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
   const testQuality = seal({
     ...common(source, 'testQuality'),
     changedTestSelectors: canonicalArray(source.testQuality.changedTestSelectors) as readonly string[],
+    unresolvedMarkers: canonicalArray((source.testQuality.unresolvedMarkers ?? []) as unknown as readonly BuildReviewProjectionJson[]) as unknown as readonly BuildReviewUnresolvedMarker[],
     changedTestTitles: inputs.sourceSnapshot.changedTestTitles,
     testSuiteProof: canonicalize(json(inputs.testSuiteProof)),
     revertedProductionManifest: canonicalArray(

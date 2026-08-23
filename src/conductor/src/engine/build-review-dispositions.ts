@@ -131,9 +131,12 @@ const REDUCED_COVERAGE_REASONS = new Set<BuildReviewInfrastructureFailureReason>
   'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed',
 ]);
 
-/** A persisted record outside the sole active catalog has no current authority. */
+/** Retired, shipped rubric ids are tolerated only for compatibility reads. */
+const RETIRED_BUILD_REVIEW_RUBRIC_IDS = new Set([
+  'scope', 'rootCause', 'causalIntegrity', 'completeness', 'wiring',
+]);
 export function isRetiredBuildReviewRubric(value: unknown): value is string {
-  return typeof value === 'string' && value !== 'testQuality';
+  return typeof value === 'string' && RETIRED_BUILD_REVIEW_RUBRIC_IDS.has(value);
 }
 
 const defaultFilesystem: BuildReviewDispositionFilesystem = {
@@ -233,15 +236,7 @@ function isFindingDispositionRecord(value: BuildReviewStoredDispositionRecord): 
 function parseState(value: unknown): BuildReviewDispositionState | undefined {
   const source = record(value);
   if (!source || !exactKeys(source, ['version', 'records']) || source.version !== STORE_VERSION || !Array.isArray(source.records)) return undefined;
-  // A persisted record outside the live registry is intentionally ignored
-  // before strict parsing: its retired anchor schema is no longer an input
-  // language, but it must not make a resumed feature unreadable.
   const records = source.records.flatMap((entry) => {
-    const candidate = record(entry);
-    const finding = record(candidate?.finding);
-    const canonicalPayload = record(finding?.canonicalPayload);
-    const rubric = canonicalPayload?.rubric ?? record(candidate?.identity)?.rubric;
-    if (isRetiredBuildReviewRubric(rubric)) return [];
     const parsed = parseStoredDispositionRecord(entry);
     return parsed ? [parsed] : [undefined];
   });

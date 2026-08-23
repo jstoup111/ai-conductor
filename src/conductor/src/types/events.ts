@@ -223,6 +223,8 @@ export type ConductorEvent =
       effectiveVerdict: 'PASS' | 'FAIL';
       /** Deterministic container-level PASS cause, when no rubric ran. */
       reason?: string;
+      /** Unbound Covers declarations seen in the frozen test-quality scope. */
+      unresolvedMarkers?: readonly { selector: string; reference: string }[];
     }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | { type: 'step_started'; step: StepName; index: number }
@@ -374,7 +376,7 @@ export type ConductorEvent =
   | { type: 'recovery_needed'; step: StepName; options: RecoveryOption[] }
   | { type: 'gate_blocked'; step: StepName; reason: string }
   | { type: 'tier_skip'; step: StepName; tier: ComplexityTier }
-  | { type: 'config_skip'; step: StepName }
+  | { type: 'config_skip'; step: StepName; reason?: string }
   | { type: 'navigation_back'; from: StepName; to: StepName }
   | { type: 'rate_limit'; waitSeconds: number; reason?: 'usage-exhausted' }
   | { type: 'session_reset'; reason: string }

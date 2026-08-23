@@ -2837,8 +2837,17 @@ describe('engine/conductor', () => {
   });
 
   describe('daemon prd-audit gap-aware halting', () => {
-    const AUDIT_HEADER =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';
+    function renderAuditReport(auditBody: string): string {
+      if (auditBody.includes('**PRD:**')) return `# PRD Audit\n\n${auditBody}`;
+      const fr = auditBody.match(/FR-\d+/)?.[0] ?? 'FR-1';
+      const grade = 'FIXABLE';
+      return [
+        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+        '| Criterion | Grade | Plan task | PRD: | Evidence |',
+        '|---|---|---|---|---|',
+        `| S1.1 | ${grade} | 1 | ${fr} | x |`,
+      ].join('\n');
+    }
 
     // Seed every step before prd_audit as done so the loop can start at the
     // SHIP tail; write the build + manual-test fixtures the predicates need.
@@ -2862,9 +2871,19 @@ describe('engine/conductor', () => {
       state.architecture_review_as_built = 'done';
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/plans/feat.md'),
+        '### Task 1: repair\n### Task 2: support\n### Task 3: support\n### Task 4: support\n',
+      );
+      await writeFile(
+        join(dir, '.docs/stories/feat.md'),
+        '## Story 1: repair\n\n### Happy Path\n- Given a gap, when repaired, then it passes.\n',
+      );
       await writeFile(
         join(dir, '.pipeline/task-status.json'),
-        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+        JSON.stringify({ tasks: [1, 2, 3, 4].map((id) => ({ id: String(id), status: 'completed' })) }),
       );
     }
 
@@ -2881,7 +2900,7 @@ describe('engine/conductor', () => {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
             await writeFile(
               join(dir, '.pipeline/task-status.json'),
-              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+              JSON.stringify({ tasks: [1, 2, 3, 4].map((id) => ({ id: String(id), status: 'completed' })) }),
             );
           } else if (step === 'manual_test') {
             await writeFile(
@@ -2899,7 +2918,7 @@ describe('engine/conductor', () => {
             await new Promise((resolve) => setTimeout(resolve, 5));
             await writeFile(
               join(dir, '.pipeline/prd-audit.md'),
-              '# PRD Audit\n\n' + AUDIT_HEADER + auditBody,
+              renderAuditReport(auditBody),
             );
           } else if (step === 'architecture_review_as_built') {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -2929,12 +2948,12 @@ describe('engine/conductor', () => {
             if (step === 'build') {
               await writeFile(
                 join(dir, '.pipeline/task-status.json'),
-                JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+                JSON.stringify({ tasks: [1, 2, 3, 4].map((id) => ({ id: String(id), status: 'completed' })) }),
               );
             } else {
               await writeFile(
                 join(dir, '.pipeline/prd-audit.md'),
-                '# PRD Audit\n\n' + AUDIT_HEADER + auditBody,
+                renderAuditReport(auditBody),
               );
             }
           } else if (step === 'manual_test') {
@@ -3082,7 +3101,17 @@ describe('engine/conductor', () => {
 
     it('/remediate: routes an autonomous gap to its target step with the gap in the hint', async () => {
       await seedToPrdAudit();
-      const { runner } = remediateRunner('| FR-2 | MISSING | impl-gap | x | no |\n', {
+      const { runner, calls } = remediateRunner(
+        [
+          '**PRD:** present',
+          '',
+          '## Verdict Table',
+          '',
+          '| Criterion | Grade | Plan task | PRD: | Evidence |',
+          '|---|---|---|---|---|',
+          '| S1.1 | FIXABLE | 1 | FR-2 | x |',
+        ].join('\n'),
+        {
         dispositions: [
           {
             id: 'FR-2',
@@ -6652,14 +6681,19 @@ describe('engine/conductor', () => {
 
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
     const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+      '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | PASS | — | FR-1 | evidence.ts:1 |\n';
     const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
     beforeEach(async () => {
       await mkdir(join(dir, '.docs/specs'), { recursive: true });
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
       await writeFile(
         join(dir, '.docs/specs/prd-audit-join.md'),
         '## Functional Requirements\n\nFR-1\n',
+      );
+      await writeFile(
+        join(dir, '.docs/stories/prd-audit-join.md'),
+        '## Story 1: join\n\n**Requirements:** FR-1\n\n### Happy Path\n- Given a green gate, when joined, then it completes.\n',
       );
     });
 

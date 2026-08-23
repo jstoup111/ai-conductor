@@ -70,9 +70,10 @@ export async function recordAcceptedWidening(
     throw new Error('accepted widening requires a criterion and summary');
   }
   const current = await readAcceptedWidenings(projectRoot);
-  const existing = current.entries.find(
-    (entry) => entry.criterion === normalized.criterion && entry.summary === normalized.summary,
-  );
+  // Evidence prose is re-authored on every audit lap.  Criterion is the
+  // stable scope/intent identity; retaining the first summary preserves the
+  // operator's rationale without making acceptance depend on byte equality.
+  const existing = current.entries.find((entry) => entry.criterion === normalized.criterion);
   if (existing) return existing;
 
   const entry: AcceptedWidening = { ...normalized, acceptedAt: new Date().toISOString() };

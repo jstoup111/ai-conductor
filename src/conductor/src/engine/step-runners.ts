@@ -2354,27 +2354,10 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     let containmentReport: ContainmentFloorReport | undefined;
-    if (buildReviewConfig.scopeContainmentEnforced) {
-      try {
-        containmentReport = await runContainmentFloor({
-          projectRoot: this.projectDir,
-          planPath,
-          scopeContainmentEnforced: buildReviewConfig.scopeContainmentEnforced,
-        });
-      } catch {
-        // Fail-soft: containment telemetry must never fail build_review.
-      }
-    }
-
     let inputs;
     try {
       inputs = {
-        ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
-          ...this.buildReviewInputOptions,
-          acceptedWidenings: buildReviewConfig.scopeContainmentEnforced
-            ? containmentReport?.acceptedWidenings ?? []
-            : [],
-        }),
+        ...await assembleBuildReviewInputs(this.gitRunner, planPath, this.buildReviewInputOptions),
       };
     } catch (err) {
       return {

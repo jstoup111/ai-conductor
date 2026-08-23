@@ -778,7 +778,8 @@ async function sweptArtifactStillValid(
       // about to be swept can diverge from what it was stamped from — never
       // spare a report that does not itself currently read clean.
       const report = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
-      if (findUnalignedFrRows(report).length > 0) return false;
+      const parsed = parsePrdAuditReport(report);
+      if (parsed.ok ? parsed.value.findings.some((finding) => finding.grade !== 'PASS') : findUnalignedFrRows(report).length > 0) return false;
       const resolution = artifactResolution ?? (await buildArtifactResolutionContext(dir, { git }));
       if ((await prdAuditCoverageGap(dir, resolution, report)) !== null) return false;
       return (await prdAuditStoryCoverageGap(dir, resolution, undefined, report)) === null;
@@ -1320,8 +1321,11 @@ export function parseAsBuiltVerdict(content: string): string | null {
     /^[^\S\n]*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*(.+?)\s*\*{0,2}\s*$/im,
   );
   if (!m) return null;
-  const value = m[1].replace(/\*+/g, '').trim();
-  return value.length > 0 ? value : null;
+  const value = m[1].replace(/\*+/g, '').trim().toUpperCase();
+  return value === 'APPROVED' || value === 'APPROVED WITH DRIFT NOTES' ||
+    value === 'PLAN_GAP' || value === 'BLOCKED'
+    ? value
+    : null;
 }
 
 /** The terminal interpretation of a fresh as-built review report. */
@@ -1341,9 +1345,9 @@ export type AsBuiltReviewOutcome =
 export function classifyAsBuiltReviewOutcome(content: string): AsBuiltReviewOutcome {
   const verdict = parseAsBuiltVerdict(content);
   if (verdict === null) return { kind: 'invalid' };
-  if (/^APPROVED\b/i.test(verdict)) return { kind: 'approved' };
-  if (/^BLOCKED\b/i.test(verdict)) return { kind: 'blocked' };
-  if (!/^PLAN_GAP\b/i.test(verdict)) return { kind: 'invalid' };
+  if (verdict === 'APPROVED' || verdict === 'APPROVED WITH DRIFT NOTES') return { kind: 'approved' };
+  if (verdict === 'BLOCKED') return { kind: 'blocked' };
+  if (verdict !== 'PLAN_GAP') return { kind: 'invalid' };
 
   const outcome = content.match(/^[^\S\n]*\*{0,2}\s*Outcome delivered\s*\*{0,2}\s*:+\s*(yes|no)\s*$/im)?.[1]
     ?.toLowerCase();
@@ -2756,8 +2760,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                 }));
               for (const f of preCheckFiles) {
                 const report = await readFile(f, 'utf-8');
+                const parsed = parsePrdAuditReport(report);
                 if (
-                  findUnalignedFrRows(report).length > 0 ||
+                  (parsed.ok
+                    ? parsed.value.findings.some((finding) => finding.grade !== 'PASS')
+                    : findUnalignedFrRows(report).length > 0) ||
                   (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null ||
                   (await prdAuditStoryCoverageGap(dir, artifactResolution, ctx.featureDesc, report)) !== null
                 ) {
@@ -2784,7 +2791,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (files.length === 0) {
       return {
         done: false,
-        reason: 'no .pipeline/prd-audit.md present — the prd-audit skill must record a per-FR verdict table',
+        reason: 'no .pipeline/prd-audit.md present — the prd-audit skill must record its criterion-grade Verdict Table',
       };
     }
     // Only consider reports written by THIS judging attempt (falls back to
@@ -2807,11 +2814,23 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     let blockingReason: string | undefined;
     for (const f of fresh) {
-      const blocking = findUnalignedFrRows(await readFile(f, 'utf-8'));
+      const parsed = parsePrdAuditReport(await readFile(f, 'utf-8'));
+      if (!parsed.ok) {
+        const hasFeatureIdentity = Boolean(ctx.planPath || ctx.featureDesc);
+        const legacyBlocking = findUnalignedFrRows(await readFile(f, 'utf-8'));
+        if (hasFeatureIdentity || legacyBlocking.length > 0) {
+          blockingReason = hasFeatureIdentity
+            ? `PRD audit report mechanical fault: ${parsed.error}`
+            : `prd-audit found un-ALIGNED FRs: ${legacyBlocking.join('; ')} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
+          break;
+        }
+        continue;
+      }
+      const blocking = parsed.value.findings.filter((finding) => finding.grade !== 'PASS');
       if (blocking.length > 0) {
-        const shown = blocking.slice(0, 3).join('; ');
+        const shown = blocking.slice(0, 3).map((finding) => `${finding.criterion} (${finding.grade})`).join('; ');
         const more = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : '';
-        blockingReason = `prd-audit found un-ALIGNED FRs: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
+        blockingReason = `prd-audit found blocking criterion grades: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
         break;
       }
     }
@@ -3786,6 +3805,8 @@ export interface PrdAuditFinding {
   criterion: string;
   grade: PrdAuditGrade;
   planTask?: number;
+  /** Intent FR associations from the table's PRD: column. */
+  prdIds: readonly string[];
   evidence: string;
 }
 
@@ -3850,18 +3871,30 @@ export function parsePrdAuditReport(
   const criterionIndex = header.indexOf('criterion');
   const gradeIndex = header.indexOf('grade');
   const planTaskIndex = header.indexOf('plan task');
+  const prdIndex = header.findIndex((cell) => /^prd\s*:?$/.test(cell));
   const evidenceIndex = header.indexOf('evidence');
   const activePlanTaskIds = activePlan === undefined
     ? undefined
     : new Set(parsePlanTaskPaths(activePlan).keys());
   const findings: PrdAuditFinding[] = [];
 
+  let readingCriterionTable = false;
   for (const line of lines.slice(headerIndex + 1)) {
-    if (!/^\s*\|/.test(line)) continue;
+    // The criterion table is followed by a retained per-FR context table in
+    // conformant reports.  It is evidence only, not another criterion row.
+    // A blank line ends the contiguous Markdown table, so never interpret
+    // the later table's FR-* cells as malformed story criteria.
+    if (!/^\s*\|/.test(line)) {
+      if (readingCriterionTable && line.trim() === '') break;
+      continue;
+    }
+    readingCriterionTable = true;
     const cells = tableCells(line);
     if (isTableSeparator(cells)) continue;
     const criterion = cells[criterionIndex]?.toUpperCase();
-    if (!criterion || !CRITERION_ID_RE.test(criterion)) continue;
+    if (!criterion || !CRITERION_ID_RE.test(criterion)) {
+      return prdAuditMechanicalFault('PRD audit finding has an empty or malformed Criterion.');
+    }
 
     const rawGrade = cells[gradeIndex]?.toUpperCase();
     if (!rawGrade || !PRD_AUDIT_GRADES.has(rawGrade as PrdAuditGrade)) {
@@ -3894,6 +3927,7 @@ export function parsePrdAuditReport(
       criterion,
       grade: rawGrade as PrdAuditGrade,
       ...(planTask === undefined ? {} : { planTask }),
+      prdIds: Object.freeze([...(prdIndex === -1 ? '' : cells[prdIndex] ?? '').matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((match) => match[0].toUpperCase())),
       evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
     });
   }
@@ -3931,29 +3965,18 @@ export async function prdAuditCoverageGap(
   const hasFeatureIdentity = Boolean(context.activePlanPath || context.featureDesc || context.featureIdentities.length > 0);
   if (!hasFeatureIdentity) return null;
 
+  const parsed = parsePrdAuditReport(reportContent);
+  if (!parsed.ok) return parsed.error;
   const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
   if (prdPaths.length === 0) {
-    const parsed = parsePrdAuditReport(reportContent);
-    if (!parsed.ok) return parsed.error;
     return parsed.value.prd === 'none'
       ? null
       : 'PRD audit report declares **PRD:** present but no approved PRD could be resolved for the feature.';
   }
 
-  let frIdSets: Set<string>[];
-  try {
-    frIdSets = await Promise.all(
-      prdPaths.map(async (path) => extractPrdFrIds(await readFile(path, 'utf8'))),
-    );
-  } catch {
-    return 'PRD audit coverage is unreadable: a resolved approved PRD could not be read.';
-  }
-
-  const expectedIds = new Set(
-    frIdSets.flatMap((ids) => [...ids]),
-  );
-  const missing = findFrIdsWithoutRows(reportContent, expectedIds);
-  return missing.length === 0 ? null : `PRD audit report is missing verdict rows for ${missing.join(', ')}.`;
+  return parsed.value.prd === 'present'
+    ? null
+    : 'PRD audit report declares **PRD:** none but an approved PRD was resolved for the feature.';
 }
 
 /**
@@ -3985,9 +4008,21 @@ async function prdAuditStoryCoverageGap(
     return `PRD audit cannot read story criteria at ${relative(projectRoot, storiesPath)}.`;
   }
 
-  const criteria = extractAuthoritativeStoryCriteria(storiesText);
-  if (criteria.length === 0) {
+  const criterionIds = extractStoryCriterionIds(storiesText);
+  if (criterionIds.length === 0) {
     return `PRD audit cannot parse story criteria in ${relative(projectRoot, storiesPath)}.`;
+  }
+  const parsed = parsePrdAuditReport(reportContent);
+  if (!parsed.ok) return parsed.error;
+  const expectedCriteria = new Set(criterionIds);
+  const reportedCriteria = new Set(parsed.value.findings.map((finding) => finding.criterion));
+  const unknownCriteria = [...reportedCriteria].filter((criterion) => !expectedCriteria.has(criterion));
+  if (unknownCriteria.length > 0) {
+    return `PRD audit report names criteria absent from the active stories: ${unknownCriteria.join(', ')}.`;
+  }
+  const missingCriteria = [...expectedCriteria].filter((criterion) => !reportedCriteria.has(criterion));
+  if (missingCriteria.length > 0) {
+    return `PRD audit report is missing criterion-grade rows for ${missingCriteria.join(', ')}.`;
   }
 
   const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
@@ -4006,7 +4041,12 @@ async function prdAuditStoryCoverageGap(
 
   const covered = extractStoryCoveredFrIds(storiesText);
   const uncovered = [...expectedIds].filter((id) => !covered.has(id));
-  const missingPlanGaps = findFrIdsWithoutPlanGapRows(reportContent, uncovered);
+  const declaredPlanGaps = new Set(
+    parsed.value.findings
+      .filter((finding) => finding.grade === 'PLAN_GAP')
+      .flatMap((finding) => finding.prdIds),
+  );
+  const missingPlanGaps = uncovered.filter((id) => !declaredPlanGaps.has(id));
   return missingPlanGaps.length === 0
     ? null
     : `PRD audit report is missing PLAN_GAP rows for PRD requirements without story coverage: ${missingPlanGaps.join(', ')}.`;
@@ -4024,17 +4064,28 @@ function extractStoryCoveredFrIds(storiesText: string): Set<string> {
   return ids;
 }
 
-function findFrIdsWithoutPlanGapRows(content: string, expectedIds: readonly string[]): string[] {
-  const declared = new Set<string>();
-  for (const line of verdictTableLines(content)) {
-    if (!/^\s*\|/.test(line)) continue;
-    const cells = tableCells(line);
-    if (isTableSeparator(cells) || !cells.some((cell) => /\bPLAN_GAP\b/i.test(cell))) continue;
-    for (const id of expectedIds) {
-      if (cells.some((cell) => new RegExp(`\\b${id}\\b`, 'i').test(cell))) declared.add(id);
+/** Map each authoritative Given/When/Then row to its report-table criterion id. */
+function extractStoryCriterionIds(storiesText: string): string[] {
+  const ids: string[] = [];
+  for (const block of splitStoryBlocks(storiesText)) {
+    const story = block.id?.match(/\d+/)?.[0];
+    if (!story) continue;
+    let ordinal = 0;
+    for (const type of ['happy', 'negative'] as const) {
+      const body = sectionBody(
+        block.text,
+        type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i,
+      );
+      if (body === null) continue;
+      for (const line of body.split('\n')) {
+        const match = line.match(/^\s*(?:[-*+] |\d+[.)] )(.+?)\s*$/);
+        if (!match || !/\bgiven\b/i.test(match[1]) || !/\bthen\b/i.test(match[1])) continue;
+        ordinal += 1;
+        ids.push(`S${story}.${ordinal}`);
+      }
     }
   }
-  return expectedIds.filter((id) => !declared.has(id));
+  return ids;
 }
 
 /**
@@ -4043,6 +4094,12 @@ function findFrIdsWithoutPlanGapRows(content: string, expectedIds: readonly stri
  * blocking row. Verdict is read per-cell (see {@link parseFrVerdictRow}).
  */
 function findUnalignedFrRows(content: string): string[] {
+  const parsed = parsePrdAuditReport(content);
+  if (parsed.ok) {
+    return parsed.value.findings
+      .filter((finding) => finding.grade !== 'PASS')
+      .flatMap((finding) => finding.prdIds);
+  }
   const blocking: string[] = [];
   for (const line of verdictTableLines(content)) {
     const row = parseFrVerdictRow(line);
@@ -4057,6 +4114,19 @@ function findUnalignedFrRows(content: string): string[] {
  * class cell can't be read). Used by the daemon to decide self-heal vs HALT.
  */
 function findUnalignedFrRowsWithClass(content: string): UnalignedFrRow[] {
+  const parsed = parsePrdAuditReport(content);
+  if (parsed.ok) {
+    return parsed.value.findings
+      .filter((finding) => finding.grade !== 'PASS')
+      .flatMap((finding) => finding.prdIds.map((fr) => ({
+        fr,
+        gapClass: finding.grade === 'FIXABLE'
+          ? 'impl-gap' as const
+          : finding.grade === 'PLAN_GAP'
+            ? 'plan-gap' as const
+            : 'intended-drift' as const,
+      })));
+  }
   const rows: UnalignedFrRow[] = [];
   for (const line of verdictTableLines(content)) {
     const row = parseFrVerdictRow(line);

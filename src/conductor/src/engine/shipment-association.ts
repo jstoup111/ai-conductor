@@ -132,7 +132,9 @@ function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentF
 
 function recordedAsBuiltFindings(report: string | undefined): RecordedShipmentFinding[] {
   if (!report || !/^\s*Verdict\s*:\s*PLAN_GAP\s*$/im.test(report) || !/^\s*Outcome delivered\s*:\s*yes\s*$/im.test(report)) return [];
-  const heading = /^## Recorded Findings\s*$/im.exec(report);
+  // Keep the shipped reader compatible with the writer's annotated heading,
+  // while rejecting arbitrary prose sections that only share a prefix.
+  const heading = /^## Recorded Findings(?:\s*\(if PLAN_GAP\s*[—-][^)]*\))?\s*$/im.exec(report);
   if (!heading || heading.index === undefined) return [];
   const afterHeading = report.slice(heading.index + heading[0].length);
   const nextHeading = afterHeading.search(/^#{1,6}\s/m);

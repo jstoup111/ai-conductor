@@ -158,13 +158,18 @@ describe('integration/gate-loop', () => {
     } else if (step === 'prd_audit') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await mkdir(join(dir, '.docs/specs'), { recursive: true });
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
       await writeFile(
         join(dir, '.docs/specs/add-foo.md'),
         '## Functional Requirements\n\nFR-1\n',
       );
       await writeFile(
+        join(dir, '.docs/stories/add-foo.md'),
+        '## Story 1: add foo\n\n### Happy Path\n- Given input, when it runs, then it succeeds.\n',
+      );
+      await writeFile(
         join(dir, '.pipeline/prd-audit.md'),
-        '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
+        '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | PASS | — | FR-1 | foo.ts:1 |\n',
       );
     } else if (step === 'architecture_review_as_built') {
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
@@ -1156,7 +1161,7 @@ describe('integration/gate-loop', () => {
         mode: 'auto',
         fromStep: 'build',
         maxRetries: 1,
-        config: { build_review: { enabled: false } },
+        config: { build_review: { enabled: false }, steps: { prd_audit: { disable: true } } },
       } as never);
 
       await conductor.run();
@@ -1191,7 +1196,7 @@ describe('integration/gate-loop', () => {
         mode: 'auto',
         fromStep: 'build',
         maxRetries: 1,
-        config: { build_review: { enabled: false } },
+        config: { build_review: { enabled: false }, steps: { prd_audit: { disable: true } } },
       } as never);
 
       await conductor.run();
