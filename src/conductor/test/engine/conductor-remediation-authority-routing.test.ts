@@ -439,7 +439,36 @@ describe('planRemediation implementation-only authority routing', () => {
     });
   });
 
-  it('halts an unprovenanced taskless build_stall remediation instead of routing raw fixes', async () => {
+  it.each([
+    {
+      caseName: 'when build_stall carries no structured provenance',
+      hintSource: {
+        source: 'build_stall',
+        evidenceFile: '.pipeline/build-stall-question.md',
+      },
+    },
+    {
+      caseName: 'when build_stall carries the build-stall evidence file',
+      hintSource: {
+        source: 'build_stall',
+        evidence: [{ gate: 'build' as StepName, evidenceFile: '.pipeline/halt-user-input-required' }],
+      },
+    },
+    {
+      caseName: 'when build-stall carries the build_stall evidence file',
+      hintSource: {
+        source: 'build-stall',
+        evidence: [{ gate: 'build' as StepName, evidenceFile: '.pipeline/build-stall-question.md' }],
+      },
+    },
+    {
+      caseName: 'when build_stall carries a non-build gate',
+      hintSource: {
+        source: 'build_stall',
+        evidence: [{ gate: 'architecture_review_as_built' as StepName, evidenceFile: '.pipeline/build-stall-question.md' }],
+      },
+    },
+  ])('halts an unadmitted taskless build-stall remediation $caseName', async ({ hintSource }) => {
     const runner: StepRunner = {
       run: async () => {
         await writeFile(
@@ -476,7 +505,7 @@ describe('planRemediation implementation-only authority routing', () => {
         state: ConductState,
         steps: typeof ALL_STEPS,
         dispatchContext: string,
-        hintSource: { source: string; evidenceFile: string },
+        hintSource: unknown,
       ) => Promise<{ kind: string; detail?: string }>;
     }).planRemediation(
       {
@@ -485,10 +514,7 @@ describe('planRemediation implementation-only authority routing', () => {
       } as ConductState,
       ALL_STEPS,
       'Remediate build stall: which validation boundary applies?',
-      {
-        source: 'build_stall',
-        evidenceFile: '.pipeline/build-stall-question.md',
-      },
+      hintSource,
     );
 
     expect(outcome).toMatchObject({
