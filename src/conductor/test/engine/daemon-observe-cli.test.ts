@@ -697,6 +697,77 @@ describe('engine/daemon-observe-cli', () => {
         expect(out.join('\n')).not.toMatch(/agreement/i);
       });
     });
+
+    describe('plan growth (FR-19)', () => {
+      async function writeActivePlan(
+        repo: string,
+        slug: string,
+        taskCount: number,
+      ): Promise<string> {
+        const featureRoot = join(repo, '.worktrees', slug);
+        const planPath = join(featureRoot, '.docs', 'plans', `${slug}.md`);
+        await mkdir(join(featureRoot, '.pipeline'), { recursive: true });
+        await mkdir(join(featureRoot, '.docs', 'plans'), { recursive: true });
+        await writeFile(
+          planPath,
+          Array.from({ length: taskCount }, (_, index) => `### Task ${index + 1}: work`).join('\n'),
+          'utf8',
+        );
+        await writeFile(
+          join(featureRoot, '.pipeline', 'conduct-state.json'),
+          JSON.stringify({ build: 'in_progress' }),
+          'utf8',
+        );
+        await writeFile(
+          join(featureRoot, '.pipeline', 'engine-state.json'),
+          JSON.stringify({ activePlanPath: `.docs/plans/${slug}.md` }),
+          'utf8',
+        );
+        return featureRoot;
+      }
+
+      it('shows active-feature authored, per-gate, remaining, and cap counts from its durable ledger', async () => {
+        const repo = join(root, 'repo-plan-growth');
+        // The active plan includes the three persisted remediation headings;
+        // readGrowth validates authored + added against that total.
+        const featureRoot = await writeActivePlan(repo, 'growth-feature', 22);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({
+            version: 1,
+            gates: {},
+            growth: { authored: 19, added: 3, byGate: { prd_audit: 3 } },
+          }),
+          'utf8',
+        );
+        const registryPath = await registry([record('repo-plan-growth', repo)]);
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
+
+        expect(out).toContain(
+          '  PLAN GROWTH [growth-feature]: authored 19; added 3 (prd_audit: 3); remaining 1/4',
+        );
+      });
+
+      it('recomputes legacy ledgers without growth records from the active plan', async () => {
+        const repo = join(root, 'repo-legacy-growth');
+        const featureRoot = await writeActivePlan(repo, 'legacy-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {} }),
+          'utf8',
+        );
+        const registryPath = await registry([record('repo-legacy-growth', repo)]);
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
+
+        expect(out).toContain(
+          '  PLAN GROWTH [legacy-feature]: authored 19; added 0; remaining 4/4',
+        );
+      });
+    });
   });
 
   describe('runDaemonLogs', () => {

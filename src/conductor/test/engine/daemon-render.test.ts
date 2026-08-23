@@ -163,6 +163,16 @@ describe('renderDaemonEvent', () => {
     })).toEqual(['↶ REWIND: build (operator; demoted build, test_suite, build_review)']);
   });
 
+  it('renders plan-growth counts with each gate and the current cap', () => {
+    expect(lines({
+      type: 'plan_growth',
+      authored: 19,
+      added: 3,
+      byGate: { prd_audit: 3 },
+      remaining: 1,
+    })).toEqual(['· PLAN GROWTH: authored 19; added 3 (prd_audit: 3); remaining 1/4']);
+  });
+
   it('renders halt and convergence', () => {
     expect(lines({ type: 'loop_halt', reason: 'cap' })).toEqual(['· ✋ loop halted: cap']);
     expect(lines({

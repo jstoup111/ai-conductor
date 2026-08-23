@@ -144,6 +144,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'operator_rewind',
+  'plan_growth',
   'contained_live_checkout_drift',
   'self_host_containment_verdict',
   'step_started',
