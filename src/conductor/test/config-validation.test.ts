@@ -120,7 +120,7 @@ describe('LLM provider selection validation', () => {
 });
 
 describe('build_review rubric validation', () => {
-  it('rejects retired causalIntegrity configuration at the raw config boundary', () => {
+  it('accepts retired causalIntegrity configuration as a no-op at the raw config boundary', () => {
     const result = validateConfig({
       build_review: {
         rubrics: {
@@ -137,11 +137,12 @@ describe('build_review rubric validation', () => {
       },
     });
 
-    expect(result.ok ? 'accepted retired rubric' : result.error.message)
-      .toMatch(/build_review\.rubrics\.causalIntegrity.*unknown/i);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.warnings).toContainEqual(expect.stringMatching(/causalIntegrity.*retired/i));
   });
 
-  it('rejects retired rubric identifiers from raw configuration', () => {
+  it('accepts retired rubric identifiers as no-ops with one warning per key', () => {
     const result = validateConfig({
       build_review: {
         rubrics: {
@@ -150,13 +151,12 @@ describe('build_review rubric validation', () => {
         },
       },
     });
-    const diagnostic = result.ok
-      ? 'accepted retired rubric identifiers'
-      : result.error.message;
-
-    expect(diagnostic).toMatch(
-      /(?=.*build_review\.rubrics\.rootCause)(?=.*build_review\.rubrics\.causalIntegrity)(?=.*unknown)/i,
-    );
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/rootCause.*retired/i),
+      expect.stringMatching(/causalIntegrity.*retired/i),
+    ]));
   });
 
   it.each([
@@ -175,17 +175,6 @@ describe('build_review rubric validation', () => {
       config: { build_review: { maxParallel: 0 } },
       path: 'build_review\\.maxParallel',
     },
-    {
-      name: 'an enabled gate with no enabled rubrics',
-      config: {
-        build_review: {
-          rubrics: {
-            testQuality: { enabled: false },
-          },
-        },
-      },
-      path: 'build_review\\.rubrics.*at least one enabled rubric',
-    },
   ])('rejects $name before any rubric can dispatch', ({ config, path }) => {
     const result = validateConfig(config);
     const diagnostic = result.ok ? 'accepted invalid build review rubric configuration' : result.error.message;
@@ -193,8 +182,8 @@ describe('build_review rubric validation', () => {
     expect(diagnostic).toMatch(new RegExp(path, 'i'));
   });
 
-  it('rejects retired wiring policy and clamps single-rubric concurrency', () => {
-    expect(validateConfig({ build_review: { rubrics: { wiring: {} } } })).toMatchObject({ ok: false });
+  it('accepts retired wiring policy as a no-op and still bounds single-rubric concurrency', () => {
+    expect(validateConfig({ build_review: { rubrics: { wiring: {} } } })).toMatchObject({ ok: true });
     expect(validateConfig({ build_review: { maxParallel: 2 } })).toMatchObject({ ok: false });
   });
 });

@@ -369,10 +369,11 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     }).toEqual({
       capturedCalls: { invoke: [], interactive: [] },
       claudeRuntimeCalls: { invoke: [], interactive: [] },
-      beginBranchCalls: expect.arrayContaining([
-        ['build-review:testQuality'],
-        ['attribution_verify'],
-      ]),
+      // test-quality is opt-in and this fixture deliberately provides no
+      // changed test carrying a Covers: marker, so build_review publishes its
+      // empty-set PASS without opening a provider branch. Attribution remains
+      // the production provider-routing assertion under test here.
+      beginBranchCalls: [['attribution_verify']],
       codexCalls: expect.arrayContaining([
         expect.objectContaining({ cwd: projectRoot, model: 'gpt-5.6-sol', effort: 'high', resume: false }),
       ]),
