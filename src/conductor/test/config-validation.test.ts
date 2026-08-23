@@ -182,9 +182,9 @@ describe('build_review rubric validation', () => {
     expect(diagnostic).toMatch(new RegExp(path, 'i'));
   });
 
-  it('accepts retired wiring policy as a no-op and still bounds single-rubric concurrency', () => {
+  it('accepts retired wiring policy as a no-op and supports the compatibility concurrency range', () => {
     expect(validateConfig({ build_review: { rubrics: { wiring: {} } } })).toMatchObject({ ok: true });
-    expect(validateConfig({ build_review: { maxParallel: 2 } })).toMatchObject({ ok: false });
+    expect(validateConfig({ build_review: { maxParallel: 4 } })).toMatchObject({ ok: true });
   });
 });
 

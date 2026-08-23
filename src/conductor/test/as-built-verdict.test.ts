@@ -64,7 +64,7 @@ describe('as-built SHIP routing', () => {
       mkdir(join(dir, '.docs', 'specs'), { recursive: true }),
     ]);
     await writeFile(join(dir, '.docs', 'plans', `${slug}.md`), '# Plan\n\n### Task 1: existing work\n\n**Files:** src/feature.ts\n\n**Criterion:** S1.1\n');
-    await writeFile(join(dir, '.docs', 'stories', `${slug}.md`), '# Stories\n\n## Story 1\n\n### Acceptance Criteria\n\n- **S1.1:** Given x, when y, then z.\n');
+    await writeFile(join(dir, '.docs', 'stories', `${slug}.md`), '# Stories\n\n## Story 1\n\n### Happy Path\n\n- Given x, when y, then z.\n');
     await writeFile(join(dir, '.docs', 'specs', `${slug}.md`), '# PRD\n\n## Functional Requirements\n\n- **FR-1:** The requested result exists.\n');
     await writeFile(join(pipeline, 'task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }));
 
