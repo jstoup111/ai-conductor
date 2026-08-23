@@ -167,9 +167,17 @@ steps:
     llm_provider: claude
   manual_test:
     disable: true
-#  build:
-#    model: gpt-5.6-sol
-#    effort: low
+  # Codex builds every feature (28/28 in the eval corpus). Raise it off the
+  # `terra` default to the top codex tier (`sol`) — same tier build_review
+  # already judges at — on the operator's read that implementation quality is
+  # the limiter. Effort stays at the engine default (medium).
+  build:
+    model: gpt-5.6-sol
+  # Remediate decides what work a failing lap actually gets, across laps. That
+  # is a judgement call over plan contract + prior-lap findings, so pin it to
+  # claude rather than letting the run-level codex entry resolve first.
+  remediate:
+    llm_provider: claude
   maintain-documentation:
     llm_provider: claude
     after: rebase
