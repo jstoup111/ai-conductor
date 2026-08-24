@@ -648,6 +648,31 @@ describe('isEngineFlooredBody', () => {
     expect(isEngineFlooredBody(`${PR_BODY_FLOOR_MARKER}\n\n${AUTHORED_BODY}`)).toBe(false);
   });
 
+  // #1703 recurring one layer down. The floor TEXTS are provenance exactly
+  // like the marker: an authoring pass writes real prose around the
+  // SHIP-entry draft note and leaves the note in place. Returning true on
+  // their mere presence classified 5,720 characters of authored prose on
+  // PR #1845 as a placeholder, and FINISH halted on finished work with
+  // "The author_pr_prose transition left pr.prose unchanged at placeholder."
+  it('classifies authored prose as authored even when the SHIP-entry draft note survived', () => {
+    const body = `${shipDraftPrBody('widget import flow')}\n\n${AUTHORED_BODY}`;
+    expect(body).toMatch(/draft opened automatically/i);
+    expect(isEngineFlooredBody(body)).toBe(false);
+  });
+
+  it('classifies authored prose as authored even when a "not yet authored" section survived', () => {
+    const body = [
+      PR_BODY_FLOOR_MARKER,
+      '',
+      '## Test evidence',
+      '',
+      'Not yet authored.',
+      '',
+      AUTHORED_BODY,
+    ].join('\n');
+    expect(isEngineFlooredBody(body)).toBe(false);
+  });
+
   it('keeps a floor a floor under every structured block the engine appends to it', () => {
     const floor = [
       PR_BODY_FLOOR_MARKER,
