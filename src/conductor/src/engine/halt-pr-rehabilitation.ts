@@ -425,7 +425,18 @@ function authoredProseLength(body: string): number {
  */
 export function isEngineFlooredBody(body: string): boolean {
   if (!body.includes(PR_BODY_FLOOR_MARKER)) return false;
-  if (FLOOR_UNAUTHORED_SECTION.test(body) || FLOOR_DRAFT_NOTE.test(body)) return true;
+  // The floor TEXTS are provenance too, exactly like the marker above, and
+  // the same reasoning applies: an authoring pass that writes real prose
+  // around the SHIP-entry draft note leaves that note in place. Returning
+  // `true` on their mere presence re-created #1703 one layer down — 5,720
+  // characters of authored prose on PR #1845 classified as a placeholder
+  // because the body still carried "Draft opened automatically...", after
+  // which the authoring retry could not change the verdict and the
+  // non-advancing-transition guard halted FINISH on finished work.
+  //
+  // No separate branch is needed: `authoredProseLength` already filters both
+  // floor texts out, so a genuine floor measures ~zero and a body with prose
+  // around the note measures far above the cap.
   return authoredProseLength(body) <= FLOOR_FREE_TEXT_MAX_CHARS;
 }
 
