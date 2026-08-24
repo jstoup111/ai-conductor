@@ -19,7 +19,7 @@ import type {
   BuildProgressConfig,
 } from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
-import { ALL_STEPS } from './steps.js';
+import { ALL_STEPS, OUT_OF_BAND_STEPS } from './steps.js';
 import { readUserConfig } from './user-config.js';
 import { VALID_MARKDOWN_VIEWER_MODES } from './md-viewer-presets.js';
 import { VALID_MERMAID_RENDERER_MODES } from './mermaid-renderer-presets.js';
@@ -513,8 +513,19 @@ export function validateConfig(
       };
     }
 
-    const builtInNames = new Set(ALL_STEPS.map((s) => s.name));
-    const stepDefs = new Map(ALL_STEPS.map((s) => [s.name, s]));
+    // Built-in steps are the linear gate-loop table PLUS the out-of-band steps
+    // (bootstrap/assess/remediate/attribution_verify). The latter are dispatched
+    // by name through the same `getStepDefinition` lookup, so a `steps.<name>`
+    // entry for one is ordinary built-in routing config — not a custom step
+    // declaration, and it must not be required to carry `after`/`skill`.
+    const builtInNames = new Set<string>([
+      ...ALL_STEPS.map((s) => s.name as string),
+      ...Object.keys(OUT_OF_BAND_STEPS),
+    ]);
+    const stepDefs = new Map<string, (typeof ALL_STEPS)[number]>([
+      ...ALL_STEPS.map((s) => [s.name as string, s] as const),
+      ...Object.entries(OUT_OF_BAND_STEPS),
+    ]);
     // Collect all custom-step names up-front so a custom can legally point
     // `after` at a sibling custom (chain ordering). Validation still rejects
     // references that don't resolve to either built-in or declared custom.
