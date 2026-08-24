@@ -462,6 +462,27 @@ complexity:
       expect(result.error.message).toContain('steps.memory');
     });
 
+    // Out-of-band steps (bootstrap/assess/remediate/attribution_verify) are
+    // dispatched by name through the same step-definition lookup as the linear
+    // gate loop, so routing config for one is built-in config — not a custom
+    // step declaration that must carry `after`/`skill`.
+    it.each(['bootstrap', 'assess', 'remediate', 'attribution_verify'])(
+      'accepts routing config for out-of-band built-in step %s without after/skill',
+      (step) => {
+        const result = validateConfig({ steps: { [step]: { llm_provider: 'claude' } } });
+        expect(result.ok).toBe(true);
+      },
+    );
+
+    it('rejects after on an out-of-band built-in step', () => {
+      const result = validateConfig({
+        steps: { remediate: { after: 'build', skill: 'x/SKILL.md' } },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('steps.remediate.after is not valid for built-in steps');
+    });
+
     it('accepts rebase_resolution_attempts as a known top-level key', () => {
       const result = validateConfig({ rebase_resolution_attempts: 5 });
       expect(result.ok).toBe(true);
