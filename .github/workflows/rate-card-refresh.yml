@@ -1,0 +1,157 @@
+name: rate-card-refresh
+
+# Keeps `.ai-conductor/rate-card.json` in step with upstream published pricing.
+#
+# The card is DURABLE STATE, committed so that what priced a dispatch is
+# recoverable from git history. That is also why this refresh opens a pull
+# request instead of pushing to the default branch: a rate change alters every
+# subsequent cost figure, so it should be reviewable rather than silent.
+#
+# Deliberately a scheduled workflow rather than a daemon poller — a network
+# fetch has no place in the dispatch hot path, and the daemon may be down.
+
+on:
+  schedule:
+    # Daily, off-the-hour: GitHub queues scheduled runs and on-the-hour crons
+    # are the most contended slot, so an odd minute starts sooner.
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: rate-card-refresh
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - run: npm ci
+        working-directory: src/conductor
+      - run: npm run build
+        working-directory: src/conductor
+
+      # `rate-card refresh` fails closed: a fetch error, unparseable upstream,
+      # or no usable rate for any routed model leaves the committed card
+      # untouched and exits non-zero. Let that fail the run — a silent skip
+      # would let the card rot unnoticed.
+      - name: Refresh the rate card from upstream
+        run: ./bin/conduct-ts rate-card refresh
+
+      # `refresh` always stamps a new `as_of`, so the file is dirty on every
+      # run even when nothing was repriced. Compare the RATES ONLY, and discard
+      # a timestamp-only change — otherwise this opens an empty PR every day
+      # and the signal stops meaning anything.
+      - name: Detect a real rate change
+        id: diff
+        run: |
+          set -euo pipefail
+          CARD=.ai-conductor/rate-card.json
+          git show HEAD:"$CARD" > /tmp/rate-card-before.json
+          if node -e '
+            const fs = require("node:fs");
+            const models = (p) => JSON.stringify(JSON.parse(fs.readFileSync(p, "utf8")).models);
+            process.exit(models("/tmp/rate-card-before.json") === models(process.argv[1]) ? 0 : 1);
+          ' "$CARD"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Rates unchanged upstream — discarding the as_of-only diff."
+            git checkout -- "$CARD"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Upstream rates changed:"
+            diff <(node -e 'console.log(JSON.stringify(JSON.parse(require("node:fs").readFileSync("/tmp/rate-card-before.json","utf8")).models,null,2))') \
+                 <(node -e 'console.log(JSON.stringify(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).models,null,2))' "$CARD") || true
+          fi
+
+      - id: app-token
+        if: steps.diff.outputs.changed == 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Open or update the rate-card pull request
+        if: steps.diff.outputs.changed == 'true'
+        uses: actions/github-script@v9
+        env:
+          RATE_CARD_APP_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
+          RATE_CARD_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { readFile } = await import('node:fs/promises');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const base = context.payload.repository.default_branch;
+            const branch = 'automation/rate-card';
+            const card = JSON.parse(await readFile('.ai-conductor/rate-card.json', 'utf8'));
+
+            const remote = `https://x-access-token:${encodeURIComponent(process.env.RATE_CARD_APP_TOKEN)}@github.com/${owner}/${repo}.git`;
+            await exec.exec('git', ['remote', 'set-url', 'origin', remote], { silent: true });
+            await exec.exec('git', ['config', 'user.name', process.env.RATE_CARD_APP_LOGIN]);
+            await exec.exec('git', ['config', 'user.email',
+              `${process.env.RATE_CARD_APP_LOGIN}@users.noreply.github.com`]);
+
+            // One long-lived branch, force-updated to the current base each run,
+            // so a rate change that lands while an earlier PR is still open
+            // supersedes it instead of stacking a second one.
+            await exec.exec('git', ['checkout', '-B', branch]);
+            await exec.exec('git', ['add', '.ai-conductor/rate-card.json']);
+            await exec.exec('git', ['commit', '-m',
+              `chore(cost): refresh the codex rate card (as_of ${card.as_of})`]);
+            await exec.exec('git', ['push', '--force-with-lease', 'origin', `${branch}:${branch}`]);
+
+            const rows = Object.entries(card.models)
+              .map(([model, rate]) => `| \`${model}\` | ${rate.input_cost_per_token} | ${rate.output_cost_per_token} | `
+                + `${rate.cache_read_input_token_cost ?? rate.input_cost_per_token} | `
+                + `${rate.cache_creation_input_token_cost ?? rate.input_cost_per_token} |`)
+              .join('\n');
+
+            const body = [
+              'Upstream published pricing changed for at least one model this repository routes',
+              'codex dispatches to. Opened automatically by `.github/workflows/rate-card-refresh.yml`.',
+              '',
+              '**Review this as a cost change, not a version bump.** Merging it changes every',
+              'subsequent `costUsd` computed for a codex dispatch. Costs already recorded in',
+              '`.pipeline/events.jsonl` are unaffected — dispatches are priced at the rate in force',
+              'when they ran, and are never repriced retroactively.',
+              '',
+              `Source: ${card.source}`,
+              `as_of: ${card.as_of}`,
+              '',
+              '| model | input | output | cache read | cache creation |',
+              '| --- | --- | --- | --- | --- |',
+              rows,
+              '',
+              '## Release metadata',
+              '',
+              '```',
+              'Release-Disposition: no-note',
+              '```',
+              '',
+              'Rate data only; no implementation change.',
+            ].join('\n');
+
+            const title = 'chore(cost): refresh the codex rate card';
+            const open = await github.rest.pulls.list({ owner, repo, head: `${owner}:${branch}`, state: 'open' });
+            if (open.data.length > 0) {
+              await github.rest.pulls.update({ owner, repo, pull_number: open.data[0].number, title, body });
+              core.notice(`Updated existing rate-card PR #${open.data[0].number}`);
+            } else {
+              const created = await github.rest.pulls.create({ owner, repo, head: branch, base, title, body });
+              core.notice(`Opened rate-card PR #${created.data.number}`);
+            }

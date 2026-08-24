@@ -42,6 +42,15 @@ user file.
 A committed, project-scoped JSON file of per-model token prices. It is durable state read by name,
 not configuration: it has no keys in `config.yml`, no user-scoped counterpart, and no precedence
 rules. Maintain it with `conduct-ts rate-card refresh` (see the CLI reference) and commit the result.
+`.github/workflows/rate-card-refresh.yml` also runs that refresh daily and opens a bot pull
+request on `automation/rate-card` when the published rates change, so the card does not rot
+between manual refreshes. Review such a PR as a **cost change**: merging it alters every
+subsequent `costUsd` computed for a codex dispatch. Already-recorded costs are unaffected —
+a dispatch is priced at the rate in force when it ran and is never repriced retroactively,
+which is why the card is committed rather than fetched live.
+
+The card's `as_of` therefore tracks when the rates last **changed**, not when they were last
+checked: a refresh that finds identical rates leaves the committed file untouched.
 
 It exists because providers disagree about reporting cost. Claude Code returns `total_cost_usd` on
 every dispatch, so its `TokenUsage.costUsd` is provider truth. Codex returns token counts and no
