@@ -16,7 +16,11 @@ ensureRunTmpRootSync(tmpdir());
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
-    exclude: ['test/smoke/**', '**/*.smoke.test.ts'],
+    exclude: [
+      'test/smoke/**',
+      '**/*.smoke.test.ts',
+      'test/engine/deterministic-build-verification-group.test.ts',
+    ],
     environment: 'node',
     // Global guards (see test/setup.ts): never spawn a real build daemon, and
     // block the pr-labels gh/git seam from real exec (AI_CONDUCTOR_NO_REAL_EXEC).
