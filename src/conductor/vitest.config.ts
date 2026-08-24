@@ -26,7 +26,10 @@ export default defineConfig({
     // where the conductor suite pollutes its own working directory.
     globalSetup: ['./test/global-setup.ts'],
     pool: 'forks',
-    poolOptions: { forks: { maxForks: 3, minForks: 1 } },
+    // Three concurrent forks peak above the 28 GiB user-slice ceiling and
+    // are OOM-killed after completing their files. Two retain parallelism
+    // while leaving enough headroom for the suite's real-Git fixtures.
+    poolOptions: { forks: { maxForks: 2, minForks: 1 } },
     testTimeout: 20000,
     hookTimeout: 30000,
   },

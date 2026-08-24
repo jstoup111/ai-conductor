@@ -294,7 +294,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);
     expect(vitestConfig).toMatch(
-      /poolOptions:\s*\{\s*forks:\s*\{\s*maxForks:\s*3,\s*minForks:\s*1\s*\}\s*\}/s,
+      /poolOptions:\s*\{\s*forks:\s*\{\s*maxForks:\s*2,\s*minForks:\s*1\s*\}\s*\}/s,
     );
   });
 

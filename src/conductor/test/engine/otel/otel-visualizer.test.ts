@@ -391,13 +391,18 @@ describe('T21: flush on exit — idempotent stop() and signal handlers', () => {
 
   it('SIGINT triggers stop() and spans are flushed', async () => {
     const vis = makeVis();
+    const processOn = vi.spyOn(process, 'on');
     vis.start(t21Emitter);
     await t21Emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
     await t21Emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
     await t21Emitter.emit({ type: 'feature_complete', featureDesc: 'test' });
 
-    // Simulate SIGINT — triggers the registered handler.
-    process.emit('SIGINT');
+    // Invoke only this visualizer's handler. Broadcasting a real process-wide
+    // SIGINT also invokes Vitest's signal handler in a reused fork, which can
+    // terminate the worker after the test has passed.
+    const sigintHandler = processOn.mock.calls.find(([signal]) => signal === 'SIGINT')?.[1];
+    expect(sigintHandler).toBeTypeOf('function');
+    (sigintHandler as () => void)();
 
     // Wait for the flush to complete by awaiting stop() directly.
     // stop() is idempotent: calling it again after SIGINT triggered it returns
