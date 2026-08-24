@@ -11,7 +11,11 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.104.1] - 2026-08-23
+## [0.105.0] - 2026-08-24
+
+### Changed
+
+- build_review no longer judges plan conformance, scope, or mechanism soundness — prd_audit now owns scope-as-intent grading with bounded remediation, and a new as-built architecture review owns design conformance, both running on every feature regardless of tier or track; build_review keeps only an opt-in test-quality rubric. ([implementation PR #1824](https://github.com/jstoup111/ai-conductor/pull/1824)).
 
 ### Fixed
 
@@ -20,6 +24,34 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Remediation tasks may no longer order a removal that drops coverage a completed plan task delivered — the removal must name the surviving plan task or criterion and carry its replacement. ([implementation PR #1829](https://github.com/jstoup111/ai-conductor/pull/1829)).
 - Remediation tasks that change one side of a duplicated enumeration, registry, or id list must now name the counterpart or derive both from one source, so the pair cannot silently diverge. ([implementation PR #1830](https://github.com/jstoup111/ai-conductor/pull/1830)).
 - Remediation tasks now sweep for sibling sites of the same defect class and for what a removal orphans, bounded to sites an existing plan task admits, so a repaired defect stops reappearing at the next site on the following audit cycle. ([implementation PR #1837](https://github.com/jstoup111/ai-conductor/pull/1837)).
+
+## Migration
+
+```bash migration
+# build_review's scope, completeness, rootCause (and tautology) rubrics are
+# retired; only an opt-in test-quality rubric remains in the container.
+# Their skill directories (skills/build-review-scope,
+# skills/build-review-completeness, skills/build-review-root-cause,
+# skills/build-review-tautology) are removed from the harness and a new
+# skills/build-review-test-quality is added.
+#
+# A normal harness update (bin/conduct's built-in update flow, which runs
+# bin/migrate) already re-runs `bin/install --update` and prunes the stale
+# skill symlinks automatically — no manual symlink cleanup is required.
+#
+# Existing `build_review.rubrics.<scope|completeness|rootCause|tautology|
+# wiring|causalIntegrity>` keys in .ai-conductor/config.yml or project
+# config are accepted as no-ops with a one-time notice; they never fail
+# config loading or halt a run. Review your config afterward, since those
+# rubrics will simply stop running — if you relied on them, the questions
+# they used to ask are now owned by prd_audit (scope-as-intent, with bounded
+# remediation) and the new as-built architecture review (design
+# conformance), both of which now run on every feature regardless of
+# complexity tier or work track. See the new `prd_audit` and
+# `architecture_review_as_built` sections in docs/reference/configuration.md
+# for their keys and defaults.
+echo "No required action beyond a normal 'bin/conduct' update — review build_review.rubrics config afterward."
+```
 
 ## [0.104.0] - 2026-08-22
 
