@@ -48,6 +48,14 @@ build_progress_halt:
 # putting counterfactual/plan-holistic judgement on the strongest reasoner.
 # rootCause inherits the engine's medium-effort default (narrowest rubric).
 build_review:
+  # Gate disabled 2026-08-23 by operator decision, for this feature only.
+  # Required in addition to the per-rubric flags below: main's coordinator
+  # returns `refused: no-enabled-rubrics` when every registered rubric is off
+  # (build-review-coordinator.ts:443), whereas `enabled: false` takes the clean
+  # `gate-disabled` path (:440). This branch retires the four-rubric container
+  # and its replacement, test-quality, is not in the running engine's registry,
+  # so there is no rubric left for this gate to run here.
+  enabled: false
   # Enable this repository's advisory containment recordings. The shipped
   # default remains false, so consumer repositories must opt in explicitly.
   scopeContainmentEnforced: true
@@ -71,11 +79,31 @@ build_review:
       llm_provider: claude
       model: opus
       effort: high
+    # completeness and scope are disabled on 2026-08-23 by operator decision,
+    # for the duration of this feature only. This branch is the one retiring the
+    # four-rubric container: it has already deleted skills/build-review-completeness
+    # and skills/build-review-scope, so both rubrics are grading the very diff
+    # that removes them, under an engine built from main that still registers
+    # them.
+    #
+    # Measured cost on this feature: completeness returned
+    # invalid-provider-result 7 consecutive times and twice exhausted its
+    # 3-attempt mechanical allowance, producing no verdict all day. scope's
+    # findings ordered the deletion of daemon-observe-cli.ts:464,526 and
+    # skills/writing-system-tests/SKILL.md:409 — work that pending tasks
+    # rem-fr19-1 and rem-fr4-4 already own — which deadlocked remediation
+    # ("no dispatchable build work; the implicated task(s) are already
+    # evidence-complete") and halted the loop needing a human.
+    #
+    # Task 32 makes this permanent by enabling test-quality only; this edit is
+    # the interim unblock, not that task's deliverable.
     completeness:
+      enabled: false
       llm_provider: claude
       model: opus
       effort: high
     scope:
+      enabled: false
       llm_provider: codex
       model: gpt-5.6-sol
     # rootCause is disabled on 2026-08-22 by operator decision, as the interim
@@ -153,6 +181,26 @@ steps:
   coherence_check:
     llm_provider: codex
   prd_audit:
+    # Disabled 2026-08-23 by operator decision, for this feature only, AFTER the
+    # audit itself returned PASS. The gate failure is a report-contract mismatch,
+    # not a finding: this branch makes the stories' 84 acceptance criteria the
+    # audit key with FR-1..23 as intent context, so the report carries 0 FR-N
+    # verdict rows and 84 criterion rows (83 PASS, 1 OVER_SCOPE — the unplanned
+    # probe test files, graded outside-harmless). The running engine is built
+    # from main, whose artifacts.ts still requires one FR-N verdict row per PRD
+    # FR, so it reported 20 rows missing and scraped FR-6/FR-16/FR-19 out of the
+    # PRD column of PASS rows as un-ALIGNED.
+    #
+    # This is the self-host bootstrap condition, not a compatibility break. The
+    # spec's backward-compatibility requirements are all new-engine-reads-old-data
+    # (FR-20 retired config keys, FR-21 pre-change plans, FR-22 persisted retired
+    # dispositions) and all hold. Old-engine-reads-new-report is not required by
+    # any FR; FR-7 is the requirement to change that parser, so report and parser
+    # land in the same merge and a consumer updating normally never sees this.
+    #
+    # RE-ENABLE once this feature merges and the daemon respawns onto an engine
+    # carrying the FR-7 parser. Nothing else should inherit this key.
+    disable: true
     llm_provider: claude
   architecture_review_as_built:
     llm_provider: claude
