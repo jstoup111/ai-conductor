@@ -34,6 +34,7 @@ describe('halt record rendering', () => {
         'Branch: feat/operator-decision\n' +
         'Head SHA: f00dbabe1234567890\n' +
         'Halted at: 2026-08-23T16:30:00.000Z\n\n' +
+        'Push status: this record may be ahead of the remote; push is not guaranteed.\n\n' +
         '## HALT\n\n' +
         '```text\n' +
         'Build review needs an operator decision.\nThe release note scope is unclear.\n' +
@@ -46,6 +47,12 @@ describe('halt record rendering', () => {
     const record = renderHaltRecord({ ...input, haltBody });
 
     expect(record).toContain(`\`\`\`\`\`text\n${haltBody}\n\`\`\`\`\``);
+  });
+
+  it('warns that the record may be ahead of the remote', () => {
+    expect(renderHaltRecord(input)).toContain(
+      'Push status: this record may be ahead of the remote; push is not guaranteed.\n',
+    );
   });
 
   it('is byte-identical for identical input and resolves the record path', () => {

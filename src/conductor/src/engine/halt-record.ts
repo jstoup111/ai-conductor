@@ -75,6 +75,7 @@ export function renderHaltRecord(input: HaltRecordInput): string {
     `Branch: ${input.branch}\n` +
     `Head SHA: ${input.headSha}\n` +
     `Halted at: ${input.haltedAt}\n\n` +
+    `Push status: this record may be ahead of the remote; push is not guaranteed.\n\n` +
     `## HALT\n\n` +
     `${fence}text\n${input.haltBody}${bodySuffix}${fence}\n`
   );
