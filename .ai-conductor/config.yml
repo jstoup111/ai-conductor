@@ -149,8 +149,8 @@ steps:
   # a fixed-grammar Release-* block validated by a required CI check that fails
   # closed, so a wrong answer is caught rather than shipped.
   release-disposition:
-    llm_provider: claude
-    model: sonnet
+    llm_provider: codex
+    model: gpt-5.6-terra
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
