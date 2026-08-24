@@ -116,3 +116,61 @@ export async function acceptClearedOverScopeHalt(projectRoot: string): Promise<A
     return null;
   }
 }
+
+export type IntentRelation = 'within' | 'outside-harmless' | 'outside-visible';
+
+export function prdAuditTableCells(line: string): string[] {
+  return line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
+}
+
+/** Criterion → declared intent relation, for OVER_SCOPE rows of a prd-audit Verdict Table. */
+export function overScopeRelations(reportText: string): Map<string, IntentRelation> {
+  const lines = reportText.split('\n');
+  const headerIndex = lines.findIndex((line) => {
+    if (!/^\s*\|/.test(line)) return false;
+    const header = prdAuditTableCells(line).map((cell) => cell.toLowerCase());
+    return header.includes('criterion') && header.includes('grade');
+  });
+  if (headerIndex === -1) return new Map();
+  const header = prdAuditTableCells(lines[headerIndex]!).map((cell) => cell.toLowerCase());
+  const criterionIndex = header.indexOf('criterion');
+  const gradeIndex = header.indexOf('grade');
+  const relationIndex = header.findIndex((cell) => cell === 'intent relation' || cell === 'intentrelation');
+  if (relationIndex === -1) return new Map();
+  const relations = new Map<string, IntentRelation>();
+  for (const line of lines.slice(headerIndex + 1)) {
+    if (!/^\s*\|/.test(line)) continue;
+    const cells = prdAuditTableCells(line);
+    if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
+    if (cells[gradeIndex]?.trim().toUpperCase() !== 'OVER_SCOPE') continue;
+    const criterion = cells[criterionIndex]?.trim().toUpperCase();
+    if (!criterion) continue;
+    const relation = (cells[relationIndex] ?? '').trim().toLowerCase();
+    if (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible') {
+      relations.set(criterion, relation);
+    }
+  }
+  return relations;
+}
+
+/**
+ * The ONE definition of "this OVER_SCOPE finding is accepted".
+ *
+ * `routePrdAuditOverScope` uses it to decide whether to halt asking the
+ * operator to accept; the prd_audit completion predicate uses it to decide
+ * whether the finding still blocks the gate. Before #1854 only the router
+ * consulted acceptance, so an accepted OVER_SCOPE finding stopped prompting
+ * but never satisfied the gate — the operator could accept scope bloat and
+ * still never ship, because the gate re-selected prd_audit until its
+ * oscillation cap halted the run.
+ */
+export function overScopeCriterionIsAccepted(
+  criterion: string,
+  relations: ReadonlyMap<string, IntentRelation>,
+  acceptedWidenings: readonly AcceptedWidening[],
+): boolean {
+  return (
+    relations.get(criterion) === 'within' ||
+    acceptedWidenings.some((entry) => entry.criterion === criterion)
+  );
+}

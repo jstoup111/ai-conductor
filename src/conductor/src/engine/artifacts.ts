@@ -19,6 +19,11 @@ import { seedTaskStatus } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
 import { gateVerdictStillValid } from './gate-code-validity.js';
+import {
+  overScopeCriterionIsAccepted,
+  overScopeRelations,
+  readAcceptedWidenings,
+} from './accepted-widenings.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveTaskIds } from './task-progress.js';
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
@@ -2761,9 +2766,18 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               for (const f of preCheckFiles) {
                 const report = await readFile(f, 'utf-8');
                 const parsed = parsePrdAuditReport(report);
+                const preRelations = overScopeRelations(report);
+                const preAccepted = (await readAcceptedWidenings(dir)).entries;
                 if (
                   (parsed.ok
-                    ? parsed.value.findings.some((finding) => finding.grade !== 'PASS')
+                    ? parsed.value.findings.some(
+                        (finding) =>
+                          finding.grade !== 'PASS' &&
+                          !(
+                            finding.grade === 'OVER_SCOPE' &&
+                            overScopeCriterionIsAccepted(finding.criterion, preRelations, preAccepted)
+                          ),
+                      )
                     : findUnalignedFrRows(report).length > 0) ||
                   (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null ||
                   (await prdAuditStoryCoverageGap(dir, artifactResolution, ctx.featureDesc, report)) !== null
@@ -2826,7 +2840,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         }
         continue;
       }
-      const blocking = parsed.value.findings.filter((finding) => finding.grade !== 'PASS');
+      // An OVER_SCOPE finding the operator has accepted — or that the audit
+      // itself graded intent-relation `within` — is recorded, not blocking.
+      // Without this the operator could accept scope bloat and still never
+      // ship: the gate re-selected prd_audit forever because acceptance was
+      // invisible here (#1854).
+      const reportText = await readFile(f, 'utf-8');
+      const relations = overScopeRelations(reportText);
+      const accepted = (await readAcceptedWidenings(dir)).entries;
+      const blocking = parsed.value.findings.filter(
+        (finding) =>
+          finding.grade !== 'PASS' &&
+          !(
+            finding.grade === 'OVER_SCOPE' &&
+            overScopeCriterionIsAccepted(finding.criterion, relations, accepted)
+          ),
+      );
       if (blocking.length > 0) {
         const shown = blocking.slice(0, 3).map((finding) => `${finding.criterion} (${finding.grade})`).join('; ');
         const more = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : '';
