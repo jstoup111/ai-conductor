@@ -289,7 +289,12 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     });
     expect(template).toMatch(/test_suite:[\s\S]*command:[^\n]*npm test[\s\S]*working_directory:/i);
     const testScript = JSON.parse(packageJson).scripts.test as string;
-    expect(testScript.match(/vitest run/g)).toHaveLength(4);
+    // Signal simulation needs a thread worker, but runs concurrently with the
+    // fork-pool batch rather than after it.
+    expect(testScript.match(/vitest run/g)).toHaveLength(3);
+    expect(testScript).toContain('vitest.signal.config.ts');
+    expect(testScript).toContain('wait "$ordinary"');
+    expect(testScript).toContain('wait "$signals"');
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);
     expect(vitestConfig).toMatch(
