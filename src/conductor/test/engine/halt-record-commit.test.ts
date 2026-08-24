@@ -118,7 +118,7 @@ async function statusPaths(cwd: string): Promise<string[]> {
 async function configureBareRemote(worktree: string): Promise<string> {
   const remote = await mkdtemp(join(tmpdir(), 'halt-record-commit-remote-'));
   scratchRoots.push(remote);
-  await execa('git', ['init', '--bare', '-q', remote]);
+  await execa('git', ['init', '--bare', '-b', 'main', '-q', remote]);
   await execa('git', ['remote', 'add', 'origin', remote], { cwd: worktree });
   await execa('git', ['push', '--set-upstream', 'origin', input.branch], { cwd: worktree });
   return remote;

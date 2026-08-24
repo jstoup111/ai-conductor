@@ -486,7 +486,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     const originPath = join(tmpDir, 'origin.git');
 
     // Create a bare origin repo
-    execSync(`git init --bare "${originPath}"`);
+    execSync(`git init --bare -b main "${originPath}"`);
 
     // Create the main repo and configure remote
     execSync(`git init -b main "${repoPath}"`);

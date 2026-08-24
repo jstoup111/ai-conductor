@@ -297,7 +297,7 @@ async function makeFeatureRepository(): Promise<{ worktree: string; repositoryRo
   await (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).writeFile(join(main, 'README.md'), 'test\n');
   await execa('git', ['add', 'README.md'], { cwd: main });
   await execa('git', ['commit', '-q', '-m', 'initial'], { cwd: main });
-  await execa('git', ['init', '--bare', '-q', remote]);
+  await execa('git', ['init', '--bare', '-b', 'main', '-q', remote]);
   await execa('git', ['worktree', 'add', '-q', '-b', 'feat/operator-decision', worktree], { cwd: main });
   await execa('git', ['remote', 'add', 'origin', remote], { cwd: worktree });
   await execa('git', ['push', '-q', '--set-upstream', 'origin', 'feat/operator-decision'], { cwd: worktree });

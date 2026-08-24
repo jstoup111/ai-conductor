@@ -2240,6 +2240,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'halt_marker_write_failed':
       log(`${dot} ${chalk.red('✋')} ${chalk.red(`halt marker write failed: ${event.path} — ${event.reason}`)}`);
       break;
+    case 'halt_record_written':
+      log(`${dot} ${chalk.green('✓')} ${chalk.green(`halt record committed: ${event.path} (${event.haltClass})`)}`);
+      break;
+    case 'halt_record_write_failed':
+      log(`${dot} ${chalk.red('✋')} ${chalk.red(`halt record write failed: ${event.path} — ${event.reason}`)}`);
+      break;
+    case 'halt_record_push_failed':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`halt record push failed: ${event.path} — ${event.reason}`)}`);
+      break;
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);
       break;
