@@ -3123,6 +3123,73 @@ describe('engine/artifacts', () => {
     });
   });
 
+  describe('checkStepCompletion: prd_audit operator-accepted OVER_SCOPE (#1854)', () => {
+    const table =
+      '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |\n' +
+      '| --- | --- | --- | --- | --- | --- |\n';
+
+    async function writeReport(rows: string): Promise<void> {
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' + table + rows,
+      );
+    }
+
+    async function accept(...criteria: string[]): Promise<void> {
+      await createFile(
+        '.pipeline/accepted-widenings.json',
+        JSON.stringify({
+          version: 1,
+          entries: criteria.map((criterion) => ({
+            criterion,
+            summary: `operator accepted ${criterion}`,
+            acceptedAt: '2026-08-24T00:00:00.000Z',
+          })),
+        }),
+      );
+    }
+
+    it('an OVER_SCOPE finding the operator accepted no longer blocks the gate', async () => {
+      await writeReport('| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n');
+      await accept('S3.1');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(true);
+    });
+
+    it('the same finding still blocks when the operator has NOT accepted it', async () => {
+      await writeReport('| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('S3.1 (OVER_SCOPE)');
+    });
+
+    it('an OVER_SCOPE finding the audit graded intent-relation `within` does not block', async () => {
+      await writeReport('| S3.1 | OVER_SCOPE | — | none | within | conductor.ts:8163 |\n');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(true);
+    });
+
+    it('acceptance is scoped to OVER_SCOPE — an accepted criterion graded PLAN_GAP still blocks', async () => {
+      await writeReport('| S5.7 | PLAN_GAP | — | none | — | coherence-validator.ts:1710 |\n');
+      await accept('S5.7');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('S5.7 (PLAN_GAP)');
+    });
+
+    it('accepting one finding does not clear an unaccepted sibling', async () => {
+      await writeReport(
+        '| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n' +
+          '| S4.2 | OVER_SCOPE | — | none | outside-visible | daemon-cli.ts:2044 |\n',
+      );
+      await accept('S3.1');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('S4.2 (OVER_SCOPE)');
+      expect(result.reason).not.toContain('S3.1');
+    });
+  });
+
   describe('checkStepCompletion: architecture_review_as_built codeStamp sidecar (gate-code-validity, #817)', () => {
     const SIDECAR = '.pipeline/architecture-review-as-built-code-stamp.json';
 
