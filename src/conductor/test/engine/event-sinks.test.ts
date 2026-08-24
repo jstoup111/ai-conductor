@@ -100,6 +100,9 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_stale_aggregate',
   'loop_halt',
   'halt_marker_write_failed',
+  'halt_record_written',
+  'halt_record_write_failed',
+  'halt_record_push_failed',
   'rebase_conflict_halt',
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -524,6 +527,18 @@ describe('event sink subscriptions', () => {
     expect(new Set(persistedEventTypes())).toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
   });
 
+  it('declares sink policies for halt-record outcomes', () => {
+    expect({
+      written: EVENT_SINKS.halt_record_written,
+      writeFailed: EVENT_SINKS.halt_record_write_failed,
+      pushFailed: EVENT_SINKS.halt_record_push_failed,
+    }).toEqual({
+      written: { render: true, persist: true, audit: true },
+      writeFailed: { render: true, persist: true, audit: true },
+      pushFailed: { render: true, persist: true, audit: true },
+    });
+  });
+
   it('keeps non-halt lifecycle events out of the persisted set', () => {
     const neverPersisted = [
       'loop_converged',
@@ -544,6 +559,9 @@ describe('event sink subscriptions', () => {
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
       'verdict_freshness',
       'halt_marker_write_failed',
+      'halt_record_written',
+      'halt_record_write_failed',
+      'halt_record_push_failed',
       'build_review_disposition_version_invalidated',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
@@ -554,6 +572,9 @@ describe('event sink subscriptions', () => {
     expect(new Set(renderedEventTypes())).toEqual(new Set([
       ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
       'halt_marker_write_failed',
+      'halt_record_written',
+      'halt_record_write_failed',
+      'halt_record_push_failed',
     ]));
   });
 });
