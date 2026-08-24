@@ -122,8 +122,11 @@ steps:
   # network egress. The claude pin existed because `gh pr create` had to escape
   # the sandbox and lost the auto_review approval — a permissions limit, not a
   # capability one. Revert this pin if publication quality regresses.
+  # Unpinned from codex 2026-08-24 for the same reason as
+  # `release-disposition` above — `finish` sits later in the same SHIP tail
+  # and would hit the identical prepare-time failure. Restore together.
   finish:
-    llm_provider: codex
+    llm_provider: claude
   manual_test:
     disable: true
   # build stays on the codex `terra` default at medium effort. A bump to `sol`
@@ -148,9 +151,15 @@ steps:
   # egress under the workspace-write sandbox, fixed by PR #1828. The output is
   # a fixed-grammar Release-* block validated by a required CI check that fails
   # closed, so a wrong answer is caught rather than shipped.
+  # Unpinned from codex 2026-08-24: every attempt died in <1s at
+  # conductor.ts:3961 "Codex self-host isolation is unavailable for the
+  # resolved provider candidate" — a prepare-time wiring failure in the
+  # SHIP tail, never a provider call. `build` runs codex fine in the same
+  # worktree, so this is step-path-specific, not a codex capability gap.
+  # Restore the codex route once that is fixed.
   release-disposition:
-    llm_provider: codex
-    model: gpt-5.6-terra
+    llm_provider: claude
+    model: sonnet
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
