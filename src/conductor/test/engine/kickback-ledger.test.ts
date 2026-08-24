@@ -16,6 +16,8 @@ import {
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  recordGrowth,
+  readGrowth,
   readKickbackLedger,
   writeKickbackLedger,
   type KickbackGateEntry,
@@ -35,6 +37,107 @@ describe('kickback-ledger', () => {
 
   it('returns an empty ledger when the ledger file is absent', async () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  describe('plan growth', () => {
+    it('persists authored and gate-added tasks, then reports the remaining cap', async () => {
+      await recordGrowth(dir, {
+        authored: 19,
+        added: 3,
+        byGate: { prd_audit: 3 },
+      });
+
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 19,
+        added: 3,
+        byGate: { prd_audit: 3 },
+        remaining: 1,
+      });
+      await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+        growth: { authored: 19, added: 3, byGate: { prd_audit: 3 } },
+      });
+    });
+
+    it('derives authored count from only the recorded active plan, including pre-existing rem tasks', async () => {
+      const activePlan = join(dir, '.docs/plans/active.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/active.md',
+      }));
+      await writeFile(activePlan, [
+        '### Task 1: Original work',
+        '### Task rem-legacy-1: Pre-existing remediation',
+        '### Task 2: More original work',
+      ].join('\n'));
+      await writeFile(join(dir, '.docs/plans/unrelated.md'), [
+        '### Task 1: Wrong plan',
+        '### Task 2: Wrong plan',
+        '### Task 3: Wrong plan',
+        '### Task 4: Wrong plan',
+      ].join('\n'));
+
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 3,
+        added: 0,
+        byGate: {},
+        remaining: 4,
+      });
+    });
+
+    it('recomputes and logs an impossible hand-edited growth record', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/active.md',
+      }));
+      await writeFile(join(dir, '.docs/plans/active.md'), [
+        '### Task 1: Original work',
+        '### Task rem-legacy-1: Pre-existing remediation',
+      ].join('\n'));
+      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: {},
+        growth: { authored: 1, added: 4, byGate: { prd_audit: 3 } },
+      }));
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        await expect(readGrowth(dir, 4)).resolves.toEqual({
+          authored: 2,
+          added: 0,
+          byGate: {},
+          remaining: 4,
+        });
+        await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+          growth: { authored: 2, added: 0, byGate: {} },
+        });
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('impossible growth record'));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('emits plan growth through the supplied event-spine sink', async () => {
+      const emitted: unknown[] = [];
+
+      await recordGrowth(dir, {
+        authored: 19,
+        added: 3,
+        byGate: { prd_audit: 3 },
+      }, {
+        cap: 4,
+        events: { emit: async (event) => { emitted.push(event); } },
+      });
+
+      expect(emitted).toEqual([{
+        type: 'plan_growth',
+        authored: 19,
+        added: 3,
+        byGate: { prd_audit: 3 },
+        remaining: 1,
+      }]);
+    });
   });
 
   it('returns an empty ledger and warns when the ledger JSON is corrupt', async () => {

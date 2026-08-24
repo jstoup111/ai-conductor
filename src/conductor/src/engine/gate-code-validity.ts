@@ -93,6 +93,7 @@ export async function gateVerdictStillValid(
   const F =
     surface === 'feature-runtime' ||
     surface === 'feature-codetest' ||
+    surface === 'feature-runtime-or-prd-inputs' ||
     surface === 'all-runtime'
       ? await deriveFeatureSurface(ctx)
       : [];
@@ -114,6 +115,13 @@ export async function gateVerdictStillValid(
         F.length === 0
           ? test.length === 0 && featureSrc.length === 0 && foreignSrc.length === 0
           : featureSrc.length === 0 && featureTestPaths(delta, F).length === 0;
+      break;
+    case 'feature-runtime-or-prd-inputs':
+      isSurfaceMiss =
+        featureSrc.length === 0 &&
+        !delta.some(
+          (path) => path.startsWith('.docs/stories/') || path.startsWith('.docs/specs/'),
+        );
       break;
     case 'all-runtime':
       isSurfaceMiss = featureSrc.length === 0 && foreignSrc.length === 0;

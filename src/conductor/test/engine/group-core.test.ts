@@ -352,23 +352,23 @@ describe("group-core: runAuxiliaryGroupBranch", () => {
     };
     const outcome: BuildReviewRubricResult = {
       kind: "skipped",
-      rubric: "tautology",
+      rubric: "testQuality",
       reason: "disabled",
     };
     const execute = vi.fn(async (
-      memberId: "tautology",
+      memberId: "testQuality",
       receivedPolicy: ResolvedBuildReviewRubricPolicy,
     ): Promise<BuildReviewRubricResult> => {
-      expect(memberId).toBe("tautology");
+      expect(memberId).toBe("testQuality");
       expect(receivedPolicy).toBe(policy);
       return outcome;
     });
 
-    await expect(runAuxiliaryGroupBranch("tautology", policy, execute)).resolves.toBe(outcome);
-    expect(execute).toHaveBeenCalledWith("tautology", policy);
+    await expect(runAuxiliaryGroupBranch("testQuality", policy, execute)).resolves.toBe(outcome);
+    expect(execute).toHaveBeenCalledWith("testQuality", policy);
   });
 
-  it("caps auxiliary fan-out while preserving each member's policy and attributed outcome", async () => {
+  it("preserves the configured test-quality policy and attributed outcome", async () => {
     const deferred = <T>() => {
       let resolve!: (value: T) => void;
       const promise = new Promise<T>((done) => {
@@ -377,43 +377,27 @@ describe("group-core: runAuxiliaryGroupBranch", () => {
       return { promise, resolve };
     };
     const first = deferred<BuildReviewRubricResult>();
-    const second = deferred<BuildReviewRubricResult>();
-    const third = deferred<BuildReviewRubricResult>();
-    const thirdStarted = deferred<void>();
     const started: string[] = [];
-    const policies: Record<"tautology" | "scope" | "rootCause", ResolvedBuildReviewRubricPolicy> = {
-      tautology: { enabled: true, llm_provider: "claude", model: "sonnet", effort: "medium", model_fallback_ladder: ["sonnet", "opus"], max_retries: 2, escalate: false },
-      scope: { enabled: true, llm_provider: "codex", model: "gpt-5.6-terra", effort: "high", model_fallback_ladder: ["gpt-5.6-terra"], max_retries: 3, escalate: true },
-      rootCause: { enabled: true, llm_provider: "claude", model: "opus", effort: "xhigh", model_fallback_ladder: ["opus"], max_retries: 1, escalate: true },
+    const policies: Record<"testQuality", ResolvedBuildReviewRubricPolicy> = {
+      testQuality: { enabled: true, llm_provider: "claude", model: "sonnet", effort: "medium", model_fallback_ladder: ["sonnet", "opus"], max_retries: 2, escalate: false },
     };
-    const pending = { tautology: first, scope: second, rootCause: third };
 
     const outcomesPromise = runAuxiliaryGroupBranches(
       Object.entries(policies).map(([memberId, policy]) => ({ memberId, policy })),
-      2,
+      1,
       async (memberId, policy) => {
         started.push(memberId);
         expect(policy).toBe(policies[memberId as keyof typeof policies]);
-        if (memberId === "rootCause") thirdStarted.resolve();
-        return pending[memberId as keyof typeof pending].promise;
+        return first.promise;
       },
     );
 
     await Promise.resolve();
-    await Promise.resolve();
-    expect(started).toEqual(["tautology", "scope"]);
-
-    first.resolve({ kind: "skipped", rubric: "tautology", reason: "disabled" });
-    await thirdStarted.promise;
-    expect(started).toEqual(["tautology", "scope", "rootCause"]);
-
-    second.resolve({ kind: "infrastructure-failure", rubric: "scope", reason: "retry-exhausted", detail: "codex exhausted" });
-    third.resolve({ kind: "judged", rubric: "rootCause", lapId: "lap-1" as never, snapshotDigest: "digest", contractVersion: "v1" as never, findings: [], verdict: "PASS" });
+    expect(started).toEqual(["testQuality"]);
+    first.resolve({ kind: "judged", rubric: "testQuality", lapId: "lap-1" as never, snapshotDigest: "digest", contractVersion: "v1" as never, findings: [], verdict: "PASS" });
 
     await expect(outcomesPromise).resolves.toEqual([
-      { kind: "skipped", rubric: "tautology", reason: "disabled" },
-      { kind: "infrastructure-failure", rubric: "scope", reason: "retry-exhausted", detail: "codex exhausted" },
-      { kind: "judged", rubric: "rootCause", lapId: "lap-1", snapshotDigest: "digest", contractVersion: "v1", findings: [], verdict: "PASS" },
+      { kind: "judged", rubric: "testQuality", lapId: "lap-1", snapshotDigest: "digest", contractVersion: "v1", findings: [], verdict: "PASS" },
     ]);
   });
 });

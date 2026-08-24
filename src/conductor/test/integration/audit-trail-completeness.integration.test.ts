@@ -53,6 +53,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   AuditedEventType,
   'friction-mapped' | 'not-audited-by-design'
 > = {
+  config_deprecated_key: 'not-audited-by-design',
   contained_live_checkout_drift: 'not-audited-by-design',
   self_host_containment_verdict: 'not-audited-by-design',
   build_review_rubric_started: 'not-audited-by-design',
@@ -152,6 +153,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   unattributed_progress: 'not-audited-by-design',
   halt_cleared: 'friction-mapped',
   operator_rewind: 'friction-mapped',
+  plan_growth: 'not-audited-by-design',
   ci_failed: 'not-audited-by-design',
   attribution_divergence: 'not-audited-by-design',
   acceptance_red: 'not-audited-by-design',
@@ -159,6 +161,11 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
+  config_deprecated_key: {
+    type: 'config_deprecated_key',
+    key: 'build_review.rubrics.scope',
+    adr: 'adr-2026-08-22-build-review-opt-in-rubric-container',
+  },
   contained_live_checkout_drift: {
     type: 'contained_live_checkout_drift',
     evidence: 'live root read-only; worktree writable',
@@ -453,6 +460,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   halt_cleared: { type: 'halt_cleared', step: 'build', cause: 'operator' },
   operator_rewind: { type: 'operator_rewind', operator: 'operator', target: 'build', demoted: ['build', 'test_suite'] },
+  plan_growth: { type: 'plan_growth', authored: 19, added: 3, byGate: { prd_audit: 3 }, remaining: 1 },
   ci_failed: {
     type: 'ci_failed',
     prUrl: 'https://github.com/acme/repo/pull/1',

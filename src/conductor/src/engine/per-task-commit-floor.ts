@@ -3,7 +3,6 @@ import { isAbsolute, join } from 'node:path';
 import { execa } from 'execa';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import {
-  parsePlanTaskVerifyOnly,
   canonicalTaskId,
   filesForCommit,
   listCommitsWithTrailers,
@@ -11,25 +10,7 @@ import {
 import { evaluateScopeContainment } from './plan-scope-containment.js';
 import { parseScopeTrailers } from './scope-trailer.js';
 import { resolveScopeWideningRationale } from './scope-widening-rationale.js';
-import { normalizeTasks } from './task-progress.js';
 import type { ConductorEvent } from '../types/events.js';
-
-/**
- * Per-task work-happened floor (task 1 of the per-task-commit-floor plan):
- * for every plan task id, confirm it is EITHER covered by a commit carrying
- * a matching `Task:` trailer OR marked verify-only in the plan. A gap is a
- * plan task id satisfying neither. Fail-soft: any thrown error (missing
- * plan, git failure, malformed input) degrades to a satisfied, no-gap report
- * with a skip note — this floor never fabricates a gap it couldn't actually
- * verify.
- */
-export interface PerTaskFloorReport {
-  satisfied: boolean;
-  gaps: string[];
-  coveredTasks: string[];
-  markedTasks: string[];
-  skipNotes: string[];
-}
 
 export interface ContainmentFloorViolation {
   taskId: string;
@@ -58,59 +39,6 @@ export type ContainmentCheckUnresolvedRecord = Extract<
   ConductorEvent,
   { type: 'containment_check_unresolved' }
 >;
-
-export async function runPerTaskCommitFloor(args: {
-  projectRoot: string;
-  planPath: string;
-  taskStatusPath?: string;
-}): Promise<PerTaskFloorReport> {
-  try {
-    const planText = await readFile(args.planPath, 'utf-8');
-    const planIds = [...parsePlanTaskPaths(planText).keys()];
-
-    const commits = await listCommitsWithTrailers(args.projectRoot);
-    const coveredCanonical = new Set<string>();
-    for (const commit of commits) {
-      for (const value of commit.trailers['Task'] ?? []) {
-        coveredCanonical.add(canonicalTaskId(value));
-      }
-    }
-
-    const verifyOnly = parsePlanTaskVerifyOnly(planText);
-    const skippedCanonical = await readSkippedTaskIds(
-      args.taskStatusPath ?? join(args.projectRoot, '.pipeline/task-status.json'),
-    );
-
-    const coveredTasks: string[] = [];
-    const markedTasks: string[] = [];
-    const gaps: string[] = [];
-
-    for (const id of planIds) {
-      const covered = coveredCanonical.has(canonicalTaskId(id));
-      const marked = verifyOnly.get(id) === true || skippedCanonical.has(canonicalTaskId(id));
-      if (covered) coveredTasks.push(id);
-      if (marked) markedTasks.push(id);
-      if (!covered && !marked) gaps.push(id);
-    }
-
-    return {
-      satisfied: gaps.length === 0,
-      gaps,
-      coveredTasks,
-      markedTasks,
-      skipNotes: [],
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      satisfied: true,
-      gaps: [],
-      coveredTasks: [],
-      markedTasks: [],
-      skipNotes: [`per-task-commit-floor: ${message}`],
-    };
-  }
-}
 
 /**
  * Commit-history containment backstop. Unlike the commit-msg hook, this runs
@@ -359,41 +287,6 @@ async function commitMessage(projectRoot: string, sha: string): Promise<string> 
     throw new Error(`git show ${sha} failed: ${result.stderr || 'unknown error'}`);
   }
   return result.stdout;
-}
-
-/**
- * Canonical ids of `.pipeline/task-status.json` rows with `status ===
- * 'skipped'`. Fail-soft: a missing/unreadable/malformed status file (or one
- * `normalizeTasks` can't make sense of) yields an empty set — this is the
- * ordinary "no data" case, not an error worth a skip note.
- */
-async function readSkippedTaskIds(taskStatusPath: string): Promise<Set<string>> {
-  const skipped = new Set<string>();
-  let raw: string;
-  try {
-    raw = await readFile(taskStatusPath, 'utf-8');
-  } catch {
-    return skipped;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return skipped;
-  }
-  for (const task of normalizeTasks(parsed)) {
-    if (task.status === 'skipped' && task.id !== undefined) {
-      skipped.add(canonicalTaskId(task.id));
-    }
-  }
-  return skipped;
-}
-
-export function renderPerTaskFloorReport(report: PerTaskFloorReport): string[] {
-  return report.gaps.map(
-    (id) =>
-      `Advisory: task ${id} produced no commit carrying its Task: trailer and no verify-only/skip marker — confirm its work shipped inside another task's commit or add a **Verify-only:** marker.`,
-  );
 }
 
 export function renderContainmentFloorReport(report: ContainmentFloorReport): string[] {

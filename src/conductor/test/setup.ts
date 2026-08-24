@@ -24,6 +24,13 @@
 //    (e.g. a suite intentionally poisoning it with `"undefined"` to test a fallback path
 //    still wins). Tests that inject `env`/`home` directly into `resolveEngineerDir` bypass
 //    `process.env` entirely and are unaffected either way.
+//
+// 4. A self-host daemon marks its own maker session with
+//    CONDUCT_DAEMON_SESSION=1. Real-binary test fixtures intentionally spawn
+//    ordinary operator CLIs, so inheriting that ambient marker would refuse
+//    them before their fixture can exercise the target behavior. Enable only
+//    the guard's documented test valve here; tests of the guard pass an
+//    explicit environment and still cover the production refusal path.
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +39,7 @@ import { NO_AUTOLAUNCH_ENV } from '../src/engine/engineer/daemon-launch.js';
 
 process.env[NO_AUTOLAUNCH_ENV] = '1';
 process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+process.env.CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW = '1';
 if (!process.env.AI_CONDUCTOR_ENGINEER_DIR) {
   process.env.AI_CONDUCTOR_ENGINEER_DIR = mkdtempSync(
     join(tmpdir(), 'ai-conductor-test-engineer-')

@@ -20,6 +20,9 @@ export const HALT_CLASS_MARKER = '.pipeline/HALT.class';
 /** HALT class for a feature-authored protected-artifact violation. */
 export const PROTECTED_ARTIFACT_HALT_CLASS = 'protected-artifact';
 
+/** HALT class for an approved-plan insufficiency requiring human judgement. */
+export const PLAN_GAP_HALT_CLASS = 'plan-gap';
+
 /**
  * Classification of a HALT: `needs-human` marks are those only an operator
  * can resolve; `mechanical` marks are those the daemon may safely re-kick.
@@ -27,10 +30,25 @@ export const PROTECTED_ARTIFACT_HALT_CLASS = 'protected-artifact';
 export type HaltClass =
   | 'needs-human'
   | 'mechanical'
-  | typeof PROTECTED_ARTIFACT_HALT_CLASS;
+  | typeof PROTECTED_ARTIFACT_HALT_CLASS
+  | typeof PLAN_GAP_HALT_CLASS;
 
 /** Classification observed while reading a HALT sidecar. */
 export type HaltDisposition = HaltClass | 'legacy' | 'unclassified';
+
+/** True for a classified halt which the daemon must retain for an operator. */
+export function isOperatorActionHalt(
+  haltClass: HaltDisposition,
+): haltClass is 'needs-human' | typeof PLAN_GAP_HALT_CLASS | 'unclassified' {
+  return haltClass === 'needs-human' || haltClass === PLAN_GAP_HALT_CLASS || haltClass === 'unclassified';
+}
+
+/** True when a newly written step HALT has a class that carries its body as a reason. */
+function isStepWrittenHumanHalt(
+  haltClass: HaltDisposition,
+): haltClass is 'needs-human' | typeof PLAN_GAP_HALT_CLASS {
+  return haltClass === 'needs-human' || haltClass === PLAN_GAP_HALT_CLASS;
+}
 
 /** Outcome of a best-effort halt-marker write. */
 export type HaltMarkerWriteResult =
@@ -133,7 +151,7 @@ export async function readStepWrittenHaltReason(
   if (!now.present) return null;
   const unchanged = before.present && now.mtimeMs === before.mtimeMs && now.size === before.size;
   if (unchanged) return null;
-  if ((await readHaltClass(projectRoot)) !== 'needs-human') return null;
+  if (!isStepWrittenHumanHalt(await readHaltClass(projectRoot))) return null;
   try {
     const body = (await readFile(join(projectRoot, HALT_MARKER), 'utf-8')).trim();
     return body.length > 0 ? body : null;
@@ -156,7 +174,8 @@ export async function readHaltClass(worktreePath: string): Promise<HaltDispositi
       contents === 'needs-human' ||
       contents === 'mechanical' ||
       contents === 'legacy' ||
-      contents === PROTECTED_ARTIFACT_HALT_CLASS
+      contents === PROTECTED_ARTIFACT_HALT_CLASS ||
+      contents === PLAN_GAP_HALT_CLASS
     ) {
       return contents;
     }

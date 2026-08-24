@@ -122,9 +122,8 @@ conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> --r
 `findings` is read-only and renders the current feature's raw and effective build-review findings;
 `--json` selects machine-readable output. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
-and a non-empty rationale. Acceptance works on every rubric — `tautology`, `scope`, `rootCause`, and
-`completeness` — because the identity the engine prints is the identity the disposition store
-accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
+and a non-empty rationale. Acceptance works on every registered rubric — currently only `testQuality` —
+because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
 artifacts and exit 1; successful findings inspection and accepted exact-current findings exit 0.
 A refusal names the check that failed — unreadable aggregate, non-current lap, unknown finding, or a
 disposition-store rejection — and records the same reason on the feature's
@@ -297,6 +296,10 @@ specs are blocked. If the snapshot is missing, malformed, or unreadable, status 
 state unknown rather than implying an all-clear. This is a read-only local-file view: it does not
 invoke Git, GitHub, or the network. The daemon startup dashboard does not yet render this section;
 that UI work is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
+
+For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line reading the feature's
+kickback ledger and resolved `prd_audit` cap: the plan's authored task count, the number of tasks added
+so far (broken down by the gate that added them, when any), and how many remain under the cap.
 
 Nine rendered states. `restart-pending` and `dead-pane` are overlays: they take precedence in the
 badge, but the underlying liveness and pause facts stay on the row.

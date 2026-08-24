@@ -9,6 +9,7 @@ import {
 } from './build-review-aggregate.js';
 import {
   BuildReviewDispositionStore,
+  isRetiredBuildReviewRubric,
   type BuildReviewDispositionListResult,
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
@@ -30,6 +31,8 @@ export interface BuildReviewEffectiveResolverDeps {
   readonly createStore?: (projectRoot: string) => DispositionStore;
   /** Reports durable dispositions that no longer bind the current contract. */
   readonly emit?: (event: Extract<ConductorEvent, { type: 'build_review_disposition_version_invalidated' }>) => void | Promise<void>;
+  /** Reports ignored legacy records supplied by a custom disposition store. */
+  readonly log?: (message: string) => void;
 }
 
 export type BuildReviewEffectiveResolution =
@@ -97,7 +100,19 @@ export async function resolveEffectiveBuildReviewVerdict(
   if (listed.records.some((record) => !sameFeature(record.feature, feature))) {
     return { ok: false, reason: 'build-review disposition state returned a foreign feature record' };
   }
-  for (const record of listed.records) {
+  const dispositions = listed.records.filter((record) => {
+    const rubric = record?.finding?.canonicalPayload?.rubric;
+    if (!isRetiredBuildReviewRubric(rubric)) return true;
+    deps.log?.(`ignored retired rubric record: ${rubric}`);
+    return false;
+  });
+  const reducedCoverageRecords = reducedCoverage.records.filter((record) => {
+    const rubric = record?.identity?.rubric;
+    if (!isRetiredBuildReviewRubric(rubric)) return true;
+    deps.log?.(`ignored retired rubric record: ${rubric}`);
+    return false;
+  });
+  for (const record of dispositions) {
     if (record.finding.canonicalPayload.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) {
       await deps.emit?.({
         type: 'build_review_disposition_version_invalidated',
@@ -110,14 +125,14 @@ export async function resolveEffectiveBuildReviewVerdict(
   }
   let effective: BuildReviewEffectiveVerdict | undefined;
   try {
-    effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records, reducedCoverage.records);
+    effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, dispositions, reducedCoverageRecords);
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };
   }
   if (!effective) return { ok: false, reason: 'build-review disposition state cannot resolve current findings' };
   const renderedReducedCoverage = renderBuildReviewReducedCoverageEvidence({
     state: 'known',
-    records: reducedCoverage.records,
+    records: reducedCoverageRecords,
     currentFailures: Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
   });
   if (!renderedReducedCoverage.ok) return { ok: false, reason: renderedReducedCoverage.message };

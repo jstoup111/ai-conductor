@@ -97,7 +97,7 @@ describe('Story 7: npm scripts preserve scoped test selection', () => {
     await mkdir(join(fixtureRoot, '.pipeline'), { recursive: true });
     await writeFile(verdictPath, JSON.stringify({
       verdict: 'PASS',
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      rubric: { testQuality: false },
     }));
 
     const completion = await checkStepCompletion(fixtureRoot, 'build_review', {

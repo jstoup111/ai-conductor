@@ -1,91 +1,44 @@
-import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+
 import {
   classifyBuildReviewRubricBranches,
   coordinateBuildReviewRubrics,
   type BuildReviewCoordinationInput,
-  type BuildReviewCoordinatorHooks,
 } from "../../src/engine/build-review-coordinator.js";
 import {
+  mapBuildReviewCoordinatorFailureReason,
   parseBuildReviewInfrastructureFailure,
   parseBuildReviewLapId,
   type BuildReviewInfrastructureFailureReason,
 } from "../../src/engine/build-review-domain.js";
-import type { BuildReviewCacheEntry } from "../../src/engine/build-review-cache.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
-import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
-import type { ResolvedBuildReviewConfig } from "../../src/engine/resolved-config.js";
-import type { ConductorEvent } from "../../src/types/events.js";
+import type {
+  ResolvedBuildReviewConfig,
+  ResolvedBuildReviewRubricPolicy,
+} from "../../src/engine/resolved-config.js";
 
-function config(overrides: Partial<ResolvedBuildReviewConfig> = {}): ResolvedBuildReviewConfig {
-  const policy = {
-    enabled: true,
-    llm_provider: "claude" as const,
-    model: "sonnet",
-    effort: "medium" as const,
-    model_fallback_ladder: ["sonnet"],
-    max_retries: 1,
-    escalate: false,
-  };
+const policy: ResolvedBuildReviewRubricPolicy = {
+  enabled: true,
+  llm_provider: "claude",
+  model: "sonnet",
+  effort: "medium",
+  model_fallback_ladder: ["sonnet"],
+  max_retries: 1,
+  escalate: false,
+};
+
+function config(testQualityEnabled: boolean): ResolvedBuildReviewConfig {
+  // The test-quality config key is introduced after the legacy resolved type.
+  // The coordinator's registry, not that retired type, owns runnable membership.
   return {
     enabled: true,
     perTaskFloor: true,
     scopeContainmentEnforced: false,
-    maxParallel: 5,
-    rubrics: {
-      tautology: policy,
-      scope: policy,
-      rootCause: policy,
-      completeness: policy,
-    },
-    ...overrides,
-  };
+    maxParallel: 1,
+    rubrics: { testQuality: { ...policy, enabled: testQualityEnabled } },
+  } as unknown as ResolvedBuildReviewConfig;
 }
-
-describe("build-review coordinator: pre-dispatch classification", () => {
-  it("classifies disabled branches before any cache or model call", () => {
-    const resolved = config({
-      rubrics: {
-        ...config().rubrics,
-        tautology: { ...config().rubrics.tautology, enabled: false },
-      },
-    });
-    const hooks: BuildReviewCoordinatorHooks = {
-      lookupCache: vi.fn(),
-      dispatchModel: vi.fn(),
-    };
-
-    expect(classifyBuildReviewRubricBranches(resolved, [], hooks)).toEqual({
-      kind: "ready",
-      branches: [
-        { kind: "skipped", rubric: "tautology", reason: "disabled" },
-        { rubric: "scope", skillName: "build-review-scope", policy: resolved.rubrics.scope },
-        { rubric: "rootCause", skillName: "build-review-root-cause", policy: resolved.rubrics.rootCause },
-        { rubric: "completeness", skillName: "build-review-completeness", policy: resolved.rubrics.completeness },
-      ],
-    });
-    expect(hooks.lookupCache).not.toHaveBeenCalled();
-    expect(hooks.dispatchModel).not.toHaveBeenCalled();
-  });
-
-  it("refuses an enabled gate whose every rubric is disabled instead of passing an empty lap", () => {
-    const disabled = { ...config().rubrics };
-    for (const rubric of Object.keys(disabled) as Array<keyof typeof disabled>) {
-      disabled[rubric] = { ...disabled[rubric], enabled: false };
-    }
-
-    expect(classifyBuildReviewRubricBranches(config({ rubrics: disabled }), ["src/index.ts"])).toEqual({
-      kind: "refused",
-      reason: "no-enabled-rubrics",
-    });
-  });
-
-  it("returns a disabled gate result without creating a synthetic successful branch", () => {
-    expect(classifyBuildReviewRubricBranches(config({ enabled: false }), ["src/index.ts"])).toEqual({
-      kind: "gate-disabled",
-    });
-  });
-});
 
 function inputs(): BuildReviewFrozenInputs {
   const sourceContent = {
@@ -95,554 +48,376 @@ function inputs(): BuildReviewFrozenInputs {
     removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
   };
   return {
-    diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
-    planBody: "# Plan\n",
-    mergeBase: "base", baseRef: "origin/main", baseKind: "remote", trackingRefSha: "base", remoteHeadSha: "base", fresh: true,
-    repairContext: [], acceptedWidenings: [],
-    removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    ...sourceContent,
+    mergeBase: "base",
+    baseRef: "origin/main",
+    baseKind: "remote",
+    trackingRefSha: "base",
+    remoteHeadSha: "base",
+    fresh: true,
     testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" } as never,
     sourceSnapshot: {
-      digest: "sha256:snapshot", contentDigest: contentDigestFor(sourceContent), baseRef: "origin/main", mergeBase: "base", headSha: "head",
-      ...sourceContent, acceptedWidenings: [],
+      digest: "sha256:snapshot",
+      contentDigest: `sha256:${createHash("sha256").update(JSON.stringify(sourceContent)).digest("hex")}`,
+      baseRef: "origin/main",
+      mergeBase: "base",
+      headSha: "head",
+      ...sourceContent,
+      testQuality: { inScopeTests: ["test/a.test.ts"], unresolvedMarkers: [] },
     },
   };
 }
 
-function contentDigestFor(content: {
-  readonly diff: string;
-  readonly planBody: string;
-  readonly repairContext: readonly unknown[];
-  readonly removalContext: unknown;
-}): string {
-  const { diff, planBody, repairContext, removalContext } = content;
-  return `sha256:${createHash("sha256").update(JSON.stringify({
-    diff,
-    planBody,
-    repairContext,
-    removalContext,
-  })).digest("hex")}`;
+function coordinationInput(
+  testQualityEnabled: boolean,
+  overrides: Partial<BuildReviewCoordinationInput> = {},
+): BuildReviewCoordinationInput {
+  return {
+    config: config(testQualityEnabled),
+    inputs: inputs(),
+    lapId: parseBuildReviewLapId("lap-current")!,
+    preflight: vi.fn(),
+    readCache: vi.fn(async () => undefined),
+    dispatchModel: vi.fn(async () => undefined),
+    writeArtifact: vi.fn(async (artifact) => ({ version: 1, ...artifact })),
+    writeCache: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+describe("build-review coordinator: registered dispatch", () => {
+  it("keeps a disabled whole gate distinct from an empty enabled container", () => {
+    expect(classifyBuildReviewRubricBranches({ ...config(false), enabled: false }, [])).toEqual({
+      kind: "gate-disabled",
+    });
+  });
+
+  it("passes an enabled container with no enabled registered rubric without dispatching", async () => {
+    const emit = vi.fn(async () => undefined);
+    const input = coordinationInput(false, { emit });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(result).toEqual({
+      kind: "passed",
+      verdict: "PASS",
+      reason: "build_review_no_rubrics",
+    });
+    expect(JSON.parse(JSON.stringify(result))).toEqual({
+      kind: "passed",
+      verdict: "PASS",
+      reason: "build_review_no_rubrics",
+    });
+    expect(input.preflight).not.toHaveBeenCalled();
+    expect(input.readCache).not.toHaveBeenCalled();
+    expect(input.dispatchModel).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith({
+      type: "build_review_outer_verdict",
+      lapId: "lap-current",
+      rawVerdict: "PASS",
+      effectiveVerdict: "PASS",
+      reason: "build_review_no_rubrics",
+    });
+  });
+
+  it("passes test-quality's empty frozen scope without preflight or grader dispatch", async () => {
+    const frozenInputs = inputs();
+    const input = coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          testQuality: { inScopeTests: [], unresolvedMarkers: [] },
+        },
+      },
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(result).toEqual({
+      kind: "passed",
+      verdict: "PASS",
+      reason: "test_quality_empty_scope",
+    });
+    expect(input.preflight).toHaveBeenCalledTimes(0);
+    expect(input.dispatchModel).not.toHaveBeenCalled();
+    expect(input.readCache).not.toHaveBeenCalled();
+  });
+
+  it("excludes a relocated refactor-preserving test from the grader and rejects a finding anchored there", async () => {
+    const inScopeTest = "test/feature-behavior.test.ts";
+    const relocatedTest = "test/relocated-legacy.test.ts";
+    const inScopeTitle = "feature behavior remains sensitive";
+    const relocatedTitle = "legacy behavior remains preserved after relocation";
+    const frozenInputs = inputs();
+    const dispatchModel = vi.fn(async () => ({
+      findings: [{
+        concernKind: "test-insensitive",
+        summary: "The relocated preservation test is insensitive.",
+        evidenceLocations: [`${relocatedTest}:12`],
+        anchor: {
+          rubric: "testQuality",
+          locus: {
+            path: relocatedTest,
+            contentHash: `sha256:${createHash("sha256").update(relocatedTitle).digest("hex")}`,
+            display: relocatedTitle,
+          },
+        },
+      }],
+    }));
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          changedTestTitles: [
+            { selector: inScopeTest, titleText: inScopeTitle, staticExtractionFallback: false },
+            { selector: relocatedTest, titleText: relocatedTitle, staticExtractionFallback: false },
+          ],
+          testQuality: { inScopeTests: [inScopeTest], unresolvedMarkers: [] },
+        },
+      },
+      preflight: vi.fn(async () => ({
+        classification: "stayed-green",
+        cacheable: true,
+        cacheProvenance: "miss",
+        changedPaths: ["src/feature.ts", inScopeTest, relocatedTest],
+        changedTestSelectors: [inScopeTest, relocatedTest],
+        revertedProductionManifest: [],
+        sourceIdentities: { mergeBase: "base", headSha: "head" },
+        scopedRun: { exitCode: 0, runKind: "passed", ranSelectors: [inScopeTest, relocatedTest], failureExcerpt: "" },
+      } as const)),
+      dispatchModel,
+    }));
+
+    expect(dispatchModel).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric: "testQuality" }),
+      expect.objectContaining({
+        changedTestSelectors: [inScopeTest],
+        changedTestTitles: [{ selector: inScopeTest, titleText: inScopeTitle, staticExtractionFallback: false }],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "ready",
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" }],
+    });
+  });
+
+  it("dispatches exactly the enabled registered test-quality rubric", async () => {
+    const lapId = parseBuildReviewLapId("lap-current")!;
+    const frozenInputs = inputs();
+    const dispatchModel = vi.fn(async () => undefined);
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: frozenInputs,
+      lapId,
+      projections: {
+        testQuality: {
+          rubric: "testQuality",
+          contractVersion: "v3",
+          projectionVersion: "v2",
+          lapId,
+          snapshotDigest: frozenInputs.sourceSnapshot.digest,
+          digest: "sha256:test-quality",
+        },
+      } as never,
+      dispatchModel,
+    }));
+
+    expect(classifyBuildReviewRubricBranches(config(true), [])).toMatchObject({
+      kind: "ready",
+      branches: [{ rubric: "testQuality", skillName: "build-review-test-quality" }],
+    });
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+    expect(dispatchModel).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric: "testQuality" }),
+      expect.objectContaining({ rubric: "testQuality" }),
+    );
+    expect(result).toMatchObject({ kind: "ready" });
+  });
+});
+
+const IN_SCOPE_TEST = "test/a.test.ts";
+const IN_SCOPE_TITLE = "a stays sensitive to its subject";
+const IN_SCOPE_HASH = `sha256:${createHash("sha256").update(IN_SCOPE_TITLE).digest("hex")}`;
+
+/** Frozen inputs whose in-scope test carries a title region a finding can anchor to. */
+function titledInputs(): BuildReviewFrozenInputs {
+  const frozenInputs = inputs();
+  return {
+    ...frozenInputs,
+    sourceSnapshot: {
+      ...frozenInputs.sourceSnapshot,
+      changedTestTitles: [{ selector: IN_SCOPE_TEST, titleText: IN_SCOPE_TITLE, staticExtractionFallback: false }],
+    },
+  };
+}
+
+function testQualityFinding(summary = "The changed test passes against the reverted production code.") {
+  return {
+    concernKind: "test-insensitive",
+    summary,
+    evidenceLocations: [`${IN_SCOPE_TEST}:1`],
+    anchor: { rubric: "testQuality", locus: { path: IN_SCOPE_TEST, contentHash: IN_SCOPE_HASH, display: IN_SCOPE_TITLE } },
+  };
+}
+
+function testQualityBranch(result: Awaited<ReturnType<typeof coordinateBuildReviewRubrics>>) {
+  return result.kind === "ready" ? result.branches.find((branch) => branch.rubric === "testQuality") : undefined;
 }
 
 describe("build-review coordinator: frozen fan-out", () => {
   it("emits each rubric occurrence exactly once in branch settlement order", async () => {
-    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput['emit']>>[0]) => undefined);
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
 
-    await coordinateBuildReviewRubrics({
-      config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async (branch, projection) => ({
-        kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-      }),
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      dispatchModel: vi.fn(async () => ({ findings: [] })),
       emit,
-    });
+    }));
 
+    expect(result).toMatchObject({ kind: "ready", branches: [{ kind: "dispatched", rubric: "testQuality" }] });
+    // A disabled rubric is dropped at classification, so no skip occurrence is reachable.
     expect(emit.mock.calls.map(([event]) => event)).toEqual([
-      { type: "build_review_rubric_skipped", rubric: "tautology", lapId: "lap-current", reason: "disabled" },
-      { type: "build_review_rubric_started", rubric: "scope", lapId: "lap-current" },
-      { type: "build_review_rubric_started", rubric: "rootCause", lapId: "lap-current" },
-      { type: "build_review_rubric_started", rubric: "completeness", lapId: "lap-current" },
-      { type: "build_review_rubric_result", rubric: "scope", lapId: "lap-current", verdict: "PASS" },
-      { type: "build_review_rubric_result", rubric: "rootCause", lapId: "lap-current", verdict: "PASS" },
-      { type: "build_review_rubric_result", rubric: "completeness", lapId: "lap-current", verdict: "PASS" },
+      { type: "build_review_rubric_started", rubric: "testQuality", lapId: "lap-current" },
+      { type: "build_review_rubric_result", rubric: "testQuality", lapId: "lap-current", verdict: "PASS" },
     ]);
   });
 
   it("materializes a fresh result into both current-lap evidence stores before returning it", async () => {
-    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
-    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
-    const dispatchModel = vi.fn(async (branch, projection) => ({
-      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-    }));
+    const input = coordinationInput(true, { dispatchModel: vi.fn(async () => ({ findings: [] })) });
 
-    await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: async () => ({
-        classification: "approved-exception" as const, exception: "empty-test-set" as const,
-        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
-      }),
-      readCache: async () => undefined,
-      dispatchModel,
-      writeArtifact,
-      writeCache,
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(input.writeArtifact).toHaveBeenCalledTimes(1);
+    expect(input.writeArtifact).toHaveBeenCalledWith({
+      rubric: "testQuality", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
+      result: { kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [], verdict: "PASS" },
     });
-
-    expect(writeArtifact).toHaveBeenCalledTimes(4);
-    expect(writeCache).toHaveBeenCalledTimes(4);
-    expect(writeArtifact.mock.calls.map(([artifact]) => artifact)).toEqual([
-      expect.objectContaining({
-        rubric: "tautology", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
-        result: expect.objectContaining({ kind: "judged", rubric: "tautology", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
-      }),
-      expect.objectContaining({
-        rubric: "scope", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
-        result: expect.objectContaining({ kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
-      }),
-      expect.objectContaining({
-        rubric: "rootCause", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
-        result: expect.objectContaining({ kind: "judged", rubric: "rootCause", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
-      }),
-      expect.objectContaining({
-        rubric: "completeness", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
-        result: expect.objectContaining({ kind: "judged", rubric: "completeness", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
-      }),
-    ]);
-    expect(writeCache.mock.calls.every(([entry]) => entry.result.kind === "judged")).toBe(true);
+    expect(input.writeCache).toHaveBeenCalledTimes(1);
+    expect(input.writeCache).toHaveBeenCalledWith(expect.objectContaining({
+      version: 1, rubric: "testQuality", contractVersion: "v3", projectionVersion: expect.any(String),
+      projectionDigest: expect.stringMatching(/^sha256:/), policyFingerprint: expect.any(String),
+      result: expect.objectContaining({ kind: "judged", rubric: "testQuality", lapId: "lap-current", verdict: "PASS" }),
+    }));
+    expect(testQualityBranch(result)).toMatchObject({ kind: "dispatched", rubric: "testQuality", result: { kind: "judged", verdict: "PASS" } });
   });
 
-  it("rematerializes an exact cache hit with provenance without rewriting its semantic entry", async () => {
-    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
-    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
-    const dispatchModel = vi.fn(async (branch, projection) => ({
-      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-    }));
-    const result = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: async () => ({
-        classification: "approved-exception" as const, exception: "empty-test-set" as const,
-        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
-      }),
-      readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
-        version: 1 as const, rubric: "scope" as const, contractVersion: "v3" as const, projectionVersion: "v2" as const,
-        projectionDigest: projection.digest, policyFingerprint,
-        result: {
-          kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
-          snapshotDigest: "cached-snapshot", contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-        },
-      } : undefined,
-      dispatchModel, writeArtifact, writeCache,
-    });
+  it.each([
+    ["throws", vi.fn(async () => { throw new Error("disk full"); })],
+    ["returns an artifact that fails validation", vi.fn(async () => ({}) as never)],
+  ])("turns an artifact write that %s into an owning infrastructure result and never caches it", async (_shape, writeArtifact) => {
+    const input = coordinationInput(true, { dispatchModel: vi.fn(async () => ({ findings: [] })), writeArtifact });
 
-    expect(result).toMatchObject({ kind: "ready" });
-    expect(writeCache).toHaveBeenCalledTimes(3);
-    expect(writeArtifact.mock.calls.find(([artifact]) => artifact.rubric === "scope")?.[0]).toMatchObject({
-      lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "cache-hit", cachedLapId: "cached" },
-    });
-    expect(dispatchModel).not.toHaveBeenCalledWith(expect.objectContaining({ rubric: "scope" }), expect.anything());
-    expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("scope");
-  });
+    const result = await coordinateBuildReviewRubrics(input);
 
-  it("serves rebased cache hits with current-lap provenance and re-dispatches only widened scope", async () => {
-    const cache = new Map<BuildReviewCacheEntry["rubric"], BuildReviewCacheEntry>();
-    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
-    const writeCache = vi.fn(async (entry: BuildReviewCacheEntry) => {
-      cache.set(entry.rubric, entry);
-    });
-    const dispatchModel = vi.fn(async (branch, projection) => ({
-      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-    }));
-    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
-    let preflightSourceIdentities = { mergeBase: "base", headSha: "head" };
-    const preflight = async () => ({
-      classification: "approved-exception" as const, exception: "empty-test-set" as const,
-      cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-      revertedProductionManifest: [], revertedProductionPatch: [], sourceIdentities: preflightSourceIdentities, output: { stdout: "", stderr: "" },
-    });
-    const initial = inputs();
-    const rebased: BuildReviewFrozenInputs = {
-      ...initial,
-      mergeBase: "rebased-base",
-      baseRef: "origin/rebased-main",
-      testSuiteProof: {
-        ...initial.testSuiteProof,
-        provenanceHeadSha: "rebased-head",
-      },
-      sourceSnapshot: {
-        ...initial.sourceSnapshot,
-        digest: "sha256:rebased-snapshot",
-        mergeBase: "rebased-base",
-        headSha: "rebased-head",
-        baseRef: "origin/rebased-main",
-      },
-    };
-    const run = (lapId: string, snapshot: BuildReviewFrozenInputs) => coordinateBuildReviewRubrics({
-      config: config(), inputs: snapshot, lapId: parseBuildReviewLapId(lapId)!, preflight,
-      readCache: async (branch) => cache.get(branch.rubric), dispatchModel, writeArtifact, writeCache, emit,
-    });
-
-    await run("lap-cached", initial);
-    dispatchModel.mockClear();
-    writeArtifact.mockClear();
-    emit.mockClear();
-    preflightSourceIdentities = { mergeBase: "rebased-base", headSha: "rebased-head" };
-
-    const rebasedResult = await run("lap-rebased", rebased);
-
-    expect({
-      cacheHits: emit.mock.calls.map(([event]) => event).filter((event) => event.type === "build_review_cache_hit"),
-      dispatches: dispatchModel.mock.calls.length,
-      branches: rebasedResult.kind === "ready" ? rebasedResult.branches : [],
-      artifacts: writeArtifact.mock.calls.map(([artifact]) => artifact),
-    }).toMatchObject({
-      cacheHits: [
-        { rubric: "tautology", lapId: "lap-rebased" },
-        { rubric: "scope", lapId: "lap-rebased" },
-        { rubric: "rootCause", lapId: "lap-rebased" },
-        { rubric: "completeness", lapId: "lap-rebased" },
-      ],
-      dispatches: 0,
-      branches: [
-        { kind: "cache-hit", rubric: "tautology", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
-        { kind: "cache-hit", rubric: "scope", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
-        { kind: "cache-hit", rubric: "rootCause", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
-        { kind: "cache-hit", rubric: "completeness", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
-      ],
-      artifacts: [
-        { rubric: "tautology", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
-        { rubric: "scope", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
-        { rubric: "rootCause", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
-        { rubric: "completeness", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
-      ],
-    });
-
-    dispatchModel.mockClear();
-    emit.mockClear();
-    const widenedSourceSnapshot = {
-      ...rebased.sourceSnapshot,
-      digest: "sha256:widened-snapshot",
-      acceptedWidenings: [{ path: "src/widened.ts", rationale: "required coordination", derived: false, taskId: "5", sha: "widened-sha" }],
-    };
-    const widened = {
-      ...rebased,
-      sourceSnapshot: {
-        ...widenedSourceSnapshot,
-      },
-    };
-
-    const widenedResult = await run("lap-widened", widened);
-
-    expect({
-      cacheHits: emit.mock.calls.map(([event]) => event).filter((event) => event.type === "build_review_cache_hit"),
-      dispatched: dispatchModel.mock.calls.map(([branch]) => branch.rubric),
-      branches: widenedResult.kind === "ready" ? widenedResult.branches : [],
-    }).toMatchObject({
-      cacheHits: [
-        { rubric: "tautology", lapId: "lap-widened" },
-        { rubric: "rootCause", lapId: "lap-widened" },
-        { rubric: "completeness", lapId: "lap-widened" },
-      ],
-      dispatched: ["scope"],
-      branches: [
-        { kind: "cache-hit", rubric: "tautology" },
-        { kind: "dispatched", rubric: "scope" },
-        { kind: "cache-hit", rubric: "rootCause" },
-        { kind: "cache-hit", rubric: "completeness" },
-      ],
-    });
-  });
-
-  it("turns artifact write failure into an owning infrastructure result and never caches skips", async () => {
-    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
-    const result = await coordinateBuildReviewRubrics({
-      config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async (branch, projection) => ({
-        kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-      }),
-      writeArtifact: async (artifact) => {
-        if (artifact.rubric === "scope") throw new Error("disk full");
-        return { version: 1, ...artifact };
-      },
-      writeCache,
-    });
-
-    expect(result).toMatchObject({ kind: "ready" });
-    expect((result as Extract<typeof result, { kind: "ready" }>).branches.find((branch) => branch.rubric === "scope"))
-      .toEqual({ kind: "infrastructure-failure", rubric: "scope", reason: "artifact-write-failed" });
-    expect(writeCache).toHaveBeenCalledTimes(2);
-    expect(writeCache.mock.calls.map(([entry]) => entry.rubric)).toEqual(["rootCause", "completeness"]);
+    expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "artifact-write-failed" });
+    expect(input.writeCache).not.toHaveBeenCalled();
   });
 
   it("turns a cache write failure into an owning infrastructure result", async () => {
-    const result = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: async () => ({
-        classification: "approved-exception" as const, exception: "empty-test-set" as const,
-        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
-      }),
-      readCache: async () => undefined,
-      dispatchModel: async (branch, projection) => ({
-        kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-      }),
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async (entry) => {
-        if (entry.rubric === "scope") throw new Error("disk full");
-      },
-    });
-
-    expect((result as Extract<typeof result, { kind: "ready" }>).branches.find((branch) => branch.rubric === "scope"))
-      .toEqual({ kind: "infrastructure-failure", rubric: "scope", reason: "cache-write-failed" });
-  });
-
-  it("runs one Tautology preflight, reuses exact hits, caps misses, and settles every branch", async () => {
-    const active = { count: 0, peak: 0 };
-    const dispatchModel = vi.fn(async (branch, projection) => {
-      active.count += 1;
-      active.peak = Math.max(active.peak, active.count);
-      await Promise.resolve();
-      active.count -= 1;
-      return {
-        kind: "judged", rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: "v3", findings: [], verdict: "PASS",
-      };
-    });
-    const preflight = vi.fn(async () => ({
-      classification: "red" as const, cacheable: true as const, cacheProvenance: "miss" as const,
-      changedPaths: ["src/a.ts", "test/a.test.ts"], changedTestSelectors: ["test/a.test.ts"],
-      revertedProductionManifest: [{ path: "src/a.ts", mergeBaseBlobSha: "e79120aab4682bfe81153595c7d2ec1ad3bd3dd8" }],
-      sourceIdentities: { mergeBase: "base", headSha: "head" },
-      scopedRun: { exitCode: 1 as number, runKind: "nonzero-exit" as const, ranSelectors: ["test/a.test.ts"], failureExcerpt: "AssertionError: expected 2 to be 1" },
-    }));
-    const cachedScope = {
-      version: 1 as const, rubric: "scope" as const, contractVersion: "v3" as const, projectionVersion: "v2" as const,
-      projectionDigest: "", policyFingerprint: "", result: {
-        kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
-        snapshotDigest: "old", contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-      },
-    };
-    const result = await coordinateBuildReviewRubrics({
-      config: config({ maxParallel: 2 }), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, preflight,
-      readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope"
-        ? { ...cachedScope, projectionDigest: projection.digest, policyFingerprint }
-        : undefined,
-      dispatchModel,
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
-    });
-
-    expect(preflight).toHaveBeenCalledOnce();
-    if (result.kind !== "ready") throw new Error("expected a settled review lap");
-    expect(active.peak).toBeLessThanOrEqual(2);
-    expect(dispatchModel).toHaveBeenCalledTimes(3);
-    expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("scope");
-    expect(result.branches.map((branch) => branch.rubric)).toEqual(["tautology", "scope", "rootCause", "completeness"]);
-    expect(result.branches.find((branch) => branch.rubric === "scope")).toMatchObject({ kind: "cache-hit" });
-    expect(dispatchModel.mock.calls.every(([, projection]) => !("dispositions" in projection) && !("siblings" in projection))).toBe(true);
-  });
-
-  it("projects a content-free tautology payload: manifest by reference, verdict fields verbatim, no raw run output", async () => {
-    const projected: unknown[] = [];
-    const dispatchModel = vi.fn(async (branch, projection) => {
-      if (branch.rubric === "tautology") projected.push(projection);
-      return {
-        kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
-      };
-    });
-    const rawRunOutput = `raw runner output ${"x".repeat(4_096)}`;
-    await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: async () => ({
-        classification: "red" as const, cacheable: true as const, cacheProvenance: "miss" as const,
-        changedPaths: ["src/a.ts", "test/a.test.ts"], changedTestSelectors: ["test/a.test.ts"],
-        revertedProductionManifest: [{ path: "src/a.ts", mergeBaseBlobSha: "e79120aab4682bfe81153595c7d2ec1ad3bd3dd8" }],
-        eligibleSelectorRemovals: [],
-        sourceIdentities: { mergeBase: "base", headSha: "head" },
-        scopedRun: {
-          exitCode: 1, runKind: "nonzero-exit" as const, ranSelectors: ["test/a.test.ts"],
-          failureExcerpt: rawRunOutput.slice(0, 64),
-        },
-      }),
-      readCache: async () => undefined, dispatchModel,
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
-    });
-
-    expect(projected).toHaveLength(1);
-    const projection = projected[0] as Record<string, unknown>;
-    // Manifest is by reference only — no merge-base content field survives projection.
-    expect(projection.revertedProductionManifest).toEqual([
-      { path: "src/a.ts", mergeBaseBlobSha: "e79120aab4682bfe81153595c7d2ec1ad3bd3dd8" },
-    ]);
-    const serialized = JSON.stringify(projection);
-    expect(serialized).not.toContain("mergeBaseContent");
-    expect(serialized).not.toContain("revertedProductionPatch");
-    expect(serialized).not.toContain(rawRunOutput);
-    // The engine-derived verdict fields travel verbatim inside preflightEvidence.
-    expect(projection.preflightEvidence).toMatchObject({
-      classification: "red",
-      changedPaths: ["src/a.ts", "test/a.test.ts"],
-      changedTestSelectors: ["test/a.test.ts"],
-      sourceIdentities: { mergeBase: "base", headSha: "head" },
-      scopedRun: {
-        exitCode: 1, runKind: "nonzero-exit", ranSelectors: ["test/a.test.ts"],
-        failureExcerpt: rawRunOutput.slice(0, 64),
-      },
-    });
-  });
-
-  it("records a preflight infrastructure failure without dispatching Tautology while sibling rubrics settle", async () => {
-    const infrastructureEvents: Array<Extract<ConductorEvent, {
-      type: "build_review_rubric_infrastructure_failure";
-    }>> = [];
-    const emit = vi.fn(async (event: ConductorEvent) => {
-      if (event.type === "build_review_rubric_infrastructure_failure") infrastructureEvents.push(event);
-    });
-    const dispatchModel = vi.fn(async (branch, projection) => ({
-      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-    }));
-    const result = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: async () => ({
-        classification: "infrastructure-failure", reason: "scoped-run-timeout", changedPaths: [], changedTestSelectors: [],
-        sourceIdentities: { mergeBase: "base", headSha: "head" },
-      }),
-      readCache: async () => undefined, dispatchModel,
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const input = coordinationInput(true, {
+      dispatchModel: vi.fn(async () => ({ findings: [] })),
+      writeCache: vi.fn(async () => { throw new Error("disk full"); }),
       emit,
     });
 
-    if (result.kind !== "ready") throw new Error("expected a settled review lap");
-    expect(result.branches[0]).toMatchObject({ rubric: "tautology", kind: "infrastructure-failure" });
-    expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("tautology");
-    expect(result.branches).toHaveLength(4);
-    expect(infrastructureEvents).toHaveLength(1);
-    expect(infrastructureEvents).toEqual([{
-      type: "build_review_rubric_infrastructure_failure",
-      rubric: "tautology",
-      lapId: "lap-current",
-      reason: "scoped-run-timeout",
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(input.writeArtifact).toHaveBeenCalledTimes(1);
+    expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "cache-write-failed" });
+    expect(emit).toHaveBeenCalledWith({
+      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "cache-write-failed",
+    });
+  });
+
+  it("records a preflight infrastructure failure without dispatching the grader", async () => {
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const input = coordinationInput(true, {
+      preflight: vi.fn(async () => ({
+        classification: "infrastructure-failure" as const, reason: "scoped-run-timeout" as const,
+        failureExcerpt: "scoped run exceeded 60s",
+        changedPaths: [], changedTestSelectors: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
+      })),
+      emit,
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(input.preflight).toHaveBeenCalledTimes(1);
+    expect(input.dispatchModel).not.toHaveBeenCalled();
+    expect(input.readCache).not.toHaveBeenCalled();
+    expect(input.writeArtifact).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      kind: "ready",
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "scoped-run-timeout" }],
+    });
+    expect(emit.mock.calls.map(([event]) => event)).toEqual([{
+      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current",
+      reason: "scoped-run-timeout", excerpt: "scoped run exceeded 60s",
     }]);
-    expect(infrastructureEvents[0]).not.toHaveProperty("excerpt");
   });
 });
 
 describe("build-review coordinator: dispatch-failure detail carry-through", () => {
-  const noTautology = () =>
-    config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } });
-
   it("settles a dispatch-failure report as invalid-provider-result carrying its bounded detail", async () => {
+    const detail = "judged-result contract not satisfied after one repair turn: ... Raw output excerpt: I judged the rubric...";
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
-    const coordination = await coordinateBuildReviewRubrics({
-      config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async (branch, projection) =>
-        branch.rubric === "scope"
-          ? { kind: "dispatch-failure", detail: "judged-result contract not satisfied after one repair turn: ... Raw output excerpt: I judged the rubric..." }
-          : {
-              kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-              contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-            },
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
+    const input = coordinationInput(true, {
+      dispatchModel: vi.fn(async () => ({ kind: "dispatch-failure", detail })),
       emit,
     });
 
-    expect(coordination.kind).toBe("ready");
-    const scope = coordination.kind === "ready"
-      ? coordination.branches.find((branch) => branch.rubric === "scope")
-      : undefined;
-    expect(scope).toEqual({
-      kind: "infrastructure-failure",
-      rubric: "scope",
-      reason: "invalid-provider-result",
-      detail: "judged-result contract not satisfied after one repair turn: ... Raw output excerpt: I judged the rubric...",
-    });
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result", detail });
+    expect(input.writeArtifact).not.toHaveBeenCalled();
     // The event-spine occurrence stays a short reason; the detail travels on the branch only.
     expect(emit).toHaveBeenCalledWith({
-      type: "build_review_rubric_infrastructure_failure", rubric: "scope", lapId: "lap-current", reason: "invalid-provider-result",
+      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-provider-result",
     });
   });
 
-  it("settles an undefined dispatch result as invalid-provider-result with no detail (unchanged behavior)", async () => {
-    const coordination = await coordinateBuildReviewRubrics({
-      config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async (branch, projection) =>
-        branch.rubric === "rootCause" ? undefined : {
-          kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-          contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-        },
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
-    });
+  it("settles an undefined dispatch result as invalid-provider-result with no detail", async () => {
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true));
 
-    const rootCause = coordination.kind === "ready"
-      ? coordination.branches.find((branch) => branch.rubric === "rootCause")
-      : undefined;
-    expect(rootCause).toEqual({ kind: "infrastructure-failure", rubric: "rootCause", reason: "invalid-provider-result" });
+    expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" });
   });
 
   it.each([
     ["has no JSON object", "not JSON at all", "no parseable JSON object was found in the response"],
     ["has non-array findings", { findings: "none" }, '"findings" must be an array (empty when no concern was found)'],
     ["has one malformed finding among valid findings", {
-      findings: [
-        { concernKind: "out-of-plan-change", summary: "outside plan", evidenceLocations: ["src/a.ts:1"], anchor: { rubric: "scope", path: "src/a.ts", relation: "not-authorized-by-plan" } },
-        { concernKind: "out-of-plan-change", summary: "outside plan", evidenceLocations: ["src/a.ts:1"], anchor: { rubric: "scope", path: "", relation: "not-authorized-by-plan" } },
-      ],
-    }, "findings[1].anchor.path must be a non-empty string"],
+      findings: [testQualityFinding(), { ...testQualityFinding(), anchor: { rubric: "testQuality", locus: { path: "", contentHash: IN_SCOPE_HASH, display: IN_SCOPE_TITLE } } }],
+    }, 'findings[1].anchor.locus must be a content-region reference {"path", "contentHash", "display", "occurrence"?}'],
   ])("carries the engine-produced failed requirement when a provider result %s", async (_shape, payload, detail) => {
-    const coordination = await coordinateBuildReviewRubrics({
-      config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async (branch, projection) => branch.rubric === "scope"
-        ? payload
-        : {
-            kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-            contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-          },
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
-    });
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => payload),
+    }));
 
-    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined)
-      .toEqual({ kind: "infrastructure-failure", rubric: "scope", reason: "invalid-provider-result", detail });
+    expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result", detail });
   });
 
-  // Task 18 step 3 forbids adding a member to the closed
-  // BuildReviewInfrastructureFailureReason union — that mapping belongs to
-  // `review-infrastructure-failures-are-operator-unreco`. The Record below is
-  // keyed BY the union, so `typecheck:test` fails on a missing key when a member
-  // is added and on an excess key when one is removed; the runtime assertions
-  // then prove the parser admits exactly these members and nothing else.
-  it("persists a tautology relocation audit from a findings-only live dispatch", async () => {
-    const relocationAudit = [
-      "[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move",
-    ];
-    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
-    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
-
-    const coordination = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: async () => ({
-        classification: "approved-exception" as const, exception: "empty-test-set" as const,
-        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
-      }),
-      readCache: async () => undefined,
-      dispatchModel: async (branch) => branch.rubric === "tautology"
-        ? { findings: [], relocationAudit }
-        : { findings: [] },
-      writeArtifact,
-      writeCache,
+  it("rejects colliding finding identities in one judged result as infrastructure, never a verdict", async () => {
+    const input = coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => ({ findings: [testQualityFinding("first wording"), testQualityFinding("second wording")] })),
     });
 
-    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "tautology") : undefined)
-      .toMatchObject({ kind: "dispatched", rubric: "tautology", result: { relocationAudit } });
-    expect(writeArtifact.mock.calls.find(([artifact]) => artifact.rubric === "tautology")?.[0].result)
-      .toMatchObject({ relocationAudit });
-    expect(writeCache.mock.calls.find(([entry]) => entry.rubric === "tautology")?.[0].result)
-      .toMatchObject({ relocationAudit });
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(testQualityBranch(result)).toEqual({
+      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result",
+      detail: `findings must not repeat one concern on one content region (duplicated: "${IN_SCOPE_TITLE}") — merge equivalent findings`,
+    });
+    expect(input.writeArtifact).not.toHaveBeenCalled();
+    expect(input.writeCache).not.toHaveBeenCalled();
   });
 
+  // The Record below is keyed BY the closed union, so `typecheck:test` fails on
+  // a missing key when a member is added and on an excess key when one is
+  // removed; the runtime assertions then prove the parser admits exactly these
+  // members and nothing else.
   it("pins the closed infrastructure-reason vocabulary against silent growth", () => {
     const pinned: Record<BuildReviewInfrastructureFailureReason, true> = {
       "provider-error": true,
@@ -655,200 +430,98 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       "artifact-read-failed": true,
       "artifact-write-failed": true,
     };
-    const reasons = Object.keys(pinned) as BuildReviewInfrastructureFailureReason[];
+    // The parser admits exactly the reasons the coordinator mapping can produce;
+    // the three union members outside that mapping are carried by other
+    // producers and never reach this parser.
+    const producible = new Set<string>(Object.values(mapBuildReviewCoordinatorFailureReason));
+    expect([...producible].every((reason) => reason in pinned)).toBe(true);
 
-    for (const reason of reasons) {
+    for (const reason of producible) {
       expect(parseBuildReviewInfrastructureFailure({
-        kind: "infrastructure-failure", rubric: "scope", reason, detail: "d",
-      })).toEqual({ kind: "infrastructure-failure", rubric: "scope", reason, detail: "d" });
+        kind: "infrastructure-failure", rubric: "testQuality", reason, detail: "d",
+      })).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason, detail: "d" });
     }
     expect(parseBuildReviewInfrastructureFailure({
-      kind: "infrastructure-failure", rubric: "scope", reason: "invalid-provider-result", detail: "d",
+      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result", detail: "d",
+    })).toBeUndefined();
+    expect(parseBuildReviewInfrastructureFailure({
+      kind: "infrastructure-failure", rubric: "testQuality", reason: "scoped-run-timeout", detail: "d",
     })).toBeUndefined();
   });
 });
 
 describe("build-review coordinator: findings-only provider payloads", () => {
-  const noTautology = () =>
-    config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } });
-
-  const judged = (rubric: "tautology" | "scope" | "rootCause" | "completeness", projection: { lapId: string; snapshotDigest: string }) => ({
-    kind: "judged" as const, rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-    contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
-  });
-
-  it("persists a live findings-only scope dispatch as the complete engine-stamped v3 envelope", async () => {
-    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
-    const coordination = await coordinateBuildReviewRubrics({
-      config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async (branch, projection) => branch.rubric === "scope"
-        ? { findings: [] }
-        : judged(branch.rubric, projection),
-      writeArtifact,
-      writeCache: async () => undefined,
+  it.each([
+    ["no findings", [], "PASS"],
+    ["one finding", [testQualityFinding()], "FAIL"],
+  ] as const)("persists a findings-only dispatch with %s as the complete engine-stamped v3 envelope", async (_shape, findings, verdict) => {
+    const input = coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => ({ findings: [...findings] })),
     });
 
-    expect(writeArtifact.mock.calls
-      .map(([artifact]) => artifact)
-      .filter((artifact) => artifact.rubric === "scope"))
-      .toEqual([{
-        rubric: "scope", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
-        result: {
-          kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
-          findings: [], verdict: "PASS",
-        },
-      }]);
-  });
+    const result = await coordinateBuildReviewRubrics(input);
 
-
-  it("settles a well-formed scope finding without provider envelope fields", async () => {
-    const finding = {
-      concernKind: "out-of-plan-change",
-      summary: "The changed source path is not authorized by the plan.",
-      evidenceLocations: ["src/a.ts:1"],
-      anchor: { rubric: "scope" as const, path: "src/a.ts", relation: "not-authorized-by-plan" },
+    const expected = {
+      kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+      findings: [...findings], verdict,
     };
-    const coordination = await coordinateBuildReviewRubrics({
-      config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async (branch, projection) => branch.rubric === "scope"
-        ? { findings: [finding] }
-        : judged(branch.rubric, projection),
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
+    expect(input.writeArtifact).toHaveBeenCalledWith({
+      rubric: "testQuality", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" }, result: expected,
     });
-
-    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined)
-      .toEqual({
-        kind: "dispatched", rubric: "scope",
-        result: {
-          kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
-          findings: [finding], verdict: "FAIL",
-        },
-      });
+    expect(testQualityBranch(result)).toEqual({ kind: "dispatched", rubric: "testQuality", result: expected });
   });
-
-  it("stamps one projection identity onto concurrent findings-only rubric results", async () => {
-    const coordination = await coordinateBuildReviewRubrics({
-      config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async () => ({ findings: [] }),
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
-    });
-
-    expect(coordination.kind === "ready" ? coordination.branches.filter((branch) =>
-      branch.kind === "dispatched" && (branch.rubric === "scope" || branch.rubric === "rootCause"),
-    ) : []).toEqual([
-      {
-        kind: "dispatched", rubric: "scope",
-        result: expect.objectContaining({ lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
-      },
-      {
-        kind: "dispatched", rubric: "rootCause",
-        result: expect.objectContaining({ lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
-      },
-    ]);
-  });
-
-  const settleScopePayload = async (payload: Record<string, unknown>) => {
-    const coordination = await coordinateBuildReviewRubrics({
-      config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async (branch, projection) => branch.rubric === "scope"
-        ? payload
-        : judged(branch.rubric, projection),
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
-      writeCache: async () => undefined,
-    });
-    return coordination.kind === "ready"
-      ? coordination.branches.find((branch) => branch.rubric === "scope")
-      : undefined;
-  };
-
-  const scopeFinding = {
-    concernKind: "out-of-plan-change",
-    summary: "The changed source path is not authorized by the plan.",
-    evidenceLocations: ["src/a.ts:1"],
-    anchor: { rubric: "scope", path: "src/a.ts", relation: "not-authorized-by-plan" },
-  };
 
   it.each([
     ["status discriminator", { findings: [], status: "judged" }, "PASS", []],
     ["type discriminator", { findings: [], type: "judged" }, "PASS", []],
-    ["omitted lap and snapshot identity", { findings: [] }, "PASS", []],
-    ["different rubric", { findings: [], rubric: "rootCause" }, "PASS", []],
-    ["v1 contract version", { findings: [scopeFinding], contractVersion: "v1" }, "FAIL", [scopeFinding]],
-    // relocationAudit is deliberately NOT here: it is a recognized provider-owned
-    // evidence field — a non-tautology payload carrying one is rejected with the
-    // named problem (pinned in build-review-domain.test.ts), never laundered.
+    ["foreign lap and snapshot identity", { findings: [], lapId: "other-lap", snapshotDigest: "sha256:other" }, "PASS", []],
+    ["different rubric", { findings: [], rubric: "scope" }, "PASS", []],
+    ["v1 contract version", { findings: [testQualityFinding()], contractVersion: "v1" }, "FAIL", [testQualityFinding()]],
     ["unrecognized top-level keys", { findings: [], extra: "ignored", source: "provider" }, "PASS", []],
   ] as const)("settles a provider payload with %s under the engine-owned v3 envelope", async (_shape, payload, verdict, findings) => {
-    expect(await settleScopePayload(payload)).toMatchObject({
-      kind: "dispatched", rubric: "scope",
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => payload),
+    }));
+
+    expect(testQualityBranch(result)).toEqual({
+      kind: "dispatched", rubric: "testQuality",
       result: {
-        kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
-        verdict, findings,
+        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+        verdict, findings: [...findings],
       },
     });
   });
 });
 
 describe("build-review coordinator: engine-held rubric isolation", () => {
-  it("rejects a dispatch-time projection rubric mismatch without writing either branch artifact", async () => {
-    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
-    const frozenInputs = inputs();
+  it("rejects a dispatch-time projection rubric mismatch without writing a branch artifact", async () => {
     const lapId = parseBuildReviewLapId("lap-current")!;
-    const projections = deriveBuildReviewRubricProjections({
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const input = coordinationInput(true, {
       lapId,
-      inputs: frozenInputs,
-      tautology: {
-        changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: "not-requested" },
-      },
-    });
-    const coordination = await coordinateBuildReviewRubrics({
-      config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
-      inputs: frozenInputs, lapId,
-      projections: { ...projections, scope: projections.rootCause as never },
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async () => ({ findings: [] }),
-      writeArtifact,
-      writeCache: async () => undefined,
+      projections: {
+        testQuality: {
+          rubric: "scope", contractVersion: "v3", projectionVersion: "v2", lapId,
+          snapshotDigest: inputs().sourceSnapshot.digest, digest: "sha256:test-quality",
+        },
+      } as never,
+      dispatchModel: vi.fn(async () => ({ findings: [] })),
+      emit,
     });
 
-    expect({
-      scope: coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined,
-      artifactRubrics: writeArtifact.mock.calls.map(([artifact]) => artifact.rubric),
-    }).toEqual({
-      scope: { kind: "infrastructure-failure", rubric: "scope", reason: "projection-rubric-mismatch" },
-      artifactRubrics: ["rootCause", "completeness"],
-    });
-  });
+    const result = await coordinateBuildReviewRubrics(input);
 
-  it("writes four concurrent rubric results only under their own branch identities", async () => {
-    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
-    await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: vi.fn(), readCache: async () => undefined,
-      dispatchModel: async () => ({ findings: [] }),
-      writeArtifact,
-      writeCache: async () => undefined,
+    expect(result).toEqual({
+      kind: "ready",
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "projection-rubric-mismatch" }],
     });
-
-    expect(writeArtifact.mock.calls.map(([artifact]) => ({
-      artifactRubric: artifact.rubric,
-      resultRubric: artifact.result.rubric,
-      provenance: artifact.provenance.kind,
-    }))).toEqual([
-      { artifactRubric: "tautology", resultRubric: "tautology", provenance: "fresh" },
-      { artifactRubric: "scope", resultRubric: "scope", provenance: "fresh" },
-      { artifactRubric: "rootCause", resultRubric: "rootCause", provenance: "fresh" },
-      { artifactRubric: "completeness", resultRubric: "completeness", provenance: "fresh" },
-    ]);
+    expect(input.readCache).not.toHaveBeenCalled();
+    expect(input.dispatchModel).not.toHaveBeenCalled();
+    expect(input.writeArtifact).not.toHaveBeenCalled();
+    expect(emit.mock.calls.map(([event]) => event)).toEqual([{
+      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "projection-rubric-mismatch",
+    }]);
   });
 });

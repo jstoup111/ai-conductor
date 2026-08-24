@@ -13,7 +13,6 @@ import {
   TestSuiteProofError,
 } from '../../src/engine/build-review-inputs.js';
 import type { BuildReviewFrozenInputs, BuildReviewInputOptions } from '../../src/engine/build-review-inputs.js';
-import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import { buildReviewFindingReferenceContext, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { deriveBuildReviewRubricProjections } from '../../src/engine/build-review-projections.js';
 import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
@@ -100,7 +99,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs.testSuiteProof).toBe(CURRENT_PROOF.evidence);
       expect(inputs.sourceSnapshot).toMatchObject({
         mergeBase: 'base123', headSha: 'head123', diff: inputs.diff, planBody: inputs.planBody,
-        operatorReseals: inputs.operatorReseals,
       });
       expect(inputs.sourceSnapshot.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(JSON.stringify(inputs)).not.toMatch(/makerNarrative/i);
@@ -274,7 +272,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         diff = 'diff --git a/a b/a\nindex 1111111..2222222 100644\n+change\n',
         planBody = '# Plan body\n\nSome plan content.\n',
         resealReason = 'Operator approved the amendment.',
-        acceptedWidenings = [] as BuildReviewInputOptions['acceptedWidenings'],
       } = {}): Promise<string> {
         await mkdir(join(dir, '.docs/plans'), { recursive: true });
         await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -296,7 +293,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         ]);
 
         return (await assembleBuildReviewInputs(git, scopedPlanPath, {
-          acceptedWidenings,
           inspectTestSuite: async () => ({
             status: 'CURRENT', evidence: { ...CURRENT_PROOF.evidence, provenanceHeadSha: headSha },
           }),
@@ -313,10 +309,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const oneByteDiff = await contentDigestFor({ diff: 'diff --git a/a b/a\nindex 1111111..2222222 100644\n+changed\n' });
       const changedPlan = await contentDigestFor({ planBody: '# Plan body\n\nChanged plan content.\n' });
       const changedReseal = await contentDigestFor({ resealReason: 'Operator approved the corrected amendment.' });
-      const changedWidening = await contentDigestFor({
-        acceptedWidenings: [{ path: 'src/widened.ts', rationale: 'required coordination', derived: false, taskId: '5', sha: 'widened-sha' }],
-      });
-
       expect({
         hasSha256Digest: /^sha256:[a-f0-9]{64}$/.test(baseline),
         provenanceIsExcluded: changedProvenance === baseline,
@@ -324,7 +316,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         diffIsIncluded: oneByteDiff !== baseline,
         planIsIncluded: changedPlan !== baseline,
         resealIsExcluded: changedReseal === baseline,
-        wideningIsExcluded: changedWidening === baseline,
       }).toEqual({
         hasSha256Digest: true,
         provenanceIsExcluded: true,
@@ -332,7 +323,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         diffIsIncluded: true,
         planIsIncluded: true,
         resealIsExcluded: true,
-        wideningIsExcluded: true,
       });
     });
 
@@ -502,7 +492,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
       ]);
-      expect(calls.some((c) => c[0] === 'show')).toBe(false);
+      expect(calls.some((c) => c[0] === 'show')).toBe(true);
     });
 
     it('names exactly the engine-authored surfaces as machinery paths', () => {
@@ -533,123 +523,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
       await expect(assembleBuildReviewInputs(git, planPath)).resolves.toMatchObject({
         removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
-      });
-    });
-
-    it('derives verify-only context only for eligible plan task headers', async () => {
-      await writeFile(planPath, `# Plan
-
-### Task 3: Verify parser behavior
-**Verify-only:** yes
-**Files:** \`src/engine/autoheal.ts\`, \`src/engine/plan-task-parse.ts\`
-
-### Task 4: Verify a type-only contract
-**Type:** implementation+verification
-**Files:** \`src/engine/build-review-inputs.ts\`
-
-### Task 5: Maybe verify later
-**Verify-only:** maybe
-**Files:** \`src/ignored.ts\`
-`, 'utf-8');
-      const { git } = fakeGit([
-        ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
-        { match: ['diff', 'abc1234..HEAD'], result: { stdout: '' } },
-      ]);
-
-      const inputs = await assembleBuildReviewInputs(git, planPath);
-      await writeFile(planPath, '**Verify-only:** yes\n**Files:** `src/headerless.ts`\n', 'utf-8');
-      const headerlessInputs = await assembleBuildReviewInputs(git, planPath);
-
-      expect({
-        eligible: inputs.verifyOnlyContext,
-        headerless: headerlessInputs.verifyOnlyContext,
-      }).toEqual({
-        eligible: [
-          {
-            taskId: '3',
-            paths: ['src/engine/autoheal.ts', 'src/engine/plan-task-parse.ts'],
-          },
-          {
-            taskId: '4',
-            paths: ['src/engine/build-review-inputs.ts'],
-          },
-        ],
-        headerless: [],
-      });
-    });
-
-    it('includes frozen verify-only evidence in the source snapshot identity', async () => {
-      const { git } = fakeGit([
-        ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
-        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
-      ]);
-
-      // Task 2's contract: the two assemblies are IDENTICAL except the one
-      // `**Verify-only:** yes` marker line, so the digest divergence below is
-      // attributable to the verify-only evidence and not an unrelated body change.
-      const planBodyWithout = `# Plan body
-
-### Task 3: Prove existing behavior
-**Files:** \`src/engine/build-review-inputs.ts\`
-`;
-      const planBodyWith = planBodyWithout.replace(
-        '**Files:**',
-        '**Verify-only:** yes\n**Files:**',
-      );
-      await writeFile(planPath, planBodyWithout, 'utf-8');
-      const withoutMarker = await assembleBuildReviewInputs(git, planPath);
-      await writeFile(planPath, planBodyWith, 'utf-8');
-      const withMarker = await assembleBuildReviewInputs(git, planPath);
-      const { verifyOnlyContext } = withMarker.sourceSnapshot;
-
-      expect(withoutMarker.sourceSnapshot.verifyOnlyContext).toEqual([]);
-      expect(verifyOnlyContext).toEqual([
-        {
-          taskId: '3',
-          paths: ['src/engine/build-review-inputs.ts'],
-        },
-      ]);
-      expect(withMarker.sourceSnapshot.contentDigest).not.toBe(withoutMarker.sourceSnapshot.contentDigest);
-      expect(withMarker.sourceSnapshot.digest).not.toBe(withoutMarker.sourceSnapshot.digest);
-      expect({
-        context: Object.isFrozen(verifyOnlyContext),
-        entry: Object.isFrozen(verifyOnlyContext?.[0]),
-        paths: Object.isFrozen(verifyOnlyContext?.[0]?.paths),
-      }).toEqual({ context: true, entry: true, paths: true });
-    });
-
-    it('freezes parsed preservation evidence in the source snapshot identity', async () => {
-      const { git } = fakeGit([
-        ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
-        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
-      ]);
-      const planBodyWithout = `# Plan body
-
-### Task 3: Preserve existing behavior
-`;
-      const planBodyWith = `${planBodyWithout}**Preserves:** the ungated TokenMeter wrapper transparency
-`;
-      await writeFile(planPath, planBodyWithout, 'utf-8');
-      const withoutClause = await assembleBuildReviewInputs(git, planPath);
-      await writeFile(planPath, planBodyWith, 'utf-8');
-      const withClause = await assembleBuildReviewInputs(git, planPath);
-      const { preservationContext } = withClause.sourceSnapshot;
-
-      expect({
-        context: preservationContext,
-        digestChanges: withClause.sourceSnapshot.digest !== withoutClause.sourceSnapshot.digest,
-        contentDigestChanges: withClause.sourceSnapshot.contentDigest !== withoutClause.sourceSnapshot.contentDigest,
-        frozen: Object.isFrozen(preservationContext),
-        entryFrozen: Object.isFrozen(preservationContext?.[0]),
-      }).toEqual({
-        context: [{ taskId: '3', behavior: 'the ungated TokenMeter wrapper transparency' }],
-        digestChanges: true,
-        contentDigestChanges: true,
-        frozen: true,
-        entryFrozen: true,
       });
     });
 
@@ -756,6 +629,77 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.diff).toContain('feature.txt');
       expect(result.diff).toContain('feature change');
       expect(result.planBody).toContain('Fixture plan.');
+    });
+
+    it('projects only changed tests whose Covers markers bind to this plan or its referenced stories', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/selected.md');
+      const selectedStoriesPath = join(dir, '.docs/stories/selected.md');
+
+      await git('checkout', 'main');
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(selectedStoriesPath, '# Selected stories\n\nCriterion S3.1 exists here.\n');
+      // This criterion must not resolve `Covers: S9.9`: the plan selects the
+      // preceding artifact, and build_review must never glob `.docs/stories`.
+      await writeFile(join(dir, '.docs/stories/unrelated.md'), '# Unrelated stories\n\nCriterion S9.9 exists here.\n');
+      await writeFile(scopedPlanPath, [
+        '**Stories:** .docs/stories/selected.md',
+        '',
+        '### Task 7: selected behavior',
+        '',
+        '**Files:** src/selected.ts',
+      ].join('\n'));
+      await git('add', '.');
+      await git('commit', '-m', 'add selected plan and stories');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+
+      await git('checkout', '-b', 'feature/test-quality-projection');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await Promise.all([
+        writeFile(join(dir, 'src/technical-coverage.ts'), '// Covers: task:7\nexport const technicalCoverage = true;\n'),
+        writeFile(join(dir, 'test/criterion.test.ts'), '// Covers: S3.1\nit(\'criterion\', () => {});\n'),
+        writeFile(join(dir, 'test/task.test.ts'), '// Covers: task:7\nit(\'task\', () => {});\n'),
+        writeFile(join(dir, 'test/unmarked.test.ts'), 'it(\'unmarked\', () => {});\n'),
+        writeFile(join(dir, 'test/unresolved.test.ts'), '// Covers: S9.9\nit(\'unresolved\', () => {});\n'),
+        writeFile(join(dir, 'test/malformed.test.ts'), '// Covers: FR-, S3, task:\nit(\'malformed\', () => {});\n'),
+      ]);
+      await git('add', 'test', 'src/technical-coverage.ts');
+      await git('commit', '-m', 'add feature tests');
+
+      const currentProof = async (): Promise<FullSuiteInspectionResult> => ({
+        status: 'CURRENT',
+        evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+      } as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>);
+      const assembleProjection = () => assembleInputs(realGit(), scopedPlanPath, { inspectTestSuite: currentProof });
+
+      const beforeRebase = await assembleProjection();
+
+      expect(beforeRebase.sourceSnapshot.testQuality).toEqual({
+        inScopeTests: ['src/technical-coverage.ts', 'test/criterion.test.ts', 'test/task.test.ts'],
+        unresolvedMarkers: [
+          { selector: 'test/malformed.test.ts', reference: 'FR-' },
+          { selector: 'test/malformed.test.ts', reference: 'S3' },
+          { selector: 'test/malformed.test.ts', reference: 'task:' },
+          { selector: 'test/unresolved.test.ts', reference: 'S9.9' },
+        ],
+      });
+
+      // Another feature's test reaches the base before this feature is rebased.
+      // It must disappear from this feature's fresh merge-base diff.
+      await git('checkout', 'main');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(join(dir, 'test/other-feature.test.ts'), '// Covers: S3.1\nit(\'other feature\', () => {});\n');
+      await git('add', 'test/other-feature.test.ts');
+      await git('commit', '-m', 'add other feature test');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+      await git('checkout', 'feature/test-quality-projection');
+      await git('rebase', 'main');
+
+      const afterRebase = await assembleProjection();
+
+      expect(afterRebase.diff).not.toContain('other-feature.test.ts');
+      expect(afterRebase.sourceSnapshot.testQuality).toEqual(beforeRebase.sourceSnapshot.testQuality);
     });
 
     // End-to-end form of the engine-append exclusion: the plan is committed on
@@ -894,25 +838,15 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         assembleBuildReviewInputs(realGit(), planPath),
       ]);
 
-      expect({
-        feature: featureInputs.operatorReseals,
-        loose: looseInputs.operatorReseals,
-      }).toEqual({
-        feature: [{
-          fromCommit: 'before',
-          toCommit: 'after',
-          paths: ['.docs/stories/fixture.md'],
-          reason: 'Operator approved the amendment.',
-        }],
-        loose: [],
-      });
-      expect(featureInputs.sourceSnapshot.operatorReseals).toEqual(featureInputs.operatorReseals);
+      expect(featureInputs).not.toHaveProperty('operatorReseals');
+      expect(looseInputs).not.toHaveProperty('operatorReseals');
+      expect(featureInputs.sourceSnapshot).not.toHaveProperty('operatorReseals');
 
       await writeFile(join(dir, '.pipeline/protected-artifact-seal.json'), '{ unusable');
-      expect((await assembleBuildReviewInputs(realGit(), scopedPlanPath)).sourceSnapshot.operatorReseals).toEqual([]);
+      expect(await assembleBuildReviewInputs(realGit(), scopedPlanPath)).not.toHaveProperty('operatorReseals');
     });
 
-    it('keeps shared rubric snapshot identity stable while a real operator reseal invalidates Scope only', async () => {
+    it('keeps test-quality snapshot identity stable while a real operator reseal changes unrelated provenance', async () => {
       const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
@@ -932,8 +866,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const project = (inputs: BuildReviewFrozenInputs) => deriveBuildReviewRubricProjections({
         lapId: parseBuildReviewLapId('lap-input-assembly')!,
         inputs,
-        tautology: {
-          changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: 'not-requested' },
+        testQuality: {
+          changedTestSelectors: [], revertedProductionManifest: [], unresolvedMarkers: [], preflight: { classification: 'not-requested' },
         },
       });
 
@@ -945,76 +879,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const second = project(secondInputs);
 
       expect(secondInputs.sourceSnapshot.digest).toBe(firstInputs.sourceSnapshot.digest);
-      expect(second.scope.digest).not.toBe(first.scope.digest);
-      expect(second.tautology).toEqual(first.tautology);
-      expect(second.rootCause).toEqual(first.rootCause);
-      expect(second.completeness).toEqual(first.completeness);
-    });
-
-    it('renders a #1502 sealed-artifact amendment only when its operator reseal is persisted', async () => {
-      const amendedPath = '.docs/stories/resealed-story.md';
-      const pairedPlanPath = join(dir, '.docs/plans/feature.md');
-      const rationale = 'Operator approved the corrected acceptance boundary verbatim.';
-      const evidenceSection = (prompt: string) => prompt.match(
-        /## Operator-authorized protected-artifact reseals\n\n[\s\S]*?(?=\n\n## Engine-derived removal evidence)/,
-      )?.[0] ?? '';
-      const withoutEvidenceSection = (prompt: string) => prompt.replace(
-        evidenceSection(prompt),
-        '<operator-reseal-evidence>',
-      );
-
-      await git('checkout', 'main');
-      await mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await mkdir(join(dir, '.docs/stories'), { recursive: true });
-      await writeFile(pairedPlanPath, '# Approved plan\n\nAmend the sealed story.\n');
-      await writeFile(join(dir, amendedPath), 'approved story\n');
-      await git('add', '.');
-      await git('commit', '-m', 'decide: approve protected artifacts');
-      const baseline = await git('rev-parse', 'HEAD');
-      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
-      await git('checkout', '-b', 'operator-reseal-evidence');
-      await writeFile(join(dir, amendedPath), 'operator-approved amended story\n');
-      await git('add', amendedPath);
-      await git('commit', '-m', 'docs: amend sealed story');
-      const head = await git('rev-parse', 'HEAD');
-
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      const writeSeal = (rebaselines: unknown[]) => writeFile(
-        join(dir, '.pipeline/protected-artifact-seal.json'),
-        JSON.stringify({
-          version: 2,
-          baselineCommit: head,
-          protectedArtifacts: [],
-          rebaselines,
-        }),
-      );
-      await writeSeal([{
-        trigger: 'operator-reseal',
-        paths: [amendedPath],
-        reason: rationale,
-        fromCommit: baseline,
-        toCommit: head,
-      }]);
-      const withResealPrompt = buildGraderPrompt(
-        await assembleBuildReviewInputs(realGit(), pairedPlanPath),
-      );
-
-      await writeSeal([]);
-      const withoutResealPrompt = buildGraderPrompt(
-        await assembleBuildReviewInputs(realGit(), pairedPlanPath),
-      );
-
-      expect({
-        populatedEvidence: [amendedPath, rationale].every((value) =>
-          evidenceSection(withResealPrompt).includes(value)),
-        emptyEvidence: evidenceSection(withoutResealPrompt).endsWith('(none)'),
-        otherwiseIdentical:
-          withoutEvidenceSection(withResealPrompt) === withoutEvidenceSection(withoutResealPrompt),
-      }).toEqual({
-        populatedEvidence: true,
-        emptyEvidence: true,
-        otherwiseIdentical: true,
-      });
+      expect(second.testQuality).toEqual(first.testQuality);
     });
 
     it('classifies a closed provenance disposition for available, unwarranted, and unmatched repair context', async () => {

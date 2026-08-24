@@ -15,8 +15,7 @@ export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
 // Shared task-header grammar for parsers that identify task blocks without
 // requiring a title. Keep every consumer on this expression so a supported
-// heading form cannot silently drift between Files, Preserves, and
-// Verify-only metadata.
+// heading form cannot silently drift between Files and Verify-only metadata.
 export const TASK_HEADER_PATTERN =
   /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
 
@@ -38,13 +37,20 @@ export interface ParsedPlanTaskPaths extends Map<string, Set<string>> {
   foreignProtectedReferencesByTaskId: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
+/** Completion checks declared by task-local `**Done when:**` blocks. */
+export interface ParsedPlanTaskDoneWhen extends Map<string, string[]> {
+  /** Declared blocks with no list-item checks, unlike legacy absence. */
+  malformedTaskIds: ReadonlySet<string>;
+}
+
 // A task's **Files:** line is the authoritative declaration of which paths
 // corroborate its commits (#424). Plans write these as plain text (no
 // backticks) with `;`/`,` separators, and use `same` / `same as Task N`
 // shorthand to inherit an earlier task's set. Matches `**Files:**`,
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
-const PRESERVES_LINE = /^\s*(?:[-*]\s+)?\*\*Preserves\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+const DONE_WHEN_LINE = /^\s*\*\*Done when\s*:\s*\*\*\s*$/i;
+const LIST_ITEM_LINE = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/;
 
 // Retired **Wired-into:** metadata must remain excluded from legacy fallback
 // paths in historical plans. This preserves only the old line grammar (case,
@@ -86,18 +92,31 @@ function expandTaskIds(raw: string): string[] {
 }
 
 /**
- * Parses the preserved behavior declared by each plan task.
+ * Parses ordered, task-local `**Done when:**` checks.
  *
- * This intentionally uses the same task-header grammar as
- * `parsePlanTaskVerifyOnly`; malformed or empty clauses produce no entry.
+ * A missing block remains absent for compatibility with historical plans. A
+ * declared block needs at least one list item; otherwise it is malformed and
+ * cannot be silently treated as that legacy absence.
  */
-export function parsePlanTaskPreserves(text: string): Map<string, string[]> {
-  const result = new Map<string, string[]>();
+export function parsePlanTaskDoneWhen(text: string): ParsedPlanTaskDoneWhen {
+  const result = new Map<string, string[]>() as ParsedPlanTaskDoneWhen;
+  const malformedTaskIds = new Set<string>();
   let currentIds: string[] = [];
+  let collecting = false;
+  let sawCheck = false;
+
+  const finishBlock = () => {
+    if (collecting && !sawCheck) {
+      for (const id of currentIds) malformedTaskIds.add(id);
+    }
+    collecting = false;
+    sawCheck = false;
+  };
 
   for (const line of text.split('\n')) {
     const headerMatch = line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
+      finishBlock();
       currentIds = expandTaskIds(
         headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
       );
@@ -105,16 +124,31 @@ export function parsePlanTaskPreserves(text: string): Map<string, string[]> {
     }
     if (currentIds.length === 0) continue;
 
-    const preservesMatch = line.match(PRESERVES_LINE);
-    const behavior = preservesMatch?.[1].trim();
-    if (!behavior) continue;
-    for (const id of currentIds) {
-      const behaviors = result.get(id);
-      if (behaviors) behaviors.push(behavior);
-      else result.set(id, [behavior]);
+    if (DONE_WHEN_LINE.test(line)) {
+      finishBlock();
+      collecting = true;
+      continue;
     }
+    if (!collecting) continue;
+
+    const check = line.match(LIST_ITEM_LINE)?.[1].trim();
+    if (check) {
+      for (const id of currentIds) {
+        const checks = result.get(id);
+        if (checks) checks.push(check);
+        else result.set(id, [check]);
+      }
+      sawCheck = true;
+      continue;
+    }
+
+    // Blank lines are allowed within an authored block. Any non-list content
+    // starts another metadata field and ends the block.
+    if (line.trim()) finishBlock();
   }
 
+  finishBlock();
+  result.malformedTaskIds = malformedTaskIds;
   return result;
 }
 

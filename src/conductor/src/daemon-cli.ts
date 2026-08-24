@@ -2093,6 +2093,17 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${chalk.yellow('↶ REWIND:')} ${event.target} (operator; demoted ${event.demoted.join(', ') || 'none'})`,
       );
       break;
+    case 'plan_growth': {
+      const byGate = Object.entries(event.byGate)
+        .map(([gate, count]) => `${gate}: ${count}`)
+        .join(', ');
+      log(
+        `${dot} ${chalk.yellow('PLAN GROWTH:')} authored ${event.authored}; ` +
+        `added ${event.added}${byGate ? ` (${byGate})` : ''}; ` +
+        `remaining ${event.remaining}/${event.added + event.remaining}`,
+      );
+      break;
+    }
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;

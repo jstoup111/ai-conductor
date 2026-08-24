@@ -155,6 +155,20 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 
 export type ConductorEvent =
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
+  | {
+      /** Durable plan-task growth accounting after a remediation append. */
+      type: 'plan_growth';
+      authored: number;
+      added: number;
+      byGate: Record<string, number>;
+      remaining: number;
+    }
+  | {
+      /** A retired configuration key was accepted as a compatibility no-op. */
+      type: 'config_deprecated_key';
+      key: string;
+      adr: string;
+    }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
   | {
       /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */
@@ -202,7 +216,16 @@ export type ConductorEvent =
     }
   | { type: 'build_review_disposition_refused'; feature: string; reason: string }
   | { type: 'build_review_disposition_version_invalidated'; feature: string; findingId: string; rubric: string; contractVersion: string }
-  | { type: 'build_review_outer_verdict'; lapId: string; rawVerdict: 'PASS' | 'FAIL'; effectiveVerdict: 'PASS' | 'FAIL' }
+  | {
+      type: 'build_review_outer_verdict';
+      lapId: string;
+      rawVerdict: 'PASS' | 'FAIL';
+      effectiveVerdict: 'PASS' | 'FAIL';
+      /** Deterministic container-level PASS cause, when no rubric ran. */
+      reason?: string;
+      /** Unbound Covers declarations seen in the frozen test-quality scope. */
+      unresolvedMarkers?: readonly { selector: string; reference: string }[];
+    }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | { type: 'step_started'; step: StepName; index: number }
   | {
@@ -353,7 +376,7 @@ export type ConductorEvent =
   | { type: 'recovery_needed'; step: StepName; options: RecoveryOption[] }
   | { type: 'gate_blocked'; step: StepName; reason: string }
   | { type: 'tier_skip'; step: StepName; tier: ComplexityTier }
-  | { type: 'config_skip'; step: StepName }
+  | { type: 'config_skip'; step: StepName; reason?: string }
   | { type: 'navigation_back'; from: StepName; to: StepName }
   | { type: 'rate_limit'; waitSeconds: number; reason?: 'usage-exhausted' }
   | { type: 'session_reset'; reason: string }
@@ -672,6 +695,8 @@ export type ConductorEvent =
       type: 'loop_halt';
       step?: StepName;
       reason: string;
+      /** Present when an external BUILD action classifies its own terminal halt. */
+      haltClass?: 'plan-gap';
       /**
        * URL of the auto-opened needs-remediation draft PR, when the conductor
        * irrecoverably HALTs in auto mode and escalation succeeded. Absent when

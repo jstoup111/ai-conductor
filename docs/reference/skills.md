@@ -53,8 +53,7 @@ The 12 implicit-required shipped skills are:
 | `/engineer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/engineer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
 | Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims` | Called from an active skill: issue authoring, fresh debugging, batch simplification, or load-bearing claim verification |
 
-The 21 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-completeness`,
-`build-review-root-cause`, `build-review-scope`, `build-review-tautology`, `code-review`, `conduct`,
+The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `conduct`,
 `daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
 `remediate`, `retro`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
@@ -561,7 +560,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 `test-suite` and `wiring-check` have no `SKILL.md` — both `test_suite` (index 14) and `wiring_check`
 (index 13) are **engine-native** BUILD steps. `test_suite` obtains a current result from the
 repository-configured aggregate verifier. `wiring_check` is a deprecated no-op retained for compatibility.
-`build_review` fans out to the engine-managed Tautology, Scope, Root Cause, and Completeness rubric
+`build_review` dispatches the engine-managed test-quality rubric
 skills; their raw verdicts are joined before effective dispositions are applied. The two names remain in `build_verification` (see
 [The build verification group](steps.md#the-build-verification-group)); it fans out after `build` and
 joins before `build_review`.
@@ -588,35 +587,40 @@ joins before `build_review`.
 
 ### prd-audit
 
-> Use at SHIP, after manual-test and before retro/finish. Audits shipped implementation against the PRD's functional requirements (FR-N); gates on gaps and kicks back to BUILD or DECIDE.
+> Use at SHIP, after manual-test and before retro/finish. Audits the shipped implementation against the feature stories' acceptance criteria, using PRD functional requirements as intent context when a PRD exists; produces graded, criterion-level findings and never implements or routes work itself.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, `model: opus`.
-- **Engine step** — `prd_audit` (index 17, SHIP, prerequisite `manual_test`). Loop gate; skipped on the
-  technical track; no tier skip.
-- **Inputs** — approved PRDs under `.docs/specs/`, excluding superseded ones; `.docs/stories/` for
-  FR-to-story traceability; the codebase and diff per FR.
+- **Engine step** — `prd_audit` (index 17, SHIP, prerequisite `manual_test`). Loop gate; runs on every
+  feature, at every tier and on both tracks — the skill does not infer a skip from tier, track, or the
+  absence of a PRD.
+- **Inputs** — the feature's committed stories (the audit key) via the active plan's `**Stories:**`
+  reference; the active plan and any coherence mapping; the matching non-`SUPERSEDED-` PRD when present
+  (context, not the key); the implementation, changed tests, and BUILD `Scope:` trailers; operator
+  reseal and `Scope:` trailer rationales as immutable `OVER_SCOPE` intent evidence.
 - **Outputs** — `.pipeline/prd-audit.md`, overwritten each run; a code-stamp sidecar on the pass path.
-- **Gate role** — blocking. It loops until every FR is `ALIGNED` or explicitly accepted by a human; a
-  missing approved PRD blocks. Under the daemon, an all-implementation-gap result self-heals back to
-  BUILD within a bounded budget; any non-implementation blocking row HALTs for a human. It never
-  self-accepts a divergence.
-- **Dispatches** — `agents/prd-auditor.md`, one dispatch per FR.
+- **Gate role** — blocking. Each finding carries exactly one grade — `PASS`, `FIXABLE`, `PLAN_GAP`, or
+  `OVER_SCOPE` — and the report needs exactly one graded verdict row per acceptance criterion. A
+  `FIXABLE` row must name its owning plan task. `FIXABLE` findings appends a bounded remediation lap
+  (capped tasks, see [configuration](configuration.md#prd_audit)); exceeding the cap, needing a second
+  lap, a happy-path `PLAN_GAP`, or a user-visible out-of-intent `OVER_SCOPE` halts for the operator.
+  A negative-path or edge-scenario `PLAN_GAP`, and an `OVER_SCOPE` widening within intent or with no
+  user-visible effect, are recorded in the verdict and the shipped record and the feature ships.
+- **Dispatches** — `agents/prd-auditor.md`, one dispatch for the whole audit.
 
 ### remediate
 
-> Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
+> Use when a SHIP gate blocks — a prd-audit FIXABLE finding, the as-built architecture review's BLOCKED verdict, or finish verification — or on a build stall. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `remediate` (out-of-band, SHIP, prerequisite `prd_audit`). Engine enforcement is
   `advisory`. Deliberately outside the sequential list so the loop never dispatches it unconditionally.
-- **Inputs** — `.pipeline/build-review.json` (present when a `build_review` FAIL dispatches
-  remediation), `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
-  `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`. A `build_review`-sourced
-  dispatch also carries best-effort `plan contract:` and `prior attempts:` pointer lines (see
-  [gates](../explanation/gates.md#where-a-build_review-fail-goes)); the skill treats a referenced plan
-  task's Steps as the governing repair contract and prior-attempt artifacts as context only.
+- **Inputs** — `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
+  `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`. A `build_review` FAIL no
+  longer dispatches `/remediate`: it routes straight back to `build` with its own best-effort
+  `plan contract:` and `prior attempts:` pointer lines (see
+  [gates](../explanation/gates.md#where-a-build_review-fail-goes)).
 - **Outputs** — `.pipeline/remediation.json`, overwritten each run. The engine then appends each task
   into the feature's plan. No completion glob — the engine reads the JSON directly to route.
 - **Gate role** — advisory; it is the unblocker rather than a blocker. HALT is reserved for exactly

@@ -151,7 +151,7 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
     );
   }
 
-  it('finish-fail -> /remediate -> build kickback preserves pre-existing .pipeline run-state and does not crash the loop', async () => {
+  it('finish-fail remediation with unadmitted plan work preserves conductor state after a .pipeline wipe', async () => {
     await seedShipTailWithRunState();
 
     let wiped = false;
@@ -172,7 +172,8 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
           await rm(pipelineDir, { recursive: true, force: true });
           wiped = true;
 
-          // Write a remediation plan that routes back to build.
+          // Write an unadmitted remediation task. Finish has no plan-growth
+          // allowance, so the loop must halt cleanly after restoring state.
           // The conductor reads this file after /remediate returns to decide the next step.
           // We must recreate the .pipeline directory since we just deleted it.
           await mkdir(pipelineDir, { recursive: true });
@@ -182,7 +183,7 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
                 id: 'test-gap-1',
                 disposition: 'build',
                 category: null,
-                rationale: 'Route back to build for re-run',
+                rationale: 'Attempt a finish-to-build re-run',
                 tasks: [
                   {
                     id: 'rem-pipeline-durability-1',
@@ -268,32 +269,13 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
 
     expect(wiped).toBe(true);
 
-    // The wipe must not have silently swallowed the daemon into an
-    // unrecoverable halt with lost state: either the kickback completed and
-    // reached build without crashing (loop_halt never fires), or — if the
-    // outer catch legitimately fired for an unrelated reason — the in-memory
-    // conduct-state.json must still have been flushed (the D1 ordering fix).
-    if (halted) {
-      expect(haltReason).not.toMatch(/ENOENT/);
-    }
+    expect(halted).toBe(true);
+    expect(haltReason).toContain('no plan-growth allowance');
+    expect(kickbacks).toEqual([]);
 
     const stateResult = await readState(statePath);
     expect(stateResult.ok).toBe(true);
 
-    const taskStatus = await readFile(join(pipelineDir, 'task-status.json'), 'utf-8').catch(
-      () => null,
-    );
-    expect(taskStatus).not.toBeNull();
-
-    const taskEvidence = await readFile(join(pipelineDir, 'task-evidence.json'), 'utf-8').catch(
-      () => null,
-    );
-    expect(taskEvidence).not.toBeNull();
-
-    const buildGate = await readFile(join(pipelineDir, 'gates', 'build.json'), 'utf-8').catch(
-      () => null,
-    );
-    expect(buildGate).not.toBeNull();
   });
 
   it('RED: crash handler drops conduct-state.json when .pipeline is absent', async () => {

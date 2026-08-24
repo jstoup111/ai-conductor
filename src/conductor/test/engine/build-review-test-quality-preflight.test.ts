@@ -8,7 +8,8 @@ import {
   scopedRunFailure,
   TAUTOLOGY_EXCERPT_CAP_BYTES,
   type TautologyScopedRunResult,
-} from '../../src/engine/build-review-tautology-preflight.js';
+} from '../../src/engine/build-review-test-quality-preflight.js';
+import { preflightProjection } from '../../src/engine/build-review-coordinator.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 function scopedCommandResult(command: string) {
@@ -20,7 +21,31 @@ function scopedCommandResult(command: string) {
   }).runScopedTautologyCommand(process.cwd(), ['spec/example_spec.rb'], new AbortController().signal);
 }
 
-describe('build-review Tautology preflight', () => {
+describe('build-review test-quality preflight', () => {
+  it.each([
+    [{ classification: 'red', cacheable: true, cacheProvenance: 'miss', changedPaths: [], changedTestSelectors: ['test/a.test.ts'], revertedProductionManifest: [], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, scopedRun: { exitCode: 1, runKind: 'nonzero-exit', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'assertion failed' } }, 'assertion failed'],
+    [{ classification: 'stayed-green', cacheable: true, cacheProvenance: 'miss', changedPaths: [], changedTestSelectors: ['test/a.test.ts'], revertedProductionManifest: [], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, scopedRun: { exitCode: 0, runKind: 'passed', ranSelectors: ['test/a.test.ts'], failureExcerpt: '' } }, ''],
+    [{ classification: 'approved-exception', exception: 'removal-maintenance', cacheable: true, cacheProvenance: 'miss', changedPaths: [], changedTestSelectors: ['test/a.test.ts'], revertedProductionManifest: [], sourceIdentities: { mergeBase: 'base', headSha: 'head' } }, ''],
+  ] as const)('projects %s as typed evidence without synthesizing an engine finding', (result, excerpt) => {
+    const projection = preflightProjection(result);
+
+    expect(projection.preflight).toEqual({ classification: result.classification, excerpt });
+    expect(projection).not.toHaveProperty('findings');
+  });
+
+  it('classifies a scoped command execution error as a mechanical fault with bounded projection evidence', async () => {
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => { throw new Error('command unavailable'); },
+      removeCheckout: async () => {},
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'scoped-run-failed' });
+    expect(preflightProjection(result).preflight).toEqual({ classification: 'infrastructure-failure', excerpt: '' });
+  });
+
   it.each([
     ['RSpec', '3 examples, 1 failure', ''],
     ['go test', '--- FAIL: TestCounterfactual', 'FAIL\texample.com/project\t0.002s'],

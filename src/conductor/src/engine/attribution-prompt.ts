@@ -12,7 +12,7 @@
  * It must never reference conductor state, task-status.json, maker-summary
  * artifacts, or maker-session internals — input isolation is the point.
  *
- * Pattern: mirror build-review-prompt.ts isolation model.
+ * Pattern: preserve the same input-isolation model as build review.
  */
 
 /**

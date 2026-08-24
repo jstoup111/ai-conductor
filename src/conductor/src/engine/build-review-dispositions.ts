@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
   createConductStateLease,
   type ConductStateLease,
@@ -91,6 +92,7 @@ export interface BuildReviewDispositionStoreOptions {
   readonly clock?: () => number;
   readonly lock?: ConductStateLease;
   readonly leaseOptions?: Omit<ConductStateLeaseOptions, 'now'>;
+  readonly log?: (message: string) => void;
 }
 
 export type BuildReviewDispositionStoreFailure = {
@@ -124,11 +126,17 @@ interface BuildReviewDispositionState {
   readonly records: readonly BuildReviewStoredDispositionRecord[];
 }
 
-const REDUCED_COVERAGE_RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness']);
+const REDUCED_COVERAGE_RUBRICS = new Set<BuildReviewRubricId>(['testQuality']);
 const REDUCED_COVERAGE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
   'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact',
   'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed',
 ]);
+
+/** Retired, shipped rubric ids are tolerated only for compatibility reads. */
+const RETIRED_BUILD_REVIEW_RUBRIC_IDS = new Set<string>(DEPRECATED_BUILD_REVIEW_RUBRIC_IDS);
+export function isRetiredBuildReviewRubric(value: unknown): value is string {
+  return typeof value === 'string' && RETIRED_BUILD_REVIEW_RUBRIC_IDS.has(value);
+}
 
 const defaultFilesystem: BuildReviewDispositionFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
@@ -220,6 +228,22 @@ function parseStoredDispositionRecord(value: unknown): BuildReviewStoredDisposit
     : parseDispositionRecord(value);
 }
 
+/**
+ * Retired rubric records are compatibility-only state: they must not make a
+ * whole otherwise-readable store malformed before the list readers can ignore
+ * them. Inspect only the raw rubric discriminator here; every current record
+ * still goes through the strict parser below.
+ */
+function isRetiredStoredDispositionRecord(value: unknown): boolean {
+  const source = record(value);
+  if (!source) return false;
+  const reducedCoverageIdentity = record(source.identity);
+  const finding = record(source.finding);
+  const canonicalPayload = record(finding?.canonicalPayload);
+  return isRetiredBuildReviewRubric(reducedCoverageIdentity?.rubric) ||
+    isRetiredBuildReviewRubric(canonicalPayload?.rubric);
+}
+
 function isFindingDispositionRecord(value: BuildReviewStoredDispositionRecord): value is BuildReviewDispositionRecord {
   return !('kind' in value);
 }
@@ -227,7 +251,11 @@ function isFindingDispositionRecord(value: BuildReviewStoredDispositionRecord): 
 function parseState(value: unknown): BuildReviewDispositionState | undefined {
   const source = record(value);
   if (!source || !exactKeys(source, ['version', 'records']) || source.version !== STORE_VERSION || !Array.isArray(source.records)) return undefined;
-  const records = source.records.map(parseStoredDispositionRecord);
+  const records = source.records.flatMap((entry) => {
+    if (isRetiredStoredDispositionRecord(entry)) return [];
+    const parsed = parseStoredDispositionRecord(entry);
+    return parsed ? [parsed] : [undefined];
+  });
   return records.every((entry): entry is BuildReviewStoredDispositionRecord => entry !== undefined)
     ? { version: STORE_VERSION, records }
     : undefined;
@@ -302,6 +330,7 @@ export class BuildReviewDispositionStore {
   private readonly clock: () => number;
   private readonly statePath: string;
   private readonly lock: ConductStateLease;
+  private readonly log: (message: string) => void;
 
   constructor(projectRoot: string, options: BuildReviewDispositionStoreOptions = {}) {
     this.filesystem = options.filesystem ?? defaultFilesystem;
@@ -311,6 +340,7 @@ export class BuildReviewDispositionStore {
       ...options.leaseOptions,
       now: this.clock,
     });
+    this.log = options.log ?? ((message) => console.warn(message));
   }
 
   private async acquire(): Promise<BuildReviewDispositionStoreFailure | { readonly ok: true; readonly release: () => Promise<void> }> {
@@ -374,9 +404,17 @@ export class BuildReviewDispositionStore {
     if (!acquired.ok) return acquired;
     try {
       const loaded = await this.load();
-      return loaded.ok
-        ? { ok: true, records: Object.freeze(loaded.state.records.filter(isFindingDispositionRecord).filter((entry) => sameFeature(entry.feature, feature))) }
-        : loaded;
+      if (!loaded.ok) return loaded;
+      const records = loaded.state.records
+        .filter(isFindingDispositionRecord)
+        .filter((entry) => sameFeature(entry.feature, feature))
+        .filter((entry) => {
+          const rubric = entry.finding.canonicalPayload.rubric;
+          if (!isRetiredBuildReviewRubric(rubric)) return true;
+          this.log(`ignored retired rubric record: ${rubric}`);
+          return false;
+        });
+      return { ok: true, records: Object.freeze(records) };
     } finally {
       await acquired.release();
     }
@@ -389,10 +427,17 @@ export class BuildReviewDispositionStore {
     if (!acquired.ok) return acquired;
     try {
       const loaded = await this.load();
-      return loaded.ok
-        ? { ok: true, records: Object.freeze(loaded.state.records.filter((entry): entry is BuildReviewReducedCoverageDispositionRecord =>
-          !isFindingDispositionRecord(entry) && sameFeature(entry.feature, feature))) }
-        : loaded;
+      if (!loaded.ok) return loaded;
+      const records = loaded.state.records
+        .filter((entry): entry is BuildReviewReducedCoverageDispositionRecord =>
+          !isFindingDispositionRecord(entry) && sameFeature(entry.feature, feature))
+        .filter((entry) => {
+          const rubric = entry.identity.rubric;
+          if (!isRetiredBuildReviewRubric(rubric)) return true;
+          this.log(`ignored retired rubric record: ${rubric}`);
+          return false;
+        });
+      return { ok: true, records: Object.freeze(records) };
     } finally {
       await acquired.release();
     }

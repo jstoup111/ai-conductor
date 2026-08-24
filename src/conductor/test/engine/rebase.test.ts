@@ -1146,13 +1146,21 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(Object.keys(byGate).sort()).toEqual(
       ['prd_audit', 'architecture_review_as_built'].sort(),
     );
-    // Declared surface: the feature's own runtime paths (F ∩ runtime) —
-    // 'src/feature.test.ts' is excluded (test path, not runtime).
-    expect(byGate.prd_audit.surface).toEqual(['src/feature.ts']);
+    // prd_audit now has a document-input surface as well as feature runtime,
+    // so its non-enumerable declaration uses the broad surface sentinel.
+    expect(byGate.prd_audit.surface).toEqual(['<all runtime source>']);
+    // The as-built review remains feature-runtime scoped; its test path is
+    // excluded from the declared source surface.
     expect(byGate.architecture_review_as_built.surface).toEqual(['src/feature.ts']);
-    // Matched delta for this gate's surface is empty — nothing in D hit
-    // src/feature.ts, which is exactly why it was preserved.
-    expect(byGate.prd_audit.deltaConsidered).toEqual([]);
+    // The widened PRD input declaration observes the complete relevant delta;
+    // neither path is a declared story/PRD input, so classification still
+    // preserves the audit despite retaining the diagnostic context.
+    expect(byGate.prd_audit.deltaConsidered).toEqual([
+      'src/feature.test.ts',
+      'src/foreign.ts',
+    ]);
+    // The as-built review only considers feature runtime source and sees no
+    // matching delta.
     expect(byGate.architecture_review_as_built.deltaConsidered).toEqual([]);
     // Invalidated gates must not appear in the preserved set.
     expect(byGate.build_review).toBeUndefined();

@@ -7,35 +7,47 @@
 import { describe, expect, it } from 'vitest';
 import {
   parsePlanTaskPaths,
-  parsePlanTaskPreserves,
+  parsePlanTaskDoneWhen,
   TASK_HEADER_PATTERN,
   TASK_ID_PATTERN,
 } from '../../src/engine/plan-task-parse.js';
 import { parsePlanTaskVerifyOnly } from '../../src/engine/autoheal.js';
 
 describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)', () => {
-  it('parses one preserved behavior from its task block', () => {
-    const result = parsePlanTaskPreserves(`# Plan
+  describe('parsePlanTaskDoneWhen', () => {
+    it('returns ordered Done when checks only for tasks that declare the block', () => {
+      const result = parsePlanTaskDoneWhen(`# Plan
 
-### Task 9: Preserve wrapper behavior
-**Preserves:** the ungated TokenMeter wrapper transparency
+### Task 1: Has verifiable completion criteria
+**Done when:**
+- First check
+- Second check
+- Third check
+
+**Files:** src/one.ts
+
+### Task 2: Keeps the legacy close rule
+**Files:** src/two.ts
 `);
 
-    expect(result).toEqual(new Map([['9', ['the ungated TokenMeter wrapper transparency']]]));
-  });
+      expect(result).toEqual(new Map([['1', [
+        'First check',
+        'Second check',
+        'Third check',
+      ]]]));
+      expect(result.malformedTaskIds).toEqual(new Set());
+    });
 
-  it('accumulates separate preserved behaviors from one task block', () => {
-    const result = parsePlanTaskPreserves(`# Plan
+    it('marks an empty Done when block malformed instead of treating it as absent', () => {
+      const result = parsePlanTaskDoneWhen(`### Task 1: Incomplete metadata
+**Done when:**
 
-### Task 9: Preserve wrapper behavior
-**Preserves:** the ungated TokenMeter wrapper transparency
-**Preserves:** the provider-facing TokenMeter metric name
+**Files:** src/one.ts
 `);
 
-    expect(result).toEqual(new Map([['9', [
-      'the ungated TokenMeter wrapper transparency',
-      'the provider-facing TokenMeter metric name',
-    ]]]));
+      expect(result.has('1')).toBe(false);
+      expect(result.malformedTaskIds).toEqual(new Set(['1']));
+    });
   });
 
   it('exports TASK_ID_PATTERN matching the H9 id grammar', () => {
@@ -44,22 +56,18 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
 
   it('keeps every task parser on the shared supported header grammar', () => {
     const plan = `### Task rem-adr-001: Colon-delimited
-**Preserves:** colon behavior
 **Verify-only:** yes
 **Files:** src/colon.ts
 
 #### Task task_1 — Dash-delimited
-**Preserves:** dash behavior
 **Verify-only:** yes
 **Files:** src/dash.ts
 
 ##### Task 1.2
-**Preserves:** bare numeric behavior
 **Verify-only:** yes
 **Files:** src/bare.ts
 
 ###### T0 — Shorthand
-**Preserves:** shorthand behavior
 **Verify-only:** yes
 **Files:** src/shorthand.ts
 `;
@@ -67,7 +75,6 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
 
     expect(TASK_HEADER_PATTERN).toBeInstanceOf(RegExp);
     expect(Array.from(parsePlanTaskPaths(plan).keys())).toEqual(ids);
-    expect(Array.from(parsePlanTaskPreserves(plan).keys())).toEqual(ids);
     expect(Array.from(parsePlanTaskVerifyOnly(plan).keys())).toEqual(ids);
   });
 

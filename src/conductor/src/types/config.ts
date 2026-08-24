@@ -646,11 +646,7 @@ export interface MergeableAutoresolveConfig {
 }
 
 /** The closed set of independently-executed build-review rubric branches. */
-export type BuildReviewRubricId =
-  | 'tautology'
-  | 'scope'
-  | 'rootCause'
-  | 'completeness';
+export type BuildReviewRubricId = 'testQuality';
 
 /** Optional execution overrides for one build-review rubric branch. */
 export interface BuildReviewRubricConfig {
@@ -676,8 +672,6 @@ export type BuildReviewRubricsConfig = Partial<
 export interface BuildReviewConfig {
   /** Enable the build_review gate. Default: true. */
   enabled?: boolean;
-  /** Enable the per-task work-happened commit floor gate. Default: true (on, fail-safe). */
-  perTaskFloor?: boolean;
   /**
    * Refuse commits whose staged paths exceed the active plan task's declared
    * scope. Default: false (report-only).

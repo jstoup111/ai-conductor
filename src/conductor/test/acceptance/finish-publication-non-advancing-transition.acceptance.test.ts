@@ -372,7 +372,7 @@ async function runProductionObservation(
   const result = await coordinator.advance({
     state,
     mode: 'auto',
-    daemon: true,
+    daemon: false,
     dispatchJudgment,
     emit: async (event: FinishPublicationEvent) => {
       if (event.type === 'finish_publication_transition' && event.phase === 'completed') {
@@ -408,6 +408,7 @@ async function finishRetryEventsFor(
     if (step.name === 'finish') break;
     state[step.name] = 'done';
   }
+  state.finish = 'pending';
   const stateFilePath = join(pipeline, 'conduct-state.json');
   await writeState(stateFilePath, state as ConductState);
 
@@ -436,7 +437,7 @@ async function finishRetryEventsFor(
     projectRoot: root,
     fromStep: 'finish',
     mode: 'auto',
-    daemon: true,
+    daemon: false,
     verifyArtifacts: false,
     git: async () => ({ stdout: '' }),
     gh: async () => ({ stdout: '' }),

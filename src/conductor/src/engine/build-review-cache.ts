@@ -8,6 +8,7 @@ import {
   type BuildReviewJudgedResult,
   type BuildReviewRubricContractVersion,
 } from "./build-review-domain.js";
+import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 
 const CACHE_VERSION = 1;
 const CACHE_DIRECTORY = ".pipeline/build-review/cache";
@@ -86,8 +87,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
-  return value === "tautology" || value === "scope" || value === "rootCause" ||
-    value === "completeness";
+  return value === "testQuality";
 }
 
 /** Strictly parses the cache boundary; unknown fields and non-judgements miss closed. */
@@ -137,7 +137,8 @@ export async function readBuildReviewCacheEntry(
   fs: BuildReviewCacheFilesystem,
 ): Promise<BuildReviewCacheEntryCandidate | undefined> {
   try {
-    return parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric))));
+    const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric))));
+    return entry && !isRetiredBuildReviewRubric(entry.rubric) ? entry : undefined;
   } catch {
     return undefined;
   }

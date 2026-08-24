@@ -2,14 +2,16 @@
 set -euo pipefail
 
 # test_skill_pipeline_contract.sh — Validates cross-skill pipeline contracts.
-# Pipeline documents session-hook task stamping rather than imperative task
-# CLI calls, and finish delegates aggregate verification to the configured verifier.
+# Pipeline documents session-hook task stamping, requires the ordinary Done when
+# close flow to reach the engine-owned writer, and finish delegates aggregate
+# verification to the configured verifier.
 #
 # Usage: ./test/test_skill_pipeline_contract.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_FILE="${HARNESS_DIR}/skills/pipeline/SKILL.md"
+TASK_CLI_FILE="${HARNESS_DIR}/src/conductor/src/engine/task-cli.ts"
 CODE_REVIEW_SKILL="${HARNESS_DIR}/skills/code-review/SKILL.md"
 FINISH_SKILL_FILE="${HARNESS_DIR}/skills/finish/SKILL.md"
 PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
@@ -80,6 +82,20 @@ confirmed_breadth_contract_holds() {
   grep -qiE 'Scope boundary:.*\.docs/track/<slug>\.md.*binding' "$skill_file" \
     && grep -qiE 'preserve.+confirmed.+(narrow|comprehensive).+(breadth|outcome|scope)' "$skill_file" \
     && grep -qiE '(do not|must not|never).+(materially broader|material expansion|expand materially).+(unless|without).+operator.+confirm.+before.+artifact' "$skill_file"
+}
+
+ordinary_done_when_close_contract_holds() {
+  local skill_file="$1"
+  local task_cli_file="$2"
+  local run_task_done
+
+  run_task_done="$(sed -n '/^export async function runTaskDone(/,/^async function runTaskPlanGap(/p' "$task_cli_file")"
+
+  grep -qF 'normal BUILD task-close path' "$skill_file" \
+    && grep -qF 'conduct task done <id> --done-when <n>=<evidence>' "$skill_file" \
+    && grep -qF 'conduct task done <id> --plan-gap <n> --reason <text>' "$skill_file" \
+    && grep -qF 'const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);' <<<"$run_task_done" \
+    && grep -qF "if (completion.kind === 'refused')" <<<"$run_task_done"
 }
 
 adr_structural_policy_contract_holds() {
@@ -258,6 +274,39 @@ if grep -q 'Task: <id>' "$SKILL_FILE" && grep -q 'Task: none' "$SKILL_FILE"; the
   pass "documents line-1 dispatch marker contract (Task: <id> / Task: none)"
 else
   fail "missing line-1 dispatch marker contract (Task: <id> / Task: none)"
+fi
+
+# The ordinary BUILD close path must collect every declared Done when proof (or
+# halt for a plan gap) through the engine-owned completion writer. Keep this a
+# combined skill/flow assertion: prose alone cannot prove the CLI reaches the
+# writer, while source alone cannot prove BUILD agents are instructed to use it.
+if [ ! -f "$TASK_CLI_FILE" ]; then
+  fail "task CLI exists for ordinary Done when close flow"
+else
+  ordinary_close_skill_mutation="$(mktemp "${TMPDIR:-/tmp}/ordinary-done-when-close-skill.XXXXXX")"
+  ordinary_close_cli_mutation="$(mktemp "${TMPDIR:-/tmp}/ordinary-done-when-close-cli.XXXXXX")"
+
+  sed '/normal BUILD task-close path/d' "$SKILL_FILE" >"$ordinary_close_skill_mutation"
+  if ordinary_done_when_close_contract_holds "$ordinary_close_skill_mutation" "$TASK_CLI_FILE"; then
+    fail "ordinary Done when close predicate rejects missing BUILD-close guidance"
+  else
+    pass "ordinary Done when close predicate rejects missing BUILD-close guidance"
+  fi
+
+  sed '/const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);/d' "$TASK_CLI_FILE" >"$ordinary_close_cli_mutation"
+  if ordinary_done_when_close_contract_holds "$SKILL_FILE" "$ordinary_close_cli_mutation"; then
+    fail "ordinary Done when close predicate rejects a CLI path that bypasses completeTaskDoneWhen"
+  else
+    pass "ordinary Done when close predicate rejects a CLI path that bypasses completeTaskDoneWhen"
+  fi
+
+  if ordinary_done_when_close_contract_holds "$SKILL_FILE" "$TASK_CLI_FILE"; then
+    pass "ordinary BUILD task closure supplies Done when evidence or plan-gap reason through completeTaskDoneWhen"
+  else
+    fail "ordinary BUILD task closure must supply Done when evidence or plan-gap reason through completeTaskDoneWhen"
+  fi
+
+  rm -f "$ordinary_close_skill_mutation" "$ordinary_close_cli_mutation"
 fi
 
 # Must reference the session-hook ADR or PreToolUse/PostToolUse hooks

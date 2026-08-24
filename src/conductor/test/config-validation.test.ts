@@ -120,7 +120,7 @@ describe('LLM provider selection validation', () => {
 });
 
 describe('build_review rubric validation', () => {
-  it('normalizes causalIntegrity to the canonical rootCause rubric', () => {
+  it('accepts retired causalIntegrity configuration as a no-op at the raw config boundary', () => {
     const result = validateConfig({
       build_review: {
         rubrics: {
@@ -137,31 +137,12 @@ describe('build_review rubric validation', () => {
       },
     });
 
-    const normalized = result.ok
-      ? {
-          rootCause: result.config.build_review?.rubrics?.rootCause,
-          hasCausalIntegrity: Object.hasOwn(
-            result.config.build_review?.rubrics ?? {},
-            'causalIntegrity',
-          ),
-        }
-      : result;
-
-    expect(normalized).toEqual({
-      rootCause: {
-        enabled: false,
-        llm_provider: 'claude',
-        model: 'opus',
-        effort: 'high',
-        model_fallback_ladder: ['opus', 'sonnet'],
-        max_retries: 2,
-        escalate: false,
-      },
-      hasCausalIntegrity: false,
-    });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.warnings).toContainEqual(expect.stringMatching(/causalIntegrity.*retired/i));
   });
 
-  it('rejects rootCause and causalIntegrity together as ambiguous', () => {
+  it('accepts retired rubric identifiers as no-ops with one warning per key', () => {
     const result = validateConfig({
       build_review: {
         rubrics: {
@@ -170,13 +151,12 @@ describe('build_review rubric validation', () => {
         },
       },
     });
-    const diagnostic = result.ok
-      ? 'accepted ambiguous rootCause and causalIntegrity rubric keys'
-      : result.error.message;
-
-    expect(diagnostic).toMatch(
-      /(?=.*build_review\.rubrics\.rootCause)(?=.*build_review\.rubrics\.causalIntegrity)(?=.*ambiguous)/i,
-    );
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/rootCause.*retired/i),
+      expect.stringMatching(/causalIntegrity.*retired/i),
+    ]));
   });
 
   it.each([
@@ -187,27 +167,13 @@ describe('build_review rubric validation', () => {
     },
     {
       name: 'a malformed rubric execution policy',
-      config: { build_review: { rubrics: { scope: { effort: 'extreme' } } } },
-      path: 'build_review\\.rubrics\\.scope\\.effort',
+      config: { build_review: { rubrics: { testQuality: { effort: 'extreme' } } } },
+      path: 'build_review\\.rubrics\\.testQuality\\.effort',
     },
     {
       name: 'invalid rubric concurrency',
       config: { build_review: { maxParallel: 0 } },
       path: 'build_review\\.maxParallel',
-    },
-    {
-      name: 'an enabled gate with no enabled rubrics',
-      config: {
-        build_review: {
-          rubrics: {
-            tautology: { enabled: false },
-            scope: { enabled: false },
-            rootCause: { enabled: false },
-            completeness: { enabled: false },
-          },
-        },
-      },
-      path: 'build_review\\.rubrics.*at least one enabled rubric',
     },
   ])('rejects $name before any rubric can dispatch', ({ config, path }) => {
     const result = validateConfig(config);
@@ -216,9 +182,26 @@ describe('build_review rubric validation', () => {
     expect(diagnostic).toMatch(new RegExp(path, 'i'));
   });
 
-  it('rejects retired wiring policy and clamps concurrency at four rubrics', () => {
-    expect(validateConfig({ build_review: { rubrics: { wiring: {} } } })).toMatchObject({ ok: false });
-    expect(validateConfig({ build_review: { maxParallel: 5 } })).toMatchObject({ ok: false });
+  it.each([
+    { name: 'above the cap', maxParallel: 5 },
+    { name: 'a non-integer', maxParallel: 2.5 },
+    { name: 'a numeric string', maxParallel: '4' },
+  ])('rejects build_review.maxParallel that is $name with a validation error naming the 1-4 range', ({ maxParallel }) => {
+    const result = validateConfig({ build_review: { maxParallel } });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.type).toBe('validation_error');
+    expect(result.error.message).toMatch(/build_review\.maxParallel.*integer between 1 and 4/);
+  });
+
+  it.each([1, 4])('accepts build_review.maxParallel %i inside the 1-4 range', (maxParallel) => {
+    expect(validateConfig({ build_review: { maxParallel } })).toMatchObject({ ok: true });
+  });
+
+  it('accepts retired wiring policy as a no-op and supports the compatibility concurrency range', () => {
+    expect(validateConfig({ build_review: { rubrics: { wiring: {} } } })).toMatchObject({ ok: true });
+    expect(validateConfig({ build_review: { maxParallel: 4 } })).toMatchObject({ ok: true });
   });
 });
 

@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import {
   loadConfig,
   validateConfig,
+  DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
   disabledStepNames,
   customStepEntries,
   mergeConfigs,
@@ -1799,15 +1800,142 @@ complexity:
     });
   });
 
+  describe('prd_audit and architecture_review_as_built config fields', () => {
+    it('resolves the remediation caps and plan-gap policy defaults', () => {
+      expect(validateConfig({})).toMatchObject({
+        ok: true,
+        config: {
+          prd_audit: {
+            max_remediation_laps: 1,
+            max_appended_tasks: 5,
+            max_appended_ratio: 0.25,
+            halt_on_any_plan_gap: false,
+          },
+        },
+      });
+    });
+
+    it.each([
+      ['max_remediation_laps', 0],
+      ['max_appended_tasks', 0],
+    ])('rejects prd_audit.%s when it is zero', (key, value) => {
+      expect(validateConfig({ prd_audit: { [key]: value } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: `prd_audit.${key} must be a positive integer`,
+        },
+      });
+    });
+
+    it.each([0, -0.1, 1.1])('rejects an out-of-range remediation ratio', (value) => {
+      expect(validateConfig({ prd_audit: { max_appended_ratio: value } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'prd_audit.max_appended_ratio must be a finite number in (0, 1]',
+        },
+      });
+    });
+
+    it('resolves a per-check as-built tier override', () => {
+      expect(
+        validateConfig({
+          architecture_review_as_built: {
+            checks: { reachability: { tiers: ['M', 'L'] } },
+          },
+        }),
+      ).toMatchObject({
+        ok: true,
+        config: {
+          architecture_review_as_built: {
+            checks: { reachability: { tiers: ['M', 'L'] } },
+          },
+        },
+      });
+    });
+
+    it('rejects an unknown as-built check name', () => {
+      expect(
+        validateConfig({
+          architecture_review_as_built: { checks: { unknown: { tiers: ['S'] } } },
+        }),
+      ).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown check in architecture_review_as_built.checks: "unknown"',
+        },
+      });
+    });
+  });
+
   describe('build_review config field', () => {
-    it('materializes the closed four-rubric configuration with default and per-rubric execution policy fields', () => {
+    it('accepts retired rubric keys as no-ops and warns once per configured key', () => {
+      const retiredScope = validateConfig({
+        build_review: {
+          rubrics: {
+            scope: { enabled: true, max_retries: 'ignored-with-the-retired-rubric' },
+          },
+        },
+      });
+      const emptyContainer = validateConfig({
+        build_review: {
+          enabled: true,
+          rubrics: {
+            tautology: { enabled: false },
+            scope: { enabled: false },
+            rootCause: { enabled: false },
+            completeness: { enabled: false },
+          },
+        },
+      });
+      const oldAliases = validateConfig({
+        build_review: {
+          rubrics: {
+            rootCause: { enabled: true },
+            causalIntegrity: { enabled: true },
+          },
+        },
+      });
+      const neverShipped = validateConfig({
+        build_review: { rubrics: { inventedRubric: { enabled: true } } },
+      });
+
+      expect(DEPRECATED_BUILD_REVIEW_RUBRIC_IDS).toEqual([
+        'scope', 'completeness', 'rootCause', 'causalIntegrity', 'tautology', 'wiring',
+      ]);
+      expect(retiredScope.ok && retiredScope.warnings).toEqual([
+        'build_review.rubrics.scope is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
+      ]);
+      expect(retiredScope.ok && retiredScope.deprecatedKeys).toEqual([
+        {
+          key: 'build_review.rubrics.scope',
+          adr: 'adr-2026-08-22-build-review-opt-in-rubric-container',
+        },
+      ]);
+      expect(emptyContainer.ok).toBe(true);
+      expect(oldAliases.ok && oldAliases.warnings).toEqual([
+        'build_review.rubrics.rootCause is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
+        'build_review.rubrics.causalIntegrity is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
+      ]);
+      expect(neverShipped).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown rubric ID: build_review.rubrics.inventedRubric',
+        },
+      });
+    });
+
+    it('materializes the single test-quality policy and preserves its configured policy', () => {
       const defaults = validateConfig({ build_review: {} });
       const configured = validateConfig({
         build_review: {
-          maxParallel: 3,
+          maxParallel: 1,
           rubrics: {
-            tautology: {
-              enabled: false,
+            testQuality: {
+              enabled: true,
               llm_provider: ['codex', 'claude'],
               model: 'gpt-5.6-sol',
               effort: 'high',
@@ -1825,20 +1953,17 @@ complexity:
       }).toEqual({
         defaults: {
           enabled: true,
-          maxParallel: 4,
+          maxParallel: 1,
           rubrics: {
-            tautology: { enabled: true },
-            scope: { enabled: true },
-            rootCause: { enabled: true },
-            completeness: { enabled: true },
+            testQuality: { enabled: false },
           },
         },
         configured: {
           enabled: true,
-          maxParallel: 3,
+          maxParallel: 1,
           rubrics: {
-            tautology: {
-              enabled: false,
+            testQuality: {
+              enabled: true,
               llm_provider: ['codex', 'claude'],
               model: 'gpt-5.6-sol',
               effort: 'high',
@@ -1846,17 +1971,14 @@ complexity:
               max_retries: 2,
               escalate: true,
             },
-            scope: { enabled: true },
-            rootCause: { enabled: true },
-            completeness: { enabled: true },
           },
         },
       });
     });
 
-    it('keeps legacy keys tolerant while the rubric execution subtree is fail-closed', () => {
+    it('keeps retired keys tolerant and treats retired policy as a no-op', () => {
       const legacy = validateConfig({
-        build_review: { enabled: 'not-a-boolean', perTaskFloor: 'not-a-boolean' },
+        build_review: { enabled: 'not-a-boolean', perTaskFloor: false },
       });
       const rubricPolicy = validateConfig({
         build_review: { rubrics: { completeness: { max_retries: 'many' } } },
@@ -1869,16 +1991,18 @@ complexity:
               warnings: legacy.warnings,
             }
           : legacy,
-        rubricPolicy: rubricPolicy.ok ? rubricPolicy : rubricPolicy.error.message,
+        rubricPolicy: rubricPolicy.ok ? rubricPolicy.warnings : rubricPolicy.error.message,
       }).toEqual({
         legacy: {
           buildReview: expect.objectContaining({ enabled: true }),
           warnings: [
             expect.stringMatching(/build_review\.enabled/),
-            expect.stringMatching(/build_review\.perTaskFloor/),
+            'build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
           ],
         },
-        rubricPolicy: expect.stringMatching(/build_review\.rubrics\.completeness\.max_retries/),
+        rubricPolicy: [
+          'build_review.rubrics.completeness is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
+        ],
       });
     });
 
@@ -1898,41 +2022,22 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
-    it('preserves enabled:false with perTaskFloor:false without warnings', () => {
+    it('accepts perTaskFloor as a deprecated no-op without retaining it in the resolved config', () => {
       const result = validateConfig({
         build_review: { enabled: false, perTaskFloor: false },
       });
       expect(result.ok && {
         build_review: result.config.build_review,
         warnings: result.warnings,
+        deprecatedKeys: result.deprecatedKeys,
       }).toEqual({
-        build_review: expect.objectContaining({ enabled: false, perTaskFloor: false }),
-        warnings: [],
+        build_review: { enabled: false, maxParallel: 1, rubrics: { testQuality: { enabled: false } } },
+        warnings: ['build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).'],
+        deprecatedKeys: [{
+          key: 'build_review.perTaskFloor',
+          adr: 'adr-2026-08-22-build-review-opt-in-rubric-container',
+        }],
       });
-    });
-
-    it('defaults enabled after preserving a partial perTaskFloor:false block', () => {
-      const result = validateConfig({ build_review: { perTaskFloor: false } });
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
-        build_review: expect.objectContaining({ enabled: true, perTaskFloor: false }),
-        warnings: [],
-      });
-    });
-
-    it('passes perTaskFloor:false through validation to the build_review resolver', () => {
-      const result = validateConfig({
-        build_review: { enabled: true, perTaskFloor: false },
-      });
-      expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual(expect.objectContaining({
-        enabled: true,
-        perTaskFloor: false,
-        scopeContainmentEnforced: false,
-        maxParallel: 4,
-        rubrics: expect.objectContaining({ scope: expect.objectContaining({ enabled: true }) }),
-      }));
     });
 
     it('preserves an explicit boolean scope-containment enforcement mode', () => {
@@ -2023,32 +2128,6 @@ complexity:
       expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
     });
 
-    it('drops an invalid enabled value while retaining perTaskFloor', () => {
-      const result = validateConfig({
-        build_review: { enabled: 'banana', perTaskFloor: false },
-      });
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
-        build_review: expect.objectContaining({ enabled: true, perTaskFloor: false }),
-        warnings: [expect.stringMatching(/build_review\.enabled/)],
-      });
-    });
-
-    it('drops an invalid perTaskFloor value while retaining enabled', () => {
-      const result = validateConfig({
-        build_review: { enabled: false, perTaskFloor: 'sometimes' },
-      });
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
-        build_review: expect.objectContaining({ enabled: false }),
-        warnings: [expect.stringMatching(/build_review\.perTaskFloor/)],
-      });
-    });
-
     it('is total across build_review shapes', () => {
       const testCases: Array<[string, Record<string, unknown>]> = [
         ['absent', {}],
@@ -2057,9 +2136,8 @@ complexity:
         ['string', { build_review: 'yes' }],
         ['number', { build_review: 1 }],
         ['array', { build_review: [] }],
-        ['valid', { build_review: { enabled: false, perTaskFloor: false } }],
-        ['partially valid', { build_review: { perTaskFloor: false } }],
-        ['fully invalid', { build_review: { enabled: 'no', perTaskFloor: 'no' } }],
+        ['retired key', { build_review: { enabled: false, perTaskFloor: false } }],
+        ['retired key with an invalid value', { build_review: { perTaskFloor: 'no' } }],
       ];
       for (const [, testCase] of testCases) {
         expect(() => validateConfig(testCase)).not.toThrow();

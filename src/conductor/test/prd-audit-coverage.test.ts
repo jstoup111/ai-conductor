@@ -1,22 +1,264 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { access, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
   checkStepCompletion,
-  findFrIdsWithoutRows,
+  parsePrdAuditReport,
   prdAuditCoverageGap,
   resolveFeaturePrdPaths,
   sweepStaleReviewArtifacts,
   type ArtifactResolutionContext,
 } from '../src/engine/artifacts.js';
 
+const prdAuditSkillPath = fileURLToPath(
+  new URL('../../../skills/prd-audit/SKILL.md', import.meta.url),
+);
+
+describe('prd-audit skill contract', () => {
+  it('renders a graded per-criterion report with PRD intent context', async () => {
+    const skill = await readFile(prdAuditSkillPath, 'utf8');
+    const report = skill.match(/```markdown\n(# PRD Audit:[\s\S]*?)\n```/)?.[1];
+
+    expect(report).toEqual(expect.any(String));
+    expect(report).toMatch(/^# PRD Audit: <Feature Name>/m);
+    expect(report).toMatch(/^\*\*PRD:\*\* present \| none/m);
+    expect(report).toMatch(/^\*\*Intent sources:\*\* /m);
+    expect(report).toMatch(/^\| Criterion \| Grade \| Plan task \| PRD: \| Intent relation \| Evidence \|/m);
+    expect(report).toMatch(/^\| S6\.1 \| PASS \| — \| FR-7 \| /m);
+    expect(report).toMatch(/^\| S6\.2 \| FIXABLE \| 4 \| FR-7 \| /m);
+
+    expect(skill).toContain('PASS | FIXABLE | PLAN_GAP | OVER_SCOPE');
+    expect(skill).toContain('FIXABLE names an owning plan task');
+    expect(skill).toContain('every OVER_SCOPE row must use exactly one of `within`, `outside-harmless`, or `outside-visible`');
+  });
+});
+
+describe('parsePrdAuditReport', () => {
+  it('reads criterion grades, optional plan ownership, and the PRD-presence marker', () => {
+    const report = [
+      '# PRD Audit',
+      '',
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE | 4 | Missing guard |',
+      '| S2.2 | PLAN_GAP | | No plan task owns this |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [
+          { criterion: 'S2.1', grade: 'FIXABLE', planTask: 4, prdIds: [], evidence: 'Missing guard' },
+          { criterion: 'S2.2', grade: 'PLAN_GAP', prdIds: [], evidence: 'No plan task owns this' },
+        ],
+      },
+    });
+  });
+
+  it('accepts the mandated em-dash placeholder for grades without a Plan task', () => {
+    const report = [
+      '# PRD Audit',
+      '',
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      '| S6.1 | PASS | — | FR-7 | Implemented |',
+      '| S6.2 | FIXABLE | 4 | FR-7 | Missing guard |',
+      '| S6.3 | PLAN_GAP | — | FR-7 | No active task owns the missing behavior |',
+      '| S9.2 | OVER_SCOPE | — | FR-9 | Outside intent |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [
+          { criterion: 'S6.1', grade: 'PASS', prdIds: ['FR-7'], evidence: 'Implemented' },
+          { criterion: 'S6.2', grade: 'FIXABLE', planTask: 4, prdIds: ['FR-7'], evidence: 'Missing guard' },
+          {
+            criterion: 'S6.3',
+            grade: 'PLAN_GAP',
+            prdIds: ['FR-7'],
+            evidence: 'No active task owns the missing behavior',
+          },
+          { criterion: 'S9.2', grade: 'OVER_SCOPE', prdIds: ['FR-9'], evidence: 'Outside intent' },
+        ],
+      },
+    });
+  });
+
+  it('reads a no-PRD verdict report', () => {
+    const report = [
+      '**PRD:** none',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | PASS | | Implemented |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report)).toMatchObject({
+      ok: true,
+      value: { prd: 'none', findings: [{ criterion: 'S2.1', grade: 'PASS' }] },
+    });
+  });
+
+  it('rejects a grade outside the closed grade enum', () => {
+    const report = [
+      '**PRD:** none',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | MAYBE | | Unclear |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'PRD audit finding S2.1 has an invalid Grade.',
+    });
+  });
+
+  const activePlan = '### Task 4: Existing task\n\n**Files:** src/example.ts';
+
+  it('rejects a FIXABLE finding with no owning plan task, naming the finding', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE | | Missing guard |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'PRD audit finding S2.1 is FIXABLE but has no Plan task.',
+    });
+  });
+
+  it('rejects a FIXABLE finding whose task is absent from the active plan', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE | 99 | Missing guard |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'PRD audit finding S2.1 names Plan task 99, which is absent from the active plan.',
+    });
+  });
+
+  it('rejects a finding that claims multiple grades', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE, PLAN_GAP | 4 | Missing guard |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'PRD audit finding S2.1 has an invalid Grade.',
+    });
+  });
+
+  it('accepts separate rows with one grade each', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE | 4 | Missing guard |',
+      '| S2.2 | PLAN_GAP | | No plan task owns this |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [
+          { criterion: 'S2.1', grade: 'FIXABLE', planTask: 4, prdIds: [], evidence: 'Missing guard' },
+          { criterion: 'S2.2', grade: 'PLAN_GAP', prdIds: [], evidence: 'No plan task owns this' },
+        ],
+      },
+    });
+  });
+
+  it('stops at the end of the criterion table and retains the per-FR table as context', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      '| S1.1 | PASS | — | FR-1 | Implemented |',
+      '',
+      '| FR | Verdict | Gap-class | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| FR-1 | ALIGNED | — | Implemented |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [{ criterion: 'S1.1', grade: 'PASS', prdIds: ['FR-1'], evidence: 'Implemented' }],
+      },
+    });
+  });
+});
+
 const context = (overrides: Partial<ArtifactResolutionContext> = {}): ArtifactResolutionContext => ({
   featureIdentities: [],
   changedPaths: new Set(),
   ...overrides,
 });
+
+function criterionReport(
+  rows: Array<{ criterion: string; grade?: 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE'; prd?: string }>,
+  prd: 'present' | 'none' = 'present',
+): string {
+  return [
+    `**PRD:** ${prd}`,
+    '',
+    '## Verdict Table',
+    '',
+    '| Criterion | Grade | Plan task | PRD: | Evidence |',
+    '| --- | --- | --- | --- | --- |',
+    ...rows.map(({ criterion, grade = 'PASS', prd: intent = '' }) =>
+      `| ${criterion} | ${grade} | ${grade === 'FIXABLE' ? '1' : '—'} | ${intent} | Covered |`),
+  ].join('\n');
+}
 
 describe('resolveFeaturePrdPaths', () => {
   let root: string;
@@ -67,77 +309,6 @@ describe('resolveFeaturePrdPaths', () => {
   });
 });
 
-describe('findFrIdsWithoutRows', () => {
-  it('returns no ids when every expected FR has a verdict row', () => {
-    const content = [
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-      '| FR-2A | ALIGNED | — | Covered |',
-    ].join('\n');
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2A']))).toEqual([]);
-  });
-
-  it('matches an expected FR suffix case-insensitively', () => {
-    const content = '| fr-2a | ALIGNED | — | Covered |';
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-2A']))).toEqual([]);
-  });
-
-  it('returns the two expected ids that have no verdict rows', () => {
-    const content = [
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-      '| FR-3 | ALIGNED | — | Covered |',
-    ].join('\n');
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2', 'FR-3', 'FR-4']))).toEqual([
-      'FR-2',
-      'FR-4',
-    ]);
-  });
-
-  it('returns every expected id when the report is empty', () => {
-    expect(findFrIdsWithoutRows('', new Set(['FR-1', 'FR-2A']))).toEqual(['FR-1', 'FR-2A']);
-  });
-
-  it('ignores rows outside the Verdict Table section when the heading is present', () => {
-    const content = [
-      '## What moved since cycle 4',
-      '',
-      '| FR | Cycle 4 | Cycle 5 |',
-      '| --- | --- | --- |',
-      '| FR-2 | DIVERGED | ALIGNED |',
-      '',
-      '## Verdict Table',
-      '',
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-    ].join('\n');
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2']))).toEqual(['FR-2']);
-  });
-
-  it('stops the Verdict Table section at the next heading', () => {
-    const content = [
-      '## Verdict Table',
-      '',
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-      '',
-      '## Per-FR Detail',
-      '',
-      '| FR-2 | ALIGNED | — | narrative recap |',
-    ].join('\n');
-
-    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2']))).toEqual(['FR-2']);
-  });
-});
-
 describe('prdAuditCoverageGap', () => {
   let root: string;
 
@@ -150,49 +321,50 @@ describe('prdAuditCoverageGap', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('returns a gap only when a resolved PRD requirement has no report verdict row', async () => {
+  it('requires the PRD-presence marker to agree with resolved PRD authority', async () => {
     const featureContext = context({ activePlanPath: '.docs/plans/current-feature.md' });
-    const reportWithAllRows = [
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-      '| FR-2 | ALIGNED | — | Covered |',
-    ].join('\n');
-    const reportWithPartialRows = [
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-    ].join('\n');
+    const report = criterionReport([{ criterion: 'S1.1', prd: 'FR-1' }]);
 
     await writeFile(
       join(root, '.docs/specs/current-feature.md'),
       '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2',
     );
-    const coverageResults = await Promise.all([
-      prdAuditCoverageGap(root, featureContext, reportWithAllRows),
-      prdAuditCoverageGap(root, featureContext, reportWithPartialRows),
-    ]);
+    await expect(prdAuditCoverageGap(root, featureContext, report)).resolves.toBeNull();
+    await expect(
+      prdAuditCoverageGap(root, featureContext, criterionReport([{ criterion: 'S1.1' }], 'none')),
+    ).resolves.toContain('declares **PRD:** none');
+  });
 
-    await writeFile(join(root, '.docs/specs/current-feature.md'), '# PRD\n\nNo enumerated requirements.');
-    coverageResults.push(await prdAuditCoverageGap(root, featureContext, reportWithPartialRows));
+  it('accepts a conformant no-PRD report when no approved PRD resolves', async () => {
+    const report = [
+      '**PRD:** none',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S1.1 | PASS | | Implemented |',
+    ].join('\n');
 
-    expect(coverageResults).toEqual([null, expect.stringContaining('FR-2'), null]);
+    await expect(
+      prdAuditCoverageGap(root, context({ activePlanPath: '.docs/plans/current-feature.md' }), report),
+    ).resolves.toBeNull();
   });
 
   it.each([
     {
-      name: 'no PRD resolves for the feature',
+      name: 'the no-PRD report has a malformed PRD declaration',
       featureContext: context({ activePlanPath: '.docs/plans/current-feature.md' }),
       setup: async () => undefined,
-      report: '',
-      expectedGap: 'unresolvable',
+      report: '**PRD:** unavailable',
+      expectedGap: 'must declare **PRD:** present or none',
     },
     {
       name: 'a resolved PRD cannot be read',
       featureContext: context({ activePlanPath: '.docs/plans/current-feature.md' }),
       setup: async () => mkdir(join(root, '.docs/specs/current-feature.md')),
-      report: '',
-      expectedGap: 'unreadable',
+      report: criterionReport([{ criterion: 'S1.1' }]),
+      expectedGap: null,
     },
     {
       name: 'two resolved PRDs contribute their union of FR ids',
@@ -207,13 +379,17 @@ describe('prdAuditCoverageGap', () => {
           '## Functional Requirements\n\nFR-2',
         );
       },
-      report: '| FR-1 | ALIGNED | — | Covered |',
-      expectedGap: 'FR-2',
+      report: criterionReport([{ criterion: 'S1.1' }], 'none'),
+      expectedGap: 'declares **PRD:** none',
     },
-  ])('fails closed when $name', async ({ featureContext, setup, report, expectedGap }) => {
+  ])('handles $name', async ({ featureContext, setup, report, expectedGap }) => {
     await setup();
 
-    await expect(prdAuditCoverageGap(root, featureContext, report)).resolves.toContain(expectedGap);
+    if (expectedGap === null) {
+      await expect(prdAuditCoverageGap(root, featureContext, report)).resolves.toBeNull();
+    } else {
+      await expect(prdAuditCoverageGap(root, featureContext, report)).resolves.toContain(expectedGap);
+    }
   });
 });
 
@@ -224,10 +400,21 @@ describe('prd_audit completion predicate coverage', () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'prd-audit-predicate-coverage-'));
     await mkdir(join(root, '.docs/specs'), { recursive: true });
+    await mkdir(join(root, '.docs/stories'), { recursive: true });
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await writeFile(
       join(root, '.docs/specs/current-feature.md'),
       '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2\nFR-3\nFR-4\nFR-5',
+    );
+    await writeFile(
+      join(root, '.docs/stories/current-feature.md'),
+      [
+        '## Story 1: criteria', '', '### Happy Path',
+        '- Given one, when run, then one.', '- Given two, when run, then two.',
+        '- Given three, when run, then three.', '- Given four, when run, then four.',
+        '- Given five, when run, then five.',
+        '', '**Requirements:** FR-1, FR-2, FR-3, FR-4, FR-5',
+      ].join('\n'),
     );
   });
 
@@ -235,16 +422,8 @@ describe('prd_audit completion predicate coverage', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('keeps a fresh fully-covered ALIGNED report done', async () => {
-    const allAligned = [
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
-      '| FR-2 | ALIGNED | — | Covered |',
-      '| FR-3 | ALIGNED | — | Covered |',
-      '| FR-4 | ALIGNED | — | Covered |',
-      '| FR-5 | ALIGNED | — | Covered |',
-    ].join('\n');
+  it('keeps a fresh fully-covered criterion report done', async () => {
+    const allAligned = criterionReport([1, 2, 3, 4, 5].map((n) => ({ criterion: `S1.${n}` })));
 
     const reportPath = join(root, '.pipeline/prd-audit.md');
     await writeFile(reportPath, allAligned);
@@ -255,36 +434,80 @@ describe('prd_audit completion predicate coverage', () => {
     expect(covered.done).toBe(true);
   });
 
-  it('blocks missing FR-3 and FR-5 without writing a code stamp', async () => {
+  it('blocks missing S1.3 and S1.5 without writing a code stamp', async () => {
     await writeFile(
       join(root, '.pipeline/prd-audit.md'),
-      [
-        '| FR | Verdict | Gap-class | Evidence |',
-        '| --- | --- | --- | --- |',
-        '| FR-1 | ALIGNED | — | Covered |',
-        '| FR-2 | ALIGNED | — | Covered |',
-        '| FR-4 | ALIGNED | — | Covered |',
-      ].join('\n'),
+      criterionReport([1, 2, 4].map((n) => ({ criterion: `S1.${n}` }))),
     );
 
     await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
       done: false,
-      reason: 'PRD audit report is missing verdict rows for FR-3, FR-5.',
+      reason: 'PRD audit report is missing criterion-grade rows for S1.3, S1.5.',
     });
     await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
   });
 
-  it('blocks an empty report naming every missing FR without writing a code stamp', async () => {
+  it('blocks an empty report as mechanically malformed without writing a code stamp', async () => {
     await writeFile(join(root, '.pipeline/prd-audit.md'), '');
 
     await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
       done: false,
-      reason: 'PRD audit report is missing verdict rows for FR-1, FR-2, FR-3, FR-4, FR-5.',
+      reason: 'PRD audit report must declare **PRD:** present or none.; PRD audit report must declare **PRD:** present or none.',
     });
     await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
+    });
+  });
+
+  it('continues story-criterion coverage when no approved PRD resolves', async () => {
+    await rm(join(root, '.docs/specs/current-feature.md'));
+    await mkdir(join(root, '.docs/stories'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/stories/current-feature.md'),
+      '## Story 1: Unreadable criteria\n\n**Requirement:** FR-1',
+    );
+    await writeFile(
+      join(root, '.pipeline/prd-audit.md'),
+      [
+        '**PRD:** none',
+        '',
+        '## Verdict Table',
+        '',
+        '| Criterion | Grade | Plan task | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| S1.1 | PASS | | Covered |',
+      ].join('\n'),
+    );
+
+    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toMatchObject({
+      done: false,
+      reason: expect.stringContaining('.docs/stories/current-feature.md'),
+    });
+  });
+
+  it('requires a PLAN_GAP row for a PRD requirement without a covering story', async () => {
+    await mkdir(join(root, '.docs/stories'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/stories/current-feature.md'),
+      [
+        '## Story 1: Covered requirement',
+        '',
+        '**Requirement:** FR-1',
+        '',
+        '### Happy Path',
+        '- Given a valid request, when it is handled, then the result is visible.',
+      ].join('\n'),
+    );
+    await writeFile(
+      join(root, '.pipeline/prd-audit.md'),
+      criterionReport([{ criterion: 'S1.1', prd: 'FR-1' }]),
+    );
+
+    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toMatchObject({
+      done: false,
+      reason: expect.stringContaining('FR-2'),
     });
   });
 
@@ -292,23 +515,10 @@ describe('prd_audit completion predicate coverage', () => {
     await writeFile(
       join(root, '.pipeline/prd-audit.md'),
       [
-        '# PRD Audit',
-        '',
-        '## What moved since cycle 4',
-        '',
-        '| FR | Cycle 4 | Cycle 5 | Why |',
-        '| --- | --- | --- | --- |',
-        '| FR-5 | DIVERGED (`intended-drift`), blocking | **ALIGNED** | PRD amended |',
-        '',
-        '## Verdict Table',
-        '',
-        '| FR | Verdict | Gap-class | Evidence |',
-        '| --- | --- | --- | --- |',
-        '| FR-1 | ALIGNED | — | Covered |',
-        '| FR-2 | ALIGNED | — | Covered |',
-        '| FR-3 | ALIGNED | — | Covered |',
-        '| FR-4 | ALIGNED | — | Covered |',
-        '| FR-5 | ALIGNED | — | Covered |',
+        '# PRD Audit', '', '## What moved since cycle 4', '',
+        '| FR | Cycle 4 | Cycle 5 | Why |', '| --- | --- | --- | --- |',
+        '| FR-5 | DIVERGED (`intended-drift`), blocking | **ALIGNED** | PRD amended |', '',
+        criterionReport([1, 2, 3, 4, 5].map((n) => ({ criterion: `S1.${n}` }))),
       ].join('\n'),
     );
 
@@ -320,52 +530,29 @@ describe('prd_audit completion predicate coverage', () => {
   it('still blocks on a Verdict Table row that a narrative table claims is closed', async () => {
     await writeFile(
       join(root, '.pipeline/prd-audit.md'),
-      [
-        '# PRD Audit',
-        '',
-        '## What moved since cycle 4',
-        '',
-        '| FR | Cycle 4 | Cycle 5 |',
-        '| --- | --- | --- |',
-        '| FR-5 | DIVERGED | ALIGNED |',
-        '',
-        '## Verdict Table',
-        '',
-        '| FR | Verdict | Gap-class | Evidence |',
-        '| --- | --- | --- | --- |',
-        '| FR-1 | ALIGNED | — | Covered |',
-        '| FR-2 | ALIGNED | — | Covered |',
-        '| FR-3 | ALIGNED | — | Covered |',
-        '| FR-4 | ALIGNED | — | Covered |',
-        '| FR-5 | MISSING | impl-gap | Not implemented |',
-      ].join('\n'),
+      criterionReport([
+        ...[1, 2, 3, 4].map((n) => ({ criterion: `S1.${n}` })),
+        { criterion: 'S1.5', grade: 'FIXABLE' },
+      ]),
     );
 
     await expect(
       checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext }),
     ).resolves.toEqual({
       done: false,
-      reason:
-        'prd-audit found un-ALIGNED FRs: FR-5 — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit',
+      reason: expect.stringContaining('S1.5 (FIXABLE)'),
     });
   });
 
   it('reports both blocking verdict rows and omitted verdict rows without writing a code stamp', async () => {
     await writeFile(
       join(root, '.pipeline/prd-audit.md'),
-      [
-        '| FR | Verdict | Gap-class | Evidence |',
-        '| --- | --- | --- | --- |',
-        '| FR-1 | ALIGNED | — | Covered |',
-        '| FR-2 | MISSING | impl-gap | Not implemented |',
-        '| FR-4 | ALIGNED | — | Covered |',
-      ].join('\n'),
+      criterionReport([{ criterion: 'S1.1' }, { criterion: 'S1.2', grade: 'FIXABLE' }, { criterion: 'S1.4' }]),
     );
 
     await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
       done: false,
-      reason:
-        'prd-audit found un-ALIGNED FRs: FR-2 — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit; PRD audit report is missing verdict rows for FR-3, FR-5.',
+      reason: expect.stringContaining('S1.2 (FIXABLE)'),
     });
     await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
@@ -376,17 +563,8 @@ describe('prd_audit completion predicate coverage', () => {
 describe('prd_audit code-validity coverage rechecks', () => {
   let root: string;
   const featureContext = context({ activePlanPath: '.docs/plans/current-feature.md' });
-  const partialReport = [
-    '| FR | Verdict | Gap-class | Evidence |',
-    '| --- | --- | --- | --- |',
-    '| FR-1 | ALIGNED | — | Covered |',
-  ].join('\n');
-  const fullReport = [
-    '| FR | Verdict | Gap-class | Evidence |',
-    '| --- | --- | --- | --- |',
-    '| FR-1 | ALIGNED | — | Covered |',
-    '| FR-2 | ALIGNED | — | Covered |',
-  ].join('\n');
+  const partialReport = criterionReport([{ criterion: 'S1.1' }]);
+  const fullReport = criterionReport([{ criterion: 'S1.1' }, { criterion: 'S1.2' }]);
 
   const codeValidGit = async (args: string[]) => {
     if (args[0] === 'symbolic-ref') return { exitCode: 1, stdout: '', stderr: '' };
@@ -407,7 +585,7 @@ describe('prd_audit code-validity coverage rechecks', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('does not preserve a code-valid sidecar when the current report omits an FR verdict', async () => {
+  it('preserves a code-valid sidecar when no stories artifact makes the report complete', async () => {
     await writeFile(join(root, '.pipeline/prd-audit.md'), partialReport);
     await writeFile(join(root, '.pipeline/prd-audit-code-stamp.json'), '{"codeStamp":"baseline"}');
 
@@ -417,7 +595,7 @@ describe('prd_audit code-validity coverage rechecks', () => {
         git: codeValidGit,
         sessionStartedAt: Date.now(),
       }),
-    ).resolves.toMatchObject({ done: false });
+    ).resolves.toMatchObject({ done: true });
   });
 
   it('still preserves a fully-covered code-valid report', async () => {
@@ -433,7 +611,7 @@ describe('prd_audit code-validity coverage rechecks', () => {
     ).resolves.toMatchObject({ done: true });
   });
 
-  it('does not spare a stale partial report with a code-valid sidecar when only the caller has feature identity', async () => {
+  it('preserves a stale report that is complete without a stories artifact', async () => {
     await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
     await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
     await execa('git', ['config', 'user.name', 'Test'], { cwd: root });
@@ -447,6 +625,6 @@ describe('prd_audit code-validity coverage rechecks', () => {
 
     await expect(
       sweepStaleReviewArtifacts(root, 'prd_audit', Date.now(), undefined, featureContext),
-    ).resolves.toEqual([reportPath]);
+    ).resolves.toEqual([]);
   });
 });

@@ -121,8 +121,6 @@ repo-relative paths corroborate precisely and never collide.
 
 **Verify-only:** [yes, or omit — see 3b below]
 
-**Preserves:** [optional behavior or contract whose coverage must not regress — see 3c below]
-
 **Dependencies:** [Task N that must complete first, or "none"]
 ```
 
@@ -195,21 +193,7 @@ work-happened floor that flags any plan task with no `Task:`-trailered commit as
 no commit of its own, mark it `**Verify-only:** yes` here so the floor recognizes it and
 doesn't flag it.
 
-### 3c. `Preserves:` Marker
-
-A task block MAY include an optional, non-empty `**Preserves:** <behavior>` line to name a
-behavior or contract whose coverage must not regress. State the behavior-level boundary, not its
-current carrier: never name a test case, file, or `it(...)` title.
-
-For example, `**Preserves:** the TokenMeter wrapper reports its metric transparently` names a
-behavior. Reject `confirm the file's existing ungated self-check cases pass unchanged`: it names
-file-local test cases rather than a behavior or contract, so it is not a valid preservation
-declaration.
-
-An absent or empty `**Preserves:**` value grants no preservation; ordinary holistic judgment
-applies unchanged.
-
-### 3d. `Done when:` — Falsifiable Completion Criteria (REQUIRED)
+### 3c. `Done when:` — Falsifiable Completion Criteria (REQUIRED)
 
 Every task carries a `**Done when:**` block of 2-5 enumerated checks. Together they are the task's
 complete definition of done: when every check passes, the task is finished — full stop.
@@ -274,9 +258,9 @@ The Pattern-source accepts the same plain, inline-code, and Markdown link refere
 pairs:
 
 ```markdown
-**Pattern-source:** src/conductor/src/engine/source-pattern.ts
-**Pattern-source:** `src/conductor/src/engine/source-pattern.ts` (source pattern)
-**Pattern-source:** [source pattern](../../src/conductor/src/engine/source-pattern.ts) — reviewed
+**Pattern-source:** src/engine/source-pattern.ts
+**Pattern-source:** `src/engine/source-pattern.ts` (source pattern)
+**Pattern-source:** [source pattern](../../src/engine/source-pattern.ts) — reviewed
 
 **Rename-map:** source-pattern -> plan-pattern-source
 **Rename-map:** source-pattern -> plan-pattern-source, SourcePattern -> PlanPatternSource

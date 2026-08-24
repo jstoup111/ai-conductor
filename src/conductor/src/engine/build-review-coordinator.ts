@@ -11,6 +11,7 @@ import {
   type BuildReviewSkip,
 } from "./build-review-domain.js";
 import {
+  BUILD_REVIEW_RUBRIC_IDS,
   fingerprintBuildReviewRubricPolicy,
   getBuildReviewRubricDescriptor,
 } from "./build-review-registry.js";
@@ -26,12 +27,14 @@ import {
 import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import {
   deriveBuildReviewRubricProjections,
-  type BuildReviewProjectionJson,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
-  type BuildReviewTautologyProjectionInput,
+  type BuildReviewTestQualityProjectionInput,
 } from "./build-review-projections.js";
-import type { TautologyPreflightResult } from "./build-review-tautology-preflight.js";
+import {
+  projectTestQualityPreflight,
+  type TautologyPreflightResult,
+} from "./build-review-test-quality-preflight.js";
 import { runAuxiliaryGroupBranches } from "./group-core.js";
 import type {
   ResolvedBuildReviewConfig,
@@ -40,12 +43,8 @@ import type {
 import type { ConductorEvent } from "../types/events.js";
 import { canonicalizeBuildReviewFindingSet } from "./build-review-finding-identity.js";
 
-const BUILD_REVIEW_RUBRICS: readonly BuildReviewRubricId[] = [
-  "tautology",
-  "scope",
-  "rootCause",
-  "completeness",
-];
+const BUILD_REVIEW_RUBRICS = BUILD_REVIEW_RUBRIC_IDS;
+const TEST_QUALITY_RUBRIC: BuildReviewRubricId = "testQuality";
 
 /** A rubric that passed deterministic pre-dispatch classification. */
 export interface BuildReviewDispatchableRubric {
@@ -68,8 +67,11 @@ export interface BuildReviewCoordinatorHooks {
 
 export type BuildReviewClassification =
   | { kind: "gate-disabled" }
+  | { kind: "passed"; verdict: "PASS"; reason: "build_review_no_rubrics" }
   | { kind: "refused"; reason: "no-enabled-rubrics" | "no-valid-judgement" }
   | { kind: "ready"; branches: readonly BuildReviewClassifiedBranch[] };
+
+type BuildReviewPassReason = "build_review_no_rubrics" | "test_quality_empty_scope";
 
 export type BuildReviewCoordinatedBranch =
   | BuildReviewSkip
@@ -85,6 +87,7 @@ export type BuildReviewCoordinatedBranch =
 
 export type BuildReviewCoordination =
   | { readonly kind: "gate-disabled" }
+  | { readonly kind: "passed"; readonly verdict: "PASS"; readonly reason: BuildReviewPassReason }
   | { readonly kind: "refused"; readonly reason: "no-enabled-rubrics" | "no-valid-judgement" }
   | { readonly kind: "ready"; readonly branches: readonly BuildReviewCoordinatedBranch[] };
 
@@ -121,7 +124,8 @@ export interface BuildReviewCoordinationInput {
     | "build_review_rubric_result"
     | "build_review_rubric_skipped"
     | "build_review_cache_hit"
-    | "build_review_rubric_infrastructure_failure" }>) => Promise<void>;
+    | "build_review_rubric_infrastructure_failure"
+    | "build_review_outer_verdict" }>) => Promise<void>;
 }
 
 /**
@@ -132,37 +136,20 @@ export interface BuildReviewCoordinationInput {
  * exit-code verdict plus a capped failure excerpt — never raw stdout/stderr
  * or merge-base file content, and never the same evidence twice.
  */
-function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTautologyProjectionInput {
+export function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTestQualityProjectionInput {
   if (preflight.classification === "infrastructure-failure") {
     return {
       changedTestSelectors: preflight.changedTestSelectors,
+      unresolvedMarkers: [],
       revertedProductionManifest: [],
-      preflightEvidence: {
-        classification: preflight.classification,
-        reason: preflight.reason,
-        changedPaths: preflight.changedPaths,
-        changedTestSelectors: preflight.changedTestSelectors,
-        sourceIdentities: preflight.sourceIdentities,
-        ...(preflight.failureExcerpt !== undefined ? { failureExcerpt: preflight.failureExcerpt } : {}),
-      },
+      preflight: projectTestQualityPreflight(preflight),
     };
   }
   return {
     changedTestSelectors: preflight.changedTestSelectors,
+    unresolvedMarkers: [],
     revertedProductionManifest: preflight.revertedProductionManifest,
-    preflightEvidence: {
-      classification: preflight.classification,
-      ...(preflight.exception !== undefined ? { exception: preflight.exception } : {}),
-      changedPaths: preflight.changedPaths,
-      changedTestSelectors: preflight.changedTestSelectors,
-      ...(preflight.eligibleSelectorRemovals !== undefined
-        ? { eligibleSelectorRemovals: preflight.eligibleSelectorRemovals as unknown as BuildReviewProjectionJson }
-        : {}),
-      sourceIdentities: preflight.sourceIdentities,
-      ...(preflight.scopedRun !== undefined
-        ? { scopedRun: preflight.scopedRun as unknown as BuildReviewProjectionJson }
-        : {}),
-    },
+    preflight: projectTestQualityPreflight(preflight),
   };
 }
 
@@ -192,9 +179,9 @@ export function stampBuildReviewDispatchedCandidate(
     snapshotDigest: projection.snapshotDigest,
     findings: source?.findings,
     // The relocation audit is provider-owned EVIDENCE, not an envelope field:
-    // the tautology contract requires it on fixture-relocation results, the
+    // the test-quality contract validates it as typed evidence, the
     // artifact persists it, and the aggregate consumes it. Pass it through and
-    // let validation enforce rubric-appropriateness (non-tautology payloads
+    // let validation enforce rubric-appropriateness (unexpected payloads
     // carrying one are rejected with a named problem, never laundered here).
     ...(source?.relocationAudit === undefined ? {} : { relocationAudit: source.relocationAudit }),
   };
@@ -264,14 +251,40 @@ function validWrittenArtifact(
 export async function coordinateBuildReviewRubrics(
   input: BuildReviewCoordinationInput,
 ): Promise<BuildReviewCoordination> {
+  const testQualityPolicy = input.config.rubrics.testQuality;
+  const inScopeTests = input.inputs.sourceSnapshot.testQuality?.inScopeTests ?? [];
+  const unresolvedMarkers = input.inputs.sourceSnapshot.testQuality?.unresolvedMarkers ?? [];
+  if (input.config.enabled && testQualityPolicy?.enabled && inScopeTests.length === 0) {
+    await input.emit?.({
+      type: "build_review_outer_verdict",
+      lapId: input.lapId,
+      rawVerdict: "PASS",
+      effectiveVerdict: "PASS",
+      reason: "test_quality_empty_scope",
+      ...(unresolvedMarkers.length > 0 ? { unresolvedMarkers } : {}),
+    });
+    return { kind: "passed", verdict: "PASS", reason: "test_quality_empty_scope" };
+  }
+
   const classification = classifyBuildReviewRubricBranches(input.config, []);
+  if (classification.kind === "passed") {
+    await input.emit?.({
+      type: "build_review_outer_verdict",
+      lapId: input.lapId,
+      rawVerdict: "PASS",
+      effectiveVerdict: "PASS",
+      reason: classification.reason,
+      ...(unresolvedMarkers.length > 0 ? { unresolvedMarkers } : {}),
+    });
+    return classification;
+  }
   if (classification.kind !== "ready") return classification;
 
-  const tautologyEnabled = classification.branches.some(
-    (branch) => !("kind" in branch) && branch.rubric === "tautology",
+  const testQualityEnabled = classification.branches.some(
+    (branch) => !("kind" in branch) && branch.rubric === TEST_QUALITY_RUBRIC,
   );
   let preflight: TautologyPreflightResult | undefined;
-  if (tautologyEnabled) {
+  if (testQualityEnabled) {
     try {
       preflight = await input.preflight();
     } catch {
@@ -282,13 +295,24 @@ export async function coordinateBuildReviewRubrics(
       };
     }
   }
-  const projections = input.projections ?? deriveBuildReviewRubricProjections({
+  const inScopeTestSet = new Set(inScopeTests);
+  const projectionInputs: BuildReviewFrozenInputs = {
+    ...input.inputs,
+    sourceSnapshot: {
+      ...input.inputs.sourceSnapshot,
+      changedTestTitles: input.inputs.sourceSnapshot.changedTestTitles?.filter(
+        (title) => inScopeTestSet.has(title.selector),
+      ),
+    },
+  };
+  const derivedProjections = deriveBuildReviewRubricProjections({
     lapId: input.lapId,
-    inputs: input.inputs,
-    tautology: preflight ? preflightProjection(preflight) : {
-      changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: "not-requested" },
+    inputs: projectionInputs,
+    testQuality: preflight ? { ...preflightProjection(preflight), changedTestSelectors: inScopeTests, unresolvedMarkers } : {
+      changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
+  const projections = input.projections ?? derivedProjections;
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
   const misses: BuildReviewDispatchableRubric[] = [];
 
@@ -304,7 +328,7 @@ export async function coordinateBuildReviewRubrics(
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "projection-rubric-mismatch" });
       continue;
     }
-    if (branch.rubric === "tautology" && preflight?.classification === "infrastructure-failure") {
+    if (branch.rubric === TEST_QUALITY_RUBRIC && preflight?.classification === "infrastructure-failure") {
       resolved.set(branch.rubric, infrastructure(branch.rubric, preflight.reason));
       await input.emit?.({
         type: "build_review_rubric_infrastructure_failure",
@@ -439,19 +463,17 @@ export function classifyBuildReviewRubricBranches(
 ): BuildReviewClassification {
   if (!config.enabled) return { kind: "gate-disabled" };
 
-  const enabled = BUILD_REVIEW_RUBRICS.filter((rubric) => config.rubrics[rubric].enabled);
-  if (enabled.length === 0) return { kind: "refused", reason: "no-enabled-rubrics" };
-
-  const branches = BUILD_REVIEW_RUBRICS.map((rubric): BuildReviewClassifiedBranch => {
-    const policy = config.rubrics[rubric];
-    if (!policy.enabled) return { kind: "skipped", rubric, reason: "disabled" };
-
-    const descriptor = getBuildReviewRubricDescriptor(rubric);
-    return { rubric, skillName: descriptor.skillName, policy };
+  const policies = config.rubrics as unknown as Partial<Record<string, ResolvedBuildReviewRubricPolicy>>;
+  const branches = BUILD_REVIEW_RUBRIC_IDS.flatMap((registeredRubric): BuildReviewClassifiedBranch[] => {
+    const policy = policies[registeredRubric];
+    if (!policy?.enabled) return [];
+    const rubric = registeredRubric as unknown as BuildReviewRubricId;
+    const descriptor = getBuildReviewRubricDescriptor(registeredRubric);
+    return [{ rubric, skillName: descriptor.skillName, policy }];
   });
 
   if (!branches.some((branch): branch is BuildReviewDispatchableRubric => !("kind" in branch))) {
-    return { kind: "refused", reason: "no-valid-judgement" };
+    return { kind: "passed", verdict: "PASS", reason: "build_review_no_rubrics" };
   }
   return { kind: "ready", branches };
 }

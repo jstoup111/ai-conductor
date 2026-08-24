@@ -1,17 +1,15 @@
-import { spawnSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
-const target = 'test/acceptance/review-infrastructure-failures-are-operator-unreco.acceptance.test.ts';
-const reportPath = join(tmpdir(), `mechanical-review-recovery-red-${process.pid}.json`);
+const target = 'test/acceptance/build-review-re-judges-what-the-plan-architecture-.acceptance.test.ts';
+const reportPath = join(tmpdir(), `one-review-owner-red-${process.pid}.json`);
 const vitestPath = join(process.cwd(), 'node_modules', 'vitest', 'vitest.mjs');
-const env = { ...process.env };
-delete env.CONDUCT_DAEMON_SESSION;
 const result = spawnSync(
   process.execPath,
   [vitestPath, 'run', target, '--reporter=json', `--outputFile=${reportPath}`],
-  { cwd: process.cwd(), env, encoding: 'utf8' },
+  { cwd: process.cwd(), encoding: 'utf8' },
 );
 
 if (result.stdout) process.stderr.write(result.stdout);
@@ -34,7 +32,7 @@ try {
       reason: String(test.failureMessages?.[0] ?? 'acceptance assertion failed').split('\n')[0],
     })),
     intentRationale:
-      'The absent operator command and incomplete terminal-fault recovery flow prove that an exhausted mechanical review cannot yet be resumed to PASS through recorded reduced coverage.',
+      'The missing legacy-growth compatibility, PLAN_GAP ship route, and all-track prd_audit dispatch prove the one-owner review architecture is not implemented.',
   };
 } catch (error) {
   evidence = {

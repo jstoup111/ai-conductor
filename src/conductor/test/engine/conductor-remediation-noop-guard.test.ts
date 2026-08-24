@@ -232,3 +232,56 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
     expect(result.target).toBe('acceptance_specs');
   });
 });
+
+describe('planRemediation D3: kickback audit discriminator (#647 Story 4)', () => {
+  type Outcome = { kind: string; detail?: string; target?: string; kickbackOutcome?: string };
+  type PlanRemediation = (
+    state: ConductState,
+    steps: typeof ALL_STEPS,
+    dispatchContext: string,
+    hintSource: { source: string; evidenceFile: string },
+  ) => Promise<Outcome>;
+
+  it('a D1 no-op halt carries kickbackOutcome derived-already-complete; a real build route carries none', async () => {
+    // The idempotent-upsert D1 shape above: the appended rem-* id is already
+    // evidence-complete, so the guard halts after the append and stamps the
+    // discriminator the conductor forwards as the 'kickback' event's
+    // `kickback_outcome`.
+    const remId = 'rem-1';
+    await writeFile(planPath, `### Task ${remId}: fix the missing behavior\n`);
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/remediated.ts'), 'fix\n');
+    await git('add', '.');
+    await git('commit', '-q', '-m', `fix: remediate ${remId}\n\nTask: ${remId}`);
+    await writeFile(
+      join(dir, '.pipeline/engine-state.json'),
+      JSON.stringify({ activePlanPath: planPath }),
+    );
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: remId, status: 'completed' }] }),
+    );
+    await writeRemediationJson('build');
+    const noop = await (makeConductor(makeRunner()) as unknown as { planRemediation: PlanRemediation })
+      .planRemediation({ ...baseState, feature_desc: 'p' } as ConductState, ALL_STEPS, 'test', { source: 'test', evidenceFile: 'x' });
+
+    // A genuinely new pending rem-* task is real work: the route carries no
+    // discriminator (did-work is classified only after the build runs).
+    await writeFile(planPath, '### Task 1\n**Files:** `src/a.ts`\n');
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+    );
+    await writeRemediationJson('build');
+    const route = await (makeConductor(makeRunner()) as unknown as { planRemediation: PlanRemediation })
+      .planRemediation({ ...baseState, feature_desc: 'p' } as ConductState, ALL_STEPS, 'test', { source: 'test', evidenceFile: 'x' });
+
+    expect({
+      noop: { kind: noop.kind, kickbackOutcome: noop.kickbackOutcome },
+      route: { kind: route.kind, target: route.target, kickbackOutcome: route.kickbackOutcome },
+    }).toEqual({
+      noop: { kind: 'halt', kickbackOutcome: 'derived-already-complete' },
+      route: { kind: 'route', target: 'build', kickbackOutcome: undefined },
+    });
+  });
+});

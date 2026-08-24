@@ -123,6 +123,29 @@ export type TautologyPreflightResult = TautologyCompletedPreflight | {
       readonly sourceIdentities: { readonly mergeBase: string; readonly headSha: string };
     };
 
+/**
+ * The only preflight payload carried into the test-quality projection.  It is
+ * evidence for the grader to inspect, never an engine-derived finding.
+ */
+export interface TestQualityPreflightEvidence {
+  readonly classification: TautologyPreflightResult['classification'] | 'not-requested';
+  /** Bounded command diagnostic when one exists; empty for a clean run. */
+  readonly excerpt?: string;
+  /** Compatibility payload retained while legacy projection readers migrate. */
+  readonly [key: string]: unknown;
+}
+
+export function projectTestQualityPreflight(
+  preflight: TautologyPreflightResult,
+): TestQualityPreflightEvidence {
+  return {
+    classification: preflight.classification,
+    excerpt: preflight.classification === 'infrastructure-failure'
+      ? preflight.failureExcerpt ?? ''
+      : preflight.scopedRun?.failureExcerpt ?? '',
+  };
+}
+
 /** Total byte cap for a scoped-run failure excerpt (head+tail combined). */
 export const TAUTOLOGY_EXCERPT_CAP_BYTES = 16_384;
 /** Reserved for the truncation marker so the excerpt never exceeds the cap. */

@@ -12,7 +12,6 @@ import {
   type BuildReviewFrozenInputs,
   type BuildReviewInputOptions,
 } from '../../src/engine/build-review-inputs.js';
-import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
@@ -28,16 +27,9 @@ vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) =
 
 // ── Structural input-isolation test (build_review) ───────────────────────
 //
-// The build_review grader must see ONLY the diff + plan body — never the
-// maker's `.pipeline/task-status.json` or any transcript. This is enforced
-// two ways:
-//   1. Structurally: assembleBuildReviewInputs(git, planPath) and
-//      buildGraderPrompt(inputs) have signatures that admit no state/summary
-//      parameter at all (a compile-level guarantee — see the type-only
-//      assertions below).
-//   2. At runtime: seed a fixture repo whose tree contains a maker "summary"
-//      sentinel in task-status.json and a transcript-like file, assemble the
-//      full grader prompt from it, and assert the sentinel never appears.
+// Build-review input assembly must never read the maker's
+// `.pipeline/task-status.json` or any transcript. The fixture seeds both
+// sentinel-bearing files and asserts that the frozen inputs exclude them.
 
 const TASK_STATUS_SENTINEL = 'TASK_STATUS_SENTINEL_12345';
 const TRANSCRIPT_SENTINEL = 'TRANSCRIPT_SENTINEL_12345';
@@ -127,12 +119,10 @@ describe('build_review input isolation', () => {
     await rm(mainDir, { recursive: true, force: true });
   });
 
-  it('never leaks task status, transcript, or maker-summary content into assembled inputs or the grader prompt', async () => {
+  it('never leaks task status, transcript, or maker-summary content into assembled inputs', async () => {
     const inputs = await assembleBuildReviewInputs(realGit(), planPath, {
       inspectTestSuite: async () => CURRENT_PROOF,
     });
-    const prompt = buildGraderPrompt(inputs);
-
     // Sanity check: the sentinel-bearing files are real, on disk, in the
     // same working tree the diff was computed from — this test would only
     // pass trivially (not meaningfully) if they didn't actually exist.
@@ -140,7 +130,7 @@ describe('build_review input isolation', () => {
     expect(inputs.diff).not.toContain('task-status.json');
     expect(inputs.diff).not.toContain('transcript.log');
 
-    const assembledContent = JSON.stringify({ inputs, prompt });
+    const assembledContent = JSON.stringify(inputs);
     for (const sentinel of [
       TASK_STATUS_SENTINEL,
       TRANSCRIPT_SENTINEL,
@@ -154,7 +144,7 @@ describe('build_review input isolation', () => {
     })).rejects.toBeInstanceOf(TestSuiteProofError);
   });
 
-  it('admits only git, plan, and proof inspection / inputs at the type level — no state parameter exists', () => {
+  it('admits only git, plan, and proof inspection at the type level — no state parameter exists', () => {
     // Compile-level check: these assignments only type-check if the
     // functions' parameter lists are exactly as narrow as documented. If a
     // future maintainer adds a `state`/`summary` parameter, this file fails
@@ -162,19 +152,14 @@ describe('build_review input isolation', () => {
     type Equal<Left, Right> =
       (<T>() => T extends Left ? 1 : 2) extends (<T>() => T extends Right ? 1 : 2) ? true : false;
     type Expect<Value extends true> = Value;
-    type PromptParams = Parameters<typeof buildGraderPrompt>;
-
     // Exact equality makes a merge-base-era `(git, planPath)` signature fail
     // the typecheck: proof inspection is now a required supported seam.
     type _AssembleSignature = Expect<Equal<
       typeof assembleBuildReviewInputs,
       (git: GitRunner, planPath: string, options?: BuildReviewInputOptions) => Promise<BuildReviewFrozenInputs>
     >>;
-    const promptArity: PromptParams extends [unknown] ? true : false = true;
-
     const assembleSignature: _AssembleSignature = true;
     expect(assembleSignature).toBe(true);
-    expect(promptArity).toBe(true);
   });
 
   it('keeps scoped verification agent-owned and preserves the broad-fallback contract', async () => {
@@ -205,18 +190,14 @@ describe('build_review input isolation', () => {
       kind: 'ready',
       branches: [
         {
-          kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result',
-          detail: 'the rubric worker lost its response payload',
+          kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-provider-result',
+          detail: 'the test-quality worker lost its response payload',
         },
-        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({
-          kind: 'dispatched' as const, rubric,
-          result: {} as never,
-        })),
       ],
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
-      config: { build_review: { enabled: true, rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } } } as HarnessConfig,
+      config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
       buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
         version: 1,
@@ -233,7 +214,7 @@ describe('build_review input isolation', () => {
 
     await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({
       success: false,
-      output: 'build_review mechanical fault in scope (malformed-artifact): invalid-provider-result: the rubric worker lost its response payload',
+      output: 'build_review mechanical fault in testQuality (malformed-artifact): invalid-provider-result: the test-quality worker lost its response payload',
       currentLapMechanicalFault: true,
     });
     await expect(readFile(join(dir, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
@@ -243,13 +224,11 @@ describe('build_review input isolation', () => {
     const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
-      branches: (['tautology', 'scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
-        kind: 'dispatched' as const, rubric, result: {} as never,
-      })),
+      branches: [{ kind: 'dispatched' as const, rubric: 'testQuality', result: {} as never }],
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
-      config: { build_review: { enabled: true } } as HarnessConfig,
+      config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
       buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
         version: 1,
@@ -259,13 +238,13 @@ describe('build_review input isolation', () => {
         result: {
           kind: 'judged', rubric, lapId, snapshotDigest,
           contractVersion: 'v3' as never,
-          findings: rubric === 'scope' ? [{
-            concernKind: 'out-of-plan-change',
+          findings: [{
+            concernKind: 'test-insensitive',
             summary: 'The environment cannot load this change safely.',
             evidenceLocations: ['feature.txt:1'],
-            anchor: { rubric: 'scope', path: 'feature.txt', relation: 'not-authorized-by-plan' },
-          }] : [],
-          verdict: rubric === 'scope' ? 'FAIL' : 'PASS',
+            anchor: { rubric: 'testQuality', locus: { path: 'feature.txt', contentHash: 'sha256:fixture', display: 'fixture test' } },
+          }],
+          verdict: 'FAIL',
         },
         provenance: { kind: 'fresh' },
       }),
@@ -284,63 +263,22 @@ describe('build_review input isolation', () => {
     );
   });
 
-  it('keeps skipped rubrics out of the mechanical lane', async () => {
-    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
-    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
-      kind: 'ready',
-      branches: [
-        { kind: 'skipped', rubric: 'tautology', reason: 'disabled' },
-        ...(['scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
-          kind: 'dispatched' as const, rubric, result: {} as never,
-        })),
-      ],
-    });
-    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
-      gitRunner: realGit(), planPath,
-      config: { build_review: { enabled: true } } as HarnessConfig,
-      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
-      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
-        version: 1,
-        rubric,
-        lapId,
-        snapshotDigest,
-        result: {
-          kind: 'judged', rubric, lapId, snapshotDigest,
-          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
-        },
-        provenance: { kind: 'fresh' },
-      }),
-    });
-
-    const result = await runner.run('build_review', {} as never);
-    expect(result).toMatchObject({ success: true });
-    expect(result.currentLapMechanicalFault).toBeUndefined();
-    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
-      '"kind": "skipped"',
-    );
-  });
-
   it('publishes an exhausted malformed artifact as the current lap mechanical failure', async () => {
     const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
-      branches: (['tautology', 'scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
-        kind: 'dispatched' as const, rubric, result: {} as never,
-      })),
+      branches: [{ kind: 'dispatched' as const, rubric: 'testQuality', result: {} as never }],
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
-      config: { build_review: { enabled: true } } as HarnessConfig,
+      config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
       buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
         version: 1,
         rubric,
         lapId,
         snapshotDigest,
-        result: rubric === 'scope' ? { kind: 'not-a-rubric-result' } as never : {
-          kind: 'judged', rubric, lapId, snapshotDigest,
-          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
-        },
+        result: { kind: 'not-a-rubric-result' } as never,
         provenance: { kind: 'fresh' },
       }),
     });

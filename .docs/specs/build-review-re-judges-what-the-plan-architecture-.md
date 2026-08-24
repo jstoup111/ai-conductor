@@ -116,6 +116,14 @@ A second problem compounds this: most features are classified technical, so SHIP
   that the approved plan does not authorize; every off-plan need is a halt or a recorded,
   non-blocking finding.
 
+  > **Amended 2026-08-23 by #1805 (operator decision):** this feature delivers FR-17 for the
+  > prd_audit and as-built review gates only. The manual_test route
+  > (`conductor.ts:4726-4800`) is out of scope here — manual_test appears zero times in this
+  > feature's plan, stories, and coherence mapping, so closing it is work the approved plan does
+  > not authorize, and prd_audit correctly refused to route it to BUILD. Tracked as #1826, which
+  > also carries the prd_audit `impl-only` fallback (`conductor.ts:8872-8917`). FR-17 is knowingly
+  > PARTIAL at ship.
+
 ### Bounded growth
 
 - **FR-18:** The total number of tasks a plan can accumulate after approval is bounded by the

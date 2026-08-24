@@ -27,6 +27,7 @@ import { validateWhenSyntax } from './when-expression.js';
 import type { PluginRegistry } from './plugin-registry.js';
 import { FALLBACK_RETRIES } from './resolved-config.js';
 import { resolveProviderModelPolicy } from './provider-model-policy.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -35,26 +36,70 @@ export type ConfigError = {
 
 export type ConfigWarning = string;
 
+/** A compatibility key accepted during config loading and reported on the event spine. */
+export type DeprecatedConfigKey = {
+  key: string;
+  adr: string;
+};
+
 type KeySpec = {
   key: string;
   isValid: (value: unknown) => boolean;
 };
 
 export type ConfigResult =
-  | { ok: true; config: HarnessConfig; warnings: ConfigWarning[] }
+  | {
+      ok: true;
+      config: HarnessConfig;
+      warnings: ConfigWarning[];
+      deprecatedKeys?: readonly DeprecatedConfigKey[];
+    }
   | { ok: false; error: ConfigError };
+
+/** Emit each deprecated-key occurrence once after the event persister subscribes. */
+export async function emitDeprecatedConfigKeyEvents(
+  result: ConfigResult,
+  events: ConductorEventEmitter,
+): Promise<void> {
+  if (!result.ok) return;
+  for (const deprecatedKey of result.deprecatedKeys ?? []) {
+    await events.emit({ type: 'config_deprecated_key', ...deprecatedKey });
+  }
+}
 
 const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP']);
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
 const BUILT_IN_MODEL_PROVIDERS = new Set(['claude', 'codex']);
 const VALID_ADR_CORPORA = new Set(['change_set', 'repo_wide']);
-const BUILD_REVIEW_RUBRIC_IDS = [
-  'tautology',
+const VALID_COMPLEXITY_TIERS = new Set(['S', 'M', 'L']);
+const AS_BUILT_CHECK_NAMES = new Set([
+  'reachability',
+  'planGap',
+  'adrCompliance',
+  'diagramDrift',
+]);
+const PRD_AUDIT_DEFAULTS = {
+  max_remediation_laps: 1,
+  max_appended_tasks: 5,
+  max_appended_ratio: 0.25,
+  halt_on_any_plan_gap: false,
+} as const;
+const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
+export const DEPRECATED_BUILD_REVIEW_RUBRIC_IDS = [
   'scope',
-  'rootCause',
   'completeness',
+  'rootCause',
+  'causalIntegrity',
+  'tautology',
+  'wiring',
 ] as const;
+
+const DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET = new Set<string>(
+  DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
+);
+const DEPRECATED_BUILD_REVIEW_ADR =
+  'adr-2026-08-22-build-review-opt-in-rubric-container';
 
 /** Default hard floor for live provider-stream observation emission. */
 export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
@@ -87,17 +132,19 @@ function normalizeKeyedBlock(
 function validateBuildReviewRubrics(
   maxParallel: unknown,
   rubrics: unknown,
+  warnings: ConfigWarning[],
+  deprecatedKeys: DeprecatedConfigKey[],
 ): ConfigError | null {
   if (
     maxParallel !== undefined &&
     (typeof maxParallel !== 'number' ||
       !Number.isInteger(maxParallel) ||
       maxParallel < 1 ||
-      maxParallel > BUILD_REVIEW_RUBRIC_IDS.length)
+      maxParallel > 4)
   ) {
     return {
       type: 'validation_error',
-      message: `build_review.maxParallel must be an integer between 1 and ${BUILD_REVIEW_RUBRIC_IDS.length}`,
+      message: 'build_review.maxParallel must be an integer between 1 and 4',
     };
   }
   if (rubrics === undefined) return null;
@@ -116,6 +163,13 @@ function validateBuildReviewRubrics(
   ]);
   for (const [rubricId, policy] of Object.entries(rubrics)) {
     const path = `build_review.rubrics.${rubricId}`;
+    if (DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId)) {
+      warnings.push(
+        `${path} is retired and ignored (${DEPRECATED_BUILD_REVIEW_ADR}).`,
+      );
+      deprecatedKeys.push({ key: path, adr: DEPRECATED_BUILD_REVIEW_ADR });
+      continue;
+    }
     if (!BUILD_REVIEW_RUBRIC_IDS.includes(rubricId as (typeof BUILD_REVIEW_RUBRIC_IDS)[number])) {
       return { type: 'validation_error', message: `Unknown rubric ID: ${path}` };
     }
@@ -328,7 +382,7 @@ export function validateConfig(
   const materializeDefaults = opts.materializeDefaults ?? true;
 
   if (raw === null || raw === undefined) {
-    return { ok: true, config: {}, warnings: [] };
+    return { ok: true, config: {}, warnings: [], deprecatedKeys: [] };
   }
 
   if (typeof raw !== 'object') {
@@ -340,6 +394,7 @@ export function validateConfig(
 
   const obj = cloneForValidation(raw) as Record<string, unknown>;
   const warnings: ConfigWarning[] = [];
+  const deprecatedKeys: DeprecatedConfigKey[] = [];
 
   const knownTopLevelKeys = new Set([
     'harness_version',
@@ -387,6 +442,10 @@ export function validateConfig(
     'build_review',
     // ADR corpus scope for conflict-check.
     'conflict_check',
+    // SHIP prd_audit remediation caps and PLAN_GAP routing policy.
+    'prd_audit',
+    // Per-check tier policy for the as-built architecture review.
+    'architecture_review_as_built',
     // CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
     'ci_watch',
     // Progress-aware build halt/park decision (daemon-halts-a-build-that-is-making-forward-progre).
@@ -708,8 +767,7 @@ export function validateConfig(
       return errVal('complexity must be an object');
     }
     const cx = obj.complexity as Record<string, unknown>;
-    const VALID_TIERS = new Set(['S', 'M', 'L']);
-    if (cx.default_tier !== undefined && !VALID_TIERS.has(cx.default_tier as string)) {
+    if (cx.default_tier !== undefined && !VALID_COMPLEXITY_TIERS.has(cx.default_tier as string)) {
       return errVal('complexity.default_tier must be S|M|L');
     }
   }
@@ -1009,6 +1067,23 @@ export function validateConfig(
     };
   }
 
+  // prd_audit — bounded remediation policy. Every validated config carries
+  // the defaults so the later remediation router has one authoritative cap.
+  {
+    const err = validatePrdAuditBlock(obj.prd_audit);
+    if (err) return { ok: false, error: err };
+    if (obj.prd_audit !== undefined || materializeDefaults) {
+      obj.prd_audit = resolvePrdAuditBlock(obj.prd_audit);
+    }
+  }
+
+  // architecture_review_as_built — optional tier overrides for the review's
+  // closed set of independently applicable checks.
+  if (obj.architecture_review_as_built !== undefined) {
+    const err = validateArchitectureReviewAsBuiltBlock(obj.architecture_review_as_built);
+    if (err) return { ok: false, error: err };
+  }
+
   // conflict_check — ADR corpus scope for conflict-check. The default keeps
   // consumer checks bounded to ADRs in the current change set.
   if (obj.conflict_check !== undefined) {
@@ -1047,66 +1122,73 @@ export function validateConfig(
         obj.build_review,
         [
           { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
-          { key: 'perTaskFloor', isValid: (value) => typeof value === 'boolean' },
+          // Compatibility-only: accept every historical shape, then remove it
+          // before the resolved config can observe it.
+          { key: 'perTaskFloor', isValid: () => true },
           { key: 'scopeContainmentEnforced', isValid: (value) => typeof value === 'boolean' },
           { key: 'maxParallel', isValid: () => true },
           { key: 'rubrics', isValid: () => true },
         ],
         warnings,
       );
-      let rubricInput = br.rubrics;
-      if (isPlainObject(rubricInput) && Object.hasOwn(rubricInput, 'causalIntegrity')) {
-        if (Object.hasOwn(rubricInput, 'rootCause')) {
-          return errVal(
-            'Ambiguous rubric configuration: build_review.rubrics.rootCause and build_review.rubrics.causalIntegrity cannot both be defined',
-          );
-        }
-        const { causalIntegrity, ...canonicalRubrics } = rubricInput;
-        rubricInput = { ...canonicalRubrics, rootCause: causalIntegrity };
+      if (Object.hasOwn(br, 'perTaskFloor')) {
+        warnings.push(
+          `build_review.perTaskFloor is retired and ignored (${DEPRECATED_BUILD_REVIEW_ADR}).`,
+        );
+        deprecatedKeys.push({
+          key: 'build_review.perTaskFloor',
+          adr: DEPRECATED_BUILD_REVIEW_ADR,
+        });
+        delete br.perTaskFloor;
       }
-      const rubricError = validateBuildReviewRubrics(br.maxParallel, rubricInput);
+      const rubricInput = br.rubrics;
+      const rubricError = validateBuildReviewRubrics(
+        br.maxParallel,
+        rubricInput,
+        warnings,
+        deprecatedKeys,
+      );
       if (rubricError) return { ok: false, error: rubricError };
+      const activeRubricInput = isPlainObject(rubricInput)
+        ? Object.fromEntries(
+            Object.entries(rubricInput).filter(
+              ([rubricId]) => !DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId),
+            ),
+          )
+        : undefined;
       const resolvedBuildReview = {
         ...br,
         enabled: typeof br.enabled === 'boolean' ? br.enabled : true,
-        maxParallel: typeof br.maxParallel === 'number' ? br.maxParallel : 4,
+        maxParallel: typeof br.maxParallel === 'number' ? br.maxParallel : 1,
         rubrics: Object.fromEntries(
           BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
             rubricId,
             {
-              ...((rubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId] ?? {}),
+              ...((activeRubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId] ?? {}),
               enabled:
-                typeof (rubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
-                  ? (rubricInput as Record<string, Record<string, unknown>>)[rubricId].enabled
-                  : true,
+                typeof (activeRubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
+                  ? (activeRubricInput as Record<string, Record<string, unknown>>)[rubricId].enabled
+                  : false,
             },
           ]),
         ),
       };
       obj.build_review = resolvedBuildReview;
-      if (
-        resolvedBuildReview.enabled === true &&
-        Object.values(resolvedBuildReview.rubrics as Record<string, { enabled: boolean }>).every(
-          (rubric) => rubric.enabled === false,
-        )
-      ) {
-        return errVal('build_review.rubrics must contain at least one enabled rubric when build_review is enabled');
-      }
     } else {
       warnings.push(
         `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`,
       );
       obj.build_review = {
         enabled: true,
-        maxParallel: 4,
-        rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: true }])),
+        maxParallel: 1,
+        rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
       };
     }
   } else if (obj.build_review === null || materializeDefaults) {
     obj.build_review = {
       enabled: true,
-      maxParallel: 4,
-      rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: true }])),
+      maxParallel: 1,
+      rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
     };
   }
 
@@ -1218,7 +1300,7 @@ export function validateConfig(
     }
   }
 
-  return { ok: true, config: obj as HarnessConfig, warnings };
+  return { ok: true, config: obj as HarnessConfig, warnings, deprecatedKeys };
 }
 
 const SELF_HOST_ACTIVATIONS = new Set(['auto', 'force_on', 'force_off']);
@@ -1314,6 +1396,146 @@ function validateBuildAuthBlock(raw: unknown): ConfigError | null {
       message: 'harness_self_host.build_auth.token_path must be a string',
     };
   }
+  return null;
+}
+
+function validatePrdAuditBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'prd_audit must be an object' };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set([
+    'max_remediation_laps',
+    'max_appended_tasks',
+    'max_appended_ratio',
+    'halt_on_any_plan_gap',
+  ]);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in prd_audit: "${key}"` };
+    }
+  }
+
+  for (const key of ['max_remediation_laps', 'max_appended_tasks'] as const) {
+    const value = obj[key];
+    if (
+      value !== undefined &&
+      (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `prd_audit.${key} must be a positive integer`,
+      };
+    }
+  }
+
+  const ratio = obj.max_appended_ratio;
+  if (
+    ratio !== undefined &&
+    (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0 || ratio > 1)
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'prd_audit.max_appended_ratio must be a finite number in (0, 1]',
+    };
+  }
+
+  if (
+    obj.halt_on_any_plan_gap !== undefined &&
+    typeof obj.halt_on_any_plan_gap !== 'boolean'
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'prd_audit.halt_on_any_plan_gap must be a boolean',
+    };
+  }
+
+  return null;
+}
+
+function resolvePrdAuditBlock(raw: unknown): {
+  max_remediation_laps: number;
+  max_appended_tasks: number;
+  max_appended_ratio: number;
+  halt_on_any_plan_gap: boolean;
+} {
+  const obj = isPlainObject(raw) ? raw : {};
+  return {
+    max_remediation_laps:
+      typeof obj.max_remediation_laps === 'number'
+        ? obj.max_remediation_laps
+        : PRD_AUDIT_DEFAULTS.max_remediation_laps,
+    max_appended_tasks:
+      typeof obj.max_appended_tasks === 'number'
+        ? obj.max_appended_tasks
+        : PRD_AUDIT_DEFAULTS.max_appended_tasks,
+    max_appended_ratio:
+      typeof obj.max_appended_ratio === 'number'
+        ? obj.max_appended_ratio
+        : PRD_AUDIT_DEFAULTS.max_appended_ratio,
+    halt_on_any_plan_gap:
+      typeof obj.halt_on_any_plan_gap === 'boolean'
+        ? obj.halt_on_any_plan_gap
+        : PRD_AUDIT_DEFAULTS.halt_on_any_plan_gap,
+  };
+}
+
+function validateArchitectureReviewAsBuiltBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return {
+      type: 'validation_error',
+      message: 'architecture_review_as_built must be an object',
+    };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (key !== 'checks') {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in architecture_review_as_built: "${key}"`,
+      };
+    }
+  }
+
+  if (obj.checks === undefined) return null;
+  if (!isPlainObject(obj.checks)) {
+    return {
+      type: 'validation_error',
+      message: 'architecture_review_as_built.checks must be an object',
+    };
+  }
+
+  for (const [checkName, policy] of Object.entries(obj.checks)) {
+    const path = `architecture_review_as_built.checks.${checkName}`;
+    if (!AS_BUILT_CHECK_NAMES.has(checkName)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown check in architecture_review_as_built.checks: "${checkName}"`,
+      };
+    }
+    if (!isPlainObject(policy)) {
+      return { type: 'validation_error', message: `${path} must be an object` };
+    }
+    for (const key of Object.keys(policy)) {
+      if (key !== 'tiers') {
+        return { type: 'validation_error', message: `Unknown key in ${path}: "${key}"` };
+      }
+    }
+    if (
+      policy.tiers !== undefined &&
+      (!Array.isArray(policy.tiers) ||
+        policy.tiers.some((tier) => typeof tier !== 'string' || !VALID_COMPLEXITY_TIERS.has(tier)))
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.tiers must be an array containing only S, M, or L`,
+      };
+    }
+  }
+
   return null;
 }
 
@@ -2055,7 +2277,22 @@ export async function loadMergedConfig(
     ok: true,
     config: validated.config,
     warnings: [...projectResult.warnings, ...validated.warnings],
+    deprecatedKeys: uniqueDeprecatedConfigKeys([
+      ...(projectResult.deprecatedKeys ?? []),
+      ...(validated.deprecatedKeys ?? []),
+    ]),
   };
+}
+
+function uniqueDeprecatedConfigKeys(
+  deprecatedKeys: readonly DeprecatedConfigKey[],
+): DeprecatedConfigKey[] {
+  const seen = new Set<string>();
+  return deprecatedKeys.filter(({ key }) => {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function errVal(message: string): ConfigResult {

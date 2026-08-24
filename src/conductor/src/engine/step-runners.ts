@@ -6,12 +6,16 @@ import type { LLMProvider, ProviderStreamObservation } from '../execution/llm-pr
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
+import { prdAuditScopeProjection } from './conductor.js';
 import type {
   ComplexityAssessment,
   StepRunner,
   StepRunResult,
   StepRunOptions,
 } from './conductor.js';
+import { listCommitsWithTrailers } from './autoheal.js';
+import { readOperatorReseals } from './protected-artifact-seal.js';
+import { parseScopeTrailers } from './scope-trailer.js';
 import { ALL_STEPS, buildStepRegistry, getStepDefinition, tryGetStepIndex } from './steps.js';
 import {
   resolveStepConfig,
@@ -27,7 +31,6 @@ import {
 import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt, CiFailureContext, CiFailureAttempt } from './rebase.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
-  findArtifactFiles,
   resolveFeaturePlanPath,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
@@ -42,9 +45,7 @@ import {
 } from './build-review-inputs.js';
 import {
   runContainmentFloor,
-  runPerTaskCommitFloor,
   renderContainmentFloorReport,
-  renderPerTaskFloorReport,
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
@@ -74,7 +75,7 @@ import {
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
-import { boundedHeadTailExcerpt, classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
+import { boundedHeadTailExcerpt, classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-test-quality-preflight.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -119,6 +120,11 @@ import { DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS as CONFIGURED_PROVIDER_STREAM_M
 import { parseFinishPrProseJudgment } from './finish-pr-prose-judgment.js';
 import { resolvePlanPatternSource } from './plan-pattern-source.js';
 import { runCopyEquivalence } from './copy-equivalence.js';
+import {
+  renderAsBuiltPolicyPrompt,
+  resolveAsBuiltPolicy,
+  type AsBuiltPolicyConfig,
+} from './as-built-policy.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -592,7 +598,7 @@ export class DefaultStepRunner implements StepRunner {
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private providerLifecycleAttempt = 0;
   /** Bounded per-run evidence cache; failed preflights never enter it. */
-  private readonly tautologyPreflightCache = new Map<string, import('./build-review-tautology-preflight.js').TautologyCompletedPreflight>();
+  private readonly tautologyPreflightCache = new Map<string, import('./build-review-test-quality-preflight.js').TautologyCompletedPreflight>();
   callCount = 0;
 
   constructor(
@@ -805,6 +811,7 @@ export class DefaultStepRunner implements StepRunner {
       autonomous,
       opts?.retryReason,
       opts?.finishProsePass,
+      state.complexity_tier,
     );
 
     // Autonomous steps use invoke() (captured output) so we can detect rate
@@ -1876,8 +1883,8 @@ export class DefaultStepRunner implements StepRunner {
   /**
    * Dispatch the build_review grader: a fresh, isolated one-shot session
    * (never resumes the main conductor session), fed strictly the diff since
-   * the default branch plus the plan body (assembleBuildReviewInputs /
-   * buildGraderPrompt — no task-status, transcript, or maker-summary access).
+   * the default branch plus the plan body (assembleBuildReviewInputs — no
+   * task-status, transcript, or maker-summary access).
    *
    * Follows the same one-shot pattern as resolveRebaseConflict: fresh uuid,
    * `resume: false`, walked through the model fallback ladder. On full-ladder
@@ -1928,6 +1935,9 @@ export class DefaultStepRunner implements StepRunner {
 
     if (coordination.kind === 'gate-disabled') {
       return { success: true, output: 'build_review disabled' };
+    }
+    if (coordination.kind === 'passed') {
+      return this.publishBuildReviewPass(coordination.reason);
     }
     if (coordination.kind === 'refused') {
       return { success: false, output: `build_review refused: ${coordination.reason}` };
@@ -2080,9 +2090,7 @@ export class DefaultStepRunner implements StepRunner {
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
   ): Promise<unknown> {
-    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
-      tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness',
-    };
+    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = { testQuality: 'Test Quality' };
     const contractShape = renderBuildReviewJudgedResultShape(branch.rubric);
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
@@ -2329,49 +2337,27 @@ export class DefaultStepRunner implements StepRunner {
     // resolveFeaturePlanPath) built the correct feature. Mirror the build step:
     // prefer the caller's override, else the slug-scoped resolver, which fails
     // closed on ambiguity rather than grading someone else's plan.
+    const buildReviewConfig = resolveBuildReviewConfig(this.config, this.modelPolicy, {
+      modelCliOverride: this.modelOverride,
+      effortCliOverride: this.effortOverride,
+    });
     let planPath = this.planPathOverride;
     if (!planPath) {
       planPath = await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
     }
     if (!planPath) {
-      const planFiles = await findArtifactFiles(this.projectDir, 'plan');
-      const detail =
-        planFiles.length === 0
-          ? 'no .docs/plans/*.md present'
-          : `could not scope this feature's plan among ${planFiles.length} in .docs/plans/ ` +
-            `(feature_desc="${this.featureDesc}")`;
-      return {
-        success: false,
-        output: `${detail} — build_review has no plan to grade the diff against`,
-      };
+      return this.publishBuildReviewPass(
+        buildReviewConfig.rubrics.testQuality.enabled
+          ? 'test_quality_empty_scope'
+          : 'build_review_no_rubrics',
+      );
     }
 
-    const buildReviewConfig = resolveBuildReviewConfig(this.config, this.modelPolicy, {
-      modelCliOverride: this.modelOverride,
-      effortCliOverride: this.effortOverride,
-    });
     let containmentReport: ContainmentFloorReport | undefined;
-    if (buildReviewConfig.perTaskFloor) {
-      try {
-        containmentReport = await runContainmentFloor({
-          projectRoot: this.projectDir,
-          planPath,
-          scopeContainmentEnforced: buildReviewConfig.scopeContainmentEnforced,
-        });
-      } catch {
-        // Fail-soft: containment telemetry must never fail build_review.
-      }
-    }
-
     let inputs;
     try {
       inputs = {
-        ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
-          ...this.buildReviewInputOptions,
-          acceptedWidenings: buildReviewConfig.scopeContainmentEnforced
-            ? containmentReport?.acceptedWidenings ?? []
-            : [],
-        }),
+        ...await assembleBuildReviewInputs(this.gitRunner, planPath, this.buildReviewInputOptions),
       };
     } catch (err) {
       return {
@@ -2408,37 +2394,22 @@ export class DefaultStepRunner implements StepRunner {
       return repairProvenance ? { ...withFreshness, repairProvenance } : withFreshness;
     };
 
-    // Per-task "work happened at all" floor (#781): purely additive,
-    // non-blocking telemetry computed alongside the grader dispatch. It
-    // NEVER feeds buildGraderPrompt/inputs, never changes `success`, and
-    // never triggers a kickback — it only prepends advisory lines to this
-    // step's own `output` and writes a sidecar artifact for observability.
-    // Guarded end-to-end: runPerTaskCommitFloor is already fail-soft
-    // internally, but the try/catch here ensures literally nothing from this
-    // telemetry path can throw and fail the build_review step.
-    let floorAdvisoryLines: string[] = [];
-    if (buildReviewConfig.perTaskFloor) {
+    // Containment telemetry is non-blocking: it never changes `success` or
+    // triggers a kickback. Guard it so an observability failure cannot fail
+    // build_review.
+    let containmentAdvisoryLines: string[] = [];
+    if (buildReviewConfig.scopeContainmentEnforced) {
       try {
         // Fall back to the relative `.pipeline` dir when this.pipelineDir is
         // unset (mirrors the finish-record fallback above): the daemon always
         // passes the worktree's absolute pipelineDir, but callers that don't
         // (e.g. direct/test invocation) still get a usable artifact path.
         const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
-        const floorReport = await runPerTaskCommitFloor({
-          projectRoot: this.projectDir,
-          planPath,
-          taskStatusPath: join(effectivePipelineDir, 'task-status.json'),
-        });
         if (this.pipelineDir) {
           await this.ensurePipelineDir();
         } else {
           await mkdir(effectivePipelineDir, { recursive: true });
         }
-        await writeFile(
-          join(effectivePipelineDir, 'per-task-floor.json'),
-          JSON.stringify(floorReport, null, 2),
-          'utf-8',
-        );
         containmentReport ??= await runContainmentFloor({
           projectRoot: this.projectDir,
           planPath,
@@ -2449,14 +2420,9 @@ export class DefaultStepRunner implements StepRunner {
           JSON.stringify(containmentReport, null, 2),
           'utf-8',
         );
-        floorAdvisoryLines = [
-          ...renderPerTaskFloorReport(floorReport),
-          ...(buildReviewConfig.scopeContainmentEnforced
-            ? renderContainmentFloorReport(containmentReport)
-            : []),
-        ];
-        if (floorAdvisoryLines.length > 0) {
-          for (const line of floorAdvisoryLines) {
+        containmentAdvisoryLines = renderContainmentFloorReport(containmentReport);
+        if (containmentAdvisoryLines.length > 0) {
+          for (const line of containmentAdvisoryLines) {
             this.log(`WARNING: ${line}`);
           }
         }
@@ -2512,21 +2478,46 @@ export class DefaultStepRunner implements StepRunner {
     // The lifecycle still exposes one public build_review step. Its
     // coordinator owns the bounded auxiliary fan-out and receives the one
     // frozen snapshot. The injectable coordinator remains a narrow test seam.
-    const withFloorAdvisory = (result: StepRunResult): StepRunResult => ({
+    const withContainmentAdvisory = (result: StepRunResult): StepRunResult => ({
       ...result,
-      ...(typeof result.output === 'string' && floorAdvisoryLines.length > 0
-        ? { output: `${floorAdvisoryLines.join('\n')}\n\n${result.output}` }
+      ...(typeof result.output === 'string' && containmentAdvisoryLines.length > 0
+        ? { output: `${containmentAdvisoryLines.join('\n')}\n\n${result.output}` }
         : {}),
     });
     if (this.buildReviewCoordinator) {
-      return withBaseFreshness(withFloorAdvisory(
+      return withBaseFreshness(withContainmentAdvisory(
         await this.buildReviewCoordinator(inputs, buildReviewConfig),
       ));
     }
 
-    return withBaseFreshness(withFloorAdvisory(
+    return withBaseFreshness(withContainmentAdvisory(
       await this.runRubricBuildReview(inputs, buildReviewConfig),
     ));
+  }
+
+  private async publishBuildReviewPass(
+    reason: 'build_review_no_rubrics' | 'test_quality_empty_scope',
+  ): Promise<StepRunResult> {
+    const verdict = {
+      verdict: 'PASS' as const,
+      reason,
+      rubric: { testQuality: false },
+    };
+    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const verdictPath = join(effectivePipelineDir, 'build-review.json');
+    try {
+      await mkdir(effectivePipelineDir, { recursive: true });
+      const temporaryPath = `${verdictPath}.${randomUUID()}.tmp`;
+      await writeFile(temporaryPath, `${JSON.stringify(verdict, null, 2)}\n`, 'utf-8');
+      await rename(temporaryPath, verdictPath);
+    } catch (error) {
+      return {
+        success: false,
+        output: `build_review empty-set PASS publication failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    await this.stampBuildReviewVerdict();
+    return { success: true, output: JSON.stringify(verdict) };
   }
 
   private async stampBuildReviewVerdict(): Promise<void> {
@@ -2623,6 +2614,7 @@ export class DefaultStepRunner implements StepRunner {
     autonomous: boolean,
     retryReason?: string,
     finishProsePass?: 'author' | 'judge',
+    tier?: ComplexityTier,
   ): Promise<string> {
     const stepDef = this.stepRegistry.find((candidate) => candidate.name === step)
       ?? getStepDefinition(step);
@@ -2645,6 +2637,41 @@ export class DefaultStepRunner implements StepRunner {
 
     // Effort is now controlled via CLAUDE_CODE_EFFORT_LEVEL env var (Claude's
     // native reasoning knob) — no prose hint needed in the system prompt.
+
+    if (step === 'architecture_review_as_built') {
+      const policy = await resolveAsBuiltPolicy({
+        projectRoot: this.projectDir,
+        tier,
+        // The runtime config validator already owns this accepted block. Its
+        // public HarnessConfig declaration is widened by the config task, so
+        // keep this task's prompt seam scoped to the validated policy shape.
+        config: this.config as unknown as AsBuiltPolicyConfig | undefined,
+      });
+      prompt += `\n\n${renderAsBuiltPolicyPrompt(policy)}`;
+    }
+
+    if (step === 'prd_audit') {
+      const [operatorReseals, featureCommits] = await Promise.all([
+        readOperatorReseals(this.projectDir),
+        listCommitsWithTrailers(this.projectDir),
+      ]);
+      const scopeTrailers = featureCommits.flatMap((commit) =>
+        (commit.trailers.Scope ?? []).flatMap((trailer) =>
+          parseScopeTrailers(`Scope: ${trailer}`),
+        ),
+      );
+      const scopeEvidence = prdAuditScopeProjection({
+        resealEvidence: operatorReseals.flatMap((reseal) =>
+          reseal.paths.map((path) => ({ path, reason: reseal.reason })),
+        ),
+        scopeTrailers,
+      });
+      prompt +=
+        '\n\nPRD-AUDIT SCOPE EVIDENCE — judge operator reseal rationales and feature-commit Scope: '
+        + 'trailer rationales only as OVER_SCOPE intent evidence. This evidence is immutable; do not invent '
+        + 'a widening rationale.\n```json\n'
+        + `${JSON.stringify(scopeEvidence, null, 2)}\n` + '```';
+    }
 
     // Task 14: Include quarantine context if a .pipeline/QUARANTINE sentinel exists.
     // This surfaces the quarantine ref and preserved paths to the resuming build dispatch.

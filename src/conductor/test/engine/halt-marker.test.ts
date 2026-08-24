@@ -13,7 +13,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 import { writeFile, rename, mkdir } from 'node:fs/promises';
-import { writeHaltMarker, readHaltClass, HALT_MARKER, HALT_CLASS_MARKER } from '../../src/engine/halt-marker';
+import {
+  writeHaltMarker,
+  readHaltClass,
+  HALT_MARKER,
+  HALT_CLASS_MARKER,
+  PLAN_GAP_HALT_CLASS,
+} from '../../src/engine/halt-marker';
 import type { HaltClass } from '../../src/engine/halt-marker';
 import { ConductorEventEmitter } from '../../src/ui/events';
 
@@ -181,6 +187,15 @@ describe('readHaltClass', () => {
     await (actual.writeFile as any)(join(root, HALT_CLASS_MARKER), 'legacy', 'utf-8');
 
     await expect(readHaltClass(root)).resolves.toBe('legacy');
+  });
+
+  it('returns plan-gap when HALT.class contains the approved-plan insufficiency class', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    await (actual.writeFile as any)(join(root, HALT_CLASS_MARKER), PLAN_GAP_HALT_CLASS, 'utf-8');
+
+    await expect(readHaltClass(root)).resolves.toBe(PLAN_GAP_HALT_CLASS);
   });
 
   it('returns unclassified when the file is absent', async () => {
