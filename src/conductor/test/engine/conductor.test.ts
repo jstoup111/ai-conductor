@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, utimes } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 
 vi.mock('execa', () => ({
@@ -13208,6 +13208,46 @@ describe('build-step stall circuit breaker', () => {
     expect(haltClearedRecord).toBeDefined();
     expect(haltClearedRecord?.cause).toBe('operator');
     expect(haltClearedRecord?.origin).toBe('build');
+  });
+
+  it('supersedes the committed halt record when the in-build halt marker is cleared', async () => {
+    // ADR adr-2026-08-23-committed-halt-record §7 names both halt-clear seams.
+    // The daemon's is wired (daemon-deps.ts); this asserts the conductor's own
+    // in-loop clear also resolves the record, so a record can never merge to
+    // main saying `Status: halted` for a feature that resumed and shipped.
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(3, 10);
+    await writeFile(join(dir, '.pipeline/halt-user-input-required'), 'plan gap');
+
+    const slug = basename(dir);
+    const recordPath = join(dir, '.docs/halted', `${slug}.md`);
+    await mkdir(join(dir, '.docs/halted'), { recursive: true });
+    await writeFile(
+      recordPath,
+      `# Halt: ${slug}\n\nStatus: halted\nClass: plan-gap\nStep: build\n`,
+    );
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    const record = await readFile(recordPath, 'utf8');
+    expect(record).toContain('Status: resolved');
+    expect(record).toContain('Resolution cause: operator');
+    expect(record).not.toContain('Status: halted');
   });
 
   it('captures halt marker content to evidence file before clearing the marker', async () => {

@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import {
   recordGateRepair,
 } from './test-suite-remediation.js';
-import { dirname, relative, join, isAbsolute } from 'node:path';
+import { basename, dirname, relative, join, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execa } from 'execa';
 import {
@@ -299,6 +299,7 @@ import {
   normalizeTasks,
   resolveTaskIds,
 } from './task-progress.js';
+import { supersedeHaltRecord } from './halt-record.js';
 import {
   makeGitRunner,
   performRebase,
@@ -8151,6 +8152,18 @@ export class Conductor {
                   const isZeroWorkStall = stalled === 'no_task_progress';
 
                   await clearHaltMarker(this.projectRoot);
+                  // adr-2026-08-23-committed-halt-record §7 supersedes the
+                  // committed record at EVERY halt-clear seam, not only the
+                  // daemon's (daemon-deps.ts:338). A record left saying
+                  // `Status: halted` for a feature that has since resumed is
+                  // worse than no record — an operator acts on it. Best-effort
+                  // and swallowed, matching appendHaltClearedRecord: a record
+                  // failure must never throw into the stall path.
+                  try {
+                    await supersedeHaltRecord(this.projectRoot, basename(this.projectRoot), 'operator');
+                  } catch {
+                    /* best-effort halt-record supersession */
+                  }
                   await emitTracked({
                     type: 'halt_cleared',
                     step: step.name,
