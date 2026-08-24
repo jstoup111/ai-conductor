@@ -2144,3 +2144,67 @@ Return requests are accepted.
     ).resolves.toBeUndefined();
   });
 });
+
+describe('runCoherenceGate criterion fail-closed guard', () => {
+  it('rejects unparseable story criteria even when a fresh waiver names criterion:stories-unparseable', async () => {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-criterion-unparseable-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(canonicalPath, 'README.md'), '# fixture\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed fixture']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await mkdir(join(worktreePath, '.docs/coherence-waivers'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | covered | "Task 1 builds the widget." | diff-local |
+`,
+    );
+    await writeFile(
+      join(worktreePath, '.docs/coherence-waivers/idea.md'),
+      'Waives: criterion:stories-unparseable\nRationale: an attempted waiver must not clear malformed stories.\n',
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'add criterion waiver']);
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath,
+        tier: 'M',
+        track: 'technical',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: `# Stories
+
+## Story 1: Widget shipping
+`,
+        planText: `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (happy path)
+
+Task 1 builds the widget.
+
+## Coverage Check
+
+| Story | Tasks |
+| --- | --- |
+| 1 | 1 |
+`,
+        prdText: null,
+        outcomeBullets: [],
+        ideaFiles: new Set(['.docs/coherence/idea.md', '.docs/coherence-waivers/idea.md']),
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).rejects.toThrow('criterion:stories-unparseable');
+  });
+});

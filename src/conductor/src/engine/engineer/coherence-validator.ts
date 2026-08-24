@@ -1743,6 +1743,19 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
     );
   }
 
+  // A stories file with no extractable criteria is malformed evidence, not a
+  // coverage gap. Reject it before aggregation so a coherence waiver cannot
+  // turn a failed criterion check into a successful land.
+  if (required.layers.has('criterion')) {
+    const criterionResult = checkCriterionCoverage(parsed.rows, storiesText, planText);
+    if (!criterionResult.ok && criterionResult.reason === 'unparseable-stories') {
+      throw new Error(
+        'landSpec: coherence gate: criterion:stories-unparseable — stories file has no ' +
+          'parseable story criteria. Fix the stories artifact before landing.',
+      );
+    }
+  }
+
   const effectivePrdText = required.layers.has('fr') ? prdText : null;
   const effectiveOutcomeBullets = required.layers.has('outcome') ? outcomeBullets : [];
 
