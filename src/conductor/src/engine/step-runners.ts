@@ -2,7 +2,12 @@ import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { join, relative } from 'node:path';
-import type { LLMProvider, ProviderStreamObservation } from '../execution/llm-provider.js';
+import type {
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+  ProviderStreamObservation,
+} from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
@@ -1231,18 +1236,27 @@ export class DefaultStepRunner implements StepRunner {
           set runWideUnavailable(value) {
             runtime.runWideUnavailable = value;
           },
-          provider: {
-            supportsSessionResume: runtime.provider.supportsSessionResume,
-            lifecycleCapability: runtime.provider.lifecycleCapability,
-            invoke: async (options) =>
+          // DELEGATE, never re-enumerate. This wrapper exists only to make
+          // `invoke` route through `invokeInteractive` for streaming
+          // dispatch; every other capability must reach the real adapter
+          // untouched. Listing members by hand silently dropped the optional
+          // ones: `resolveSelfHostExecutable` went missing, so every
+          // codex-routed streaming step threw "Codex self-host isolation is
+          // unavailable for the resolved provider candidate" at
+          // conductor.ts:3961 before the provider was ever constructed, and
+          // `readiness` went missing, so auth recovery could not engage on a
+          // streaming step. Prototype delegation cannot lose a member the
+          // adapter grows later.
+          provider: Object.assign(Object.create(runtime.provider) as LLMProvider, {
+            invoke: async (options: InvokeOptions): Promise<InvokeResult> =>
               (await runtime.provider.invokeInteractive(options)) ?? {
                 success: true,
                 output: '',
                 exitCode: 0,
               },
-            invokeInteractive: (options) =>
+            invokeInteractive: (options: InvokeOptions): Promise<InvokeResult | void> =>
               runtime.provider.invokeInteractive(options),
-          },
+          }),
         };
       }),
     );

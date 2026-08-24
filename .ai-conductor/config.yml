@@ -109,8 +109,16 @@ steps:
     llm_provider: codex
   prd_audit:
     llm_provider: claude
+  # Routed to codex 2026-08-24. Of the two as-built judgement gates this is
+  # the safer one to move: it emits a single verdict plus rationale, so it
+  # cannot produce the malformed-table "mechanical fault" halt that
+  # prd_audit's 40-row Verdict Table already caused twice; and its contract
+  # surface is narrower — approved ADRs against the diff, rather than plan
+  # tasks + story criteria + scope trailers + intent relations. A wrong
+  # BLOCKED is loud and lands in front of the operator. `prd_audit`
+  # deliberately stays on claude.
   architecture_review_as_built:
-    llm_provider: claude
+    llm_provider: codex
   # Pinned to claude (operator order, 2026-08-10), reverting #1471. Conflict
   # resolution was rerouted to codex on the theory that it is mechanical
   # pattern-matching; in practice codex does not resolve rebases acceptably, so
@@ -122,11 +130,11 @@ steps:
   # network egress. The claude pin existed because `gh pr create` had to escape
   # the sandbox and lost the auto_review approval — a permissions limit, not a
   # capability one. Revert this pin if publication quality regresses.
-  # Unpinned from codex 2026-08-24 for the same reason as
-  # `release-disposition` above — `finish` sits later in the same SHIP tail
-  # and would hit the identical prepare-time failure. Restore together.
+  # Back on codex 2026-08-24 with `release-disposition`, same root cause and
+  # same fix. `gh` egress under the workspace-write sandbox was granted by
+  # PR #1828, so the original reason for the claude pin is also gone.
   finish:
-    llm_provider: claude
+    llm_provider: codex
   manual_test:
     disable: true
   # build stays on the codex `terra` default at medium effort. A bump to `sol`
@@ -140,8 +148,11 @@ steps:
   # claude rather than letting the run-level codex entry resolve first.
   remediate:
     llm_provider: claude
+  # Routed to codex 2026-08-24. The claude pin carried no recorded rationale;
+  # this is a bounded docs-conformance pass with a completion artifact, and a
+  # wrong answer costs a stale docs page rather than a bad gate verdict.
   maintain-documentation:
-    llm_provider: claude
+    llm_provider: codex
     after: rebase
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
@@ -151,15 +162,16 @@ steps:
   # egress under the workspace-write sandbox, fixed by PR #1828. The output is
   # a fixed-grammar Release-* block validated by a required CI check that fails
   # closed, so a wrong answer is caught rather than shipped.
-  # Unpinned from codex 2026-08-24: every attempt died in <1s at
-  # conductor.ts:3961 "Codex self-host isolation is unavailable for the
-  # resolved provider candidate" — a prepare-time wiring failure in the
-  # SHIP tail, never a provider call. `build` runs codex fine in the same
-  # worktree, so this is step-path-specific, not a codex capability gap.
-  # Restore the codex route once that is fixed.
+  # Back on codex 2026-08-24 once the root cause shipped: the streaming
+  # dispatch path rebuilt each ProviderRuntime with a hand-listed `provider`
+  # literal, dropping `resolveSelfHostExecutable`, so every codex-routed
+  # streaming step threw at conductor.ts:3961 before the provider existed.
+  # step-runners.ts now delegates to the real adapter. Original rationale
+  # stands: the output is a fixed-grammar Release-* block validated by a
+  # required CI check that fails closed, so a wrong answer is caught.
   release-disposition:
-    llm_provider: claude
-    model: sonnet
+    llm_provider: codex
+    model: gpt-5.6-terra
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
