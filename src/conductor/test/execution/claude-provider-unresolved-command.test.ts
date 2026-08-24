@@ -161,7 +161,7 @@ describe('Claude custom-step command resolution evidence (#1311)', () => {
     });
     expect(parseJsonResult(unresolvedRaw)).toEqual({
       output: 'Unknown command: /pipeline',
-      tokenUsage: { input: 0, output: 0, costUsd: 0, numTurns: 0 },
+      tokenUsage: { input: 0, output: 0, costUsd: 0, costSource: 'provider', numTurns: 0 },
       numTurns: 0,
     });
     expect(successful).toMatchObject({

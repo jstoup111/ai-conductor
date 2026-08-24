@@ -39,6 +39,7 @@ describe('Claude stream JSON result parsing', () => {
       cacheRead: 500,
       cacheCreation: 0,
       costUsd: 0.023,
+      costSource: 'provider',
       numTurns: 3,
       durationMs: 4213,
     });

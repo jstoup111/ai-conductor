@@ -187,7 +187,7 @@ necessarily the repo default.
   dispatch. `grep ' via '` over the log answers "which provider ran this step" without inspecting
   process argv. A provider skipped from a cached availability result dispatches no process and is
   not logged; a fallback between providers still prints its own `⚠ PROVIDER FALLBACK` line.
-- **`·   finish: total usage — <dispatches>, <cost>, <fresh> fresh + <cached> cached→<out> tok, <n> unmetered`**
+- **`·   finish: total usage — <dispatches>, <cost>, <fresh> fresh + <cached> cached→<out> tok, <n> cost-unmetered (tokens counted, cost not), <n> unmetered`**
   is logged once,
   when the feature's `finish` step completes. `<fresh>` counts non-cached input tokens; `<cached>`
   counts prompt-cache reads and creation — the conversation an agentic dispatch resubmits on every
@@ -202,6 +202,13 @@ necessarily the repo default.
   that snapshot, without re-dispatching `finish`. A concurrent upstream commit is adopted only when
   its tree exactly matches the verified refresh; unrelated branch content still fails closed under
   the ordinary shipment-evidence gates.
+
+  A non-zero `cost-unmetered` count means `<cost>` is a PARTIAL figure: those dispatches reported
+  token counts that ARE in the token totals, but no dollars. That happens when a provider reports no
+  cost of its own (codex) and the model it ran has no entry in the committed
+  `.ai-conductor/rate-card.json` — see the rate-card section of the configuration reference, and run
+  `conduct-ts rate-card refresh` to close the gap. The clause is omitted when every metered dispatch
+  also carried a cost.
 
   Cost and token figures appear only when at least one dispatch was actually metered. A build whose
   provider reported no usage prints its dispatch count and an explicit `<n> unmetered` instead of a

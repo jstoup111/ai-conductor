@@ -327,6 +327,13 @@ export type ConductorEvent =
       outputTokens: number;
       /** Cached prompt volume (cache reads + creation), when tracked. */
       cachedInputTokens?: number;
+      /**
+       * Dispatches whose tokens are counted above but whose cost is not —
+       * a provider that reports usage without money, or one whose model has no
+       * entry in the committed rate card. Non-zero means `costUsd` is a PARTIAL
+       * figure, not the feature total.
+       */
+      costUnmeteredDispatches?: number;
     }
   | {
       /** A visible transition from an unavailable provider to the next candidate. */

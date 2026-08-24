@@ -84,6 +84,7 @@ describe('provider stream progress inertness', () => {
         inputTokens: 100,
         outputTokens: 20,
         cachedInputTokens: 15,
+        costUnmeteredDispatches: 0,
       },
     });
   });

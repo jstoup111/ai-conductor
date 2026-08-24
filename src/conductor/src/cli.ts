@@ -507,6 +507,16 @@ export function createProgram(): Command {
     .command('create <name>')
     .description('Scaffold a new project (git init + skeleton CLAUDE.md + .gitignore) and register it')
     .option('--remote <url>', 'Add an origin remote (add-only, no push)');
+  const rateCard = program
+    .command('rate-card')
+    .description('Maintain the committed per-model token price card (.ai-conductor/rate-card.json)');
+  rateCard
+    .command('refresh')
+    .description('Fetch upstream model prices, prune to the models this project routes to, and rewrite the card with a fresh as_of')
+    .option('--model <id>', 'Also price this model id (repeatable)');
+  rateCard
+    .command('show')
+    .description('Print the committed rate card: as_of, source, and each model rate');
   const config = program
     .command('config')
     .description('Manage project- and user-scoped harness configuration');

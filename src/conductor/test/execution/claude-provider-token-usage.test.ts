@@ -52,6 +52,9 @@ describe('ClaudeProvider tokenUsage parsing', () => {
     expect(result.tokenUsage?.cacheCreation).toBe(10);
     expect(result.tokenUsage?.cacheRead).toBe(5);
     expect(result.tokenUsage?.costUsd).toBe(0.05);
+    // Claude reports its own money, so the cost is provider truth — not the
+    // harness rate-card estimate other providers' dispatches carry.
+    expect(result.tokenUsage?.costSource).toBe('provider');
     expect(result.tokenUsage?.numTurns).toBe(3);
     expect(result.tokenUsage?.durationMs).toBe(1200);
   });

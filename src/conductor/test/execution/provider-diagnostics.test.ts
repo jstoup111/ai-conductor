@@ -216,6 +216,42 @@ describe('formatFeatureUsageTotal', () => {
     expect(line).not.toContain('tok');
   });
 
+  it('names cost-unmetered dispatches so a partial cost never reads as a total', () => {
+    // The gap this closes: a mixed-provider build whose second provider
+    // reported tokens but no money contributed its full token volume and $0.
+    // The line printed one provider's dollars beside both providers' tokens
+    // with nothing to say so — a 4.4x understatement that looked authoritative.
+    expect(
+      formatFeatureUsageTotal({
+        dispatches: 47,
+        meteredDispatches: 47,
+        unmeteredDispatches: 0,
+        costUnmeteredDispatches: 17,
+        costUsd: 5.63,
+        inputTokens: 2_250_000,
+        outputTokens: 148_000,
+        cachedInputTokens: 58_000_000,
+      }),
+    ).toBe(
+      'finish: total usage — 47 dispatches, $5.63, 2.3M fresh + 58M cached→148k tok, ' +
+        '17 cost-unmetered (tokens counted, cost not)',
+    );
+  });
+
+  it('says nothing extra when every metered dispatch also carried a cost', () => {
+    expect(
+      formatFeatureUsageTotal({
+        dispatches: 47,
+        meteredDispatches: 47,
+        unmeteredDispatches: 0,
+        costUnmeteredDispatches: 0,
+        costUsd: 24.6,
+        inputTokens: 2_250_000,
+        outputTokens: 148_000,
+      }),
+    ).not.toContain('cost-unmetered');
+  });
+
   it('singularizes a one-dispatch build', () => {
     expect(
       formatFeatureUsageTotal({

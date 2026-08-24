@@ -467,10 +467,79 @@ describe('engine/cost-rollup', () => {
         inputTokens: 2000,
         outputTokens: 500,
         cachedInputTokens: 0,
+        costUnmeteredDispatches: 0,
       });
       expect(formatFeatureUsageTotal(totals)).toBe(
         'finish: total usage — 3 dispatches, $3.75, 2k→500 tok, 1 unmetered',
       );
+    });
+
+    it('carries the cost-unmetered count through to the line an operator reads', async () => {
+      // The defect this closes: a dispatch that reports tokens but no cost
+      // contributes its FULL token volume and $0. Before the count surfaced,
+      // the finish line paired all-provider tokens with one provider's dollars
+      // and read as an authoritative total.
+      await writeEvents([
+        JSON.stringify({
+          type: 'provider_attempt',
+          step: 'build',
+          provider: 'claude',
+          outcome: 'success',
+          invoked: true,
+          tokenUsage: { input: 1000, output: 100, costUsd: 5.63, costSource: 'provider' },
+        }),
+        JSON.stringify({
+          type: 'provider_attempt',
+          step: 'build_review',
+          provider: 'codex',
+          outcome: 'success',
+          invoked: true,
+          tokenUsage: { input: 2_250_000, output: 148_000, cacheRead: 58_000_000 },
+        }),
+      ]);
+
+      const totals = toFeatureUsageTotals(await computeCostRollup(dir));
+
+      expect(totals.costUnmeteredDispatches).toBe(1);
+      expect(totals.costUsd).toBe(5.63);
+      expect(formatFeatureUsageTotal(totals)).toContain(
+        '1 cost-unmetered (tokens counted, cost not)',
+      );
+    });
+
+    it('reports zero cost-unmetered once every dispatch carries a cost', async () => {
+      // With the codex adapter pricing its own dispatches from the rate card,
+      // the same two-provider build has nothing left unpriced.
+      await writeEvents([
+        JSON.stringify({
+          type: 'provider_attempt',
+          step: 'build',
+          provider: 'claude',
+          outcome: 'success',
+          invoked: true,
+          tokenUsage: { input: 1000, output: 100, costUsd: 5.63, costSource: 'provider' },
+        }),
+        JSON.stringify({
+          type: 'provider_attempt',
+          step: 'build_review',
+          provider: 'codex',
+          outcome: 'success',
+          invoked: true,
+          tokenUsage: {
+            input: 2_250_000,
+            output: 148_000,
+            cacheRead: 58_000_000,
+            costUsd: 18.97,
+            costSource: 'rate-card',
+          },
+        }),
+      ]);
+
+      const totals = toFeatureUsageTotals(await computeCostRollup(dir));
+
+      expect(totals.costUnmeteredDispatches).toBe(0);
+      expect(totals.costUsd).toBeCloseTo(24.6, 6);
+      expect(formatFeatureUsageTotal(totals)).not.toContain('cost-unmetered');
     });
 
     it('never reports negative metered dispatches when unreadable records outnumber them', async () => {

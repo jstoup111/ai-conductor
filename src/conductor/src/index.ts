@@ -112,6 +112,7 @@ import {
   type DaemonCommandOptions,
 } from './engine/daemon-command.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
+import { detectRateCardCommand, dispatchRateCard } from './engine/rate-card-cli.js';
 import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
@@ -632,6 +633,16 @@ async function main(): Promise<void> {
   const renderCmd = detectRenderCommand(process.argv);
   if (renderCmd) {
     const code = await dispatchRender(renderCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Rate-card subcommand (`rate-card refresh|show`) runs NON-INTERACTIVELY and
+  // exits — maintains the committed per-model token price card the codex
+  // adapter prices its dispatches from. Network fetch lives here, never on the
+  // dispatch path.
+  const rateCardCmd = detectRateCardCommand(process.argv);
+  if (rateCardCmd) {
+    const code = await dispatchRateCard(rateCardCmd, process.cwd());
     process.exit(code);
   }
 
