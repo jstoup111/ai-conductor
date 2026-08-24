@@ -1823,6 +1823,105 @@ Reject the broken widget before shipping.
     ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
   });
 
+  it('enumerates every coverage-layer rejection as a stable waiver-compatible gap', async () => {
+    const coverageLayerRejectionClasses = [
+      'omitted',
+      'invented',
+      'duplicate',
+      'verdict',
+      'disposition-missing',
+      'disposition-negative',
+      'task-missing',
+      'quote-empty',
+      'quote-ungrounded',
+    ] as const;
+    type CoverageLayerRejectionClass = (typeof coverageLayerRejectionClasses)[number];
+
+    const expectedGapIds: Record<CoverageLayerRejectionClass, string> = {
+      omitted: 'criterion:omitted:2',
+      invented: 'criterion:invented:9',
+      duplicate: 'criterion:duplicate:1',
+      verdict: 'criterion:verdict:3',
+      'disposition-missing': 'criterion:disposition-missing:4',
+      'disposition-negative': 'criterion:disposition-negative:5',
+      'task-missing': 'criterion:task-missing:6:99',
+      'quote-empty': 'criterion:quote-empty:7',
+      'quote-ungrounded': 'criterion:quote-ungrounded:8',
+    };
+    const coverageStories = `# Stories
+
+## Story 1: Coverage rejection classes
+
+### Happy Path
+- Given a duplicate widget, when it ships, then it arrives
+- Given an omitted widget, when it ships, then it arrives
+- Given a verdict widget, when it ships, then it arrives
+- Given a missing-disposition widget, when it ships, then it arrives
+- Given a negative-disposition widget, when it ships, then it arrives
+- Given a missing-task widget, when it ships, then it arrives
+- Given an empty-quote widget, when it ships, then it arrives
+- Given an ungrounded-quote widget, when it ships, then it arrives
+`;
+    const coveragePlan = `# Plan
+
+### Task 1: Duplicate evidence
+Duplicate evidence.
+
+### Task 2: Verdict evidence
+Verdict evidence.
+
+### Task 3: Missing disposition evidence
+Missing disposition evidence.
+
+### Task 4: Negative disposition evidence
+Negative disposition evidence.
+
+### Task 5: Empty quote evidence
+Empty quote evidence.
+
+### Task 6: Grounded quote evidence
+Grounded quote evidence.
+`;
+    const coverageRows = rows([
+      '| criterion | Story 1 happy: Given a duplicate widget, when it ships, then it arrives | task-1 | covered | "Duplicate evidence." | diff-local |',
+      '| criterion | Story 1 happy: Given a duplicate widget, when it ships, then it arrives | task-1 | covered | "Duplicate evidence." | diff-local |',
+      '| criterion | Story 1 happy: Given a verdict widget, when it ships, then it arrives | task-2 | gap | "Verdict evidence." | diff-local |',
+      '| criterion | Story 1 happy: Given a missing-disposition widget, when it ships, then it arrives | task-3 | covered | "Missing disposition evidence." |  |',
+      '| criterion | Story 1 happy: Given a negative-disposition widget, when it ships, then it arrives | task-4 | covered | "Negative disposition evidence." | outside-diff |',
+      '| criterion | Story 1 happy: Given a missing-task widget, when it ships, then it arrives | task-99 | covered | "Missing task evidence." | diff-local |',
+      '| criterion | Story 1 happy: Given an empty-quote widget, when it ships, then it arrives | task-5 | covered |  | diff-local |',
+      '| criterion | Story 1 happy: Given an ungrounded-quote widget, when it ships, then it arrives | task-6 | covered | "Ungrounded quote evidence." | diff-local |',
+      '| criterion | invented criterion | task-1 | covered | "Duplicate evidence." | diff-local |',
+    ]);
+
+    const result = checkCriterionCoverage(coverageRows, coverageStories, coveragePlan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+
+    const emittedGapIds = result.gaps.map((gap) => gap.gapId);
+    const registeredGapIds = coverageLayerRejectionClasses.map(
+      (rejectionClass) => expectedGapIds[rejectionClass],
+    );
+    expect(emittedGapIds).toHaveLength(coverageLayerRejectionClasses.length);
+    expect(new Set(emittedGapIds)).toEqual(new Set(registeredGapIds));
+
+    const waiverPath = '.docs/coherence-waivers/coverage-rejection-classes.md';
+    const waiverVerdict = await evaluateCoherenceWaiver({
+      gaps: result.gaps.map((gap) => ({
+        layer: 'criterion',
+        gapId: gap.gapId,
+        artifact: 'coverage table',
+        item: gap.detail,
+      })),
+      changedFiles: [{ status: 'A', path: waiverPath }],
+      readText: async (path) =>
+        path === waiverPath
+          ? `Waives: ${registeredGapIds.join(', ')}\nRationale: coverage rejection ids are registered for waiver evaluation.\n`
+          : null,
+    });
+    expect(waiverVerdict).toEqual({ ok: true });
+  });
+
   it('uses the shared story extractor and fails closed for unparseable story criteria', () => {
     expect(checkCriterionCoverage(completeRows(), '# Stories\n\n## Story 1: No scenarios\n', plan)).toMatchObject({
       ok: false,
