@@ -73,6 +73,8 @@ describe('committed halt record operator pickup', () => {
   });
 
   it('reads the halt from a branch-only clone and observes its resolution after fetch', async () => {
+    const headAtHalt = await git(['rev-parse', 'HEAD']);
+
     await expect(
       writeHaltMarker(worktree, HALT_REASON, 'needs-human'),
     ).resolves.toEqual({ status: 'written' });
@@ -83,8 +85,9 @@ describe('committed halt record operator pickup', () => {
     expect(haltedRecord).toContain(SLUG);
     expect(haltedRecord).toContain('Status: halted');
     expect(haltedRecord).toContain('needs-human');
-    expect(haltedRecord).toContain('build');
+    expect(haltedRecord).toContain('Halting step: build');
     expect(haltedRecord).toContain('BUILD');
+    expect(haltedRecord).toContain(`Head SHA: ${headAtHalt}`);
     expect(haltedRecord).toContain(HALT_REASON.trim());
 
     let cleared = false;
@@ -101,9 +104,10 @@ describe('committed halt record operator pickup', () => {
       pickup,
     );
     expect(resolvedRecord).toContain('Status: resolved');
-    expect(resolvedRecord).toContain('operator');
+    expect(resolvedRecord).toContain('Resolution cause: operator');
     expect(resolvedRecord).toContain(HALT_REASON.trim());
     expect(resolvedRecord).toContain('needs-human');
-    expect(resolvedRecord).toContain('build');
+    expect(resolvedRecord).toContain('Halting step: build');
+    expect(resolvedRecord).toContain(`Head SHA: ${headAtHalt}`);
   });
 });
