@@ -8,7 +8,14 @@
 // all of them. Both the constant and the best-effort writer now live here.
 
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { execa } from 'execa';
+import {
+  haltRecordPath,
+  isRecordableHaltClass,
+  recordHalt,
+  type HaltRecordInput,
+} from './halt-record.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
 /** The park-for-human marker the daemon loop treats as a stop. */
@@ -92,12 +99,76 @@ export async function writeHaltMarker(
   try {
     await writeFile(haltClassTempPath, haltClass, 'utf-8');
     await rename(haltClassTempPath, haltClassPath);
+    await writeHaltRecord(projectRoot, body, haltClass, events);
     return { status: 'written' };
   } catch (error) {
     await unlink(haltClassTempPath).catch(() => {});
     const reason = error instanceof Error ? error.message : String(error);
     await events?.emit({ type: 'halt_marker_write_failed', path: haltClassPath, reason }).catch(() => {});
     return { status: 'partial', writtenPath: markerPath, path: haltClassPath, reason };
+  }
+}
+
+async function writeHaltRecord(
+  projectRoot: string,
+  haltBody: string,
+  haltClass: HaltClass,
+  events?: ConductorEventEmitter,
+): Promise<void> {
+  if (!isRecordableHaltClass(haltClass)) return;
+
+  const input = await haltRecordInput(projectRoot, haltBody, haltClass);
+  const path = haltRecordPath(input.slug);
+
+  try {
+    const result = await recordHalt(projectRoot, input);
+    if (result.kind === 'written') {
+      await events?.emit({ type: 'halt_record_written', path, slug: input.slug, haltClass }).catch(() => {});
+    } else if (result.kind === 'failed') {
+      await events?.emit({ type: 'halt_record_write_failed', path, reason: result.reason }).catch(() => {});
+    } else if (result.kind === 'pushFailed') {
+      await events?.emit({ type: 'halt_record_push_failed', path, reason: result.reason }).catch(() => {});
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    await events?.emit({ type: 'halt_record_write_failed', path, reason }).catch(() => {});
+  }
+}
+
+async function haltRecordInput(
+  projectRoot: string,
+  haltBody: string,
+  haltClass: HaltClass,
+): Promise<HaltRecordInput> {
+  const [branch, headSha, phaseMarker] = await Promise.all([
+    gitValue(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    gitValue(projectRoot, ['rev-parse', 'HEAD']),
+    readFile(join(projectRoot, '.pipeline', 'phase-active'), 'utf8').catch(() => ''),
+  ]);
+  const fields = new Map(
+    phaseMarker.split('\n').flatMap((line) => {
+      const match = /^(step|phase): (.+)$/.exec(line);
+      return match ? [[match[1], match[2]]] : [];
+    }),
+  );
+
+  return {
+    slug: basename(projectRoot),
+    haltClass,
+    step: fields.get('step') ?? 'unknown',
+    phase: fields.get('phase') ?? 'unknown',
+    branch,
+    headSha,
+    haltedAt: new Date().toISOString(),
+    haltBody,
+  };
+}
+
+async function gitValue(projectRoot: string, args: string[]): Promise<string> {
+  try {
+    return (await execa('git', args, { cwd: projectRoot })).stdout.trim() || 'unknown';
+  } catch {
+    return 'unknown';
   }
 }
 
