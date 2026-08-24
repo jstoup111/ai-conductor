@@ -1922,10 +1922,50 @@ Grounded quote evidence.
     expect(waiverVerdict).toEqual({ ok: true });
   });
 
-  it('uses the shared story extractor and fails closed for unparseable story criteria', () => {
-    expect(checkCriterionCoverage(completeRows(), '# Stories\n\n## Story 1: No scenarios\n', plan)).toMatchObject({
+  it.each([
+    [
+      'wrong cell count',
+      '| criterion | Given a widget, when shipped, then it arrives. | task-1 | covered | "Task 1 owns the widget." |',
+    ],
+    [
+      'empty criterion',
+      '| criterion |  | task-1 | covered | "Task 1 owns the widget." | diff-local |',
+    ],
+    [
+      'unknown verdict',
+      '| criterion | Given a widget, when shipped, then it arrives. | task-1 | probably-covered | "Task 1 owns the widget." | diff-local |',
+    ],
+    [
+      'empty cited task ids',
+      '| criterion | Given a widget, when shipped, then it arrives. |  | covered | "Task 1 owns the widget." | diff-local |',
+    ],
+    [
+      'out-of-vocabulary disposition',
+      '| criterion | Given a widget, when shipped, then it arrives. | task-1 | covered | "Task 1 owns the widget." | maybe-local |',
+    ],
+  ])('keeps malformed criterion rows non-waivable: %s', (_label, row) => {
+    // S3.5 and S5.3 require malformed values to be refused rather than defaulted.
+    expect(
+      parseCoherenceArtifact(
+        `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+${row}
+`,
+      ),
+    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+  });
+
+  it('keeps unparseable story criteria as a fail-closed check result, not a waiver-compatible gap', () => {
+    expect(checkCriterionCoverage(completeRows(), '# Stories\n\n## Story 1: No scenarios\n', plan)).toEqual({
       ok: false,
       reason: 'unparseable-stories',
+      gaps: [
+        {
+          gapId: 'criterion:stories-unparseable',
+          criterion: '',
+          detail: 'stories file has no parseable story criteria',
+        },
+      ],
     });
   });
 });
