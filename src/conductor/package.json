@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "node scripts/publish-engine.mjs",
-    "test": "sh -c 'if [ \"$#\" -gt 0 ]; then vitest run --reporter=dot --silent --slowTestThreshold=1800000 \"$@\"; else vitest run --reporter=dot --silent --slowTestThreshold=1800000 test/engine test/execution test/integration test/ui test/cli test/structural test/fixtures test/*.test.ts & ordinary=$!; vitest run --config vitest.signal.config.ts --reporter=dot --silent --slowTestThreshold=1800000 & signals=$!; wait \"$ordinary\" && wait \"$signals\"; fi && echo \"AGGREGATE_TEST_SUITE_PASS\"' --",
+    "test": "sh -c 'if [ \"$#\" -gt 0 ]; then vitest run --reporter=dot --silent --slowTestThreshold=1800000 \"$@\"; else vitest run --reporter=dot --silent --slowTestThreshold=1800000 & ordinary=$!; vitest run --config vitest.signal.config.ts --reporter=dot --silent --slowTestThreshold=1800000 & signals=$!; wait \"$ordinary\" && wait \"$signals\"; fi && echo \"AGGREGATE_TEST_SUITE_PASS\"' --",
     "test:changed": "sh -c \"vitest run --reporter=dot --changed --silent --slowTestThreshold=1800000 \\\"\\$@\\\" && echo 'AGGREGATE_TEST_SUITE_PASS'\" --",
     "test:watch": "vitest",
     "smoke": "node --import tsx scripts/smoke.ts vitest.smoke.config.ts",

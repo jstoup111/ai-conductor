@@ -295,6 +295,27 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     expect(testScript).toContain('vitest.signal.config.ts');
     expect(testScript).toContain('wait "$ordinary"');
     expect(testScript).toContain('wait "$signals"');
+
+    // The no-argument branch is the aggregate gate's command. Any positional
+    // path passed there narrows the run to those paths, silently dropping
+    // every tier it omits while `AGGREGATE_TEST_SUITE_PASS` still prints —
+    // which is how `test/acceptance/**` (171 files) and `test/types/**` (3)
+    // once left the default run undetected. The default must therefore carry
+    // no path filter and inherit the config's `include` whole.
+    const defaultBranch = testScript.slice(testScript.indexOf('else'), testScript.indexOf('fi &&'));
+    expect(defaultBranch).not.toMatch(/(^|\s)(\.\/)?test\//);
+
+    // Whatever `vitest.config.ts` excludes for pool reasons must be run by the
+    // signal config instead, so the two commands still cover the include set.
+    const signalConfig = await readFile(join(CONDUCTOR_ROOT, 'vitest.signal.config.ts'), 'utf8');
+    const excludeBlock = vitestConfig.match(/exclude:\s*\[([\s\S]*?)\]/)?.[1] ?? '';
+    const poolExcluded = [...excludeBlock.matchAll(/'(test\/[^'*]*\.test\.ts)'/g)].map(
+      (match) => match[1]!,
+    );
+    expect(poolExcluded.length).toBeGreaterThan(0);
+    for (const excluded of poolExcluded) {
+      expect(signalConfig).toContain(excluded);
+    }
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);
     expect(vitestConfig).toMatch(
