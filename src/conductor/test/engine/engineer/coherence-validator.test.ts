@@ -145,6 +145,45 @@ describe('parseCoherenceArtifact', () => {
     });
   });
 
+  it('parses a criterion row with its task evidence and optional disposition', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget, when shipped, then it arrives. | task-1, task-2 | covered | "Task 2 ships the widget." |  |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'criterion',
+          criterion: 'Given a widget, when shipped, then it arrives.',
+          citedIds: ['task-1', 'task-2'],
+          verdict: 'covered',
+          quote: 'Task 2 ships the widget.',
+          disposition: undefined,
+        },
+      ],
+    });
+  });
+
+  it('rejects a criterion row with an empty required quote as criterion-specific unparseable data', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget, when shipped, then it arrives. | task-1, task-2 | covered |  | diff-local |
+`),
+    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+  });
+
+  it('rejects a criterion row with no cited task evidence as criterion-specific unparseable data', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget, when shipped, then it arrives. |  | covered | "Task 2 ships the widget." | diff-local |
+`),
+    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+  });
+
   it('rejects the unknown decision row class after allowing adr', () => {
     expect(
       parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |

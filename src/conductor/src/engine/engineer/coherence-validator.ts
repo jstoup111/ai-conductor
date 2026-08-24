@@ -27,29 +27,46 @@ import {
 } from './coherence-waiver.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 
-/** The five row classes a coherence artifact row may belong to. */
-export type CoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task' | 'adr';
+/** The five legacy row classes a coherence artifact row may belong to. */
+export type LegacyCoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task' | 'adr';
 
-/** A single parsed row of the coherence mapping table. */
-export interface CoherenceRow {
-  rowClass: CoherenceRowClass;
+/** A row class in the coherence mapping table. */
+export type CoherenceRowClass = LegacyCoherenceRowClass | 'criterion';
+
+/** A single parsed row in the legacy five-column coherence mapping table. */
+export interface LegacyCoherenceRow {
+  rowClass: LegacyCoherenceRowClass;
   id: string;
   citedIds: string[];
   verdict: string;
   quote: string;
 }
 
+/** A parsed criterion-level claim, grounded by one or more plan-task citations. */
+export interface CriterionCoherenceRow {
+  rowClass: 'criterion';
+  criterion: string;
+  citedIds: string[];
+  verdict: string;
+  quote: string;
+  disposition: string | undefined;
+}
+
+/** A single parsed row of the coherence mapping table. */
+export type CoherenceRow = LegacyCoherenceRow | CriterionCoherenceRow;
+
 /** Distinct fail-closed reasons a coherence artifact parse can be rejected for. */
 export type CoherenceParseFailureReason =
   | 'missing-coherence-artifact'
   | 'empty-coherence-artifact'
-  | 'unparseable-coherence-artifact';
+  | 'unparseable-coherence-artifact'
+  | 'unparseable-criterion-row';
 
 export type CoherenceParseResult =
   | { ok: true; rows: CoherenceRow[] }
   | { ok: false; reason: CoherenceParseFailureReason };
 
-const ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task', 'adr']);
+const LEGACY_ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task', 'adr']);
 
 /**
  * Strip surrounding whitespace and a single pair of matching straight/curly
@@ -123,14 +140,35 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
 
   const rows: CoherenceRow[] = [];
   for (const cells of tableRowLines) {
-    if (cells.length !== 5) {
-      return { ok: false, reason: 'unparseable-coherence-artifact' };
-    }
-    const [rawRowClass, rawId, rawCitedIds, rawVerdict, rawQuote] = cells;
+    const rawRowClass = cells[0];
     const rowClass = rawRowClass.trim().toLowerCase();
-    if (!ROW_CLASSES.has(rowClass)) {
+    if (rowClass === 'criterion') {
+      if (cells.length !== 6) {
+        return { ok: false, reason: 'unparseable-criterion-row' };
+      }
+      const [, rawCriterion, rawCitedIds, rawVerdict, rawQuote, rawDisposition] = cells;
+      const criterion = rawCriterion.trim();
+      const verdict = rawVerdict.trim();
+      const quote = unquote(rawQuote);
+      if (criterion.length === 0 || verdict.length === 0 || quote.length === 0) {
+        return { ok: false, reason: 'unparseable-criterion-row' };
+      }
+      const citedIds = rawCitedIds
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      if (citedIds.length === 0) {
+        return { ok: false, reason: 'unparseable-criterion-row' };
+      }
+      const disposition = rawDisposition.trim() || undefined;
+
+      rows.push({ rowClass, criterion, citedIds, verdict, quote, disposition });
+      continue;
+    }
+    if (cells.length !== 5 || !LEGACY_ROW_CLASSES.has(rowClass)) {
       return { ok: false, reason: 'unparseable-coherence-artifact' };
     }
+    const [, rawId, rawCitedIds, rawVerdict, rawQuote] = cells;
     const id = rawId.trim();
     const verdict = rawVerdict.trim();
     if (id.length === 0 || verdict.length === 0) {
@@ -143,7 +181,7 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
     const quote = unquote(rawQuote);
 
     rows.push({
-      rowClass: rowClass as CoherenceRowClass,
+      rowClass: rowClass as LegacyCoherenceRowClass,
       id,
       citedIds,
       verdict,
@@ -232,7 +270,7 @@ export function crossCheckIds(
 
   const knownIds = new Set<string>([...storyIds, ...taskIds, ...frIds, ...outcomeIds, ...adrIds]);
 
-  const poolByClass: Record<CoherenceRowClass, ReadonlySet<string>> = {
+  const poolByClass: Record<LegacyCoherenceRowClass, ReadonlySet<string>> = {
     outcome: outcomeIds,
     fr: frIds,
     story: storyIds,
@@ -241,6 +279,7 @@ export function crossCheckIds(
   };
 
   for (const row of rows) {
+    if (row.rowClass === 'criterion') continue;
     // The row's own subject id must resolve against the pool for its class
     // (a row about a nonexistent FR/story/task/outcome is itself fabricated).
     const ownId = row.rowClass === 'fr' ? row.id.toUpperCase() : row.id;
