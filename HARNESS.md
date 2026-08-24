@@ -683,3 +683,6 @@ tmux sessions; the next `daemon start` (or engineer nudge) respawns.
   `docs/` directory), update the relevant guide too, not just the README. A
   feature is not done while its docs are stale; the `finish` step verifies the
   README/docs reflect what shipped before opening the PR.
+- **Operator-actionable halts are branch-visible.** An operator-actionable halt
+  on a feature branch lands a committed `.docs/halted/<slug>.md` record; a
+  `mechanical` halt does not.
