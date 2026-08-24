@@ -59,6 +59,7 @@ import {
   appendRemediationTasks,
   findResumeIndex,
   resolveGroupMembership,
+  earliestRemediationTarget,
 } from '../../src/engine/conductor.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
@@ -72,7 +73,7 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
-import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { checkStepCompletion, type RemediationGap } from '../../src/engine/artifacts.js';
 import {
   creditKickbackGateLaps,
   readKickbackLedger,
@@ -81,7 +82,7 @@ import {
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { appendTimingSection, renderShippedRecord } from '../../src/engine/shipped-record.js';
-import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { deriveEffectiveBuildReviewVerdict, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
 import {
@@ -2522,16 +2523,25 @@ describe('engine/conductor', () => {
         mode: 'auto',
         maxRetries: 2,
         config: { build_review: { rubrics: { testQuality: { enabled: true } } } },
+        // A strict aggregate resolves through the disposition store; this
+        // fixture has no feature identity, so join the raw aggregate directly.
+        buildReviewEffectiveResolver: async (_root, aggregate) => {
+          const effective = deriveEffectiveBuildReviewVerdict(aggregate);
+          return effective
+            ? { ok: true as const, feature: { version: 'v1' as const, repository: dir, feature: 'fixture' }, effective }
+            : { ok: false as const, reason: 'fixture aggregate is invalid' };
+        },
       });
 
       await conductor.run();
 
       expect(freshnessEvents.map(({ fresh, outcome }) => ({ fresh, outcome }))).toEqual([
         { fresh: false, outcome: 'stale_invalidated' },
+        { fresh: true, outcome: 'rewritten' },
       ]);
 
       const result = await readState(statePath);
-      expect(result.ok && result.value.build_review).toBe('failed');
+      expect(result.ok && result.value.build_review).toBe('done');
     });
   });
 
@@ -6646,6 +6656,57 @@ describe('engine/conductor', () => {
       expect(calledSteps).toContain('manual_test');
       expect(calledSteps).toContain('prd_audit');
     });
+
+    it('width 1: prd_audit and architecture_review_as_built config-disabled leave manual_test the sole member — no parallel_started emitted', async () => {
+      // The always-run prd_audit only leaves the group through an explicit
+      // `steps.<name>.disable`; with both siblings disabled the group has one
+      // dispatchable member and the fan-out ceremony event is skipped so the
+      // event stream for manual_test matches the serial baseline.
+      await writeState(statePath, {
+        ...VALIDATION_GROUP_PREREQS,
+        complexity_tier: 'M',
+        track: 'technical',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        config: {
+          steps: {
+            prd_audit: { disable: true },
+            architecture_review_as_built: { disable: true },
+          },
+        } as HarnessConfig,
+      });
+
+      const observedEvents: Array<{ type: string; step?: string }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+
+      await conductor.run();
+
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect({
+        parallelStarted: observedEvents.some((e) => e.type === 'parallel_started'),
+        manualTestStarted: observedEvents.some((e) => e.type === 'step_started' && e.step === 'manual_test'),
+        manualTestDispatched: calledSteps.includes('manual_test'),
+        siblingsDispatched: calledSteps.filter((step) => step === 'prd_audit' || step === 'architecture_review_as_built'),
+      }).toEqual({
+        parallelStarted: false,
+        manualTestStarted: true,
+        manualTestDispatched: true,
+        siblingsDispatched: [],
+      });
+    });
   });
 
   describe('single-writer join state + gate verdicts — all-green (Task 17)', () => {
@@ -7685,6 +7746,30 @@ describe('engine/conductor', () => {
       expect(kickbacks).toHaveLength(0);
       expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toMatch(/as-built review verdict is BLOCKED/);
     });
+
+    it('earliestRemediationTarget merges a manual_test build target with an acceptance_specs disposition to the earlier acceptance_specs', () => {
+      // The merged join folds manual_test's forced `build` target into the
+      // routed dispositions and navigates back to whichever is earliest in
+      // step order; `acceptance_specs` precedes `build`, so it wins and the
+      // later `build` target is subsumed by the forward walk.
+      const gap = (id: string, disposition: string): RemediationGap => ({
+        id,
+        disposition,
+        category: null,
+        rationale: `remediate ${id}`,
+        tasks: [{ id: `rem-${id}`, title: `remediate ${id}` }],
+      } as unknown as RemediationGap);
+
+      expect(earliestRemediationTarget([gap('mt', 'build'), gap('ADR-1', 'acceptance_specs')], ALL_STEPS)).toEqual({
+        target: 'acceptance_specs',
+        unresolved: [],
+      });
+      expect(earliestRemediationTarget([gap('ADR-1', 'acceptance_specs'), gap('mt', 'build')], ALL_STEPS)).toEqual({
+        target: 'acceptance_specs',
+        unresolved: [],
+      });
+      expect(earliestRemediationTarget([gap('mt', 'build')], ALL_STEPS)).toEqual({ target: 'build', unresolved: [] });
+    });
   });
 
   describe('Halt dispositions and partial plans (Task 23)', () => {
@@ -7920,6 +8005,7 @@ describe('engine/conductor', () => {
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
     const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
     it('readRemediationPlan → null (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
@@ -7942,9 +8028,12 @@ describe('engine/conductor', () => {
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
           } else if (step === 'architecture_review_as_built') {
+            // APPROVED: a BLOCKED as-built verdict is terminal for the run and
+            // would mask the property. The non-MT gap that dispatches
+            // /remediate is prd_audit, whose mock writes no report.
             await writeFile(
               join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_BLOCKED,
+              AS_BUILT_APPROVED,
             );
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
@@ -7983,7 +8072,9 @@ describe('engine/conductor', () => {
 
       // Despite the unusable LLM plan, the deterministic manual_test
       // kickback still fires — it does not depend on /remediate at all.
-      expect(kickbacks.some((k) => k.from === 'manual_test' && k.to === 'build')).toBe(false);
+      expect(kickbacks.some((k) => k.from === 'manual_test' && k.to === 'build')).toBe(true);
+      const mtKickback = kickbacks.find((k) => k.from === 'manual_test' && k.to === 'build');
+      expect(mtKickback?.evidence).toContain('| s1 | FAIL |');
     });
 
     it('remediationRounds at MAX_KICKBACKS_PER_GATE halts exactly like the serial gate loop, never a silent non-green failure', async () => {

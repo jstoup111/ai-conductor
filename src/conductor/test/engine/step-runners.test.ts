@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -26,9 +27,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
-import { makeGitRunner } from '../../src/engine/rebase.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
-import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
 import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function createMockProvider(): LLMProvider {
@@ -3267,7 +3266,7 @@ TIER: M`,
       );
     });
 
-    it.skip('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
+    it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
       const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
       const featureRoot = join(repository, '.worktrees', 'feature');
       const selector = 'src/conductor/spec/example_spec.mjs';
@@ -3276,7 +3275,7 @@ TIER: M`,
       const selectorMarkerEnv = 'BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER';
       const priorSelectorMarker = process.env[selectorMarkerEnv];
       let checkoutRoot: string | undefined;
-      const observedProjections: Array<{ preflight: { scopedRun?: { failureExcerpt?: string } } }> = [];
+      const observedProjections: Array<{ preflight: { classification: string; excerpt: string } }> = [];
       try {
         await execa('git', ['init', '-q', '-b', 'main'], { cwd: repository });
         await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repository });
@@ -3297,7 +3296,7 @@ TIER: M`,
         await mkdir(join(repository, '.worktrees'), { recursive: true });
         await execa('git', ['worktree', 'add', '-q', '-b', 'feature/proof', featureRoot], { cwd: repository });
         await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
-        await writeFile(join(featureRoot, selector), "import { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || !execa || answer !== 2) { await writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies'); process.exit(1); }\n");
+        await writeFile(join(featureRoot, selector), "// Covers: task:1\nimport { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || !execa || answer !== 2) { await writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies'); process.exit(1); }\n");
         await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
         await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
         await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
@@ -3346,15 +3345,10 @@ TIER: M`,
         expect((await lstat(checkoutCommandDependencies)).isSymbolicLink()).toBe(true);
         expect(await realpath(checkoutCommandDependencies)).toBe(await realpath(sourceDependencies));
         expect(await readFile(selectorMarker, 'utf8')).toBe('selector-loaded-checkout-dependencies');
-        expect(observedProjections[0]).toMatchObject({
-          preflight: {
-            classification: 'red',
-            scopedRun: {
-              exitCode: 1,
-              runKind: 'nonzero-exit',
-            },
-          },
-        });
+        // The preflight reaches the grader as typed evidence only: its
+        // classification plus a bounded excerpt, never a verdict.
+        expect(observedProjections[0]).toMatchObject({ preflight: { classification: 'red' } });
+        expect(typeof observedProjections[0].preflight.excerpt).toBe('string');
       } finally {
         if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
         else process.env[selectorMarkerEnv] = priorSelectorMarker;
@@ -3362,12 +3356,13 @@ TIER: M`,
       }
     });
 
-    it.skip('writes the raw aggregate but returns and emits the shared effective verdict', async () => {
+    it('writes the raw aggregate but returns and emits the shared effective verdict', async () => {
+      await scopedPlan();
       const provider = createMockProvider();
       const events = { emit: vi.fn(async () => undefined) } as any;
       let rawAggregate: unknown;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(), planPath, events,
+        gitRunner: scopedTestGit(), planPath, events,
         buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest, _fs) => ({
           version: 1,
           rubric,
@@ -3383,7 +3378,7 @@ TIER: M`,
             findings: [{
               concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
               evidenceLocations: ['x:1'],
-              anchor: { rubric: 'testQuality', locus: { path: 'test/engine/step-runners.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
+              anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
             }],
             verdict: 'FAIL' as const,
           },
@@ -3399,7 +3394,7 @@ TIER: M`,
             },
           };
         }),
-        ...testQualityOptIn(),
+        ...scopedTestQualityOptIn(),
         ...currentBuildReviewProof(),
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
@@ -3408,7 +3403,7 @@ TIER: M`,
         findings: [{
           concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
           evidenceLocations: ['x:1'],
-          anchor: { rubric: 'testQuality', locus: { path: 'test/engine/step-runners.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
+          anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
         }],
         verdict: 'FAIL',
       }));
@@ -3451,11 +3446,12 @@ TIER: M`,
       });
     });
 
-    it.skip('leaves a missing current-lap branch artifact absent until the mechanical allowance is exhausted', async () => {
+    it('leaves a missing current-lap branch artifact absent until the mechanical allowance is exhausted', async () => {
+      await scopedPlan();
       const provider = createMockProvider();
       const events = { emit: vi.fn(async () => undefined) } as any;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(), planPath, events,
+        gitRunner: scopedGit(), planPath, events,
         buildReviewArtifactReader: async () => undefined,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
@@ -3473,10 +3469,11 @@ TIER: M`,
       });
     });
 
-    it.skip('withholds an aggregate for an all-infrastructure below-cap lap and reports its first closed failure', async () => {
+    it('withholds an aggregate for an all-infrastructure below-cap lap and reports its first closed failure', async () => {
+      await scopedPlan();
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(), planPath,
+        gitRunner: scopedGit(), planPath,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
       });
@@ -3505,7 +3502,7 @@ TIER: M`,
       });
     });
 
-    it.skip.each([
+    it.each([
       {
         name: 'test-quality is enabled explicitly',
         config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
@@ -3523,9 +3520,10 @@ TIER: M`,
         expectedInvokeCalls: 2,
       },
     ])('uses the production rubric coordinator when $name', async ({ config, expectedInvokeCalls }) => {
+      await scopedPlan();
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
         config,
         buildReviewInputOptions: {
@@ -3596,182 +3594,75 @@ TIER: M`,
       };
     }
 
-    async function prepareContainmentRepo(
-      changedPaths: string[],
-      commitMessage: string,
-      declaredPath = 'config.ts',
-    ): Promise<string> {
-      await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
-      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
-      await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
-      writeFileSync(planPath, `### Task 3: Config only\n**Files:** ${declaredPath}\n`);
-      const declaredDirectory = declaredPath.slice(0, declaredPath.lastIndexOf('/'));
-      if (declaredDirectory !== '') await mkdir(join(dir, declaredDirectory), { recursive: true });
-      writeFileSync(join(dir, declaredPath), 'base\n');
-      await execa('git', ['add', declaredPath], { cwd: dir });
-      await execa('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
-      await execa('git', ['remote', 'add', 'origin', dir], { cwd: dir });
-      await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: dir });
-      await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: dir });
-      await execa('git', ['checkout', '-q', '-b', 'feature/containment'], { cwd: dir });
-      for (const path of changedPaths) {
-        const directory = path.slice(0, path.lastIndexOf('/'));
-        if (directory !== '') await mkdir(join(dir, directory), { recursive: true });
-        writeFileSync(join(dir, path), `${path}\n`);
-      }
-      await execa('git', ['add', '--', ...changedPaths], { cwd: dir });
-      await execa('git', ['commit', '-q', '-m', commitMessage], { cwd: dir });
-      return (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+    // A non-empty test-quality scope: one changed non-test source path whose
+    // `Covers:` marker binds to the plan's Task 1. A non-test path keeps the
+    // revert-and-rerun preflight on its engine-authored empty-test-set
+    // exception, so the grader dispatch is reached without a git checkout.
+    const SCOPED_SELECTOR = 'src/covered.ts';
+    function scopedGit() {
+      const git = async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+        if (args[0] === 'diff') return { exitCode: 0, stdout: `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}\n`, stderr: '' };
+        if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
+          return { exitCode: 0, stdout: '// Covers: task:1\nexport const covered = true;\n', stderr: '' };
+        }
+        return { exitCode: 1, stdout: '', stderr: '' };
+      };
+      return git;
+    }
+    async function scopedPlan(path = planPath) {
+      await writeFile(path, `# Plan\n\n### Task 1: Cover the thing\n**Files:** ${SCOPED_SELECTOR}\n`, 'utf-8');
     }
 
-    it.skip('passes accepted scope-widening evidence into the isolated grader prompt', async () => {
-      const sha = await prepareContainmentRepo(
-        ['shared.ts'],
-        'widen shared parser\n\nTask: 3\nScope: shared.ts — shared parser changes atomically',
-        'engine/config.ts',
-      );
-      const invoke = vi.fn().mockResolvedValue({
-        success: true,
-        output: '{"verdict":"PASS"}',
-        exitCode: 0,
-      });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        {
-          gitRunner: makeGitRunner(dir),
-          planPath,
-          pipelineDir: join(dir, '.pipeline'),
-          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
-          ...currentBuildReviewProof(),
-        },
-      );
+    // A scoped changed TEST (title `covered`) beside a production change. The
+    // fake git materializes the preflight checkout so the runner's own
+    // revert-and-rerun reaches the grader; the finding anchor must then name
+    // the changed test's content region exactly.
+    const SCOPED_TEST = 'test/covered.test.ts';
+    const SCOPED_TEST_REGION = {
+      path: SCOPED_TEST,
+      contentHash: `sha256:${createHash('sha256').update('covered').digest('hex')}`,
+      display: 'covered',
+    };
+    function scopedTestGit() {
+      const git = async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+        if (args[0] === 'diff') {
+          return { exitCode: 0, stdout: [
+            `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}`,
+            `diff --git a/${SCOPED_TEST} b/${SCOPED_TEST}`,
+          ].join('\n') + '\n', stderr: '' };
+        }
+        if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_TEST}`)) {
+          return { exitCode: 0, stdout: "// Covers: task:1\nit('covered', () => {});\n", stderr: '' };
+        }
+        if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
+          return { exitCode: 0, stdout: 'export const covered = false;\n', stderr: '' };
+        }
+        if (args[0] === 'worktree' && args[1] === 'add') {
+          const checkout = args[3]!;
+          await mkdir(join(checkout, 'src'), { recursive: true });
+          await mkdir(join(checkout, 'test'), { recursive: true });
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (args[0] === 'worktree' && args[1] === 'remove') return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: '' };
+      };
+      return git;
+    }
+    function scopedTestQualityOptIn() {
+      return {
+        config: {
+          test_suite: { scoped_command: 'exit 1' },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+        } as HarnessConfig,
+      };
+    }
 
-      await runner.run('build_review', emptyState);
-
-      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
-      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
-      expect(invoke).toHaveBeenCalledTimes(8);
-      expect(prompts).toContain('shared.ts');
-      expect(prompts).toContain('shared parser changes atomically');
-      expect(prompts).toContain('Task 3');
-      expect(prompts).toContain(sha);
-      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
-        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
-      expect(scopePrompt).toContain('shared parser changes atomically');
-      expect(invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
-        .filter((prompt) => !prompt.includes('"rubric":"scope"')).join('\n'))
-        .not.toContain('shared parser changes atomically');
-    });
-
-    it.skip('passes derived scope-widening evidence into the isolated grader prompt with provenance', async () => {
-      const sha = await prepareContainmentRepo(
-        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
-        'out of scope\n\nTask: 3',
-      );
-      const invoke = vi.fn().mockResolvedValue({
-        success: true,
-        output: '{"verdict":"PASS"}',
-        exitCode: 0,
-      });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        {
-          gitRunner: makeGitRunner(dir),
-          planPath,
-          pipelineDir: join(dir, '.pipeline'),
-          log: (message) => console.warn(message),
-          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
-          ...currentBuildReviewProof(),
-        },
-      );
-
-      await runner.run('build_review', emptyState);
-
-      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
-        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
-      expect(scopePrompt).toContain('other/artifacts.ts');
-      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
-      expect(scopePrompt).toContain('out of scope');
-      expect(scopePrompt).toContain('"taskId":"3"');
-      expect(scopePrompt).toContain(sha);
-      // Commit-message-derived widenings must carry their derived provenance
-      // flag into the grader prompt, not just path/rationale/task/sha.
-      expect(scopePrompt).toContain('"derived":true');
-    });
-
-    it.skip('keeps grader failure output separate from derived scope-widening evidence', async () => {
-      const sha = await prepareContainmentRepo(
-        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
-        'out of scope\n\nTask: 3',
-      );
-      const invoke = vi.fn().mockResolvedValue({
-        success: false,
-        output: 'grader exited before writing a verdict',
-        exitCode: 1,
-      });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        {
-          gitRunner: makeGitRunner(dir),
-          planPath,
-          pipelineDir: join(dir, '.pipeline'),
-          ...currentBuildReviewProof(),
-          config: { build_review: { scopeContainmentEnforced: true } },
-        },
-      );
-
-      const result = await runner.run('build_review', emptyState);
-      const output = result.output ?? '';
-      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
-        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
-
-      expect(result.success).toBe(false);
-      expect(output).not.toContain('out of scope');
-      expect(output).toContain('containment-floor: hook-events ledger is unrecorded');
-      expect(scopePrompt).toContain('other/artifacts.ts');
-      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
-      expect(scopePrompt).toContain('out of scope');
-      expect(scopePrompt).toContain('"taskId":"3"');
-      expect(scopePrompt).toContain(sha);
-    });
-
-    it.skip('keeps the widened floor active while containment evidence is disabled', async () => {
-      await prepareContainmentRepo(['src/engine/config.test.ts'], 'test sibling\n\nTask: 3', 'src/engine/config.ts');
-      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        {
-          gitRunner: makeGitRunner(dir),
-          planPath,
-          pipelineDir: join(dir, '.pipeline'),
-          ...currentBuildReviewProof(),
-          config: { build_review: { scopeContainmentEnforced: false } },
-        },
-      );
-
-      await runner.run('build_review', emptyState);
-
-      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
-      const floor = JSON.parse(await readFile(join(dir, '.pipeline', 'containment-floor.json'), 'utf8'));
-      expect(floor.acceptedWidenings).toEqual([]);
-      expect(floor.skipNotes).toEqual([]);
-      expect(prompts).not.toContain('test sibling');
-      expect(evaluateScopeContainment({
-        stagedPaths: ['src/engine/config.test.ts'],
-        task: { id: '3', status: 'in_progress', files: ['src/engine/config.ts'] },
-      })).toEqual({ allowed: true });
-    });
-
-    it.skip('leaves no verdict artifact after a byte-identical vocabulary repair is rejected', async () => {
+    it('leaves no verdict artifact after a byte-identical vocabulary repair is rejected', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({
         success: true,
         output: JSON.stringify({
@@ -3788,7 +3679,7 @@ TIER: M`,
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
         dir,
-        { gitRunner: scriptedGit(), planPath, ...testQualityOptIn(), ...currentBuildReviewProof() },
+        { gitRunner: scopedGit(), planPath, ...testQualityOptIn(), ...currentBuildReviewProof() },
       );
 
       const result = await runner.run('build_review', emptyState);
@@ -3801,11 +3692,12 @@ TIER: M`,
       expect(ledger.gates.build_review?.cumulative ?? 0).toBe(0);
     });
 
-    it.skip('dispatches test-quality with a fresh uuid and resume:false, never the constructor session', async () => {
+    it('dispatches test-quality with a fresh uuid and resume:false, never the constructor session', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
@@ -3824,26 +3716,24 @@ TIER: M`,
       }
     });
 
-    it.skip('resolves the feature\'s own plan by featureDesc stem, not the alphabetically-last plan file (#788)', async () => {
+    it('resolves the feature\'s own plan by featureDesc stem, not the alphabetically-last plan file (#788)', async () => {
       const { mkdir } = await import('node:fs/promises');
       const plansDir = join(dir, '.docs', 'plans');
       await mkdir(plansDir, { recursive: true });
       // Unrelated plan that sorts AFTER the feature's own plan alphabetically.
+      // Its only task cannot bind the changed file's `Covers: task:1` marker,
+      // so grading against it would empty-pass without a dispatch.
       await writeFile(
         join(plansDir, 'writing-system-tests-red-exit-gate.md'),
-        '# Unrelated Plan\n\nWrong plan.\n',
+        '# Unrelated Plan\n\n### Task 9: Wrong plan\n**Files:** src/other.ts\n',
         'utf-8',
       );
-      await writeFile(
-        join(plansDir, 'block-edits-to-docs-spec-artifacts-during-build-an.md'),
-        '# Correct Plan\n\nGrade against this one.\n',
-        'utf-8',
-      );
+      await scopedPlan(join(plansDir, 'block-edits-to-docs-spec-artifacts-during-build-an.md'));
 
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         featureDesc: 'block-edits-to-docs-spec-artifacts-during-build-an',
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
@@ -3851,23 +3741,25 @@ TIER: M`,
 
       const result = await runner.run('build_review', emptyState);
 
+      // The feature's own plan binds the scope: one test-quality dispatch plus
+      // one bounded repair turn. The wrong plan would have empty-passed.
       expect(result.success).toBe(false);
-      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
-      // One test-quality branch gets one dispatch plus one bounded repair turn.
+      expect(result.output).not.toContain('test_quality_empty_scope');
       expect(invoke).toHaveBeenCalledTimes(2);
-      expect(prompts).toContain('Grade against this one.');
-      expect(prompts).not.toContain('Wrong plan.');
+      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      expect(prompts).toContain(SCOPED_SELECTOR);
     });
 
     // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o): base-
     // freshness telemetry, carried on StepRunResult so the conductor can
     // emit a `build_review_base` event without step-runners.ts owning event
     // emission itself.
-    it.skip('attaches baseFreshness from assembleBuildReviewInputs when the verdict is invalid', async () => {
+    it('attaches baseFreshness from assembleBuildReviewInputs when the verdict is invalid', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
@@ -3889,11 +3781,12 @@ TIER: M`,
     // Task 24 (rebase-invalidated-test-failures-never-reach-build): the
     // middle leg of grading provenance — whatever assembly classified must
     // reach the conductor on StepRunResult, or the event is never emitted.
-    it.skip('carries the assembled grading provenance through to the conductor', async () => {
+    it('carries the assembled grading provenance through to the conductor', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
@@ -3906,7 +3799,8 @@ TIER: M`,
       expect(invoke).toHaveBeenCalledTimes(2);
     });
 
-    it.skip('attaches baseFreshness even on a ladder-exhausted failure (fire-and-forget telemetry)', async () => {
+    it('attaches baseFreshness even on a ladder-exhausted failure (fire-and-forget telemetry)', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({
         success: false,
         output: 'no models available',
@@ -3915,7 +3809,7 @@ TIER: M`,
       });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),

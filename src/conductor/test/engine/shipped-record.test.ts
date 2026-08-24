@@ -20,6 +20,7 @@ import {
 import { parseCostBlock } from '../../src/engine/kpi-report.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { upsertBuildReviewAcceptedRisk } from '../../src/engine/build-review-accepted-risk.js';
 import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import type { CostRollup } from '../../src/engine/cost-rollup.js';
@@ -451,6 +452,24 @@ describe('accepted build-review risk shipped projection', () => {
     expect(appended).not.toContain('2026-08-14T12:00:00.000Z');
     expect(appendBuildReviewAcceptedRisk(body, [])).toBe(body);
     expect(() => appendBuildReviewAcceptedRisk(body, [{ ...accepted, rationale: '' }])).toThrow(/unrenderable/);
+  });
+
+  it('upserts the accepted-risk section idempotently: a repeat with the same records changes nothing', () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } })!;
+    const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
+    // No trailing newline: the upsert joins with exactly one blank line, so a
+    // body already in that normalized form is the fixed point under repetition.
+    const body = '---\nslug: feature\n---\n\n## Cost\ninput: 1';
+
+    const first = upsertBuildReviewAcceptedRisk(body, [accepted]);
+    expect(first).toMatchObject({ ok: true, changed: true });
+    if (!first.ok) return;
+
+    const second = upsertBuildReviewAcceptedRisk(first.body, [accepted]);
+    expect(second).toEqual({ ok: true, body: first.body, changed: false });
+    if (!second.ok) return;
+    expect(Buffer.from(second.body).equals(Buffer.from(first.body))).toBe(true);
+    expect(second.body.split('## Accepted build-review risk')).toHaveLength(2);
   });
 });
 

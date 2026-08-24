@@ -182,6 +182,23 @@ describe('build_review rubric validation', () => {
     expect(diagnostic).toMatch(new RegExp(path, 'i'));
   });
 
+  it.each([
+    { name: 'above the cap', maxParallel: 5 },
+    { name: 'a non-integer', maxParallel: 2.5 },
+    { name: 'a numeric string', maxParallel: '4' },
+  ])('rejects build_review.maxParallel that is $name with a validation error naming the 1-4 range', ({ maxParallel }) => {
+    const result = validateConfig({ build_review: { maxParallel } });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.type).toBe('validation_error');
+    expect(result.error.message).toMatch(/build_review\.maxParallel.*integer between 1 and 4/);
+  });
+
+  it.each([1, 4])('accepts build_review.maxParallel %i inside the 1-4 range', (maxParallel) => {
+    expect(validateConfig({ build_review: { maxParallel } })).toMatchObject({ ok: true });
+  });
+
   it('accepts retired wiring policy as a no-op and supports the compatibility concurrency range', () => {
     expect(validateConfig({ build_review: { rubrics: { wiring: {} } } })).toMatchObject({ ok: true });
     expect(validateConfig({ build_review: { maxParallel: 4 } })).toMatchObject({ ok: true });
