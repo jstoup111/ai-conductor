@@ -118,23 +118,39 @@ steps:
   # seal remain true but catch only the resolutions that fail loudly.
   rebase:
     llm_provider: claude
+  # Routed to codex 2026-08-23, after PR #1828 granted the codex sandbox
+  # network egress. The claude pin existed because `gh pr create` had to escape
+  # the sandbox and lost the auto_review approval — a permissions limit, not a
+  # capability one. Revert this pin if publication quality regresses.
   finish:
-    llm_provider: claude
+    llm_provider: codex
   manual_test:
     disable: true
-#  build:
-#    model: gpt-5.6-sol
-#    effort: low
+  # build stays on the codex `terra` default at medium effort. A bump to `sol`
+  # was considered and dropped 2026-08-23: there is no control group showing
+  # the builder is the limiter (codex built 28/28 corpus features), the
+  # findings-per-lap rate is flat, and `escalate` already climbs build to
+  # sol/high on retry when a task actually needs it (18 such escalations in
+  # the corpus). Revisit alongside #1805 rather than as a blind bump.
+  # Remediate decides what work a failing lap actually gets, across laps. That
+  # is a judgement call over plan contract + prior-lap findings, so pin it to
+  # claude rather than letting the run-level codex entry resolve first.
+  remediate:
+    llm_provider: claude
   maintain-documentation:
     llm_provider: claude
     after: rebase
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
-  # Provider pinned so `claude` resolves ahead of the run-level codex entry (#1285).
+  # Routed to codex 2026-08-23 (was pinned to claude ahead of the run-level
+  # codex entry, #1285). Same rationale as `finish`: the failure was `gh`
+  # egress under the workspace-write sandbox, fixed by PR #1828. The output is
+  # a fixed-grammar Release-* block validated by a required CI check that fails
+  # closed, so a wrong answer is caught rather than shipped.
   release-disposition:
-    llm_provider: claude
-    model: sonnet
+    llm_provider: codex
+    model: gpt-5.6-terra
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
