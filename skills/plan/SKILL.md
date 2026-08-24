@@ -94,6 +94,11 @@ Load every story for the feature from `.docs/stories/`. For each story, extract:
 
 Break stories into tasks at **2-5 minute granularity**. Each task follows the TDD cycle:
 
+For every story criterion, answer: “Can a commit outside this feature's diff
+change whether this criterion is true?” Record `diff-local` only when the
+answer is no; `outside-diff` requires a documented coherence waiver rather
+than silently becoming a BUILD assertion.
+
 ```markdown
 ### Task [N]: [Descriptive title]
 **Story:** [Reference to story and specific acceptance criterion]

@@ -82,7 +82,7 @@ The artifact is a Markdown table (or one table per row class) with these columns
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
 |---|---|---|---|---|
 
-### 4a. Row Classes (exactly five)
+### 4a. Row Classes (six)
 
 1. **outcome** — one row per intake Desired-outcome bullet (skip this class entirely
    if no outcomes were staged/committed — an empty outcome layer is "not required,"
@@ -101,6 +101,13 @@ The artifact is a Markdown table (or one table per row class) with these columns
    `.docs/decisions/adr-*.md` file in the current spec change set. Cited id:
    `adr-<stem>`. Counterpart: the story id(s) that implement or are constrained by the
    decision.
+6. **criterion** — one row per exact happy or negative Given/When/Then
+   criterion extracted from the stories file. Its cells are the exact criterion
+   text, cited task id(s), verdict, a verbatim quote from one cited task's
+   body, and a diff-locality disposition. The quote is matched as an exact
+   substring after whitespace normalization; a paraphrase does not ground
+   coverage. The disposition is exactly `diff-local` or `outside-diff`; only
+   `diff-local` is non-negative and lands without a coherence waiver.
 
 ### 4b. Verdict Vocabulary
 

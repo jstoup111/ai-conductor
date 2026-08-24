@@ -21,6 +21,7 @@ import {
   checkFrCoverage,
   checkStoryFrTieOut,
   checkStoryCoverage,
+  checkCriterionCoverage,
   checkOrphanTasks,
   checkCoverageTableConsistency,
   renderGapReport,
@@ -1649,13 +1650,121 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
     const result = resolveRequiredLayers('/wt', 'M', 'product', [], ['.docs/coherence/foo.md']);
     expect(result).toEqual({
       engaged: true,
-      layers: new Set(['fr', 'story', 'orphan-task', 'coverage-table']),
+      layers: new Set(['fr', 'story', 'criterion', 'orphan-task', 'coverage-table']),
     });
   });
 
   it('L-tier engages normally too', () => {
     const result = resolveRequiredLayers('/wt', 'L', 'product', [], WITH_COHERENCE);
     expect(result.engaged).toBe(true);
+  });
+});
+
+describe('criterion coverage (Tasks 4-18, 24)', () => {
+  const stories = `# Stories
+
+## Story 1: Widget
+
+### Happy Path
+- Given a widget, when it ships, then it arrives
+
+### Negative Paths
+- Given a broken widget, when it ships, then it is rejected
+`;
+  const plan = `# Plan
+
+### Task 1: Ship widget
+**Story:** Story 1
+**Type:** happy-path
+
+Ship the widget with
+arrival tracking.
+
+### Task 2: Reject broken widget
+**Story:** Story 1
+**Type:** negative-path
+
+Reject the broken widget before shipping.
+`;
+  const criterion = 'Story 1 happy: Given a widget, when it ships, then it arrives';
+  const negativeCriterion = 'Story 1 negative: Given a broken widget, when it ships, then it is rejected';
+
+  function rows(tableRows: string[]) {
+    const parsed = parseCoherenceArtifact(
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n` +
+        `| --- | --- | --- | --- | --- | --- |\n${tableRows.join('\n')}\n`,
+    );
+    expect(parsed.ok).toBe(true);
+    return parsed.ok ? parsed.rows : [];
+  }
+
+  const completeRows = () =>
+    rows([
+      `| criterion | ${criterion} | task-1 | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
+    ]);
+
+  it('accepts every extracted criterion when its quote is in a cited task, including normalized whitespace', () => {
+    const valid = rows([
+      `| criterion | ${criterion} | task-1 | covered | "Ship the   widget with arrival tracking." | diff-local |`,
+      `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
+    ]);
+    expect(checkCriterionCoverage(valid, stories, plan)).toEqual({ ok: true });
+  });
+
+  it('reports omitted, invented, and duplicate criteria with stable waivable ids', () => {
+    const invalid = rows([
+      `| criterion | ${criterion} | task-1 | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | ${criterion} | task-1 | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | invented criterion | task-1 | covered | "Ship the widget with arrival tracking." | diff-local |`,
+    ]);
+    const result = checkCriterionCoverage(invalid, stories, plan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(
+      expect.arrayContaining(['criterion:duplicate:1', 'criterion:omitted:2', 'criterion:invented:3']),
+    );
+    expect(result.gaps.map((gap) => gap.detail).join('\n')).toContain(negativeCriterion);
+  });
+
+  it('rejects a stale or misattributed quote and an unknown cited task', () => {
+    const invalid = rows([
+      `| criterion | ${criterion} | task-2 | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | ${negativeCriterion} | task-99 | covered | "Reject the broken widget before shipping." | diff-local |`,
+    ]);
+    const result = checkCriterionCoverage(invalid, stories, plan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(
+      expect.arrayContaining(['criterion:quote-ungrounded:1', 'criterion:task-missing:2:99']),
+    );
+    expect(result.gaps.map((gap) => gap.detail).join('\n')).toContain(criterion);
+  });
+
+  it('requires a non-negative, closed diff-locality disposition without inspecting criterion prose', () => {
+    const missing = rows([
+      `| criterion | ${criterion} | task-1 | covered | "Ship the widget with arrival tracking." |  |`,
+      `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | outside-diff |`,
+    ]);
+    const result = checkCriterionCoverage(missing, stories, plan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(
+      expect.arrayContaining(['criterion:disposition-missing:1', 'criterion:disposition-negative:2']),
+    );
+    expect(
+      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | ${criterion} | task-1 | covered | "Ship the widget with arrival tracking." | maybe-local |
+`),
+    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+  });
+
+  it('uses the shared story extractor and fails closed for unparseable story criteria', () => {
+    expect(checkCriterionCoverage(completeRows(), '# Stories\n\n## Story 1: No scenarios\n', plan)).toMatchObject({
+      ok: false,
+      reason: 'unparseable-stories',
+    });
   });
 });
 
@@ -1770,6 +1879,8 @@ describe('runCoherenceGate ADR pool (Task 7)', () => {
 | story | story-2 | task-2 | covered | "As a user..." |
 | task | task-1 | story-1 | covered | "Task 1: build widget" |
 | task | task-2 | story-2 | covered | "Task 2: ship widget" |
+| criterion | Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | covered | "Build widget arrival." | diff-local |
+| criterion | Story 2 happy: Given a return, when requested, then it is accepted | task-2 | covered | "Return requests are accepted." | diff-local |
 `,
     );
     await runGit(worktreePath, ['add', '-A']);
@@ -1792,8 +1903,14 @@ describe('runCoherenceGate ADR pool (Task 7)', () => {
 ## Story 1: Widget shipping
 **Requirement:** FR-1
 
+### Happy Path
+- Given a widget, when shipped, then it arrives
+
 ## Story 2: Widget returns
 **Requirement:** FR-2
+
+### Happy Path
+- Given a return, when requested, then it is accepted
 `,
         planText: `# Plan
 
@@ -1802,10 +1919,14 @@ describe('runCoherenceGate ADR pool (Task 7)', () => {
 **Type:** happy-path
 **Files:** src/widget.ts
 
+Build widget arrival.
+
 ### Task 2: Return widget
 **Story:** Story 2 (FR-2)
 **Type:** happy-path
 **Files:** src/ship.ts
+
+Return requests are accepted.
 `,
         prdText: `# PRD
 
