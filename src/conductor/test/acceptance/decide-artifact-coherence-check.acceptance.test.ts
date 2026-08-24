@@ -771,3 +771,25 @@ describe('Story 14 / FR-14 — fail-closed on missing/empty/unparseable record',
     await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
   });
 });
+
+// Covers: S1.4, task:6
+// The criterion layer is a land-time extension of this acceptance flow. Keep
+// driving landSpec itself so the spec fails if the new validator exists but is
+// never wired into the production landing entry point.
+describe('Criterion-level coherence coverage — every accepted criterion is owned before land', () => {
+  it('negative: an M-tier artifact with no criterion rows is refused and names the omitted criterion verbatim', async () => {
+    const mappedCriterion =
+      'Given a mapped outcome, when land validates, then it passes.';
+    const coherenceWithoutCriterionRows = COHERENCE
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('| criterion'))
+      .join('\n');
+    const wt = await seedWorktree('coherence demo', {
+      coherence: coherenceWithoutCriterionRows,
+    });
+
+    await expect(
+      landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
+    ).rejects.toThrow(mappedCriterion);
+  });
+});
