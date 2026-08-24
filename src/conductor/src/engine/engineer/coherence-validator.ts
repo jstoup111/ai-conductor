@@ -173,11 +173,7 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       const criterion = rawCriterion.trim();
       const verdict = rawVerdict.trim();
       const quote = unquote(rawQuote);
-      if (
-        criterion.length === 0 ||
-        !isCriterionVerdict(verdict) ||
-        quote.length === 0
-      ) {
+      if (criterion.length === 0 || !isCriterionVerdict(verdict)) {
         return { ok: false, reason: 'unparseable-criterion-row' };
       }
       const citedIds = rawCitedIds

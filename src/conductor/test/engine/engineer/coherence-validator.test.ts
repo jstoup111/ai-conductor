@@ -167,13 +167,76 @@ describe('parseCoherenceArtifact', () => {
     });
   });
 
-  it('rejects a criterion row with an empty required quote as criterion-specific unparseable data', () => {
-    expect(
-      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+  it.each([
+    ['empty', ''],
+    ['whitespace-only', '  '],
+  ])('defers a %s criterion quote to coverage validation', (_label, quote) => {
+    const literalCriterion = 'Given a widget, when shipped, then it arrives.';
+    const criterion = `Story 1 happy: ${literalCriterion}`;
+    const stories = `# Stories
+
+## Story 1: Widget
+
+### Happy Path
+- ${literalCriterion}
+`;
+    const plan = `# Plan
+
+### Task 1: Ship widget
+**Story:** Story 1
+**Type:** happy-path
+
+Ship the widget with arrival tracking.
+`;
+    const parsed = parseCoherenceArtifact(
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
 | --- | --- | --- | --- | --- | --- |
-| criterion | Given a widget, when shipped, then it arrives. | task-1, task-2 | covered |  | diff-local |
-`),
-    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+| criterion | ${criterion} | task-1 | covered | "${quote}" | diff-local |
+`,
+    );
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const emptyQuoteResult = checkCriterionCoverage(parsed.rows, stories, plan);
+    expect(emptyQuoteResult).toEqual({
+      ok: false,
+      reason: 'criterion-gap',
+      gaps: [
+        expect.objectContaining({
+          gapId: 'criterion:quote-empty:1',
+          detail: expect.stringContaining(literalCriterion),
+        }),
+      ],
+    });
+
+    const missingTaskResult = checkCriterionCoverage(
+      [
+        {
+          rowClass: 'criterion',
+          criterion,
+          citedIds: ['task-99'],
+          verdict: 'covered',
+          quote: 'Ship the widget with arrival tracking.',
+          disposition: 'diff-local',
+        },
+      ],
+      stories,
+      plan,
+    );
+    expect(missingTaskResult).toEqual({
+      ok: false,
+      reason: 'criterion-gap',
+      gaps: [
+        expect.objectContaining({
+          gapId: 'criterion:task-missing:1:99',
+          detail: expect.stringContaining('which does not exist in the plan'),
+        }),
+      ],
+    });
+    if (emptyQuoteResult.ok || missingTaskResult.ok) return;
+    expect(emptyQuoteResult.gaps[0].detail).not.toBe(missingTaskResult.gaps[0].detail);
+    expect(emptyQuoteResult.gaps[0].detail).toContain('empty coverage quote');
   });
 
   it('rejects a criterion row with no cited task evidence as criterion-specific unparseable data', () => {
