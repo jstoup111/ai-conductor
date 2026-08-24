@@ -139,7 +139,16 @@ export async function supersedeHaltRecord(
     if (superseded === current) return { kind: 'noop' };
 
     await writeFile(path, superseded);
-    return await commitHaltRecordChange(root, relPath, `halt record resolved: ${slug}`);
+    const commitResult = await commitHaltRecordChange(root, relPath, `halt record resolved: ${slug}`);
+    if (commitResult.kind !== 'written') return commitResult;
+
+    try {
+      await execa('git', ['push'], { cwd: root });
+    } catch {
+      // A resolution remains durable on the branch even when its remote is unavailable.
+    }
+
+    return { kind: 'written' };
   } catch (error) {
     return { kind: 'failed', reason: errorMessage(error) };
   }

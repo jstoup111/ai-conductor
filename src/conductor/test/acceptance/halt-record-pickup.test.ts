@@ -26,6 +26,7 @@ const HALT_REASON = 'build review needs an operator decision\nmissing acceptance
 
 describe('committed halt record operator pickup', () => {
   let root: string;
+  let main: string;
   let remote: string;
   let worktreeBase: string;
   let worktree: string;
@@ -39,22 +40,23 @@ describe('committed halt record operator pickup', () => {
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'halt-record-pickup-'));
+    main = join(root, 'main');
     remote = join(root, 'origin.git');
     worktreeBase = join(root, 'worktrees');
     worktree = join(worktreeBase, SLUG);
     pickup = join(root, 'operator-clone');
 
     await execFile('git', ['init', '--bare', '-q', '-b', 'main', remote]);
-    await execFile('git', ['init', '-q', '-b', 'main', worktree]);
-    await git(['config', 'user.email', 'acceptance@example.com']);
-    await git(['config', 'user.name', 'Acceptance Test']);
-    await git(['config', 'commit.gpgsign', 'false']);
-    await writeFile(join(worktree, 'README.md'), 'fixture\n');
-    await git(['add', 'README.md']);
-    await git(['commit', '-q', '-m', 'fixture base']);
-    await git(['remote', 'add', 'origin', remote]);
-    await git(['push', '-q', '-u', 'origin', 'main']);
-    await git(['checkout', '-q', '-b', BRANCH]);
+    await execFile('git', ['init', '-q', '-b', 'main', main]);
+    await git(['config', 'user.email', 'acceptance@example.com'], main);
+    await git(['config', 'user.name', 'Acceptance Test'], main);
+    await git(['config', 'commit.gpgsign', 'false'], main);
+    await writeFile(join(main, 'README.md'), 'fixture\n');
+    await git(['add', 'README.md'], main);
+    await git(['commit', '-q', '-m', 'fixture base'], main);
+    await git(['remote', 'add', 'origin', remote], main);
+    await git(['push', '-q', '-u', 'origin', 'main'], main);
+    await git(['worktree', 'add', '-q', '-b', BRANCH, worktree], main);
     await git(['push', '-q', '-u', 'origin', BRANCH]);
 
     await mkdir(join(worktree, '.pipeline'), { recursive: true });
