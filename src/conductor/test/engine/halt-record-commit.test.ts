@@ -48,9 +48,42 @@ describe('recordHalt', () => {
     expect(await changedPathsAtHead(worktree)).toEqual([haltRecordPath(input.slug)]);
     expect(await statusPaths(worktree)).toContain(` M ${unrelated}`);
   });
+
+  it('pushes the committed record to its configured bare remote', async () => {
+    const worktree = await makeFeatureRepository();
+    const remote = await remoteUrl(worktree);
+
+    await expect(recordHalt(worktree, input)).resolves.toEqual({ kind: 'written' });
+
+    await expect(readRemoteFile(remote, input.branch, haltRecordPath(input.slug))).resolves.toContain('Status: halted');
+  });
+
+  it('retains the local record commit when no remote is configured', async () => {
+    const worktree = await makeFeatureRepository({ configureRemote: false });
+    const before = await commitCount(worktree);
+
+    const result = await recordHalt(worktree, input);
+
+    expect(result).toMatchObject({ kind: 'pushFailed' });
+    if (result.kind === 'pushFailed') expect(result.reason).not.toBe('');
+    expect(await commitCount(worktree)).toBe(before + 1);
+    await expect(readFile(join(worktree, haltRecordPath(input.slug)), 'utf8')).resolves.toContain('Status: halted');
+  });
+
+  it('retains the local record commit when its remote rejects the push', async () => {
+    const worktree = await makeFeatureRepository();
+    const remote = await remoteUrl(worktree);
+    await writeFile(join(remote, 'hooks', 'pre-receive'), '#!/bin/sh\necho push rejected >&2\nexit 1\n', { mode: 0o755 });
+    const before = await commitCount(worktree);
+
+    const result = await recordHalt(worktree, input);
+    expect(result).toMatchObject({ kind: 'pushFailed' });
+    if (result.kind === 'pushFailed') expect(result.reason).not.toBe('');
+    expect(await commitCount(worktree)).toBe(before + 1);
+  });
 });
 
-async function makeFeatureRepository(): Promise<string> {
+async function makeFeatureRepository({ configureRemote = true }: { configureRemote?: boolean } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'halt-record-commit-root-'));
   const worktree = await mkdtemp(join(tmpdir(), 'halt-record-commit-worktree-'));
   scratchRoots.push(root, worktree);
@@ -63,6 +96,7 @@ async function makeFeatureRepository(): Promise<string> {
   await execa('git', ['add', 'README.md', 'unrelated.txt'], { cwd: root });
   await execa('git', ['commit', '-q', '-m', 'initial'], { cwd: root });
   await execa('git', ['worktree', 'add', '-q', '-b', input.branch, worktree], { cwd: root });
+  if (configureRemote) await configureBareRemote(worktree);
   return worktree;
 }
 
@@ -79,4 +113,23 @@ async function changedPathsAtHead(cwd: string): Promise<string[]> {
 async function statusPaths(cwd: string): Promise<string[]> {
   const { stdout } = await execa('git', ['status', '--porcelain'], { cwd });
   return stdout.split('\n').filter(Boolean);
+}
+
+async function configureBareRemote(worktree: string): Promise<string> {
+  const remote = await mkdtemp(join(tmpdir(), 'halt-record-commit-remote-'));
+  scratchRoots.push(remote);
+  await execa('git', ['init', '--bare', '-q', remote]);
+  await execa('git', ['remote', 'add', 'origin', remote], { cwd: worktree });
+  await execa('git', ['push', '--set-upstream', 'origin', input.branch], { cwd: worktree });
+  return remote;
+}
+
+async function readRemoteFile(remote: string, branch: string, path: string): Promise<string> {
+  const { stdout } = await execa('git', ['--git-dir', remote, 'show', `${branch}:${path}`]);
+  return stdout;
+}
+
+async function remoteUrl(worktree: string): Promise<string> {
+  const { stdout } = await execa('git', ['remote', 'get-url', 'origin'], { cwd: worktree });
+  return stdout;
 }

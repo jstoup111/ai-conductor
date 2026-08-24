@@ -24,7 +24,8 @@ export type HaltRecordResult =
   | { kind: 'written' }
   | { kind: 'noop' }
   | { kind: 'skipped' }
-  | { kind: 'failed'; reason: string };
+  | { kind: 'failed'; reason: string }
+  | { kind: 'pushFailed'; reason: string };
 
 /** Resolve a halt record's repository-relative path. */
 export function haltRecordPath(slug: string): string {
@@ -106,6 +107,13 @@ export async function recordHalt(root: string, input: HaltRecordInput): Promise<
       cwd: root,
       env: withEngineCommitEnv(),
     });
+
+    try {
+      await execa('git', ['push'], { cwd: root });
+    } catch (error) {
+      return { kind: 'pushFailed', reason: errorMessage(error) };
+    }
+
     return { kind: 'written' };
   } catch (error) {
     return { kind: 'failed', reason: errorMessage(error) };
@@ -132,5 +140,15 @@ function commandFailure(result: { stderr?: string; shortMessage?: string }): str
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (typeof error === 'object' && error !== null) {
+    const { stderr, shortMessage, message } = error as {
+      stderr?: unknown;
+      shortMessage?: unknown;
+      message?: unknown;
+    };
+    for (const value of [stderr, shortMessage, message]) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+  }
+  return String(error);
 }
