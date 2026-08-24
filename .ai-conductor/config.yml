@@ -123,7 +123,7 @@ steps:
   # the sandbox and lost the auto_review approval — a permissions limit, not a
   # capability one. Revert this pin if publication quality regresses.
   finish:
-    llm_provider: codex
+    llm_provider: claude
   manual_test:
     disable: true
   # build stays on the codex `terra` default at medium effort. A bump to `sol`
@@ -149,8 +149,8 @@ steps:
   # a fixed-grammar Release-* block validated by a required CI check that fails
   # closed, so a wrong answer is caught rather than shipped.
   release-disposition:
-    llm_provider: codex
-    model: gpt-5.6-terra
+    llm_provider: claude
+    model: sonnet
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
