@@ -42,12 +42,15 @@ export interface LegacyCoherenceRow {
   quote: string;
 }
 
+/** The only verdicts a criterion-level coverage claim may carry. */
+export type CriterionVerdict = 'covered' | 'gap' | 'fail';
+
 /** A parsed criterion-level claim, grounded by one or more plan-task citations. */
 export interface CriterionCoherenceRow {
   rowClass: 'criterion';
   criterion: string;
   citedIds: string[];
-  verdict: string;
+  verdict: CriterionVerdict;
   quote: string;
   disposition: string | undefined;
 }
@@ -67,6 +70,10 @@ export type CoherenceParseResult =
   | { ok: false; reason: CoherenceParseFailureReason };
 
 const LEGACY_ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task', 'adr']);
+
+function isCriterionVerdict(value: string): value is CriterionVerdict {
+  return value === 'covered' || value === 'gap' || value === 'fail';
+}
 
 /**
  * Strip surrounding whitespace and a single pair of matching straight/curly
@@ -150,7 +157,11 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       const criterion = rawCriterion.trim();
       const verdict = rawVerdict.trim();
       const quote = unquote(rawQuote);
-      if (criterion.length === 0 || verdict.length === 0 || quote.length === 0) {
+      if (
+        criterion.length === 0 ||
+        !isCriterionVerdict(verdict) ||
+        quote.length === 0
+      ) {
         return { ok: false, reason: 'unparseable-criterion-row' };
       }
       const citedIds = rawCitedIds

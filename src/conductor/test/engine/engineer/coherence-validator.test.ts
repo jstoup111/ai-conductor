@@ -184,6 +184,59 @@ describe('parseCoherenceArtifact', () => {
     ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
   });
 
+  it.each(['covered', 'gap', 'fail'] as const)(
+    'parses the closed criterion verdict %s as its typed value',
+    (verdict) => {
+      expect(
+        parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget, when shipped, then it arrives. | task-1 | ${verdict} | "Task 1 owns the widget." | diff-local |
+`),
+      ).toEqual({
+        ok: true,
+        rows: [
+          {
+            rowClass: 'criterion',
+            criterion: 'Given a widget, when shipped, then it arrives.',
+            citedIds: ['task-1'],
+            verdict,
+            quote: 'Task 1 owns the widget.',
+            disposition: 'diff-local',
+          },
+        ],
+      });
+    },
+  );
+
+  it('rejects probably-covered for the named criterion with the criterion-specific parse reason', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget, when shipped, then it arrives. | task-1 | probably-covered | "Task 1 owns the widget." | diff-local |
+`),
+    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+  });
+
+  it('keeps legacy rows affirmative-by-default for an unknown verdict', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| story | story-1 | task-1 | probably-covered | "Task 1 owns the widget." |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'story',
+          id: 'story-1',
+          citedIds: ['task-1'],
+          verdict: 'probably-covered',
+          quote: 'Task 1 owns the widget.',
+        },
+      ],
+    });
+  });
+
   it('rejects the unknown decision row class after allowing adr', () => {
     expect(
       parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
