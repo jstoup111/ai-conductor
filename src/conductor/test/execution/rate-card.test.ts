@@ -23,6 +23,7 @@ const TERRA: ModelRate = {
   input_cost_per_token: 2e-6,
   output_cost_per_token: 1.2e-5,
   cache_read_input_token_cost: 2e-7,
+  cache_creation_input_token_cost: 2.5e-6,
 };
 const SOL: ModelRate = {
   input_cost_per_token: 4e-6,
@@ -37,6 +38,27 @@ const card = (models: Record<string, ModelRate>): RateCard => ({
 });
 
 describe('priceUsage', () => {
+  // Cache WRITES cost more than ordinary input — upstream publishes 1.25x
+  // across the codex family (terra 2.5e-6 vs input 2e-6). Pricing them at the
+  // input rate understated every cache-creating dispatch by 20%. It stayed
+  // invisible because codex reported `cacheCreation: 0` on all 17 observed
+  // dispatches, so the term was inert rather than correct.
+  it('prices cache creation at its own published rate, not the input rate', () => {
+    const usage: TokenUsage = { input: 0, output: 0, cacheCreation: 1_000_000 };
+    expect(priceUsage(usage, TERRA)).toBeCloseTo(2.5, 12);
+    expect(priceUsage(usage, TERRA)).not.toBeCloseTo(2.0, 12);
+  });
+
+  it('falls back to the input rate only when a model publishes no cache-write tier', () => {
+    const noCacheWrite: ModelRate = {
+      input_cost_per_token: 2e-6,
+      output_cost_per_token: 1.2e-5,
+      cache_read_input_token_cost: 2e-7,
+    };
+    const usage: TokenUsage = { input: 0, output: 0, cacheCreation: 1_000_000 };
+    expect(priceUsage(usage, noCacheWrite)).toBeCloseTo(2.0, 12);
+  });
+
   it('prices fresh input, cache reads, cache creation, and output', () => {
     const usage: TokenUsage = {
       input: 1000,
@@ -44,8 +66,10 @@ describe('priceUsage', () => {
       cacheRead: 10_000,
       cacheCreation: 500,
     };
-    // 1000*2e-6 + 10000*2e-7 + 500*2e-6 + 100*1.2e-5
-    expect(priceUsage(usage, TERRA)).toBeCloseTo(0.002 + 0.002 + 0.001 + 0.0012, 12);
+    // 1000*2e-6 + 10000*2e-7 + 500*2.5e-6 + 100*1.2e-5
+    // The cache-creation term uses the published cache-WRITE rate (2.5e-6),
+    // not the input rate.
+    expect(priceUsage(usage, TERRA)).toBeCloseTo(0.002 + 0.002 + 0.00125 + 0.0012, 12);
   });
 
   it('does NOT price reasoningOutput separately — it is already inside output', () => {
@@ -129,12 +153,13 @@ describe('applyRateCard', () => {
 });
 
 describe('parseModelRate', () => {
-  it('keeps only the three fields the formula reads', () => {
+  it('keeps only the four fields the formula reads', () => {
     expect(
       parseModelRate({
         input_cost_per_token: 2e-6,
         output_cost_per_token: 1.2e-5,
         cache_read_input_token_cost: 2e-7,
+        cache_creation_input_token_cost: 2.5e-6,
         litellm_provider: 'openai',
         max_tokens: 128000,
       }),

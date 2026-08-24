@@ -134,7 +134,8 @@ export async function dispatchRateCard(
     for (const [model, rate] of Object.entries(card.models)) {
       console.log(
         `  ${model}: input=${rate.input_cost_per_token} output=${rate.output_cost_per_token} ` +
-          `cache_read=${rate.cache_read_input_token_cost ?? rate.input_cost_per_token}`,
+          `cache_read=${rate.cache_read_input_token_cost ?? rate.input_cost_per_token} ` +
+          `cache_creation=${rate.cache_creation_input_token_cost ?? rate.input_cost_per_token}`,
       );
     }
     return 0;

@@ -44,6 +44,12 @@ export interface ModelRate {
   output_cost_per_token: number;
   /** Falls back to `input_cost_per_token` when the model has no cache tier. */
   cache_read_input_token_cost?: number;
+  /**
+   * Writing a cache entry costs MORE than ordinary input — upstream publishes
+   * 1.25x across the codex family (terra 2.5e-6 vs input 2e-6). Falls back to
+   * `input_cost_per_token` only when a model publishes no cache-write tier.
+   */
+  cache_creation_input_token_cost?: number;
 }
 
 export interface RateCard {
@@ -68,6 +74,9 @@ export function parseModelRate(value: unknown): ModelRate | undefined {
   };
   if (finite(record.cache_read_input_token_cost)) {
     rate.cache_read_input_token_cost = record.cache_read_input_token_cost;
+  }
+  if (finite(record.cache_creation_input_token_cost)) {
+    rate.cache_creation_input_token_cost = record.cache_creation_input_token_cost;
   }
   return rate;
 }
@@ -108,7 +117,7 @@ export function parseRateCard(raw: string): RateCard | undefined {
  *
  *   cost = input          * input_cost_per_token
  *        + cacheRead      * (cache_read_input_token_cost ?? input_cost_per_token)
- *        + cacheCreation  * input_cost_per_token
+ *        + cacheCreation  * (cache_creation_input_token_cost ?? input_cost_per_token)
  *        + output         * output_cost_per_token
  *
  * `reasoningOutput` is NOT priced separately: providers already include it in
@@ -118,10 +127,16 @@ export function parseRateCard(raw: string): RateCard | undefined {
  */
 export function priceUsage(usage: TokenUsage, rate: ModelRate): number {
   const cacheReadRate = rate.cache_read_input_token_cost ?? rate.input_cost_per_token;
+  // Cache WRITES are dearer than input, not equal to it. Pricing them at the
+  // input rate understated every cache-creating dispatch by 20%; it stayed
+  // invisible only because codex reported cacheCreation: 0 on all 17 observed
+  // dispatches, so the term was inert rather than correct.
+  const cacheCreationRate =
+    rate.cache_creation_input_token_cost ?? rate.input_cost_per_token;
   return (
     (usage.input || 0) * rate.input_cost_per_token +
     (usage.cacheRead ?? 0) * cacheReadRate +
-    (usage.cacheCreation ?? 0) * rate.input_cost_per_token +
+    (usage.cacheCreation ?? 0) * cacheCreationRate +
     (usage.output || 0) * rate.output_cost_per_token
   );
 }
