@@ -9,7 +9,8 @@ ships.
 
 Governing decisions: `adr-2026-08-23-criterion-layer-is-structural-at-land`,
 `adr-2026-08-23-coverage-claims-grounded-by-verbatim-quote`,
-`adr-2026-08-23-diff-locality-is-an-authored-disposition`.
+`adr-2026-08-23-diff-locality-is-an-authored-disposition`,
+`adr-2026-08-24-evidentiary-defects-are-not-waivable`.
 
 ## Story 1: Every accepted story criterion is owned by a task before the plan lands
 
@@ -129,10 +130,10 @@ possible and an invented value cannot slip past the gate.
 - Given a waiver naming a gap id the validator never reported, when the operator runs engineer land, then the land is rejected because a waiver must name the validator's own gap ids
 - Given a waiver that names some but not all reported criterion gaps, when the operator runs engineer land, then the land is rejected naming the uncovered gaps
 - Given a waiver that was merged by an earlier feature rather than being fresh in this change set, when the operator runs engineer land, then the land is rejected on freshness
-- Given a criterion rejection of any class introduced by this feature, when its report is rendered, then it carries a stable gap id that the waiver mechanism accepts
+- Given a criterion **coverage** rejection of any class introduced by this feature, when its report is rendered, then it carries a stable gap id that the waiver mechanism accepts (evidentiary defects — an unreadable record or an unresolvable citation — are refused fail-closed and are deliberately not waivable, per `adr-2026-08-24-evidentiary-defects-are-not-waivable`)
 
 ### Done When
-- [ ] Every criterion rejection class emits a stable gap id, proven by a test enumerating the classes and asserting each id is waivable
+- [ ] Every criterion coverage rejection class emits a stable gap id, proven by a test enumerating the classes and asserting each id is waivable, and the same test records the evidentiary classes that are deliberately non-waivable
 - [ ] A test asserts an unrecognized criterion verdict is rejected, contrasted with the existing affirmative-by-default behavior for legacy row classes
 - [ ] A waiver test covers the partial-coverage and stale-waiver cases for criterion gaps
 
