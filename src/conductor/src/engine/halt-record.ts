@@ -1,5 +1,5 @@
 import { execa } from 'execa';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { HaltClass } from './halt-marker.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
@@ -17,6 +17,12 @@ export interface HaltRecordInput {
   headSha: string;
   haltedAt: string;
   haltBody: string;
+}
+
+/** The operator action that resolved a previously raised halt. */
+export interface HaltRecordResolution {
+  cause: string;
+  resolvedAt: string;
 }
 
 /** Outcome of an attempt to persist the durable halt record. */
@@ -81,6 +87,16 @@ export function renderHaltRecord(input: HaltRecordInput): string {
   );
 }
 
+/** Mark a halted record resolved without discarding its original halt details. */
+export function supersedeHaltRecordText(text: string, resolution: HaltRecordResolution): string {
+  if (!text.includes('Status: halted\n')) return text;
+
+  return text.replace(
+    'Status: halted\n',
+    `Status: resolved\nResolution cause: ${resolution.cause}\nResolved at: ${resolution.resolvedAt}\n`,
+  );
+}
+
 /**
  * Write and commit a halt record only from a recordable feature checkout.
  * Every filesystem or Git failure is returned to the halt-marker seam instead
@@ -94,20 +110,8 @@ export async function recordHalt(root: string, input: HaltRecordInput): Promise<
     await mkdir(join(root, dirname(relPath)), { recursive: true });
     await writeFile(join(root, relPath), renderHaltRecord(input));
 
-    await execa('git', ['add', '--', relPath], { cwd: root });
-    const staged = await execa('git', ['diff', '--cached', '--quiet', '--', relPath], {
-      cwd: root,
-      reject: false,
-    });
-    if (staged.exitCode === 0) return { kind: 'noop' };
-    if (staged.exitCode !== 1) {
-      return { kind: 'failed', reason: commandFailure(staged) };
-    }
-
-    await execa('git', ['commit', '--no-verify', '-m', `halt record: ${input.slug}`], {
-      cwd: root,
-      env: withEngineCommitEnv(),
-    });
+    const commitResult = await commitHaltRecordChange(root, relPath, `halt record: ${input.slug}`);
+    if (commitResult.kind !== 'written') return commitResult;
 
     try {
       await execa('git', ['push'], { cwd: root });
@@ -119,6 +123,46 @@ export async function recordHalt(root: string, input: HaltRecordInput): Promise<
   } catch (error) {
     return { kind: 'failed', reason: errorMessage(error) };
   }
+}
+
+/** Resolve and commit an existing halt record, preserving its original halt details. */
+export async function supersedeHaltRecord(
+  root: string,
+  slug: string,
+  cause: string,
+): Promise<HaltRecordResult> {
+  try {
+    const relPath = haltRecordPath(slug);
+    const path = join(root, relPath);
+    const current = await readFile(path, 'utf8');
+    const superseded = supersedeHaltRecordText(current, { cause, resolvedAt: new Date().toISOString() });
+    if (superseded === current) return { kind: 'noop' };
+
+    await writeFile(path, superseded);
+    return await commitHaltRecordChange(root, relPath, `halt record resolved: ${slug}`);
+  } catch (error) {
+    return { kind: 'failed', reason: errorMessage(error) };
+  }
+}
+
+async function commitHaltRecordChange(
+  root: string,
+  relPath: string,
+  message: string,
+): Promise<HaltRecordResult> {
+  await execa('git', ['add', '--', relPath], { cwd: root });
+  const staged = await execa('git', ['diff', '--cached', '--quiet', '--', relPath], {
+    cwd: root,
+    reject: false,
+  });
+  if (staged.exitCode === 0) return { kind: 'noop' };
+  if (staged.exitCode !== 1) return { kind: 'failed', reason: commandFailure(staged) };
+
+  await execa('git', ['commit', '--no-verify', '-m', message], {
+    cwd: root,
+    env: withEngineCommitEnv(),
+  });
+  return { kind: 'written' };
 }
 
 function haltBodyFence(body: string): string {

@@ -7,8 +7,11 @@ import {
   HALT_RECORD_DIR,
   haltRecordPath,
   isRecordableHaltClass,
+  recordHalt,
   renderHaltRecord,
   resolveRecordability,
+  supersedeHaltRecord,
+  supersedeHaltRecordText,
 } from '../../src/engine/halt-record.js';
 
 const input = {
@@ -64,6 +67,60 @@ describe('halt record rendering', () => {
   });
 });
 
+describe('halt record supersession', () => {
+  it('resolves a halted record while preserving its halt history', () => {
+    const superseded = supersedeHaltRecordText(renderHaltRecord(input), {
+      cause: 'operator resume',
+      resolvedAt: '2026-08-23T17:00:00.000Z',
+    });
+
+    expect(superseded).toBe(
+      '# Halt record\n\n' +
+        'Status: resolved\n' +
+        'Resolution cause: operator resume\n' +
+        'Resolved at: 2026-08-23T17:00:00.000Z\n' +
+        'Slug: operator-decision\n' +
+        'Class: needs-human\n' +
+        'Halting step: build_review\n' +
+        'Phase: BUILD\n' +
+        'Branch: feat/operator-decision\n' +
+        'Head SHA: f00dbabe1234567890\n' +
+        'Halted at: 2026-08-23T16:30:00.000Z\n\n' +
+        'Push status: this record may be ahead of the remote; push is not guaranteed.\n\n' +
+        '## HALT\n\n' +
+        '```text\n' +
+        'Build review needs an operator decision.\nThe release note scope is unclear.\n' +
+        '```\n',
+    );
+  });
+
+  it('leaves an already-resolved record byte-identical', () => {
+    const resolved = supersedeHaltRecordText(
+      'Status: resolved\nResolution cause: operator resume\nResolved at: 2026-08-23T17:00:00.000Z\n',
+      { cause: 'rekick', resolvedAt: '2026-08-23T18:00:00.000Z' },
+    );
+
+    expect(resolved).toBe('Status: resolved\nResolution cause: operator resume\nResolved at: 2026-08-23T17:00:00.000Z\n');
+  });
+
+  it('commits a resolution once when superseded repeatedly', async () => {
+    const root = await makeFeatureRepository();
+    await recordHalt(root, input);
+    const before = await commitCount(root);
+
+    await expect(supersedeHaltRecord(root, input.slug, 'operator resume')).resolves.toEqual({ kind: 'written' });
+    await expect(supersedeHaltRecord(root, input.slug, 'rekick')).resolves.toEqual({ kind: 'noop' });
+
+    expect(await commitCount(root)).toBe(before + 1);
+  });
+
+  it('returns a failure result when the record cannot be read', async () => {
+    const root = await makeFeatureRepository();
+
+    await expect(supersedeHaltRecord(root, input.slug, 'operator resume')).resolves.toMatchObject({ kind: 'failed' });
+  });
+});
+
 const scratchRoots: string[] = [];
 
 afterEach(async () => {
@@ -115,4 +172,17 @@ async function makeScratchRepository(): Promise<string> {
   await execa('git', ['add', 'README.md'], { cwd: root });
   await execa('git', ['commit', '-q', '-m', 'initial'], { cwd: root });
   return root;
+}
+
+async function makeFeatureRepository(): Promise<string> {
+  const root = await makeScratchRepository();
+  const worktree = join(root, '..', `${input.slug}-feature-worktree`);
+  scratchRoots.push(worktree);
+  await execa('git', ['worktree', 'add', '-q', '-b', input.branch, worktree], { cwd: root });
+  return worktree;
+}
+
+async function commitCount(cwd: string): Promise<number> {
+  const { stdout } = await execa('git', ['rev-list', '--count', 'HEAD'], { cwd });
+  return Number.parseInt(stdout, 10);
 }
