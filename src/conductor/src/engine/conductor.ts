@@ -183,9 +183,12 @@ import {
 } from './halt-classification.js';
 import {
   acceptClearedOverScopeHalt,
+  overScopeCriterionIsAccepted,
+  overScopeRelations,
   readAcceptedWidenings,
   renderOverScopeAcceptanceCandidate,
   type AcceptedWidening,
+  type IntentRelation,
 } from './accepted-widenings.js';
 import type { ScopeTrailer } from './scope-trailer.js';
 import { resolveScopeWideningRationale } from './scope-widening-rationale.js';
@@ -627,40 +630,6 @@ export function routePrdAuditPlanGaps(
   return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings };
 }
 
-type IntentRelation = 'within' | 'outside-harmless' | 'outside-visible';
-
-function prdAuditTableCells(line: string): string[] {
-  return line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
-}
-
-function overScopeRelations(reportText: string): Map<string, IntentRelation> {
-  const lines = reportText.split('\n');
-  const headerIndex = lines.findIndex((line) => {
-    if (!/^\s*\|/.test(line)) return false;
-    const header = prdAuditTableCells(line).map((cell) => cell.toLowerCase());
-    return header.includes('criterion') && header.includes('grade');
-  });
-  if (headerIndex === -1) return new Map();
-  const header = prdAuditTableCells(lines[headerIndex]!).map((cell) => cell.toLowerCase());
-  const criterionIndex = header.indexOf('criterion');
-  const gradeIndex = header.indexOf('grade');
-  const relationIndex = header.findIndex((cell) => cell === 'intent relation' || cell === 'intentrelation');
-  if (relationIndex === -1) return new Map();
-  const relations = new Map<string, IntentRelation>();
-  for (const line of lines.slice(headerIndex + 1)) {
-    if (!/^\s*\|/.test(line)) continue;
-    const cells = prdAuditTableCells(line);
-    if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
-    if (cells[gradeIndex]?.trim().toUpperCase() !== 'OVER_SCOPE') continue;
-    const criterion = cells[criterionIndex]?.trim().toUpperCase();
-    if (!criterion) continue;
-    const relation = (cells[relationIndex] ?? '').trim().toLowerCase();
-    if (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible') {
-      relations.set(criterion, relation);
-    }
-  }
-  return relations;
-}
 
 export type PrdAuditOverScopeRoute =
   | { kind: 'none' }
@@ -694,9 +663,7 @@ export function routePrdAuditOverScope(
     .map((finding) => {
       const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
       const relation = relations.get(finding.criterion) as IntentRelation;
-      const accepted =
-        relation === 'within' ||
-        acceptedWidenings.some((entry) => entry.criterion === finding.criterion);
+      const accepted = overScopeCriterionIsAccepted(finding.criterion, relations, acceptedWidenings);
       return {
         gate: 'prd_audit' as const,
         grade: 'OVER_SCOPE' as const,

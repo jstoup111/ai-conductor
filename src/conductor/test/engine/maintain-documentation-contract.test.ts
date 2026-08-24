@@ -86,7 +86,7 @@ describe('repository-local maintain-documentation contract', () => {
         byteIdentical: true,
         repoConfigValid: true,
         configuredStep: {
-          llm_provider: 'claude',
+          llm_provider: 'codex',
           after: 'rebase',
           skill: '.agents/skills/maintain-documentation/SKILL.md',
           enforcement: 'gating',

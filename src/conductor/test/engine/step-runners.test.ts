@@ -4273,3 +4273,85 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     );
   });
 });
+
+describe('streamingProviderRuntimes preserves every adapter capability (#1855)', () => {
+  class FakeAdapter implements LLMProvider {
+    supportsSessionResume = true;
+    lifecycleCapability = { synchronousSpawnPermit: true } as const;
+    interactiveCalls = 0;
+
+    async invoke(): Promise<InvokeResult> {
+      return { success: true, output: 'direct', exitCode: 0 };
+    }
+
+    async invokeInteractive(): Promise<InvokeResult> {
+      this.interactiveCalls += 1;
+      return { success: true, output: 'interactive', exitCode: 0 };
+    }
+
+    async readiness() {
+      return { provider: 'codex', authenticated: true } as never;
+    }
+
+    async prepareSelfHostAuth() {
+      return { args: [] };
+    }
+
+    async resolveSelfHostExecutable(): Promise<string> {
+      return '/usr/bin/codex';
+    }
+  }
+
+  function streamingRuntimeFor(adapter: LLMProvider): LLMProvider {
+    const policy = CODEX_MODEL_POLICY;
+    const runner = new DefaultStepRunner(createMockProvider(), 's', '/tmp/p', {
+      config: { llm_provider: ['codex'] },
+      providerRuntimes: new ProviderRuntimeSet([
+        {
+          key: 'codex',
+          provider: adapter,
+          policy,
+          builtIn: true,
+          availability: new ModelAvailability(policy.modelFallbackLadder),
+        },
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['codex'],
+    });
+    const streaming = (runner as unknown as {
+      streamingProviderRuntimes: (set: ProviderRuntimeSet) => ProviderRuntimeSet;
+      providerRuntimes: ProviderRuntimeSet;
+    });
+    return streaming.streamingProviderRuntimes(streaming.providerRuntimes).get('codex').provider;
+  }
+
+  it('carries the self-host members the codex isolation path requires', async () => {
+    const wrapped = streamingRuntimeFor(new FakeAdapter());
+    // conductor.ts:3961 reads exactly these two before provisioning codex.
+    expect(typeof wrapped.resolveSelfHostExecutable).toBe('function');
+    expect(typeof wrapped.prepareSelfHostAuth).toBe('function');
+    await expect(wrapped.resolveSelfHostExecutable!()).resolves.toBe('/usr/bin/codex');
+  });
+
+  it('carries `readiness`, so auth recovery still engages on a streaming step', () => {
+    expect(typeof streamingRuntimeFor(new FakeAdapter()).readiness).toBe('function');
+  });
+
+  it('still routes `invoke` through `invokeInteractive` — the reason the wrapper exists', async () => {
+    const adapter = new FakeAdapter();
+    const wrapped = streamingRuntimeFor(adapter);
+    const result = await wrapped.invoke({ prompt: 'p' } as InvokeOptions);
+    expect(result.output).toBe('interactive');
+    expect(adapter.interactiveCalls).toBe(1);
+  });
+
+  it('drops no member of the adapter it wraps', () => {
+    const adapter = new FakeAdapter();
+    const wrapped = streamingRuntimeFor(adapter);
+    const members = ['supportsSessionResume', 'lifecycleCapability', 'invoke', 'invokeInteractive',
+      'readiness', 'prepareSelfHostAuth', 'resolveSelfHostExecutable'];
+    for (const member of members) {
+      expect(wrapped[member as keyof LLMProvider], `missing ${member}`).toBeDefined();
+    }
+  });
+});
