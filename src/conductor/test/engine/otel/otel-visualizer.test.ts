@@ -409,12 +409,18 @@ describe('T21: flush on exit — idempotent stop() and signal handlers', () => {
 
   it('SIGTERM triggers stop() and spans are flushed', async () => {
     const vis = makeVis();
+    const processOn = vi.spyOn(process, 'on');
     vis.start(t21Emitter);
     await t21Emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
     await t21Emitter.emit({ type: 'step_completed', step: 'plan', status: 'done' });
     await t21Emitter.emit({ type: 'feature_complete', featureDesc: 'test' });
 
-    process.emit('SIGTERM');
+    // Invoke only this visualizer's handler. Broadcasting a real process-wide
+    // SIGTERM also invokes unrelated handlers retained by other test fixtures
+    // in a reused Vitest fork, some of which legitimately terminate the process.
+    const sigtermHandler = processOn.mock.calls.find(([signal]) => signal === 'SIGTERM')?.[1];
+    expect(sigtermHandler).toBeTypeOf('function');
+    (sigtermHandler as () => void)();
     await vis.stop();
 
     expect(t21SpanExporter.getFinishedSpans().length).toBeGreaterThan(0);
