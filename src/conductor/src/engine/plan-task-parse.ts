@@ -92,6 +92,42 @@ function expandTaskIds(raw: string): string[] {
 }
 
 /**
+ * Returns the committed body text for every recognized task heading.
+ *
+ * Bodies retain their authored line endings and continue until the next task
+ * heading, so blank lines and fenced code remain available to consumers that
+ * need to resolve evidence inside a task's prose.
+ */
+export function parsePlanTaskBodies(text: string): Map<string, string> {
+  const result = new Map<string, string>();
+  let currentIds: string[] = [];
+  let bodyLines: string[] = [];
+
+  const saveCurrentBody = () => {
+    if (currentIds.length === 0) return;
+    const body = bodyLines.join('\n');
+    for (const id of currentIds) result.set(id, body);
+  };
+
+  for (const line of text.split('\n')) {
+    const headerMatch = line.match(TASK_HEADER_PATTERN);
+    if (headerMatch) {
+      saveCurrentBody();
+      currentIds = expandTaskIds(
+        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+      );
+      bodyLines = [];
+      continue;
+    }
+
+    if (currentIds.length > 0) bodyLines.push(line);
+  }
+
+  saveCurrentBody();
+  return result;
+}
+
+/**
  * Parses ordered, task-local `**Done when:**` checks.
  *
  * A missing block remains absent for compatibility with historical plans. A
