@@ -20,6 +20,12 @@ the gate route. The engine owns those mechanical outcomes.
 Each finding is keyed to one story criterion and carries exactly one grade:
 `PASS | FIXABLE | PLAN_GAP | OVER_SCOPE`.
 
+**Every Verdict Table key must be an id of an active story criterion.** The engine reads the
+table mechanically: a key that is not of the form `S<story>.<criterion>` fails the report, and
+so does a well-formed key that names no criterion in the active stories. Both discard the whole
+report — every other verdict in it is lost — and halt the run for a human. Never invent a key
+(`OS.1`, `SCOPE.2`), and never write two rows for the same criterion.
+
 Per the `/verify-claims` protocol, cite concrete `file:line` evidence and give a confidence when
 evidence is ambiguous. Do not turn uncertainty into a PASS.
 
@@ -59,6 +65,12 @@ For every story criterion, record one row.
   and user-visible. Include any `Scope:` trailer rationale and operator-reseal rationale in the
   evidence. A reseal rationale that does not justify the protected-artifact change is an OVER_SCOPE
   finding; a rationale that does justify it is evidence for no finding.
+  **An unplanned change usually owns no story criterion.** Key the row to the criterion whose
+  behavior the change actually affects when one exists. When none does, do not force it into the
+  table and do not borrow an unrelated criterion's key: report it under a `## Findings without an
+  owning criterion` section below the table, in the same row format but headed `Finding` instead
+  of `Criterion`, with its judgement in Criterion detail as usual. The engine cannot route those
+  findings today (#1848); they are reported for the operator.
 
 Do not conflate grades: an unmet criterion with an existing owner is FIXABLE even if another
 criterion is a PLAN_GAP. One row carries one grade.
@@ -115,4 +127,5 @@ the policy to this evidence.
 - [ ] Unreadable criteria and PRD-to-story coverage gaps are surfaced, never silently passed
 - [ ] Each finding cites `file:line` evidence and has calibrated confidence where ambiguous
 - [ ] Every OVER_SCOPE row carries an `Intent relation` of `within`, `outside-harmless`, or `outside-visible`; detail judges intent, user visibility, Scope trailers, and reseal rationale
+- [ ] Every Verdict Table key is an active story criterion id, each appearing on exactly one row; a finding owning no criterion is reported below the table, never keyed to an invented or unrelated id
 - [ ] Report written to `.pipeline/prd-audit.md`; no implementation, plan mutation, or routing performed
