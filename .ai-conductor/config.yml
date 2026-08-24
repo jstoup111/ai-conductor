@@ -48,96 +48,23 @@ build_progress_halt:
 # putting counterfactual/plan-holistic judgement on the strongest reasoner.
 # rootCause inherits the engine's medium-effort default (narrowest rubric).
 build_review:
-  # Gate disabled 2026-08-23 by operator decision, for this feature only.
-  # Required in addition to the per-rubric flags below: main's coordinator
-  # returns `refused: no-enabled-rubrics` when every registered rubric is off
-  # (build-review-coordinator.ts:443), whereas `enabled: false` takes the clean
-  # `gate-disabled` path (:440). This branch retires the four-rubric container
-  # and its replacement, test-quality, is not in the running engine's registry,
-  # so there is no rubric left for this gate to run here.
-  enabled: false
   # Enable this repository's advisory containment recordings. The shipped
   # default remains false, so consumer repositories must opt in explicitly.
   scopeContainmentEnforced: true
   rubrics:
-    # tautology is opt-in engine-wide (#1682: its scoped-run preflight only
-    # recognizes Vitest/pytest output). This repo runs Vitest and DID enable it,
-    # but disabled it on 2026-08-21 by operator decision. Rationale on #1626:
-    # the rubric gates whether unit tests will keep telling the truth later —
-    # test debt — not whether the software works. Functional proof is unaffected
-    # (engine-enforced acceptance RED per adr-2026-07-21, the full suite,
-    # prd_audit/manual_test), and completeness already carries a can't-fail bar
-    # for task deliverables. Measured cost: 61% lap fail rate, one feature ran
-    # 6 laps / ~$90 without terminating.
+    # test-quality is the only rubric this container dispatches. The rubrics it
+    # replaced — scope, completeness, rootCause, tautology — are retired and
+    # unregistered: prd_audit now owns scope-as-intent grading with bounded
+    # remediation, and the as-built architecture review owns design conformance,
+    # both running on every feature regardless of tier or track.
     #
-    # RE-ENABLE under #1619, as part of that implementation — when the
-    # counterfactual is mechanical and runs at build time, where it costs
-    # seconds and cannot cycle because it is not a judgement. Do not re-enable
-    # it as a review-time LLM rubric.
-    tautology:
-      enabled: false
+    # No retired key is declared here. A consumer config that still names one
+    # loads as a no-op with a one-time notice (FR-20) rather than failing.
+    testQuality:
+      enabled: true
       llm_provider: claude
       model: opus
       effort: high
-    # completeness and scope are disabled on 2026-08-23 by operator decision,
-    # for the duration of this feature only. This branch is the one retiring the
-    # four-rubric container: it has already deleted skills/build-review-completeness
-    # and skills/build-review-scope, so both rubrics are grading the very diff
-    # that removes them, under an engine built from main that still registers
-    # them.
-    #
-    # Measured cost on this feature: completeness returned
-    # invalid-provider-result 7 consecutive times and twice exhausted its
-    # 3-attempt mechanical allowance, producing no verdict all day. scope's
-    # findings ordered the deletion of daemon-observe-cli.ts:464,526 and
-    # skills/writing-system-tests/SKILL.md:409 — work that pending tasks
-    # rem-fr19-1 and rem-fr4-4 already own — which deadlocked remediation
-    # ("no dispatchable build work; the implicated task(s) are already
-    # evidence-complete") and halted the loop needing a human.
-    #
-    # Task 32 makes this permanent by enabling test-quality only; this edit is
-    # the interim unblock, not that task's deliverable.
-    completeness:
-      enabled: false
-      llm_provider: claude
-      model: opus
-      effort: high
-    scope:
-      enabled: false
-      llm_provider: codex
-      model: gpt-5.6-sol
-    # rootCause is disabled on 2026-08-22 by operator decision, as the interim
-    # half of #1805 while that consolidation goes through DECIDE.
-    #
-    # Measured cost across the 24 shipped features carrying build_review
-    # telemetry: a 39.2% FAIL rate (148 failures / 378 judged), the highest of
-    # the three enabled rubrics; mean laps-to-pass 5.2 (max 12), which did not
-    # move across 89 build_review fixes merged since 2026-08-08.
-    #
-    # The cause is structural, not strictness. Of the three grading rubrics only
-    # rootCause has no plan reference in its anchor (build-review-domain.ts:71-73):
-    # scope carries `relation: not-authorized-by-plan` and completeness carries a
-    # `planTask`, while rootCause binds a free-text `statedDefect` to a code
-    # locus. When the approved mechanism cannot fully close the stated defect it
-    # therefore cannot report "the plan is the limit" — it can only demand a
-    # different mechanism, which scope then condemns as unauthorized. That
-    # deadlock is #1630; on 2026-08-22 alone it cost an operator revert of five
-    # commits and the rejection of ten appended remediation tasks.
-    #
-    # What still covers this ground meanwhile: scope keeps every change inside
-    # the approved plan, completeness keeps the can't-fail bar on task
-    # deliverables, acceptance RED is engine-enforced (adr-2026-07-21), and
-    # test_suite runs the full suite. What is genuinely uncovered: whether a
-    # change fixes the root cause or only its symptom, until #1805 re-seats that
-    # judgement.
-    #
-    # RE-ENABLE only as part of #1805, re-seated as an as-built architecture
-    # review with the authority to route a plan gap back to DECIDE. Do not
-    # re-enable it as a BUILD-blocking rubric that can order work off-plan.
-    rootCause:
-      enabled: false
-      llm_provider: codex
-      model: gpt-5.6-sol
 
 # Native pre-SHIP aggregate verification. The project-owned npm script runs
 # Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
@@ -181,26 +108,6 @@ steps:
   coherence_check:
     llm_provider: codex
   prd_audit:
-    # Disabled 2026-08-23 by operator decision, for this feature only, AFTER the
-    # audit itself returned PASS. The gate failure is a report-contract mismatch,
-    # not a finding: this branch makes the stories' 84 acceptance criteria the
-    # audit key with FR-1..23 as intent context, so the report carries 0 FR-N
-    # verdict rows and 84 criterion rows (83 PASS, 1 OVER_SCOPE — the unplanned
-    # probe test files, graded outside-harmless). The running engine is built
-    # from main, whose artifacts.ts still requires one FR-N verdict row per PRD
-    # FR, so it reported 20 rows missing and scraped FR-6/FR-16/FR-19 out of the
-    # PRD column of PASS rows as un-ALIGNED.
-    #
-    # This is the self-host bootstrap condition, not a compatibility break. The
-    # spec's backward-compatibility requirements are all new-engine-reads-old-data
-    # (FR-20 retired config keys, FR-21 pre-change plans, FR-22 persisted retired
-    # dispositions) and all hold. Old-engine-reads-new-report is not required by
-    # any FR; FR-7 is the requirement to change that parser, so report and parser
-    # land in the same merge and a consumer updating normally never sees this.
-    #
-    # RE-ENABLE once this feature merges and the daemon respawns onto an engine
-    # carrying the FR-7 parser. Nothing else should inherit this key.
-    disable: true
     llm_provider: claude
   architecture_review_as_built:
     llm_provider: claude
