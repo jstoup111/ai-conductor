@@ -1,5 +1,8 @@
 import { execa } from 'execa';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { HaltClass } from './halt-marker.js';
+import { withEngineCommitEnv } from './engine-commit-env.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 
 /** Git-tracked records that let an operator inspect a feature halt from its branch. */
@@ -15,6 +18,13 @@ export interface HaltRecordInput {
   haltedAt: string;
   haltBody: string;
 }
+
+/** Outcome of an attempt to persist the durable halt record. */
+export type HaltRecordResult =
+  | { kind: 'written' }
+  | { kind: 'noop' }
+  | { kind: 'skipped' }
+  | { kind: 'failed'; reason: string };
 
 /** Resolve a halt record's repository-relative path. */
 export function haltRecordPath(slug: string): string {
@@ -69,6 +79,39 @@ export function renderHaltRecord(input: HaltRecordInput): string {
   );
 }
 
+/**
+ * Write and commit a halt record only from a recordable feature checkout.
+ * Every filesystem or Git failure is returned to the halt-marker seam instead
+ * of escaping and disturbing the original halt flow.
+ */
+export async function recordHalt(root: string, input: HaltRecordInput): Promise<HaltRecordResult> {
+  try {
+    if (!await resolveRecordability(root, input.haltClass)) return { kind: 'skipped' };
+
+    const relPath = haltRecordPath(input.slug);
+    await mkdir(join(root, dirname(relPath)), { recursive: true });
+    await writeFile(join(root, relPath), renderHaltRecord(input));
+
+    await execa('git', ['add', '--', relPath], { cwd: root });
+    const staged = await execa('git', ['diff', '--cached', '--quiet', '--', relPath], {
+      cwd: root,
+      reject: false,
+    });
+    if (staged.exitCode === 0) return { kind: 'noop' };
+    if (staged.exitCode !== 1) {
+      return { kind: 'failed', reason: commandFailure(staged) };
+    }
+
+    await execa('git', ['commit', '--no-verify', '-m', `halt record: ${input.slug}`], {
+      cwd: root,
+      env: withEngineCommitEnv(),
+    });
+    return { kind: 'written' };
+  } catch (error) {
+    return { kind: 'failed', reason: errorMessage(error) };
+  }
+}
+
 function haltBodyFence(body: string): string {
   const longestRun = Math.max(
     0,
@@ -82,4 +125,12 @@ async function currentBranch(root: string): Promise<string> {
   const branch = stdout.trim();
   if (!branch) throw new Error('current branch is empty');
   return branch;
+}
+
+function commandFailure(result: { stderr?: string; shortMessage?: string }): string {
+  return result.stderr?.trim() || result.shortMessage || 'git diff --cached failed';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
