@@ -133,3 +133,24 @@ spec to a feature that is currently halted.
       review report in the same directory does not demand an `adr` row.
 - [ ] Cover the compatibility case in tests: an existing coherence artifact with no `adr` rows,
       in a change set with no ADRs, still passes.
+
+> **Amended 2026-08-23 by #1799:** the Decision's rule — that a new coherence row class joins the
+> signal-gated group rather than the structural one — is narrowed. It governs a row class tracking a
+> genuine variable, where "this spec correctly has none of these" is a real answer: a spec may have
+> no ADRs, no PRD FRs, and no intake outcomes. It does not extend to a row class tracking something
+> every engaged spec necessarily has. For such a class the only derivable change-set signal is the
+> presence of the rows themselves, which is circular — omitting the rows would disable the very
+> layer that detects missing rows.
+>
+> The test for a future row class is therefore **"can a correct spec legitimately have none of
+> these?"**, not "is it new?". A No answer makes the class structural.
+>
+> The retroactivity concern that motivated this ADR is unaffected: `runCoherenceGate`'s only
+> non-test caller is `src/conductor/src/engine/engineer/land-spec.ts:347`, so a structural layer is
+> never re-run against an already-landed spec, and discovery's own shallow check
+> (`hasCoherenceTableDataRow`, `src/conductor/src/engine/daemon-backlog.ts:1018`) is deliberately
+> left unmodified.
+>
+> The first class admitted under this narrowing is `criterion`; see
+> `adr-2026-08-23-criterion-layer-is-structural-at-land`. The original decision above stands for the
+> `adr` layer and every variable-tracking class.
