@@ -15,7 +15,7 @@ import type {
   InvokeOptions,
 } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
-import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
+import type { Options as ExecaOptions, Result as ExecaResult, ResultPromise } from 'execa';
 import {
   deriveBindSet,
   wrapForContainment,
@@ -471,6 +471,55 @@ describe('CodexProvider', () => {
         ],
       },
     ]);
+  });
+
+  it('passes every unattended execution policy through the injected subprocess factory', async () => {
+    const subprocessFactory = vi.fn<
+      (file: string, args: readonly string[], options: ExecaOptions) => ResultPromise
+    >(() =>
+      Promise.resolve({ stdout: jsonlMessage('unattended'), exitCode: 0, failed: false }) as any,
+    );
+    provider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      undefined,
+      subprocessFactory,
+    );
+
+    await provider.invoke(baseOptions);
+
+    expect(subprocessFactory).toHaveBeenCalledOnce();
+    const unattendedArgs = subprocessFactory.mock.calls[0][1] as string[];
+    const configValues = unattendedArgs.flatMap((argument, index) =>
+      argument === '--config' ? [unattendedArgs[index + 1]] : [],
+    );
+    expect(configValues).toEqual(expect.arrayContaining([
+      'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.network_access=true',
+      'approval_policy="on-request"',
+      'approvals_reviewer="auto_review"',
+      'shell_environment_policy.ignore_default_excludes=false',
+    ]));
+  });
+
+  it('passes no --config values through the injected subprocess factory for an interactive REPL dispatch', async () => {
+    const subprocessFactory = vi.fn<
+      (file: string, args: readonly string[], options: ExecaOptions) => ResultPromise
+    >(() =>
+      Promise.resolve({ stdout: 'interactive', exitCode: 0, failed: false }) as any,
+    );
+    provider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      undefined,
+      subprocessFactory,
+    );
+
+    await provider.invokeInteractive({ ...baseOptions, interactive: true });
+
+    expect(subprocessFactory).toHaveBeenCalledOnce();
+    const interactiveArgs = subprocessFactory.mock.calls[0][1] as string[];
+    expect(interactiveArgs).not.toContain('--config');
   });
 
   it('passes an engine-derived containment launcher with more than sixteen arguments to Codex', async () => {
