@@ -6,6 +6,71 @@ import {
 } from '../src/engine/shipment-association.js';
 
 describe('shipped-record recorded review findings', () => {
+  it('carries an operator decision and its rationale into the record', () => {
+    // ADR D8: a recorded accept/refuse must survive into the shipped record.
+    // Keeping only `accepted` erased who decided what, and erased refusals.
+    const findings = recordedShipmentFindings({
+      prdAudit: [
+        '**PRD:** present',
+        '',
+        '## Recorded Findings',
+        '',
+        '```json',
+        JSON.stringify({ findings: [{
+          gate: 'prd_audit',
+          grade: 'OVER_SCOPE',
+          criterion: 'S5.2',
+          summary: 'The visible flag was not in the approved intent.',
+          accepted: false,
+          decision: 'refuse',
+          rationale: 'Rework it inside the approved scope.',
+        }, {
+          gate: 'prd_audit',
+          grade: 'OVER_SCOPE',
+          criterion: 'S5.3',
+          summary: 'The operator accepted the visible widening.',
+          accepted: true,
+          decision: 'accept',
+          rationale: 'Cheaper than a second lap.',
+        }] }),
+        '```',
+      ].join('\n'),
+    });
+
+    expect(findings).toEqual([
+      {
+        gate: 'prd_audit',
+        grade: 'OVER_SCOPE',
+        criterion: 'S5.2',
+        summary: 'The visible flag was not in the approved intent.',
+        accepted: false,
+        decision: 'refuse',
+        rationale: 'Rework it inside the approved scope.',
+      },
+      {
+        gate: 'prd_audit',
+        grade: 'OVER_SCOPE',
+        criterion: 'S5.3',
+        summary: 'The operator accepted the visible widening.',
+        accepted: true,
+        decision: 'accept',
+        rationale: 'Cheaper than a second lap.',
+      },
+    ]);
+
+    const rendered = appendRecordedShipmentFindings([
+      '---',
+      'slug: decision-findings',
+      'spec_hash: digest',
+      '---',
+      '',
+      '## Cost',
+    ].join('\n'), findings);
+    expect(rendered).toContain('    decision: refuse');
+    expect(rendered).toContain('    rationale: "Rework it inside the approved scope."');
+    expect(rendered).toContain('    decision: accept');
+  });
+
   it('copies recorded non-blocking prd-audit and delivered as-built findings into frontmatter', () => {
     const findings = recordedShipmentFindings({
       prdAudit: [

@@ -239,6 +239,72 @@ describe('prd_audit kickback', () => {
     expect(classifyOverScopeCriterion('S3.1', new Map([['S3.1', 'outside-visible']]), decisions)).toBe('accepted');
   });
 
+  it('carries harvest defects and recorded decisions out of a halted over-scope route', async () => {
+    // ADR D7: a defect the operator's edit produced must reach the next halt
+    // body, not only the spine. ADR D8: recorded decisions project into the
+    // verdict artifact even when the route halts on a refusal.
+    const root = await mkdtemp(join(tmpdir(), 'over-scope-halt-route-'));
+    dirs.push(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'prd-audit.md'), [
+      '# PRD Audit',
+      '',
+      '**PRD:** none',
+      '',
+      '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:1 |',
+      '',
+    ].join('\n'));
+    await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+      version: 1,
+      decisions: [{
+        criterion: 'S3.1',
+        summary: 'Visible behavior outside the approved intent.',
+        decision: 'refuse',
+        rationale: 'Rework it inside scope.',
+        operator: 'operator@example.test',
+        decidedAt: '2026-08-24T00:00:00.000Z',
+      }],
+    }));
+    // An entry naming a criterion the halt never offered is a named defect.
+    await writeFile(join(root, '.pipeline', 'HALT.cleared'), [
+      '```json over-scope-decisions',
+      '[{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"}]',
+      '```',
+    ].join('\n'));
+
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline/conduct-state.json'),
+      stepRunner: { run: async () => ({ success: true }) },
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+
+    const route = await (conductor as unknown as {
+      routeCurrentPrdAuditOverScope: () => Promise<{
+        kind: string;
+        refused?: Array<{ criterion: string }>;
+        defects?: Array<{ kind: string; criterion?: string }>;
+      }>;
+    }).routeCurrentPrdAuditOverScope();
+
+    expect(route.kind).toBe('halt');
+    expect(route.refused).toEqual([expect.objectContaining({ criterion: 'S3.1' })]);
+    expect(route.defects).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'unknown-criterion', criterion: 'S9.9' })]),
+    );
+
+    const report = await readFile(join(root, '.pipeline', 'prd-audit.md'), 'utf8');
+    expect(report).toContain('## Recorded Findings');
+    expect(report).toContain('"decision": "refuse"');
+    expect(report).toContain('"rationale": "Rework it inside scope."');
+  });
+
   it('renders all undecided criteria and parses valid decision siblings while naming defects', () => {
     const rendered = renderOverScopeDecisionBlock([
       { criterion: 'S3.1', summary: 'First.', relation: 'outside-visible' },

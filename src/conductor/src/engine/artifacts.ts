@@ -4150,11 +4150,16 @@ function findUnalignedFrRows(content: string): string[] {
  * gap-class cell (`impl-gap | intended-drift | plan-gap`; `unknown` when the
  * class cell can't be read). Used by the daemon to decide self-heal vs HALT.
  */
-function findUnalignedFrRowsWithClass(content: string): UnalignedFrRow[] {
+function findUnalignedFrRowsWithClass(
+  content: string,
+  settledOverScopeCriteria: ReadonlySet<string> = new Set(),
+): UnalignedFrRow[] {
   const parsed = parsePrdAuditReport(content);
   if (parsed.ok) {
     return parsed.value.findings
       .filter((finding) => finding.grade !== 'PASS')
+      .filter((finding) =>
+        finding.grade !== 'OVER_SCOPE' || !settledOverScopeCriteria.has(finding.criterion))
       .flatMap((finding) => finding.prdIds.map((fr) => ({
         fr,
         gapClass: finding.grade === 'FIXABLE'
@@ -4192,10 +4197,23 @@ export async function classifyPrdAuditGaps(
   sessionStartedAt: number | undefined,
 ): Promise<PrdGapClassification> {
   const files = await findArtifactFiles(dir, 'prd_audit');
+  const decisions = (await readOverScopeDecisions(dir)).decisions;
   const blocking: UnalignedFrRow[] = [];
   for (const f of files) {
     if (!(await fileIsFreshSinceSession(f, sessionStartedAt))) continue;
-    blocking.push(...findUnalignedFrRowsWithClass(await readFile(f, 'utf-8')));
+    const content = await readFile(f, 'utf-8');
+    // An OVER_SCOPE criterion the operator already accepted, or one whose
+    // intent relation never made it blocking, is not a gap this routing should
+    // act on. Reading only the fresh rows made an accepted widening re-route
+    // the next lap exactly as it did before the operator decided (ADR D8).
+    const relations = overScopeRelations(content);
+    const settled = new Set(
+      [...relations.keys()].filter((criterion) =>
+        ['accepted', 'not-blocking'].includes(
+          classifyOverScopeCriterion(criterion, relations, decisions),
+        )),
+    );
+    blocking.push(...findUnalignedFrRowsWithClass(content, settled));
   }
   if (blocking.length === 0) return { kind: 'clean', summary: 'no blocking FRs' };
 

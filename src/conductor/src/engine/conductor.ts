@@ -637,7 +637,7 @@ export function routePrdAuditPlanGaps(
 export type PrdAuditOverScopeRoute =
   | { kind: 'none' }
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
-  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }> };
+  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; defects?: Array<{ kind: string; criterion?: string }> };
 
 /**
  * One PRD-audit route result shared by the serial SHIP walk and the
@@ -2946,6 +2946,10 @@ export class Conductor {
     const blockingCriteria = new Set([...relations].filter(([, relation]) => relation === 'outside-visible').map(([criterion]) => criterion));
     const cleared = await readFile(join(this.projectRoot, '.pipeline', 'HALT.cleared'), 'utf8').catch(() => '');
     const parsed = parseClearedOverScopeDecisions(cleared, blockingCriteria);
+    // D7: a defect the operator's edit produced must reach the next halt body,
+    // not only the spine. Emitting it and dropping it made the re-halt look
+    // identical to a halt where the operator had never touched the block.
+    let harvestDefects: Array<{ kind: string; criterion?: string }> = [];
     if (parsed.kind === 'parsed') {
       let operator: string | undefined;
       try {
@@ -2954,14 +2958,20 @@ export class Conductor {
       } catch { /* emitted as a defect below */ }
       const result = operator ? await recordOverScopeDecisions(this.projectRoot, parsed.decisions.map((decision) => ({ ...decision, operator }))) : { recorded: [], failure: 'missing-operator' as const };
       const defects = [...parsed.defects, ...(result.failure ? [{ kind: result.failure === 'missing-operator' ? 'missing-operator' as const : 'write-failed' as const }] : [])];
+      harvestDefects = defects;
       if (parsed.decisions.length || defects.length) await this.events.emit({ type: 'over_scope_decision', criteria: [...blockingCriteria], decisions: result.recorded.map((decision) => ({ criterion: decision.criterion, decision: decision.decision })), defects });
     }
     const decisions = await readOverScopeDecisions(this.projectRoot);
     const route = routePrdAuditOverScope(reportText, decisions.decisions);
-    if (route.kind === 'record') {
+    // D8: recorded decisions project into the verdict artifact whichever way
+    // the route went. A halted route carries the same findings — including the
+    // refusal that caused the halt — and previously persisted none of them.
+    if (route.kind === 'record' || route.kind === 'halt') {
       await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
     }
-    return route;
+    return route.kind === 'halt' && harvestDefects.length > 0
+      ? { ...route, defects: harvestDefects }
+      : route;
   }
 
   /**
@@ -5953,7 +5963,7 @@ export class Conductor {
               const reason =
                 `prd-audit halted: user-visible scope requires operator acceptance — ` +
                 `${prdAuditRoute.route.detail}` +
-                `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused)}`;
+                `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused, prdAuditRoute.route.defects ?? [])}`;
               await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -7733,7 +7743,7 @@ export class Conductor {
                 const reason =
                   `prd-audit halted: user-visible scope requires operator acceptance — ` +
                   `${prdAuditRoute.route.detail}` +
-                  `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused)}`;
+                  `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused, prdAuditRoute.route.defects ?? [])}`;
                 await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);

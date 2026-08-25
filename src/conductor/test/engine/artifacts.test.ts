@@ -3520,6 +3520,60 @@ describe('engine/artifacts', () => {
       await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n' + header + body);
     }
 
+    it('an accepted OVER_SCOPE widening flips cleanliness on the next lap', async () => {
+      // ADR D8 / Plan Task 12: the operator's recorded acceptance must reach
+      // the classifier that routes the next lap, not only the gate predicate.
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- | --- | --- |\n' +
+          '| S3.1 | OVER_SCOPE | — | FR-1 | outside-visible | conductor.ts:8163 |\n',
+      );
+      expect((await classifyPrdAuditGaps(dir, undefined)).kind).not.toBe('clean');
+
+      await createFile(
+        '.pipeline/accepted-widenings.json',
+        JSON.stringify({
+          version: 1,
+          decisions: [{
+            criterion: 'S3.1',
+            summary: 'operator accepted S3.1',
+            decision: 'accept',
+            rationale: 'Approved for this feature.',
+            operator: 'test',
+            decidedAt: '2026-08-24T00:00:00.000Z',
+          }],
+        }),
+      );
+      expect((await classifyPrdAuditGaps(dir, undefined)).kind).toBe('clean');
+    });
+
+    it('a refused OVER_SCOPE criterion still routes as a gap', async () => {
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- | --- | --- |\n' +
+          '| S3.1 | OVER_SCOPE | — | FR-1 | outside-visible | conductor.ts:8163 |\n',
+      );
+      await createFile(
+        '.pipeline/accepted-widenings.json',
+        JSON.stringify({
+          version: 1,
+          decisions: [{
+            criterion: 'S3.1',
+            summary: 'operator refused S3.1',
+            decision: 'refuse',
+            rationale: 'Rework it instead.',
+            operator: 'test',
+            decidedAt: '2026-08-24T00:00:00.000Z',
+          }],
+        }),
+      );
+      expect((await classifyPrdAuditGaps(dir, undefined)).kind).not.toBe('clean');
+    });
+
     it('returns clean when there is no audit report', async () => {
       const c = await classifyPrdAuditGaps(dir, undefined);
       expect(c.kind).toBe('clean');
