@@ -15,7 +15,17 @@ const { watcherHandlers, watcher } = vi.hoisted(() => {
   };
   return { watcherHandlers: handlers, watcher: fakeWatcher };
 });
-vi.mock('chokidar', () => ({ watch: vi.fn(() => watcher) }));
+// chokidar 5 is pure ESM and its package exports no CJS entry, so vitest no
+// longer synthesizes a default export from a factory mock the way it did for
+// chokidar 4. daemon-deps.ts imports the DEFAULT (`import chokidar from
+// 'chokidar'`), so the factory has to provide it explicitly — otherwise
+// `chokidar.watch` is undefined, watchHaltCleared's try/catch swallows the
+// TypeError, no handler is ever registered, and the test fails downstream on
+// an empty handler map rather than at the mock.
+vi.mock('chokidar', () => {
+  const watch = vi.fn(() => watcher);
+  return { default: { watch }, watch };
+});
 const { runProjectTeardown } = vi.hoisted(() => ({
   runProjectTeardown: vi.fn<
     (worktreePath: string, log?: (message: string) => void, opts?: { verbose?: boolean; timeoutSeconds?: number }) => Promise<void>
