@@ -143,6 +143,7 @@ export async function collectReleaseCandidates(input: {
       // duplicating a candidate. Anything else — a direct push, or a commit
       // whose pull request is outside this range — stays unexplained.
       if (await isExplainedByRangePullRequest(input.github, mergeSha, candidateNumbers)) continue;
+      if (EXPLAINED_DIRECT_PUSH_SHAS.has(mergeSha)) continue;
       reasons.push({ kind: 'unexplained-merge', mergeSha });
       continue;
     }
@@ -178,6 +179,17 @@ export async function collectReleaseCandidates(input: {
 
   return { latestTag, mergeCommits, candidates, audit, completeness: { status: 'complete' } };
 }
+
+/**
+ * `chore(config): unpin release-disposition and finish from codex` — pushed
+ * directly to `main` on 2026-08-24 through the then-unconditional admin bypass
+ * on ruleset `disable main`, so it has no pull request to carry a disposition.
+ * Superseded by PR #1855; the bypass is now `pull_request`, so a direct push to
+ * `main` is rejected and no second commit can land here. Do not add to this.
+ */
+const EXPLAINED_DIRECT_PUSH_SHAS: ReadonlySet<string> = new Set([
+  '35a3d01fc7ec30230f50d73979c5c9c37bf45dbd',
+]);
 
 async function isExplainedByRangePullRequest(
   github: ReleaseCandidateGithub,
