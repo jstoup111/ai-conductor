@@ -9,7 +9,7 @@ import {
   stat,
 } from 'node:fs/promises';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   recordGateRepair,
 } from './test-suite-remediation.js';
@@ -2151,6 +2151,14 @@ export class Conductor {
   private currentAttemptStartedAt: number | undefined;
 
   /**
+   * Engine-owned identity for the current generic dispatch. The provider
+   * lifecycle attempt id is minted inside DefaultStepRunner, after this seam,
+   * so it is not reachable through the StepRunner contract. Cleared alongside
+   * currentAttemptStartedAt after the dispatch completion check.
+   */
+  private currentRunId: string | undefined;
+
+  /**
    * Set when a recorded prd-audit finding could not be projected into the
    * verdict artifact (D8). Consumed once by `routeCurrentPrdAudit`, which
    * turns it into a named blocking route.
@@ -2418,6 +2426,7 @@ export class Conductor {
     return {
       sessionStartedAt: state.session_started_at,
       attemptStartedAt: this.currentAttemptStartedAt,
+      attemptRunId: this.currentRunId,
       featureDesc: state.feature_desc,
       config: this.config,
       getHeadSha: () => currentCommitSha(this.projectRoot),
@@ -7605,6 +7614,7 @@ export class Conductor {
             await this.completionCtx(state),
           );
           this.currentAttemptStartedAt = undefined;
+          this.currentRunId = undefined;
           const hasRepairableRedEvidenceRefusal =
             !preCheck.done &&
             (preCheck.acceptanceRedRefusalClass === 'missing' ||
@@ -7889,6 +7899,7 @@ export class Conductor {
               // before the generic dispatch call so completionCtx can
               // require the verdict artifact to postdate THIS attempt.
               this.currentAttemptStartedAt = Date.now();
+              this.currentRunId = randomUUID();
             }
             // Dispatch preflight: a step whose working directory no longer
             // exists can never succeed. Without this the provider is launched
@@ -8575,6 +8586,7 @@ export class Conductor {
             // consume the in-flight attempt timestamp, so clear it now
             // rather than leaking it into a later completionCtx() call.
             this.currentAttemptStartedAt = undefined;
+            this.currentRunId = undefined;
           }
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity') {
             if (step.name === 'acceptance_specs') {
@@ -8617,6 +8629,7 @@ export class Conductor {
             // re-checks below, the next step, or an idle/backstop caller)
             // as a stale "in-flight attempt" timestamp.
             this.currentAttemptStartedAt = undefined;
+            this.currentRunId = undefined;
 
             if (step.name === 'prd_audit') {
               const prdAuditRoute = await this.routeCurrentPrdAudit(state);

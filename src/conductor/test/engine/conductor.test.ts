@@ -2454,6 +2454,53 @@ describe('engine/conductor', () => {
       expect(idleCtxAfter.attemptStartedAt).toBeUndefined();
     });
 
+    // Covers: task:2
+    it('completionCtx carries one distinct attemptRunId for each verdict dispatch only', async () => {
+      await seedToBuildReview();
+      const attemptRunIds: Array<string | undefined> = [];
+      let conductor: Conductor;
+      const runner: StepRunner = {
+        run: async () => {
+          const stateResult = await readState(statePath);
+          const state = stateResult.ok ? stateResult.value : ({} as ConductState);
+          const ctx = await (conductor as unknown as {
+            completionCtx: (s: ConductState) => Promise<{ attemptRunId?: string }>;
+          }).completionCtx(state);
+          attemptRunIds.push(ctx.attemptRunId);
+          return { success: true };
+        },
+      };
+      conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'build_review',
+        verifyArtifacts: true,
+        maxRetries: 2,
+        config: { build_review: { rubrics: { testQuality: { enabled: true } } } },
+      });
+
+      const stateResult = await readState(statePath);
+      const state = stateResult.ok ? stateResult.value : ({} as ConductState);
+      const idleCtx = await (conductor as unknown as {
+        completionCtx: (s: ConductState) => Promise<{ attemptRunId?: string }>;
+      }).completionCtx(state);
+      expect(idleCtx.attemptRunId).toBeUndefined();
+
+      await conductor.run();
+
+      expect(attemptRunIds).toHaveLength(2);
+      expect(attemptRunIds[0]).toMatch(/\S/);
+      expect(attemptRunIds[1]).toMatch(/\S/);
+      expect(attemptRunIds[0]).not.toBe(attemptRunIds[1]);
+
+      const idleCtxAfter = await (conductor as unknown as {
+        completionCtx: (s: ConductState) => Promise<{ attemptRunId?: string }>;
+      }).completionCtx(state);
+      expect(idleCtxAfter.attemptRunId).toBeUndefined();
+    });
+
     it('a review retry whose session does not rewrite the verdict does not pass the gate', async () => {
       await seedToBuildReview();
       // Stale verdict, written well before this run starts; the stub

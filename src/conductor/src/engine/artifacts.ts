@@ -1115,6 +1115,11 @@ export interface CompletionContext {
    * resume/backstop/legacy callers, which fall back to `sessionStartedAt`.
    */
   attemptStartedAt?: number;
+  /**
+   * Engine-owned identity for the in-flight dispatch. Absent for idle,
+   * resume, and backstop completion checks.
+   */
+  attemptRunId?: string;
   /** Used by the retro predicate to prefer slug-matched filenames. */
   featureDesc?: string;
   /** Prepared once by callers that need feature-aware generic artifact resolution. */
