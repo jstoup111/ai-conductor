@@ -73,7 +73,12 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
-import { checkStepCompletion, type RemediationGap } from '../../src/engine/artifacts.js';
+import {
+  checkStepCompletion,
+  stampGateRunIdentity,
+  PRD_AUDIT_CODE_STAMP,
+  type RemediationGap,
+} from '../../src/engine/artifacts.js';
 import {
   creditKickbackGateLaps,
   readKickbackLedger,
@@ -2499,6 +2504,31 @@ describe('engine/conductor', () => {
         completionCtx: (s: ConductState) => Promise<{ attemptRunId?: string }>;
       }).completionCtx(state);
       expect(idleCtxAfter.attemptRunId).toBeUndefined();
+    });
+
+    // Covers: task:3
+    it('merges an engine-owned run id onto a verdict sidecar without changing its code stamp', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      await writeFile(sidecar, '{"codeStamp":"head-before-settle"}\n');
+
+      await stampGateRunIdentity(dir, 'prd_audit', 'attempt-owned-by-engine');
+
+      await expect(readFile(sidecar, 'utf8')).resolves.toBe(
+        '{\n  "codeStamp": "head-before-settle",\n  "runId": "attempt-owned-by-engine"\n}\n',
+      );
+    });
+
+    it('treats a corrupt verdict sidecar as empty when stamping the engine run id', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      await writeFile(sidecar, '{not-json');
+
+      await stampGateRunIdentity(dir, 'prd_audit', 'attempt-owned-by-engine');
+
+      await expect(readFile(sidecar, 'utf8')).resolves.toBe(
+        '{\n  "runId": "attempt-owned-by-engine"\n}\n',
+      );
     });
 
     it('a review retry whose session does not rewrite the verdict does not pass the gate', async () => {

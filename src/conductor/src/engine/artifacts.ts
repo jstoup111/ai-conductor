@@ -2338,6 +2338,46 @@ export const ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP =
 /** Sidecar path for manual_test's code stamp (see `GateCodeStampMarker`). */
 export const MANUAL_TEST_CODE_STAMP = '.pipeline/manual-test-code-stamp.json';
 
+const VERDICT_RUN_ID_SIDECARS: Partial<Record<StepName, string>> = {
+  manual_test: MANUAL_TEST_CODE_STAMP,
+  prd_audit: PRD_AUDIT_CODE_STAMP,
+  architecture_review_as_built: ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+};
+
+async function readGateCodeStampMarker(path: string): Promise<GateCodeStampMarker> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'));
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as GateCodeStampMarker
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Records the engine-owned identity of a verdict dispatch at settle. */
+export async function stampGateRunIdentity(
+  dir: string,
+  step: StepName,
+  runId: string | undefined,
+): Promise<void> {
+  const sidecarPath = VERDICT_RUN_ID_SIDECARS[step];
+  if (!sidecarPath || !runId) return;
+
+  try {
+    const path = join(dir, sidecarPath);
+    const existing = await readGateCodeStampMarker(path);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      JSON.stringify({ ...existing, runId } satisfies GateCodeStampMarker, null, 2) + '\n',
+      'utf-8',
+    );
+  } catch {
+    // Best-effort; Task 4 owns observable write-failure policy.
+  }
+}
+
 /**
  * Writes `{ codeStamp }` to a `GateCodeStampMarker` sidecar at true-completion
  * exit. Best-effort — never throws, never blocks returning `done: true`.
@@ -2348,9 +2388,11 @@ async function writeGateCodeStamp(
   ctx: CompletionContext,
 ): Promise<void> {
   const codeStamp = await stampCode(ctx);
+  const path = join(dir, sidecarPath);
+  const existing = await readGateCodeStampMarker(path);
   await writeFile(
-    join(dir, sidecarPath),
-    JSON.stringify({ codeStamp } satisfies GateCodeStampMarker, null, 2),
+    path,
+    JSON.stringify({ ...existing, codeStamp } satisfies GateCodeStampMarker, null, 2),
     'utf-8',
   ).catch(() => {});
 }

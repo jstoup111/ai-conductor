@@ -171,6 +171,7 @@ import {
   type CompletionContext,
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
+  stampGateRunIdentity,
 } from './artifacts.js';
 import { parsePlanTaskBodies } from './plan-task-parse.js';
 import {
@@ -6114,6 +6115,7 @@ export class Conductor {
             // it does not add another validity predicate.
             const nativeBranchResults = new Map<string, StepRunResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
+              const branchRunIds = new Map(members.map((member) => [member.name, randomUUID()]));
               const roundChanges: Record<string, unknown> = {};
               for (const member of members) {
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
@@ -6138,7 +6140,14 @@ export class Conductor {
                         return settled;
                       },
                       {
-                        onMemberEvent: (event) => {
+                        onMemberEvent: async (event) => {
+                          if (event.phase === 'result') {
+                            await stampGateRunIdentity(
+                              this.projectRoot,
+                              event.member as StepName,
+                              branchRunIds.get(event.member),
+                            );
+                          }
                           if (event.phase === 'result' && event.outcome === 'verdict:pass') {
                             const syntheticKey = `${builtinGroup.name}__${event.member}`;
                             inFlightGroupCompletions![event.member] = 'done';
@@ -6171,7 +6180,15 @@ export class Conductor {
                       // via the signal handlers above; a clean round below
                       // clears it before any halt/allGreen/kickback branching
                       // runs, so those paths are entirely unaffected.
-                      onMemberEvent: (event) => {
+                      onMemberEvent: async (event) => {
+                        if (event.phase === 'result') {
+                          // This settles before runGroupBranch returns to the join.
+                          await stampGateRunIdentity(
+                            this.projectRoot,
+                            event.member as StepName,
+                            branchRunIds.get(event.member),
+                          );
+                        }
                         if (event.phase === 'result' && event.outcome === 'verdict:pass') {
                           const syntheticKey = `${builtinGroup.name}__${event.member}`;
                           inFlightGroupCompletions![event.member] = 'done';
@@ -8162,6 +8179,10 @@ export class Conductor {
             attempt--;
             continue;
           }
+
+          // The engine owns verdict identity. Stamp it once the provider call
+          // settles, before any terminal success, error, or halt routing.
+          await stampGateRunIdentity(this.projectRoot, step.name, this.currentRunId);
 
           // A missing command is a deterministic environment failure. Retrying,
           // escalating model/effort, or walking providers cannot make a command
