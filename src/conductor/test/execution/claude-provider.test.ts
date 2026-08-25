@@ -240,6 +240,59 @@ describe('ClaudeProvider', () => {
       }));
     });
 
+    it('does not turn partial stream observations from a signal-killed dispatch into usage', async () => {
+      const stdout = new PassThrough();
+      let resolveProcess: (result: { stdout: string; stderr: string; exitCode?: number; signal: string }) => void;
+      let resolveStarted: () => void;
+      const started = new Promise<void>((resolve) => {
+        resolveStarted = resolve;
+      });
+      const process = Object.assign(
+        new Promise<{ stdout: string; stderr: string; exitCode?: number; signal: string }>((resolve) => {
+          resolveProcess = resolve;
+        }),
+        { stdout, kill: vi.fn() },
+      );
+      provider = new ClaudeProvider(undefined, () => {
+        resolveStarted!();
+        return process as any;
+      });
+      const onProviderStream = vi.fn();
+      const streamRecords = [
+        JSON.stringify({
+          type: 'assistant',
+          message: { usage: { input_tokens: 17, output_tokens: 7 } },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          message: { usage: { input_tokens: 29, output_tokens: 13 } },
+        }),
+      ];
+
+      const invocation = provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        streamConsumer: { onProviderStream, close: vi.fn() },
+      });
+      await started;
+      stdout.write(`${streamRecords.join('\n')}\n`);
+      resolveProcess!({
+        stdout: streamRecords.join('\n'),
+        stderr: '',
+        signal: 'SIGTERM',
+      });
+
+      const result = await invocation;
+
+      expect(onProviderStream).toHaveBeenLastCalledWith(expect.objectContaining({
+        uncachedInputTokens: 46,
+        outputTokens: 20,
+      }));
+      expect(result).toMatchObject({ success: false, exitCode: 1 });
+      expect(result.tokenUsage).toBeUndefined();
+      expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
+    });
+
     it('contains a throwing stream consumer without aborting a successful non-REPL dispatch', async () => {
       const stdout = new PassThrough();
       let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;
