@@ -315,6 +315,73 @@ export const STEP_ARTIFACT_CONTRACTS = {
   attribution_verify: [],
 } satisfies Record<StepName, readonly ArtifactPatternContract[]>;
 
+export interface FeatureArtifactStemValidationEntry {
+  step: StepName;
+  paths: readonly string[];
+}
+
+export interface FeatureArtifactStemViolation {
+  step: StepName;
+  path: string;
+  strategy: FeatureArtifactIdentityStrategy['strategy'];
+  expectedStem: string;
+  exampleExpectedPath: string;
+}
+
+function artifactPathMatchesPattern(path: string, pattern: string): boolean {
+  let expression = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    if (pattern.slice(index, index + 3) === '**/') {
+      expression += '(?:.*/)?';
+      index += 2;
+    } else if (pattern[index] === '*') {
+      expression += '[^/]*';
+    } else {
+      expression += pattern[index].replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+    }
+  }
+  return new RegExp(`(?:^|/)${expression}$`).test(path.replaceAll('\\', '/'));
+}
+
+function exampleArtifactPath(pattern: string, featureIdentity: string): string {
+  const wildcardIndex = pattern.indexOf('*');
+  const directory = wildcardIndex === -1 ? dirname(pattern) : pattern.slice(0, wildcardIndex);
+  const extension = pattern.endsWith('.md') ? '.md' : '';
+  return `${directory.endsWith('/') ? directory : `${directory}/`}${basename(featureIdentity, '.md')}${extension}`;
+}
+
+/**
+ * Validates that candidate artifacts for feature-scoped contracts retain the
+ * active feature identity in their filename stem. Repository- and run-scoped
+ * contracts deliberately have no feature identity requirement.
+ */
+export function validateFeatureArtifactStems(
+  entries: readonly FeatureArtifactStemValidationEntry[],
+  featureIdentity: string,
+): FeatureArtifactStemViolation[] {
+  const violations: FeatureArtifactStemViolation[] = [];
+  const expectedStem = basename(featureIdentity, '.md');
+
+  for (const { step, paths } of entries) {
+    for (const path of paths) {
+      for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
+        if (contract.scope !== 'feature') continue;
+        if (!artifactPathMatchesPattern(path, contract.pattern)) continue;
+        if (artifactMatchesFeatureIdentity(path, featureIdentity, contract.identity)) continue;
+        violations.push({
+          step,
+          path,
+          strategy: contract.identity.strategy,
+          expectedStem,
+          exampleExpectedPath: exampleArtifactPath(contract.pattern, featureIdentity),
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
  * or a literal filename. Empty list = step produces no file artifacts; verification

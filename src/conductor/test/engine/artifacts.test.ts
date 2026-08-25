@@ -58,6 +58,7 @@ vi.mock('../../src/engine/shipment-evidence.js', () => ({
 import {
   STEP_ARTIFACT_CONTRACTS,
   STEP_ARTIFACT_GLOBS,
+  validateFeatureArtifactStems,
   buildArtifactResolutionContext,
   resolveArtifactFiles,
   findArtifactFiles,
@@ -231,6 +232,85 @@ describe('engine/artifacts', () => {
 
     it('declares manual_test results file', () => {
       expect(STEP_ARTIFACT_GLOBS.manual_test).toEqual(['.pipeline/manual-test-results.md']);
+    });
+  });
+
+  describe('validateFeatureArtifactStems', () => {
+    const featureIdentity = 'clean-rubric-judgements-rejected-as-invalid-provid';
+
+    it('accepts exact and date-prefixed normalized stems', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [
+            {
+              step: 'conflict_check',
+              paths: [
+                `.docs/conflicts/${featureIdentity}.md`,
+                `.docs/conflicts/2026-08-19-${featureIdentity}.md`,
+              ],
+            },
+          ],
+          featureIdentity,
+        ),
+      ).toEqual([]);
+    });
+
+    it('reports truncated normalized stems with the expected filename', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [
+            {
+              step: 'conflict_check',
+              paths: ['.docs/conflicts/2026-08-19-clean-rubric-judgements.md'],
+            },
+          ],
+          featureIdentity,
+        ),
+      ).toEqual([
+        {
+          step: 'conflict_check',
+          path: '.docs/conflicts/2026-08-19-clean-rubric-judgements.md',
+          strategy: 'normalized-stem',
+          expectedStem: featureIdentity,
+          exampleExpectedPath: `.docs/conflicts/${featureIdentity}.md`,
+        },
+      ]);
+    });
+
+    it('reports plan-stem mismatches for plan and coherence artifacts', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [
+            { step: 'plan', paths: ['.docs/plans/other-feature.md'] },
+            { step: 'coherence_check', paths: ['.docs/coherence/other-feature.md'] },
+          ],
+          featureIdentity,
+        ),
+      ).toEqual([
+        {
+          step: 'plan',
+          path: '.docs/plans/other-feature.md',
+          strategy: 'plan-stem',
+          expectedStem: featureIdentity,
+          exampleExpectedPath: `.docs/plans/${featureIdentity}.md`,
+        },
+        {
+          step: 'coherence_check',
+          path: '.docs/coherence/other-feature.md',
+          strategy: 'plan-stem',
+          expectedStem: featureIdentity,
+          exampleExpectedPath: `.docs/coherence/${featureIdentity}.md`,
+        },
+      ]);
+    });
+
+    it('ignores repository-scoped paths on mixed-scope steps', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [{ step: 'architecture_review', paths: ['.docs/decisions/adr-2026-08-25.md'] }],
+          featureIdentity,
+        ),
+      ).toEqual([]);
     });
   });
 
