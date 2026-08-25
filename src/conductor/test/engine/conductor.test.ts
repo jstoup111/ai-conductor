@@ -2612,7 +2612,7 @@ describe('engine/conductor', () => {
       ],
     ] as const)(
       'accepts a freshly written %s verdict report with the settled dispatch identity',
-      async (step, reportPath) => {
+      async (step, reportPath, _sidecarPath) => {
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         const runId = `task-6-${step}`;
         const dispatchStartedAt = Date.now();
@@ -2674,8 +2674,95 @@ describe('engine/conductor', () => {
       }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt);
       expect(result.reason).toContain('expected run id current-run');
       expect(result.reason).toContain('found run id current-run');
+      expect(result.reason).toContain('found mtime');
       expect(result.reason).not.toContain('FR-17');
     });
+
+    // Covers: task:7
+    it('rejects a partial prd-audit write by naming the missing run-id marker only', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
+      const dispatchStartedAt = Date.now();
+      await utimes(report, new Date(dispatchStartedAt), new Date(dispatchStartedAt));
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+      });
+
+      const result = await (conductor as unknown as {
+        verdictDispatchHandshake: (
+          name: StepName,
+          expectedRunId: string,
+          startedAt: number,
+        ) => Promise<{ done: boolean; routeClass?: string; reason?: string }>;
+      }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt);
+
+      expect(result).toMatchObject({ done: false, routeClass: 'absent' });
+      expect(result.reason).toContain(PRD_AUDIT_CODE_STAMP);
+      expect(result.reason).not.toContain('.pipeline/prd-audit.md is missing');
+      expect(result.reason).not.toContain('FR-17');
+    });
+
+    it('fails closed and warns without throwing when a verdict sidecar is corrupt', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
+      const dispatchStartedAt = Date.now();
+      await utimes(report, new Date(dispatchStartedAt), new Date(dispatchStartedAt));
+      await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), '{not-json');
+      const logs: string[] = [];
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        log: (message) => logs.push(message),
+      });
+
+      await expect(
+        (conductor as unknown as {
+          verdictDispatchHandshake: (
+            name: StepName,
+            expectedRunId: string,
+            startedAt: number,
+          ) => Promise<{ done: boolean; routeClass?: string; reason?: string }>;
+        }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt),
+      ).resolves.toMatchObject({ done: false, routeClass: 'absent' });
+
+      expect(logs).toContainEqual(expect.stringContaining(PRD_AUDIT_CODE_STAMP));
+      expect(logs.join('\n')).not.toContain('FR-17');
+    });
+
+    it.each(['', '{', '[]', 'null', '{"runId":0}', '{"runId":""}'])(
+      'never throws for malformed verdict sidecar input %j',
+      async (sidecar) => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        const report = join(dir, '.pipeline/prd-audit.md');
+        await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
+        const dispatchStartedAt = Date.now();
+        await utimes(report, new Date(dispatchStartedAt), new Date(dispatchStartedAt));
+        await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), sidecar);
+        const conductor = new Conductor({
+          projectRoot: dir,
+          stateFilePath: statePath,
+          stepRunner: createMockStepRunner({ success: true }),
+          events,
+        });
+
+        await expect(
+          (conductor as unknown as {
+            verdictDispatchHandshake: (
+              name: StepName,
+              expectedRunId: string,
+              startedAt: number,
+            ) => Promise<{ done: boolean; routeClass?: string; reason?: string }>;
+          }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt),
+        ).resolves.toMatchObject({ done: false, routeClass: 'absent' });
+      },
+    );
 
     it('a review retry whose session does not rewrite the verdict does not pass the gate', async () => {
       await seedToBuildReview();

@@ -2538,6 +2538,12 @@ export class Conductor {
     try {
       const files = await findArtifactFilesForStep(this.projectRoot, step);
       const identities = await verdictProducedByRun(this.projectRoot, step, expectedRunId);
+      const sidecarPath: Partial<Record<StepName, string>> = {
+        manual_test: MANUAL_TEST_CODE_STAMP,
+        prd_audit: PRD_AUDIT_CODE_STAMP,
+        architecture_review_as_built: ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+      };
+      const marker = sidecarPath[step] ?? `${step} verdict sidecar`;
       const foundRunId = identities.state === 'stale-run-identity'
         ? identities.foundRunId
         : identities.state === 'match'
@@ -2571,9 +2577,14 @@ export class Conductor {
       }
 
       if (identities.state !== 'match') {
+        const identityState = identities.state === 'stale-run-identity' ? 'stale' : 'unstamped';
         failures.push(
-          `${step} verdict sidecar is ${identities.state === 'stale-run-identity' ? 'stale' : 'unstamped'} ` +
+          `${marker} is ${identityState} ` +
           `(expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId})`,
+        );
+        (this.log ?? console.warn)(
+          `warning: post-dispatch verdict write handshake could not verify ${marker} for ${step}; ` +
+          `expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId}`,
         );
       }
 
@@ -2588,6 +2599,10 @@ export class Conductor {
     } catch {
       // D3: a read failure is a failed handshake, never a thrown conductor
       // failure. Task 7 adds the per-artifact corrupt-input diagnostics.
+      (this.log ?? console.warn)(
+        `warning: post-dispatch verdict write handshake could not verify ${step}; ` +
+        `expected run id ${expectedRunId ?? 'none'}; found run id unavailable`,
+      );
       return {
         done: false,
         routeClass: 'absent',
