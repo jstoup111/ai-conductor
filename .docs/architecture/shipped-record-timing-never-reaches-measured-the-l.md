@@ -58,8 +58,8 @@ sequenceDiagram
 
 - **`activeInterval` is stamped by the persister, not by the emitter.** `event-persister.ts:95-100`
   computes it at persist time from `openSteps` / `openGroups`, keyed by step name, and only for
-  `step_completed`, `step_failed`, `parallel_completed`, `parallel_failure`. The terminal event is
-  therefore the sole carrier of an execution's active time — which is why an execution that never
+  `step_completed`, `step_failed`, `step_refused`, `parallel_completed`, `parallel_failure`. The
+  terminal event is therefore the sole carrier of an execution's active time — which is why an execution that never
   emits a terminal loses its duration outright, not merely its close marker.
 - **The open map is per-process; the ledger is per-worktree and append-only.** A start written by
   one dispatch and a terminal written by the next cannot be paired by the persister, because the new
@@ -83,3 +83,4 @@ sequenceDiagram
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-08-12 | Initial generation | DECIDE for #1260 — shipped-record timing never reaches `measured` |
+| 2026-08-25 | Serial `step_refused` added to the persister's terminal set | #1753 introduced a refusal terminal; a serial refusal closes its step interval, while a validation-group member's refusal stays nonterminal until `parallel_failure` closes the group |

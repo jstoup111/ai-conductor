@@ -847,6 +847,11 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** A typed refusal is an entry/environment outcome, never provider text. */
+  refusal?: {
+    kind: 'seal' | 'needs-human' | 'validation-verdict';
+    reason: string;
+  };
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
   /**
@@ -1634,8 +1639,14 @@ export class Conductor {
       : event.type === 'parallel_started'
         ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
         : undefined;
+    // A refusal normally closes its own step execution. Validation-group
+    // members run inside their entry's parallel execution instead, so their
+    // refusal is deliverable (but non-terminal) while that enclosing window
+    // remains open.
     const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
       ? `step:${event.step}`
+      : event.type === 'step_refused'
+        ? (this.openExecutions.has(`step:${event.step}`) ? `step:${event.step}` : undefined)
       : event.type === 'parallel_completed'
         || (event.type === 'parallel_failure' && event.terminal !== false)
         ? `parallel:${event.step}`
@@ -1652,6 +1663,15 @@ export class Conductor {
       // still resolve. Its ordinary terminal is then an orphan: the ledger
       // listener cannot recover an interval after the shutdown terminal consumed it.
       if (!this.openExecutions.has(terminalKey)) return Promise.resolve();
+    }
+    if (event.type === 'step_refused' && !terminalKey) {
+      const group = getGroupForStep(event.step);
+      const hasOpenGroupExecution = group?.members.some((member) =>
+        this.openExecutions.has(`parallel:${member}`),
+      ) ?? false;
+      // A missing step key is valid only for a currently-running group member.
+      // Otherwise this is the same late orphan that SIGTERM must suppress.
+      if (!hasOpenGroupExecution) return Promise.resolve();
     }
     const deliver = async () => {
       this.activeExecutionEventDeliveries += 1;
@@ -1733,6 +1753,63 @@ export class Conductor {
       ? await this.surfaceRemediationPr(input.reason)
       : undefined;
     await this.emitLoopHalt(input.loopHaltReason ?? input.reason, prUrl);
+  }
+
+  /**
+   * Record a typed refusal without rewriting the step as a work failure. The
+   * caller has already written the authoritative HALT marker through the
+   * shared marker seam; this method owns only its state and spine effects.
+   */
+  private async recordStepRefusal(
+    state: ConductState,
+    step: StepName,
+    kind: 'seal' | 'needs-human' | 'validation-verdict',
+    reason: string,
+  ): Promise<void> {
+    await this.commitStateChanges(state, `record refused ${step} step`, {
+      [step]: 'refused',
+      last_step: step,
+    });
+    await this.emitExecutionEvent({ type: 'step_refused', step, kind, reason });
+  }
+
+  /**
+   * Terminal validation-group exit. The group opened `parallel:<entry>`, so a
+   * member refusal is delivered while that window remains open, then the group
+   * closes. Attribute the refusal to the member whose judgement ended the
+   * attempt.
+   * Attributing it to the fan-out entry step (whose own work decided nothing)
+   * both mis-states the halt and leaves the judging validator unrefused.
+   */
+  private async recordGroupRefusal(input: {
+    state: ConductState;
+    groupStep: StepName;
+    judgingStep: StepName;
+    /** Members whose attempt this halt ended; defaults to the judging step. */
+    refusedSteps?: readonly StepName[];
+    reason: string;
+  }): Promise<void> {
+    const refused = new Set<StepName>(input.refusedSteps ?? []);
+    refused.add(input.judgingStep);
+    const changes: Record<string, unknown> = { last_step: input.judgingStep };
+    for (const step of refused) changes[step] = 'refused';
+    await this.commitStateChanges(
+      input.state,
+      `record refused ${input.judgingStep} step`,
+      changes,
+    );
+    await this.emitExecutionEvent({
+      type: 'step_refused',
+      step: input.judgingStep,
+      kind: 'validation-verdict',
+      reason: input.reason,
+    });
+    await this.emitExecutionEvent({
+      type: 'parallel_failure',
+      step: input.groupStep,
+      branch: input.judgingStep,
+      error: input.reason,
+    });
   }
   private featureSlug?: string;
   private operatorParkBoundary?: () => Promise<boolean>;
@@ -6017,6 +6094,11 @@ export class Conductor {
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+              // Story 3, negative path: a no-verdict outcome is the validator's
+              // own runner dying (thrown branch, terminal error, or exhausted
+              // retry budget) — a work failure, not a judgement awaiting a
+              // human. It keeps `failed` so the refusal lane can never mask a
+              // broken validator.
               await this.commitStateChanges(state, `fail ${step.name} validation group`, {
                 [step.name]: 'failed',
                 last_step: step.name,
@@ -6159,9 +6241,19 @@ export class Conductor {
                 reason + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
               );
-              await this.commitStateChanges(state, `fail ${step.name} validation group`, {
-                [step.name]: 'failed',
-                last_step: step.name,
+              await this.recordGroupRefusal({
+                state,
+                groupStep: step.name,
+                judgingStep: 'architecture_review_as_built',
+                // Siblings that missed their own gate are ended by this halt
+                // too; leaving them unstamped understated the group's exit.
+                refusedSteps: membership.dispatchable
+                  .filter((member, idx) =>
+                    outcomes[idx]?.kind !== 'verdict' ||
+                    outcomes[idx]?.verdict !== 'pass' ||
+                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
+                  .map((member) => member.name as StepName),
+                reason,
               });
               await this.emitLoopHalt(reason);
               process.off('SIGINT', sigintHandler);
@@ -6484,7 +6576,7 @@ export class Conductor {
             // DONE or HALT" and park). Preserves the #367 guarantee the
             // serial walk gave these same steps: a manual_test FAIL or a
             // no-evidence gate miss HALTs — it is never silently dropped.
-            const failedMemberReasons = membership.dispatchable
+            const failedMembers = membership.dispatchable
               .filter((member, idx) => {
                 const outcome = outcomes[idx];
                 if (outcome?.kind !== 'verdict' || outcome.verdict !== 'pass') return true;
@@ -6492,7 +6584,8 @@ export class Conductor {
                 if (!gateVerdicts.get(member.name)?.satisfied) return true;
                 if (member.name === 'manual_test' && manualTestFailRows.length > 0) return true;
                 return false;
-              })
+              });
+            const failedMemberReasons = failedMembers
               .map((member) => {
                 if (member.name === 'manual_test' && manualTestFailRows.length > 0) {
                   return `step 'manual_test' failed: FAIL rows in .pipeline/manual-test-results.md`;
@@ -6514,21 +6607,18 @@ export class Conductor {
                   (failedMemberReasons.length > 0
                     ? failedMemberReasons.join('; ')
                     : 'non-green branch outcome');
-            await this.commitStateChanges(state, `fail ${step.name} validation group`, {
-              [step.name]: 'failed',
-              last_step: step.name,
-            });
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
               await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human');
             }
-            await emitTracked({
-              type: 'step_failed',
-              step: step.name,
-              // Carry the per-member gate reasons (e.g. the manual_test
-              // whitewash-guard refusal), not just a generic label — the
-              // serial walk's step_failed carried the gate reason too.
-              error: groupHaltReason,
-              retryCount: 0,
+            // Attribute the refusal to the first member that actually failed
+            // its own gate; with none identified the group entry is the only
+            // honest subject left.
+            await this.recordGroupRefusal({
+              state,
+              groupStep: step.name,
+              judgingStep: (failedMembers[0]?.name as StepName | undefined) ?? step.name,
+              refusedSteps: failedMembers.map((member) => member.name as StepName),
+              reason: groupHaltReason,
             });
             await this.emitLoopHalt(groupHaltReason);
             process.off('SIGINT', sigintHandler);
@@ -6550,6 +6640,25 @@ export class Conductor {
         const gate = checkGate(step, state);
         if (!gate.passed) {
           await emitTracked({ type: 'gate_blocked', step: step.name, reason: gate.reason });
+          // A pending predecessor remains runnable in the ordinary forward
+          // walk, so preserve the existing generic daemon backstop for that
+          // selected-entry shape. Only the residual state — every direct
+          // prerequisite is already non-runnable — needs an immediate,
+          // actionable HALT naming the durable blocker.
+          const noRunnablePrerequisite = gate.unsatisfied.every(
+            (prerequisite) => getStepStatus(state, prerequisite) !== 'pending',
+          );
+          if (this.daemon && noRunnablePrerequisite) {
+            const prerequisites = gate.unsatisfied.map(
+              (prerequisite) => `${prerequisite} (${getStepStatus(state, prerequisite)})`,
+            );
+            const haltReason =
+              `Step '${step.name}' is blocked by unsatisfied prerequisite${prerequisites.length === 1 ? '' : 's'}: ` +
+              prerequisites.join(', ') +
+              '. Operator action is required before this run can continue.';
+            await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+            await this.emitLoopHalt(haltReason);
+          }
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
           return;
@@ -7046,7 +7155,11 @@ export class Conductor {
             buildWatcher?.stop();
             closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
-            result = { success: false, output: dispatchIssue };
+            result = {
+              success: false,
+              output: dispatchIssue,
+              refusal: { kind: 'seal', reason: dispatchIssue },
+            };
             // Write the HALT marker directly rather than relying solely on
             // the generic "retries exhausted" flow below. Gated on `attempt
             // >= 2` — the SAME literal threshold the pre-existing stall
@@ -7718,8 +7831,7 @@ export class Conductor {
                 haltBeforeAttempt,
               );
               if (stepWrittenHalt) {
-                state[step.name] = 'failed';
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
                 await this.emitLoopHalt(stepWrittenHalt);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
@@ -8504,8 +8616,7 @@ export class Conductor {
                   haltBeforeAttempt,
                 );
                 if (stepWrittenHalt) {
-                  state[step.name] = 'failed';
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
                   await this.emitLoopHalt(stepWrittenHalt);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
@@ -8638,6 +8749,18 @@ export class Conductor {
         }
 
         if (!succeeded) {
+          if (failedStepResult?.refusal) {
+            const { kind, reason } = failedStepResult.refusal;
+            await this.writeHaltMarker(
+              reason + '\n',
+              kind === 'seal' ? PROTECTED_ARTIFACT_HALT_CLASS : 'needs-human',
+            );
+            await this.recordStepRefusal(state, step.name, kind, reason);
+            await this.emitLoopHalt(reason);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
           // Exhausted retries — route through the recovery menu.
           await this.saveConductorStepStatus(state, step.name, 'failed');
           if (step.name === 'build') {

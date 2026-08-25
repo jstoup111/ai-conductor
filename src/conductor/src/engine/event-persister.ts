@@ -80,9 +80,16 @@ export class EventPersister {
       const step = 'step' in event && typeof event.step === 'string'
         ? event.step
         : undefined;
+      // A refusal ends a serial step's attempt, so it closes that step's
+      // interval exactly as a completion or failure does (adr-2026-08-12 D1:
+      // every started execution closes on the ledger). A validation-group
+      // member never opened `step:<member>` — the group owns `parallel:<entry>`
+      // — so its refusal finds no open interval here, carries none, and closes
+      // nothing; `parallel_failure` still closes the group.
       const closesStep = (
         event.type === 'step_completed'
         || event.type === 'step_failed'
+        || event.type === 'step_refused'
       );
       const closesGroup = (
         event.type === 'parallel_completed'

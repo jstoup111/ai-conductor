@@ -30,6 +30,7 @@ describe('engine/gates', () => {
       expect(result.passed).toBe(false);
       if (!result.passed) {
         expect(result.reason).toContain('architecture_review');
+        expect(result.unsatisfied).toEqual(['architecture_review']);
       }
     });
 
@@ -37,6 +38,7 @@ describe('engine/gates', () => {
       const state: ConductState = { architecture_review: 'failed' };
       const result = checkGate('stories', state);
       expect(result.passed).toBe(false);
+      if (!result.passed) expect(result.unsatisfied).toEqual(['architecture_review']);
     });
 
     it('fails when prerequisite is in_progress', () => {

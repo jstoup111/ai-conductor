@@ -2508,6 +2508,6 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
 
     expect(auditRuns).toBe(1);
     const finalState = await readRealState(realStatePath);
-    expect(finalState.ok && finalState.value.prd_audit).toBe('failed');
+    expect(finalState.ok && finalState.value.prd_audit).toBe('refused');
   });
 });

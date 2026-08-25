@@ -70,6 +70,12 @@ describe('renderDaemonEvent', () => {
     expect(lines({ type: 'step_failed', step: 'build', error: 'boom', retryCount: 2 })).toEqual([
       '· ✗ build failed (try 2): boom',
     ]);
+    expect(lines({
+      type: 'step_refused',
+      step: 'build',
+      kind: 'needs-human',
+      reason: 'operator judgement required',
+    })).toEqual(['· ✋ build refused (needs-human): operator judgement required']);
   });
 
   it('renders exact operator park boundaries without lifecycle semantics', () => {
@@ -408,6 +414,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       { type: 'step_started', step: 'build', index: 0 },
       { type: 'step_completed', step: 'build', status: 'done' },
       { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
+      { type: 'step_refused', step: 'build', kind: 'seal', reason: 'protected artifact changed' },
       { type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry' },
       { type: 'checkpoint_reached', step: 'build' },
       { type: 'recovery_needed', step: 'build', options: ['retry'] },
@@ -482,6 +489,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'step_started',
       'step_completed',
       'step_failed',
+      'step_refused',
       'step_retry',
       'gate_verdict',
       'kickback',

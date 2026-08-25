@@ -73,6 +73,10 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
+  // adr-2026-08-24 D3 declares the refusal audited at introduction, and its
+  // sink registry entry carries `audit: true` — the declaration and the writer
+  // must agree.
+  step_refused: 'friction-mapped',
   provider_attempt: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
   scratch_cleanup_reclaimed: 'not-audited-by-design',
@@ -208,6 +212,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   step_completed: { type: 'step_completed', step: 'build', status: 'done' },
   step_failed: { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
+  step_refused: {
+    type: 'step_refused',
+    step: 'build',
+    kind: 'needs-human',
+    reason: 'operator judgement required',
+  },
   provider_attempt: {
     type: 'provider_attempt',
     step: 'build',

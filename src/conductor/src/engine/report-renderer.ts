@@ -358,6 +358,7 @@ interface RetryRow {
   count: number;
   topReason: string;
   failed: boolean;
+  refused: boolean;
 }
 
 function renderRetries(events: ParsedEvent[]): string {
@@ -365,6 +366,7 @@ function renderRetries(events: ParsedEvent[]): string {
   const retryCounts = new Map<string, number>();
   const retryReasons = new Map<string, Map<string, number>>();
   const failedSteps = new Set<string>();
+  const refusedSteps = new Set<string>();
   const completedSteps = new Set<string>();
 
   for (const evt of events) {
@@ -380,6 +382,8 @@ function renderRetries(events: ParsedEvent[]): string {
       reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
     } else if (evt.type === 'step_failed') {
       failedSteps.add(evt.step);
+    } else if (evt.type === 'step_refused') {
+      refusedSteps.add(evt.step);
     } else if (evt.type === 'step_completed') {
       completedSteps.add(evt.step);
     }
@@ -387,7 +391,13 @@ function renderRetries(events: ParsedEvent[]): string {
 
   const lines: string[] = ['## Retry Hotspots', ''];
 
-  if (retryCounts.size === 0) {
+  // A refusal is a first-attempt outcome: needs-human and validation-verdict
+  // refusals commonly carry zero retries. Seeding rows from retry counts alone
+  // dropped them from the report entirely, so a refused step read as absent.
+  const refusedWithoutRetries = [...refusedSteps].filter(
+    (step) => !retryCounts.has(step) && !completedSteps.has(step),
+  );
+  if (retryCounts.size === 0 && refusedWithoutRetries.length === 0) {
     lines.push('No retries recorded');
     return lines.join('\n');
   }
@@ -408,12 +418,21 @@ function renderRetries(events: ParsedEvent[]): string {
       }
     }
     const failed = failedSteps.has(step) && !completedSteps.has(step);
-    rows.push({ step, count, topReason, failed });
+    rows.push({
+      step,
+      count,
+      topReason,
+      failed,
+      refused: refusedSteps.has(step) && !completedSteps.has(step),
+    });
+  }
+  for (const step of refusedWithoutRetries) {
+    rows.push({ step, count: 0, topReason: '', failed: false, refused: true });
   }
   rows.sort((a, b) => b.count - a.count);
 
   for (const row of rows) {
-    const statusLabel = row.failed ? '(failed)' : 'ok';
+    const statusLabel = row.failed ? '(failed)' : row.refused ? '(refused)' : 'ok';
     lines.push(padRow([row.step, String(row.count), row.topReason, statusLabel]));
   }
 
