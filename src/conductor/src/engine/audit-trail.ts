@@ -244,6 +244,18 @@ export class AuditTrailWriter {
           reason: `rewound to ${event.target}`,
           cause: event.demoted.join(', '),
         };
+      case 'step_refused':
+        // adr-2026-08-24 D3 declares this event audited at introduction, and
+        // the sink registry's `audit: true` means exactly "recorded to
+        // .pipeline/audit-trail/events.jsonl" (adr-2026-07-26). A refusal is
+        // the friction record for an attempt that ended on an entry
+        // condition or a human-judgement boundary rather than its own work.
+        return {
+          origin: event.step,
+          event: 'step_refused',
+          reason: event.reason,
+          cause: event.kind,
+        };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict
         // (e.g. early-exit steps). If a gate_verdict was already recorded

@@ -7970,14 +7970,16 @@ describe('engine/conductor', () => {
       // plan only covering prd_audit's gap.
       expect(doneEvents).toHaveLength(0);
 
-      // The unaddressed member is restaged (not marked satisfied/'done') so
-      // the NEXT tail pass re-verifies it from disk rather than trusting the
+      // The unaddressed member is recorded 'refused' — the halt ended its
+      // attempt on a human-judgement boundary, not on its own work failing
+      // (adr-2026-08-24 D4). 'refused' does not satisfy a prerequisite, so the
+      // NEXT tail pass still re-verifies it from disk rather than trusting the
       // stale pre-remediation verdict.
       const persisted = await readState(statePath);
       expect(persisted.ok).toBe(true);
       const persistedState = (persisted as { ok: true; value: ConductState }).value;
       expect(persistedState.architecture_review_as_built).not.toBe('done');
-      expect(persistedState.architecture_review_as_built).toBeUndefined();
+      expect(persistedState.architecture_review_as_built).toBe('refused');
     });
   });
 

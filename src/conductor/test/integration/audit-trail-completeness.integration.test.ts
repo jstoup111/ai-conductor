@@ -73,9 +73,10 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
-  // A refusal is durable operational telemetry on the event spine, but it is
-  // not a retro-friction record: the corresponding loop_halt owns that map.
-  step_refused: 'not-audited-by-design',
+  // adr-2026-08-24 D3 declares the refusal audited at introduction, and its
+  // sink registry entry carries `audit: true` — the declaration and the writer
+  // must agree.
+  step_refused: 'friction-mapped',
   provider_attempt: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
   scratch_cleanup_reclaimed: 'not-audited-by-design',
