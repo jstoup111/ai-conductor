@@ -47,6 +47,10 @@ const PLAN = [
   '**Story:** 1',
   '**Dependencies:** none',
   '',
+  '**Done when:**',
+  '- Approved ADR declarations are accepted.',
+  '- Unapproved ADR declarations are refused.',
+  '',
 ].join('\n');
 
 const COHERENCE = [
