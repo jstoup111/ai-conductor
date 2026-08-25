@@ -2804,9 +2804,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const file = join(dir, '.pipeline/manual-test-results.md');
     const markerPath = join(dir, MANUAL_TEST_FAIL_EVIDENCE);
     const runIdentity = await completionVerdictRunIdentity(dir, 'manual_test', ctx);
-    if (runIdentity.state === 'stale-run-identity') {
-      return staleVerdictRunIdentityResult('.pipeline/manual-test-results.md', runIdentity);
-    }
 
     // gate-code-validity-on-redispatch (#817, Task 6): before falling into
     // the mtime-freshness check below, see if a stamped FAIL-free marker
@@ -2818,7 +2815,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // could bypass the guard below. Missing marker, parse failure, no
     // codeStamp, or any FAIL/whitewash residue all fall through unchanged
     // to the existing logic (invariant C2/C3).
-    if (resolveGateCodeValidityConfig(ctx.config).enabled) {
+    if (
+      runIdentity.state !== 'stale-run-identity' &&
+      resolveGateCodeValidityConfig(ctx.config).enabled
+    ) {
       try {
         const raw = await readFile(markerPath, 'utf-8');
         const marker = JSON.parse(raw) as ManualTestFailEvidence;
@@ -2860,6 +2860,28 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // done just because the sentinel is present (Task 9 — sentinel/FAIL
     // ordering bug). Compute/check FAIL rows BEFORE honoring the sentinel.
     const failRows = region.split('\n').filter(isManualTestFailRow);
+
+    // A stale stamp normally means this dispatch has no verdict to judge, so
+    // retain the typed no-fresh-verdict result rather than re-scoring the old
+    // latest attempt. The one exception is an unresolved same-HEAD FAIL: its
+    // marker is the #367 proof that a later clean section would be a
+    // whitewash, and must remain authoritative even across run identities.
+    if (runIdentity.state === 'stale-run-identity') {
+      if (
+        failRows.length === 0 &&
+        headSha &&
+        (await hasFreshFailEvidenceAtHead(markerPath, headSha, ctx.sessionStartedAt))
+      ) {
+        return {
+          done: false,
+          reason:
+            `manual-test results flipped FAIL→PASS but HEAD (${headSha.slice(0, 12)}) has not ` +
+            'moved since the recorded FAIL — no new commits means no fix (whitewash guard). ' +
+            'Implement and commit the fix, then re-run manual-test',
+        };
+      }
+      return staleVerdictRunIdentityResult('.pipeline/manual-test-results.md', runIdentity);
+    }
 
     // Auto-mode SKIP sentinel (#748): the latest attempt was deliberately
     // skipped (no endpoint/UI stories to exercise) rather than carrying a

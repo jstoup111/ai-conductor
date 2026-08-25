@@ -5077,6 +5077,91 @@ Task 1 → Task 2
         expect(result.reason).toContain('prior-run');
       });
 
+      // Covers: task:14
+      it('keeps the FAIL→PASS head-movement guard ahead of a stale run identity', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(
+          join(gdir, RESULTS),
+          '## Attempt 1 — 2026-08-25T10:00:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | FAIL |\n\n' +
+            '## Attempt 2 — 2026-08-25T10:01:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | PASS |\n',
+        );
+        await writeFile(
+          join(gdir, MARKER),
+          JSON.stringify({ observedAt: Date.now(), headSha: baseline, failRows: ['| Bar | FAIL |'] }),
+        );
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/no new commits|whitewash/i);
+        expect(result.routeClass).toBeUndefined();
+      });
+
+      // Covers: task:14
+      it('keeps the FAIL→PASS head-movement guard with a matching run identity', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'current-run' }));
+        await writeFile(
+          join(gdir, RESULTS),
+          '## Attempt 1 — 2026-08-25T10:00:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | FAIL |\n',
+        );
+        await expect(checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({ done: false });
+
+        await writeFile(
+          join(gdir, RESULTS),
+          '## Attempt 1 — 2026-08-25T10:00:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | FAIL |\n\n' +
+            '## Attempt 2 — 2026-08-25T10:01:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | PASS |\n',
+        );
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/no new commits|whitewash/i);
+      });
+
+      // Covers: task:14
+      it('treats a mismatched stamp on the latest append attempt as no fresh verdict', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(
+          join(gdir, RESULTS),
+          '## Attempt 1 — 2026-08-25T10:00:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | FAIL |\n\n' +
+            '## Attempt 2 — 2026-08-25T10:01:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | PASS |\n',
+        );
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: false, routeClass: 'absent' });
+        expect(result.reason ?? '').toMatch(/no fresh verdict/);
+        expect(result.reason ?? '').not.toMatch(/contains FAIL rows/);
+      });
+
       // Covers: task:13
       it('keeps unstamped results on legacy mtime semantics', async () => {
         gdir = await makeGitDir();
