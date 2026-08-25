@@ -2423,6 +2423,9 @@ function staleVerdictRunIdentityResult(
 ): CompletionResult {
   return {
     done: false,
+    // A prior dispatch's report is not an adverse verdict from THIS dispatch.
+    // Keep this typed so retry routing never has to infer freshness from text.
+    routeClass: 'absent',
     reason:
       `${artifact} was produced by run ${identity.foundRunId}, not the current run ` +
       `${identity.expectedRunId} — scoring 'no fresh verdict'; the prior run's findings are never reused`,
@@ -4652,6 +4655,11 @@ export function classifyRetryDecision(input: {
 
   const namedRoute = step === 'prd_audit' ? prdAuditNonClean === true : completion.routeClass === 'named-route';
   if (namedRoute) return { decision: 'route', signal: 'named-route' };
+
+  // D5: no verdict for this dispatch is a retryable absence, even when its
+  // diagnostic happens to repeat byte-for-byte. This is a typed facet rather
+  // than a reason-string exception, so stale findings cannot become a route.
+  if (completion.routeClass === 'absent') return { decision: 'rerun' };
 
   if (
     attempt >= 2 &&

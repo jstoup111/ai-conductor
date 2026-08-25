@@ -3917,7 +3917,7 @@ describe('engine/artifacts', () => {
             expect(r).toEqual({ decision: 'rerun' });
           });
 
-          it('absent, attempt 2, same reason, inputsUnchanged → route identical-repeat', () => {
+          it('absent, attempt 2, same reason, inputsUnchanged → rerun', () => {
             const r = classifyRetryDecision({
               step,
               completion: completion('absent', 'same'),
@@ -3925,7 +3925,7 @@ describe('engine/artifacts', () => {
               priorReason: 'same',
               inputsUnchanged: true,
             });
-            expect(r).toEqual({ decision: 'route', signal: 'identical-repeat' });
+            expect(r).toEqual({ decision: 'rerun' });
           });
 
           it('absent, attempt 2, same reason, inputsUnchanged:false → rerun', () => {
@@ -4008,6 +4008,33 @@ describe('engine/artifacts', () => {
         prdAuditNonClean: false,
       });
       expect(r).toEqual({ decision: 'rerun' });
+    });
+
+    // Covers: task:10
+    it('reruns a typed absent verdict even when its diagnostic text repeats', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: completion(
+          'absent',
+          'report was produced by run prior-run, not the current run current-run',
+        ),
+        attempt: 2,
+        priorReason: 'report was produced by run prior-run, not the current run current-run',
+        inputsUnchanged: true,
+      });
+      expect(r).toEqual({ decision: 'rerun' });
+    });
+
+    // Covers: task:10
+    it('routes a matching-stamp adverse prd_audit verdict regardless of diagnostic wording', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: { done: false, reason: 'a reworded adverse verdict' },
+        attempt: 1,
+        inputsUnchanged: false,
+        prdAuditNonClean: true,
+      });
+      expect(r).toEqual({ decision: 'route', signal: 'named-route' });
     });
 
     describe('identical-repeat requires all three conditions', () => {
@@ -4767,7 +4794,7 @@ Task 1 → Task 2
         expect(result.done).toBe(true);
       });
 
-      // Covers: task:9
+      // Covers: task:9, task:10
       it('never preserves or completes a report stamped for a prior run', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
@@ -4780,7 +4807,7 @@ Task 1 → Task 2
           attemptRunId: 'current-run',
         });
 
-        expect(result).toMatchObject({ done: false });
+        expect(result).toMatchObject({ done: false, routeClass: 'absent' });
         expect(result.reason).toContain('.pipeline/prd-audit.md');
         expect(result.reason).toContain('current-run');
         expect(result.reason).toContain('prior-run');

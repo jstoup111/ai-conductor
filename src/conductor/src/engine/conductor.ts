@@ -7726,7 +7726,7 @@ export class Conductor {
         // only compares consecutive attempts of the same step dispatch).
         let priorCompletionReason: string | undefined;
         let priorHeadSha: string | null = null;
-        let priorArtifactMtimeSignature: string | undefined;
+        let priorRetryInputSignature: string | undefined;
         // D5: set only for a signal-(b) identical-repeat route; threaded into
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
@@ -8940,13 +8940,25 @@ export class Conductor {
 
                 const headSha = await currentCommitSha(this.projectRoot);
                 const artifactSnapshot = await snapshotArtifactMtimes(this.projectRoot, step.name);
-                const artifactSignature = JSON.stringify(
+                const artifactMtimeSignature = JSON.stringify(
                   Array.from(artifactSnapshot.entries()).sort(),
                 );
+                // A stamped verdict is identified by its engine-owned run id;
+                // mtime remains the exact legacy key for unstamped sidecars.
+                // A mismatched run id still produces a stable signature, but
+                // its typed `absent` completion facet forces a rerun above.
+                const runIdentity = await verdictProducedByRun(
+                  this.projectRoot,
+                  step.name,
+                  this.currentRunId,
+                );
+                const retryInputSignature = runIdentity.state === 'unstamped'
+                  ? `mtime:${artifactMtimeSignature}`
+                  : `run:${runIdentity.state === 'match' ? runIdentity.runId : runIdentity.foundRunId}`;
                 const inputsUnchanged =
-                  priorArtifactMtimeSignature !== undefined &&
+                  priorRetryInputSignature !== undefined &&
                   headSha === priorHeadSha &&
-                  artifactSignature === priorArtifactMtimeSignature;
+                  retryInputSignature === priorRetryInputSignature;
 
                 const clsDecision = classifyRetryDecision({
                   step: step.name,
@@ -8978,7 +8990,7 @@ export class Conductor {
 
                 priorCompletionReason = completion.reason;
                 priorHeadSha = headSha;
-                priorArtifactMtimeSignature = artifactSignature;
+                priorRetryInputSignature = retryInputSignature;
 
                 if (clsDecision.decision === 'route') break;
                 // 'rerun' — fall through to the unchanged retry logic below.
