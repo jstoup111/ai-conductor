@@ -3233,10 +3233,13 @@ describe('engine/artifacts', () => {
         '.pipeline/accepted-widenings.json',
         JSON.stringify({
           version: 1,
-          entries: criteria.map((criterion) => ({
+          decisions: criteria.map((criterion) => ({
             criterion,
             summary: `operator accepted ${criterion}`,
-            acceptedAt: '2026-08-24T00:00:00.000Z',
+            decision: 'accept',
+            rationale: 'Approved for this feature.',
+            operator: 'test',
+            decidedAt: '2026-08-24T00:00:00.000Z',
           })),
         }),
       );

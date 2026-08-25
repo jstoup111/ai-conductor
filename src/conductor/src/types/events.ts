@@ -110,7 +110,8 @@ export type OverScopeDecisionEventDefectKind =
   | 'unknown-criterion'
   | 'missing-rationale'
   | 'invalid-decision'
-  | 'missing-operator';
+  | 'missing-operator'
+  | 'write-failed';
 
 export interface OverScopeDecisionEventDefect {
   kind: OverScopeDecisionEventDefectKind;

@@ -12,10 +12,11 @@ import {
   type StepRunner,
 } from '../src/engine/conductor.js';
 import {
-  acceptClearedOverScopeHalt,
-  readAcceptedWidenings,
+  classifyOverScopeCriterion,
+  parseClearedOverScopeDecisions,
   readOverScopeDecisions,
-  renderOverScopeAcceptanceCandidate,
+  recordOverScopeDecisions,
+  renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
 import { readGrowth, readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
@@ -225,6 +226,40 @@ describe('prd_audit kickback', () => {
     }];
     await writeFile(path, JSON.stringify({ version: 1, decisions }));
     await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions });
+  });
+
+  it('records durable decisions idempotently and permits a later override', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'over-scope-decisions-record-'));
+    dirs.push(root);
+    const refuse = { criterion: 'S3.1', summary: 'Visible behavior.', decision: 'refuse' as const, rationale: 'Needs rework.', operator: 'operator' };
+    await expect(recordOverScopeDecisions(root, [refuse])).resolves.toMatchObject({ recorded: [expect.objectContaining(refuse)] });
+    await expect(recordOverScopeDecisions(root, [refuse])).resolves.toEqual({ recorded: [] });
+    await recordOverScopeDecisions(root, [{ ...refuse, decision: 'accept', rationale: 'Approved after review.' }]);
+    const decisions = (await readOverScopeDecisions(root)).decisions;
+    expect(classifyOverScopeCriterion('S3.1', new Map([['S3.1', 'outside-visible']]), decisions)).toBe('accepted');
+  });
+
+  it('renders all undecided criteria and parses valid decision siblings while naming defects', () => {
+    const rendered = renderOverScopeDecisionBlock([
+      { criterion: 'S3.1', summary: 'First.', relation: 'outside-visible' },
+      { criterion: 'S3.2', summary: 'Second.', relation: 'outside-visible' },
+      { criterion: 'S3.3', summary: 'Third.', relation: 'outside-visible' },
+    ]);
+    expect(rendered).toContain('```json over-scope-decisions');
+    expect(rendered.match(/"decision": "pending"/g)).toHaveLength(3);
+    const edited = rendered
+      .replace('"criterion": "S3.1",\n    "summary": "First.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.1", "summary": "First.", "decision": "accept", "rationale": "Approved."')
+      .replace('"criterion": "S3.2",\n    "summary": "Second.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.2", "summary": "Second.", "decision": "refuse", "rationale": "Rework."')
+      .replace('"criterion": "S3.3",\n    "summary": "Third.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.3", "summary": "Third.", "decision": "accept", "rationale": ""');
+    const parsed = parseClearedOverScopeDecisions(edited, new Set(['S3.1', 'S3.2', 'S3.3']));
+    expect(parsed).toMatchObject({ kind: 'parsed', decisions: [{ criterion: 'S3.1', decision: 'accept' }, { criterion: 'S3.2', decision: 'refuse' }], defects: [{ kind: 'missing-rationale', criterion: 'S3.3' }] });
+  });
+
+  it('treats pending, absent, malformed, unknown, and invalid decision entries safely', () => {
+    expect(parseClearedOverScopeDecisions('ordinary halt', new Set(['S3.1']))).toEqual({ kind: 'absent' });
+    expect(parseClearedOverScopeDecisions('```json over-scope-decisions\n{ nope\n```', new Set(['S3.1']))).toMatchObject({ defects: [{ kind: 'malformed-block' }] });
+    const body = '```json over-scope-decisions\n[{"criterion":"S3.1","summary":"x","decision":"pending"},{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"},{"criterion":"S3.1","summary":"x","decision":"wat","rationale":"x"}]\n```';
+    expect(parseClearedOverScopeDecisions(body, new Set(['S3.1']))).toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }, { kind: 'invalid-decision', criterion: 'S3.1' }] });
   });
 
   async function runGroupedPrdAudit(report: string, stories: string) {
@@ -672,23 +707,21 @@ describe('prd_audit kickback', () => {
     expect(route).toEqual({ kind: 'none' });
   });
 
-  it('records an operator acceptance from a cleared over-scope halt and regrades it within intent', async () => {
+  it('parses a cleared decision block and regrades an accepted criterion', async () => {
     const root = await mkdtemp(join(tmpdir(), 'accepted-widenings-'));
     dirs.push(root);
     await mkdir(join(root, '.pipeline'), { recursive: true });
     const report = overScopeReport('S3.4', 'outside-visible', 'A visible optional feature.');
-    await writeFile(
-      join(root, '.pipeline', 'HALT.cleared'),
-      `prd-audit halted\n\n${renderOverScopeAcceptanceCandidate({
-        criterion: 'S3.4',
-        summary: 'A visible optional feature.',
-      })}\n`,
-    );
-
-    await acceptClearedOverScopeHalt(root);
-    const accepted = await readAcceptedWidenings(root);
-    expect(accepted.entries).toHaveLength(1);
-    expect(routePrdAuditOverScope(report, accepted.entries)).toMatchObject({
+    const body = renderOverScopeDecisionBlock([{ criterion: 'S3.4', summary: 'A visible optional feature.', relation: 'outside-visible' }])
+      .replace('"pending"', '"accept"')
+      .replace('"decision": "accept"', '"decision": "accept", "rationale": "Approved."');
+    const parsed = parseClearedOverScopeDecisions(body, new Set(['S3.4']));
+    expect(parsed.kind).toBe('parsed');
+    if (parsed.kind !== 'parsed') return;
+    await recordOverScopeDecisions(root, parsed.decisions.map((decision) => ({ ...decision, operator: 'test' })));
+    const decisions = await readOverScopeDecisions(root);
+    expect(decisions.decisions).toHaveLength(1);
+    expect(routePrdAuditOverScope(report, decisions.decisions)).toMatchObject({
       kind: 'record',
       findings: [{ criterion: 'S3.4', accepted: true }],
     });

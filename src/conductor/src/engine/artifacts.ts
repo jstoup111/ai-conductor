@@ -20,9 +20,9 @@ import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
 import { gateVerdictStillValid } from './gate-code-validity.js';
 import {
-  overScopeCriterionIsAccepted,
+  classifyOverScopeCriterion,
   overScopeRelations,
-  readAcceptedWidenings,
+  readOverScopeDecisions,
 } from './accepted-widenings.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveTaskIds } from './task-progress.js';
@@ -2786,7 +2786,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                 const report = await readFile(f, 'utf-8');
                 const parsed = parsePrdAuditReport(report);
                 const preRelations = overScopeRelations(report);
-                const preAccepted = (await readAcceptedWidenings(dir)).entries;
+                const preDecisions = (await readOverScopeDecisions(dir)).decisions;
                 if (
                   (parsed.ok
                     ? parsed.value.findings.some(
@@ -2794,7 +2794,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                           finding.grade !== 'PASS' &&
                           !(
                             finding.grade === 'OVER_SCOPE' &&
-                            overScopeCriterionIsAccepted(finding.criterion, preRelations, preAccepted)
+                            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, preRelations, preDecisions))
                           ),
                       )
                     : findUnalignedFrRows(report).length > 0) ||
@@ -2859,20 +2859,19 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         }
         continue;
       }
-      // An OVER_SCOPE finding the operator has accepted — or that the audit
-      // itself graded intent-relation `within` — is recorded, not blocking.
+      // An accepted or non-visible OVER_SCOPE finding is recorded, not blocking.
       // Without this the operator could accept scope bloat and still never
       // ship: the gate re-selected prd_audit forever because acceptance was
       // invisible here (#1854).
       const reportText = await readFile(f, 'utf-8');
       const relations = overScopeRelations(reportText);
-      const accepted = (await readAcceptedWidenings(dir)).entries;
+      const decisions = (await readOverScopeDecisions(dir)).decisions;
       const blocking = parsed.value.findings.filter(
         (finding) =>
           finding.grade !== 'PASS' &&
           !(
             finding.grade === 'OVER_SCOPE' &&
-            overScopeCriterionIsAccepted(finding.criterion, relations, accepted)
+            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, relations, decisions))
           ),
       );
       if (blocking.length > 0) {

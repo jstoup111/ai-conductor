@@ -182,12 +182,13 @@ import {
   type OverScopeHaltClass,
 } from './halt-classification.js';
 import {
-  acceptClearedOverScopeHalt,
-  overScopeCriterionIsAccepted,
+  classifyOverScopeCriterion,
   overScopeRelations,
-  readAcceptedWidenings,
-  renderOverScopeAcceptanceCandidate,
-  type AcceptedWidening,
+  parseClearedOverScopeDecisions,
+  readOverScopeDecisions,
+  recordOverScopeDecisions,
+  renderOverScopeDecisionBlock,
+  type OverScopeDecision,
   type IntentRelation,
 } from './accepted-widenings.js';
 import type { ScopeTrailer } from './scope-trailer.js';
@@ -555,6 +556,8 @@ export interface RecordedPrdAuditFinding {
   criterion: string;
   summary: string;
   accepted?: boolean;
+  decision?: 'accept' | 'refuse';
+  rationale?: string;
 }
 
 export type PrdAuditPlanGapRoute =
@@ -634,7 +637,7 @@ export function routePrdAuditPlanGaps(
 export type PrdAuditOverScopeRoute =
   | { kind: 'none' }
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
-  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[] };
+  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }> };
 
 /**
  * One PRD-audit route result shared by the serial SHIP walk and the
@@ -652,7 +655,7 @@ type CurrentPrdAuditRoute =
 /** Route OVER_SCOPE findings through intent relation and prior operator acceptance. */
 export function routePrdAuditOverScope(
   reportText: string,
-  acceptedWidenings: readonly AcceptedWidening[],
+  decisions: readonly OverScopeDecision[],
 ): PrdAuditOverScopeRoute {
   const parsed = parsePrdAuditReport(reportText);
   if (!parsed.ok) return { kind: 'none' };
@@ -663,26 +666,32 @@ export function routePrdAuditOverScope(
     .map((finding) => {
       const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
       const relation = relations.get(finding.criterion) as IntentRelation;
-      const accepted = overScopeCriterionIsAccepted(finding.criterion, relations, acceptedWidenings);
+      const classification = classifyOverScopeCriterion(finding.criterion, relations, decisions);
+      const durableDecision = decisions.filter((entry) => entry.criterion === finding.criterion).at(-1);
       return {
         gate: 'prd_audit' as const,
         grade: 'OVER_SCOPE' as const,
         criterion: finding.criterion,
         summary,
-        accepted,
-        relation: accepted ? 'within' as const : relation,
+        accepted: classification === 'accepted' || relation === 'within',
+        ...(durableDecision ? { decision: durableDecision.decision, rationale: durableDecision.rationale } : {}),
+        classification,
+        relation,
       };
     });
   if (findings.length === 0) return { kind: 'none' };
 
-  const visible = findings.filter((finding) => finding.relation === 'outside-visible');
-  const recorded = findings.map(({ relation: _relation, ...finding }) => finding);
-  if (visible.length > 0) {
+  const undecided = findings.filter((finding) => finding.classification === 'blocking-undecided');
+  const refused = findings.filter((finding) => finding.classification === 'blocking-refused');
+  const recorded = findings.map(({ relation: _relation, classification: _classification, ...finding }) => finding);
+  if (undecided.length > 0 || refused.length > 0) {
     return {
       kind: 'halt',
       haltClass: OVER_SCOPE_HALT_CLASS,
-      detail: `OVER_SCOPE visible behavior on ${visible.map((finding) => finding.criterion).join(', ')}.`,
+      detail: `OVER_SCOPE visible behavior on ${[...undecided, ...refused].map((finding) => finding.criterion).join(', ')}.`,
       findings: recorded,
+      undecided: undecided.map(({ classification: _classification, ...finding }) => finding),
+      refused: refused.map(({ classification: _classification, ...finding }) => finding),
     };
   }
   const hasOtherBlockingGrade = parsed.value.findings.some(
@@ -2933,9 +2942,22 @@ export class Conductor {
     } catch {
       return { kind: 'none' };
     }
-    await acceptClearedOverScopeHalt(this.projectRoot);
-    const accepted = await readAcceptedWidenings(this.projectRoot);
-    const route = routePrdAuditOverScope(reportText, accepted.entries);
+    const relations = overScopeRelations(reportText);
+    const blockingCriteria = new Set([...relations].filter(([, relation]) => relation === 'outside-visible').map(([criterion]) => criterion));
+    const cleared = await readFile(join(this.projectRoot, '.pipeline', 'HALT.cleared'), 'utf8').catch(() => '');
+    const parsed = parseClearedOverScopeDecisions(cleared, blockingCriteria);
+    if (parsed.kind === 'parsed') {
+      let operator: string | undefined;
+      try {
+        const identity = await resolveDaemonOwner(await readMachineOwnerConfig(), this.gh, this.projectRoot);
+        operator = identity.resolved ? identity.id : undefined;
+      } catch { /* emitted as a defect below */ }
+      const result = operator ? await recordOverScopeDecisions(this.projectRoot, parsed.decisions.map((decision) => ({ ...decision, operator }))) : { recorded: [], failure: 'missing-operator' as const };
+      const defects = [...parsed.defects, ...(result.failure ? [{ kind: result.failure === 'missing-operator' ? 'missing-operator' as const : 'write-failed' as const }] : [])];
+      if (parsed.decisions.length || defects.length) await this.events.emit({ type: 'over_scope_decision', criteria: [...blockingCriteria], decisions: result.recorded.map((decision) => ({ criterion: decision.criterion, decision: decision.decision })), defects });
+    }
+    const decisions = await readOverScopeDecisions(this.projectRoot);
+    const route = routePrdAuditOverScope(reportText, decisions.decisions);
     if (route.kind === 'record') {
       await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
     }
@@ -5928,11 +5950,10 @@ export class Conductor {
             }
 
             if (prdAuditRoute?.kind === 'over-scope-halt') {
-              const candidate = prdAuditRoute.route.findings.find((finding) => !finding.accepted);
               const reason =
                 `prd-audit halted: user-visible scope requires operator acceptance — ` +
                 `${prdAuditRoute.route.detail}` +
-                (candidate ? `\n\n${renderOverScopeAcceptanceCandidate(candidate)}` : '');
+                `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused)}`;
               await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -7709,13 +7730,10 @@ export class Conductor {
                 return;
               }
               if (prdAuditRoute.kind === 'over-scope-halt') {
-                const candidate = prdAuditRoute.route.findings.find((finding) => !finding.accepted);
                 const reason =
                   `prd-audit halted: user-visible scope requires operator acceptance — ` +
                   `${prdAuditRoute.route.detail}` +
-                  (candidate
-                    ? `\n\n${renderOverScopeAcceptanceCandidate(candidate)}`
-                    : '');
+                  `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused)}`;
                 await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);

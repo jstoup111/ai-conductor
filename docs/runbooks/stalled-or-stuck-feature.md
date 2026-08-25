@@ -885,6 +885,14 @@ PARKED or HALTED. The daemon log should show `↻ resume <slug>` after dispatch.
 **Blast radius:** clearing the halt makes the feature eligible for dispatch again on the next
 poll. Fix the cause first, or it halts again immediately.
 
+#### OVER_SCOPE decision halt
+
+If `HALT.class` is `over-scope`, do not clear the body unchanged. Edit the fenced
+`over-scope-decisions` JSON array in `.pipeline/HALT`: for each decision you are making, set
+`decision` to `accept` or `refuse` and add a non-empty `rationale`. Leave entries you are not
+deciding as `pending`. An accept clears that criterion; a refusal records the decision but keeps
+the halt active as “refused — rework required.” Then use the ordinary clear procedure below.
+
 ```bash
 rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
 ```
