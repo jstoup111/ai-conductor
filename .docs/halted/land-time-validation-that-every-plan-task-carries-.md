@@ -1,39 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-25T03:05:06.096Z
+Status: halted
 Slug: land-time-validation-that-every-plan-task-carries-
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-land-time-validation-that-every-plan-task-carries-
-Head SHA: 1093254698dfc022501ae8e47445a11156a8553c
-Halted at: 2026-08-25T03:01:55.581Z
+Head SHA: ee82b73632d7acfa55a12c188f5a0755c878191f
+Halted at: 2026-08-25T04:21:45.592Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-feature parked — will not re-dispatch on the next scan
-bin/setup exited 0 but the worktree could not be brought clean — residual uncommitted paths quarantined to wip/setup-quarantine-land-time-validation-that-every-plan-task-carries-: src/conductor/package-lock.json
-
-──── Triage Evidence ────
-
-Output tail:
-bin/setup exited 0 but the worktree could not be brought clean — residual uncommitted paths quarantined to wip/setup-quarantine-land-time-validation-that-every-plan-task-carries-: src/conductor/package-lock.json
-
-Quarantine ref: wip/setup-quarantine-land-time-validation-that-every-plan-task-carries-
-
-Contract outcome: dirty-tree-uncleaned
-
-Dirty paths after fix-session:
-  - src/conductor/package-lock.json
-
-Resume procedure:
-  1. Fix the cause of the error above (project setup / config / environment / a crashed step).
-  2. rm .pipeline/HALT
-  3. conduct-ts daemon unpark land-time-validation-that-every-plan-task-carries-
-  4. Re-queue the feature (restart the daemon if it was excluded this run).
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED — shipped code violates an approved architecture decision
 ```
