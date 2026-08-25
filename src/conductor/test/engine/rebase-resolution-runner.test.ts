@@ -19,7 +19,6 @@ function makeProvider(invokeResult: Partial<InvokeResult> = {}): LLMProvider {
   const defaults: InvokeResult = { success: true, output: '', exitCode: 0 };
   return {
     invoke: vi.fn().mockResolvedValue({ ...defaults, ...invokeResult }),
-    invokeInteractive: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -101,7 +100,6 @@ describe('DefaultStepRunner.resolveRebaseConflict', () => {
 
     expect(result).toEqual({ resolved: true });
     expect(provider.invoke).toHaveBeenCalledOnce();
-    expect(provider.invokeInteractive).not.toHaveBeenCalled();
   });
 
   it('returns {resolved:false, reason} when skill reports false', async () => {
@@ -254,7 +252,6 @@ describe('DefaultStepRunner.resolveRebaseConflict', () => {
 
     expect(result.resolved).toBe(false);
     expect(codex.invoke).toHaveBeenCalledOnce();
-    expect(codex.invokeInteractive).not.toHaveBeenCalled();
     const options = (codex.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(options.prompt).toBe('$rebase');
     expect(options.systemPrompt).toContain('full replay');

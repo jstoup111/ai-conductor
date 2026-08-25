@@ -95,7 +95,7 @@ The only layer permitted to reach a third party in ordinary code paths.
 
 | File | Owns |
 | --- | --- |
-| `llm-provider.ts` | The port. `LLMProvider` `:141`, `InvokeOptions` `:109`, `InvokeResult` `:56`. |
+| `llm-provider.ts` | The port. `LLMProvider` exposes one `invoke` entry point; `InvokeOptions.interactive` selects operator-facing behavior and `streamConsumer` carries optional observation. |
 | `claude-provider.ts` | The `claude` host adapter plus its failure detectors. |
 | `codex-provider.ts` | The `codex` host adapter and JSONL parsing. |
 | `codex-self-host-auth.ts` | Codex credential handling for self-host builds. |

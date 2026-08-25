@@ -39,7 +39,6 @@ function scriptedIo(lines: string[]) {
 /** Minimal no-op provider stub (routing/authoring not needed for task 33). */
 const noopProvider = {
   invoke: async () => ({ success: false, output: '', exitCode: 0 }),
-  invokeInteractive: async () => {},
 };
 
 /** Minimal gh stub (PR machinery not needed for task 33). */

@@ -23,7 +23,6 @@ function dispatchWithProviderStream(
 ): Promise<ProviderExecutionResult> {
   const runner = new DefaultStepRunner({
     invoke: vi.fn(),
-    invokeInteractive: vi.fn(),
   }, 'stream-test', '/tmp/provider-stream-throttle', { events, configuredProviders: ['codex'] });
   const dispatch = (runner as unknown as {
     dispatchProviderWithLifecycleSupervision: (
@@ -195,7 +194,7 @@ describe('provider stream dispatch throttle', () => {
 
   it('preserves the provider result when the final telemetry flush fails', async () => {
     const events = new ConductorEventEmitter();
-    const runner = new DefaultStepRunner({ invoke: vi.fn(), invokeInteractive: vi.fn() }, 'flush-failure', '/tmp/provider-stream-throttle', {
+    const runner = new DefaultStepRunner({ invoke: vi.fn(), }, 'flush-failure', '/tmp/provider-stream-throttle', {
       events,
       configuredProviders: ['codex'],
     });

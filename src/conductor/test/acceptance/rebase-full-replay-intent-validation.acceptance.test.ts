@@ -69,7 +69,6 @@ function scriptedProvider(result: InvokeResult): ProviderDouble {
         calls.push(options);
         return result;
       }),
-      invokeInteractive: vi.fn(async () => undefined),
     },
   };
 }

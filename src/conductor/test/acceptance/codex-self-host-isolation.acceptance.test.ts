@@ -190,7 +190,7 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
         .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
       const runtimes = new ProviderRuntimeSet([{
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY, builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
       }]);

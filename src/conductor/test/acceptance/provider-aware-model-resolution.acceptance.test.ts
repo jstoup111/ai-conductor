@@ -369,7 +369,6 @@ describe('#902 real execution paths', () => {
         calls.push(options);
         return { success: true, output: 'done', exitCode: 0 };
       }),
-      invokeInteractive: vi.fn(),
     };
 
     const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -406,7 +405,6 @@ describe('#902 real execution paths', () => {
           modelUnavailable: true,
         };
       }),
-      invokeInteractive: vi.fn(),
     };
     const gitRunner: GitRunner = vi.fn(async (args: string[]) => ({
       exitCode: 0,
@@ -485,7 +483,6 @@ describe('#902 unknown-provider compatibility policy', () => {
 
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 })),
-      invokeInteractive: vi.fn(),
     };
     const dir = await mkdtemp(join(tmpdir(), 'compatibility-policy-runner-'));
     tempDirs.push(dir);

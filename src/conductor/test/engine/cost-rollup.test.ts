@@ -94,6 +94,54 @@ describe('engine/cost-rollup', () => {
     });
   });
 
+  it('preserves all three metering states without inventing a cost', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 100, output: 10, costUsd: 0.42, costSource: 'provider' },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 80, output: 8 },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'review',
+        provider: 'codex',
+        outcome: 'success',
+        invoked: true,
+      }),
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'retro',
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 60, output: 6, costUsd: 'not-a-number' },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup).toMatchObject({
+      tokens: { input: 240, output: 24, cacheRead: 0, cacheCreation: 0 },
+      costUsd: 0.42,
+      dispatches: 4,
+      unmetered: { count: 1, durationMs: 0 },
+      costUnmetered: { count: 2 },
+    });
+    expect(classifyMetering({ input: 60, output: 6, costUsd: 'not-a-number' } as never))
+      .toBe('cost-unmetered');
+  });
+
   it('sums tokens/cost, counts dispatches/retries/halts for metered events', async () => {
     await writeEvents([
       JSON.stringify({

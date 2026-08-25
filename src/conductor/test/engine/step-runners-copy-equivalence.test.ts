@@ -47,7 +47,6 @@ describe('build_review copy equivalence', () => {
     const providerInvoke = invoke ?? vi.fn(defaultInvoke);
     const provider: LLMProvider = {
       invoke: providerInvoke,
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const gitRunner = async (args: string[]) => {
       if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };

@@ -189,7 +189,8 @@ first, then project-local, which shadows it on the same kind and name:
 A manifest requires three fields — `kind: llm_provider`, a `name` matching `[a-z0-9-]+`, and an
 `entrypoint` — and may declare an optional `harness_version` range. Once registered, the name is
 usable in `llm_provider` exactly like `claude` or `codex`. An `llm_provider` entrypoint must export
-both `invoke` and `invokeInteractive`.
+`invoke`. The engine selects an operator-facing interactive dispatch through
+`InvokeOptions.interactive`; plugins do not implement a separate interactive method.
 
 An invalid manifest is skipped with a warning. An incompatible `harness_version` or a missing or
 malformed entrypoint aborts startup rather than degrading silently.

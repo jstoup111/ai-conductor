@@ -304,6 +304,12 @@ export interface InvokeOptions {
    */
   onProviderStream?: (observation: ProviderStreamObservation) => void;
   /**
+   * Optional candidate-scoped stream observer. It grants no timeout, kill,
+   * retry, or lifecycle authority. On an interactive REPL dispatch, it is
+   * inert: the adapter neither invokes nor closes it.
+   */
+  streamConsumer?: ProviderStreamCandidateObserver;
+  /**
    * Internal candidate boundary: supplies a fresh observer for each invoked
    * provider, preventing fallback candidates from inheriting stream state.
    */
@@ -341,10 +347,4 @@ export interface LLMProvider {
   prepareSelfHostAuth?(context: SelfHostAuthContext): Promise<SelfHostAuthPreparation>;
   /** Resolve the provider executable before a child home overrides provider state. */
   resolveSelfHostExecutable?(): Promise<string>;
-  /**
-   * Built-in providers return classified completion after their streamed
-   * process exits. Legacy custom providers may keep returning void; absence of
-   * a result carries no provider-fallback authority.
-   */
-  invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void>;
 }

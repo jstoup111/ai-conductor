@@ -299,7 +299,6 @@ describe('daemon ship path — writes NO shipped record (ADR Decision 1 complian
       daemon: false,
       provider: {
         invoke: async () => ({ success: true, output: '', exitCode: 0 }),
-        invokeInteractive: async () => {},
       },
       project: 'test-project',
       projectRoot: mainCheckout,

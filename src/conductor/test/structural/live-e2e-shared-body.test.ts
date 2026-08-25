@@ -69,7 +69,6 @@ describe('structural: shared live E2E body', () => {
         process.env[registeredDescriptor.credentialEnvVar] = `${registeredDescriptor.id}-credential`;
         const provider: LLMProvider = {
           invoke: vi.fn(),
-          invokeInteractive: vi.fn(),
           readiness: vi.fn(async (): Promise<never> => {
             throw new Error('equivalent injected live-provider outcome');
           }),

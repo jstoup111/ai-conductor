@@ -81,7 +81,6 @@ function provider(): LLMProvider {
       output: 'ok',
       exitCode: 0,
     })),
-    invokeInteractive: vi.fn(async () => {}),
   };
 }
 
@@ -171,7 +170,6 @@ describe('ProviderRuntimeSet', () => {
     const registry = new PluginRegistry();
     registry.register('llm_provider', 'codex', {
       invoke,
-      invokeInteractive: vi.fn(async () => {}),
       readiness,
     });
     registry.markInitialized();
@@ -317,7 +315,6 @@ describe('ProviderRuntimeSet', () => {
               exitCode: model === nativeFallback ? 0 : 1,
             };
       }),
-      invokeInteractive: vi.fn(async () => {}),
     });
     const registry = new PluginRegistry();
     registry.register(
@@ -509,7 +506,6 @@ describe('ProviderRuntimeSet', () => {
             calls += 1;
             return fixture.result;
           }),
-          invokeInteractive: vi.fn(async () => {}),
         },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,

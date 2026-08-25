@@ -1307,7 +1307,7 @@ describe('engine/conductor', () => {
     const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1363,7 +1363,7 @@ describe('engine/conductor', () => {
       .mockResolvedValueOnce({ success: false, output: 'second rejection', authFailure: true, authentication });
     const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
     const runtimes = new ProviderRuntimeSet([{
-      key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(), readiness },
+      key: 'codex', provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY, builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
     }]);
@@ -6782,7 +6782,6 @@ describe('engine/conductor', () => {
           key: 'codex',
           provider: {
             invoke: vi.fn(),
-            invokeInteractive: vi.fn(async () => {}),
             readiness,
           },
           policy: CODEX_MODEL_POLICY,
@@ -10573,14 +10572,12 @@ describe('engine/conductor', () => {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
       }),
-      invokeInteractive: vi.fn(),
       prepareSelfHostAuth: vi.fn(),
       resolveSelfHostExecutable: vi.fn().mockResolvedValue('codex'),
     } as LLMProvider;
     const claude: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
-      invokeInteractive: vi.fn(),
     };
     const runtimes = new ProviderRuntimeSet([
       { key: 'codex', provider: codex, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability([]) },
@@ -10761,7 +10758,6 @@ describe('engine/conductor', () => {
     };
     const provider: LLMProvider = {
       invoke: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
-      invokeInteractive: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
     };
     const runtimes = new ProviderRuntimeSet([
       {
@@ -10838,7 +10834,6 @@ describe('engine/conductor', () => {
       return {
         lifecycleCapability: { synchronousSpawnPermit: true },
         invoke,
-        invokeInteractive: invoke,
       };
     };
     const runtimes = new ProviderRuntimeSet([
@@ -11500,7 +11495,6 @@ describe('engine/conductor', () => {
           supportsSessionResume: key === 'claude',
           lifecycleCapability: { synchronousSpawnPermit: true },
           invoke: invokeProvider,
-          invokeInteractive: invokeProvider,
         };
       };
       const runtimes = new ProviderRuntimeSet([
@@ -16083,7 +16077,6 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     async (providerKey) => {
       const provider: LLMProvider = {
         invoke: vi.fn(),
-        invokeInteractive: vi.fn(),
       };
       const runtime = {
         key: providerKey,

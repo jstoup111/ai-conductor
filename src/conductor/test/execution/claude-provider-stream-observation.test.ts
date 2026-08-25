@@ -5,6 +5,38 @@ import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
 describe('ClaudeProvider provider stream observations', () => {
+  it('leaves a REPL stream consumer inert', async () => {
+    const stdout = new PassThrough();
+    let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+    let resolveStarted: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+      resolveProcess = resolve;
+    }), { stdout, kill: vi.fn() });
+    const provider = new ClaudeProvider(undefined, () => {
+      resolveStarted!();
+      return process as any;
+    });
+    const onProviderStream = vi.fn();
+    const close = vi.fn();
+
+    const invocation = provider.invoke({
+      prompt: 'Do the thing',
+      sessionId: 'session-123',
+      resume: false,
+      interactive: true,
+      streamConsumer: { onProviderStream, close },
+    });
+    await started;
+    stdout.write(`${JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 17, output_tokens: 7 } } })}\n`);
+    resolveProcess!({ stdout: '', stderr: '', exitCode: 0 });
+    await invocation;
+
+    expect([onProviderStream.mock.calls, close.mock.calls]).toEqual([[], []]);
+  });
+
   it('reports Agent records as active children with running token totals', async () => {
     const stdout = new PassThrough();
     let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;

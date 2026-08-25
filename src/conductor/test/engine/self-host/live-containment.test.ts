@@ -88,7 +88,6 @@ async function prepareCandidate(
     key: providerKey,
     provider: {
       invoke: vi.fn(),
-      invokeInteractive: vi.fn(async () => {}),
       prepareSelfHostAuth: vi.fn(async () => ({})),
       resolveSelfHostExecutable: vi.fn(async () => providerKey),
       lifecycleCapability: { synchronousSpawnPermit: true },

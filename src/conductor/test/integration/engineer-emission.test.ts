@@ -33,7 +33,6 @@ function makeProvider(narrative = '# Full Retro\n\nDetailed.'): LLMProvider & { 
       provider.calls += 1;
       return { success: true, output: narrative, exitCode: 0 };
     },
-    async invokeInteractive(): Promise<void> {},
   };
   return provider;
 }

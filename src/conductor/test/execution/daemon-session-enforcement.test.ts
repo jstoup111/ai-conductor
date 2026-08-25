@@ -177,10 +177,13 @@ function codexCapture() {
     (_file: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
       calls.push({ args: [...args], env: options.env });
       return Promise.resolve({
-        stdout: JSON.stringify({
-          type: 'item.completed',
-          item: { type: 'agent_message', text: 'Done.' },
-        }),
+        stdout: [
+          JSON.stringify({
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'Done.' },
+          }),
+          JSON.stringify({ type: 'turn.completed' }),
+        ].join('\n'),
         stderr: '',
         exitCode: 0,
         failed: false,
@@ -199,7 +202,7 @@ describe('daemon-session marker injection (claude adapter)', () => {
 
   it('stamps the marker on the interactive entry too', async () => {
     const { calls, provider } = claudeCapture();
-    await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    await provider.invoke({ ...baseOptions, interactive: false });
     expect(calls[0]!.env?.[DAEMON_SESSION_MARKER]).toBe('1');
   });
 
@@ -232,7 +235,7 @@ describe('daemon-session marker injection (codex adapter)', () => {
 
   it('stamps the marker on the interactive entry and preserves self-host env', async () => {
     const { calls, provider } = codexCapture();
-    await provider.invokeInteractive({
+    await provider.invoke({
       ...baseOptions,
       interactive: false,
       selfHost: {

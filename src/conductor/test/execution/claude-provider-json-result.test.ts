@@ -76,7 +76,7 @@ describe('Claude stream JSON result parsing', () => {
     expect(result.tokenUsage).toBeUndefined();
   });
 
-  it('passes through a stream with no terminal result record', async () => {
+  it('rejects a successful stream with no terminal result record', async () => {
     const stdout = [
       JSON.stringify({ type: 'system', subtype: 'init' }),
       JSON.stringify({ type: 'assistant', message: { content: [] } }),
@@ -85,7 +85,10 @@ describe('Claude stream JSON result parsing', () => {
 
     const result = await new ClaudeProvider().invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
 
-    expect(result).toMatchObject({ output: stdout, tokenUsage: undefined });
+    expect(result).toMatchObject({
+      success: false,
+      output: 'Claude provider parse failure: missing terminal result record.',
+    });
   });
 
   it('leaves token usage undefined when the terminal result omits input tokens', async () => {
@@ -101,7 +104,7 @@ describe('Claude stream JSON result parsing', () => {
     expect(result).toMatchObject({ output: 'text without complete usage', tokenUsage: undefined });
   });
 
-  it('passes through raw stdout when the terminal stream line is malformed', async () => {
+  it('rejects a successful stream when the terminal stream line is malformed', async () => {
     const stdout = [
       JSON.stringify({ type: 'result', result: 'stale result', usage: { input_tokens: 1, output_tokens: 1 } }),
       '{"type":"result","result":',
@@ -110,6 +113,9 @@ describe('Claude stream JSON result parsing', () => {
 
     const result = await new ClaudeProvider().invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
 
-    expect(result).toMatchObject({ output: stdout, tokenUsage: undefined });
+    expect(result).toMatchObject({
+      success: false,
+      output: 'Claude provider parse failure: missing terminal result record.',
+    });
   });
 });

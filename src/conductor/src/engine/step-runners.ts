@@ -6,6 +6,7 @@ import type {
   InvokeOptions,
   InvokeResult,
   LLMProvider,
+  ProviderStreamCandidateObserver,
   ProviderStreamObservation,
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
@@ -99,7 +100,6 @@ import {
 } from './provider-execution.js';
 import {
   ProviderRuntimeSet,
-  type ProviderRuntime,
 } from './provider-runtime.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
@@ -819,9 +819,9 @@ export class DefaultStepRunner implements StepRunner {
       state.complexity_tier,
     );
 
-    // Autonomous steps use invoke() (captured output) so we can detect rate
-    // limits and stale sessions. Collaborative steps use invokeInteractive()
-    // because the user is actively interacting via REPL.
+    // Every dispatch reaches the provider through invoke(). `interactive`
+    // selects the REPL; non-REPL collaborative steps still receive the
+    // machine envelope and streaming observations.
     if (autonomous) {
       if (this.providerRuntimes && branchSessionId === undefined) {
         if (step === 'remediate') {
@@ -893,13 +893,21 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     // Consult the availability cache before dispatch so a model already
-    // known-dead (e.g. downgraded during an earlier autonomous step) isn't
-    // handed to the interactive REPL — effectiveModel() substitutes a live
-    // model and fires the substitution warning itself.
+    // known-dead is not handed to the unified dispatch entry —
+    // effectiveModel() substitutes a live model and fires its warning.
     const { model: effectiveModel } = this.modelAvailability.effectiveModel(resolved.model);
+    if (effectiveModel === resolved.model && this.modelAvailability.dead.has(resolved.model)) {
+      return {
+        success: false,
+        output: `Model fallback ladder exhausted: no live model remains after ${resolved.model}.`,
+      };
+    }
+    const streamConsumer = interactive
+      ? undefined
+      : this.createProviderStreamConsumer(step, this.providerKey);
 
     try {
-      await this.provider.invokeInteractive({
+      await this.provider.invoke({
         prompt,
         sessionId: branchSessionId ?? this.sessionId,
         resume,
@@ -915,6 +923,7 @@ export class DefaultStepRunner implements StepRunner {
         systemPrompt,
         model: effectiveModel,
         effort: resolved.effort,
+        ...(streamConsumer ? { streamConsumer } : {}),
       });
       this.callCount++;
 
@@ -937,6 +946,8 @@ export class DefaultStepRunner implements StepRunner {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.log(`Session for ${step} exited with error: ${errorMessage}`);
       return { success: false, output: `Session for ${step} exited with error: ${errorMessage}` };
+    } finally {
+      streamConsumer?.close();
     }
   }
 
@@ -957,9 +968,6 @@ export class DefaultStepRunner implements StepRunner {
       );
     }
 
-    const runtimes = streaming
-      ? this.streamingProviderRuntimes(this.providerRuntimes)
-      : this.providerRuntimes;
     const invocationOptions = this.withFeatureDiagnosticLog({
       prompt,
       systemPrompt,
@@ -979,7 +987,7 @@ export class DefaultStepRunner implements StepRunner {
             step,
             configuredProviders: this.configuredProviders,
             preferredProvider: this.config?.steps?.[step]?.llm_provider,
-            runtimes,
+            runtimes: this.providerRuntimes!,
             sessions,
             config: this.config,
             tier: state.complexity_tier,
@@ -1218,48 +1226,25 @@ export class DefaultStepRunner implements StepRunner {
     };
   }
 
-  private streamingProviderRuntimes(
-    runtimes: ProviderRuntimeSet,
-  ): ProviderRuntimeSet {
-    return new ProviderRuntimeSet(
-      runtimes.keys().map((key): ProviderRuntime => {
-        const runtime = runtimes.get(key);
-        return {
-          key: runtime.key,
-          policy: runtime.policy,
-          builtIn: runtime.builtIn,
-          lifecycleCapability: runtime.lifecycleCapability,
-          availability: runtime.availability,
-          get runWideUnavailable() {
-            return runtime.runWideUnavailable;
-          },
-          set runWideUnavailable(value) {
-            runtime.runWideUnavailable = value;
-          },
-          // DELEGATE, never re-enumerate. This wrapper exists only to make
-          // `invoke` route through `invokeInteractive` for streaming
-          // dispatch; every other capability must reach the real adapter
-          // untouched. Listing members by hand silently dropped the optional
-          // ones: `resolveSelfHostExecutable` went missing, so every
-          // codex-routed streaming step threw "Codex self-host isolation is
-          // unavailable for the resolved provider candidate" at
-          // conductor.ts:3961 before the provider was ever constructed, and
-          // `readiness` went missing, so auth recovery could not engage on a
-          // streaming step. Prototype delegation cannot lose a member the
-          // adapter grows later.
-          provider: Object.assign(Object.create(runtime.provider) as LLMProvider, {
-            invoke: async (options: InvokeOptions): Promise<InvokeResult> =>
-              (await runtime.provider.invokeInteractive(options)) ?? {
-                success: true,
-                output: '',
-                exitCode: 0,
-              },
-            invokeInteractive: (options: InvokeOptions): Promise<InvokeResult | void> =>
-              runtime.provider.invokeInteractive(options),
-          }),
-        };
-      }),
+  private createProviderStreamConsumer(
+    step: StepName,
+    provider: string,
+  ): ProviderStreamCandidateObserver {
+    const throttle = createProviderStreamThrottle<ProviderStreamObservation>(
+      (observation) => {
+        void this.events?.emit({
+          type: 'provider_stream_progress', step, provider, ...observation,
+          ts: new Date().toISOString(),
+        }).catch(() => {});
+      },
+      { minIntervalMs: resolveProviderStreamMinIntervalMs(this.config) },
     );
+    const heartbeat = setInterval(throttle.heartbeat, DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS);
+    heartbeat.unref(); // portability-ok: consumer-owned heartbeat is cleared at dispatch close
+    return {
+      onProviderStream: throttle,
+      close: () => { clearInterval(heartbeat); throttle.flush(); },
+    };
   }
 
   private async persistProviderAwareSuccess(
@@ -1349,7 +1334,6 @@ export class DefaultStepRunner implements StepRunner {
         attemptedModels.push(opts.model ?? '');
         return this.provider.invoke(opts);
       },
-      invokeInteractive: (opts) => this.provider.invokeInteractive(opts),
     };
 
     // Concurrent-group branch dispatch: use the branch-local session id
@@ -1548,7 +1532,7 @@ export class DefaultStepRunner implements StepRunner {
       return;
     }
     const resolved = this.resolvedConfigFor(step);
-    await this.provider.invokeInteractive({
+    await this.provider.invoke({
       prompt,
       sessionId: this.sessionId,
       resume: false,

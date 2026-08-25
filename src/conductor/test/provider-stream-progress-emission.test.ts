@@ -20,7 +20,7 @@ describe('provider stream progress emission', () => {
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(projectDir, '.pipeline', 'events.jsonl'), events);
     persister.start();
-    const runner = new DefaultStepRunner({ invoke: vi.fn(), invokeInteractive: vi.fn() }, 'emission-test', projectDir, {
+    const runner = new DefaultStepRunner({ invoke: vi.fn(), }, 'emission-test', projectDir, {
       events,
       configuredProviders: ['claude'],
     });
@@ -71,7 +71,6 @@ describe('provider stream progress emission', () => {
         options.onProviderStream?.({ childObservability: 'observed', activeChildren: 1, uncachedInputTokens: 99, outputTokens: 9 });
         return { success: false, output: 'Claude unavailable', exitCode: 1, providerUnavailable: true, providerUnavailableScope: 'run' };
       },
-      invokeInteractive: async () => ({ success: false, output: 'not used', exitCode: 1 }),
     };
     const codex: LLMProvider = {
       supportsSessionResume: false,
@@ -80,7 +79,6 @@ describe('provider stream progress emission', () => {
         options.onProviderStream?.({ childObservability: 'unsupported', uncachedInputTokens: 1, outputTokens: 2 });
         return { success: true, output: 'done', exitCode: 0 };
       },
-      invokeInteractive: async () => ({ success: false, output: 'not used', exitCode: 1 }),
     };
     const runtimes = new ProviderRuntimeSet([
       { key: 'claude', provider: claude, lifecycleCapability: claude.lifecycleCapability, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },

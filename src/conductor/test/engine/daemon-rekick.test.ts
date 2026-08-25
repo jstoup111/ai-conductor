@@ -1429,7 +1429,7 @@ describe('engine/daemon-rekick — verified merged-history continuation', () => 
         );
       },
       daemon: false,
-      provider: { invoke: async () => ({ success: true, output: '', exitCode: 0 }), invokeInteractive: async () => {} },
+      provider: { invoke: async () => ({ success: true, output: '', exitCode: 0 }), },
       project: 'test-project',
       log,
     };

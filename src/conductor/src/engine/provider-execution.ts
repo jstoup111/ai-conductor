@@ -608,9 +608,21 @@ export async function executeProviderCandidates({
     let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     const invoke = async (): Promise<InvokeResult> => {
-      candidateObserver = candidateOptions.providerStreamObserverForCandidate?.(providerKey);
+      // The REPL path supplies no stream consumer
+      // (adr-2026-08-24-one-dispatch-member-on-the-provider-contract, and the
+      // machine-envelope ADR repeats it). An interactive dispatch renders to
+      // the operator's own terminal; an observer there watches a stream that
+      // structurally cannot carry machine envelopes, so it is not merely
+      // inert — it must never be created or attached.
+      candidateObserver = candidateOptions.interactive
+        ? undefined
+        : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
       const candidateInvocationOptions = candidateObserver
-        ? { ...candidateOptions, onProviderStream: candidateObserver.onProviderStream }
+        ? {
+            ...candidateOptions,
+            streamConsumer: candidateObserver,
+            onProviderStream: candidateObserver.onProviderStream,
+          }
         : candidateOptions;
       const candidate = {
         step,

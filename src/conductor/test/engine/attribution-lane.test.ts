@@ -73,7 +73,6 @@ Add tests for sweep.
     });
     const provider: LLMProvider = {
       invoke,
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
 
     const result = await dispatchAttributionVerifier({
@@ -94,13 +93,44 @@ Add tests for sweep.
     expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it('delegates the legacy attribution verifier dispatch through invoke without a stream consumer', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      success: true,
+      output: '{}',
+      exitCode: 0,
+    });
+    const invokeInteractive = vi.fn().mockRejectedValue(
+      new Error('legacy interactive dispatch must not run'),
+    );
+    const provider: LLMProvider = { invoke, };
+
+    await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invokeInteractive).not.toHaveBeenCalled();
+    expect(invoke.mock.calls[0][0]).not.toHaveProperty('streamConsumer');
+
+    const source = await readFile(
+      new URL('../../src/engine/attribution-lane.ts', import.meta.url),
+      'utf-8',
+    );
+    expect(source).not.toContain('provider.invokeInteractive');
+  });
+
   it('uses step ID attribution_verify', async () => {
     const invoke = vi.fn().mockResolvedValue({
       success: true,
       output: '{"schema": 1}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     await dispatchAttributionVerifier({
       provider,
@@ -123,7 +153,7 @@ Add tests for sweep.
       output: '{}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const featureWorktreeDir = join(dir, 'feature-worktree');
     await dispatchAttributionVerifier({
@@ -145,7 +175,7 @@ Add tests for sweep.
       output: '{}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const config: HarnessConfig = {
       model_fallback_ladder: ['claude-opus', 'claude-sonnet'],
@@ -178,7 +208,7 @@ Add tests for sweep.
       output: '{}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     await dispatchAttributionVerifier({
       provider,
@@ -212,7 +242,7 @@ Add tests for sweep.
         output: '{}',
         exitCode: 0,
       });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     await dispatchAttributionVerifier({
       provider,
@@ -242,7 +272,7 @@ Add tests for sweep.
         output: '{}',
         exitCode: 0,
       });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
     const config: HarnessConfig = {
       model_fallback_ladder: [
         'gpt-5.6-sol',
@@ -272,7 +302,7 @@ Add tests for sweep.
       output: 'Sol unavailable',
       modelUnavailable: true,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const result = await dispatchAttributionVerifier({
       provider,
@@ -299,7 +329,7 @@ Add tests for sweep.
       output: '{}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     await dispatchAttributionVerifier({
       provider,
@@ -322,7 +352,7 @@ Add tests for sweep.
       output: '{}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     await dispatchAttributionVerifier({
       provider,
@@ -343,7 +373,7 @@ Add tests for sweep.
       output: 'attribution complete',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const result = await dispatchAttributionVerifier({
       provider,
@@ -365,7 +395,7 @@ Add tests for sweep.
       rateLimited: true,
       waitSeconds: 60,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const result = await dispatchAttributionVerifier({
       provider,
@@ -387,7 +417,7 @@ Add tests for sweep.
       output: 'auth failed',
       authFailure: true,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const result = await dispatchAttributionVerifier({
       provider,
@@ -427,7 +457,7 @@ Add tests for sweep.
       output: 'session expired',
       sessionExpired: true,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const result = await dispatchAttributionVerifier({
       provider,
@@ -448,7 +478,7 @@ Add tests for sweep.
       output: 'no models available',
       modelUnavailable: true,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const config: HarnessConfig = {
       model_fallback_ladder: ['claude-opus', 'claude-sonnet', 'claude-haiku'],
@@ -536,7 +566,6 @@ Add tests for sweep.
     const invoke = vi.fn();
     const provider: LLMProvider = {
       invoke,
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
 
     // First call: should dispatch and cache
@@ -581,7 +610,6 @@ Add tests for sweep.
     const invoke = vi.fn();
     const provider: LLMProvider = {
       invoke,
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
 
     invoke.mockResolvedValueOnce({
@@ -631,7 +659,6 @@ Add tests for sweep.
     const invoke = vi.fn();
     const provider: LLMProvider = {
       invoke,
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
 
     invoke.mockResolvedValueOnce({
@@ -681,7 +708,6 @@ Add tests for sweep.
     const invoke = vi.fn();
     const provider: LLMProvider = {
       invoke,
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
 
     // Manually create a memo with an unreachable HEAD (fake SHA)
@@ -723,7 +749,6 @@ Add tests for sweep.
     });
     const provider: LLMProvider = {
       invoke,
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
 
     await dispatchAttributionVerifier({
@@ -757,7 +782,6 @@ Add tests for sweep.
     });
     const provider: LLMProvider = {
       invoke,
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
 
     await dispatchAttributionVerifier({
@@ -830,7 +854,7 @@ Implement task 3.
       output: 'verdict written',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const headSha = 'abc1234567890def1234567890def1234567890';
     const verdict = {
@@ -878,7 +902,7 @@ Implement task 3.
       output: 'verdict written',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const headSha = 'abc1234567890def1234567890def1234567890';
     const verdict = {
@@ -919,7 +943,7 @@ Implement task 3.
       output: 'verdict written',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke, };
 
     const currentHeadSha = 'abc1234567890def1234567890def1234567890';
     const verdictHeadSha = 'different1234567890def1234567890def1234567890'; // Mismatch!

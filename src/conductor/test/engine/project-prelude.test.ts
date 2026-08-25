@@ -27,7 +27,6 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 function createMockProvider(): LLMProvider {
   return {
     invoke: vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 }),
-    invokeInteractive: vi.fn(),
   } as unknown as LLMProvider;
 }
 
@@ -175,7 +174,6 @@ describe('invokeSkill return type', () => {
         exitCode: 0,
         rateLimited: true,
       }),
-      invokeInteractive: vi.fn(),
     } as unknown as LLMProvider;
 
     const result = await invokeSkill(provider, 'session-1', '/test', 'Test prompt');
@@ -191,7 +189,6 @@ describe('invokeSkill return type', () => {
         exitCode: 0,
         rateLimited: false,
       }),
-      invokeInteractive: vi.fn(),
     } as unknown as LLMProvider;
 
     const result = await invokeSkill(provider, 'session-1', '/test', 'Test prompt');
@@ -207,7 +204,6 @@ describe('invokeSkill return type', () => {
         exitCode: 1,
         rateLimited: false,
       }),
-      invokeInteractive: vi.fn(),
     } as unknown as LLMProvider;
 
     const result = await invokeSkill(provider, 'session-1', '/test', 'Test prompt');
@@ -223,7 +219,6 @@ describe('invokeSkill return type', () => {
         exitCode: 429,
         rateLimited: true,
       }),
-      invokeInteractive: vi.fn(),
     } as unknown as LLMProvider;
 
     const result = await invokeSkill(provider, 'session-1', '/test', 'Test prompt');
@@ -263,10 +258,9 @@ describe('runProjectPrelude (happy paths)', () => {
     }));
     const provider = (
       invoke: LLMProvider['invoke'],
-      invokeInteractive: LLMProvider['invokeInteractive'],
+      invokeInteractive: LLMProvider['invoke'],
     ): LLMProvider => ({
       invoke,
-      invokeInteractive,
     });
     const runtimes = new ProviderRuntimeSet([
       {

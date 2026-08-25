@@ -697,16 +697,15 @@ describe('prd_audit kickback', () => {
         }],
       }),
     );
-    const invokeInteractive = vi.fn().mockResolvedValue(undefined);
+    const invoke = vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 });
     const runner = new DefaultStepRunner({
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: vi.fn(),
-      invokeInteractive,
+      invoke,
     }, 'session', root, { pipelineDir: join(root, '.pipeline') });
 
     await runner.run('prd_audit', {});
 
-    const prompt = invokeInteractive.mock.calls[0][0].systemPrompt as string;
+    const prompt = invoke.mock.calls[0][0].systemPrompt as string;
     expect(prompt).toContain('PRD-AUDIT SCOPE EVIDENCE');
     expect(prompt).toContain('.docs/plans/feature.md');
     expect(prompt).toContain('corrected plan');

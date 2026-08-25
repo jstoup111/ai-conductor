@@ -115,10 +115,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
           exitCode: 0,
         };
       },
-
-      invokeInteractive: async () => {
-        throw new Error('invokeInteractive not supported in fixture');
-      },
     };
   }
 
@@ -131,7 +127,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         providerInvoked = true;
         return originalProvider.invoke(opts);
       },
-      invokeInteractive: (opts) => originalProvider.invokeInteractive(opts),
     };
 
     // Create a DefaultStepRunner with the tracked provider
@@ -220,7 +215,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     );
     const provider = (
       invoke: LLMProvider['invoke'],
-      invokeInteractive: LLMProvider['invokeInteractive'],
+      invokeInteractive: LLMProvider['invoke'],
     ): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: async (options) => {
@@ -234,7 +229,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         }
         return invoke(options);
       },
-      invokeInteractive,
     });
     const runtimes = new ProviderRuntimeSet([
       {
@@ -412,9 +406,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         );
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
-      invokeInteractive: async () => {
-        throw new Error('invokeInteractive not supported in fixture');
-      },
     };
     const runner = new DefaultStepRunner(
       provider,
@@ -469,9 +460,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         };
         await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
-      },
-      invokeInteractive: async () => {
-        throw new Error('not supported');
       },
     };
 
@@ -536,10 +524,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
 
         await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
-      },
-
-      invokeInteractive: async () => {
-        throw new Error('not supported');
       },
     };
 
@@ -623,10 +607,6 @@ Add comprehensive tests.
         };
         await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
-      },
-
-      invokeInteractive: async () => {
-        throw new Error('not supported');
       },
     };
 
@@ -712,9 +692,6 @@ Add comprehensive tests.
         await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
 
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
-      },
-      invokeInteractive: async () => {
-        throw new Error('not supported in test');
       },
     };
 

@@ -94,7 +94,6 @@ function inertProvider(invoke = vi.fn(async () => invokeResult())): LLMProvider 
   return {
     supportsSessionResume: false,
     invoke,
-    invokeInteractive: vi.fn(async () => undefined),
   };
 }
 

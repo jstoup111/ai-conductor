@@ -25,6 +25,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
 
   it('parses tokenUsage from a claude --output-format json result payload', async () => {
     const jsonResult = JSON.stringify({
+      type: 'result',
       result: 'Done!',
       usage: {
         input_tokens: 100,
@@ -67,7 +68,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
       failed: false,
     } as any);
 
-    const result = await provider.invoke(baseOptions);
+    const result = await provider.invoke({ ...baseOptions, interactive: true });
     expect(result.tokenUsage).toBeUndefined();
     expect(result.output).toBe('plain text output');
   });
@@ -80,13 +81,14 @@ describe('ClaudeProvider tokenUsage parsing', () => {
       failed: false,
     } as any);
 
-    const result = await provider.invoke(baseOptions);
+    const result = await provider.invoke({ ...baseOptions, interactive: true });
     expect(result.tokenUsage).toBeUndefined();
     expect(result.output).toBe('not valid json {{{');
   });
 
   it('parses tokenUsage with zero cache values', async () => {
     const jsonResult = JSON.stringify({
+      type: 'result',
       result: 'Done!',
       usage: {
         input_tokens: 200,
@@ -112,7 +114,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
 
   it('invokes claude with verbose stream-json output (not text)', async () => {
     mockExeca.mockResolvedValue({
-      stdout: JSON.stringify({ result: 'ok' }),
+      stdout: JSON.stringify({ type: 'result', result: 'ok' }),
       stderr: '',
       exitCode: 0,
       failed: false,

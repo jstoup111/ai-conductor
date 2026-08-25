@@ -139,9 +139,14 @@ type CodexSubprocessFactory = (
 ) => ResultPromise;
 
 /** Extract the final agent message and optional usage from Codex JSONL output. */
-export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: TokenUsage } {
+export function parseCodexJsonl(stdout: string): {
+  output: string;
+  tokenUsage?: TokenUsage;
+  hasTerminalResult: boolean;
+} {
   let output: string | undefined;
   let tokenUsage: TokenUsage | undefined;
+  let hasTerminalResult = false;
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -150,6 +155,9 @@ export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: 
       if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
         const text = event.item.text ?? event.item.content?.map((part) => part.text ?? '').join('');
         if (text) output = text;
+      }
+      if (event.type === 'turn.completed') {
+        hasTerminalResult = true;
       }
       if (event.type === 'turn.completed' && event.usage) {
         const input = event.usage.input_tokens;
@@ -189,7 +197,7 @@ export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: 
     }
   }
 
-  return { output: output ?? stdout, tokenUsage };
+  return { output: output ?? stdout, tokenUsage, hasTerminalResult };
 }
 
 function parseWaitSeconds(output: string, fallbackSeconds = 300): number {
@@ -270,34 +278,47 @@ export class CodexProvider implements LLMProvider {
     // session id, but the invariant is enforced uniformly at every adapter
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
-    const readiness = await this.readiness(options.spawnPermit);
-    this.logReadinessDiagnostic(readiness, options.diagnosticLog);
-    if (readiness.state === 'missing' || readiness.state === 'unusable') {
+    const repl = options.interactive === true;
+    const jsonOutput = !repl;
+    // A real interactive session leaves authorization to the operator. Auto
+    // streaming is explicitly marked noninteractive by the runner and must
+    // prove readiness for every dispatch.
+    const readiness = repl ? undefined : await this.readiness(options.spawnPermit);
+    if (readiness) this.logReadinessDiagnostic(readiness, options.diagnosticLog);
+    if (readiness?.state === 'missing' || readiness?.state === 'unusable') {
       return this.readinessFailure(readiness);
     }
 
     const authentication = this.authentication;
-    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, true, true)];
-    const prompt = this.composePrompt(options);
+    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, !repl)];
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
       const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, args, {
         reject: false,
-        input: prompt,
-        stdout: 'pipe',
-        stderr: 'pipe',
+        input: this.composePrompt(options),
+        stdin: 'pipe',
+        stdout: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
+        stderr: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
         cwd: options.cwd,
         env: this.invocationEnv(options, authentication),
-      }, options);
+      }, {
+        ...options,
+        onProviderStream: repl ? undefined : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
+      });
       return subprocess;
     });
 
     this.logDiagnostics(result, options.diagnosticLog);
 
-    const completion = this.classifyCompletion(result, true, authentication, true, readiness, {
-      model: options.model,
-      cwd: options.cwd,
-    });
+    const completion = this.classifyCompletion(
+      result,
+      jsonOutput,
+      authentication,
+      !repl,
+      readiness,
+      { model: options.model, cwd: options.cwd },
+      !repl,
+    );
     return { ...completion, observedIntervals: [interval] };
   }
 
@@ -381,49 +402,6 @@ export class CodexProvider implements LLMProvider {
     }
   }
 
-  /**
-   * Codex's `exec` mode is one-shot rather than a REPL. Keep the interface
-   * usable for conductor's collaborative calls by streaming that one-shot run.
-   */
-  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
-    // Boundary enforcement: fresh session per invocation (see invoke()).
-    options = enforceFreshSessionOptions(options, 'codex');
-    // A real interactive session leaves authorization to the operator. Auto
-    // streaming still uses this method, but is explicitly marked noninteractive
-    // by the runner and must prove readiness for every dispatch.
-    const readiness = options.interactive
-      ? undefined
-      : await this.readiness(options.spawnPermit);
-    if (readiness) this.logReadinessDiagnostic(readiness, options.diagnosticLog);
-    if (readiness?.state === 'missing' || readiness?.state === 'unusable') {
-      return this.readinessFailure(readiness);
-    }
-
-    const authentication = this.authentication;
-    const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, [...this.selfHostArgs(options), ...this.buildArgs(options, false, !options.interactive)], {
-        reject: false,
-        input: this.composePrompt(options),
-        stdin: 'pipe',
-        stdout: options.diagnosticLog ? 'pipe' : options.interactive ? ['pipe', 'inherit'] : 'pipe',
-        stderr: options.diagnosticLog ? 'pipe' : options.interactive ? ['pipe', 'inherit'] : 'pipe',
-        cwd: options.cwd,
-        env: this.invocationEnv(options, authentication),
-      }, options);
-      return subprocess;
-    });
-
-    this.logDiagnostics(result, options.diagnosticLog);
-
-    return {
-      ...this.classifyCompletion(result, false, authentication, !options.interactive, readiness, {
-        model: options.model,
-        cwd: options.cwd,
-      }),
-      observedIntervals: [interval],
-    };
-  }
-
   private logDiagnostics(
     result: { stdout?: unknown; stderr?: unknown },
     diagnosticLog: InvokeOptions['diagnosticLog'],
@@ -480,6 +458,7 @@ export class CodexProvider implements LLMProvider {
      * dispatch stays `cost-unmetered` rather than carrying an invented figure.
      */
     pricing?: { model?: string; cwd?: string },
+    strictMachineEnvelope = false,
   ): InvokeResult {
     const { source } = authenticationSelection;
     const stdout = (result.stdout ?? '') as string;
@@ -487,17 +466,21 @@ export class CodexProvider implements LLMProvider {
     const exitCode = (result.exitCode ?? 1) as number;
     const parsedRaw = jsonOutput
       ? parseCodexJsonl(stdout)
-      : { output: stdout, tokenUsage: undefined as TokenUsage | undefined };
+      : {
+          output: stdout,
+          tokenUsage: undefined as TokenUsage | undefined,
+          hasTerminalResult: true,
+        };
     // Price at DISPATCH time so the rate in force when the run happened is
     // baked into the event log. Nothing re-prices history: a later card
     // revision would silently drift every past feature's reported cost.
     const parsed = {
       output: parsedRaw.output,
-      tokenUsage: applyRateCard(
+      tokenUsage: !strictMachineEnvelope || exitCode === 0 ? applyRateCard(
         parsedRaw.tokenUsage,
         pricing?.model,
         this.loadRates(pricing?.cwd ?? process.cwd()),
-      ),
+      ) : undefined,
     };
     const rawOutput =
       stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
@@ -520,6 +503,15 @@ export class CodexProvider implements LLMProvider {
         providerUnavailableReason: reason,
         // A missing executable takes precedence as the completion result, but
         // must not overwrite an earlier inconclusive readiness probe.
+        authentication: readyReadiness ?? this.authenticationResult(source, 'ready'),
+      };
+    }
+
+    if (strictMachineEnvelope && exitCode === 0 && !parsedRaw.hasTerminalResult) {
+      return {
+        success: false,
+        output: 'Codex provider parse failure: missing terminal result record.',
+        exitCode,
         authentication: readyReadiness ?? this.authenticationResult(source, 'ready'),
       };
     }
@@ -907,7 +899,7 @@ export class CodexProvider implements LLMProvider {
     );
   }
 
-  private buildArgs(options: InvokeOptions, json: boolean, unattended: boolean): string[] {
+  private buildArgs(options: InvokeOptions, unattended: boolean): string[] {
     const args = ['exec'];
 
     if (options.model) args.push('--model', options.model);
@@ -936,7 +928,7 @@ export class CodexProvider implements LLMProvider {
       );
     }
     if (options.cwd) args.push('--cd', options.cwd);
-    if (json) args.push('--json');
+    if (!options.interactive) args.push('--json');
     // An explicit '-' makes stdin prompt delivery unambiguous and avoids argv
     // length limits for large build-review prompts.
     args.push('-');

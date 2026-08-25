@@ -425,21 +425,14 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
 
   it("cold-starts a provider-session branch retry without changing the serial session", async () => {
     const providerExecutor = vi.fn(executeProviderCandidates);
-    const invokeInteractive = vi
-      .fn<LLMProvider["invokeInteractive"]>()
+    const invoke = vi
+      .fn<LLMProvider['invoke']>()
       .mockResolvedValueOnce({ success: false, output: "retry", exitCode: 1 })
       .mockResolvedValueOnce({ success: true, output: "passed", exitCode: 0 });
     const provider: LLMProvider = {
       supportsSessionResume: true,
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: vi.fn(),
-      invokeInteractive: vi.fn(async (options: InvokeOptions) => {
-        const permit = options.spawnPermit?.();
-        if (permit && !permit.permitted) {
-          throw new Error(`provider spawn denied: ${permit.reason}`);
-        }
-        return invokeInteractive(options);
-      }),
+      invoke,
     };
     const sessionIds = ["manual-claude-attempt-1", "manual-claude-attempt-2"];
     const sessions = new ProviderSessionStore({
@@ -501,7 +494,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
     });
     // Fresh session per attempt: each retry mints its own unused UUID and
     // never resumes — store-derived ids (removed by design) must not appear.
-    const attemptSessions = invokeInteractive.mock.calls.map(([options]) => ({
+    const attemptSessions = invoke.mock.calls.map(([options]) => ({
       sessionId: options.sessionId,
       resume: options.resume,
     }));
@@ -542,46 +535,21 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         if (options.prompt === "/prd-audit") return prdDispatch();
         return architectureDispatch();
       };
-      const capturedInteractive = vi.fn(routeDispatch);
-      const codexInteractive = vi.fn((options: InvokeOptions) =>
+      const capturedDispatch = vi.fn(routeDispatch);
+      const codexDispatch = vi.fn((options: InvokeOptions) =>
         options.prompt === "$manual-test"
           ? manualDispatch()
           : architectureDispatch(),
       );
-      const claudeInteractive = vi.fn((_options: InvokeOptions) => prdDispatch());
-      const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
-        success: true,
-        output: "captured print path must not run",
-        exitCode: 0,
-      }));
-      const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
-        success: true,
-        output: "Codex print path must not run",
-        exitCode: 0,
-      }));
-      const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
-        success: true,
-        output: "Claude print path must not run",
-        exitCode: 0,
-      }));
-      const provider = (
-        invoke: LLMProvider["invoke"],
-        invokeInteractive: LLMProvider["invokeInteractive"],
-      ): LLMProvider => ({
+      const claudeDispatch = vi.fn((_options: InvokeOptions) => prdDispatch());
+      const provider = (dispatch: LLMProvider["invoke"]): LLMProvider => ({
         lifecycleCapability: { synchronousSpawnPermit: true },
         invoke: vi.fn(async (options: InvokeOptions) => {
           const permit = options.spawnPermit?.();
           if (permit && !permit.permitted) {
             throw new Error(`provider spawn denied: ${permit.reason}`);
           }
-          return invoke(options);
-        }),
-        invokeInteractive: vi.fn(async (options: InvokeOptions) => {
-          const permit = options.spawnPermit?.();
-          if (permit && !permit.permitted) {
-            throw new Error(`provider spawn denied: ${permit.reason}`);
-          }
-          return invokeInteractive(options);
+          return dispatch(options);
         }),
       });
       const legacySession = new SessionManager(pipelineDir);
@@ -605,7 +573,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       };
       const beginBranch = vi.spyOn(sessions, "beginBranch");
       const runner = new DefaultStepRunner(
-        provider(capturedInvoke, capturedInteractive),
+        provider(capturedDispatch),
         "captured-session",
         "/tmp/project",
         {
@@ -622,7 +590,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
           providerRuntimes: new ProviderRuntimeSet([
             {
               key: "claude",
-              provider: provider(claudeInvoke, claudeInteractive),
+              provider: provider(claudeDispatch),
               policy: CLAUDE_MODEL_POLICY,
               builtIn: true,
               availability: new ModelAvailability(
@@ -631,7 +599,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             },
             {
               key: "codex",
-              provider: provider(codexInvoke, codexInteractive),
+              provider: provider(codexDispatch),
               policy: CODEX_MODEL_POLICY,
               builtIn: true,
               availability: new ModelAvailability(
@@ -709,7 +677,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         { stepRunner: runner, onMemberEvent },
         1,
       );
-      const codexCalls = codexInteractive.mock.calls.map(([options]) => ({
+      const codexCalls = codexDispatch.mock.calls.map(([options]) => ({
         prompt: options.prompt,
         sessionId: options.sessionId,
         resume: options.resume,
@@ -719,7 +687,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         model: options.model,
         effort: options.effort,
       }));
-      const claudeCalls = claudeInteractive.mock.calls.map(([options]) => ({
+      const claudeCalls = claudeDispatch.mock.calls.map(([options]) => ({
         prompt: options.prompt,
         sessionId: options.sessionId,
         resume: options.resume,
@@ -736,12 +704,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       expect(new Set([...codexCalls, ...claudeCalls].map(({ sessionId }) => sessionId)).size).toBe(4);
 
       expect({
-        capturedCalls: capturedInteractive.mock.calls,
-        printCalls: {
-          captured: capturedInvoke.mock.calls,
-          claude: claudeInvoke.mock.calls,
-          codex: codexInvoke.mock.calls,
-        },
+        capturedCalls: capturedDispatch.mock.calls,
         beginBranchCalls: beginBranch.mock.calls,
         codexCalls: codexCalls.map(({ sessionId: _sessionId, ...call }) => ({
           ...call,
@@ -764,7 +727,6 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         },
       }).toEqual({
         capturedCalls: [],
-        printCalls: { captured: [], claude: [], codex: [] },
         beginBranchCalls: [
           ["manual_test"],
           ["prd_audit"],

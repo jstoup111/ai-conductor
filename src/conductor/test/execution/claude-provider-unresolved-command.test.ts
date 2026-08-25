@@ -17,7 +17,7 @@ const successfulEnvelopePath = fileURLToPath(
 
 async function invokeEnvelope(prompt: string, envelope: Record<string, unknown>) {
   const provider = new ClaudeProvider(undefined, () => Promise.resolve({
-    stdout: JSON.stringify(envelope),
+    stdout: JSON.stringify({ ...envelope, type: 'result' }),
     stderr: '',
     exitCode: 0,
     failed: false,
@@ -29,7 +29,7 @@ describe('Claude custom-step command resolution evidence (#1311)', () => {
   it('reports the pinned zero-turn /pipeline envelope as an unresolved command failure', async () => {
     const unresolvedRaw = await readFile(unresolvedEnvelopePath, 'utf8');
     const provider = new ClaudeProvider(undefined, () => Promise.resolve({
-      stdout: unresolvedRaw,
+      stdout: JSON.stringify({ ...JSON.parse(unresolvedRaw), type: 'result' }),
       stderr: '',
       exitCode: 0,
       failed: false,
