@@ -277,7 +277,7 @@ export class CodexProvider implements LLMProvider {
     }
 
     const authentication = this.authentication;
-    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, true, true)];
+    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, true)];
     const prompt = this.composePrompt(options);
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
@@ -401,7 +401,7 @@ export class CodexProvider implements LLMProvider {
 
     const authentication = this.authentication;
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, [...this.selfHostArgs(options), ...this.buildArgs(options, false, !options.interactive)], {
+      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, [...this.selfHostArgs(options), ...this.buildArgs(options, !options.interactive)], {
         reject: false,
         input: this.composePrompt(options),
         stdin: 'pipe',
@@ -907,7 +907,7 @@ export class CodexProvider implements LLMProvider {
     );
   }
 
-  private buildArgs(options: InvokeOptions, json: boolean, unattended: boolean): string[] {
+  private buildArgs(options: InvokeOptions, unattended: boolean): string[] {
     const args = ['exec'];
 
     if (options.model) args.push('--model', options.model);
@@ -936,7 +936,7 @@ export class CodexProvider implements LLMProvider {
       );
     }
     if (options.cwd) args.push('--cd', options.cwd);
-    if (json) args.push('--json');
+    if (!options.interactive) args.push('--json');
     // An explicit '-' makes stdin prompt delivery unambiguous and avoids argv
     // length limits for large build-review prompts.
     args.push('-');

@@ -2019,19 +2019,28 @@ describe('CodexProvider', () => {
     );
   });
 
-  it('captures output for a noninteractive invokeInteractive call', async () => {
+  it('requests JSON output for a non-REPL invokeInteractive call', async () => {
     mockExeca.mockResolvedValue({ exitCode: 0 } as any);
 
     await provider.invokeInteractive({ ...baseOptions, interactive: false });
 
     const [, args, options] = mockExeca.mock.calls[0];
     expect(args).toEqual(expect.arrayContaining(['exec', '-']));
-    expect(args).not.toContain('--json');
+    expect(args).toContain('--json');
     expect(options).toMatchObject({
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
     });
+  });
+
+  it('keeps JSON output disabled for a REPL invokeInteractive call', async () => {
+    mockExeca.mockResolvedValue({ stdout: 'visible output', stderr: '', exitCode: 0 } as any);
+
+    await provider.invokeInteractive({ ...baseOptions, interactive: true });
+
+    const [, args] = mockExeca.mock.calls[0];
+    expect(args).not.toContain('--json');
   });
 
   it('live-inherits captured output for a true operator-interactive call', async () => {
