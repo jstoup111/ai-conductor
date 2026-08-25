@@ -84,6 +84,7 @@ import {
   stampCode,
   BUILD_REVIEW_VERDICT,
   MANUAL_TEST_CODE_STAMP,
+  PRD_AUDIT_CODE_STAMP,
   removeBuildReviewVerdict,
   PR_BODY_REGEN_ATTEMPT_MARKER,
   uncommittedPathsOrNull,
@@ -3707,6 +3708,7 @@ describe('engine/artifacts', () => {
     });
   });
 
+  // Covers: task:8
   describe('classifyPrdAuditGaps', () => {
     const header = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
     async function writeAudit(body: string) {
@@ -3841,6 +3843,25 @@ describe('engine/artifacts', () => {
       // Session started "now" → the 2000 file is stale and ignored.
       const c = await classifyPrdAuditGaps(dir, Date.now());
       expect(c.kind).toBe('clean');
+    });
+
+    it('ignores blocking rows from an earlier run in the same session', async () => {
+      await writeAudit('| FR-17 | MISSING | impl-gap | stale evidence | no |\n');
+      await createFile(PRD_AUDIT_CODE_STAMP, JSON.stringify({ runId: 'earlier-run' }));
+
+      const c = await classifyPrdAuditGaps(dir, undefined, 'current-run');
+
+      expect(c).toEqual({ kind: 'clean', summary: 'no blocking FRs' });
+    });
+
+    it('keeps blocking rows from the current run', async () => {
+      await writeAudit('| FR-17 | MISSING | impl-gap | current evidence | no |\n');
+      await createFile(PRD_AUDIT_CODE_STAMP, JSON.stringify({ runId: 'current-run' }));
+
+      const c = await classifyPrdAuditGaps(dir, undefined, 'current-run');
+
+      expect(c.kind).toBe('impl-only');
+      expect(c.summary).toContain('FR-17 (impl-gap)');
     });
   });
 

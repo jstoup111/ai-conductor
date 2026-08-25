@@ -4516,12 +4516,18 @@ export interface PrdGapClassification {
 export async function classifyPrdAuditGaps(
   dir: string,
   sessionStartedAt: number | undefined,
+  expectedRunId?: string,
 ): Promise<PrdGapClassification> {
   const files = await findArtifactFiles(dir, 'prd_audit');
   const decisions = (await readOverScopeDecisions(dir)).decisions;
+  const identity = await verdictProducedByRun(dir, 'prd_audit', expectedRunId);
   const blocking: UnalignedFrRow[] = [];
   for (const f of files) {
-    if (!(await fileIsFreshSinceSession(f, sessionStartedAt))) continue;
+    if (identity.state === 'stale-run-identity') continue;
+    if (
+      identity.state === 'unstamped' &&
+      !(await fileIsFreshSinceSession(f, sessionStartedAt))
+    ) continue;
     const content = await readFile(f, 'utf-8');
     // An OVER_SCOPE criterion the operator already accepted, or one whose
     // intent relation never made it blocking, is not a gap this routing should

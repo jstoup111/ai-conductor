@@ -5501,6 +5501,10 @@ export class Conductor {
     // routed back to BUILD to self-heal. Bounded like MAX_KICKBACKS_PER_GATE so
     // an impl-gap the daemon can't actually close eventually halts for a human.
     let prdAuditSelfHeals = 0;
+    // The current attempt id is cleared immediately after completion checks;
+    // retain the last prd_audit dispatch identity for routing that follows the
+    // step loop so stale report text never drives a later fallback route.
+    let lastPrdAuditRunId: string | undefined;
     // Daemon-only: how many times the /remediate planner has routed a blocking
     // prd-audit back to a target step. Bounded like prdAuditSelfHeals so a gap the
     // planner can't actually close still halts for a human.
@@ -8341,6 +8345,7 @@ export class Conductor {
           // The engine owns verdict identity. Stamp it once the provider call
           // settles, before any terminal success, error, or halt routing.
           await this.stampVerdictRunIdentity(step.name, this.currentRunId);
+          if (step.name === 'prd_audit') lastPrdAuditRunId = this.currentRunId;
 
           // A missing command is a deterministic environment failure. Retrying,
           // escalating model/effort, or walking providers cannot make a command
@@ -8928,6 +8933,7 @@ export class Conductor {
                   const cls = await classifyPrdAuditGaps(
                     this.projectRoot,
                     state.session_started_at,
+                    lastPrdAuditRunId,
                   );
                   prdAuditNonClean = cls.kind !== 'clean';
                 }
@@ -8981,6 +8987,7 @@ export class Conductor {
                 const cls = await classifyPrdAuditGaps(
                   this.projectRoot,
                   state.session_started_at,
+                  lastPrdAuditRunId,
                 );
                 if (cls.kind !== 'clean') break;
               }
@@ -10199,6 +10206,7 @@ export class Conductor {
               const cls = await classifyPrdAuditGaps(
                 this.projectRoot,
                 state.session_started_at,
+                lastPrdAuditRunId,
               );
               if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
                 prdAuditSelfHeals++;
