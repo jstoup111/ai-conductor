@@ -1576,13 +1576,10 @@ export class Conductor {
       : event.type === 'parallel_started'
         ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
         : undefined;
-    // A refusal can end an attempt that never opened its own `step:` window —
-    // a validation-group member is dispatched inside the group's fan-out, not
-    // through the per-step walk. Treating `step:<step>` as its terminal key
-    // unconditionally made the absent-key orphan guard below discard every
-    // validation-group `step_refused`, so nothing reached render/persist/audit
-    // (adr-2026-08-24 D3/D4). Outside its own window the refusal is an
-    // ordinary event: emitted, closing nothing.
+    // A refusal normally closes its own step execution. Validation-group
+    // members run inside their entry's parallel execution instead, so their
+    // refusal is deliverable (but non-terminal) while that enclosing window
+    // remains open.
     const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
       ? `step:${event.step}`
       : event.type === 'step_refused'
@@ -1603,6 +1600,15 @@ export class Conductor {
       // still resolve. Its ordinary terminal is then an orphan: the ledger
       // listener cannot recover an interval after the shutdown terminal consumed it.
       if (!this.openExecutions.has(terminalKey)) return Promise.resolve();
+    }
+    if (event.type === 'step_refused' && !terminalKey) {
+      const group = getGroupForStep(event.step);
+      const hasOpenGroupExecution = group?.members.some((member) =>
+        this.openExecutions.has(`parallel:${member}`),
+      ) ?? false;
+      // A missing step key is valid only for a currently-running group member.
+      // Otherwise this is the same late orphan that SIGTERM must suppress.
+      if (!hasOpenGroupExecution) return Promise.resolve();
     }
     const deliver = async () => {
       this.activeExecutionEventDeliveries += 1;
