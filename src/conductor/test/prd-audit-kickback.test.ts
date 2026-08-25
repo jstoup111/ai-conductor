@@ -321,13 +321,13 @@ describe('prd_audit kickback', () => {
     ]);
     expect(missingRationale).toEqual({
       ok: false,
-      reason: 'recorded decision accept on S3.1 carries no rationale',
+      message: 'recorded decision accept on S3.1 carries no rationale',
     });
 
     const missingSummary = recordedPrdAuditFindingsBlock([
       { gate: 'prd_audit', grade: 'PLAN_GAP', criterion: 'S4.2', summary: '' },
     ]);
-    expect(missingSummary).toEqual({ ok: false, reason: 'recorded finding S4.2 carries no summary' });
+    expect(missingSummary).toEqual({ ok: false, message: 'recorded finding S4.2 carries no summary' });
 
     const unrenderableDecision = {
       gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.2', summary: 'Visible.',
@@ -335,7 +335,7 @@ describe('prd_audit kickback', () => {
     };
     expect(recordedPrdAuditFindingsBlock([unrenderableDecision] as never)).toMatchObject({
       ok: false,
-      reason: expect.stringContaining('recorded findings are not serializable'),
+      message: expect.stringContaining('recorded findings are not serializable'),
     });
   });
 
@@ -375,7 +375,7 @@ describe('prd_audit kickback', () => {
       );
 
       await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-        'recorded findings are not serializable: recorded decision is unrenderable',
+        'Unreadable scope decisions: unrenderable-decision (recorded findings are not serializable: recorded decision is unrenderable).',
       );
       // Fail closed: the artifact is exactly the judge's original verdict;
       // it never settles without the recorded operator decision.

@@ -60,7 +60,7 @@ export function classifyOverScopeCriterion(criterion: string, relations: Readonl
 }
 
 export interface OverScopeRenderableFinding { criterion: string; summary: string; relation: IntentRelation }
-export function renderOverScopeDecisionBlock(undecided: readonly OverScopeRenderableFinding[], refused: readonly OverScopeRenderableFinding[] = [], defects: readonly { kind: string; criterion?: string }[] = []): string {
+export function renderOverScopeDecisionBlock(undecided: readonly OverScopeRenderableFinding[], refused: readonly OverScopeRenderableFinding[] = [], defects: readonly { kind: string; criterion?: string; message?: string }[] = []): string {
   const parts: string[] = [];
   if (undecided.length) {
     parts.push(`Blocking criteria awaiting a decision: ${undecided.map((f) => f.criterion).join(', ')}.`);
@@ -68,7 +68,7 @@ export function renderOverScopeDecisionBlock(undecided: readonly OverScopeRender
     parts.push(`\`\`\`json over-scope-decisions\n${JSON.stringify(undecided.map((f) => ({ criterion: f.criterion, summary: f.summary, relation: f.relation, decision: 'pending' })), null, 2)}\n\`\`\``);
   }
   if (refused.length) parts.push(`Refused — rework required: ${refused.map((f) => f.criterion).join(', ')}.`);
-  if (defects.length) parts.push(`Unreadable scope decisions: ${defects.map((d) => d.criterion ? `${d.kind} (${d.criterion})` : d.kind).join(', ')}.`);
+  if (defects.length) parts.push(`Unreadable scope decisions: ${defects.map((d) => d.message ? `${d.kind} (${d.message})` : d.criterion ? `${d.kind} (${d.criterion})` : d.kind).join(', ')}.`);
   return parts.join('\n\n');
 }
 

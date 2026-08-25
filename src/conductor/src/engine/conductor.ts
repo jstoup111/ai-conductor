@@ -637,7 +637,7 @@ export function routePrdAuditPlanGaps(
 export type PrdAuditOverScopeRoute =
   | { kind: 'none' }
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
-  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; defects?: Array<{ kind: string; criterion?: string }> };
+  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; defects?: Array<{ kind: string; criterion?: string; message?: string }> };
 
 /**
  * One PRD-audit route result shared by the serial SHIP walk and the
@@ -731,7 +731,7 @@ export function prdAuditScopeProjection(input: {
  */
 export type RecordedFindingsProjection =
   | { ok: true; block: string }
-  | { ok: false; reason: string };
+  | { ok: false; message: string };
 
 export function recordedPrdAuditFindingsBlock(
   findings: readonly RecordedPrdAuditFinding[],
@@ -739,15 +739,15 @@ export function recordedPrdAuditFindingsBlock(
   for (const finding of findings) {
     const where = finding.criterion?.trim() || '<criterion missing>';
     if (!finding.criterion?.trim()) {
-      return { ok: false, reason: 'a recorded finding carries no criterion id' };
+      return { ok: false, message: 'a recorded finding carries no criterion id' };
     }
     if (!finding.summary?.trim()) {
-      return { ok: false, reason: `recorded finding ${where} carries no summary` };
+      return { ok: false, message: `recorded finding ${where} carries no summary` };
     }
     if (finding.decision && !finding.rationale?.trim()) {
       return {
         ok: false,
-        reason: `recorded decision ${finding.decision} on ${where} carries no rationale`,
+        message: `recorded decision ${finding.decision} on ${where} carries no rationale`,
       };
     }
   }
@@ -757,11 +757,11 @@ export function recordedPrdAuditFindingsBlock(
   } catch (error) {
     return {
       ok: false,
-      reason: `recorded findings are not serializable: ${error instanceof Error ? error.message : String(error)}`,
+      message: `recorded findings are not serializable: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
   if (typeof json !== 'string') {
-    return { ok: false, reason: 'recorded findings rendered to no JSON body' };
+    return { ok: false, message: 'recorded findings rendered to no JSON body' };
   }
   return { ok: true, block: `## Recorded Findings\n\n\`\`\`json\n${json}\n\`\`\`` };
 }
@@ -770,7 +770,7 @@ async function persistPrdAuditRecordedFindings(
   reportPath: string,
   reportText: string,
   findings: readonly RecordedPrdAuditFinding[],
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<{ ok: true } | { ok: false; message: string }> {
   const rendered = recordedPrdAuditFindingsBlock(findings);
   // Fail closed: write nothing rather than a verdict artifact that omits a
   // decision the operator authored.
@@ -783,7 +783,7 @@ async function persistPrdAuditRecordedFindings(
   } catch (error) {
     return {
       ok: false,
-      reason: `recorded findings could not be written to ${reportPath}: ${error instanceof Error ? error.message : String(error)}`,
+      message: `recorded findings could not be written to ${reportPath}: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
   return { ok: true };
@@ -2989,7 +2989,7 @@ export class Conductor {
     const route = routePrdAuditPlanGaps(reportText, storiesText, this.config);
     if (route.kind === 'record') {
       const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
-      if (!projected.ok) this.prdAuditProjectionRefusal = projected.reason;
+      if (!projected.ok) this.prdAuditProjectionRefusal = projected.message;
     }
     return route;
   }
@@ -3011,7 +3011,7 @@ export class Conductor {
     // D7: a defect the operator's edit produced must reach the next halt body,
     // not only the spine. Emitting it and dropping it made the re-halt look
     // identical to a halt where the operator had never touched the block.
-    let harvestDefects: Array<{ kind: string; criterion?: string }> = [];
+    let harvestDefects: Array<{ kind: string; criterion?: string; message?: string }> = [];
     if (parsed.kind === 'parsed') {
       let operator: string | undefined;
       try {
@@ -3030,7 +3030,25 @@ export class Conductor {
     // refusal that caused the halt — and previously persisted none of them.
     if (route.kind === 'record' || route.kind === 'halt') {
       const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
-      if (!projected.ok) this.prdAuditProjectionRefusal = projected.reason;
+      if (!projected.ok) {
+        // D8's projection refusal is an evidentiary defect on the same
+        // operator-facing over-scope route, never a generic side channel.
+        // A record route must become a halt so completion cannot pass while
+        // the decision is absent from the verdict artifact.
+        const defects = [...harvestDefects, { kind: 'unrenderable-decision', message: projected.message }];
+        if (route.kind === 'record') {
+          return {
+            kind: 'halt',
+            haltClass: OVER_SCOPE_HALT_CLASS,
+            detail: 'OVER_SCOPE recorded decision could not be rendered.',
+            findings: route.findings,
+            undecided: [],
+            refused: [],
+            defects,
+          };
+        }
+        return { ...route, defects };
+      }
     }
     return route.kind === 'halt' && harvestDefects.length > 0
       ? { ...route, defects: harvestDefects }
