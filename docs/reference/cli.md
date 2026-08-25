@@ -463,8 +463,8 @@ under the root `.daemon/` directory even when invoked from a nested package or l
 | `restart` | A paused daemon counts as idle. Busy: writes `.daemon/RESTART-PENDING` and returns `restart queued: daemon is busy on <slug>; it will restart automatically once idle.` Idle: clears a stale lock, reconciles an orphaned process (SIGTERM, 100 ms, SIGKILL, reclaim), relinks skills, and recreates the session. The outcome message always prints, so a degraded restart is visible. |
 | `connect` | Attaches read-only. Detach with `Ctrl-b d`. Pass `--write` to attach read-write instead — the same subcommand you already reached for to look, now with input, no need to already know about `debug`. |
 | `debug` | Attaches read-write. Unchanged; kept as a discoverable alias alongside `connect --write`. |
-| `pause` | Writes the durable pause marker; an already-paused daemon reports `already paused`. Not listed in `--help`. |
-| `resume` | Removes the pause marker; a daemon that is not paused reports `not paused`. Not listed in `--help`. |
+| `pause` | Writes the durable pause marker; an already-paused daemon reports `already paused`. Listed in `--help`. |
+| `resume` | Removes the pause marker; a daemon that is not paused reports `not paused`. Listed in `--help`. |
 
 | Flag | Applies to | Effect |
 | --- | --- | --- |
