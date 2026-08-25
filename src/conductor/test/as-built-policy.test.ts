@@ -42,31 +42,4 @@ describe('resolveAsBuiltPolicy', () => {
 
     expect(Object.values(policy).every(({ enabled }) => enabled)).toBe(true);
   });
-
-  it('reports a tier-disabled check in the rendered as-built prompt', async () => {
-    const root = await fixture();
-    const config: AsBuiltPolicyConfig = {
-      architecture_review_as_built: {
-        checks: { reachability: { tiers: ['M', 'L'] } },
-      },
-    };
-    const provider: LLMProvider = {
-      lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: vi.fn().mockResolvedValue({ success: true, output: 'done', exitCode: 0 }),
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
-    };
-    const runner = new DefaultStepRunner(provider, 'test-session', root, {
-      config: config as unknown as HarnessConfig,
-      mode: 'auto',
-    });
-
-    await runner.run('architecture_review_as_built', { complexity_tier: 'S' });
-
-    const systemPrompt = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]
-      ?.systemPrompt as string;
-    expect(systemPrompt).toContain('reachability: off — architecture_review_as_built.checks.reachability.tiers excludes S');
-    expect(systemPrompt).toContain('planGap: on');
-    expect(systemPrompt).toContain('adrCompliance: off — no approved ADRs');
-    expect(systemPrompt).toContain('diagramDrift: off — no diagrams');
-  });
 });

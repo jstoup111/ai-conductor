@@ -22,7 +22,7 @@ describe('ClaudeProvider provider stream observations', () => {
     const onProviderStream = vi.fn();
     const close = vi.fn();
 
-    const invocation = provider.invokeInteractive({
+    const invocation = provider.invoke({
       prompt: 'Do the thing',
       sessionId: 'session-123',
       resume: false,

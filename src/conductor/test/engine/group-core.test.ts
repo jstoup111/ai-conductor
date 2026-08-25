@@ -426,20 +426,13 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
   it("cold-starts a provider-session branch retry without changing the serial session", async () => {
     const providerExecutor = vi.fn(executeProviderCandidates);
     const invokeInteractive = vi
-      .fn<LLMProvider["invokeInteractive"]>()
+      .fn<LLMProvider['invoke']>()
       .mockResolvedValueOnce({ success: false, output: "retry", exitCode: 1 })
       .mockResolvedValueOnce({ success: true, output: "passed", exitCode: 0 });
     const provider: LLMProvider = {
       supportsSessionResume: true,
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: vi.fn(),
-      invokeInteractive: vi.fn(async (options: InvokeOptions) => {
-        const permit = options.spawnPermit?.();
-        if (permit && !permit.permitted) {
-          throw new Error(`provider spawn denied: ${permit.reason}`);
-        }
-        return invokeInteractive(options);
-      }),
     };
     const sessionIds = ["manual-claude-attempt-1", "manual-claude-attempt-2"];
     const sessions = new ProviderSessionStore({
@@ -566,7 +559,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       }));
       const provider = (
         invoke: LLMProvider["invoke"],
-        invokeInteractive: LLMProvider["invokeInteractive"],
+        invokeInteractive: LLMProvider['invoke'],
       ): LLMProvider => ({
         lifecycleCapability: { synchronousSpawnPermit: true },
         invoke: vi.fn(async (options: InvokeOptions) => {
@@ -575,13 +568,6 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             throw new Error(`provider spawn denied: ${permit.reason}`);
           }
           return invoke(options);
-        }),
-        invokeInteractive: vi.fn(async (options: InvokeOptions) => {
-          const permit = options.spawnPermit?.();
-          if (permit && !permit.permitted) {
-            throw new Error(`provider spawn denied: ${permit.reason}`);
-          }
-          return invokeInteractive(options);
         }),
       });
       const legacySession = new SessionManager(pipelineDir);

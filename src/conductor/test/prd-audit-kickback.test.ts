@@ -701,7 +701,6 @@ describe('prd_audit kickback', () => {
     const runner = new DefaultStepRunner({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: vi.fn(),
-      invokeInteractive,
     }, 'session', root, { pipelineDir: join(root, '.pipeline') });
 
     await runner.run('prd_audit', {});

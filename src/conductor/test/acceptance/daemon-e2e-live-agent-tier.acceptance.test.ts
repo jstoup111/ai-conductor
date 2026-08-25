@@ -60,7 +60,6 @@ describe('live-agent daemon E2E tier (#1124)', () => {
       invoke: vi.fn()
         .mockResolvedValueOnce({ success: true, output: 'first', exitCode: 0, tokenUsage: { input: 11, output: 7, numTurns: 1 } })
         .mockResolvedValueOnce({ success: true, output: 'second', exitCode: 0, tokenUsage: { input: 13, output: 11, numTurns: 2 } }),
-      invokeInteractive: vi.fn(),
     };
     const meter = new TokenMeter(provider);
     const report = vi.fn();

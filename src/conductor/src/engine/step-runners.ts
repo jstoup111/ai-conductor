@@ -1334,7 +1334,6 @@ export class DefaultStepRunner implements StepRunner {
         attemptedModels.push(opts.model ?? '');
         return this.provider.invoke(opts);
       },
-      invokeInteractive: (opts) => this.provider.invokeInteractive(opts),
     };
 
     // Concurrent-group branch dispatch: use the branch-local session id

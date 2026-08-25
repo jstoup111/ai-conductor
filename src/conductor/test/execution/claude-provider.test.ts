@@ -72,7 +72,7 @@ describe('ClaudeProvider', () => {
     it('selects the stream-json envelope for a non-REPL dispatch', async () => {
       mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
 
-      await provider.invokeInteractive({ ...baseOptions, interactive: false });
+      await provider.invoke({ ...baseOptions, interactive: false });
 
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(args).toEqual(expect.arrayContaining([
@@ -86,7 +86,7 @@ describe('ClaudeProvider', () => {
     it('leaves a REPL dispatch without machine-envelope flags', async () => {
       mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
 
-      await provider.invokeInteractive({ ...baseOptions, interactive: true });
+      await provider.invoke({ ...baseOptions, interactive: true });
 
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(args).not.toContain('--output-format');
@@ -96,7 +96,7 @@ describe('ClaudeProvider', () => {
 
     it.each([
       ['non-REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: false })],
-      ['REPL', (options: InvokeOptions) => provider.invokeInteractive({ ...options, interactive: true })],
+      ['REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: true })],
     ])('forces a fresh, non-resumed Claude session exactly once for a %s dispatch', async (_mode, dispatch) => {
       mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
 
@@ -121,7 +121,7 @@ describe('ClaudeProvider', () => {
       const invoke = vi.spyOn(provider, 'invoke');
 
       await provider.invoke(baseOptions);
-      await provider.invokeInteractive({ ...baseOptions, interactive: true });
+      await provider.invoke({ ...baseOptions, interactive: true });
 
       expect(invoke).toHaveBeenCalledTimes(2);
       expect(subprocessFactory).toHaveBeenCalledTimes(2);
@@ -417,7 +417,7 @@ describe('ClaudeProvider', () => {
         failed: true,
       } as any);
 
-      const result = await provider.invokeInteractive({
+      const result = await provider.invoke({
         ...baseOptions,
         interactive: true,
       });
@@ -451,7 +451,7 @@ describe('ClaudeProvider', () => {
       } as any);
 
       const nonRepl = await provider.invoke({ ...baseOptions, interactive: false });
-      const repl = await provider.invokeInteractive({ ...baseOptions, interactive: true });
+      const repl = await provider.invoke({ ...baseOptions, interactive: true });
 
       expect(nonRepl.tokenUsage).toMatchObject({ input: 12, output: 7 });
       expect(repl.tokenUsage).toBeUndefined();
@@ -500,7 +500,7 @@ describe('ClaudeProvider', () => {
         failed: true,
       } as any);
 
-      await provider.invokeInteractive({ ...baseOptions, diagnosticLog: featureLog });
+      await provider.invoke({ ...baseOptions, diagnosticLog: featureLog });
 
       expect(featureLog).toHaveBeenCalledWith('subprocess stdout diagnostic');
       expect(featureLog).toHaveBeenCalledWith('subprocess stderr diagnostic');
@@ -1490,7 +1490,7 @@ describe('ClaudeProvider', () => {
     it('invokeInteractive also forwards the effort env var', async () => {
       mockExeca.mockResolvedValue({ exitCode: 0 } as any);
 
-      await provider.invokeInteractive({ ...baseOptions, effort: 'high' });
+      await provider.invoke({ ...baseOptions, effort: 'high' });
 
       const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts.env?.CLAUDE_CODE_EFFORT_LEVEL).toBe('high');
@@ -1498,7 +1498,7 @@ describe('ClaudeProvider', () => {
 
     it('delivers the print-mode prompt on stdin, never as a -p argv value (#829)', async () => {
       mockExeca.mockResolvedValue({ exitCode: 0 } as any);
-      await provider.invokeInteractive({ ...baseOptions, interactive: false });
+      await provider.invoke({ ...baseOptions, interactive: false });
       const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts).toMatchObject({
         input: 'Do the thing',
@@ -1524,7 +1524,7 @@ describe('ClaudeProvider', () => {
       // fault allowance and HALT the feature.
       const oversized = 'x'.repeat(200_000);
       mockExeca.mockResolvedValue({ exitCode: 0 } as any);
-      await provider.invokeInteractive({ ...baseOptions, prompt: oversized, interactive: false });
+      await provider.invoke({ ...baseOptions, prompt: oversized, interactive: false });
       const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts).toMatchObject({ input: oversized });
       const longestArg = Math.max(...args.map((a) => Buffer.byteLength(a, 'utf8')));
@@ -1533,7 +1533,7 @@ describe('ClaudeProvider', () => {
 
     it('inherits REPL input while streaming and capturing output', async () => {
       mockExeca.mockResolvedValue({ exitCode: 0 } as any);
-      await provider.invokeInteractive({ ...baseOptions, interactive: true });
+      await provider.invoke({ ...baseOptions, interactive: true });
       const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts).toMatchObject({
         stdin: 'inherit',
@@ -1622,7 +1622,7 @@ describe('ClaudeProvider', () => {
 
     for (const fixture of cases) {
       mockExeca.mockResolvedValue(fixture.response as any);
-      const result = await provider.invokeInteractive({
+      const result = await provider.invoke({
         ...baseOptions,
         interactive: 'interactive' in fixture && fixture.interactive,
       });

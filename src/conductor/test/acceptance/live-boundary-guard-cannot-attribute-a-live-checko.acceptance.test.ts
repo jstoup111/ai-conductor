@@ -108,7 +108,7 @@ describe('acceptance: self-host live-checkout containment', () => {
   ) {
     const runtimes = new ProviderRuntimeSet([{
       key: 'claude',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}) },
+      provider: { invoke: vi.fn(), },
       policy: CLAUDE_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),

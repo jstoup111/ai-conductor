@@ -247,7 +247,6 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
       supportsSessionResume: key === 'claude',
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: invoke(key),
-      invokeInteractive: invoke(key),
     });
     const runtimes = new ProviderRuntimeSet([
       {
@@ -291,11 +290,6 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
     const runner = new DefaultStepRunner(
       {
         invoke: async () => ({
-          success: true,
-          output: 'legacy special lane completed',
-          exitCode: 0,
-        }),
-        invokeInteractive: async () => ({
           success: true,
           output: 'legacy special lane completed',
           exitCode: 0,
@@ -471,7 +465,6 @@ describe('#188 retry-as-escalation — S8 availability composition', () => {
         const canned = (opts.model && resultsByModel[opts.model]) ?? { success: true, output: 'done', exitCode: 0 };
         return { success: true, output: '', exitCode: 0, ...canned };
       }),
-      invokeInteractive: vi.fn(async (): Promise<void> => {}),
     };
     return { provider, invokeCalls };
   }

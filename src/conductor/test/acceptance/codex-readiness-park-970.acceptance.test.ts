@@ -77,7 +77,7 @@ function cachedLoginConductor(
 ) {
   const runtimes = new ProviderRuntimeSet([{
     key: 'codex',
-    provider: { invoke: vi.fn(), invokeInteractive: vi.fn(), readiness },
+    provider: { invoke: vi.fn(), readiness },
     policy: CODEX_MODEL_POLICY,
     builtIn: true,
     availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -120,14 +120,14 @@ describe('acceptance: Codex readiness park #970', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
       },
       {
         key: 'claude',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: fallbackReadiness },
+        provider: { invoke: vi.fn(), readiness: fallbackReadiness },
         policy: CLAUDE_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),

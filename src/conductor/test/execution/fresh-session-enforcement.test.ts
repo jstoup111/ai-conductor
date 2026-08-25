@@ -56,7 +56,7 @@ describe('fresh-session enforcement (claude adapter)', () => {
 
     await provider.invoke(baseOptions);
     await provider.invoke(baseOptions);
-    await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    await provider.invoke({ ...baseOptions, interactive: false });
 
     const ids = calls.map(sessionIdFromArgs);
     expect(new Set(ids).size).toBe(ids.length);
@@ -66,7 +66,7 @@ describe('fresh-session enforcement (claude adapter)', () => {
   it('enforces the same invariant on the interactive entry', async () => {
     const { calls, provider } = claudeCapture();
 
-    await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    await provider.invoke({ ...baseOptions, interactive: false });
 
     const args = calls[0]!;
     expect(sessionIdFromArgs(args)).not.toBe('caller-reused-session-id');

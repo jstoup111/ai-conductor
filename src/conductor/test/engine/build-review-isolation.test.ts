@@ -183,7 +183,6 @@ describe('build_review input isolation', () => {
   it('routes an infrastructure result with arbitrary detail through the mechanical lane', async () => {
     const provider: LLMProvider = {
       invoke: vi.fn(),
-      invokeInteractive: vi.fn(),
     };
     const coordinate = vi.mocked(coordinateBuildReviewRubrics);
     coordinate.mockResolvedValue({
@@ -221,7 +220,7 @@ describe('build_review input isolation', () => {
   });
 
   it('keeps a judged finding with environment-sounding prose in the blocking finding lane', async () => {
-    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke: vi.fn(), };
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
       branches: [{ kind: 'dispatched' as const, rubric: 'testQuality', result: {} as never }],
@@ -264,7 +263,7 @@ describe('build_review input isolation', () => {
   });
 
   it('publishes an exhausted malformed artifact as the current lap mechanical failure', async () => {
-    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke: vi.fn(), };
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
       branches: [{ kind: 'dispatched' as const, rubric: 'testQuality', result: {} as never }],

@@ -60,7 +60,7 @@ describe('self-host live-boundary events', () => {
   });
 
   function harness(work: () => Promise<StepRunResult>) {
-    const runtimes = new ProviderRuntimeSet([{ key: 'claude', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}) }, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }] as never);
+    const runtimes = new ProviderRuntimeSet([{ key: 'claude', provider: { invoke: vi.fn(), }, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }] as never);
     const providerExecution: ProviderExecutionContext = { runtimes, sessions: {} as never, configuredProviders: ['claude'] };
     const runner: StepRunner = { run: async (step: StepName) => {
       const prepared = await providerExecution.prepareCandidateSelfHost?.({ step, providerKey: 'claude', model: 'opus', effort: 'high' } as never, runtimes.get('claude') as never, { runId: 'live-boundary-events', attempt: 1 });

@@ -132,7 +132,7 @@ export default {
     const echo = runtimes.get('echo');
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    const interactiveResult = await echo.provider.invokeInteractive({
+    const interactiveResult = await echo.provider.invoke({
       prompt: 'legacy interactive prompt',
       sessionId: 'legacy-interactive-session',
       resume: false,

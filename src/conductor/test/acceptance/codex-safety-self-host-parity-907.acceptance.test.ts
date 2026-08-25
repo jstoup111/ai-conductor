@@ -64,7 +64,6 @@ function scriptedProvider(result: InvokeResult, transcript: string[], key: strin
       transcript.push(`invoke:${key}`);
       return result;
     }),
-    invokeInteractive: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
   };
 }
 

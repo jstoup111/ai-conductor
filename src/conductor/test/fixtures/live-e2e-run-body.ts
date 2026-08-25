@@ -54,12 +54,6 @@ export class TokenMeter implements LLMProvider {
     return result;
   }
 
-  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void> {
-    const result = await this.provider.invokeInteractive(options);
-    if (result) this.record(result);
-    return result;
-  }
-
   private record(result: InvokeResult): void {
     const usage = result.tokenUsage;
     if (!usage || !Number.isFinite(usage.input) || !Number.isFinite(usage.output)) {
@@ -94,11 +88,6 @@ export class ProvisionedHome implements LLMProvider {
   invoke(options: InvokeOptions): Promise<InvokeResult> {
     this.dispatches += 1;
     return this.provider.invoke({ ...options, selfHost: this.selfHost });
-  }
-
-  invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void> {
-    this.dispatches += 1;
-    return this.provider.invokeInteractive({ ...options, selfHost: this.selfHost });
   }
 }
 

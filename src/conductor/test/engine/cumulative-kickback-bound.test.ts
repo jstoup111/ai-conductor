@@ -172,7 +172,7 @@ describe('cumulative build-review kickback bound', () => {
         ? [{ kind: 'dispatched', rubric: 'testQuality', result: { kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'sha256:fixture', contractVersion: 'v3', findings: [], verdict: 'PASS' } }]
         : [{ kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-provider-result', detail: 'worker response unavailable' }],
     }));
-    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke: vi.fn(), };
     const makeRunner = () => new DefaultStepRunner(provider, 'mechanical-lap', dir, {
       pipelineDir: join(dir, '.pipeline'),
       buildReviewEffectiveResolver: async () => ({

@@ -136,8 +136,8 @@ describe('executeProviderCandidates', () => {
         model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra'], max_retries: 2, escalate: true,
       },
       runtimes: new ProviderRuntimeSet([
-        runtime('codex', { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: codexInvoke, invokeInteractive: vi.fn(async (): Promise<void> => {}) }),
-        runtime('claude', { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: claudeInvoke, invokeInteractive: vi.fn(async (): Promise<void> => {}) }),
+        runtime('codex', { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: codexInvoke, }),
+        runtime('claude', { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: claudeInvoke, }),
       ]),
       sessions: new ProviderSessionScope((() => { let id = 0; return () => `scope-${++id}`; })()),
       options: { prompt: '$build-review-scope', cwd: '/workspace' },
@@ -172,7 +172,6 @@ describe('executeProviderCandidates', () => {
           ? { success: false, output: 'primary model unavailable', exitCode: 1, modelUnavailable: true }
           : { success: true, output: 'fallback model completed', exitCode: 0 };
       }),
-      invokeInteractive: vi.fn(async (): Promise<void> => {}),
     };
     const writeRecovery = vi.fn();
     const episodeStore: ProviderLifecycleEpisodeStore = {
@@ -228,7 +227,6 @@ describe('executeProviderCandidates', () => {
           ? result
           : { success: false, output: 'wrong lifecycle permit', exitCode: 1 };
       }),
-      invokeInteractive: vi.fn(async (): Promise<void> => {}),
     });
     const writeRecovery = vi.fn();
     const episodeStore: ProviderLifecycleEpisodeStore = {
@@ -310,11 +308,10 @@ describe('executeProviderCandidates', () => {
         configuredProviders: ['custom', 'claude'],
         preferredProvider: 'custom',
         runtimes: new ProviderRuntimeSet([
-          { ...runtime('claude', { invoke: unsupportedInvoke, invokeInteractive: vi.fn(async (): Promise<void> => {}) }), key: 'custom', builtIn: false },
+          { ...runtime('claude', { invoke: unsupportedInvoke, }), key: 'custom', builtIn: false },
           runtime('claude', {
             lifecycleCapability: { synchronousSpawnPermit: true },
             invoke: supportedInvoke,
-            invokeInteractive: vi.fn(async (): Promise<void> => {}),
           }),
         ]),
         sessions: new ProviderSessionScope(vi.fn().mockReturnValue('unsupported-fallback-session')),
@@ -347,7 +344,6 @@ describe('executeProviderCandidates', () => {
     }));
     const custom = {
       invoke,
-      invokeInteractive: vi.fn(async (): Promise<void> => {}),
     };
     const runtimes = new ProviderRuntimeSet([
       { ...runtime('claude', custom), key: 'custom', builtIn: false },
@@ -409,7 +405,6 @@ describe('executeProviderCandidates', () => {
     const custom = {
       lifecycleCapability: { synchronousSpawnPermit: true as const },
       invoke,
-      invokeInteractive: vi.fn(async (): Promise<void> => {}),
     };
     const runtimes = new ProviderRuntimeSet([
       { ...runtime('claude', custom), key: 'custom', builtIn: false },
@@ -456,9 +451,8 @@ describe('executeProviderCandidates', () => {
         output: options.selfHost?.env.CODEX_HOME ?? 'missing-home',
         exitCode: 0,
       })),
-      invokeInteractive: vi.fn(async () => {}),
     };
-    const claude = { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}) };
+    const claude = { invoke: vi.fn(), };
     const runtimes = new ProviderRuntimeSet([runtime('codex', codex), runtime('claude', claude)]);
     const teardown = vi.fn(async () => {});
     const prepare = vi.fn(async () => ({
@@ -486,7 +480,6 @@ describe('executeProviderCandidates', () => {
     const close = vi.fn();
     const provider = {
       invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'must not run', exitCode: 0 })),
-      invokeInteractive: vi.fn(async () => {}),
     };
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
 
@@ -520,7 +513,6 @@ describe('executeProviderCandidates', () => {
         seen.push({ home: options.selfHost?.env.CODEX_HOME, resume: options.resume });
         return { success: true, output: 'ok', exitCode: 0 };
       }),
-      invokeInteractive: vi.fn(async () => {}),
     };
     const runtimes = new ProviderRuntimeSet([runtime('codex', codex)]);
     const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('harness-minted-uuid'));
@@ -565,7 +557,6 @@ describe('executeProviderCandidates', () => {
         seen.push(options.resume === true);
         return { success: true, output: 'ok', exitCode: 0 };
       }),
-      invokeInteractive: vi.fn(async () => {}),
     };
     const runtimes = new ProviderRuntimeSet([runtime('claude', claude)]);
     const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('session'));
@@ -610,8 +601,8 @@ describe('executeProviderCandidates', () => {
 
   it('tears down a failed candidate home before provisioning its fallback', async () => {
     const events: string[] = [];
-    const codex = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: false, output: 'missing', exitCode: 127, providerUnavailable: true, providerUnavailableScope: 'run' })), invokeInteractive: vi.fn(async () => {}) };
-    const claude = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'ok', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) };
+    const codex = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: false, output: 'missing', exitCode: 127, providerUnavailable: true, providerUnavailableScope: 'run' })), };
+    const claude = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'ok', exitCode: 0 })), };
     const runtimes = new ProviderRuntimeSet([runtime('codex', codex), runtime('claude', claude)]);
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
     await executeProviderCandidates({
@@ -624,7 +615,7 @@ describe('executeProviderCandidates', () => {
 
   it.each(['success', 'failure', 'cancellation', 'timeout', 'interruption', 'retry exhaustion', 'replacement'])('cleans the candidate home on %s terminal result', async (_terminal) => {
     const teardown = vi.fn(async () => {});
-    const provider = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: false, output: 'terminal', exitCode: 1 })), invokeInteractive: vi.fn(async () => {}) };
+    const provider = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: false, output: 'terminal', exitCode: 1 })), };
     const runtimes = new ProviderRuntimeSet([runtime('codex', provider)]);
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
     await executeProviderCandidates({ step: 'build', configuredProviders: ['codex'], runtimes, sessions: new ProviderSessionScope(vi.fn().mockReturnValue('session')), options: { prompt: 'build', cwd: '/workspace' }, prepareCandidateSelfHost: async () => ({ executable: 'codex', env: {}, args: [], teardown }) });
@@ -641,7 +632,6 @@ describe('executeProviderCandidates', () => {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
       })),
-      invokeInteractive: vi.fn(async () => {}),
     };
     const runtimes = new ProviderRuntimeSet([
       runtime('codex', provider),
@@ -716,14 +706,12 @@ describe('executeProviderCandidates', () => {
           transcript.push('invoke:codex');
           return unavailable();
         }),
-        invokeInteractive: vi.fn(async () => {}),
       }),
       runtime('claude', {
         invoke: vi.fn(async () => {
           transcript.push('invoke:claude');
           return { success: true, output: 'done', exitCode: 0 };
         }),
-        invokeInteractive: vi.fn(async () => {}),
       }),
     ]);
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
@@ -771,8 +759,8 @@ describe('executeProviderCandidates', () => {
       providerUnavailable: true, providerUnavailableScope: 'run',
     });
     const providers = new ProviderRuntimeSet([
-      runtime('codex', { invoke: vi.fn(async () => first === 'codex' ? unavailable('codex') : ({ success: true, output: 'ok', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) }),
-      runtime('claude', { invoke: vi.fn(async () => first === 'claude' ? unavailable('claude') : ({ success: true, output: 'ok', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) }),
+      runtime('codex', { invoke: vi.fn(async () => first === 'codex' ? unavailable('codex') : ({ success: true, output: 'ok', exitCode: 0 })), }),
+      runtime('claude', { invoke: vi.fn(async () => first === 'claude' ? unavailable('claude') : ({ success: true, output: 'ok', exitCode: 0 })), }),
     ]);
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
 
@@ -802,8 +790,8 @@ describe('executeProviderCandidates', () => {
       providerUnavailable: true, providerUnavailableScope: 'run',
     });
     const runtimes = new ProviderRuntimeSet([
-      runtime('codex', { invoke: vi.fn(async () => first === 'codex' ? unavailable('codex') : ({ success: true, output: 'shipped', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) }),
-      runtime('claude', { invoke: vi.fn(async () => first === 'claude' ? unavailable('claude') : ({ success: true, output: 'shipped', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) }),
+      runtime('codex', { invoke: vi.fn(async () => first === 'codex' ? unavailable('codex') : ({ success: true, output: 'shipped', exitCode: 0 })), }),
+      runtime('claude', { invoke: vi.fn(async () => first === 'claude' ? unavailable('claude') : ({ success: true, output: 'shipped', exitCode: 0 })), }),
     ]);
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
     await executeProviderCandidates({
@@ -835,8 +823,8 @@ describe('executeProviderCandidates', () => {
       exitCode: 0,
     }));
     const runtimes = new ProviderRuntimeSet([
-      runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
-      runtime('claude', { invoke: claudeInvoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('codex', { invoke: codexInvoke, }),
+      runtime('claude', { invoke: claudeInvoke, }),
     ]);
     const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('provider-session'));
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
@@ -873,8 +861,8 @@ describe('executeProviderCandidates', () => {
       exitCode: 0,
     }));
     const runtimes = new ProviderRuntimeSet([
-      runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
-      runtime('claude', { invoke: claudeInvoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('codex', { invoke: codexInvoke, }),
+      runtime('claude', { invoke: claudeInvoke, }),
     ]);
     const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('provider-session'));
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
@@ -907,7 +895,7 @@ describe('executeProviderCandidates', () => {
     const telemetryError = new Error('telemetry storage unavailable');
     const onTelemetryError = vi.fn();
     const runtimes = new ProviderRuntimeSet([
-      runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('codex', { invoke: codexInvoke, }),
     ]);
     const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('provider-session'));
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
@@ -956,8 +944,8 @@ describe('executeProviderCandidates', () => {
       step: 'build',
       configuredProviders: ['codex', 'claude'],
       runtimes: new ProviderRuntimeSet([
-        runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
-        runtime('claude', { invoke: claudeInvoke, invokeInteractive: vi.fn(async () => {}) }),
+        runtime('codex', { invoke: codexInvoke, }),
+        runtime('claude', { invoke: claudeInvoke, }),
       ]),
       sessions: new ProviderSessionScope(vi.fn().mockReturnValue('provider-session')),
       taskAttribution,
@@ -987,8 +975,8 @@ describe('executeProviderCandidates', () => {
       exitCode: 0,
     }));
     const runtimes = new ProviderRuntimeSet([
-      runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
-      runtime('claude', { invoke: claudeInvoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('codex', { invoke: codexInvoke, }),
+      runtime('claude', { invoke: claudeInvoke, }),
     ]);
     const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('provider-session'));
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
@@ -1024,7 +1012,7 @@ describe('executeProviderCandidates', () => {
         authentication: { provider: 'codex', source: 'cached-login', state: 'unusable', remediation: 'sk-secret' },
       });
     const runtimes = new ProviderRuntimeSet([
-      runtime('codex', { invoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('codex', { invoke, }),
     ]);
     const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('codex-session'));
     const module = await import('../../src/engine/provider-execution.js');
@@ -1082,11 +1070,9 @@ describe('executeProviderCandidates', () => {
     const legacyInteractive = vi.fn(async (): Promise<void> => {});
     const claude: LLMProvider = {
       invoke: claudeInvoke,
-      invokeInteractive: legacyInteractive,
     };
     const codex: LLMProvider = {
       invoke: codexInvoke,
-      invokeInteractive: vi.fn(async (): Promise<void> => {}),
     };
     const runtimes = new ProviderRuntimeSet([
       runtime('claude', claude),
@@ -1219,7 +1205,6 @@ describe('executeProviderCandidates', () => {
       runtimes: new ProviderRuntimeSet([
         runtime('codex', {
           invoke: codexInvoke,
-          invokeInteractive: vi.fn(async (): Promise<void> => {}),
         }),
       ]),
       sessions: new ProviderSessionScope(
@@ -1309,7 +1294,6 @@ describe('executeProviderCandidates', () => {
                 exitCode: 0,
               };
         }),
-        invokeInteractive: vi.fn(async (): Promise<void> => {}),
       });
       const firstRuntime = runtime(first, provider(first));
       if (fixture.cachedFirst) {
@@ -1419,7 +1403,6 @@ describe('executeProviderCandidates', () => {
     }));
     const provider = (invoke: typeof codexInvoke): LLMProvider => ({
       invoke,
-      invokeInteractive: vi.fn(async (): Promise<void> => {}),
     });
     const runtimes = new ProviderRuntimeSet([
       runtime('claude', provider(claudeInvoke)),
@@ -1692,7 +1675,6 @@ describe('executeProviderCandidates', () => {
             calls.push(options);
             return invoke(options, calls.length);
           }),
-          invokeInteractive: vi.fn(async (): Promise<void> => {}),
         },
       };
     };
@@ -2052,7 +2034,6 @@ describe('executeProviderCandidates', () => {
       }));
       const provider = (invoke: typeof preferredInvoke): LLMProvider => ({
         invoke,
-        invokeInteractive: vi.fn(async (): Promise<void> => {}),
       });
       const runtimes = new ProviderRuntimeSet([
         runtime('codex', provider(preferredInvoke)),
@@ -2146,7 +2127,6 @@ describe('executeProviderCandidates', () => {
       invoke: (options: InvokeOptions) => Promise<InvokeResult>,
     ): LLMProvider => ({
       invoke,
-      invokeInteractive: vi.fn(async (): Promise<void> => {}),
     });
     const module = await import('../../src/engine/provider-execution.js');
     const execute = (
@@ -2233,7 +2213,7 @@ describe('executeProviderCandidates', () => {
       step: 'build',
       configuredProviders: ['codex'],
       runtimes: new ProviderRuntimeSet([
-        runtime('codex', { invoke, invokeInteractive: vi.fn(async () => {}) }),
+        runtime('codex', { invoke, }),
       ]),
       sessions: new ProviderSessionScope(vi.fn().mockReturnValue('model-fallback-session')),
       options: { prompt: 'Execute the step.', cwd: '/workspace/feature' },
@@ -2261,7 +2241,6 @@ describe('executeProviderCandidates', () => {
           ? { success: false, output: 'Fable unavailable', exitCode: 1, modelUnavailable: true }
           : { success: true, output: 'Opus completed', exitCode: 0 };
       }),
-      invokeInteractive: vi.fn(async () => {}),
     };
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
 
@@ -2304,7 +2283,7 @@ describe('executeProviderCandidates', () => {
         observedIntervals: [intervals[1]],
       });
     const runtimes = new ProviderRuntimeSet([
-      runtime('codex', { invoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('codex', { invoke, }),
     ]);
     const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('retry-session'));
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
@@ -2348,7 +2327,6 @@ describe('executeProviderCandidates', () => {
           providerUnavailableReason: reason,
         };
       }),
-      invokeInteractive: vi.fn(async (): Promise<void> => {}),
     });
     const unlistedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
@@ -2374,7 +2352,6 @@ describe('executeProviderCandidates', () => {
       {
         ...runtime('claude', {
           invoke: unlistedInvoke,
-          invokeInteractive: vi.fn(async (): Promise<void> => {}),
         }),
         key: 'unlisted',
       },

@@ -141,7 +141,6 @@ describe('Story 3 (Task 5): .pipeline read sites are existence-guarded', () => {
       const { DefaultStepRunner } = await import('../../src/engine/step-runners.js');
       const mockProvider = {
         invoke: vi.fn().mockResolvedValue({ success: true, output: '' }),
-        invokeInteractive: vi.fn(),
       };
       const runner = new DefaultStepRunner(mockProvider as any, 'test', readSitesDir, {
         pipelineDir: readSitesPipelineDir,
@@ -155,7 +154,6 @@ describe('Story 3 (Task 5): .pipeline read sites are existence-guarded', () => {
       const { DefaultStepRunner } = await import('../../src/engine/step-runners.js');
       const mockProvider = {
         invoke: vi.fn().mockResolvedValue({ success: true, output: '' }),
-        invokeInteractive: vi.fn(),
       };
       const runner = new DefaultStepRunner(mockProvider as any, 'test', readSitesDir, {
         pipelineDir: readSitesPipelineDir,
@@ -171,7 +169,6 @@ describe('Story 3 (Task 5): .pipeline read sites are existence-guarded', () => {
       const { DefaultStepRunner } = await import('../../src/engine/step-runners.js');
       const mockProvider = {
         invoke: vi.fn().mockResolvedValue({ success: true, output: '' }),
-        invokeInteractive: vi.fn(),
       };
       const runner = new DefaultStepRunner(mockProvider as any, 'test', readSitesDir, {
         pipelineDir: readSitesPipelineDir,
@@ -186,7 +183,6 @@ describe('Story 3 (Task 5): .pipeline read sites are existence-guarded', () => {
       const { DefaultStepRunner } = await import('../../src/engine/step-runners.js');
       const mockProvider = {
         invoke: vi.fn().mockResolvedValue({ success: true, output: '' }),
-        invokeInteractive: vi.fn(),
       };
       const runner = new DefaultStepRunner(mockProvider as any, 'test', readSitesDir, {
         pipelineDir: readSitesPipelineDir,

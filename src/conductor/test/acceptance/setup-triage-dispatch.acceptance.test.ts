@@ -397,7 +397,6 @@ fi
       runSetupTriage,
       provider: {
         invoke: async () => ({ success: true, output: '', exitCode: 0 }),
-        invokeInteractive: async () => {},
       },
       project: 'test-project',
       ...overrides,
@@ -769,7 +768,6 @@ fi
     function makeProvider(): LLMProvider {
       return {
         invoke: vi.fn().mockResolvedValue({ success: true, output: 'done', exitCode: 0 }),
-        invokeInteractive: vi.fn().mockResolvedValue(undefined),
       };
     }
 

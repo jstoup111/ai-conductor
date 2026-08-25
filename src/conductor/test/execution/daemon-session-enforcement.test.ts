@@ -199,7 +199,7 @@ describe('daemon-session marker injection (claude adapter)', () => {
 
   it('stamps the marker on the interactive entry too', async () => {
     const { calls, provider } = claudeCapture();
-    await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    await provider.invoke({ ...baseOptions, interactive: false });
     expect(calls[0]!.env?.[DAEMON_SESSION_MARKER]).toBe('1');
   });
 
@@ -232,7 +232,7 @@ describe('daemon-session marker injection (codex adapter)', () => {
 
   it('stamps the marker on the interactive entry and preserves self-host env', async () => {
     const { calls, provider } = codexCapture();
-    await provider.invokeInteractive({
+    await provider.invoke({
       ...baseOptions,
       interactive: false,
       selfHost: {

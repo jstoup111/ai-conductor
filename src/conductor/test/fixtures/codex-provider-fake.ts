@@ -62,7 +62,6 @@ export function createCodexProviderFake(script?: CodexFakeScript): CodexProvider
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke,
-      invokeInteractive: invoke,
     },
     calls,
     threadIds,

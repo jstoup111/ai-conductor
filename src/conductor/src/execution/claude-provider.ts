@@ -661,23 +661,6 @@ export class ClaudeProvider implements LLMProvider {
     return this.classifyCompletion(observed.value, hasMachineEnvelope, observed.interval, options.prompt);
   }
 
-  /**
-   * Run Claude with stdio inherited — user sees output live.
-   *
-   * Default: every step uses `-p` (print mode) so the session exits when the
-   * skill completes. Matches bin/conduct; prevents the harness from hanging
-   * waiting for `/quit`. The autonomous vs. collaborative distinction is
-   * purely about the `--dangerously-skip-permissions` flag — collaborative
-   * steps still see Claude's permission prompts on the shared terminal.
-   *
-   * `interactive: true` is a deliberate opt-in (used by the recovery menu's
-   * "interactive fix" option) that opens a REPL instead of auto-exiting, so
-   * the user can debug with Claude manually.
-   */
-  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
-    return this.invoke(options);
-  }
-
   private classifyCompletion(
     result: {
       stdout?: unknown;

@@ -347,10 +347,4 @@ export interface LLMProvider {
   prepareSelfHostAuth?(context: SelfHostAuthContext): Promise<SelfHostAuthPreparation>;
   /** Resolve the provider executable before a child home overrides provider state. */
   resolveSelfHostExecutable?(): Promise<string>;
-  /**
-   * Built-in providers return classified completion after their streamed
-   * process exits. Legacy custom providers may keep returning void; absence of
-   * a result carries no provider-fallback authority.
-   */
-  invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void>;
 }

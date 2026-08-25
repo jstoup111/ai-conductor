@@ -389,14 +389,6 @@ export class CodexProvider implements LLMProvider {
     }
   }
 
-  /**
-   * Codex's `exec` mode is one-shot rather than a REPL. Keep the interface
-   * usable for conductor's collaborative calls by streaming that one-shot run.
-   */
-  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
-    return this.invoke(options);
-  }
-
   private logDiagnostics(
     result: { stdout?: unknown; stderr?: unknown },
     diagnosticLog: InvokeOptions['diagnosticLog'],

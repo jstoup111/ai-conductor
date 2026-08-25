@@ -312,7 +312,7 @@ describe('CodexProvider', () => {
 
   it.each([
     ['unattended invocation', (options: InvokeOptions) => provider.invoke(options)],
-    ['automatic interactive streaming', (options: InvokeOptions) => provider.invokeInteractive({ ...options, interactive: false })],
+    ['automatic interactive streaming', (options: InvokeOptions) => provider.invoke({ ...options, interactive: false })],
   ])('does not start doctor or exec for a revoked permit during %s', async (_name, invoke) => {
     const processStarts: string[] = [];
     const runDoctor = vi.fn(async () => {
@@ -358,7 +358,7 @@ describe('CodexProvider', () => {
     });
     provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
 
-    await provider.invokeInteractive({ ...baseOptions, interactive: false, spawnPermit });
+    await provider.invoke({ ...baseOptions, interactive: false, spawnPermit });
 
     expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
   });
@@ -494,7 +494,7 @@ describe('CodexProvider', () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('contained'), exitCode: 0 } as any);
 
     await provider.invoke({ ...baseOptions, selfHost });
-    await provider.invokeInteractive({ ...baseOptions, selfHost, interactive: true });
+    await provider.invoke({ ...baseOptions, selfHost, interactive: true });
 
     expect(mockExeca.mock.calls.map(([executable, args]) => ({ executable, args }))).toEqual([
       {
@@ -572,7 +572,7 @@ describe('CodexProvider', () => {
       subprocessFactory,
     );
 
-    await provider.invokeInteractive({ ...baseOptions, interactive: true });
+    await provider.invoke({ ...baseOptions, interactive: true });
 
     expect(subprocessFactory).toHaveBeenCalledOnce();
     const interactiveArgs = subprocessFactory.mock.calls[0][1] as string[];
@@ -631,7 +631,7 @@ describe('CodexProvider', () => {
     {
       name: 'operator-interactive completion',
       invoke: (subject: CodexProvider) =>
-        subject.invokeInteractive({ ...baseOptions, interactive: true }),
+        subject.invoke({ ...baseOptions, interactive: true }),
       response: { stdout: 'Done!', stderr: '', exitCode: 0 },
       expected: { success: true },
     },
@@ -644,7 +644,7 @@ describe('CodexProvider', () => {
     {
       name: 'automatic permission rejection',
       invoke: (subject: CodexProvider) =>
-        subject.invokeInteractive({ ...baseOptions, interactive: false }),
+        subject.invoke({ ...baseOptions, interactive: false }),
       response: {
         stdout: '',
         stderr: 'Codex automatic review denied the permission request.',
@@ -813,7 +813,7 @@ describe('CodexProvider', () => {
 
   it.each([
     ['non-REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: false })],
-    ['REPL', (options: InvokeOptions) => provider.invokeInteractive({ ...options, interactive: true })],
+    ['REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: true })],
   ])('forces a fresh, non-resumed Codex session exactly once for a %s dispatch', async (_mode, dispatch) => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('Fresh.'), exitCode: 0 } as any);
 
@@ -841,7 +841,7 @@ describe('CodexProvider', () => {
     );
 
     try {
-      await apiKeyProvider.invokeInteractive({
+      await apiKeyProvider.invoke({
         ...baseOptions,
         interactive: false,
         dangerouslySkipPermissions: true,
@@ -875,7 +875,7 @@ describe('CodexProvider', () => {
 
     try {
       const oneShot = await apiKeyProvider.invoke(baseOptions);
-      const automatic = await apiKeyProvider.invokeInteractive({ ...baseOptions, interactive: false });
+      const automatic = await apiKeyProvider.invoke({ ...baseOptions, interactive: false });
 
       expect(mockExeca.mock.calls.map(([, , options]) => ({ stdout: options.stdout, stderr: options.stderr }))).toEqual([
         { stdout: 'pipe', stderr: 'pipe' },
@@ -896,7 +896,7 @@ describe('CodexProvider', () => {
       .mockResolvedValueOnce({ stdout: 'automatic output', stderr: 'automatic stderr', exitCode: 0 } as any);
 
     await provider.invoke({ ...baseOptions, diagnosticLog: featureLog });
-    await provider.invokeInteractive({ ...baseOptions, interactive: false, diagnosticLog: featureLog });
+    await provider.invoke({ ...baseOptions, interactive: false, diagnosticLog: featureLog });
 
     // A recognized JSONL machine stream reaches the daemon log as a readable
     // summary; prose stdout and stderr still pass through verbatim so no
@@ -926,7 +926,7 @@ describe('CodexProvider', () => {
       .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review failed to produce a decision.', exitCode: 1 } as any);
 
     const oneShot = await provider.invoke(baseOptions);
-    const automaticStream = await provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
+    const automaticStream = await provider.invoke({ ...baseOptions, interactive: false, resume: true });
     const unknownReview = await provider.invoke(baseOptions);
     const failedReview = await provider.invoke(baseOptions);
 
@@ -963,7 +963,7 @@ describe('CodexProvider', () => {
       .mockResolvedValueOnce({ stdout: '', stderr: 'build failed', exitCode: 1 } as any);
 
     const emptyFailure = await provider.invoke(baseOptions);
-    const timeoutFailure = await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    const timeoutFailure = await provider.invoke({ ...baseOptions, interactive: false });
     const unrelatedUnknown = await provider.invoke(baseOptions);
     const buildFailure = await provider.invoke(baseOptions);
 
@@ -1593,7 +1593,7 @@ describe('CodexProvider', () => {
       const degradedProvider = new CodexProvider(runDoctor);
       mockExeca.mockResolvedValue(response as any);
 
-      const result = await degradedProvider.invokeInteractive({
+      const result = await degradedProvider.invoke({
         ...baseOptions,
         interactive: false,
         resume,
@@ -1611,7 +1611,7 @@ describe('CodexProvider', () => {
 
   it.each([
     ['ordinary', (provider: CodexProvider) => provider.invoke(baseOptions)],
-    ['unattended', (provider: CodexProvider) => provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true })],
+    ['unattended', (provider: CodexProvider) => provider.invoke({ ...baseOptions, interactive: false, resume: true })],
   ] as const)('preserves failed probe evidence when the %s completion reports an unavailable provider', async (_context, invoke) => {
     const runDoctor = vi.fn().mockResolvedValue({ stdout: '{"schemaVersion":', exitCode: 0 });
     const degradedProvider = new CodexProvider(runDoctor);
@@ -1650,7 +1650,7 @@ describe('CodexProvider', () => {
       });
       const gatedProvider = new CodexProvider(runDoctor);
       const initial = await gatedProvider.invoke(baseOptions);
-      const adjacent = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
+      const adjacent = await gatedProvider.invoke({ ...baseOptions, interactive: false, resume: true });
 
       expect({
         initial: initial.authentication?.state,
@@ -1683,7 +1683,7 @@ describe('CodexProvider', () => {
     {
       name: 'rejected selected-source evidence despite a successful mixed doctor result',
       invoke: (subject: CodexProvider) =>
-        subject.invokeInteractive({ ...baseOptions, interactive: false }),
+        subject.invoke({ ...baseOptions, interactive: false }),
       evidence: {
         schemaVersion: 1,
         auth: { selectedMode: 'cached-login', configured: true, rejected: true },
@@ -1764,8 +1764,8 @@ describe('CodexProvider', () => {
     const gatedProvider = new CodexProvider(runDoctor);
     mockExeca.mockResolvedValue({ stdout: 'interactive output', exitCode: 0 } as any);
 
-    const automatic = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false });
-    const interactive = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: true });
+    const automatic = await gatedProvider.invoke({ ...baseOptions, interactive: false });
+    const interactive = await gatedProvider.invoke({ ...baseOptions, interactive: true });
 
     expect({
       automaticState: automatic.authentication?.state,
@@ -1934,7 +1934,7 @@ describe('CodexProvider', () => {
 
     for (const invoke of [
       (provider: CodexProvider) => provider.invoke({ ...baseOptions, diagnosticLog: featureLog }),
-      (provider: CodexProvider) => provider.invokeInteractive({ ...baseOptions, interactive: false, diagnosticLog: featureLog }),
+      (provider: CodexProvider) => provider.invoke({ ...baseOptions, interactive: false, diagnosticLog: featureLog }),
     ]) {
       featureLog.mockClear();
       const result = await invoke(new CodexProvider(runDoctor));
@@ -2190,7 +2190,7 @@ describe('CodexProvider', () => {
   it('requests JSON output for a non-REPL invokeInteractive call', async () => {
     mockExeca.mockResolvedValue({ exitCode: 0 } as any);
 
-    await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    await provider.invoke({ ...baseOptions, interactive: false });
 
     const [, args, options] = mockExeca.mock.calls[0];
     expect(args).toEqual(expect.arrayContaining(['exec', '-']));
@@ -2205,7 +2205,7 @@ describe('CodexProvider', () => {
   it('keeps JSON output disabled for a REPL invokeInteractive call', async () => {
     mockExeca.mockResolvedValue({ stdout: 'visible output', stderr: '', exitCode: 0 } as any);
 
-    await provider.invokeInteractive({ ...baseOptions, interactive: true });
+    await provider.invoke({ ...baseOptions, interactive: true });
 
     const [, args] = mockExeca.mock.calls[0];
     expect(args).not.toContain('--json');
@@ -2214,7 +2214,7 @@ describe('CodexProvider', () => {
   it('live-inherits captured output for a true operator-interactive call', async () => {
     mockExeca.mockResolvedValue({ stdout: 'visible output', stderr: '', exitCode: 0 } as any);
 
-    await provider.invokeInteractive({ ...baseOptions, interactive: true });
+    await provider.invoke({ ...baseOptions, interactive: true });
 
     const [, , options] = mockExeca.mock.calls[0];
     expect({ stdout: options.stdout, stderr: options.stderr }).toEqual({
@@ -2228,8 +2228,8 @@ describe('CodexProvider', () => {
     mockExeca.mockResolvedValueOnce({ stdout: jsonlMessage('automatic completion'), stderr: '', exitCode: 0 } as any);
     mockExeca.mockResolvedValueOnce({ stdout: 'operator completion', stderr: '', exitCode: 0 } as any);
 
-    const automatic = await provider.invokeInteractive({ ...baseOptions, interactive: false });
-    const repl = await provider.invokeInteractive({ ...baseOptions, interactive: true });
+    const automatic = await provider.invoke({ ...baseOptions, interactive: false });
+    const repl = await provider.invoke({ ...baseOptions, interactive: true });
 
     expect(dispatch).toHaveBeenCalledTimes(2);
     expect(automatic.tokenUsage).toMatchObject({ input: 8, output: 7 });
@@ -2322,7 +2322,7 @@ describe('CodexProvider', () => {
 
     for (const fixture of cases) {
       mockExeca.mockResolvedValue(fixture.response as any);
-      const result = await provider.invokeInteractive(baseOptions);
+      const result = await provider.invoke(baseOptions);
       const lastCall = mockExeca.mock.calls.at(-1);
       if (!lastCall) throw new Error('expected execa to have been called');
       const [, , execaOptions] = lastCall;

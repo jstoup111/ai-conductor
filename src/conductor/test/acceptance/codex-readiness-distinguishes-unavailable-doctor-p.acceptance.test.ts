@@ -84,7 +84,6 @@ function recoveryConductor(
     key: 'codex',
     provider: {
       invoke: vi.fn(),
-      invokeInteractive: vi.fn(),
       readiness,
     } as never,
     policy: CODEX_MODEL_POLICY,

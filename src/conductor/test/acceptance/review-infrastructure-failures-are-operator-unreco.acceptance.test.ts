@@ -147,7 +147,7 @@ async function judgedPassCoordination(input: BuildReviewCoordinationInput): Prom
  * the frozen-input assembly (a git/test-suite boundary) pre-computed.
  */
 function makeRunner(fixture: Fixture, downstream: StepName[]): StepRunner {
-  const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+  const provider: LLMProvider = { invoke: vi.fn(), };
   const stepRunner = new DefaultStepRunner(provider, 'mechanical-review-session', fixture.worktree, {
     pipelineDir: join(fixture.worktree, '.pipeline'),
     buildReviewEffectiveResolver: async (root, aggregate, deps) =>

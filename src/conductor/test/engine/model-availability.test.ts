@@ -12,7 +12,6 @@ function fakeProvider(resultsByModel: Record<string, Partial<InvokeResult>>) {
       const canned = (opts.model && resultsByModel[opts.model]) ?? { success: true, output: "done", exitCode: 0 };
       return { success: true, output: "", exitCode: 0, ...canned };
     }),
-    invokeInteractive: vi.fn(async (): Promise<void> => {}),
   };
   return { provider, invokeCalls };
 }

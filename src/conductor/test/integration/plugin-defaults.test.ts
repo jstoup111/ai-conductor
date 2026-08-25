@@ -93,7 +93,6 @@ describe('Integration: plugin defaults', () => {
       async invoke() {
         return { success: true, output: 'nebula', exitCode: 0 };
       },
-      async invokeInteractive() {},
     };
     registry.register('llm_provider', pluginKey, pluginProvider);
     registry.markInitialized();

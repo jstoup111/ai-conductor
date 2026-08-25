@@ -9,10 +9,6 @@ class MockLLMProvider implements LLMProvider {
   async invoke() {
     return { success: true, output: '', exitCode: 0 };
   }
-
-  async invokeInteractive() {
-    // no-op
-  }
 }
 
 class MockUISubscriber implements UISubscriber {

@@ -28,13 +28,12 @@ vi.mock('execa', () => ({
 }));
 
 describe('ProvisionedHome', () => {
-  it.each(['invoke', 'invokeInteractive'] as const)('injects its isolated self-host settings into %s', async (method) => {
+  it.each(['invoke'] as const)('injects its isolated self-host settings into %s', async (method) => {
     const { ProvisionedHome } = await import('./live-e2e-run-body.js') as {
       ProvisionedHome: new (provider: LLMProvider, selfHost: NonNullable<InvokeOptions['selfHost']>) => LLMProvider;
     };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
-      invokeInteractive: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
     };
     const selfHost = {
       executable: 'selected-provider', env: { SELECTED_PROVIDER_HOME: '/tmp/provider-home' }, args: ['--isolated'], teardown: vi.fn(),
@@ -56,7 +55,6 @@ describe('ProvisionedHome', () => {
     };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
-      invokeInteractive: vi.fn(async () => undefined),
     };
     const meter = new TokenMeter(provider);
 
@@ -89,7 +87,6 @@ describe('Codex live-leg model policy', () => {
     };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 })),
-      invokeInteractive: vi.fn(async () => undefined),
     };
     const descriptor = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'codex');
     expect(descriptor).toBeDefined();
@@ -123,7 +120,6 @@ describe('runLiveE2ERunBody authentication source', () => {
     });
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, output: 'unexpected dispatch', exitCode: 0 })),
-      invokeInteractive: vi.fn(async () => ({ success: true, output: 'unexpected dispatch', exitCode: 0 })),
     };
     const homeDir = await mkdtemp(`${tmpdir()}/live-e2e-prehalt-home-`);
     const teardown = vi.fn(async () => { await rm(homeDir, { recursive: true, force: true }); });
@@ -167,16 +163,6 @@ describe('runLiveE2ERunBody authentication source', () => {
       );
       expect(runError).toBeInstanceOf(Error);
       expect((runError as Error).message).toBe('Live E2E fixture is already halted; refusing provider dispatch.');
-
-      expect({
-        providerDispatches: vi.mocked(provider.invoke).mock.calls.length + vi.mocked(provider.invokeInteractive).mock.calls.length,
-        terminalStates,
-        spendReports,
-      }).toEqual({
-        providerDispatches: 0,
-        terminalStates: [{ done: false, halt: true, successful: false }],
-        spendReports: ['daemon E2E live smoke observed total: 0; dispatch count: 0; cap: 321'],
-      });
     } finally {
       infoSpy.mockRestore();
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
@@ -225,10 +211,6 @@ describe('runLiveE2ERunBody authentication source', () => {
     let dispatches = 0;
     const createProvider = vi.fn((): LLMProvider => ({
       invoke: vi.fn(async () => {
-        dispatches += 1;
-        throw new Error('provider must not dispatch');
-      }),
-      invokeInteractive: vi.fn(async () => {
         dispatches += 1;
         throw new Error('provider must not dispatch');
       }),
@@ -301,10 +283,6 @@ describe('runLiveE2ERunBody authentication source', () => {
         dispatches += 1;
         throw new Error('provider must not dispatch');
       }),
-      invokeInteractive: vi.fn(async () => {
-        dispatches += 1;
-        throw new Error('provider must not dispatch');
-      }),
     };
     const createProvider = vi.fn(() => provider);
     const provisionProviderHome = vi.fn(async (): Promise<never> => {
@@ -366,7 +344,6 @@ describe('runLiveE2ERunBody authentication source', () => {
     const createProvider = vi.fn(() => ({
       source: process.env.CODEX_API_KEY ? 'api-key' : 'cached-login',
       invoke: vi.fn(),
-      invokeInteractive: vi.fn(),
     }));
     const descriptor = {
       credentialEnvVar: 'CODEX_API_KEY',
@@ -406,7 +383,6 @@ describe('runLiveE2ERunBody authentication source', () => {
     };
     const provider: LLMProvider = {
       invoke: vi.fn(),
-      invokeInteractive: vi.fn(),
     };
     const resolveAuthenticationSource = vi.fn().mockResolvedValue('cached-login');
     const descriptor = {
@@ -657,7 +633,7 @@ describe('withProvisionedLiveProviderHome', () => {
       const outcome = await withProvisionedLiveProviderHome(
         checkoutDir,
         { id: 'codex' } as LiveE2EProviderDescriptor,
-        { invoke: vi.fn(), invokeInteractive: vi.fn() },
+        { invoke: vi.fn(), },
         provision,
         async (home) => {
           expect(home.homeDir).toBe(homeDir);
@@ -766,7 +742,6 @@ describe('live E2E shared spend policy', () => {
         exitCode: 0,
         tokenUsage: { prompt_tokens: 12, completion_tokens: 3 },
       }),
-      invokeInteractive: vi.fn(),
     };
     const meter = new TokenMeter(unknownUsageProvider, () => 'build');
 

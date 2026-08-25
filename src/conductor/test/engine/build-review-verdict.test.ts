@@ -380,7 +380,7 @@ describe('engine/build-review verdict wiring contract', () => {
         { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-provider-result', detail: 'worker response unavailable' },
       ],
     });
-    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke: vi.fn(), };
     const runner = new DefaultStepRunner(provider, 'mechanical-lap', dir, {
       pipelineDir: join(dir, '.pipeline'),
       buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest) => ({
@@ -420,7 +420,7 @@ describe('engine/build-review verdict wiring contract', () => {
         { kind: 'dispatched', rubric: 'testQuality', result: { kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('mixed-lap')!, snapshotDigest: 'sha256:mixed-lap', contractVersion: 'v3', findings: [], verdict: 'PASS' } },
       ],
     });
-    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke: vi.fn(), };
     const runner = new DefaultStepRunner(provider, 'mixed-lap', dir, {
       pipelineDir: join(dir, '.pipeline'),
       buildReviewEffectiveResolver: async () => ({
@@ -489,7 +489,7 @@ describe('engine/build-review verdict wiring contract', () => {
         { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-provider-result', detail: 'worker response unavailable' },
       ],
     });
-    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const provider: LLMProvider = { invoke: vi.fn(), };
     const runner = new DefaultStepRunner(provider, 'mechanical-stale-aggregate', dir, {
       pipelineDir: join(dir, '.pipeline'),
       buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest) => ({
@@ -539,7 +539,7 @@ describe('engine/build-review verdict wiring contract', () => {
           { kind: 'infrastructure-failure', rubric: 'testQuality', reason, detail: 'disk became unavailable' },
         ],
       });
-      const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+      const provider: LLMProvider = { invoke: vi.fn(), };
       const runner = new DefaultStepRunner(provider, 'mechanical-write-failure', dir, {
         pipelineDir: join(dir, '.pipeline'),
       });
@@ -577,7 +577,7 @@ describe('engine/build-review verdict wiring contract', () => {
           { kind: 'infrastructure-failure', rubric: 'testQuality', reason, detail: 'disk became unavailable' },
         ],
       });
-      const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+      const provider: LLMProvider = { invoke: vi.fn(), };
       const runner = new DefaultStepRunner(provider, 'mechanical-write-failure', dir, {
         pipelineDir: join(dir, '.pipeline'),
       });

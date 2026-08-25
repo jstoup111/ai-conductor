@@ -38,9 +38,6 @@ function laddderProvider(
       const canned = (opts.model && resultsByModel[opts.model]) ?? fallback;
       return { success: true, output: '', exitCode: 0, ...canned };
     }),
-    invokeInteractive: vi.fn(async (opts: InvokeOptions): Promise<void> => {
-      invokeInteractiveCalls.push(opts);
-    }),
   };
   return { provider, invokeCalls, invokeInteractiveCalls };
 }

@@ -154,7 +154,7 @@ export { RecorderProvider, RecorderProviderError };
     registry.markInitialized();
 
     const provider = registry.get<LLMProvider>('llm_provider', 'recorder');
-    await provider.invokeInteractive({
+    await provider.invoke({
       prompt: 'interactive test',
       sessionId: 'session-002',
       resume: false,
