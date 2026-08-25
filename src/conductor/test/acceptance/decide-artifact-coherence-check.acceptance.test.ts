@@ -787,7 +787,7 @@ describe('Story 14 / FR-14 — fail-closed on missing/empty/unparseable record',
 describe('Criterion-level coherence coverage — every accepted criterion is owned before land', () => {
   it('negative: an M-tier artifact with no criterion rows is refused and names the omitted criterion verbatim', async () => {
     const mappedCriterion =
-      'Given a mapped outcome, when land validates, then it passes.';
+      'Story 1 happy: Given a mapped outcome, when land validates, then it passes.';
     const coherenceWithoutCriterionRows = COHERENCE
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('| criterion'))
