@@ -153,6 +153,7 @@ steps:
   # wrong answer costs a stale docs page rather than a bad gate verdict.
   maintain-documentation:
     llm_provider: codex
+    model: gpt-5.6-terra
     after: rebase
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
