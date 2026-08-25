@@ -49,7 +49,6 @@ describe('PluginRegistry', () => {
 
       const retrieved = registry.get<LLMProvider>('llm_provider', 'claude');
       expect(retrieved).toHaveProperty('invoke');
-      expect(retrieved).toHaveProperty('invokeInteractive');
     });
 
     it('get returns typed instance as UISubscriber', () => {

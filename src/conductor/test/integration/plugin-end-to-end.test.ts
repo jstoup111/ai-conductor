@@ -75,9 +75,6 @@ export default {
       exitCode: 0,
     };
   },
-  async invokeInteractive(options) {
-    console.log("ECHO (interactive): " + options.prompt);
-  }
 };
 `;
     await writeFile(join(echoProviderDir, 'index.js'), indexContent);
@@ -120,7 +117,7 @@ export default {
     expect(result.output).toBe('ECHO: test message');
   });
 
-  it('keeps a registered legacy void-interactive provider on the warned Claude-compatible policy', async () => {
+  it('uses a registered single-dispatch provider on the warned Claude-compatible policy', async () => {
     const registry = new PluginRegistry();
     await discoverPlugins(pluginDir, '', registry);
     registerBuiltins(registry, events, () => {});
@@ -130,15 +127,18 @@ export default {
       warnings.push(message);
     });
     const echo = runtimes.get('echo');
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-
     const interactiveResult = await echo.provider.invoke({
       prompt: 'legacy interactive prompt',
       sessionId: 'legacy-interactive-session',
       resume: false,
+      interactive: true,
     });
 
-    expect(interactiveResult).toBeUndefined();
+    expect(interactiveResult).toMatchObject({
+      success: true,
+      output: 'ECHO: legacy interactive prompt',
+      exitCode: 0,
+    });
     expect(echo.builtIn).toBe(false);
     expect(echo.policy).toBe(CLAUDE_MODEL_POLICY);
     expect(warnings).toEqual([
@@ -146,9 +146,6 @@ export default {
         /echo.*Claude-compatible model defaults.*add a provider model policy/i,
       ),
     ]);
-    expect(log).toHaveBeenCalledWith(
-      'ECHO (interactive): legacy interactive prompt',
-    );
   });
 
   it('step-runner dispatch uses the loaded EchoProvider', async () => {

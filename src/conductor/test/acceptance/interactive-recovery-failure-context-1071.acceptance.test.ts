@@ -236,7 +236,10 @@ describe('ST-1071-4 — runInteractive renders the context and cold-starts', () 
     const calls: InvokeOptions[] = [];
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: vi.fn(async () => ({ success: true, output: 'ok', exitCode: 0 })),
+      invoke: vi.fn(async (options: InvokeOptions) => {
+        calls.push(options);
+        return { success: true, output: 'ok', exitCode: 0 };
+      }),
     };
     return { provider, calls };
   }
@@ -272,7 +275,8 @@ describe('ST-1071-4 — runInteractive renders the context and cold-starts', () 
       namesStep: rendered.includes('build'),
       carriesReason: rendered.includes(MENU_REASON),
       resume: calls[0]?.resume,
-    }).toEqual({ namesStep: true, carriesReason: true, resume: false });
+      interactive: calls[0]?.interactive,
+    }).toEqual({ namesStep: true, carriesReason: true, resume: false, interactive: true });
   });
 
   it('provider-aware path — same contract, and no resume on the provider dispatch', async () => {
@@ -313,7 +317,8 @@ describe('ST-1071-4 — runInteractive renders the context and cold-starts', () 
       namesStep: rendered.includes('build'),
       carriesReason: rendered.includes(MENU_REASON),
       resume: calls[0]?.resume,
-    }).toEqual({ namesStep: true, carriesReason: true, resume: false });
+      interactive: calls[0]?.interactive,
+    }).toEqual({ namesStep: true, carriesReason: true, resume: false, interactive: true });
   });
 
   it('negative — a blank failure reason still states which step failed and that no reason was captured', async () => {
@@ -333,6 +338,7 @@ describe('ST-1071-4 — runInteractive renders the context and cold-starts', () 
       namesStep: rendered.includes('manual_test'),
       statesNoReason: /no (failure )?reason (was )?captured/i.test(rendered),
       resume: calls[0]?.resume,
-    }).toEqual({ namesStep: true, statesNoReason: true, resume: false });
+      interactive: calls[0]?.interactive,
+    }).toEqual({ namesStep: true, statesNoReason: true, resume: false, interactive: true });
   });
 });

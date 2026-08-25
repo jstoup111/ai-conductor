@@ -50,7 +50,6 @@ describe('Integration: plugin defaults', () => {
 
     expect(provider).toBeDefined();
     expect(provider).toHaveProperty('invoke');
-    expect(provider).toHaveProperty('invokeInteractive');
   });
 
   it('registers Codex as an opt-in built-in provider without changing the default', async () => {
@@ -66,7 +65,6 @@ describe('Integration: plugin defaults', () => {
     const provider = registry.get<LLMProvider>('llm_provider', 'codex');
 
     expect(provider).toHaveProperty('invoke');
-    expect(provider).toHaveProperty('invokeInteractive');
     expect(registry.list('llm_provider')).toEqual(expect.arrayContaining(['claude', 'codex']));
   });
 
