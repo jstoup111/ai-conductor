@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
+import { PassThrough } from 'node:stream';
 import { ClaudeProvider, parseRateLimitWaitSeconds } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
@@ -102,6 +103,74 @@ describe('ClaudeProvider', () => {
       await provider.invoke({ ...baseOptions, onSpawn });
 
       expect(onSpawn.mock.calls).toEqual([[]]);
+    });
+
+    it('delivers nonzero NDJSON token observations to a non-REPL stream consumer', async () => {
+      const stdout = new PassThrough();
+      let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+      let resolveStarted: () => void;
+      const started = new Promise<void>((resolve) => {
+        resolveStarted = resolve;
+      });
+      const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+        resolveProcess = resolve;
+      }), { stdout, kill: vi.fn() });
+      provider = new ClaudeProvider(undefined, () => {
+        resolveStarted!();
+        return process as any;
+      });
+      const onProviderStream = vi.fn();
+      const streamRecord = JSON.stringify({
+        type: 'assistant',
+        message: { usage: { input_tokens: 17, output_tokens: 7 } },
+      });
+      const terminalRecord = JSON.stringify({
+        type: 'result',
+        result: 'Done!',
+        usage: { input_tokens: 17, output_tokens: 7 },
+      });
+
+      const invocation = provider.invoke({
+        ...baseOptions,
+        streamConsumer: { onProviderStream, close: vi.fn() },
+      });
+      await started;
+      stdout.write(`${streamRecord}\n`);
+      resolveProcess!({ stdout: `${streamRecord}\n${terminalRecord}`, stderr: '', exitCode: 0 });
+
+      await expect(invocation).resolves.toMatchObject({
+        success: true,
+        output: 'Done!',
+        tokenUsage: { input: 17, output: 7 },
+      });
+      expect(onProviderStream).toHaveBeenCalledWith(expect.objectContaining({
+        uncachedInputTokens: 17,
+        outputTokens: 7,
+      }));
+    });
+
+    it('keeps a non-REPL dispatch without a stream consumer buffered', async () => {
+      const streamRecord = JSON.stringify({
+        type: 'assistant',
+        message: { usage: { input_tokens: 17, output_tokens: 7 } },
+      });
+      const terminalRecord = JSON.stringify({
+        type: 'result',
+        result: 'Done!',
+        usage: { input_tokens: 17, output_tokens: 7 },
+      });
+      mockExeca.mockResolvedValue({
+        stdout: `${streamRecord}\n${terminalRecord}`,
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      await expect(provider.invoke(baseOptions)).resolves.toMatchObject({
+        success: true,
+        output: 'Done!',
+        tokenUsage: { input: 17, output: 7 },
+      });
     });
 
     it('launches wrapped self-host invocations through bwrap with the Claude command after the bind set', async () => {

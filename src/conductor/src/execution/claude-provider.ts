@@ -645,7 +645,9 @@ export class ClaudeProvider implements LLMProvider {
         cwd: options.cwd,
         diagnosticLog: options.diagnosticLog,
         onActivity: options.onActivity,
-        onProviderStream: options.interactive ? undefined : options.onProviderStream,
+        onProviderStream: options.interactive
+          ? undefined
+          : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
         onSpawn: options.onSpawn,
         selfHost: options.selfHost,
         spawnPermit: options.spawnPermit,
