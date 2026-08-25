@@ -50,7 +50,7 @@ export interface ParsedPlanTaskDoneWhen extends Map<string, string[]> {
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 const DONE_WHEN_LINE = /^\s*\*\*Done when\s*:\s*\*\*\s*$/i;
-const LIST_ITEM_LINE = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/;
+const LIST_ITEM_LINE = /^\s*(?:[-*](?:[ \t]+|$)|\d+[.)][ \t]+)(.*?)\s*$/;
 
 // Retired **Wired-into:** metadata must remain excluded from legacy fallback
 // paths in historical plans. This preserves only the old line grammar (case,
@@ -167,8 +167,13 @@ export function parsePlanTaskDoneWhen(text: string): ParsedPlanTaskDoneWhen {
     }
     if (!collecting) continue;
 
-    const check = line.match(LIST_ITEM_LINE)?.[1].trim();
-    if (check) {
+    const listItem = line.match(LIST_ITEM_LINE);
+    if (listItem) {
+      const check = listItem[1].trim();
+      if (!check) {
+        for (const id of currentIds) malformedTaskIds.add(id);
+        continue;
+      }
       for (const id of currentIds) {
         const checks = result.get(id);
         if (checks) checks.push(check);

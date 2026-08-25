@@ -106,6 +106,17 @@ This prose quotes ### Task 2: but is not a heading.
       expect(result.has('1')).toBe(false);
       expect(result.malformedTaskIds).toEqual(new Set(['1']));
     });
+
+    it('marks a whitespace-only criterion malformed even when the block has another criterion', () => {
+      const result = parsePlanTaskDoneWhen(`### Task 1: Incomplete metadata
+**Done when:**
+-   
+- A real criterion
+`);
+
+      expect(result.get('1')).toEqual(['A real criterion']);
+      expect(result.malformedTaskIds).toEqual(new Set(['1']));
+    });
   });
 
   it('exports TASK_ID_PATTERN matching the H9 id grammar', () => {
