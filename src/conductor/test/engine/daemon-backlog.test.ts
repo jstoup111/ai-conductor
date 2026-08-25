@@ -418,6 +418,32 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
   });
 
+  // Plan Task 19 — a legacy coherence artifact (all five legacy row classes,
+  // zero criterion rows) still satisfies discovery. This fails if the
+  // criterion layer is ever wired into `hasCoherenceTableDataRow` or the
+  // discovery-side coherence branch.
+  it('keeps a criterion-free legacy coherence artifact eligible at discovery (plan Task 19)', async () => {
+    const legacyOnlyTable =
+      '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n' +
+      '|---|---|---|---|---|\n' +
+      '| outcome | O1 | FR1 | covered | fixture |\n' +
+      '| fr | FR1 | S1 | covered | fixture |\n' +
+      '| story | S1 | Task 1 | covered | fixture |\n' +
+      '| task | Task 1 | S1 | covered | fixture |\n' +
+      '| adr | adr-2026-01-01-x | Task 1 | covered | fixture |\n';
+    await writeFile(join(dir, '.docs/plans/legacy-coherence.md'), planWithDeps('.docs/stories/legacy-coherence.md'));
+    await writeFile(join(dir, '.docs/stories/legacy-coherence.md'), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, '.docs/coherence/legacy-coherence.md'), legacyOnlyTable);
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(result.items.map((item) => item.slug)).toEqual(['legacy-coherence']);
+  });
+
   it('Task 8: blocked classification is visibility-only across the mixed discovery fixture', async () => {
     const writeEligible = async (slug: string, storiesRef = `.docs/stories/${slug}.md`) => {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(storiesRef));

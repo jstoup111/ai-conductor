@@ -1643,6 +1643,19 @@ function dispositionGroundingRefusal(reason: string): CompletionResult {
   return { done: false, acceptanceRedRefusalClass: 'shape', reason };
 }
 
+/** True only when this feature's committed coherence record opted into criterion rows. */
+async function coherenceArtifactHasCriterionRows(dir: string, ctx: CompletionContext): Promise<boolean> {
+  const planPath = ctx.planPath ?? (await resolveFeaturePlanPath(dir, ctx.featureDesc));
+  if (!planPath) return false;
+  const coherencePath = join(dir, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
+  try {
+    const text = await readFile(coherencePath, 'utf-8');
+    return text.split(/\r?\n/).some((line) => /^\s*\|\s*criterion\s*\|/i.test(line));
+  } catch {
+    return false;
+  }
+}
+
 function escapeDispositionRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -1700,8 +1713,12 @@ async function groundDispositionOnlyEvidence(
       unexpected.length > 0 ? `invented: ${unexpected.join(', ')}` : '',
       omitted.length > 0 ? `omitted: ${omitted.join(', ')}` : '',
     ].filter(Boolean);
+    const criterionCheckHint =
+      omitted.length > 0 && (await coherenceArtifactHasCriterionRows(dir, ctx))
+        ? '; the DECIDE-time criterion coherence check should have caught the omitted criterion before BUILD'
+        : '';
     return dispositionGroundingRefusal(
-      `disposition-only records must be an exact one-to-one set of the authoritative story criteria — ${differences.join('; ')}`,
+      `disposition-only records must be an exact one-to-one set of the authoritative story criteria — ${differences.join('; ')}${criterionCheckHint}`,
     );
   }
 

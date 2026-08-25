@@ -197,12 +197,23 @@ apply at every tier and judge only the current plan, not historical plans alread
 
 The coherence gate is itself layered. It disengages entirely at tier S, and it does not apply retroactively:
 a change set with no coherence artifact path in it is treated as a legacy change, not a violation. Once
-engaged, the story, orphan-task, and coverage-table layers are always required; the functional-requirement
-layer only on the product track; the outcome layer only when outcomes exist; and the ADR layer whenever
-the current spec change set contains a `.docs/decisions/adr-*` path, including a deletion. The ADR row
-pool itself contains only non-deleted ADRs, so a deletion-only change engages the layer but passes with
-no ADR row. It aggregates every gap rather than stopping at the first, and reports them as one error.
-See [engineer loop](../guides/engineer-loop.md).
+engaged, the story, criterion, orphan-task, and coverage-table layers are always required; the
+functional-requirement layer only on the product track; the outcome layer only when outcomes exist; and
+the ADR layer whenever the current spec change set contains a `.docs/decisions/adr-*` path, including a
+deletion. The ADR row pool itself contains only non-deleted ADRs, so a deletion-only change engages the
+layer but passes with no ADR row. It aggregates every waivable gap rather than stopping at the first, and
+reports them as one error. Already-landed specs whose coherence artifacts predate criterion rows remain
+valid for daemon discovery and BUILD. See [engineer loop](../guides/engineer-loop.md).
+
+The criterion layer requires exactly one row for every happy- and negative-path criterion extracted from
+the stories artifact. Each row must mark the criterion `covered`, cite an existing plan task, quote an
+exact span from at least one cited task after whitespace normalization, and carry the authored
+diff-locality disposition `diff-local`. `outside-diff` records that the criterion depends on state beyond
+the feature diff and blocks land unless a fresh coherence waiver covers the reported gap. The engine reads
+that disposition; it does not infer locality from the criterion's prose. Omitted, invented, duplicate,
+non-covered, ungrounded, and missing-disposition rows are also coverage gaps. A malformed criterion row or
+a stories artifact with no parseable criteria is defective evidence and fails before waiver evaluation.
+See [artifacts](../reference/artifacts.md#coherence-mapping-shape) for the row format.
 
 The functional-requirement layer checks both directions, because coverage alone is only half of a tie-out.
 Forward, a PRD requirement no story cites — or whose only citing stories no task covers — is a gap.
@@ -553,10 +564,11 @@ Three rules apply to both, and they are what makes a waiver a record rather than
   feature never satisfies a later one. Without this, one waiver would permanently disarm a gate.
 - **Total coverage.** A waiver must cover every classified surface or reported gap. Partial coverage blocks,
   and the failure names the gap that is still uncovered.
-- **Some things are unwaivable.** A fabricated identifier cited in a traceability record is an evidentiary
-  defect, not a coverage gap, and no waiver clears it. An undeterminable change set cannot be waived either
-  — the gate does not know what it would be waiving. And a change that genuinely alters CLI, hook, or schema
-  behavior needs a real migration block, not a waiver.
+- **Some things are unwaivable.** A fabricated identifier cited in a legacy traceability row, a malformed
+  criterion row, or a stories artifact with no parseable criteria is an evidentiary defect, not a coverage
+  gap, and no waiver clears it. An undeterminable change set cannot be waived either — the gate does not
+  know what it would be waiving. And a change that genuinely alters CLI, hook, or schema behavior needs a
+  real migration block, not a waiver.
 
 ## What a gate is not
 

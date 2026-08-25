@@ -877,6 +877,99 @@ describe('engine/artifacts', () => {
     });
   });
 
+  describe('acceptance_specs: criterion-coherence remediation hint', () => {
+    const criterion = 'Story 1 happy: Given a widget, when it ships, then it arrives';
+    const omitted = 'Story 1 negative: Given a broken widget, when it ships, then it is rejected';
+    const legacyMessage =
+      `disposition-only records must be an exact one-to-one set of the authoritative story criteria — omitted: ${omitted}`;
+
+    async function writeDispositionFixture(withCriterionRow: boolean) {
+      await createFile('.docs/stories/foo.md', `# Stories
+
+## Story 1: Widget
+
+### Happy Path
+- Given a widget, when it ships, then it arrives
+
+### Negative Paths
+- Given a broken widget, when it ships, then it is rejected
+`);
+      await createFile('.docs/plans/foo.md', '# Plan\n\n### Task 1: Widget\n');
+      await createFile('test/cover.ts', 'covered\n');
+      await createFile(
+        '.pipeline/acceptance-specs-red.json',
+        JSON.stringify({
+          outcome: 'disposition-only',
+          dispositions: [{ criterion, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' }],
+        }),
+      );
+      if (withCriterionRow) {
+        await createFile(
+          '.docs/coherence/foo.md',
+          `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | ${criterion} | task-1 | covered | "Widget" | diff-local |
+`,
+        );
+      }
+    }
+
+    it('names the DECIDE-time criterion check only for omitted criteria on a criterion-row spec', async () => {
+      await writeDispositionFixture(true);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(`${legacyMessage}; the DECIDE-time criterion coherence check should have caught the omitted criterion before BUILD`);
+    });
+
+    it('preserves the legacy omitted-criterion message byte-for-byte without criterion rows', async () => {
+      await writeDispositionFixture(false);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(legacyMessage);
+    });
+
+    // Plan Task 23 — an invented disposition record keeps its own message,
+    // distinct from the omitted-criterion message, and never triggers the
+    // DECIDE-check hint in either the legacy or the criterion-row branch.
+    const invented = 'Story 1 happy: Given a phantom, when it ships, then nothing happens';
+
+    async function writeInventedOnlyFixture(withCriterionRow: boolean) {
+      await writeDispositionFixture(withCriterionRow);
+      await createFile(
+        '.pipeline/acceptance-specs-red.json',
+        JSON.stringify({
+          outcome: 'disposition-only',
+          dispositions: [
+            { criterion, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' },
+            { criterion: omitted, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' },
+            { criterion: invented, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' },
+          ],
+        }),
+      );
+    }
+
+    it('keeps the invented-record message distinct from the omitted message in the legacy branch', async () => {
+      await writeInventedOnlyFixture(false);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(
+        `disposition-only records must be an exact one-to-one set of the authoritative story criteria — invented: ${invented}`,
+      );
+      expect(result.reason).not.toBe(legacyMessage);
+      expect(result.reason).not.toContain('omitted:');
+    });
+
+    it('adds no DECIDE-check hint to an invented-only refusal even on a criterion-row spec', async () => {
+      await writeInventedOnlyFixture(true);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(
+        `disposition-only records must be an exact one-to-one set of the authoritative story criteria — invented: ${invented}`,
+      );
+      expect(result.reason).not.toContain('DECIDE-time criterion coherence check');
+    });
+  });
+
   describe('checkStepCompletion: finish predicate', () => {
     it('rejects a fresh PR marker when strict shipment evidence refuses it', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');

@@ -6,6 +6,7 @@
 // wiring-reachability gate.
 import { describe, expect, it } from 'vitest';
 import {
+  parsePlanTaskBodies,
   parsePlanTaskPaths,
   parsePlanTaskDoneWhen,
   TASK_HEADER_PATTERN,
@@ -14,6 +15,63 @@ import {
 import { parsePlanTaskVerifyOnly } from '../../src/engine/autoheal.js';
 
 describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)', () => {
+  describe('parsePlanTaskBodies', () => {
+    it('returns each task body through the next task header and preserves the final body', () => {
+      const result = parsePlanTaskBodies(`# Plan
+
+### Task 1: First task
+First task body.
+
+### Task 2: Second task
+Second task body.
+
+### Task 3: Final task
+Final task body.`);
+
+      expect(result).toEqual(new Map([
+        ['1', 'First task body.\n'],
+        ['2', 'Second task body.\n'],
+        ['3', 'Final task body.'],
+      ]));
+    });
+
+    it('parses dotted ids and retains CRLF-fenced code verbatim', () => {
+      const body = [
+        'Use this snippet:',
+        '```ts',
+        "const prose = '### Task 99: not a heading';",
+        '```',
+        'Complete the task.',
+      ].join('\r\n');
+      const result = parsePlanTaskBodies([
+        '### Task 1: First',
+        'First body.',
+        '',
+        '### Task 1.2: Dotted',
+        body,
+      ].join('\r\n'));
+
+      expect(result.get('1.2')).toBe(body);
+    });
+
+    it('returns undefined for an unknown task id', () => {
+      const result = parsePlanTaskBodies('### Task 1: Only task\nBody.');
+
+      expect(result.get('missing')).toBeUndefined();
+    });
+
+    it('does not treat similar prose as a task heading', () => {
+      const result = parsePlanTaskBodies(`### Task 1: Real task
+This prose quotes ### Task 2: but is not a heading.
+`);
+
+      expect(result).toEqual(new Map([
+        ['1', 'This prose quotes ### Task 2: but is not a heading.\n'],
+      ]));
+      expect(result.get('2')).toBeUndefined();
+    });
+  });
+
   describe('parsePlanTaskDoneWhen', () => {
     it('returns ordered Done when checks only for tasks that declare the block', () => {
       const result = parsePlanTaskDoneWhen(`# Plan

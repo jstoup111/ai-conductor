@@ -12,8 +12,12 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { splitStoryBlocks, collectPlanCoverage } from '../artifacts.js';
-import { parsePlanTaskPaths } from '../plan-task-parse.js';
+import {
+  splitStoryBlocks,
+  collectPlanCoverage,
+  extractAuthoritativeStoryCriteria,
+} from '../artifacts.js';
+import { parsePlanTaskBodies, parsePlanTaskPaths } from '../plan-task-parse.js';
 import { extractPrdFrIds } from '../prd-fr-ids.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { runOverlapScan, type RunOverlapScanArgs, type OverlapReport } from '../overlap-scan.js';
@@ -27,29 +31,65 @@ import {
 } from './coherence-waiver.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 
-/** The five row classes a coherence artifact row may belong to. */
-export type CoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task' | 'adr';
+/** The five legacy row classes a coherence artifact row may belong to. */
+export type LegacyCoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task' | 'adr';
 
-/** A single parsed row of the coherence mapping table. */
-export interface CoherenceRow {
-  rowClass: CoherenceRowClass;
+/** A row class in the coherence mapping table. */
+export type CoherenceRowClass = LegacyCoherenceRowClass | 'criterion';
+
+/** A single parsed row in the legacy five-column coherence mapping table. */
+export interface LegacyCoherenceRow {
+  rowClass: LegacyCoherenceRowClass;
   id: string;
   citedIds: string[];
   verdict: string;
   quote: string;
 }
 
+/** The only verdicts a criterion-level coverage claim may carry. */
+export type CriterionVerdict = 'covered' | 'gap' | 'fail';
+
+/** The authored answer to whether a criterion depends only on this feature's diff. */
+export type CriterionDiffLocalityDisposition = 'diff-local' | 'outside-diff';
+
+const NON_NEGATIVE_CRITERION_DISPOSITIONS: ReadonlySet<CriterionDiffLocalityDisposition> =
+  new Set(['diff-local']);
+
+/** A parsed criterion-level claim, grounded by one or more plan-task citations. */
+export interface CriterionCoherenceRow {
+  rowClass: 'criterion';
+  criterion: string;
+  citedIds: string[];
+  verdict: CriterionVerdict;
+  quote: string;
+  disposition: CriterionDiffLocalityDisposition | undefined;
+}
+
+/** A single parsed row of the coherence mapping table. */
+export type CoherenceRow = LegacyCoherenceRow | CriterionCoherenceRow;
+
 /** Distinct fail-closed reasons a coherence artifact parse can be rejected for. */
 export type CoherenceParseFailureReason =
   | 'missing-coherence-artifact'
   | 'empty-coherence-artifact'
-  | 'unparseable-coherence-artifact';
+  | 'unparseable-coherence-artifact'
+  | 'unparseable-criterion-row';
 
 export type CoherenceParseResult =
   | { ok: true; rows: CoherenceRow[] }
   | { ok: false; reason: CoherenceParseFailureReason };
 
-const ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task', 'adr']);
+const LEGACY_ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task', 'adr']);
+
+function isCriterionVerdict(value: string): value is CriterionVerdict {
+  return value === 'covered' || value === 'gap' || value === 'fail';
+}
+
+function isCriterionDiffLocalityDisposition(
+  value: string,
+): value is CriterionDiffLocalityDisposition {
+  return value === 'diff-local' || value === 'outside-diff';
+}
 
 /**
  * Strip surrounding whitespace and a single pair of matching straight/curly
@@ -123,14 +163,40 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
 
   const rows: CoherenceRow[] = [];
   for (const cells of tableRowLines) {
-    if (cells.length !== 5) {
-      return { ok: false, reason: 'unparseable-coherence-artifact' };
-    }
-    const [rawRowClass, rawId, rawCitedIds, rawVerdict, rawQuote] = cells;
+    const rawRowClass = cells[0];
     const rowClass = rawRowClass.trim().toLowerCase();
-    if (!ROW_CLASSES.has(rowClass)) {
+    if (rowClass === 'criterion') {
+      if (cells.length !== 6) {
+        return { ok: false, reason: 'unparseable-criterion-row' };
+      }
+      const [, rawCriterion, rawCitedIds, rawVerdict, rawQuote, rawDisposition] = cells;
+      const criterion = rawCriterion.trim();
+      const verdict = rawVerdict.trim();
+      const quote = unquote(rawQuote);
+      if (criterion.length === 0 || !isCriterionVerdict(verdict)) {
+        return { ok: false, reason: 'unparseable-criterion-row' };
+      }
+      const citedIds = rawCitedIds
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      if (citedIds.length === 0) {
+        return { ok: false, reason: 'unparseable-criterion-row' };
+      }
+      const dispositionText = rawDisposition.trim();
+      if (dispositionText && !isCriterionDiffLocalityDisposition(dispositionText)) {
+        return { ok: false, reason: 'unparseable-criterion-row' };
+      }
+      const disposition: CriterionDiffLocalityDisposition | undefined =
+        dispositionText === '' ? undefined : (dispositionText as CriterionDiffLocalityDisposition);
+
+      rows.push({ rowClass, criterion, citedIds, verdict, quote, disposition });
+      continue;
+    }
+    if (cells.length !== 5 || !LEGACY_ROW_CLASSES.has(rowClass)) {
       return { ok: false, reason: 'unparseable-coherence-artifact' };
     }
+    const [, rawId, rawCitedIds, rawVerdict, rawQuote] = cells;
     const id = rawId.trim();
     const verdict = rawVerdict.trim();
     if (id.length === 0 || verdict.length === 0) {
@@ -143,7 +209,7 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
     const quote = unquote(rawQuote);
 
     rows.push({
-      rowClass: rowClass as CoherenceRowClass,
+      rowClass: rowClass as LegacyCoherenceRowClass,
       id,
       citedIds,
       verdict,
@@ -232,7 +298,7 @@ export function crossCheckIds(
 
   const knownIds = new Set<string>([...storyIds, ...taskIds, ...frIds, ...outcomeIds, ...adrIds]);
 
-  const poolByClass: Record<CoherenceRowClass, ReadonlySet<string>> = {
+  const poolByClass: Record<LegacyCoherenceRowClass, ReadonlySet<string>> = {
     outcome: outcomeIds,
     fr: frIds,
     story: storyIds,
@@ -241,6 +307,7 @@ export function crossCheckIds(
   };
 
   for (const row of rows) {
+    if (row.rowClass === 'criterion') continue;
     // The row's own subject id must resolve against the pool for its class
     // (a row about a nonexistent FR/story/task/outcome is itself fabricated).
     const ownId = row.rowClass === 'fr' ? row.id.toUpperCase() : row.id;
@@ -448,6 +515,147 @@ export function checkStoryCoverage(
 
   if (gaps.length > 0) return { ok: false, reason: 'story-gap', gaps };
   return { ok: true };
+}
+
+// --- Criterion-coverage layer ---
+
+/** A criterion-level rejection, with a stable id suitable for the existing waiver mechanism. */
+export interface CriterionGapFinding {
+  gapId: string;
+  criterion: string;
+  detail: string;
+}
+
+export type CriterionCoverageResult =
+  | { ok: true }
+  | { ok: false; reason: 'criterion-gap' | 'unparseable-stories'; gaps: CriterionGapFinding[] };
+
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function taskIdFromCitation(citedId: string): string {
+  return citedId.trim().replace(/^task-/i, '');
+}
+
+/**
+ * Compare every authored criterion claim to the authoritative story extractor
+ * and to the body of the plan task it cites. This is deliberately evidence
+ * grounding, not a semantic re-judgement of whether the task implements the
+ * criterion: the engine only proves that the asserted task text is real.
+ */
+export function checkCriterionCoverage(
+  rows: CoherenceRow[],
+  storiesText: string | null,
+  planText: string | null,
+): CriterionCoverageResult {
+  const criteria = extractAuthoritativeStoryCriteria(storiesText ?? '');
+  if (criteria.length === 0) {
+    return {
+      ok: false,
+      reason: 'unparseable-stories',
+      gaps: [{
+        gapId: 'criterion:stories-unparseable',
+        criterion: '',
+        detail: 'stories file has no parseable story criteria',
+      }],
+    };
+  }
+
+  const criterionRows = rows.filter(
+    (row): row is CriterionCoherenceRow => row.rowClass === 'criterion',
+  );
+  const taskBodies = parsePlanTaskBodies(planText ?? '');
+  const gaps: CriterionGapFinding[] = [];
+  const rowsByCriterion = new Map<string, CriterionCoherenceRow[]>();
+  for (const row of criterionRows) {
+    const matchingRows = rowsByCriterion.get(row.criterion) ?? [];
+    matchingRows.push(row);
+    rowsByCriterion.set(row.criterion, matchingRows);
+  }
+
+  for (const [index, criterion] of criteria.entries()) {
+    const matches = rowsByCriterion.get(criterion) ?? [];
+    if (matches.length === 0) {
+      gaps.push({
+        gapId: `criterion:omitted:${index + 1}`,
+        criterion,
+        detail: `criterion is omitted from the coherence artifact: ${criterion}`,
+      });
+    } else if (matches.length > 1) {
+      gaps.push({
+        gapId: `criterion:duplicate:${index + 1}`,
+        criterion,
+        detail: `criterion has duplicate coherence rows: ${criterion}`,
+      });
+    }
+  }
+
+  for (const [index, row] of criterionRows.entries()) {
+    if (!criteria.includes(row.criterion)) {
+      gaps.push({
+        gapId: `criterion:invented:${index + 1}`,
+        criterion: row.criterion,
+        detail: `invented criterion row does not match any accepted story criterion: ${row.criterion}`,
+      });
+      continue;
+    }
+
+    if (row.verdict !== 'covered') {
+      gaps.push({
+        gapId: `criterion:verdict:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion row is marked ${row.verdict}: ${row.criterion}`,
+      });
+    }
+
+    if (!row.disposition) {
+      gaps.push({
+        gapId: `criterion:disposition-missing:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion has no diff-locality disposition: ${row.criterion}`,
+      });
+    } else if (!NON_NEGATIVE_CRITERION_DISPOSITIONS.has(row.disposition)) {
+      gaps.push({
+        gapId: `criterion:disposition-negative:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion is marked ${row.disposition}: ${row.criterion}`,
+      });
+    }
+
+    const citedTaskIds = row.citedIds.map(taskIdFromCitation);
+    const missingTask = citedTaskIds.find((id) => !taskBodies.has(id));
+    if (missingTask) {
+      gaps.push({
+        gapId: `criterion:task-missing:${index + 1}:${missingTask}`,
+        criterion: row.criterion,
+        detail: `criterion "${row.criterion}" cites task ${missingTask}, which does not exist in the plan`,
+      });
+      continue;
+    }
+
+    const quote = normalizeWhitespace(row.quote);
+    if (!quote) {
+      gaps.push({
+        gapId: `criterion:quote-empty:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion has an empty coverage quote: ${row.criterion}`,
+      });
+      continue;
+    }
+    const quoteFound = citedTaskIds.some((id) =>
+      normalizeWhitespace(taskBodies.get(id) ?? '').includes(quote),
+    );
+    if (!quoteFound) {
+      gaps.push({
+        gapId: `criterion:quote-ungrounded:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion "${row.criterion}" is attributed to task ${row.citedIds.join(', ')}, but its quote is absent from the cited task body`,
+      });
+    }
+  }
+
+  return gaps.length > 0 ? { ok: false, reason: 'criterion-gap', gaps } : { ok: true };
 }
 
 // --- FR-coverage layer (Task 8) ---
@@ -926,6 +1134,7 @@ export type CoherenceGapLayer =
   | 'fr'
   | 'story-fr'
   | 'story'
+  | 'criterion'
   | 'orphan-task'
   | 'coverage-table'
   | 'duplicate-claim';
@@ -937,6 +1146,7 @@ const GAP_LAYER_ORDER: readonly CoherenceGapLayer[] = [
   'fr',
   'story-fr',
   'story',
+  'criterion',
   'orphan-task',
   'coverage-table',
   'duplicate-claim',
@@ -1090,6 +1300,20 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
           gapId: gap.gapId,
           artifact: 'stories',
           item: gap.title,
+        });
+      }
+    }
+  }
+
+  if (inputs.requiredLayers?.has('criterion')) {
+    const criterionResult = checkCriterionCoverage(inputs.rows, inputs.storiesText, inputs.planText);
+    if (!criterionResult.ok) {
+      for (const gap of criterionResult.gaps) {
+        gaps.push({
+          layer: 'criterion',
+          gapId: gap.gapId,
+          artifact: 'stories / plan',
+          item: gap.detail,
         });
       }
     }
@@ -1277,7 +1501,8 @@ export type CoherenceRequiredLayer =
   | 'story'
   | 'adr'
   | 'orphan-task'
-  | 'coverage-table';
+  | 'coverage-table'
+  | 'criterion';
 
 export type RequiredLayersResult =
   | {
@@ -1339,7 +1564,12 @@ export function resolveRequiredLayers(
 
   // 3. Layer degradation: structural layers are always required once
   // engaged; marker-gated layers derive from committed signals.
-  const layers = new Set<CoherenceRequiredLayer>(['story', 'orphan-task', 'coverage-table']);
+  const layers = new Set<CoherenceRequiredLayer>([
+    'story',
+    'criterion',
+    'orphan-task',
+    'coverage-table',
+  ]);
 
   const effectiveTrack: Track = track ?? 'product';
   if (effectiveTrack === 'product') {
@@ -1511,6 +1741,19 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
         'that does not resolve against any real story/task/FR/outcome. Fix the record via ' +
         '/coherence-check before landing.',
     );
+  }
+
+  // A stories file with no extractable criteria is malformed evidence, not a
+  // coverage gap. Reject it before aggregation so a coherence waiver cannot
+  // turn a failed criterion check into a successful land.
+  if (required.layers.has('criterion')) {
+    const criterionResult = checkCriterionCoverage(parsed.rows, storiesText, planText);
+    if (!criterionResult.ok && criterionResult.reason === 'unparseable-stories') {
+      throw new Error(
+        'landSpec: coherence gate: criterion:stories-unparseable — stories file has no ' +
+          'parseable story criteria. Fix the stories artifact before landing.',
+      );
+    }
   }
 
   const effectivePrdText = required.layers.has('fr') ? prdText : null;
