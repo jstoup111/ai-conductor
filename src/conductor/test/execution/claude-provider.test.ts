@@ -81,6 +81,20 @@ describe('ClaudeProvider', () => {
       expect(args).not.toContain('--verbose');
     });
 
+    it('delegates REPL dispatch through the shared invocation process seam', async () => {
+      const subprocessFactory = vi.fn(() =>
+        Promise.resolve({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false }) as any,
+      );
+      provider = new ClaudeProvider(undefined, subprocessFactory);
+      const invoke = vi.spyOn(provider, 'invoke');
+
+      await provider.invoke(baseOptions);
+      await provider.invokeInteractive({ ...baseOptions, interactive: true });
+
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(subprocessFactory).toHaveBeenCalledTimes(2);
+    });
+
     it('reports spawn as a zero-argument observation', async () => {
       const onSpawn = vi.fn();
       mockExeca.mockResolvedValue({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false } as any);

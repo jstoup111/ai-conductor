@@ -615,10 +615,7 @@ export class ClaudeProvider implements LLMProvider {
     return result;
   }
 
-  /**
-   * Run Claude with --print mode. Captures output for analysis.
-   * Used only for truly non-interactive one-shot queries.
-   */
+  /** Run Claude for both one-shot and REPL dispatches. */
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     // Boundary enforcement: session reuse was removed by design — a fresh
     // session per invocation, regardless of what the caller supplied. See
@@ -627,46 +624,31 @@ export class ClaudeProvider implements LLMProvider {
     options = enforceFreshSessionOptions(options, 'claude');
     const args = this.buildArgs(options);
 
-    // Deliver the prompt on STDIN, never as a `-p <prompt>` command-line
-    // argument. A single argv string is capped at MAX_ARG_STRLEN (128 KiB on
-    // Linux); the build_review grader's prompt (plan + full diff) routinely
-    // exceeds that, and passing it as an argument makes exec() fail instantly
-    // with E2BIG ("Argument list too long") BEFORE claude starts — surfacing as
-    // an empty-output, non-zero exit that no classifier catches and that halts
-    // every large feature at build_review. `claude --print` reads the prompt
-    // from stdin when no positional prompt is given, which has no length limit.
-    const hasPrompt = typeof options.prompt === 'string' && options.prompt.length > 0;
+    const promptOnStdin =
+      typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
 
-    // Stream stdout/stderr to terminal while also capturing for analysis.
-    // With a prompt, feed it on stdin (execa closes stdin after writing). With
-    // no prompt, stdin is explicitly closed: otherwise Claude's CLI waits ~3s
-    // for piped input on a TTY and logs "no stdin data received in 3s" per call.
+    if (options.prompt && options.interactive) {
+      // REPL mode keeps the prompt positional and stdin attached to the terminal.
+      args.push(options.prompt);
+    }
+
+    // Non-REPL print mode receives its prompt through stdin to avoid the argv
+    // size limit; the REPL retains inherited stdin and positional prompt behavior.
     const observed = await observeInterval(this.intervalClock, () =>
-      hasPrompt
-        ? this.runClaude(args, {
-          reject: false,
-          input: options.prompt,
-          env: this.buildEnv(options),
-          cwd: options.cwd,
-          diagnosticLog: options.diagnosticLog,
-          onActivity: options.onActivity,
-          onProviderStream: options.onProviderStream,
-          onSpawn: options.onSpawn,
-          selfHost: options.selfHost,
-          spawnPermit: options.spawnPermit,
-        })
-        : this.runClaude(args, {
-          reject: false,
-          stdin: 'ignore',
-          env: this.buildEnv(options),
-          cwd: options.cwd,
-          diagnosticLog: options.diagnosticLog,
-          onActivity: options.onActivity,
-          onProviderStream: options.onProviderStream,
-          onSpawn: options.onSpawn,
-          selfHost: options.selfHost,
-          spawnPermit: options.spawnPermit,
-        }),
+      this.runClaude(args, {
+        ...(promptOnStdin
+          ? { input: options.prompt }
+          : { stdin: options.interactive ? 'inherit' as const : 'ignore' as const }),
+        reject: false,
+        env: this.buildEnv(options),
+        cwd: options.cwd,
+        diagnosticLog: options.diagnosticLog,
+        onActivity: options.onActivity,
+        onProviderStream: options.interactive ? undefined : options.onProviderStream,
+        onSpawn: options.onSpawn,
+        selfHost: options.selfHost,
+        spawnPermit: options.spawnPermit,
+      }),
     );
 
     return this.classifyCompletion(observed.value, true, observed.interval, options.prompt);
@@ -686,46 +668,7 @@ export class ClaudeProvider implements LLMProvider {
    * the user can debug with Claude manually.
    */
   async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
-    // Boundary enforcement: fresh session per invocation (see invoke()).
-    options = enforceFreshSessionOptions(options, 'claude');
-    const args = this.buildArgs(options);
-
-    // Print mode delivers the prompt on STDIN for the same reason `invoke()`
-    // does (#829): a single argv string is capped at MAX_ARG_STRLEN (128 KiB
-    // on Linux), and the build_review grader's projection routinely exceeds
-    // it, so `-p <prompt>` makes exec() fail with E2BIG BEFORE claude starts —
-    // 0 turns, ~30ms, $0.00, an empty result the engine can only classify as a
-    // malformed provider artifact. #829 closed that hole in `invoke()` and
-    // left it open here, and `step-runners.ts` routes rubric dispatch through
-    // this method. REPL mode keeps the positional argument: it is operator-
-    // typed, short, and stdin must stay attached to the terminal.
-    const promptOnStdin =
-      typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
-
-    if (options.prompt && options.interactive) {
-      // REPL mode — positional arg; session stays open until user /quits.
-      args.push(options.prompt);
-    }
-
-    // Capture while inheriting output so classification remains available only
-    // after the visibly streamed process completes.
-    const observed = await observeInterval(this.intervalClock, () =>
-      this.runClaude(args, {
-        ...(promptOnStdin
-          ? { input: options.prompt }
-          : { stdin: options.interactive ? 'inherit' as const : 'ignore' as const }),
-        reject: false,
-        env: this.buildEnv(options),
-        cwd: options.cwd,
-        diagnosticLog: options.diagnosticLog,
-        onActivity: options.onActivity,
-        onSpawn: options.onSpawn,
-        selfHost: options.selfHost,
-        spawnPermit: options.spawnPermit,
-      }),
-    );
-
-    return this.classifyCompletion(observed.value, false, observed.interval, options.prompt);
+    return this.invoke(options);
   }
 
   private classifyCompletion(
