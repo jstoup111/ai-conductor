@@ -41,6 +41,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Lets operators decide every visible over-scope criterion in one clear, while refused criteria remain blocked with their rationale recorded. ([implementation PR #1873](https://github.com/jstoup111/ai-conductor/pull/1873)).
 - Daemon builds now report prerequisite-blocked steps and validator refusals accurately instead of marking their work as failed. ([implementation PR #1870](https://github.com/jstoup111/ai-conductor/pull/1870)).
 - TDD-authored tests now declare Covers markers, so the build_review test-quality rubric reviews them instead of passing vacuously on an empty scope. ([implementation PR #1877](https://github.com/jstoup111/ai-conductor/pull/1877)).
+- Daemon help now lists every supported dispatcher command, including pause and resume. ([implementation PR #1878](https://github.com/jstoup111/ai-conductor/pull/1878)).
 
 ## Migration
 
