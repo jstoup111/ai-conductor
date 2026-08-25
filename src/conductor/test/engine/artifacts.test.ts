@@ -4814,6 +4814,46 @@ Task 1 → Task 2
         expect(result.reason).not.toContain('FR-1');
       });
 
+      // Covers: task:13
+      it('keeps unstamped reports on legacy mtime semantics', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeFile(join(gdir, PATH), ALIGNED);
+
+        await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
+        await expect(checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({
+          done: false,
+          reason: expect.stringMatching(/not rewritten by this judging session/),
+        });
+
+        await writeFile(join(gdir, PATH), ALIGNED);
+        await expect(checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptStartedAt: 0,
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({ done: true });
+      });
+
+      // Covers: task:13
+      it('ignores a mismatched run stamp when gate-code-validity is disabled', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeFile(join(gdir, PATH), ALIGNED);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        await expect(checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptStartedAt: 0,
+          attemptRunId: 'current-run',
+          config: { gate_code_validity: { enabled: false } },
+        })).resolves.toMatchObject({ done: true });
+      });
+
       it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
@@ -4902,6 +4942,46 @@ Task 1 → Task 2
         expect(result.reason).toContain('.pipeline/architecture-review-as-built.md');
         expect(result.reason).toContain('current-run');
         expect(result.reason).toContain('prior-run');
+      });
+
+      // Covers: task:13
+      it('keeps unstamped reports on legacy mtime semantics', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeFile(join(gdir, PATH), APPROVED);
+
+        await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
+        await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({
+          done: false,
+          reason: expect.stringMatching(/not rewritten by this judging session/),
+        });
+
+        await writeFile(join(gdir, PATH), APPROVED);
+        await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptStartedAt: 0,
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({ done: true });
+      });
+
+      // Covers: task:13
+      it('ignores a mismatched run stamp when gate-code-validity is disabled', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeFile(join(gdir, PATH), APPROVED);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptStartedAt: 0,
+          attemptRunId: 'current-run',
+          config: { gate_code_validity: { enabled: false } },
+        })).resolves.toMatchObject({ done: true });
       });
 
       it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
@@ -4995,6 +5075,44 @@ Task 1 → Task 2
         expect(result.reason).toContain('.pipeline/manual-test-results.md');
         expect(result.reason).toContain('current-run');
         expect(result.reason).toContain('prior-run');
+      });
+
+      // Covers: task:13
+      it('keeps unstamped results on legacy mtime semantics', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(join(gdir, RESULTS), PASS_FILE);
+
+        await utimes(join(gdir, RESULTS), OLD_MTIME, OLD_MTIME);
+        await expect(checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({
+          done: false,
+          reason: expect.stringMatching(/stale/),
+        });
+
+        await writeFile(join(gdir, RESULTS), PASS_FILE);
+        await expect(checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({ done: true });
+      });
+
+      // Covers: task:13
+      it('ignores a mismatched run stamp when gate-code-validity is disabled', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(join(gdir, RESULTS), PASS_FILE);
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        await expect(checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+          config: { gate_code_validity: { enabled: false } },
+        })).resolves.toMatchObject({ done: true });
       });
 
       it('falls through to mtime rejection when the delta touches a runtime path since the stamp', async () => {
