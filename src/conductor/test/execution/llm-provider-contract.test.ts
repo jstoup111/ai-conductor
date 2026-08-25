@@ -73,8 +73,8 @@ describe('InvokeResult provider-unavailable contract', () => {
       resume: false,
     };
     const streamConsumer: ProviderStreamCandidateObserver = {
-      onProviderStream: async () => {},
-      close: async () => {},
+      onProviderStream: () => {},
+      close: () => {},
     };
     const optionsWithStreamConsumer: InvokeOptions = {
       prompt: 'contract check',
