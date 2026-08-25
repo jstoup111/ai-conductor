@@ -94,6 +94,37 @@ Add tests for sweep.
     expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it('delegates the legacy attribution verifier dispatch through invoke without a stream consumer', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      success: true,
+      output: '{}',
+      exitCode: 0,
+    });
+    const invokeInteractive = vi.fn().mockRejectedValue(
+      new Error('legacy interactive dispatch must not run'),
+    );
+    const provider: LLMProvider = { invoke, invokeInteractive };
+
+    await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invokeInteractive).not.toHaveBeenCalled();
+    expect(invoke.mock.calls[0][0]).not.toHaveProperty('streamConsumer');
+
+    const source = await readFile(
+      new URL('../../src/engine/attribution-lane.ts', import.meta.url),
+      'utf-8',
+    );
+    expect(source).not.toContain('provider.invokeInteractive');
+  });
+
   it('uses step ID attribution_verify', async () => {
     const invoke = vi.fn().mockResolvedValue({
       success: true,
