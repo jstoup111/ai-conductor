@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -328,63 +328,61 @@ describe('prd_audit kickback', () => {
       { gate: 'prd_audit', grade: 'PLAN_GAP', criterion: 'S4.2', summary: '' },
     ]);
     expect(missingSummary).toEqual({ ok: false, reason: 'recorded finding S4.2 carries no summary' });
+
+    const unrenderableDecision = {
+      gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.2', summary: 'Visible.',
+      decision: 'accept', rationale: 'Accepted.', unrenderableDetail: 1n,
+    };
+    expect(recordedPrdAuditFindingsBlock([unrenderableDecision] as never)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('recorded findings are not serializable'),
+    });
   });
 
-  it('routes an unprojectable recorded decision to a named blocking halt', async () => {
-    // D8 fail-closed: the decision is durable and valid, but it cannot be
-    // rendered into the verdict artifact. That blocks with a named reason
-    // instead of settling the gate as if nothing had been recorded.
-    const root = await mkdtemp(join(tmpdir(), 'over-scope-projection-refusal-'));
-    dirs.push(root);
-    await mkdir(join(root, '.pipeline'), { recursive: true });
-    const reportPath = join(root, '.pipeline', 'prd-audit.md');
-    const reportText = [
-      '# PRD Audit',
-      '',
-      '**PRD:** none',
-      '',
-      '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |',
-      '| --- | --- | --- | --- | --- | --- |',
-      '| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:1 |',
-      '',
-    ].join('\n');
-    await writeFile(reportPath, reportText);
-    await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
-      version: 1,
-      decisions: [{
-        criterion: 'S3.1',
-        summary: 'Visible behavior outside the approved intent.',
-        decision: 'refuse',
-        rationale: 'Rework it inside scope.',
-        operator: 'operator@example.test',
-        decidedAt: '2026-08-24T00:00:00.000Z',
-      }],
-    }));
-    // The verdict artifact cannot be rewritten.
-    await chmod(reportPath, 0o444);
+  it('halts with the named serialization refusal and leaves the verdict unwritten', async () => {
+    // D8 fail-closed: exercise the renderer's own unrenderable-decision path,
+    // not filesystem permissions (which a privileged test process can bypass).
+    const report = overScopeReport('S9.7', 'outside-visible');
+    const originalStringify = JSON.stringify;
+    const stringify = vi.spyOn(JSON, 'stringify').mockImplementation(
+      ((value: unknown, replacer?: Parameters<typeof JSON.stringify>[1], space?: Parameters<typeof JSON.stringify>[2]) => {
+        if (
+          typeof value === 'object' && value !== null &&
+          'findings' in value && Array.isArray((value as { findings?: unknown }).findings)
+        ) {
+          throw new Error('recorded decision is unrenderable');
+        }
+        return originalStringify(value, replacer, space);
+      }) as typeof JSON.stringify,
+    );
+    try {
+      const fixture = await runGroupedPrdAudit(
+        report,
+        storiesWithCriterion('Happy Path'),
+        async (root) => {
+          await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+            version: 1,
+            decisions: [{
+              criterion: 'S9.7',
+              summary: 'A recorded visible widening.',
+              decision: 'accept',
+              rationale: 'The operator explicitly accepted it.',
+              operator: 'operator@example.test',
+              decidedAt: '2026-08-25T00:00:00.000Z',
+            }],
+          }), 'utf8');
+        },
+      );
 
-    const conductor = new Conductor({
-      stateFilePath: join(root, '.pipeline/conduct-state.json'),
-      stepRunner: { run: async () => ({ success: true }) },
-      events: new ConductorEventEmitter(),
-      projectRoot: root,
-      mode: 'auto',
-      daemon: true,
-      verifyArtifacts: false,
-      maxRetries: 1,
-    });
-
-    const route = await (conductor as unknown as {
-      routeCurrentPrdAudit: (state: unknown) => Promise<{ kind: string; reason?: string }>;
-    }).routeCurrentPrdAudit({ feature_desc: 'over-scope projection refusal' });
-
-    expect(route.kind).toBe('projection-halt');
-    expect(route.reason).toContain('recorded findings could not be written to');
-    expect(route.reason).toContain('prd-audit.md');
-
-    // Fail closed: the artifact is left exactly as the judge wrote it.
-    await expect(readFile(reportPath, 'utf8')).resolves.toBe(reportText);
-    await chmod(reportPath, 0o644);
+      await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+        'recorded findings are not serializable: recorded decision is unrenderable',
+      );
+      // Fail closed: the artifact is exactly the judge's original verdict;
+      // it never settles without the recorded operator decision.
+      await expect(readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).resolves.toBe(report);
+    } finally {
+      stringify.mockRestore();
+    }
   });
 
   it('renders all undecided criteria and parses valid decision siblings while naming defects', () => {
@@ -410,7 +408,11 @@ describe('prd_audit kickback', () => {
     expect(parseClearedOverScopeDecisions(body, new Set(['S3.1']))).toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }, { kind: 'invalid-decision', criterion: 'S3.1' }] });
   });
 
-  async function runGroupedPrdAudit(report: string, stories: string) {
+  async function runGroupedPrdAudit(
+    report: string,
+    stories: string,
+    setup?: (root: string) => Promise<void>,
+  ) {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
     dirs.push(root);
     const statePath = join(root, '.pipeline', 'conduct-state.json');
@@ -436,6 +438,7 @@ describe('prd_audit kickback', () => {
       state[step.name] = 'done';
     }
     await writeState(statePath, state as ConductState);
+    await setup?.(root);
 
     const calls: StepName[] = [];
     const runner: StepRunner = {
