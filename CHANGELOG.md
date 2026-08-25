@@ -11,7 +11,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.105.0] - 2026-08-24
+## [0.105.0] - 2026-08-25
+
+### Added
+
+- An operator-actionable halt (needs-human, plan-gap, or protected-artifact) off the default branch now leaves a committed, best-effort-pushed halt record at `.docs/halted/<slug>.md` that survives a recreated worktree and updates to resolved when the halt clears. ([implementation PR #1845](https://github.com/jstoup111/ai-conductor/pull/1845)).
+- Codex dispatches are now priced from a committed per-model rate card (`.ai-conductor/rate-card.json`, maintained by `conduct rate-card refresh`), so a mixed-provider feature reports its real cost instead of a Claude-only figure; dispatches whose cost cannot be established are named explicitly on the finish usage line. ([implementation PR #1858](https://github.com/jstoup111/ai-conductor/pull/1858)).
 
 ### Changed
 
@@ -26,6 +31,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Remediation tasks now sweep for sibling sites of the same defect class and for what a removal orphans, bounded to sites an existing plan task admits, so a repaired defect stops reappearing at the next site on the following audit cycle. ([implementation PR #1837](https://github.com/jstoup111/ai-conductor/pull/1837)).
 - A steps: override for an out-of-band step (remediate, bootstrap, assess, attribution_verify) is accepted instead of being rejected as a custom step missing 'after'. ([implementation PR #1843](https://github.com/jstoup111/ai-conductor/pull/1843)).
 - An OVER_SCOPE prd-audit finding the operator has accepted now satisfies the prd_audit gate instead of blocking it until the oscillation cap halts the run. ([implementation PR #1854](https://github.com/jstoup111/ai-conductor/pull/1854)).
+- Codex-routed steps that dispatch through the streaming path no longer fail with "Codex self-host isolation is unavailable"; the streaming runtime wrapper now preserves every provider capability, including self-host provisioning and readiness. ([implementation PR #1855](https://github.com/jstoup111/ai-conductor/pull/1855)).
+- FINISH no longer halts on an authored PR body that still carries the SHIP-entry draft note; floor classification is decided by body content rather than by the presence of engine boilerplate. ([implementation PR #1856](https://github.com/jstoup111/ai-conductor/pull/1856)).
 
 ## Migration
 
