@@ -403,7 +403,7 @@ export type ConductorEvent =
       step: StepName;
       attempt: number;
       decision: 'rerun' | 'route';
-      signal?: 'named-route' | 'identical-repeat' | 'unretryable-inputs';
+      signal?: 'named-route' | 'identical-repeat' | 'unretryable-inputs' | 'stale-run-identity';
       unchangedInput?: string;
     }
   | { type: 'checkpoint_reached'; step: StepName }
@@ -494,7 +494,7 @@ export type ConductorEvent =
       type: 'verdict_freshness';
       step: StepName;
       artifact: string;
-      floorSource: 'attempt' | 'session';
+      floorSource: 'attempt' | 'session' | 'run-identity';
       mtimeMs?: number;
       floorMs?: number;
     } & VerdictFreshnessClassification)

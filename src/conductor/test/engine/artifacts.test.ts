@@ -4071,6 +4071,22 @@ describe('engine/artifacts', () => {
         expect(r).toEqual({ decision: 'rerun' });
       });
     });
+
+    // Covers: task:15
+    it('labels a stale run-identity absence without changing its rerun decision', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: {
+          done: false,
+          routeClass: 'absent',
+          retrySignal: 'stale-run-identity',
+        },
+        attempt: 1,
+        inputsUnchanged: false,
+      });
+
+      expect(r).toEqual({ decision: 'rerun', signal: 'stale-run-identity' });
+    });
   });
 
   describe('planStem', () => {

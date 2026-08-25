@@ -8666,7 +8666,7 @@ export class Conductor {
                 step: step.name,
                 attempt,
                 decision: retryDecision.decision,
-                ...(retryDecision.decision === 'route' ? { signal: retryDecision.signal } : {}),
+                ...(retryDecision.signal ? { signal: retryDecision.signal } : {}),
               });
               if (retryDecision.decision === 'route') {
                 unretryableInputFailure = {
@@ -8991,7 +8991,7 @@ export class Conductor {
                   step: step.name,
                   attempt,
                   decision: clsDecision.decision,
-                  ...(clsDecision.decision === 'route' ? { signal: clsDecision.signal } : {}),
+                  ...(clsDecision.signal ? { signal: clsDecision.signal } : {}),
                   ...(unchangedInputNote !== undefined && clsDecision.decision === 'route' &&
                   clsDecision.signal === 'identical-repeat'
                     ? { unchangedInput: unchangedInputNote }

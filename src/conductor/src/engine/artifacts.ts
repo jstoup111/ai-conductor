@@ -1006,8 +1006,10 @@ export interface CompletionResult {
     artifact: string;
     mtimeMs?: number;
     floorMs?: number;
-    floorSource: 'attempt' | 'session';
+    floorSource: 'attempt' | 'session' | 'run-identity';
   } & VerdictFreshnessClassification;
+  /** Telemetry-only classification for a retryable stale verdict identity. */
+  retrySignal?: 'stale-run-identity';
   /**
    * Route-signal facet for retry-classification (issue #646). 'named-route'
    * marks a fresh, parseable, non-passing verdict (a real reviewer decision
@@ -2426,6 +2428,13 @@ function staleVerdictRunIdentityResult(
     // A prior dispatch's report is not an adverse verdict from THIS dispatch.
     // Keep this typed so retry routing never has to infer freshness from text.
     routeClass: 'absent',
+    retrySignal: 'stale-run-identity',
+    verdictFreshness: {
+      artifact,
+      floorSource: 'run-identity',
+      outcome: 'stale_invalidated',
+      fresh: false,
+    },
     reason:
       `${artifact} was produced by run ${identity.foundRunId}, not the current run ` +
       `${identity.expectedRunId} — scoring 'no fresh verdict'; the prior run's findings are never reused`,
@@ -4645,7 +4654,7 @@ const RETRY_CLASSIFY_STEPS: ReadonlySet<StepName> = new Set<StepName>([
 ]);
 
 export type RetryDecision =
-  | { decision: 'rerun' }
+  | { decision: 'rerun'; signal?: 'stale-run-identity' }
   | { decision: 'route'; signal: 'named-route' | 'identical-repeat' | 'unretryable-inputs' };
 
 /**
@@ -4681,7 +4690,11 @@ export function classifyRetryDecision(input: {
   // D5: no verdict for this dispatch is a retryable absence, even when its
   // diagnostic happens to repeat byte-for-byte. This is a typed facet rather
   // than a reason-string exception, so stale findings cannot become a route.
-  if (completion.routeClass === 'absent') return { decision: 'rerun' };
+  if (completion.routeClass === 'absent') {
+    return completion.retrySignal === 'stale-run-identity'
+      ? { decision: 'rerun', signal: 'stale-run-identity' }
+      : { decision: 'rerun' };
+  }
 
   if (
     attempt >= 2 &&
