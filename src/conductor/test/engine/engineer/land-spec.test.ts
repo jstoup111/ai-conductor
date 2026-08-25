@@ -955,6 +955,60 @@ describe('Task 8: protected-target land gate blast radius', () => {
   });
 });
 
+describe('landSpec Done-when validation', () => {
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  it('rejects every malformed task before committing and retains the worktree', async () => {
+    const dir = await seedValidWorktree();
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), [
+      '# Implementation Plan: dep bump',
+      '',
+      '**Stories:** .docs/stories/dep-bump.md',
+      '',
+      '### Task missing: No completion criteria',
+      '',
+      '### Task too-few: One completion criterion',
+      '**Done when:**',
+      '- This is the only criterion.',
+      '',
+    ].join('\n'));
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      /landSpec:.*plan task missing has no Done when: block.*plan task too-few has an invalid Done when: block \(too-few\)/i,
+    );
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  it('lands a plan whose tasks have two well-formed Done-when criteria', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), [
+      '# Implementation Plan: dep bump',
+      '',
+      '**Stories:** .docs/stories/dep-bump.md',
+      '',
+      '### Task one: First valid task',
+      '**Done when:**',
+      '- The first observable result exists.',
+      '- The second observable result exists.',
+      '',
+      '### Task two: Second valid task',
+      '**Done when:**',
+      '- The first observable result exists.',
+      '- The second observable result exists.',
+      '',
+    ].join('\n'));
+
+    const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+});
+
 describe('Task 4: idea-scoped spec requirement on the product track (#488)', () => {
   it('Task 12: lands when an annotated Stories reference resolves to the selected artifact', async () => {
     const dir = await seedValidWorktree();
