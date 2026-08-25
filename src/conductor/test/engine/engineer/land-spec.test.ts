@@ -92,8 +92,11 @@ async function seedNamedTierMWorktree(
   idea: string,
   conflictStem: string,
   datePrefix = '',
+  options: { storiesStem?: string; planFileStem?: string } = {},
 ): Promise<string> {
   const slug = 'clean-rubric-judgements-rejected-as-invalid-provid';
+  const storiesStem = options.storiesStem ?? `${datePrefix}${slug}`;
+  const planFileStem = options.planFileStem ?? slug;
   const dir = await createEngineerWorktree(repoPath, idea).then((worktree) => worktree.worktreePath);
   await rm(join(dir, '.docs', 'coherence'), { recursive: true, force: true });
   await Promise.all([
@@ -107,12 +110,12 @@ async function seedNamedTierMWorktree(
   ]);
   await writeFile(join(dir, '.docs', 'specs', `${slug}.md`), `# PRD: ${idea}\n\nApproved.\n`);
   await writeFile(
-    join(dir, '.docs', 'stories', `${datePrefix}${slug}.md`),
+    join(dir, '.docs', 'stories', `${storiesStem}.md`),
     `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: validate\n### Acceptance Criteria\n- Given X, when Y, then Z.\n`,
   );
   await writeFile(
-    join(dir, '.docs', 'plans', `${slug}.md`),
-    `# Implementation Plan: ${idea}\n\n**Stories:** .docs/stories/${datePrefix}${slug}.md\n\n## Task Dependency Graph\n\`\`\`\n1 → 2\n\`\`\`\n`,
+    join(dir, '.docs', 'plans', `${planFileStem}.md`),
+    `# Implementation Plan: ${idea}\n\n**Stories:** .docs/stories/${storiesStem}.md\n\n## Task Dependency Graph\n\`\`\`\n1 → 2\n\`\`\`\n`,
   );
   await writeFile(join(dir, '.docs', 'complexity', `${slug}.md`), '# Complexity\n\nTier: M\n');
   await writeFile(join(dir, '.docs', 'conflicts', `${datePrefix}${conflictStem}.md`), '# Conflicts\n\nNone.\n');
@@ -896,6 +899,47 @@ describe('Task 2: feature-scoped artifact stems at land (#1743)', () => {
     const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
 
     expect(result.branch).toBeTruthy();
+  });
+});
+
+describe('Task 3: negative feature-scoped artifact stems at land (#1743)', () => {
+  const idea = 'clean rubric judgements rejected as invalid provid';
+  const slug = 'clean-rubric-judgements-rejected-as-invalid-provid';
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  it('rejects a plan whose filename stem differs from the feature under the plan-stem strategy', async () => {
+    const planPath = '.docs/plans/unrelated-plan.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '', { planFileStem: 'unrelated-plan' });
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      new RegExp(`${planPath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(plan-stem\\)`),
+    );
+  });
+
+  it('reports mismatched conflict and stories stems together instead of accepting their loose idea association', async () => {
+    const conflictPath = '.docs/conflicts/2026-08-19-truncated-conflict.md';
+    const storiesPath = '.docs/stories/truncated-stories.md';
+    const dir = await seedNamedTierMWorktree(idea, 'truncated-conflict', '2026-08-19-', {
+      storiesStem: 'truncated-stories',
+    });
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toMatch(/^landSpec:/);
+    expect(caught!.message).toMatch(
+      new RegExp(`${conflictPath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(normalized-stem\\)`),
+    );
+    expect(caught!.message).toMatch(
+      new RegExp(`${storiesPath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(normalized-stem\\)`),
+    );
   });
 });
 
