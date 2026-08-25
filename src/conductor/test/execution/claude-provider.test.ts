@@ -56,6 +56,31 @@ describe('ClaudeProvider', () => {
       expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
     });
 
+    it('selects the stream-json envelope for a non-REPL dispatch', async () => {
+      mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
+
+      await provider.invokeInteractive({ ...baseOptions, interactive: false });
+
+      const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(args).toEqual(expect.arrayContaining([
+        '--print',
+        '--output-format',
+        'stream-json',
+        '--verbose',
+      ]));
+    });
+
+    it('leaves a REPL dispatch without machine-envelope flags', async () => {
+      mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
+
+      await provider.invokeInteractive({ ...baseOptions, interactive: true });
+
+      const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(args).not.toContain('--output-format');
+      expect(args).not.toContain('stream-json');
+      expect(args).not.toContain('--verbose');
+    });
+
     it('reports spawn as a zero-argument observation', async () => {
       const onSpawn = vi.fn();
       mockExeca.mockResolvedValue({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false } as any);
@@ -394,7 +419,12 @@ describe('ClaudeProvider', () => {
       const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts).toMatchObject({ stdin: 'ignore' });
       expect(opts.input).toBeUndefined();
-      expect(args).not.toContain('--print');
+      expect(args).toEqual(expect.arrayContaining([
+        '--print',
+        '--output-format',
+        'stream-json',
+        '--verbose',
+      ]));
     });
 
     it('starts a fresh Claude session when handed resume: true', async () => {
@@ -1259,12 +1289,15 @@ describe('ClaudeProvider', () => {
         stdout: ['pipe', 'inherit'],
         stderr: ['pipe', 'inherit'],
       });
-      // Print mode is still selected — `-p` used to do that implicitly.
+      // The machine envelope selects print mode — `-p` used to do that implicitly.
       expect(args).toContain('--print');
       expect(args).not.toContain('-p');
       expect(args).not.toContain('Do the thing');
-      expect(args).not.toContain('--verbose');
-      expect(args).not.toContain('stream-json');
+      expect(args).toEqual(expect.arrayContaining([
+        '--output-format',
+        'stream-json',
+        '--verbose',
+      ]));
     });
 
     it('keeps a prompt larger than MAX_ARG_STRLEN out of argv entirely', async () => {

@@ -636,9 +636,6 @@ export class ClaudeProvider implements LLMProvider {
     // every large feature at build_review. `claude --print` reads the prompt
     // from stdin when no positional prompt is given, which has no length limit.
     const hasPrompt = typeof options.prompt === 'string' && options.prompt.length > 0;
-    if (hasPrompt) {
-      args.push('--print', '--output-format', 'stream-json', '--verbose');
-    }
 
     // Stream stdout/stderr to terminal while also capturing for analysis.
     // With a prompt, feed it on stdin (execa closes stdin after writing). With
@@ -708,12 +705,6 @@ export class ClaudeProvider implements LLMProvider {
     if (options.prompt && options.interactive) {
       // REPL mode — positional arg; session stays open until user /quits.
       args.push(options.prompt);
-    } else if (promptOnStdin) {
-      // `-p <prompt>` both selected print mode and carried the prompt. With the
-      // prompt on stdin, print mode must be selected explicitly or the CLI
-      // opens a REPL and never exits. Output stays plain text: this path's
-      // classifyCompletion() call passes jsonOutput=false.
-      args.push('--print');
     }
 
     // Capture while inheriting output so classification remains available only
@@ -847,6 +838,12 @@ export class ClaudeProvider implements LLMProvider {
 
     if (options.model) {
       args.push('--model', options.model);
+    }
+
+    // Every non-REPL dispatch uses Claude's machine-readable envelope. The
+    // REPL keeps its plain-text interactive terminal contract.
+    if (!options.interactive) {
+      args.push('--print', '--output-format', 'stream-json', '--verbose');
     }
 
     return args;
