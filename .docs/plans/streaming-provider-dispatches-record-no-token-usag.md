@@ -731,3 +731,11 @@ Search hints for an equivalent on current HEAD: the `InvokeOptions` interface in
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-fr79-1: src/conductor/test/execution/claude-provider.test.ts — add a non-REPL streaming dispatch test asserting ClaudeProvider.invoke spawns `options.selfHost.executable` (claude-provider.ts:555) and forwards `selfHost.args` (:778) and `selfHost.env` (:823) before the child home overrides provider state, and a sibling test asserting CodexProvider.invoke spawns `options.selfHost.executable` (codex-provider.ts:299); each test must fail if its adapter's `options.selfHost?.executable ?? <default>` is reverted to the bare default
+**Gate:** prd-audit
+**Rationale:** Plan Task 14 (`850d668ff`) landed as an empty commit, so no test asserts self-host executable resolution on a unified non-REPL dispatch; the behavior is present (`src/conductor/src/execution/claude-provider.ts:555,778,823` and `src/conductor/src/execution/codex-provider.ts:299` read `options.selfHost`), and Task 14's own file scope (claude-provider.ts, codex-provider.ts, claude-provider.test.ts) admits the missing regression guard, so this is owned build work rather than a plan gap. This task adds coverage only — it removes, replaces, or relaxes no existing code, test, or assertion. Matched-pair sweep: `selfHost?.executable` has exactly two adapter sites (claude-provider.ts:555, codex-provider.ts:299) and both are named in the task so the guard cannot cover one and miss the other; `src/conductor/test/engine/conductor.test.ts:10576` and `src/conductor/test/engine/self-host/live-containment.test.ts:92` were found and deliberately excluded because both stub the runner or the provider executor and so cannot pin the adapter-level resolution Task 14 owns.
+**Criterion:** S7.9
+**Parent task:** 14
+**Done when:**
+- S7.9 is satisfied by this task.
