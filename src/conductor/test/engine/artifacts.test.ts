@@ -4743,20 +4743,48 @@ Task 1 → Task 2
         await utimes(p, OLD_MTIME, OLD_MTIME);
       }
 
-      async function writeSidecar(d: string, codeStamp: string | undefined): Promise<void> {
+      async function writeSidecar(
+        d: string,
+        codeStamp: string | undefined,
+        runId?: string,
+      ): Promise<void> {
         if (codeStamp === undefined) return;
-        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp }, null, 2));
+        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp, runId }, null, 2));
       }
 
+      // Covers: task:9
       it('preserves a stale-mtime report with a codeStamp sidecar when the surface since the stamp is unchanged', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeReport(gdir);
-        await writeSidecar(gdir, baseline);
+        await writeSidecar(gdir, baseline, 'current-run');
 
-        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+        const result = await checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
         expect(result.done).toBe(true);
+      });
+
+      // Covers: task:9
+      it('never preserves or completes a report stamped for a prior run', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline, 'prior-run');
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: false });
+        expect(result.reason).toContain('.pipeline/prd-audit.md');
+        expect(result.reason).toContain('current-run');
+        expect(result.reason).toContain('prior-run');
+        expect(result.reason).not.toContain('FR-1');
       });
 
       it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
@@ -4806,20 +4834,47 @@ Task 1 → Task 2
         await utimes(p, OLD_MTIME, OLD_MTIME);
       }
 
-      async function writeSidecar(d: string, codeStamp: string | undefined): Promise<void> {
+      async function writeSidecar(
+        d: string,
+        codeStamp: string | undefined,
+        runId?: string,
+      ): Promise<void> {
         if (codeStamp === undefined) return;
-        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp }, null, 2));
+        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp, runId }, null, 2));
       }
 
+      // Covers: task:9
       it('preserves a stale-mtime report with a codeStamp sidecar when the surface since the stamp is unchanged', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeReport(gdir);
-        await writeSidecar(gdir, baseline);
+        await writeSidecar(gdir, baseline, 'current-run');
 
-        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
+        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
         expect(result.done).toBe(true);
+      });
+
+      // Covers: task:9
+      it('never completes an approval report stamped for a prior run', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline, 'prior-run');
+
+        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: false });
+        expect(result.reason).toContain('.pipeline/architecture-review-as-built.md');
+        expect(result.reason).toContain('current-run');
+        expect(result.reason).toContain('prior-run');
       });
 
       it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
@@ -4866,6 +4921,7 @@ Task 1 → Task 2
     describe('manual_test', () => {
       const RESULTS = '.pipeline/manual-test-results.md';
       const MARKER = '.pipeline/manual-test-fail-evidence.json';
+      const RUN_ID_SIDECAR = '.pipeline/manual-test-code-stamp.json';
       const PASS_FILE = '| Story | Result |\n|---|---|\n| Foo | PASS |\n';
 
       async function writeResults(d: string): Promise<void> {
@@ -4874,14 +4930,44 @@ Task 1 → Task 2
         await utimes(p, OLD_MTIME, OLD_MTIME);
       }
 
+      // Covers: task:9
       it('preserves a stale-mtime clean-PASS marker with a codeStamp when the surface since the stamp is unchanged', async () => {
         gdir = await makeGitDir();
         const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
         await writeResults(gdir);
-        await writeFile(join(gdir, MARKER), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await writeFile(
+          join(gdir, MARKER),
+          JSON.stringify({ codeStamp: baseline }, null, 2),
+        );
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'current-run' }, null, 2));
 
-        const result = await checkStepCompletion(gdir, 'manual_test', ctxFor(gdir));
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
         expect(result.done).toBe(true);
+      });
+
+      // Covers: task:9
+      it('never preserves a clean PASS stamped for a prior run', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeResults(gdir);
+        await writeFile(
+          join(gdir, MARKER),
+          JSON.stringify({ codeStamp: baseline }, null, 2),
+        );
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }, null, 2));
+
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: false });
+        expect(result.reason).toContain('.pipeline/manual-test-results.md');
+        expect(result.reason).toContain('current-run');
+        expect(result.reason).toContain('prior-run');
       });
 
       it('falls through to mtime rejection when the delta touches a runtime path since the stamp', async () => {
