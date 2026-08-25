@@ -65,6 +65,17 @@ happy path needs strong justification.
    the cache first, substituting the first live ladder model when the resolved model is
    already marked dead — so interactive/collaborative steps benefit from earlier
    detection even though their inherited-stdio contract prevents reactive detection.
+
+   > **Amended 2026-08-24 by #1857:** the two call sites named here become one. `invokeInteractive`
+   > is removed from the provider contract and the engine dispatches solely through `invoke`, so the
+   > pre-invoke consult has a single site rather than a matched pair to keep in step. **This
+   > decision's substance is unchanged and now holds by construction** — the cache is still consulted
+   > before dispatch, and substitution still fires there. The clause's closing reason also relaxes:
+   > streaming dispatches no longer inherit stdio, so the inherited-stdio contract that "prevents
+   > reactive detection" applies afterward only to the REPL. Whether reactive detection is extended
+   > to streaming steps is not decided here and is not in #1857's scope. The original clause is
+   > preserved above as written. See
+   > [`adr-2026-08-24-one-dispatch-member-on-the-provider-contract`](adr-2026-08-24-one-dispatch-member-on-the-provider-contract.md).
 5. **Loud downgrade log:** every substitution and every reactive downgrade emits a
    warning carrying configured model, actual model, and reason — visible in step output
    (hence daemon.log). Silent downgrades would hide that a gate ran on a weaker model
