@@ -10,6 +10,14 @@
 // since. Nothing calls `gateVerdictStillValid` yet — later tasks (5, 6, 7)
 // wire it into the completion predicates.
 
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { StepName } from '../types/index.js';
+import {
+  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+  MANUAL_TEST_CODE_STAMP,
+  PRD_AUDIT_CODE_STAMP,
+} from './artifacts.js';
 import type { GitRunner } from './rebase.js';
 import { originDefaultBranch, changedPathsBetween } from './rebase.js';
 import { featureTestPaths, GATE_SURFACE, partitionDelta } from './gate-invalidation.js';
@@ -24,6 +32,62 @@ export interface GateCodeValidityContext {
 }
 
 export type GateVerdictValidity = 'preserve' | 'rerun';
+
+/** The identity comparison result for a SHIP-tail verdict sidecar. */
+export type VerdictRunIdentity =
+  | { state: 'match'; runId: string }
+  | {
+      state: 'stale-run-identity';
+      expectedRunId: string;
+      foundRunId: string;
+    }
+  | { state: 'unstamped' };
+
+function verdictRunIdentitySidecar(gate: StepName): string | undefined {
+  switch (gate) {
+    case 'prd_audit':
+      return PRD_AUDIT_CODE_STAMP;
+    case 'architecture_review_as_built':
+      return ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP;
+    case 'manual_test':
+      return MANUAL_TEST_CODE_STAMP;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Answers whether a SHIP-tail gate's verdict was produced by `expectedRunId`.
+ *
+ * A valid engine stamp is authoritative: a matching stamp is current and a
+ * different stamp is a typed stale identity. Missing, malformed, or legacy
+ * sidecars deliberately remain `unstamped`, so callers retain their existing
+ * mtime fallback unchanged.
+ */
+export async function verdictProducedByRun(
+  dir: string,
+  gate: StepName,
+  expectedRunId: string | undefined,
+): Promise<VerdictRunIdentity> {
+  if (!expectedRunId) return { state: 'unstamped' };
+
+  const sidecar = verdictRunIdentitySidecar(gate);
+  if (!sidecar) return { state: 'unstamped' };
+
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(dir, sidecar), 'utf-8'));
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { state: 'unstamped' };
+    }
+    const runId = (parsed as { runId?: unknown }).runId;
+    if (typeof runId !== 'string' || runId.length === 0) return { state: 'unstamped' };
+    return runId === expectedRunId
+      ? { state: 'match', runId }
+      : { state: 'stale-run-identity', expectedRunId, foundRunId: runId };
+  } catch {
+    return { state: 'unstamped' };
+  }
+}
 
 /**
  * Derive the feature's own claimed runtime surface `F` for `partitionDelta`:

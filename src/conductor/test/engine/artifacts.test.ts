@@ -98,6 +98,7 @@ import type { StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { verdictProducedByRun } from '../../src/engine/gate-code-validity.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -4981,6 +4982,33 @@ Task 1 → Task 2
 
         expect(removed).toEqual([]);
         await expect(readFile(join(gdir, PATH), 'utf-8')).resolves.toBe(ALIGNED);
+      });
+
+      // Covers: task:5
+      it('sweeps an otherwise code-valid report when the shared reader finds a prior run identity', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeStaleReport(gdir);
+        await writeFile(
+          join(gdir, SIDECAR),
+          JSON.stringify({ codeStamp: baseline, runId: 'run-prior' }, null, 2),
+        );
+
+        await expect(verdictProducedByRun(gdir, 'prd_audit', 'run-current')).resolves.toEqual({
+          state: 'stale-run-identity',
+          expectedRunId: 'run-current',
+          foundRunId: 'run-prior',
+        });
+        const removed = await sweepStaleReviewArtifacts(
+          gdir,
+          'prd_audit',
+          Date.now(),
+          undefined,
+          undefined,
+          'run-current',
+        );
+
+        expect(removed).toEqual([join(gdir, PATH)]);
       });
 
       it('gate_code_validity.enabled: false restores pure mtime-freshness — deletes a stale report even when the codeStamp sidecar surface is unchanged (Task 8, #817)', async () => {

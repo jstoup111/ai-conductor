@@ -18,7 +18,7 @@ import {
 import { seedTaskStatus } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
-import { gateVerdictStillValid } from './gate-code-validity.js';
+import { gateVerdictStillValid, verdictProducedByRun } from './gate-code-validity.js';
 import {
   classifyOverScopeCriterion,
   overScopeRelations,
@@ -865,8 +865,12 @@ async function sweptArtifactStillValid(
   step: StepName,
   config?: HarnessConfig,
   artifactResolution?: ArtifactResolutionContext,
+  expectedRunId?: string,
 ): Promise<boolean> {
   if (!resolveGateCodeValidityConfig(config).enabled) return false;
+  if ((await verdictProducedByRun(dir, step, expectedRunId)).state === 'stale-run-identity') {
+    return false;
+  }
   const git = makeGitRunner(dir);
   const ctx = { projectRoot: dir, git };
 
@@ -955,12 +959,13 @@ export async function sweepStaleReviewArtifacts(
   sessionStartedAt: number | undefined,
   config?: HarnessConfig,
   artifactResolution?: ArtifactResolutionContext,
+  expectedRunId?: string,
 ): Promise<string[]> {
   if (!STALE_SWEEP_STEPS.has(step) || sessionStartedAt === undefined) return [];
   const removed: string[] = [];
   for (const f of await findArtifactFiles(dir, step)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
-    if (await sweptArtifactStillValid(dir, step, config, artifactResolution)) continue; // still code-valid → spare
+    if (await sweptArtifactStillValid(dir, step, config, artifactResolution, expectedRunId)) continue; // still code-valid → spare
     try {
       await rm(f);
       removed.push(f);
