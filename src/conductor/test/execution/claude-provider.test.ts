@@ -255,6 +255,26 @@ describe('ClaudeProvider', () => {
       });
     });
 
+    it('classifies only non-REPL dispatches from the machine envelope', async () => {
+      const envelope = JSON.stringify({
+        type: 'result',
+        result: 'Done!',
+        usage: { input_tokens: 12, output_tokens: 7 },
+      });
+      mockExeca.mockResolvedValue({
+        stdout: envelope,
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const nonRepl = await provider.invoke({ ...baseOptions, interactive: false });
+      const repl = await provider.invokeInteractive({ ...baseOptions, interactive: true });
+
+      expect(nonRepl.tokenUsage).toMatchObject({ input: 12, output: 7 });
+      expect(repl.tokenUsage).toBeUndefined();
+    });
+
     it('returns the unsuccessful subprocess interval without changing output or provider usage', async () => {
       const readings = [3_000, 3_055];
       const clock: IntervalClock = {

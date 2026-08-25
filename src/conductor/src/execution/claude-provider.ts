@@ -622,6 +622,7 @@ export class ClaudeProvider implements LLMProvider {
     // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
+    const hasMachineEnvelope = !options.interactive;
     const args = this.buildArgs(options);
 
     const promptOnStdin =
@@ -651,7 +652,7 @@ export class ClaudeProvider implements LLMProvider {
       }),
     );
 
-    return this.classifyCompletion(observed.value, true, observed.interval, options.prompt);
+    return this.classifyCompletion(observed.value, hasMachineEnvelope, observed.interval, options.prompt);
   }
 
   /**
