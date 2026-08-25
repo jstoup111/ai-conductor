@@ -502,6 +502,32 @@ describe('executeProviderCandidates', () => {
     });
   });
 
+  it('passes the candidate stream observer to the normal provider invocation', async () => {
+    const observer = { onProviderStream: vi.fn(), close: vi.fn() };
+    const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
+      success: true,
+      output: 'streaming build completed',
+      exitCode: 0,
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('session')),
+      options: {
+        prompt: 'build',
+        cwd: '/workspace',
+        providerStreamObserverForCandidate: () => observer,
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ streamConsumer: observer }));
+  });
+
   it('never resumes into a freshly provisioned self-host home, even after the session was created earlier in the step', async () => {
     // Each self-host dispatch provisions its own throwaway provider home and
     // tears it down afterwards, so no rollout/session state survives into the

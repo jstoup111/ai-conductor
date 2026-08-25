@@ -610,7 +610,11 @@ export async function executeProviderCandidates({
     const invoke = async (): Promise<InvokeResult> => {
       candidateObserver = candidateOptions.providerStreamObserverForCandidate?.(providerKey);
       const candidateInvocationOptions = candidateObserver
-        ? { ...candidateOptions, onProviderStream: candidateObserver.onProviderStream }
+        ? {
+            ...candidateOptions,
+            streamConsumer: candidateObserver,
+            onProviderStream: candidateObserver.onProviderStream,
+          }
         : candidateOptions;
       const candidate = {
         step,
