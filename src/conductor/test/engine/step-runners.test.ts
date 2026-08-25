@@ -996,7 +996,7 @@ describe('DefaultStepRunner', () => {
     });
   });
 
-  it('dispatches consecutive normal steps through their preferred provider with fresh provider sessions', async () => {
+  it('dispatches a streaming step through its adapter invoke entry with fresh provider sessions', async () => {
     const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
       output: 'codex built',
@@ -1008,6 +1008,11 @@ describe('DefaultStepRunner', () => {
       output: 'claude explored',
       exitCode: 0,
       tokenUsage: { input: 7, output: 3 },
+    }));
+    const claudeInteractive = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'legacy interactive path must not run',
+      exitCode: 0,
     }));
     const legacyInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
@@ -1032,7 +1037,7 @@ describe('DefaultStepRunner', () => {
         key: 'claude',
         provider: provider(
           claudeInvoke,
-          vi.fn().mockResolvedValue(undefined),
+          claudeInteractive,
         ),
         policy: CLAUDE_POLICY,
         builtIn: true,
@@ -1107,6 +1112,7 @@ describe('DefaultStepRunner', () => {
       },
       codexCalls: codexInvoke.mock.calls,
       claudeCalls: claudeInvoke.mock.calls,
+      claudeInteractiveCalls: claudeInteractive.mock.calls,
       beginStepCalls: beginStep.mock.calls,
       buildSession,
       exploreSession: sessions.current('claude'),
@@ -1140,6 +1146,7 @@ describe('DefaultStepRunner', () => {
           }),
         ],
       ],
+      claudeInteractiveCalls: [],
       buildSession: undefined,
       exploreSession: undefined,
       build: {
