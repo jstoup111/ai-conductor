@@ -730,9 +730,10 @@ export function createProgram(): Command {
   daemon
     .command('reclaim-worktree <slug>')
     .description('Remove exactly one named, quiescent retained feature worktree');
-  // Management verbs — route to the tmux Supervisor port (detectDaemonSupervisorCommand),
-  // dispatched in index.ts before the pipeline boots. Declared here ONLY so `--help`
-  // documents them; commander never actually dispatches them.
+  // Management verbs — including the pre-boot-dispatched pause/resume controls — route
+  // to the tmux Supervisor port (detectDaemonSupervisorCommand), dispatched in index.ts
+  // before the pipeline boots. Declared here ONLY so `--help` documents them;
+  // commander never actually dispatches them.
   daemon
     .command('start')
     .description('Start the tmux-supervised daemon for this repo; auto-attaches read-only unless -D')
@@ -744,6 +745,12 @@ export function createProgram(): Command {
   daemon
     .command('restart')
     .description('Restart this repo\'s tmux-supervised daemon');
+  daemon
+    .command('pause')
+    .description('Pause dispatch by writing the pause marker; running work finishes');
+  daemon
+    .command('resume')
+    .description('Resume dispatch by clearing the pause marker');
   daemon
     .command('connect')
     .description('Attach READ-ONLY to this repo\'s daemon tmux session (Ctrl-b d to detach)')
