@@ -45,6 +45,13 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    recorded as a widening; outside intent, not user-visible → recorded, ships; outside intent,
    user-visible → HALT. Operator-reseal rationale justification (formerly a Scope sub-rule) is judged
    here; seal detection stays mechanical at commit.
+
+   > **Amended 2026-08-24 by #1846:** The outside-intent, user-visible HALT now carries a fourth
+   > durable disposition: an operator **refusal**, recorded per criterion (with rationale,
+   > operator identity, and time) alongside accepted widenings. A refused criterion still blocks
+   > the gate; the subsequent halt names it as refused — rework required — instead of re-offering
+   > acceptance. A later acceptance overrides a refusal; a refusal is moot once the audit no
+   > longer flags the criterion. See adr-2026-08-24-over-scope-decision-block-and-durable-refusals.
 5. **Bounded kickback.** `FIXABLE` findings route to BUILD through the existing remediation append
    seam — the only plan appender — under engine-enforced caps: **one lap per feature**, at most
    **5** added tasks and at most **25% of the authored task count**, whichever is lower; all three

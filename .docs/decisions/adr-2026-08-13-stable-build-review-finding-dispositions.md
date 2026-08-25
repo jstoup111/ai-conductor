@@ -132,6 +132,14 @@ so maker, remediation, grader, and daemon-spawned agent subprocesses cannot pass
 threat boundary is unattended harness activity, not a malicious local account capable of creating a
 pseudo-terminal.
 
+> **Amended 2026-08-24 by #1846:** prd_audit OVER_SCOPE acceptance uses a second, deliberately
+> weaker operator channel: per-entry edits to the fenced decision block in the halt body,
+> harvested from `HALT.cleared`. Compensating controls: entries default `pending` (a machine
+> clear — rekick, rewind, reseal — records nothing), and only explicit accept/refuse entries
+> with a non-empty rationale and machine-resolved operator identity are recorded. The TTY-gated
+> CLI verb remains the standard for build_review dispositions.
+> See adr-2026-08-24-over-scope-decision-block-and-durable-refusals.
+
 Under the state lock, `accept` refuses missing rationale, feature mismatch, stale lap, unknown or
 already accepted finding, disabled/skipped rubric, and infrastructure failures. Every refusal leaves
 the disposition store unchanged. One action accepts exactly one finding; there is no rubric-wide,
