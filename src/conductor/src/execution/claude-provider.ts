@@ -579,13 +579,17 @@ export class ClaudeProvider implements LLMProvider {
             uncachedInputTokens += tokenTotals.uncachedInputTokens;
             cachedInputTokens += tokenTotals.cachedInputTokens;
             outputTokens += tokenTotals.outputTokens;
-            onProviderStream?.({
-              childObservability: childTracker.childObservability,
-              activeChildren: childTracker.activeChildren,
-              uncachedInputTokens,
-              cachedInputTokens,
-              outputTokens,
-            });
+            try {
+              onProviderStream?.({
+                childObservability: childTracker.childObservability,
+                activeChildren: childTracker.activeChildren,
+                uncachedInputTokens,
+                cachedInputTokens,
+                outputTokens,
+              });
+            } catch {
+              // Stream consumers are observational; dispatch keeps its authority.
+            }
           }
         } catch {
           // Stream callbacks are observational; dispatch keeps its authority.

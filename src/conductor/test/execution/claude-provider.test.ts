@@ -149,6 +149,61 @@ describe('ClaudeProvider', () => {
       }));
     });
 
+    it('contains a throwing stream consumer without aborting a successful non-REPL dispatch', async () => {
+      const stdout = new PassThrough();
+      let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+      let resolveStarted: () => void;
+      const started = new Promise<void>((resolve) => {
+        resolveStarted = resolve;
+      });
+      const kill = vi.fn();
+      const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+        resolveProcess = resolve;
+      }), { stdout, kill });
+      provider = new ClaudeProvider(undefined, () => {
+        resolveStarted!();
+        return process as any;
+      });
+      const onProviderStream = vi.fn(() => {
+        throw new Error('consumer failed');
+      });
+      const streamRecords = [
+        JSON.stringify({
+          type: 'assistant',
+          message: { usage: { input_tokens: 17, output_tokens: 7 } },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          message: { usage: { input_tokens: 23, output_tokens: 11 } },
+        }),
+      ];
+      const terminalRecord = JSON.stringify({
+        type: 'result',
+        result: 'Done!',
+        usage: { input_tokens: 23, output_tokens: 11 },
+      });
+
+      const invocation = provider.invoke({
+        ...baseOptions,
+        streamConsumer: { onProviderStream, close: vi.fn() },
+      });
+      await started;
+      stdout.write(`${streamRecords.join('\n')}\n`);
+      resolveProcess!({
+        stdout: `${streamRecords.join('\n')}\n${terminalRecord}`,
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await expect(invocation).resolves.toMatchObject({
+        success: true,
+        output: 'Done!',
+        tokenUsage: { input: 23, output: 11 },
+      });
+      expect(onProviderStream).toHaveBeenCalledTimes(2);
+      expect(kill).not.toHaveBeenCalled();
+    });
+
     it('keeps a non-REPL dispatch without a stream consumer buffered', async () => {
       const streamRecord = JSON.stringify({
         type: 'assistant',
