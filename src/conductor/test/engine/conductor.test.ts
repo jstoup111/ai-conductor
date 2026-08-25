@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readdir, utimes } from 'fs/promises';
+import { mkdtemp, rm, readdir, unlink, utimes } from 'fs/promises';
 import { basename, join } from 'path';
 import { tmpdir } from 'os';
 
@@ -2842,6 +2842,140 @@ describe('engine/conductor', () => {
       expect(halt).toContain('found mtime');
       expect(halt).not.toContain('FR-17');
       expect(halt).not.toContain('stale finding must not be surfaced');
+    });
+
+    // Covers: task:12
+    it('recovers from a cleared stale-verdict halt without deleting its prior-lap artifacts', async () => {
+      const seedResult = await readState(statePath);
+      const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        state[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        state[step.name] = 'done';
+      }
+      state.prd_audit = 'pending';
+      state.architecture_review_as_built = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'done';
+      await writeState(statePath, state as ConductState);
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      await writeFile(report, '| FR-17 | FIXABLE | prior-lap finding |');
+      await writeFile(sidecar, JSON.stringify({ runId: 'prior-lap' }));
+      await writeFile(join(dir, '.pipeline/HALT'), 'stale verdict halt');
+      await writeFile(join(dir, '.pipeline/HALT.class'), 'needs-human');
+
+      // Operator recovery clears only terminal halt markers. The stale report
+      // and sidecar remain until this dispatch replaces their verdict.
+      await unlink(join(dir, '.pipeline/HALT'));
+      await unlink(join(dir, '.pipeline/HALT.class'));
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          expect(step).toBe('prd_audit');
+          await expect(readFile(report, 'utf8')).resolves.toContain('prior-lap finding');
+          await expect(readFile(sidecar, 'utf8')).resolves.toContain('prior-lap');
+          await writeFile(
+            report,
+            [
+              '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '|---|---|---|---|---|',
+              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
+            ].join('\n'),
+          );
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'prd_audit',
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+      });
+
+      await conductor.run();
+
+      expect(runner.run).toHaveBeenCalledTimes(1);
+      const result = await readState(statePath);
+      expect(result.ok && result.value.prd_audit).toBe('done');
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).rejects.toThrow();
+      expect(JSON.parse(await readFile(sidecar, 'utf8'))).toMatchObject({
+        runId: expect.any(String),
+      });
+      expect(await readFile(report, 'utf8')).not.toContain('prior-lap finding');
+    });
+
+    // Covers: task:12
+    it('honors a fresh blocking verdict after the same clear-and-rerun recovery', async () => {
+      const seedResult = await readState(statePath);
+      const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        state[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        state[step.name] = 'done';
+      }
+      state.prd_audit = 'pending';
+      state.architecture_review_as_built = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'done';
+      await writeState(statePath, state as ConductState);
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      await writeFile(report, '| FR-17 | FIXABLE | prior-lap finding |');
+      await writeFile(sidecar, JSON.stringify({ runId: 'prior-lap' }));
+      await writeFile(join(dir, '.pipeline/HALT'), 'stale verdict halt');
+      await writeFile(join(dir, '.pipeline/HALT.class'), 'needs-human');
+      await unlink(join(dir, '.pipeline/HALT'));
+      await unlink(join(dir, '.pipeline/HALT.class'));
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          expect(step).toBe('prd_audit');
+          await expect(readFile(report, 'utf8')).resolves.toContain('prior-lap finding');
+          await expect(readFile(sidecar, 'utf8')).resolves.toContain('prior-lap');
+          await writeFile(
+            report,
+            [
+              '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '|---|---|---|---|---|',
+              '| S1.1 | PLAN_GAP | 12 | FR-1 | evidence.ts:1 |',
+            ].join('\n'),
+          );
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'prd_audit',
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        config: { prd_audit: { halt_on_any_plan_gap: true } } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect(runner.run).toHaveBeenCalledTimes(1);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(halt).toContain('S1.1');
+      expect(halt).toContain('PLAN_GAP');
+      expect(halt).not.toContain('prior-lap finding');
     });
 
     it('verdict_freshness event identifies stale invalidation and rewritten verdict outcomes', async () => {
