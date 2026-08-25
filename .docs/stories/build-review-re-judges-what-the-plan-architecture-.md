@@ -188,7 +188,7 @@ As an operator, I want extra shipped behavior judged against intent so that harm
 - Given an addition that sits inside the PRD's stated scope, when prd_audit grades it OVER_SCOPE but within intent, then it is recorded as an accepted widening and the gate does not fail
 - Given an addition outside intent that users cannot see, when graded, then it is noted in the verdict and the shipped record, and the feature ships
 - Given a feature with no PRD, when an OVER_SCOPE finding is judged, then intent is taken from the stories and the plan's stated outcome, and the report says so
-- Given an over-scope stop that the operator clears to accept the widening, when prd_audit runs again, then that widening is recorded as operator-accepted and is graded within intent, not raised again
+- Given an over-scope stop whose halt-body decision entry the operator edits to `accept` (with a rationale) before clearing, when prd_audit runs again, then that widening is recorded as operator-accepted and is graded within intent, not raised again — a clear without an explicit accept edit records nothing (#1846)
 - Given a BUILD commit carrying a `Scope:` trailer with a rationale, when prd_audit judges that widening, then the rationale is part of the evidence it weighs
 
 #### Negative Paths
