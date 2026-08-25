@@ -391,7 +391,13 @@ function renderRetries(events: ParsedEvent[]): string {
 
   const lines: string[] = ['## Retry Hotspots', ''];
 
-  if (retryCounts.size === 0) {
+  // A refusal is a first-attempt outcome: needs-human and validation-verdict
+  // refusals commonly carry zero retries. Seeding rows from retry counts alone
+  // dropped them from the report entirely, so a refused step read as absent.
+  const refusedWithoutRetries = [...refusedSteps].filter(
+    (step) => !retryCounts.has(step) && !completedSteps.has(step),
+  );
+  if (retryCounts.size === 0 && refusedWithoutRetries.length === 0) {
     lines.push('No retries recorded');
     return lines.join('\n');
   }
@@ -419,6 +425,9 @@ function renderRetries(events: ParsedEvent[]): string {
       failed,
       refused: refusedSteps.has(step) && !completedSteps.has(step),
     });
+  }
+  for (const step of refusedWithoutRetries) {
+    rows.push({ step, count: 0, topReason: '', failed: false, refused: true });
   }
   rows.sort((a, b) => b.count - a.count);
 

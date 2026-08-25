@@ -186,6 +186,51 @@ describe('computeTimingRollup', () => {
   });
 
 
+  it('closes a serial step execution on its refusal', async () => {
+    // adr-2026-08-12 D1: every started execution closes on the ledger. A serial
+    // refusal is that step's terminal, so it must not leave the execution open.
+    const directory = await writeFeatureEvents([
+      { type: 'step_started', step: 'acceptance_specs' },
+      {
+        type: 'step_refused',
+        step: 'acceptance_specs',
+        kind: 'needs-human',
+        reason: 'operator judgement required',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+    ]);
+
+    const rollup = await computeTimingRollup(directory);
+    expect(rollup.state).not.toBe('partial');
+  });
+
+  it('leaves a validation-group member refusal nonterminal until the group closes', async () => {
+    // The member never opened `step:<member>` — the group owns
+    // `parallel:<entry>` — so its refusal closes nothing and is not a terminal
+    // whose active interval went missing.
+    const directory = await writeFeatureEvents([
+      { type: 'parallel_started', step: 'manual_test', branches: ['manual_test', 'prd_audit'] },
+      {
+        type: 'step_refused',
+        step: 'architecture_review_as_built',
+        kind: 'validation-verdict',
+        reason: 'as-built review verdict is BLOCKED',
+      },
+      {
+        type: 'parallel_failure',
+        step: 'manual_test',
+        branch: 'architecture_review_as_built',
+        error: 'as-built review verdict is BLOCKED',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+    ]);
+
+    const rollup = await computeTimingRollup(directory);
+    expect(rollup.state).not.toBe('partial');
+  });
+
   it('does not close a stale start when the same execution key starts again', async () => {
     const directory = await writeFeatureEvents([
       { type: 'step_started', step: 'build' },
