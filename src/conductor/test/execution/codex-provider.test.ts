@@ -104,6 +104,51 @@ describe('CodexProvider', () => {
     );
   });
 
+  it('preserves an autonomous step envelope output and usage on the unified dispatch', async () => {
+    const autonomousProvider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      undefined,
+      undefined,
+      undefined,
+      () => ({
+        as_of: '2026-08-24T00:00:00.000Z',
+        source: 'test',
+        models: {
+          'gpt-5.6-terra': {
+            input_cost_per_token: 1,
+            cache_read_input_token_cost: 1,
+            output_cost_per_token: 1,
+          },
+        },
+      }),
+    );
+    mockExeca.mockResolvedValue({
+      stdout: jsonlMessage('Autonomous task completed.'),
+      stderr: '',
+      exitCode: 0,
+    } as any);
+
+    const result = await autonomousProvider.invoke({
+      ...baseOptions,
+      interactive: false,
+      model: 'gpt-5.6-terra',
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      output: 'Autonomous task completed.',
+      tokenUsage: {
+        input: 8,
+        cacheRead: 4,
+        output: 7,
+        numTurns: 1,
+        costUsd: 19,
+        costSource: 'rate-card',
+      },
+    });
+  });
+
   describe('usage-cap exhaustion vs transient throttle', () => {
     it.each([
       {

@@ -127,6 +127,33 @@ describe('ClaudeProvider', () => {
       expect(subprocessFactory).toHaveBeenCalledTimes(2);
     });
 
+    it('preserves an autonomous step envelope output and usage on the unified dispatch', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: JSON.stringify({
+          type: 'result',
+          result: 'Autonomous task completed.',
+          usage: { input_tokens: 12, output_tokens: 7 },
+          total_cost_usd: 0.0042,
+        }),
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, interactive: false });
+
+      expect(result).toMatchObject({
+        success: true,
+        output: 'Autonomous task completed.',
+        tokenUsage: {
+          input: 12,
+          output: 7,
+          costUsd: 0.0042,
+          costSource: 'provider',
+        },
+      });
+    });
+
     it('reports spawn as a zero-argument observation', async () => {
       const onSpawn = vi.fn();
       mockExeca.mockResolvedValue({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false } as any);
