@@ -378,7 +378,9 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   and accepted ADRs that constrain the stories.
 - **Outputs** — `.docs/coherence/<plan-stem>.md`. The stem must match the plan filename stem exactly or
   the land validator rejects it as a missing coherence artifact. Applicable `adr` rows trace each
-  accepted decision to the stories that implement or must honor it.
+  accepted decision to the stories that implement or must honor it. The sixth row class, `criterion`,
+  maps each exact extracted happy- or negative-path criterion to cited plan tasks in a six-cell row:
+  criterion text, task ids, verdict, a verbatim task-body quote, and `diff-local` or `outside-diff`.
 - **PRD ↔ stories tie-out** — the `fr` and `story` row classes are checked in both directions (SKILL.md
   §4e). Forward: no PRD `FR-N` without a citing story that a task covers. Reverse: no story citing an
   `FR-N` the PRD never declares, and no story citing no FR at all. Both directions are re-derived
@@ -388,9 +390,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `conflict-check`; this skill compares each story against the PRD.
 - **Gate role** — blocking. It authors the artifact the land-time coherence gate validates. Verdicts are
   exactly `covered`, `gap`, or `fail` — `fail` marks a row whose counterpart exists but contradicts it,
-  which coverage alone cannot express. Any other string is treated as affirmative by the validator and
-  silently passes, so the vocabulary is closed deliberately. In an autonomous run an ambiguous row is marked `gap` and left for the
-  fail-closed land gate — never silently passed. At tier S it does not run and must not author a stub.
+  which coverage alone cannot express. Criterion rows enforce that vocabulary mechanically; unknown
+  values are malformed. The five legacy row classes retain affirmative-by-default parsing for backward
+  compatibility. In an autonomous run an ambiguous row is marked `gap` and left for the fail-closed land
+  gate — never silently passed. At tier S it does not run and must not author a stub.
 
 ### intake
 
