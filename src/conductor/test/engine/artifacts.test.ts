@@ -83,6 +83,7 @@ import {
   readManualTestFailRows,
   stampCode,
   BUILD_REVIEW_VERDICT,
+  MANUAL_TEST_CODE_STAMP,
   removeBuildReviewVerdict,
   PR_BODY_REGEN_ATTEMPT_MARKER,
   uncommittedPathsOrNull,
@@ -91,6 +92,7 @@ import type {
   CompletionResult,
   CompletionContext,
   ArtifactResolutionContext,
+  GateCodeStampMarker,
 } from '../../src/engine/artifacts.js';
 import type { StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -111,6 +113,21 @@ describe('engine/artifacts', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  // Covers: task:1
+  describe('gate code-stamp marker contract', () => {
+    it('exports the manual-test sidecar path and accepts run-scoped markers', () => {
+      const marker: GateCodeStampMarker = {
+        codeStamp: 'abc123',
+        runId: 'run-123',
+      };
+      const legacyMarker: GateCodeStampMarker = {};
+
+      expect(MANUAL_TEST_CODE_STAMP).toBe('.pipeline/manual-test-code-stamp.json');
+      expect(marker).toEqual({ codeStamp: 'abc123', runId: 'run-123' });
+      expect(legacyMarker.runId).toBeUndefined();
+    });
   });
 
   async function createFile(relativePath: string, content = 'test') {

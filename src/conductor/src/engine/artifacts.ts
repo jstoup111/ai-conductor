@@ -2305,8 +2305,8 @@ export async function stampCode(ctx: CompletionContext): Promise<string | null> 
 }
 
 /**
- * Sidecar code-stamp marker shape for `prd_audit` and
- * `architecture_review_as_built` (gate-code-validity-on-redispatch, #817).
+ * Sidecar code-stamp marker shape for judged gates
+ * (gate-code-validity-on-redispatch, #817).
  * Unlike `build_review` (a JSON verdict) or `manual_test` (which already has
  * a `headSha`-bearing JSON marker), these two gates' verdicts live in
  * markdown reports — so `codeStamp` is recorded in a small adjacent JSON
@@ -2317,6 +2317,7 @@ export async function stampCode(ctx: CompletionContext): Promise<string | null> 
  */
 export interface GateCodeStampMarker {
   codeStamp?: string | null;
+  runId?: string;
 }
 
 /** Sidecar path for prd_audit's code stamp (see `GateCodeStampMarker`). */
@@ -2328,6 +2329,9 @@ export const PRD_AUDIT_CODE_STAMP = '.pipeline/prd-audit-code-stamp.json';
  */
 export const ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP =
   '.pipeline/architecture-review-as-built-code-stamp.json';
+
+/** Sidecar path for manual_test's code stamp (see `GateCodeStampMarker`). */
+export const MANUAL_TEST_CODE_STAMP = '.pipeline/manual-test-code-stamp.json';
 
 /**
  * Writes `{ codeStamp }` to a `GateCodeStampMarker` sidecar at true-completion
