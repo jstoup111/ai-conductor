@@ -48,6 +48,13 @@ vi.mock('../../src/engine/provider-runtime.js', () => ({
   validateSpawnPermit: mockValidateSpawnPermit,
 }));
 
+const { mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
+  mockEnforceFreshSessionOptions: vi.fn(),
+}));
+vi.mock('../../src/execution/fresh-session.js', () => ({
+  enforceFreshSessionOptions: mockEnforceFreshSessionOptions,
+}));
+
 const baseOptions: InvokeOptions = {
   prompt: 'Make the no-op change',
   systemPrompt: 'You are the conductor.',
@@ -85,6 +92,11 @@ describe('CodexProvider', () => {
     vi.resetAllMocks();
     mockValidateSpawnPermit.mockImplementation((permit, purpose) =>
       permit?.(purpose) ?? { permitted: true });
+    mockEnforceFreshSessionOptions.mockImplementation((options, provider) => ({
+      ...options,
+      sessionId: '00000000-0000-4000-8000-000000000002',
+      resume: false,
+    }));
     provider = new CodexProvider(
       vi.fn(async (_command, _args, options) =>
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
@@ -752,6 +764,24 @@ describe('CodexProvider', () => {
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(args.at(-1)).toBe('-');
     expect(options.cwd).toBe('/workspace/project');
+  });
+
+  it.each([
+    ['non-REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: false })],
+    ['REPL', (options: InvokeOptions) => provider.invokeInteractive({ ...options, interactive: true })],
+  ])('forces a fresh, non-resumed Codex session exactly once for a %s dispatch', async (_mode, dispatch) => {
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Fresh.'), exitCode: 0 } as any);
+
+    await dispatch({ ...baseOptions, resume: true });
+
+    expect(mockEnforceFreshSessionOptions).toHaveBeenCalledTimes(1);
+    expect(mockEnforceFreshSessionOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'thread-123', resume: true }),
+      'codex',
+    );
+    const [, args] = mockExeca.mock.calls[0];
+    expect(args).not.toContain('thread-123');
+    expect(args).not.toContain('resume');
   });
 
   it('enforces the same policy for automatic streaming while keeping API keys in the Codex client environment', async () => {

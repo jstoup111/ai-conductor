@@ -18,6 +18,13 @@ vi.mock('../../src/engine/provider-runtime.js', () => ({
   validateSpawnPermit: mockValidateSpawnPermit,
 }));
 
+const { mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
+  mockEnforceFreshSessionOptions: vi.fn(),
+}));
+vi.mock('../../src/execution/fresh-session.js', () => ({
+  enforceFreshSessionOptions: mockEnforceFreshSessionOptions,
+}));
+
 import { execa, type Options as ExecaOptions, type Result as ExecaResult } from 'execa';
 
 /**
@@ -43,6 +50,11 @@ describe('ClaudeProvider', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockEnforceFreshSessionOptions.mockImplementation((options, provider) => ({
+      ...options,
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      resume: false,
+    }));
     provider = new ClaudeProvider();
   });
 
@@ -80,6 +92,25 @@ describe('ClaudeProvider', () => {
       expect(args).not.toContain('--output-format');
       expect(args).not.toContain('stream-json');
       expect(args).not.toContain('--verbose');
+    });
+
+    it.each([
+      ['non-REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: false })],
+      ['REPL', (options: InvokeOptions) => provider.invokeInteractive({ ...options, interactive: true })],
+    ])('forces a fresh, non-resumed Claude session exactly once for a %s dispatch', async (_mode, dispatch) => {
+      mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
+
+      await dispatch({ ...baseOptions, resume: true });
+
+      expect(mockEnforceFreshSessionOptions).toHaveBeenCalledTimes(1);
+      expect(mockEnforceFreshSessionOptions).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'abc-123', resume: true }),
+        'claude',
+      );
+      const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(args).toEqual(expect.arrayContaining(['--session-id', '00000000-0000-4000-8000-000000000001']));
+      expect(args).not.toContain('abc-123');
+      expect(args).not.toContain('--resume');
     });
 
     it('delegates REPL dispatch through the shared invocation process seam', async () => {
