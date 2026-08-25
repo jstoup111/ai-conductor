@@ -2,8 +2,8 @@
 
 Technical track (no `fr` rows). Outcomes staged from jstoup111/ai-conductor#1838.
 
-| Row class | Cited id / criterion | Counterpart / cited task id(s) | Verdict | Notes / verbatim quote | Disposition |
-|---|---|---|---|---|---|
+| Row class | Cited id / criterion | Counterpart / cited task id(s) | Verdict | Notes / verbatim quote |
+|---|---|---|---|---|
 | outcome | outcome-1 | story-3, story-4 | covered | Readers judge run identity; stale never acted on |
 | outcome | outcome-2 | story-2, story-3 | covered | Staleness reasons name artifact + expected/found identity, never stale findings |
 | outcome | outcome-3 | story-2 | covered | Write handshake scores a non-writing audit failed |
