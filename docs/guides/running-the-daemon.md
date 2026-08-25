@@ -404,8 +404,7 @@ conduct-ts daemon resume
 ```
 
 `pause` prints `daemon paused`, or `already paused` when the marker exists. `resume` prints
-`daemon resumed`, or `not paused`. Both are implemented and dispatched, but neither appears in
-`conduct-ts daemon --help`.
+`daemon resumed`, or `not paused`. Both are listed in `conduct-ts daemon --help`.
 
 The marker is `.daemon/PAUSED`. Its existence is authoritative; its JSON body is informational only.
 Reads fail closed — an unreadable marker counts as paused.
