@@ -9209,7 +9209,7 @@ export class Conductor {
                         daemon: this.daemon,
                         reason: 'empty/missing plan',
                         emit: (evt) =>
-                          void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
+                          void this.events.emit(evt as ConductorEvent),
                       })
                     : { parked: false };
                   if (parkResult.parked) {

@@ -237,9 +237,9 @@ describe('integration/retry-classify (#646)', () => {
     ).not.toHaveProperty('signal', 'named-route');
   });
 
-  // ── Story 3: identical repeat on unchanged inputs routes on try 2 ───────
+  // ── Story 3: absent build-review verdict stays retryable ────────────────
 
-  it('Story 3: build_review byte-identical failure on unchanged inputs routes on try 2', async () => {
+  it('Story 3: an absent build_review verdict stays retryable even when its diagnostic repeats', async () => {
     await seedTailAt(statePath, 'build_review');
     // Broken grader: never writes .pipeline/build-review.json. Completion
     // reason is a static string, so it is byte-identical every attempt, and
@@ -263,11 +263,12 @@ describe('integration/retry-classify (#646)', () => {
     await conductor.run();
 
     const calls = (runner as unknown as { __calls: StepName[] }).__calls;
-    // Attempt 1 reruns, attempt 2 routes — never burns through to attempt 3.
-    expect(calls.filter((s) => s === 'build_review')).toHaveLength(2);
-    expect(stepRetries.filter((r) => r.step === 'build_review')).toHaveLength(1);
-    expect(retryDecisions).toContainEqual(
-      expect.objectContaining({ decision: 'route', signal: 'identical-repeat', attempt: 2 }),
+    // An absent verdict is a retryable dispatch failure, never an inferred
+    // remediation route: it consumes the ordinary retry budget.
+    expect(calls.filter((s) => s === 'build_review')).toHaveLength(5);
+    expect(stepRetries.filter((r) => r.step === 'build_review')).toHaveLength(4);
+    expect(retryDecisions).not.toContainEqual(
+      expect.objectContaining({ decision: 'route', signal: 'identical-repeat' }),
     );
   });
 
@@ -404,9 +405,9 @@ describe('integration/retry-classify (#646)', () => {
     }
   });
 
-  // ── Story 6: routed HALT names the unchanged input ──────────────────────
+  // ── Story 6: an absent verdict exhausts normally ────────────────────────
 
-  it('Story 6: an identical-repeat routed HALT names the unchanged input, not "retries exhausted"', async () => {
+  it('Story 6: an absent build_review verdict exhausts retries without claiming unchanged inputs', async () => {
     await seedTailAt(statePath, 'build_review');
     // Same broken-grader fixture as Story 3: routes via identical-repeat on
     // attempt 2. build_review's own kickback path requires a parsed FAIL
@@ -430,9 +431,9 @@ describe('integration/retry-classify (#646)', () => {
     await conductor.run();
 
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-    expect(halt).not.toMatch(/retries exhausted/);
-    expect(halt).toMatch(/unchanged/i);
-    expect(halt).toMatch(/build-review\.json/);
+    expect(halt).toMatch(/retries exhausted/);
+    expect(halt).not.toMatch(/unchanged/i);
+    expect(halt).toMatch(/build_review/);
   });
 
   // ── Story 7: prd_audit behaviour is preserved, not duplicated ───────────

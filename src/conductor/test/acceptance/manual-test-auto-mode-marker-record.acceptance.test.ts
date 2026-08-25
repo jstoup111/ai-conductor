@@ -408,7 +408,8 @@ describe('daemon auto-mode manual_test — SKIP clears the gate without a HALT (
           readFile(join(dir, '.pipeline/manual-test-results.md'), 'utf-8'),
         ).rejects.toThrow();
         const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-        expect(halt).toMatch(/step 'manual_test' failed/);
+        expect(halt).toMatch(/step 'manual_test' exhausted retries without a fresh verdict/);
+        expect(halt).toMatch(/\.pipeline\/manual-test-results\.md is missing/);
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
