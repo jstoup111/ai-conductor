@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-25T00:39:45.483Z
 Slug: coherence-rows-assert-story-task-coverage-that-not
 Class: needs-human
 Halting step: maintain-documentation
