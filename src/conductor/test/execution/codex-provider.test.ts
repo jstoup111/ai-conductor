@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { promisify } from 'node:util';
 import {
   CodexProvider,
@@ -184,6 +185,49 @@ describe('CodexProvider', () => {
 
   it('declares synchronous spawn-permit lifecycle capability', () => {
     expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
+  });
+
+  it('continues a non-REPL dispatch when its JSONL stream consumer throws after receiving token usage', async () => {
+    const stdout = new PassThrough();
+    let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+    let resolveStarted: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+      resolveProcess = resolve;
+    }), { stdout, kill: vi.fn() });
+    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()), 'codex', undefined, () => {
+      resolveStarted!();
+      return process as any;
+    });
+    const observations: unknown[] = [];
+
+    const invocation = provider.invoke({
+      ...baseOptions,
+      streamConsumer: {
+        onProviderStream: (observation) => {
+          observations.push(observation);
+          throw new Error('stream consumer failed');
+        },
+        close: vi.fn(),
+      },
+    });
+    await started;
+    const record = JSON.stringify({
+      type: 'turn.completed',
+      usage: { input_tokens: 17, cached_input_tokens: 5, output_tokens: 7 },
+    });
+    stdout.write(`${record}\n`);
+    resolveProcess!({ stdout: record, stderr: '', exitCode: 0 });
+
+    await expect(invocation).resolves.toMatchObject({ success: true, exitCode: 0 });
+    expect(observations).toEqual([expect.objectContaining({
+      childObservability: 'unsupported',
+      uncachedInputTokens: 12,
+      cachedInputTokens: 5,
+      outputTokens: 7,
+    })]);
   });
 
   it('checks a current permit before readiness and immediately before the injected subprocess factory', async () => {

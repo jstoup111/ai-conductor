@@ -293,7 +293,10 @@ export class CodexProvider implements LLMProvider {
         stderr: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
         cwd: options.cwd,
         env: this.invocationEnv(options, authentication),
-      }, options);
+      }, {
+        ...options,
+        onProviderStream: repl ? undefined : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
+      });
       return subprocess;
     });
 
