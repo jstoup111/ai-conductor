@@ -178,8 +178,8 @@ providers are routed per step (`llm_provider` top level plus per-step overrides;
 necessarily the repo default.
 
 - **`<provider>: done — <turns>, <duration>, <cost>`** followed by the agent's own prose is the
-  provider subprocess's captured result. Claude's `--print --output-format json` stdout and Codex's
-  `exec --json` stdout are machine envelopes; the daemon summarizes the telemetry and prints the
+  provider subprocess's captured result. Non-interactive Claude `--print --output-format stream-json`
+  stdout and Codex `exec --json` stdout are machine envelopes; the daemon summarizes the telemetry and prints the
   human-readable result text instead of teeing the raw single-line JSON blob. Output the daemon does
   not recognize as a machine envelope — prose, stderr, crash traces — is still logged verbatim, so
   no diagnostic detail is lost.
