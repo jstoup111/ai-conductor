@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-25T10:58:01.372Z
 Slug: over-scope-halt-accepts-one-criterion-per-clear-so
 Class: needs-human
 Halting step: unknown
