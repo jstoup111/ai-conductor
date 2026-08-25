@@ -2531,6 +2531,74 @@ describe('engine/conductor', () => {
       );
     });
 
+    // Covers: task:4
+    it('uses the engine dispatch identity rather than a provider runId echo', async () => {
+      const seedResult = await readState(statePath);
+      const seed = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        seed[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        seed[step.name] = 'done';
+      }
+      seed.prd_audit = 'pending';
+      seed.architecture_review_as_built = 'skipped';
+      seed.retro = 'skipped';
+      seed.rebase = 'skipped';
+      seed.finish = 'done';
+      await writeState(statePath, seed as ConductState);
+
+      let engineRunId: string | undefined;
+      let conductor: Conductor;
+      conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async () => {
+            const stateResult = await readState(statePath);
+            const state = stateResult.ok ? stateResult.value : ({} as ConductState);
+            engineRunId = await (conductor as unknown as {
+              completionCtx: (current: ConductState) => Promise<{ attemptRunId?: string }>;
+            }).completionCtx(state).then((ctx) => ctx.attemptRunId);
+            return { success: true, output: 'provider report { "runId": "bogus" }' };
+          },
+        },
+        events,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      const stamped = JSON.parse(await readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf8')) as {
+        runId?: string;
+      };
+      expect(engineRunId).toMatch(/\S/);
+      expect(stamped.runId).toBe(engineRunId);
+      expect(stamped.runId).not.toBe('bogus');
+    });
+
+    it('warns for the affected verdict branch when its run-id sidecar cannot be written', async () => {
+      await writeFile(join(dir, '.pipeline'), 'not a directory');
+      const logs: string[] = [];
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        log: (message) => logs.push(message),
+      });
+
+      await expect(
+        (conductor as unknown as {
+          stampVerdictRunIdentity: (step: StepName, runId: string | undefined) => Promise<void>;
+        }).stampVerdictRunIdentity('prd_audit', 'engine-attempt-id'),
+      ).resolves.toBeUndefined();
+
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain('prd_audit');
+      expect(logs[0]).toContain(PRD_AUDIT_CODE_STAMP);
+      await expect(readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf8')).rejects.toThrow();
+    });
+
     it('a review retry whose session does not rewrite the verdict does not pass the gate', async () => {
       await seedToBuildReview();
       // Stale verdict, written well before this run starts; the stub

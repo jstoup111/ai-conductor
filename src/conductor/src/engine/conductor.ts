@@ -167,6 +167,9 @@ import {
   buildReviewFailureDetails,
   validateBuildReviewVerdict,
   FINISH_CHOICE_MARKER,
+  PRD_AUDIT_CODE_STAMP,
+  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+  MANUAL_TEST_CODE_STAMP,
   type RemediationGap,
   type CompletionContext,
   removeBuildReviewVerdict,
@@ -2466,6 +2469,47 @@ export class Conductor {
         return retained ?? this.fullSuiteVerifier.inspect();
       },
     };
+  }
+
+  /**
+   * Stamps the engine-owned run identity and makes a best-effort failure
+   * observable at the engine seam. Provider output is never an identity
+   * source: the only value accepted here is the id minted for this dispatch.
+   */
+  private async stampVerdictRunIdentity(
+    step: StepName,
+    runId: string | undefined,
+  ): Promise<void> {
+    const sidecarPath: Partial<Record<StepName, string>> = {
+      manual_test: MANUAL_TEST_CODE_STAMP,
+      prd_audit: PRD_AUDIT_CODE_STAMP,
+      architecture_review_as_built: ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+    };
+    const path = sidecarPath[step];
+    if (!path || !runId) return;
+
+    await stampGateRunIdentity(this.projectRoot, step, runId);
+
+    try {
+      const marker: unknown = JSON.parse(
+        await readFile(join(this.projectRoot, path), 'utf8'),
+      );
+      if (
+        marker !== null &&
+        typeof marker === 'object' &&
+        !Array.isArray(marker) &&
+        (marker as { runId?: unknown }).runId === runId
+      ) {
+        return;
+      }
+    } catch {
+      // The writer is deliberately best-effort. The warning below makes a
+      // missing/corrupt sidecar visible without turning it into a dispatch failure.
+    }
+
+    (this.log ?? console.warn)(
+      `warning: ${step} verdict run-id sidecar ${path} could not be stamped for this dispatch; treating the verdict as unstamped.`,
+    );
   }
 
   /**
@@ -6142,8 +6186,7 @@ export class Conductor {
                       {
                         onMemberEvent: async (event) => {
                           if (event.phase === 'result') {
-                            await stampGateRunIdentity(
-                              this.projectRoot,
+                            await this.stampVerdictRunIdentity(
                               event.member as StepName,
                               branchRunIds.get(event.member),
                             );
@@ -6183,8 +6226,7 @@ export class Conductor {
                       onMemberEvent: async (event) => {
                         if (event.phase === 'result') {
                           // This settles before runGroupBranch returns to the join.
-                          await stampGateRunIdentity(
-                            this.projectRoot,
+                          await this.stampVerdictRunIdentity(
                             event.member as StepName,
                             branchRunIds.get(event.member),
                           );
@@ -8182,7 +8224,7 @@ export class Conductor {
 
           // The engine owns verdict identity. Stamp it once the provider call
           // settles, before any terminal success, error, or halt routing.
-          await stampGateRunIdentity(this.projectRoot, step.name, this.currentRunId);
+          await this.stampVerdictRunIdentity(step.name, this.currentRunId);
 
           // A missing command is a deterministic environment failure. Retrying,
           // escalating model/effort, or walking providers cannot make a command
