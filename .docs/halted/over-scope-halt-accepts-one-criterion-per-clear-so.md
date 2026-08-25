@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-25T11:49:21.019Z
+Status: halted
 Slug: over-scope-halt-accepts-one-criterion-per-clear-so
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-over-scope-halt-accepts-one-criterion-per-clear-so
-Head SHA: eea13ff66ca4c71bf6a5bb457435e9eaf79f7d7c
-Halted at: 2026-08-25T11:36:00.439Z
+Head SHA: d4d8a1359aa2aa05498179edde07968f272428a0
+Halted at: 2026-08-25T12:55:59.605Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
