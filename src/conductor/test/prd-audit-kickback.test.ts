@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -9,6 +9,7 @@ import {
   remediationLapCapForGate,
   routePrdAuditPlanGaps,
   routePrdAuditOverScope,
+  recordedPrdAuditFindingsBlock,
   type StepRunner,
 } from '../src/engine/conductor.js';
 import {
@@ -303,6 +304,87 @@ describe('prd_audit kickback', () => {
     expect(report).toContain('## Recorded Findings');
     expect(report).toContain('"decision": "refuse"');
     expect(report).toContain('"rationale": "Rework it inside scope."');
+  });
+
+  it('refuses to render a recorded decision that carries no rationale, naming the reason', () => {
+    // ADR adr-2026-08-24 D8 / adr-2026-08-13 §6: a recorded decision that
+    // cannot be rendered blocks with a named reason rather than silently
+    // disappearing from the verdict artifact.
+    const renderable = recordedPrdAuditFindingsBlock([
+      { gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.1', summary: 'Visible.', decision: 'refuse', rationale: 'Rework.' },
+    ]);
+    expect(renderable.ok).toBe(true);
+    expect(renderable.ok && renderable.block).toContain('"decision": "refuse"');
+
+    const missingRationale = recordedPrdAuditFindingsBlock([
+      { gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.1', summary: 'Visible.', decision: 'accept', rationale: '   ' },
+    ]);
+    expect(missingRationale).toEqual({
+      ok: false,
+      reason: 'recorded decision accept on S3.1 carries no rationale',
+    });
+
+    const missingSummary = recordedPrdAuditFindingsBlock([
+      { gate: 'prd_audit', grade: 'PLAN_GAP', criterion: 'S4.2', summary: '' },
+    ]);
+    expect(missingSummary).toEqual({ ok: false, reason: 'recorded finding S4.2 carries no summary' });
+  });
+
+  it('routes an unprojectable recorded decision to a named blocking halt', async () => {
+    // D8 fail-closed: the decision is durable and valid, but it cannot be
+    // rendered into the verdict artifact. That blocks with a named reason
+    // instead of settling the gate as if nothing had been recorded.
+    const root = await mkdtemp(join(tmpdir(), 'over-scope-projection-refusal-'));
+    dirs.push(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const reportPath = join(root, '.pipeline', 'prd-audit.md');
+    const reportText = [
+      '# PRD Audit',
+      '',
+      '**PRD:** none',
+      '',
+      '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:1 |',
+      '',
+    ].join('\n');
+    await writeFile(reportPath, reportText);
+    await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+      version: 1,
+      decisions: [{
+        criterion: 'S3.1',
+        summary: 'Visible behavior outside the approved intent.',
+        decision: 'refuse',
+        rationale: 'Rework it inside scope.',
+        operator: 'operator@example.test',
+        decidedAt: '2026-08-24T00:00:00.000Z',
+      }],
+    }));
+    // The verdict artifact cannot be rewritten.
+    await chmod(reportPath, 0o444);
+
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline/conduct-state.json'),
+      stepRunner: { run: async () => ({ success: true }) },
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+
+    const route = await (conductor as unknown as {
+      routeCurrentPrdAudit: (state: unknown) => Promise<{ kind: string; reason?: string }>;
+    }).routeCurrentPrdAudit({ feature_desc: 'over-scope projection refusal' });
+
+    expect(route.kind).toBe('projection-halt');
+    expect(route.reason).toContain('recorded findings could not be written to');
+    expect(route.reason).toContain('prd-audit.md');
+
+    // Fail closed: the artifact is left exactly as the judge wrote it.
+    await expect(readFile(reportPath, 'utf8')).resolves.toBe(reportText);
+    await chmod(reportPath, 0o644);
   });
 
   it('renders all undecided criteria and parses valid decision siblings while naming defects', () => {
