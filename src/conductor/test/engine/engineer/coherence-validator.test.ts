@@ -35,6 +35,7 @@ import {
   type ValidateCoherenceInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
 import { evaluateCoherenceWaiver } from '../../../src/engine/engineer/coherence-waiver.js';
+import { extractAuthoritativeStoryCriteria } from '../../../src/engine/artifacts.js';
 import { AuthoringGuard } from '../../../src/engine/engineer/authoring-guard.js';
 import type { GitRunner, GitResult } from '../../../src/engine/rebase.js';
 import type { RunOverlapScanArgs } from '../../../src/engine/overlap-scan.js';
@@ -1773,6 +1774,76 @@ Reject the broken widget before shipping.
       `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
     ]);
     expect(checkCriterionCoverage(valid, stories, plan)).toEqual({ ok: true });
+  });
+
+  // Plan Task 10 — the gate and acceptance_specs share one extractor. The
+  // gate's enumeration for an empty artifact is deep-equal, in order and in
+  // identity form, to `extractAuthoritativeStoryCriteria` over the same
+  // stories text — the exact function `groundDispositionOnlyEvidence` calls.
+  // Pointing either call site at a different extractor breaks the equality.
+  it('enumerates the identical criterion set as the acceptance_specs extractor (plan Task 10)', () => {
+    const authoritative = extractAuthoritativeStoryCriteria(stories);
+    expect(authoritative).toEqual([criterion, negativeCriterion]);
+    const result = checkCriterionCoverage([], stories, plan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.criterion)).toEqual(authoritative);
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(
+      authoritative.map((_, index) => `criterion:omitted:${index + 1}`),
+    );
+  });
+
+  // Plan Task 15 — the #1799 exemplar: a row claiming its cited task carries
+  // three acceptance variants while the task's committed text assigns two.
+  // The quote is the claim, and the claim's text is absent from the task.
+  it('rejects the #1799 exemplar — a claimed third acceptance variant the task does not carry', () => {
+    const exemplarStories = `# Stories
+
+## Story 2: Acceptance variants
+
+### Happy Path
+- Given a spec, when it lands, then all three acceptance variants are covered
+`;
+    const exemplarPlan = `# Plan
+
+### Task 1: Cover the variants
+**Story:** Story 2
+**Type:** happy-path
+
+Cover the two acceptance variants: created and updated.
+`;
+    const exemplarCriterion =
+      'Story 2 happy: Given a spec, when it lands, then all three acceptance variants are covered';
+    const parsed = parseCoherenceArtifact(
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n` +
+        `| --- | --- | --- | --- | --- | --- |\n` +
+        `| criterion | ${exemplarCriterion} | task-1 | covered | "Cover the three acceptance variants: created, updated and deleted." | diff-local |\n`,
+    );
+    expect(parsed.ok).toBe(true);
+    const result = checkCriterionCoverage(parsed.ok ? parsed.rows : [], exemplarStories, exemplarPlan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-ungrounded:1']);
+    expect(result.gaps[0].detail).toContain(exemplarCriterion);
+    expect(result.gaps[0].detail).toContain('task-1');
+  });
+
+  // Plan Task 15 — the stale-quote case: the same rows pass against the plan
+  // text the quote was authored from, then fail after the task's wording is
+  // edited. Two runs over edited text prove the gate re-derives task bodies
+  // instead of caching a prior verdict.
+  it('re-checks a previously valid quote after the cited task body is edited (plan Task 15)', () => {
+    const valid = completeRows();
+    expect(checkCriterionCoverage(valid, stories, plan)).toEqual({ ok: true });
+    const editedPlan = plan.replace(
+      'Ship the widget with\narrival tracking.',
+      'Dispatch the widget with delivery confirmation.',
+    );
+    const rerun = checkCriterionCoverage(valid, stories, editedPlan);
+    expect(rerun.ok).toBe(false);
+    if (rerun.ok) return;
+    expect(rerun.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-ungrounded:1']);
+    expect(rerun.gaps[0].detail).toContain(criterion);
   });
 
   it('reports omitted, invented, and duplicate criteria with stable waivable ids', () => {

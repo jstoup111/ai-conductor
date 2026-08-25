@@ -927,6 +927,47 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toBe(legacyMessage);
     });
+
+    // Plan Task 23 — an invented disposition record keeps its own message,
+    // distinct from the omitted-criterion message, and never triggers the
+    // DECIDE-check hint in either the legacy or the criterion-row branch.
+    const invented = 'Story 1 happy: Given a phantom, when it ships, then nothing happens';
+
+    async function writeInventedOnlyFixture(withCriterionRow: boolean) {
+      await writeDispositionFixture(withCriterionRow);
+      await createFile(
+        '.pipeline/acceptance-specs-red.json',
+        JSON.stringify({
+          outcome: 'disposition-only',
+          dispositions: [
+            { criterion, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' },
+            { criterion: omitted, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' },
+            { criterion: invented, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' },
+          ],
+        }),
+      );
+    }
+
+    it('keeps the invented-record message distinct from the omitted message in the legacy branch', async () => {
+      await writeInventedOnlyFixture(false);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(
+        `disposition-only records must be an exact one-to-one set of the authoritative story criteria — invented: ${invented}`,
+      );
+      expect(result.reason).not.toBe(legacyMessage);
+      expect(result.reason).not.toContain('omitted:');
+    });
+
+    it('adds no DECIDE-check hint to an invented-only refusal even on a criterion-row spec', async () => {
+      await writeInventedOnlyFixture(true);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(
+        `disposition-only records must be an exact one-to-one set of the authoritative story criteria — invented: ${invented}`,
+      );
+      expect(result.reason).not.toContain('DECIDE-time criterion coherence check');
+    });
   });
 
   describe('checkStepCompletion: finish predicate', () => {
