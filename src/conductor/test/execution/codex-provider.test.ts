@@ -199,6 +199,32 @@ describe('CodexProvider', () => {
     expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
   });
 
+  it('uses the self-host executable for a non-REPL streaming dispatch', async () => {
+    mockExeca.mockResolvedValue({
+      stdout: jsonlMessage('Self-host dispatch completed.'),
+      stderr: '',
+      exitCode: 0,
+      failed: false,
+    } as any);
+
+    await provider.invoke({
+      ...baseOptions,
+      interactive: false,
+      selfHost: {
+        executable: '/isolated/bin/codex',
+        env: { CODEX_HOME: '/isolated/codex-home' },
+        args: ['--config', 'project_doc_max_bytes=0'],
+        teardown: async () => {},
+      },
+    });
+
+    expect(mockExeca).toHaveBeenCalledWith(
+      '/isolated/bin/codex',
+      expect.arrayContaining(['--config', 'project_doc_max_bytes=0', 'exec', '--json']),
+      expect.anything(),
+    );
+  });
+
   it('keeps tokens from an unpriceable terminal envelope cost-unmetered', async () => {
     const emptyRateCard: RateCard = {
       as_of: '2026-08-25T00:00:00.000Z',

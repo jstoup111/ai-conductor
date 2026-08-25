@@ -132,6 +132,42 @@ describe('ClaudeProvider', () => {
       ]));
     });
 
+    it('uses the self-host executable, arguments, and environment for a non-REPL streaming dispatch', async () => {
+      mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
+
+      await provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        selfHost: {
+          executable: '/isolated/bin/claude',
+          args: ['--setting-sources', 'project'],
+          env: {
+            CLAUDE_CONFIG_DIR: '/isolated/claude-home',
+            SELF_HOST_CLAUDE_TEST: 'forwarded',
+          },
+          teardown: async () => {},
+        },
+      });
+
+      expect(mockExeca).toHaveBeenCalledWith(
+        '/isolated/bin/claude',
+        expect.arrayContaining([
+          '--setting-sources',
+          'project',
+          '--print',
+          '--output-format',
+          'stream-json',
+          '--verbose',
+        ]),
+        expect.objectContaining({
+          env: expect.objectContaining({
+            CLAUDE_CONFIG_DIR: '/isolated/claude-home',
+            SELF_HOST_CLAUDE_TEST: 'forwarded',
+          }),
+        }),
+      );
+    });
+
     it('leaves a REPL dispatch without machine-envelope flags', async () => {
       mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
 
