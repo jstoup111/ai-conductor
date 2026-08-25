@@ -33,6 +33,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - An OVER_SCOPE prd-audit finding the operator has accepted now satisfies the prd_audit gate instead of blocking it until the oscillation cap halts the run. ([implementation PR #1854](https://github.com/jstoup111/ai-conductor/pull/1854)).
 - Codex-routed steps that dispatch through the streaming path no longer fail with "Codex self-host isolation is unavailable"; the streaming runtime wrapper now preserves every provider capability, including self-host provisioning and readiness. ([implementation PR #1855](https://github.com/jstoup111/ai-conductor/pull/1855)).
 - FINISH no longer halts on an authored PR body that still carries the SHIP-entry draft note; floor classification is decided by body content rather than by the presence of engine boilerplate. ([implementation PR #1856](https://github.com/jstoup111/ai-conductor/pull/1856)).
+- Repository documentation maintenance now uses the supported Codex Terra model instead of falling back to Claude Sonnet. ([implementation PR #1860](https://github.com/jstoup111/ai-conductor/pull/1860)).
 
 ## Migration
 
