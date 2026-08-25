@@ -2055,6 +2055,27 @@ describe('CodexProvider', () => {
     });
   });
 
+  it('delegates both interactive modes through invoke and classifies automatic JSON output as an envelope', async () => {
+    const dispatch = vi.spyOn(provider, 'invoke');
+    mockExeca.mockResolvedValueOnce({ stdout: jsonlMessage('automatic completion'), stderr: '', exitCode: 0 } as any);
+    mockExeca.mockResolvedValueOnce({ stdout: 'operator completion', stderr: '', exitCode: 0 } as any);
+
+    const automatic = await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    const repl = await provider.invokeInteractive({ ...baseOptions, interactive: true });
+
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(automatic.tokenUsage).toMatchObject({ input: 8, output: 7 });
+    expect(repl.tokenUsage).toBeUndefined();
+    expect(mockExeca.mock.calls.map(([, args, options]) => ({
+      json: args.includes('--json'),
+      stdout: options.stdout,
+      stderr: options.stderr,
+    }))).toEqual([
+      { json: true, stdout: 'pipe', stderr: 'pipe' },
+      { json: false, stdout: ['pipe', 'inherit'], stderr: ['pipe', 'inherit'] },
+    ]);
+  });
+
   it('streams interactive output and returns classified completion', async () => {
     const missingOutput =
       "LLM provider 'codex' not found. Install it or check your PATH.";

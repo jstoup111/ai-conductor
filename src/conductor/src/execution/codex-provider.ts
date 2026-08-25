@@ -270,22 +270,27 @@ export class CodexProvider implements LLMProvider {
     // session id, but the invariant is enforced uniformly at every adapter
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
-    const readiness = await this.readiness(options.spawnPermit);
-    this.logReadinessDiagnostic(readiness, options.diagnosticLog);
-    if (readiness.state === 'missing' || readiness.state === 'unusable') {
+    const repl = options.interactive === true;
+    const jsonOutput = !repl;
+    // A real interactive session leaves authorization to the operator. Auto
+    // streaming is explicitly marked noninteractive by the runner and must
+    // prove readiness for every dispatch.
+    const readiness = repl ? undefined : await this.readiness(options.spawnPermit);
+    if (readiness) this.logReadinessDiagnostic(readiness, options.diagnosticLog);
+    if (readiness?.state === 'missing' || readiness?.state === 'unusable') {
       return this.readinessFailure(readiness);
     }
 
     const authentication = this.authentication;
-    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, true)];
-    const prompt = this.composePrompt(options);
+    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, !repl)];
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
       const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, args, {
         reject: false,
-        input: prompt,
-        stdout: 'pipe',
-        stderr: 'pipe',
+        input: this.composePrompt(options),
+        stdin: 'pipe',
+        stdout: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
+        stderr: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
         cwd: options.cwd,
         env: this.invocationEnv(options, authentication),
       }, options);
@@ -294,7 +299,7 @@ export class CodexProvider implements LLMProvider {
 
     this.logDiagnostics(result, options.diagnosticLog);
 
-    const completion = this.classifyCompletion(result, true, authentication, true, readiness, {
+    const completion = this.classifyCompletion(result, jsonOutput, authentication, !repl, readiness, {
       model: options.model,
       cwd: options.cwd,
     });
@@ -386,42 +391,7 @@ export class CodexProvider implements LLMProvider {
    * usable for conductor's collaborative calls by streaming that one-shot run.
    */
   async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
-    // Boundary enforcement: fresh session per invocation (see invoke()).
-    options = enforceFreshSessionOptions(options, 'codex');
-    // A real interactive session leaves authorization to the operator. Auto
-    // streaming still uses this method, but is explicitly marked noninteractive
-    // by the runner and must prove readiness for every dispatch.
-    const readiness = options.interactive
-      ? undefined
-      : await this.readiness(options.spawnPermit);
-    if (readiness) this.logReadinessDiagnostic(readiness, options.diagnosticLog);
-    if (readiness?.state === 'missing' || readiness?.state === 'unusable') {
-      return this.readinessFailure(readiness);
-    }
-
-    const authentication = this.authentication;
-    const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, [...this.selfHostArgs(options), ...this.buildArgs(options, !options.interactive)], {
-        reject: false,
-        input: this.composePrompt(options),
-        stdin: 'pipe',
-        stdout: options.diagnosticLog ? 'pipe' : options.interactive ? ['pipe', 'inherit'] : 'pipe',
-        stderr: options.diagnosticLog ? 'pipe' : options.interactive ? ['pipe', 'inherit'] : 'pipe',
-        cwd: options.cwd,
-        env: this.invocationEnv(options, authentication),
-      }, options);
-      return subprocess;
-    });
-
-    this.logDiagnostics(result, options.diagnosticLog);
-
-    return {
-      ...this.classifyCompletion(result, false, authentication, !options.interactive, readiness, {
-        model: options.model,
-        cwd: options.cwd,
-      }),
-      observedIntervals: [interval],
-    };
+    return this.invoke(options);
   }
 
   private logDiagnostics(
