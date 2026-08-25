@@ -109,10 +109,13 @@ describe('fresh-session enforcement (codex adapter)', () => {
     const subprocessFactory = vi.fn((_file: string, args: readonly string[]) => {
       argv.push([...args]);
       return Promise.resolve({
-        stdout: JSON.stringify({
-          type: 'item.completed',
-          item: { type: 'agent_message', text: 'Done.' },
-        }),
+        stdout: [
+          JSON.stringify({
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'Done.' },
+          }),
+          JSON.stringify({ type: 'turn.completed' }),
+        ].join('\n'),
         stderr: '',
         exitCode: 0,
         failed: false,

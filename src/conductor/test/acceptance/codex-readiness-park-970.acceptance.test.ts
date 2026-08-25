@@ -70,6 +70,16 @@ function documentedDoctor(
   });
 }
 
+function codexCompleted(output = 'completed') {
+  return [
+    JSON.stringify({
+      type: 'item.completed',
+      item: { type: 'agent_message', text: output },
+    }),
+    JSON.stringify({ type: 'turn.completed' }),
+  ].join('\n');
+}
+
 function cachedLoginConductor(
   readiness: () => Promise<{ provider: 'codex'; source: 'cached-login'; state: 'ready' | 'unusable' }>,
   events: ConductorEventEmitter,
@@ -167,7 +177,7 @@ describe('acceptance: Codex readiness park #970', () => {
   it('proceeds through the public Codex invocation boundary when auth is ok but unrelated doctor health fails', async () => {
     mockExeca
       .mockResolvedValueOnce({ stdout: documentedDoctor('ok', 'fail'), stderr: '', exitCode: 1 } as never)
-      .mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as never);
+      .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as never);
 
     const result = await new CodexProvider().invoke(base);
 
@@ -182,7 +192,7 @@ describe('acceptance: Codex readiness park #970', () => {
   ] as const)('contrasts unavailable doctor evidence with %s auth evidence', async (_case, stdout, state) => {
     mockExeca
       .mockResolvedValueOnce({ stdout: '{not-json', stderr: '', exitCode: 0 } as never)
-      .mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as never);
+      .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as never);
     const degraded = await new CodexProvider().invoke(base);
     expect(degraded).toMatchObject({
       success: true,
@@ -192,7 +202,7 @@ describe('acceptance: Codex readiness park #970', () => {
 
     mockExeca.mockResolvedValueOnce({ stdout, stderr: 'raw doctor diagnostic', exitCode: 1 } as never);
     if (state === 'unverifiable') {
-      mockExeca.mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as never);
+      mockExeca.mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as never);
     }
 
     const result = await new CodexProvider().invoke(base);

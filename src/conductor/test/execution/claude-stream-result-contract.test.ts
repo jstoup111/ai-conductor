@@ -11,7 +11,10 @@ const fixturePath = fileURLToPath(
 
 describe('Claude stream terminal result contract', () => {
   it('derives output and complete token usage from the streamed terminal result', async () => {
-    const terminalResult = await readFile(fixturePath, 'utf8');
+    const terminalResult = JSON.stringify({
+      ...JSON.parse(await readFile(fixturePath, 'utf8')),
+      type: 'result',
+    });
     const stdout = new PassThrough();
     const process = Object.assign(Promise.resolve({ stdout: terminalResult, stderr: '', exitCode: 0 }), {
       stdout,
