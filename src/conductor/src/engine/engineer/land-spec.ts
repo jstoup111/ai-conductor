@@ -39,7 +39,14 @@ import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { slugify } from './authoring.js';
-import { adrApprovalStatus, isStoriesApproved, parseComplexityTier, parseTrack, planStem } from '../artifacts.js';
+import {
+  adrApprovalStatus,
+  isStoriesApproved,
+  parseComplexityTier,
+  parseTrack,
+  planStem,
+  validateFeatureArtifactStems,
+} from '../artifacts.js';
 import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
@@ -212,6 +219,7 @@ export async function landSpec(
   const specFile = await pickIdeaFile(specsDir, ideaFiles);
   const storiesFile = await pickIdeaFile(storiesDir, ideaFiles);
   const planFile = await pickIdeaFile(plansDir, ideaFiles);
+  const featureSlug = slugify(idea);
 
   if ((specRequired && !specFile) || !storiesFile || !planFile) {
     const missing: string[] = [];
@@ -306,8 +314,9 @@ export async function landSpec(
     ? parseComplexityTier(await readFile(complexityFile, 'utf-8'))
     : undefined;
 
+  let conflictsFile: string | null = null;
   if (tier && tier !== 'S') {
-    const conflictsFile = await pickIdeaFile(join(worktreePath, '.docs', 'conflicts'), ideaFiles);
+    conflictsFile = await pickIdeaFile(join(worktreePath, '.docs', 'conflicts'), ideaFiles);
     const architectureFile = await pickIdeaFile(join(worktreePath, '.docs', 'architecture'), ideaFiles);
     const reviewFile = await pickIdeaFile(decisionsDir, ideaFiles);
     const missing: string[] = [];
@@ -321,6 +330,23 @@ export async function landSpec(
           'Run /conflict-check, /architecture-diagram, and /architecture-review before landing.',
       );
     }
+  }
+
+  const artifactStemViolations = validateFeatureArtifactStems(
+    [
+      { step: 'prd', paths: specFile ? [relative(worktreePath, specFile)] : [] },
+      { step: 'stories', paths: [relative(worktreePath, storiesFile)] },
+      { step: 'plan', paths: [relative(worktreePath, planFile)] },
+      { step: 'conflict_check', paths: conflictsFile ? [relative(worktreePath, conflictsFile)] : [] },
+    ],
+    featureSlug,
+  );
+  if (artifactStemViolations.length > 0) {
+    const violations = artifactStemViolations
+      .map(({ path, expectedStem, strategy }) =>
+        `${path.replaceAll('\\', '/')}: expected stem "${expectedStem}" (${strategy})`)
+      .join('; ');
+    throw new Error(`landSpec: feature-scoped artifact stems do not match the feature: ${violations}`);
   }
 
   // 4e. ADR hard gate — no spec lands with an unapproved ADR (mirrors the
@@ -409,7 +435,7 @@ export async function landSpec(
   //    worktree's checked-out branch) — no `checkout -b`, no `checkout back`, and the
   //    primary working tree is never touched (FR-2). On failure we leave the worktree
   //    for inspection (FR-6) and never delete its branch.
-  const slug = slugify(idea);
+  const slug = featureSlug;
   const { stdout: headRef } = await execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd: worktreePath,
   });
