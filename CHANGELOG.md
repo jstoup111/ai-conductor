@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.105.0] - 2026-08-25
+## [1.0.0] - 2026-08-25
 
 ### Added
 
@@ -21,6 +21,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Changed
 
 - build_review no longer judges plan conformance, scope, or mechanism soundness — prd_audit now owns scope-as-intent grading with bounded remediation, and a new as-built architecture review owns design conformance, both running on every feature regardless of tier or track; build_review keeps only an opt-in test-quality rubric. ([implementation PR #1824](https://github.com/jstoup111/ai-conductor/pull/1824)).
+- Require Node.js 26 and update the conductor and recorder dependency stacks. ([implementation PR #1797](https://github.com/jstoup111/ai-conductor/pull/1797)).
+- Enforce plan-task coverage for every story acceptance criterion. ([implementation PR #1847](https://github.com/jstoup111/ai-conductor/pull/1847)).
 
 ### Fixed
 
@@ -61,6 +63,11 @@ branches never edit either file (see `docs/contributing/releases.md`).
 # `architecture_review_as_built` sections in docs/reference/configuration.md
 # for their keys and defaults.
 echo "No required action beyond a normal 'bin/conduct' update — review build_review.rubrics config afterward."
+```
+
+```bash migration
+asdf install nodejs 26.7.0
+ASDF_NODEJS_VERSION=26.7.0 "${HARNESS_DIR}/bin/install" --update
 ```
 
 ## [0.104.0] - 2026-08-22
