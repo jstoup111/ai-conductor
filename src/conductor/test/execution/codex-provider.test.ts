@@ -14,6 +14,7 @@ import type {
   AuthenticationReadiness,
   InvokeOptions,
 } from '../../src/execution/llm-provider.js';
+import type { RateCard } from '../../src/execution/rate-card.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { Options as ExecaOptions, Result as ExecaResult, ResultPromise } from 'execa';
 import {
@@ -179,6 +180,48 @@ describe('CodexProvider', () => {
         costSource: 'rate-card',
       },
     });
+    expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
+  });
+
+  it('keeps tokens from an unpriceable terminal envelope cost-unmetered', async () => {
+    const emptyRateCard: RateCard = {
+      as_of: '2026-08-25T00:00:00.000Z',
+      source: 'test',
+      models: {},
+    };
+    const unpriceable = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      undefined,
+      undefined,
+      undefined,
+      () => emptyRateCard,
+    );
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('completed'), stderr: '', exitCode: 0 } as any);
+
+    const result = await unpriceable.invoke({
+      ...baseOptions,
+      interactive: false,
+      model: 'not-in-the-rate-card',
+    });
+
+    expect(result.tokenUsage).toMatchObject({ input: 8, cacheRead: 4, output: 7 });
+    expect(result.tokenUsage?.costUsd).toBeUndefined();
+    expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
+  });
+
+  it('keeps a usage-absent terminal envelope unmetered', async () => {
+    mockExeca.mockResolvedValue({
+      stdout: JSON.stringify({ type: 'turn.completed' }),
+      stderr: '',
+      exitCode: 0,
+    } as any);
+
+    const result = await provider.invoke({ ...baseOptions, interactive: false });
+
+    expect(result).toMatchObject({ success: true, output: JSON.stringify({ type: 'turn.completed' }) });
+    expect(result.tokenUsage).toBeUndefined();
+    expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
   });
 
   describe('usage-cap exhaustion vs transient throttle', () => {
