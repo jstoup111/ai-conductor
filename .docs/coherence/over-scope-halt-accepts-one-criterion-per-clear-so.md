@@ -1,0 +1,67 @@
+# Coherence Mapping: over-scope-halt-accepts-one-criterion-per-clear-so
+
+Tier M, technical track (no PRD — fr rows omitted). Outcomes staged from jstoup111/ai-conductor#1846.
+
+| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
+|---|---|---|---|---|
+| outcome | outcome-1 | story-1 | covered | Halt presents every blocking finding in one decision block |
+| outcome | outcome-2 | story-2 | covered | One decided clear records every accepted finding and proceeds without re-halting on it |
+| outcome | outcome-3 | story-2, story-4 | covered | Accept some / refuse others in one pass; refused still blocks and the halt names the remainder |
+| outcome | outcome-4 | story-3, story-5 | covered | Acceptance never recorded for a non-blocking criterion (blocking-set validation + machine-clear inertness) |
+| outcome | outcome-5 | story-4, story-5 | covered | A decided clear makes progress or the re-halt names why (refused prose, defect naming); same halt never unchanged after a decided clear |
+| story | story-1 | task-4, task-8, task-9 | covered | Render + blocking-only selection + both emission sites |
+| story | story-2 | task-2, task-7 | covered | Recorder + harvest wiring |
+| story | story-3 | task-11 | covered | Machine-clear inertness regressions |
+| story | story-4 | task-3, task-8, task-10 | covered | Predicate + routing detail + completion gate |
+| story | story-5 | task-5 | covered | Parser defect classes; surfaced via task-7 events |
+| story | story-6 | task-1, task-12 | covered | Schema redefinition + legacy removal |
+| story | story-7 | task-6, task-12 | covered | Spine event + projection/cleanliness |
+| task | task-1 | story-6 | covered | Schema/reader |
+| task | task-2 | story-2 | covered | Recorder |
+| task | task-3 | story-4 | covered | Shared predicate |
+| task | task-4 | story-1 | covered | Renderer |
+| task | task-5 | story-5 | covered | Parser |
+| task | task-6 | story-7 | covered | Spine event |
+| task | task-7 | story-2 | covered | Harvest wiring |
+| task | task-8 | story-4 | covered | Routing |
+| task | task-9 | story-1 | covered | Emission sites |
+| task | task-10 | story-4 | covered | Completion predicate |
+| task | task-11 | story-3 | covered | Machine-clear inertness |
+| task | task-12 | story-6 | covered | Legacy removal + projection |
+| adr | adr-2026-08-24-over-scope-decision-block-and-durable-refusals | story-1, story-2, story-3, story-4, story-5, story-6, story-7 | covered | This feature implements every decision D1–D8 |
+| adr | adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback | story-4 | covered | Amended 2026-08-24: durable refusal is the fourth OVER_SCOPE disposition; story-4 implements it |
+| adr | adr-2026-08-13-stable-build-review-finding-dispositions | story-2, story-3 | covered | Amended 2026-08-24: weaker halt-body channel with pending-default and rationale+identity controls; stories 2/3 implement the controls |
+| criterion | Story 1 happy: Given a prd-audit verdict with three OVER_SCOPE findings whose intent relation is outside-visible and no prior decisions, when the conductor halts, then the halt body contains one fenced `over-scope-decisions` JSON array with exactly three entries, each `{criterion, summary, relation, decision: "pending"}` | task-4 | covered | 3 entries each `decision: "pending"` | diff-local |
+| criterion | Story 1 happy: Given the same verdict, when the halt body is rendered, then it also contains human prose naming the blocking criteria and the operator lever (edit each `decision` to `accept` or `refuse` with a `rationale`, then clear) | task-4 | covered | the operator lever sentence | diff-local |
+| criterion | Story 1 happy: Given the halt fires on the concurrent SHIP-join path instead of the serial tail, when the halt body is rendered, then it is byte-identical in structure to the serial-tail rendering (both sites call the shared helper) | task-9 | covered | one call to `renderOverScopeDecisionBlock(route.undecided, route.refused)` | diff-local |
+| criterion | Story 1 negative: Given a verdict with one outside-visible finding and one unaccepted outside-harmless finding, when the halt renders, then the decision block contains only the outside-visible criterion and the outside-harmless finding is never offered | task-8 | covered | route halts naming only the visible criterion | diff-local |
+| criterion | Story 1 negative: Given a verdict where every OVER_SCOPE finding is within intent or already decided, when routing runs, then no over-scope halt is written | task-8 | covered | all findings accepted/within → no halt | diff-local |
+| criterion | Story 1 negative: Given a verdict with an outside-visible finding that already has a recorded accept decision, when the halt set is computed, then that criterion is excluded and, if nothing else blocks, no halt occurs | task-8 | covered | accepted criterion excluded from the halt set | diff-local |
+| criterion | Story 2 happy: Given a cleared halt body whose decision block has two entries edited to `decision: "accept"` and one to `decision: "refuse"`, each with a non-empty rationale, when the conductor's next prd_audit lap harvests `HALT.cleared`, then two accept decisions and one refuse decision are recorded in `.pipeline/accepted-widenings.json`, each with criterion, summary, decision, rationale, machine-resolved operator identity, and timestamp | task-7 | covered | records 3 decisions with machine-resolved operator identity | diff-local |
+| criterion | Story 2 happy: Given both accepted criteria and no other blocking findings, when routing re-runs after the harvest, then the gate does not re-halt on either accepted criterion | task-8 | covered | no-halt-when-decided | diff-local |
+| criterion | Story 2 happy: Given a criterion with a recorded refuse decision, when a later cleared body carries `decision: "accept"` for it with a rationale, then the accept is recorded and the criterion no longer blocks | task-2 | covered | refuse→accept override | diff-local |
+| criterion | Story 2 negative: Given a cleared body whose entries are all still `decision: "pending"`, when the harvest runs, then nothing is recorded and the halt re-fires with the same blocking set | task-5 | covered | entries still `pending` parse to zero decisions | diff-local |
+| criterion | Story 2 negative: Given a recording write that fails (e.g. unwritable `.pipeline/`), when the harvest runs, then the failure never throws into the conductor's halt/clear seam and the defect is surfaced via a spine event | task-2 | covered | write failure (unwritable dir) resolves without throwing | diff-local |
+| criterion | Story 2 negative: Given the same cleared body harvested twice (duplicate wake), when the second harvest runs, then no duplicate decision entries are created (idempotent by criterion) | task-7 | covered | harvesting the same body again records nothing new | diff-local |
+| criterion | Story 3 happy: Given an over-scope halt whose decision block is untouched (all `pending`), when the daemon rekick path renames `HALT` to `HALT.cleared`, then the subsequent harvest records zero decisions and the halt re-fires with the same blocking set | task-11 | covered | rekick rename of an untouched (all-pending) halt body harvests zero decisions | diff-local |
+| criterion | Story 3 negative: Given an over-scope halt, when `conduct-ts rewind` clears the halt, then no accept or refuse decision is recorded for any criterion | task-11 | covered | a rewind-style halt removal (no `HALT.cleared` at all) records nothing | diff-local |
+| criterion | Story 3 negative: Given an over-scope halt, when reseal `--clear-halt` runs, then no decision is recorded and the next prd_audit lap re-halts on the still-blocking findings | task-11 | covered | reseal `--clear-halt`-shaped cleared body (pending entries) records nothing | diff-local |
+| criterion | Story 4 happy: Given a recorded refuse decision for criterion S5.2 and no other blocking findings, when the conductor re-halts, then the halt body names S5.2 as refused — rework required — and offers no decision entry for it | task-8 | covered | refused-detail wording | diff-local |
+| criterion | Story 4 happy: Given one refused criterion and one new undecided outside-visible finding, when the halt renders, then the refused criterion appears in the refused prose and only the new finding appears in the decision block | task-4 | covered | output names them as refused — rework required — and excludes them from the block | diff-local |
+| criterion | Story 4 happy: Given a refused criterion that the next prd-audit report no longer flags OVER_SCOPE, when routing runs, then the stale refusal has no effect and does not block | task-3 | covered | no longer flags OVER_SCOPE has no effect (moot) | diff-local |
+| criterion | Story 4 negative: Given a recorded refusal, when any routing or completion path runs, then no plan task is appended and no route to DECIDE is produced on account of the refusal | task-8 | covered | refusal never yields a route to plan/DECIDE (route kinds unchanged) | diff-local |
+| criterion | Story 4 negative: Given a refused criterion, when the identical report and refusal recur across laps over an unchanged tree, then the existing convergence bound still terminates the run rather than looping unboundedly | task-11 | covered | convergence bound still terminates repeated refusal laps over an unchanged tree | diff-local |
+| criterion | Story 5 happy: Given a block with one valid accept entry and one defective entry, when the harvest runs, then the valid decision is recorded, the defective one is refused by name, and the re-halt lists only the still-undecided/defective criteria | task-5 | covered | valid siblings still parse | diff-local |
+| criterion | Story 5 negative: Given a cleared body whose fenced block is not parseable JSON, when the harvest runs, then zero decisions are recorded, a spine event names the parse defect, and the re-halt body states the block was unreadable | task-5 | covered | malformed JSON → defect `malformed-block` | diff-local |
+| criterion | Story 5 negative: Given a cleared body containing an entry for a criterion the halted blocking set did not contain, when the harvest runs, then that entry is refused, nothing is recorded for it, and the defect event names the unknown criterion | task-5 | covered | defect `unknown-criterion` | diff-local |
+| criterion | Story 5 negative: Given an entry edited to `decision: "accept"` with an empty or missing rationale, when the harvest runs, then that entry is refused with a named defect while other valid entries in the same block are still recorded | task-5 | covered | defect `missing-rationale` | diff-local |
+| criterion | Story 5 negative: Given a cleared body with no fenced decision block at all (an unrelated halt), when the harvest runs, then it is a no-op with no defect event | task-5 | covered | body with no fence → `{kind: 'absent'}` no-op | diff-local |
+| criterion | Story 6 happy: Given the shipped codebase, when searched, then `OVER_SCOPE_ACCEPT:` rendering and its single-match reader no longer exist in production code | task-12 | covered | zero `OVER_SCOPE_ACCEPT` occurrences | diff-local |
+| criterion | Story 6 happy: Given an `.pipeline/accepted-widenings.json` in the old `entries` shape, when the tolerant reader loads it, then it reads as absent (no decisions) without throwing | task-1 | covered | old-shape `entries` store | diff-local |
+| criterion | Story 6 negative: Given a `HALT.cleared` body carrying only an old single-line `OVER_SCOPE_ACCEPT:` marker, when the harvest runs, then nothing is recorded and the feature re-halts in the new block format | task-12 | covered | old-form single-line cleared body harvests nothing | diff-local |
+| criterion | Story 6 negative: Given a decisions file with unparseable JSON, when read, then the reader returns absent without throwing and the conductor proceeds to re-halt normally | task-1 | covered | corrupt JSON | diff-local |
+| criterion | Story 7 happy: Given a harvest that records two accepts and one refusal, when it completes, then a decision-recorded event per decision (or one event carrying all three) is emitted through `ConductorEventEmitter` and persisted to `.pipeline/events.jsonl` | task-6 | covered | round-trips through the persister to events.jsonl | diff-local |
+| criterion | Story 7 happy: Given recorded decisions, when the prd_audit verdict artifact is next written, then the decisions (criterion, decision, rationale) are projected into it in the recorded-findings shape | task-12 | covered | project into the prd_audit verdict artifact's Recorded Findings shape | diff-local |
+| criterion | Story 7 happy: Given an accepted widening, when `classifyPrdAuditGaps` computes cleanliness on the next lap, then the accepted criterion no longer counts as a fresh blocking finding | task-12 | covered | flips `classifyPrdAuditGaps` cleanliness on the next lap | diff-local |
+| criterion | Story 7 negative: Given the event sink registry, when the new event type is added without a sink declaration, then compilation fails (total `EVENT_SINKS` record) | task-6 | covered | total-record check | diff-local |
+| criterion | Story 7 negative: Given a recorded decision that cannot be rendered into the verdict artifact, when projection runs, then completion blocks with a named reason rather than the decision silently disappearing | task-12 | covered | unrenderable-decision path returns a blocking completion reason | diff-local |
