@@ -1419,7 +1419,7 @@ describe('DefaultStepRunner', () => {
     });
   });
 
-  it('cold-starts legacy interactive recovery with the failed step and reason', async () => {
+  it('cold-starts a free-form recovery REPL through invoke without a stream consumer', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'legacy-session', '/tmp/project');
     const failureReason = 'manual test returned a failing acceptance scenario';
@@ -1431,13 +1431,25 @@ describe('DefaultStepRunner', () => {
       ) => Promise<void>
     )('manual_test', { step: 'manual_test', reason: failureReason });
 
-    const options = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const options = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(provider.invokeInteractive).not.toHaveBeenCalled();
+    expect(options).not.toHaveProperty('streamConsumer');
     expect({
       prompt: options.prompt,
       resume: options.resume,
+      interactive: options.interactive,
+      dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+      model: options.model,
+      effort: options.effort,
+      cwd: options.cwd,
     }).toEqual({
       prompt: expect.stringMatching(new RegExp(`manual_test.*${failureReason}`, 's')),
       resume: false,
+      interactive: true,
+      dangerouslySkipPermissions: false,
+      model: 'sonnet',
+      effort: 'medium',
+      cwd: '/tmp/project',
     });
   });
 
@@ -1452,7 +1464,7 @@ describe('DefaultStepRunner', () => {
       ) => Promise<void>
     )('build', { step: 'build', reason: '  ' });
 
-    const options = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const options = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect({
       prompt: options.prompt,
       resume: options.resume,

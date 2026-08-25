@@ -1533,7 +1533,7 @@ export class DefaultStepRunner implements StepRunner {
       return;
     }
     const resolved = this.resolvedConfigFor(step);
-    await this.provider.invokeInteractive({
+    await this.provider.invoke({
       prompt,
       sessionId: this.sessionId,
       resume: false,
