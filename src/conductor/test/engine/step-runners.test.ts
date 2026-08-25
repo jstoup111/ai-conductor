@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { execa } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
-import type { ConductState, StepName } from '../../src/types/index.js';
+import type { ConductState, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
@@ -993,6 +993,57 @@ describe('DefaultStepRunner', () => {
         preferredProvider: 'codex',
         actualProvider: 'codex',
       }),
+    });
+  });
+
+  it.each([
+    {
+      provider: 'claude' as const,
+      tokenUsage: { input: 17, output: 5, cacheRead: 11, cacheCreation: 3 },
+    },
+    {
+      provider: 'codex' as const,
+      tokenUsage: { input: 13, output: 7, cacheRead: 9, cacheCreation: 2 },
+    },
+  ])('records $provider streaming-envelope usage in its provider_attempt event', async ({
+    provider,
+    tokenUsage,
+  }) => {
+    const emitted: ProviderAttemptEvent[] = [];
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      // Faithful provider fake: REPL output is plaintext and has no machine
+      // envelope, while the non-REPL stream carries the parsed token totals.
+      if (options.interactive !== false) {
+        return { success: true, output: 'repl output', exitCode: 0 };
+      }
+      return { success: true, output: 'machine envelope output', exitCode: 0, tokenUsage };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      mode: 'auto',
+      config: {
+        llm_provider: [provider],
+        steps: { explore: { llm_provider: provider } },
+      },
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(provider, invoke)]),
+      configuredProviders: [provider],
+      sessionStore: new ProviderSessionStore(),
+      providerAttempt: (step, attempt) => {
+        emitted.push({ type: 'provider_attempt', step, ...attempt });
+      },
+    });
+
+    const result = await runner.run('explore', emptyState);
+    const event = emitted.find((candidate) => candidate.provider === provider);
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ interactive: false }));
+    expect(result.tokenUsage).toEqual(tokenUsage);
+    expect(event).toMatchObject({
+      type: 'provider_attempt',
+      step: 'explore',
+      provider,
+      outcome: 'success',
+      invoked: true,
+      tokenUsage,
     });
   });
 
