@@ -3233,6 +3233,29 @@ TIER: M`,
       );
       warnSpy.mockRestore();
     });
+
+    it('does not dispatch a collaborative step when its dead model has no live fallback', async () => {
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        modelOverride: 'fable',
+        mode: 'auto',
+      });
+      const availability = (runner as unknown as {
+        modelAvailability: { markDead: (model: string) => void };
+      }).modelAvailability;
+      availability.markDead('fable');
+      availability.markDead('opus');
+      availability.markDead('sonnet');
+
+      const result = await runner.run('explore', emptyState);
+
+      expect(result.success).toBe(false);
+      expect(invoke).not.toHaveBeenCalled();
+    });
   });
 
   // ── build_review one-shot grader dispatch (jstoup111/ai-conductor#324, Task 11) ──

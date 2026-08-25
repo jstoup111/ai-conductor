@@ -896,6 +896,12 @@ export class DefaultStepRunner implements StepRunner {
     // known-dead is not handed to the unified dispatch entry —
     // effectiveModel() substitutes a live model and fires its warning.
     const { model: effectiveModel } = this.modelAvailability.effectiveModel(resolved.model);
+    if (effectiveModel === resolved.model && this.modelAvailability.dead.has(resolved.model)) {
+      return {
+        success: false,
+        output: `Model fallback ladder exhausted: no live model remains after ${resolved.model}.`,
+      };
+    }
     const streamConsumer = interactive
       ? undefined
       : this.createProviderStreamConsumer(step, this.providerKey);
