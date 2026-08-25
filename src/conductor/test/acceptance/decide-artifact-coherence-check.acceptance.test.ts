@@ -45,6 +45,7 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { landSpec } from '../../src/engine/engineer/land-spec.js';
+import { slugify } from '../../src/engine/engineer/authoring.js';
 import { createEngineerWorktree } from '../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 
@@ -201,12 +202,13 @@ interface SeedOverrides {
  * refusal must come from the (new) coherence rung.
  */
 async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promise<string> {
+  const stem = slugify(idea);
   const {
     prd = PRD,
     stories = STORIES,
     plan = PLAN,
     coherence = COHERENCE,
-    coherenceFilename = 'coherence-demo.md',
+    coherenceFilename = `${stem}.md`,
     tier = 'M',
     track = 'product',
     stageOutcomes = true,
@@ -231,11 +233,11 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
   await mkdir(join(dir, '.docs', 'complexity'), { recursive: true });
   await mkdir(join(dir, '.docs', 'track'), { recursive: true });
 
-  if (prd !== null) await w('specs/coherence-demo.md', prd);
-  await w('stories/coherence-demo.md', stories);
-  await w('plans/coherence-demo.md', plan);
-  await w('complexity/coherence-demo.md', `# Complexity\n\nTier: ${tier}\n`);
-  await w('track/coherence-demo.md', `# Track\n\nTrack: ${track}\n`);
+  if (prd !== null) await w(`specs/${stem}.md`, prd);
+  await w(`stories/${stem}.md`, stories);
+  await w(`plans/${stem}.md`, plan.replace('.docs/stories/coherence-demo.md', `.docs/stories/${stem}.md`));
+  await w(`complexity/${stem}.md`, `# Complexity\n\nTier: ${tier}\n`);
+  await w(`track/${stem}.md`, `# Track\n\nTrack: ${track}\n`);
 
   // Non-Small tiers require conflicts + architecture + decisions to satisfy the
   // EXISTING land completeness guard (land-spec.ts step 4d). Seed them so the
@@ -244,7 +246,7 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     await mkdir(join(dir, '.docs', 'conflicts'), { recursive: true });
     await mkdir(join(dir, '.docs', 'architecture'), { recursive: true });
     await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
-    await w('conflicts/coherence-demo.md', '# Conflicts\n\nClean.\n');
+    await w(`conflicts/${stem}.md`, '# Conflicts\n\nClean.\n');
     // Plain markdown, NO ```mermaid block, so the render gate resolves to
     // no-diagrams and never needs mmdc.
     await w('architecture/coherence-demo.md', '# Architecture\n\nComponents A and B.\n');
@@ -268,7 +270,7 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
 
   if (waiver !== null) {
     await mkdir(join(dir, '.docs', 'coherence-waivers'), { recursive: true });
-    await w('coherence-waivers/coherence-demo.md', waiver);
+    await w(`coherence-waivers/${stem}.md`, waiver);
   }
 
   if (stageOutcomes) {
