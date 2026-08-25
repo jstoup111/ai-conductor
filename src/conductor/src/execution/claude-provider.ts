@@ -468,6 +468,7 @@ export function parseJsonResult(
       }
       if (typeof parsed.total_cost_usd === 'number') {
         tokenUsage.costUsd = parsed.total_cost_usd;
+        tokenUsage.costSource = 'provider';
       }
       if (numTurns !== undefined) {
         tokenUsage.numTurns = numTurns;

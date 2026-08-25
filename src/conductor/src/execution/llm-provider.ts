@@ -13,6 +13,15 @@ export interface TokenUsage {
   cacheRead?: number;
   cacheCreation?: number;
   costUsd?: number;
+  /**
+   * Where `costUsd` came from. `'provider'` is a figure the provider itself
+   * reported (Claude Code's `total_cost_usd`); `'rate-card'` is a harness
+   * estimate computed at dispatch time from the committed per-model rate card
+   * (`.ai-conductor/rate-card.json`) for a provider that reports tokens but no
+   * money. Absent when `costUsd` is absent. Additive and optional: a consumer
+   * that does not read it behaves exactly as before.
+   */
+  costSource?: 'provider' | 'rate-card';
   numTurns?: number;
   durationMs?: number;
 }

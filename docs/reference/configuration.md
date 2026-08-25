@@ -16,6 +16,7 @@ code that consumes it, and what a bad value does. Sections follow the loader's o
 | --- | --- | --- |
 | Project config | `<project>/.ai-conductor/config.yml` | `PROJECT_CONFIG_DIR` / `PROJECT_CONFIG_FILE`, `src/conductor/src/engine/config.ts:94-95` |
 | User config | `~/.ai-conductor/config.yml` | `src/conductor/src/engine/user-config.ts:13-19` |
+| Project rate card | `<project>/.ai-conductor/rate-card.json` | `RATE_CARD_RELATIVE_PATH`, `src/conductor/src/execution/rate-card.ts` |
 | Legacy project dir | `<project>/.harness/config.yml` | `LEGACY_PROJECT_CONFIG_DIR`, `config.ts:96` |
 | Legacy user JSON seed | `~/.claude/ai-conductor.config.json` (flat camelCase) | One-time migration input; after a successful seed it is renamed to `ai-conductor.config.json.migrated` |
 
@@ -35,6 +36,69 @@ already exists, and returns `false` silently on any failure without touching eit
 without changing bytes when the file already exists, and refuses a non-Git directory. The missing-file
 error names this command as its remedy. `bin/install` and `bin/migrate` continue to write only the
 user file.
+
+## Rate card (`.ai-conductor/rate-card.json`)
+
+A committed, project-scoped JSON file of per-model token prices. It is durable state read by name,
+not configuration: it has no keys in `config.yml`, no user-scoped counterpart, and no precedence
+rules. Maintain it with `conduct-ts rate-card refresh` (see the CLI reference) and commit the result.
+`.github/workflows/rate-card-refresh.yml` also runs that refresh daily and opens a bot pull
+request on `automation/rate-card` when the published rates change, so the card does not rot
+between manual refreshes. Review such a PR as a **cost change**: merging it alters every
+subsequent `costUsd` computed for a codex dispatch. Already-recorded costs are unaffected —
+a dispatch is priced at the rate in force when it ran and is never repriced retroactively,
+which is why the card is committed rather than fetched live.
+
+The card's `as_of` therefore tracks when the rates last **changed**, not when they were last
+checked: a refresh that finds identical rates leaves the committed file untouched.
+
+It exists because providers disagree about reporting cost. Claude Code returns `total_cost_usd` on
+every dispatch, so its `TokenUsage.costUsd` is provider truth. Codex returns token counts and no
+money — so without a rate card every codex dispatch classifies as *cost-unmetered*, contributes $0,
+and a mixed-provider feature reports all-provider token volume beside Claude-only dollars.
+
+```json
+{
+  "as_of": "2026-08-24T23:13:15.091Z",
+  "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+  "models": {
+    "gpt-5.6-terra": {
+      "input_cost_per_token": 0.000002,
+      "output_cost_per_token": 0.000012,
+      "cache_read_input_token_cost": 2e-7
+    }
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `as_of` | ISO-8601 instant the card was last pruned from upstream. Rewritten by every successful `refresh` |
+| `source` | Upstream catalog the rates were pruned from |
+| `models.<id>` | Per-**token** prices, LiteLLM field names verbatim, so an entry is a literal subset of the upstream record |
+
+Rules that govern how the card is used:
+
+- **Priced at dispatch time.** The adapter computes `costUsd` from the card as the dispatch
+  completes and sets it on the existing `TokenUsage`, which rides the existing `provider_attempt`
+  event. Every downstream consumer — the cost rollup, the finish usage line, the shipped record,
+  OTel — works unchanged. History is never re-priced: the rate in force when a dispatch ran is
+  what its event carries, so a later refresh cannot drift an old feature's reported cost.
+- **The formula.**
+  `input × input_cost_per_token + cacheRead × (cache_read_input_token_cost ?? input_cost_per_token)
+  + cacheCreation × input_cost_per_token + output × output_cost_per_token`.
+  `TokenUsage.input` is fresh-only by contract (the codex adapter subtracts the cached share at
+  parse time), so cached volume is never charged twice. `reasoningOutput` is **not** priced
+  separately — providers already include it in `output`.
+- **Fail closed.** A missing card, an unparseable card, a dispatch that pinned no model, or a model
+  with no card entry leaves `costUsd` undefined and the dispatch cost-unmetered. Nothing invents a
+  price.
+- **Provenance is recorded.** `TokenUsage.costSource` is `provider` for a provider-reported figure
+  and `rate-card` for a harness estimate. A provider-reported cost is never overwritten.
+- **Cost-unmetered dispatches are visible.** The finish usage line names them explicitly
+  (`N cost-unmetered (tokens counted, cost not)`), so a partial cost can never be read as a total.
+- **Refreshes are picked up live.** The card is re-read when its mtime changes; refreshing it
+  mid-run does not require a daemon restart.
 
 ## Load order and precedence
 

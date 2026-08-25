@@ -13,6 +13,7 @@ import type {
   SelfHostAuthPreparation,
   TokenUsage,
 } from './llm-provider.js';
+import { applyRateCard, loadRateCard, type RateCardLoader } from './rate-card.js';
 import {
   epochAnchoredMonotonicClock,
   observeInterval,
@@ -210,6 +211,13 @@ export class CodexProvider implements LLMProvider {
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: CodexSubprocessFactory = execa,
     private readonly doctorTimeoutMs = DEFAULT_CODEX_DOCTOR_TIMEOUT_MS,
+    /**
+     * Per-model token prices for cost accounting. Codex reports token counts
+     * but no money, so without this every codex dispatch stays
+     * `cost-unmetered` and contributes $0 to the feature rollup. Injected so
+     * tests can supply a card without touching the filesystem.
+     */
+    private readonly loadRates: RateCardLoader = loadRateCard,
   ) {
     this.authentication = this.selectAuthentication();
     this.executable = executable;
@@ -286,7 +294,10 @@ export class CodexProvider implements LLMProvider {
 
     this.logDiagnostics(result, options.diagnosticLog);
 
-    const completion = this.classifyCompletion(result, true, authentication, true, readiness);
+    const completion = this.classifyCompletion(result, true, authentication, true, readiness, {
+      model: options.model,
+      cwd: options.cwd,
+    });
     return { ...completion, observedIntervals: [interval] };
   }
 
@@ -405,7 +416,10 @@ export class CodexProvider implements LLMProvider {
     this.logDiagnostics(result, options.diagnosticLog);
 
     return {
-      ...this.classifyCompletion(result, false, authentication, !options.interactive, readiness),
+      ...this.classifyCompletion(result, false, authentication, !options.interactive, readiness, {
+        model: options.model,
+        cwd: options.cwd,
+      }),
       observedIntervals: [interval],
     };
   }
@@ -459,14 +473,32 @@ export class CodexProvider implements LLMProvider {
     authenticationSelection: SelectedAuthentication,
     automaticReview = true,
     readyReadiness?: Extract<AuthenticationReadiness, { state: 'ready' | 'probe-failed' }>,
+    /**
+     * Dispatch identity used to price the reported tokens. `model` is the
+     * model this invocation actually requested; `cwd` roots the lookup of the
+     * committed rate card. Both absent (or unmatched) means no cost — the
+     * dispatch stays `cost-unmetered` rather than carrying an invented figure.
+     */
+    pricing?: { model?: string; cwd?: string },
   ): InvokeResult {
     const { source } = authenticationSelection;
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
-    const parsed = jsonOutput
+    const parsedRaw = jsonOutput
       ? parseCodexJsonl(stdout)
-      : { output: stdout, tokenUsage: undefined };
+      : { output: stdout, tokenUsage: undefined as TokenUsage | undefined };
+    // Price at DISPATCH time so the rate in force when the run happened is
+    // baked into the event log. Nothing re-prices history: a later card
+    // revision would silently drift every past feature's reported cost.
+    const parsed = {
+      output: parsedRaw.output,
+      tokenUsage: applyRateCard(
+        parsedRaw.tokenUsage,
+        pricing?.model,
+        this.loadRates(pricing?.cwd ?? process.cwd()),
+      ),
+    };
     const rawOutput =
       stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
     const output = this.sanitizeOutput(
