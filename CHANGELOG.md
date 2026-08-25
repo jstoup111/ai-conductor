@@ -17,12 +17,14 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - An operator-actionable halt (needs-human, plan-gap, or protected-artifact) off the default branch now leaves a committed, best-effort-pushed halt record at `.docs/halted/<slug>.md` that survives a recreated worktree and updates to resolved when the halt clears. ([implementation PR #1845](https://github.com/jstoup111/ai-conductor/pull/1845)).
 - Codex dispatches are now priced from a committed per-model rate card (`.ai-conductor/rate-card.json`, maintained by `conduct rate-card refresh`), so a mixed-provider feature reports its real cost instead of a Claude-only figure; dispatches whose cost cannot be established are named explicitly on the finish usage line. ([implementation PR #1858](https://github.com/jstoup111/ai-conductor/pull/1858)).
+- Plan specifications now require every task to declare two to five nonblank completion checks before landing. ([implementation PR #1866](https://github.com/jstoup111/ai-conductor/pull/1866)).
 
 ### Changed
 
 - build_review no longer judges plan conformance, scope, or mechanism soundness — prd_audit now owns scope-as-intent grading with bounded remediation, and a new as-built architecture review owns design conformance, both running on every feature regardless of tier or track; build_review keeps only an opt-in test-quality rubric. ([implementation PR #1824](https://github.com/jstoup111/ai-conductor/pull/1824)).
 - Require Node.js 26 and update the conductor and recorder dependency stacks. ([implementation PR #1797](https://github.com/jstoup111/ai-conductor/pull/1797)).
 - Enforce plan-task coverage for every story acceptance criterion. ([implementation PR #1847](https://github.com/jstoup111/ai-conductor/pull/1847)).
+- Unifies provider dispatch so every invocation records complete execution outcomes and usage. ([implementation PR #1871](https://github.com/jstoup111/ai-conductor/pull/1871)).
 
 ### Fixed
 
@@ -36,6 +38,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Codex-routed steps that dispatch through the streaming path no longer fail with "Codex self-host isolation is unavailable"; the streaming runtime wrapper now preserves every provider capability, including self-host provisioning and readiness. ([implementation PR #1855](https://github.com/jstoup111/ai-conductor/pull/1855)).
 - FINISH no longer halts on an authored PR body that still carries the SHIP-entry draft note; floor classification is decided by body content rather than by the presence of engine boilerplate. ([implementation PR #1856](https://github.com/jstoup111/ai-conductor/pull/1856)).
 - Repository documentation maintenance now uses the supported Codex Terra model instead of falling back to Claude Sonnet. ([implementation PR #1860](https://github.com/jstoup111/ai-conductor/pull/1860)).
+- Lets operators decide every visible over-scope criterion in one clear, while refused criteria remain blocked with their rationale recorded. ([implementation PR #1873](https://github.com/jstoup111/ai-conductor/pull/1873)).
+- Daemon builds now report prerequisite-blocked steps and validator refusals accurately instead of marking their work as failed. ([implementation PR #1870](https://github.com/jstoup111/ai-conductor/pull/1870)).
 
 ## Migration
 
