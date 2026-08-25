@@ -289,15 +289,20 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     });
     expect(template).toMatch(/test_suite:[\s\S]*command:[^\n]*npm test[\s\S]*working_directory:/i);
     const testScript = JSON.parse(packageJson).scripts.test as string;
-    // Signal simulation needs a thread worker, but runs concurrently with the
-    // fork-pool batch rather than after it.
+    // Signal simulation needs a thread worker, so it runs in its own process
+    // after the fork-pool batch. Running both Vitest processes concurrently
+    // can terminate the aggregate shell with SIGHUP before it emits the
+    // required aggregate pass sentinel.
     // Every invocation goes through the Node 26 temp-dir wrapper
     // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
     expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(3);
     expect(testScript).not.toMatch(/(^|[^-])vitest run/);
     expect(testScript).toContain('vitest.signal.config.ts');
-    expect(testScript).toContain('wait "$ordinary"');
-    expect(testScript).toContain('wait "$signals"');
+    expect(testScript).not.toContain('& ordinary=$!');
+    expect(testScript).not.toContain('& signals=$!');
+    expect(testScript).not.toContain('wait "$ordinary"');
+    expect(testScript).not.toContain('wait "$signals"');
+    expect(testScript).toMatch(/vitest\.signal\.config\.ts --reporter=dot(?! --silent)/);
 
     // The no-argument branch is the aggregate gate's command. Any positional
     // path passed there narrows the run to those paths, silently dropping
