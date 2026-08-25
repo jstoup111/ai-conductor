@@ -106,6 +106,17 @@ This prose quotes ### Task 2: but is not a heading.
       expect(result.has('1')).toBe(false);
       expect(result.malformedTaskIds).toEqual(new Set(['1']));
     });
+
+    it('marks a whitespace-only criterion malformed even when the block has another criterion', () => {
+      const result = parsePlanTaskDoneWhen(`### Task 1: Incomplete metadata
+**Done when:**
+-   
+- A real criterion
+`);
+
+      expect(result.get('1')).toEqual(['A real criterion']);
+      expect(result.malformedTaskIds).toEqual(new Set(['1']));
+    });
   });
 
   it('exports TASK_ID_PATTERN matching the H9 id grammar', () => {
@@ -190,5 +201,41 @@ See \`.docs/specs/feature.md\` before editing.
     expect(result.foreignProtectedReferencesByTaskId).toEqual(
       new Map([['1', new Set(['.docs/specs/other-feature.md'])], ['2', new Set()]]),
     );
+  });
+  it('ignores task headings and metadata inside fenced code blocks', () => {
+    const plan = ['### Task 1: Real task',
+      '**Files:** src/one.ts',
+      '',
+      'Authoring example:',
+      '',
+      '```markdown',
+      '### Task phantom: Example heading',
+      '**Files:** src/phantom.ts',
+      '**Done when:**',
+      '- A phantom criterion.',
+      '```',
+      ''].join('\n');
+
+    expect([...parsePlanTaskBodies(plan).keys()]).toEqual(['1']);
+    expect([...parsePlanTaskPaths(plan).keys()]).toEqual(['1']);
+    expect(parsePlanTaskPaths(plan).get('1')).toEqual(new Set(['src/one.ts']));
+    expect([...parsePlanTaskDoneWhen(plan).keys()]).toEqual([]);
+  });
+
+  it('resumes structural parsing after a fenced block closes', () => {
+    const plan = ['### Task 1: Real task',
+      '```text',
+      '### Task phantom: Example heading',
+      '```',
+      '**Done when:**',
+      '- The first observable result exists.',
+      '- The second observable result exists.',
+      ''].join('\n');
+
+    expect([...parsePlanTaskDoneWhen(plan).keys()]).toEqual(['1']);
+    expect(parsePlanTaskDoneWhen(plan).get('1')).toEqual([
+      'The first observable result exists.',
+      'The second observable result exists.',
+    ]);
   });
 });

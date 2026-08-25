@@ -110,6 +110,10 @@ function renderPlan(slug: string, files: string, inherited = false): string {
         '**Files:** same as Task 1',
         '',
         '**Wired-into:** same as Task 1',
+        '',
+        '**Done when:**',
+        '- The inherited protected-target contract is retained.',
+        '- The inherited task can be validated at land.',
       ].join('\n')
     : '';
   return [
@@ -125,6 +129,10 @@ function renderPlan(slug: string, files: string, inherited = false): string {
     // `extractWiredIntoContracts` parser BUILD does, and an invented `none (...)`
     // parenthetical is malformed there, not a fixture nicety.
     '**Wired-into:** none (no new production surface)',
+    '',
+    '**Done when:**',
+    '- The requested file target is recorded.',
+    '- The protected-target boundary is validated at land.',
     inheritedTask,
     '',
     '## Task Dependency Graph',

@@ -70,7 +70,7 @@ different times against different evidence.
 | --- | --- | --- | --- |
 | prerequisite | before every step | that step | 1 (universal) |
 | per-step completion | after a step runs, and whenever the loop re-scores it | that step, and the loop | 12 |
-| land-time | when a spec PR is landed | the spec, before anything is built | 8 |
+| land-time | when a spec PR is landed | the spec, before anything is built | 9 |
 | self-host | before the finish step, only when the harness is building itself | the PR | 6 |
 | hook | at the moment of a tool call | the individual edit, command, or dispatch | see [settings and hooks](../reference/settings-and-hooks.md) |
 
@@ -189,6 +189,7 @@ from specs that would waste a build.
 | coherence | a traceability record that does not connect outcomes, requirements, accepted ADRs, stories, and tasks, or stories that do not tie out to the PRD |
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |
 | protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
+| plan completion checks | a task with no `Done when:` block, a blank check, fewer than two checks, or more than five checks; fenced-code examples are ignored |
 
 Before land, plan authoring runs `conduct-ts plan-protected-targets <plan-path>`. It is a blocking,
 read-only check that reports every offending task/path pair. Land repeats the same judgment against

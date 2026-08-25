@@ -50,7 +50,7 @@ export interface ParsedPlanTaskDoneWhen extends Map<string, string[]> {
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 const DONE_WHEN_LINE = /^\s*\*\*Done when\s*:\s*\*\*\s*$/i;
-const LIST_ITEM_LINE = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/;
+const LIST_ITEM_LINE = /^\s*(?:[-*](?:[ \t]+|$)|\d+[.)][ \t]+)(.*?)\s*$/;
 
 // Retired **Wired-into:** metadata must remain excluded from legacy fallback
 // paths in historical plans. This preserves only the old line grammar (case,
@@ -91,6 +91,37 @@ function expandTaskIds(raw: string): string[] {
   return ids;
 }
 
+// Markdown fenced code is illustration, never structure. adr-2026-08-21 D1
+// requires fenced content to be excluded before task matching: a plan that
+// documents `### Task N` or a `**Done when:**` block inside a fence must not
+// mint a phantom task id or phantom criteria, which would falsely reject a
+// valid plan at land time.
+const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
+
+/** Yields every line with a flag marking lines inside a fenced code block. */
+function* linesWithFenceState(text: string): Generator<{ line: string; fenced: boolean }> {
+  let openMarker: string | null = null;
+  for (const line of text.split('\n')) {
+    const fence = line.match(FENCE_LINE);
+    if (fence) {
+      const marker = fence[1];
+      if (openMarker === null) {
+        openMarker = marker;
+        yield { line, fenced: true };
+        continue;
+      }
+      // A closing fence uses the same character and is at least as long as
+      // the opener, and carries no info string.
+      if (marker[0] === openMarker[0] && marker.length >= openMarker.length && !fence[2].trim()) {
+        openMarker = null;
+        yield { line, fenced: true };
+        continue;
+      }
+    }
+    yield { line, fenced: openMarker !== null };
+  }
+}
+
 /**
  * Returns the committed body text for every recognized task heading.
  *
@@ -109,8 +140,8 @@ export function parsePlanTaskBodies(text: string): Map<string, string> {
     for (const id of currentIds) result.set(id, body);
   };
 
-  for (const line of text.split('\n')) {
-    const headerMatch = line.match(TASK_HEADER_PATTERN);
+  for (const { line, fenced } of linesWithFenceState(text)) {
+    const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
       saveCurrentBody();
       currentIds = expandTaskIds(
@@ -149,7 +180,8 @@ export function parsePlanTaskDoneWhen(text: string): ParsedPlanTaskDoneWhen {
     sawCheck = false;
   };
 
-  for (const line of text.split('\n')) {
+  for (const { line, fenced } of linesWithFenceState(text)) {
+    if (fenced) continue;
     const headerMatch = line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
       finishBlock();
@@ -167,8 +199,13 @@ export function parsePlanTaskDoneWhen(text: string): ParsedPlanTaskDoneWhen {
     }
     if (!collecting) continue;
 
-    const check = line.match(LIST_ITEM_LINE)?.[1].trim();
-    if (check) {
+    const listItem = line.match(LIST_ITEM_LINE);
+    if (listItem) {
+      const check = listItem[1].trim();
+      if (!check) {
+        for (const id of currentIds) malformedTaskIds.add(id);
+        continue;
+      }
       for (const id of currentIds) {
         const checks = result.get(id);
         if (checks) checks.push(check);
@@ -237,8 +274,8 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
   // handled at the comparison seams via canonicalTaskId, not by mangling here.
   const sameShorthand = new RegExp(`^same(?:\\s+as\\s+task\\s+(${TASK_ID_PATTERN}))?\\b`, 'i');
 
-  for (const line of text.split('\n')) {
-    const headerMatch = line.match(TASK_HEADER_PATTERN);
+  for (const { line, fenced } of linesWithFenceState(text)) {
+    const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
       current = {
         ids: expandTaskIds(
@@ -257,6 +294,7 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
     if (!current) continue;
 
     current.bodyLines.push(line);
+    if (fenced) continue;
 
     const filesMatch = line.match(FILES_LINE);
     if (filesMatch) {
