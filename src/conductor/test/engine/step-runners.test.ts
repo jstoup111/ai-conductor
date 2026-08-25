@@ -25,10 +25,13 @@ import {
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { scanInheritedState } from '../../src/engine/daemon-dashboard.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -1041,6 +1044,103 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  it.each([
+    {
+      provider: 'claude' as const,
+      observation: {
+        childObservability: 'observed' as const,
+        activeChildren: 2,
+        uncachedInputTokens: 76,
+        outputTokens: 12,
+      },
+    },
+    {
+      provider: 'codex' as const,
+      observation: {
+        childObservability: 'unsupported' as const,
+        uncachedInputTokens: 43,
+        outputTokens: 9,
+      },
+    },
+  ])('reports $provider live streaming burn before the provider invocation finishes', async ({
+    provider,
+    observation,
+  }) => {
+    const root = await mkdtemp(join(tmpdir(), 'streaming-live-status-'));
+    const worktreeBase = join(root, '.worktrees');
+    const projectDir = join(worktreeBase, 'streaming-feature');
+    const pipelineDir = join(projectDir, '.pipeline');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(pipelineDir, 'events.jsonl'), events);
+    persister.start();
+    let invocationFinished = false;
+    let liveStatusWasReadWhileInvocationOpen = false;
+    let resolveLiveStatus!: () => void;
+    const liveStatusRead = new Promise<void>((resolve) => {
+      resolveLiveStatus = resolve;
+    });
+    let liveStatus: Awaited<ReturnType<typeof scanInheritedState>> | undefined;
+    events.once('provider_stream_progress', async () => {
+      liveStatus = await scanInheritedState({
+        worktreeBase,
+        processedDir: join(root, '.daemon/processed'),
+        discover: async () => [],
+      });
+      liveStatusWasReadWhileInvocationOpen = !invocationFinished;
+      resolveLiveStatus();
+    });
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      if (!options.onProviderStream) {
+        return { success: false, output: 'stream observer missing', exitCode: 1 };
+      }
+      options.onProviderStream(observation);
+      await liveStatusRead;
+      invocationFinished = true;
+      return { success: true, output: 'stream complete', exitCode: 0 };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+      mode: 'auto',
+      config: {
+        llm_provider: [provider],
+        steps: { explore: { llm_provider: provider } },
+      },
+      events,
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(provider, invoke)]),
+      configuredProviders: [provider],
+      sessionStore: new ProviderSessionStore(),
+    });
+
+    try {
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(join(pipelineDir, 'conduct-state.json'), JSON.stringify({ explore: 'in_progress' }));
+      await events.emit({ type: 'step_started', step: 'explore', index: 1 });
+
+      const result = await runner.run('explore', emptyState);
+      const progress = liveStatus?.inProgress.find((entry) => entry.slug === 'streaming-feature')
+        ?.providerStreamProgress;
+
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+        interactive: false,
+        onProviderStream: expect.any(Function),
+      }));
+      expect(liveStatusWasReadWhileInvocationOpen).toBe(true);
+      expect(invocationFinished).toBe(true);
+      expect(progress).toMatchObject(observation);
+      expect(progress?.uncachedInputTokens).toBeGreaterThan(0);
+      expect(progress?.outputTokens).toBeGreaterThan(0);
+      if (observation.childObservability === 'unsupported') {
+        expect(progress).toMatchObject({ childObservability: 'unsupported' });
+        expect(progress).not.toHaveProperty('activeChildren');
+      } else {
+        expect(progress).toMatchObject({ childObservability: 'observed', activeChildren: 2 });
+      }
+      expect(result).toMatchObject({ success: true, output: 'stream complete' });
+    } finally {
+      persister.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('dispatches a streaming step through its adapter invoke entry with fresh provider sessions', async () => {
     const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
@@ -1599,7 +1699,6 @@ describe('DefaultStepRunner', () => {
     const invocations = [] as Array<{
       providerKey: 'claude' | 'codex';
       invokeCalls: number;
-      interactiveCalls: number;
       options: InvokeOptions;
     }>;
 
@@ -1619,6 +1718,12 @@ describe('DefaultStepRunner', () => {
       );
 
       await runner.run('stories', emptyState);
+
+      invocations.push({
+        providerKey,
+        invokeCalls: (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.length,
+        options: (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions,
+      });
     }
 
     const [claude, codex] = invocations;
@@ -1646,10 +1751,9 @@ describe('DefaultStepRunner', () => {
 
     expect({
       prompts: invocations.map(({ providerKey, options }) => ({ providerKey, prompt: options.prompt })),
-      routes: invocations.map(({ providerKey, invokeCalls, interactiveCalls }) => ({
+      routes: invocations.map(({ providerKey, invokeCalls }) => ({
         providerKey,
         invokeCalls,
-        interactiveCalls,
       })),
       claudeInvocation,
       differingInvocationFields: Object.entries(claudeInvocation)
@@ -1661,8 +1765,8 @@ describe('DefaultStepRunner', () => {
         { providerKey: 'codex', prompt: '$stories' },
       ],
       routes: [
-        { providerKey: 'claude', invokeCalls: 1, interactiveCalls: 0 },
-        { providerKey: 'codex', invokeCalls: 1, interactiveCalls: 0 },
+        { providerKey: 'claude', invokeCalls: 1 },
+        { providerKey: 'codex', invokeCalls: 1 },
       ],
       claudeInvocation: {
         systemPrompt: expect.stringContaining('Stories'),
