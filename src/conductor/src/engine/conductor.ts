@@ -167,16 +167,19 @@ import {
   buildReviewFailureDetails,
   validateBuildReviewVerdict,
   FINISH_CHOICE_MARKER,
+  VERDICT_FRESHNESS_FS_TOLERANCE_MS,
   PRD_AUDIT_CODE_STAMP,
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
   type RemediationGap,
   type CompletionContext,
+  type CompletionResult,
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
   stampGateRunIdentity,
 } from './artifacts.js';
 import { parsePlanTaskBodies } from './plan-task-parse.js';
+import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
   type CriterionBoundRemediationGap,
@@ -2510,6 +2513,89 @@ export class Conductor {
     (this.log ?? console.warn)(
       `warning: ${step} verdict run-id sidecar ${path} could not be stamped for this dispatch; treating the verdict as unstamped.`,
     );
+  }
+
+  /**
+   * D3's post-dispatch write handshake. A run-id sidecar is durable proof of
+   * which dispatch settled, but cannot by itself prove that the report was
+   * rewritten: stamping an untouched prior-lap report would otherwise bless
+   * it. Require both the declared report's write time and its settled sidecar.
+   *
+   * This is intentionally a conductor seam rather than a completion predicate;
+   * it runs before a predicate or any routing reader can inspect report text.
+   */
+  private async verdictDispatchHandshake(
+    step: StepName,
+    expectedRunId: string | undefined,
+    dispatchStartedAt: number | undefined,
+  ): Promise<CompletionResult | undefined> {
+    if (
+      step !== 'manual_test' &&
+      step !== 'prd_audit' &&
+      step !== 'architecture_review_as_built'
+    ) return undefined;
+
+    try {
+      const files = await findArtifactFilesForStep(this.projectRoot, step);
+      const identities = await verdictProducedByRun(this.projectRoot, step, expectedRunId);
+      const foundRunId = identities.state === 'stale-run-identity'
+        ? identities.foundRunId
+        : identities.state === 'match'
+          ? identities.runId
+          : 'unstamped';
+      const failures: string[] = [];
+
+      if (files.length === 0) {
+        failures.push(`${(STEP_ARTIFACT_GLOBS[step] ?? []).join(', ') || step} is missing`);
+      }
+
+      for (const file of files) {
+        let mtimeMs: number | undefined;
+        try {
+          mtimeMs = (await stat(file)).mtimeMs;
+        } catch {
+          failures.push(`${relative(this.projectRoot, file)} is missing`);
+          continue;
+        }
+        // Match the established per-attempt freshness tolerance: common
+        // filesystems round an immediate write down slightly, but a prior
+        // lap remains far outside this narrow window.
+        if (
+          dispatchStartedAt !== undefined &&
+          mtimeMs < dispatchStartedAt - VERDICT_FRESHNESS_FS_TOLERANCE_MS
+        ) {
+          failures.push(
+            `${relative(this.projectRoot, file)} is stale (found mtime ${new Date(mtimeMs).toISOString()})`,
+          );
+        }
+      }
+
+      if (identities.state !== 'match') {
+        failures.push(
+          `${step} verdict sidecar is ${identities.state === 'stale-run-identity' ? 'stale' : 'unstamped'} ` +
+          `(expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId})`,
+        );
+      }
+
+      if (failures.length === 0) return undefined;
+      return {
+        done: false,
+        routeClass: 'absent',
+        reason:
+          `post-dispatch verdict write handshake failed for ${step}: ${failures.join('; ')}; ` +
+          `expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId}`,
+      };
+    } catch {
+      // D3: a read failure is a failed handshake, never a thrown conductor
+      // failure. Task 7 adds the per-artifact corrupt-input diagnostics.
+      return {
+        done: false,
+        routeClass: 'absent',
+        reason:
+          `post-dispatch verdict write handshake could not verify ${step}; ` +
+          `expected run id ${expectedRunId ?? 'none'}; found run id unavailable`,
+      };
+    }
   }
 
   /**
@@ -6158,6 +6244,8 @@ export class Conductor {
             // their own StepRunResult. The join only observes that result;
             // it does not add another validity predicate.
             const nativeBranchResults = new Map<string, StepRunResult>();
+            const branchDispatchStartedAt = new Map<string, number>();
+            const branchHandshakeFailures = new Map<string, CompletionResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
               const branchRunIds = new Map(members.map((member) => [member.name, randomUUID()]));
               const roundChanges: Record<string, unknown> = {};
@@ -6224,12 +6312,22 @@ export class Conductor {
                       // clears it before any halt/allGreen/kickback branching
                       // runs, so those paths are entirely unaffected.
                       onMemberEvent: async (event) => {
+                        if (event.phase === 'dispatch') {
+                          branchDispatchStartedAt.set(event.member, Date.now());
+                        }
                         if (event.phase === 'result') {
                           // This settles before runGroupBranch returns to the join.
                           await this.stampVerdictRunIdentity(
                             event.member as StepName,
                             branchRunIds.get(event.member),
                           );
+                          const handshake = await this.verdictDispatchHandshake(
+                            event.member as StepName,
+                            branchRunIds.get(event.member),
+                            branchDispatchStartedAt.get(event.member),
+                          );
+                          if (handshake) branchHandshakeFailures.set(event.member, handshake);
+                          else branchHandshakeFailures.delete(event.member);
                         }
                         if (event.phase === 'result' && event.outcome === 'verdict:pass') {
                           const syntheticKey = `${builtinGroup.name}__${event.member}`;
@@ -6408,9 +6506,12 @@ export class Conductor {
               const memberName = member.name as StepName;
               const outcome = outcomes[idx];
               if (outcome?.kind === 'verdict' && outcome.verdict === 'pass') {
+                const handshake = branchHandshakeFailures.get(member.name);
                 gateVerdicts.set(
                   memberName,
-                  await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
+                  handshake
+                    ? { satisfied: false, reason: handshake.reason, checkedAt: Date.now() }
+                    : await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
                 );
               }
             }
@@ -8662,11 +8763,21 @@ export class Conductor {
                 viaException: false,
               });
             }
-            let completion = await checkStepCompletion(
-              this.projectRoot,
+            // D3: do not let a completion predicate or its downstream
+            // routing readers parse a prior-lap SHIP report. The handshake
+            // must observe this dispatch's report write first.
+            let completion = await this.verdictDispatchHandshake(
               step.name,
-              await this.completionCtx(state),
+              this.currentRunId,
+              this.currentAttemptStartedAt,
             );
+            if (!completion) {
+              completion = await checkStepCompletion(
+                this.projectRoot,
+                step.name,
+                await this.completionCtx(state),
+              );
+            }
 
             // Task 2, session-fresh-verdict-artifacts: audit-trail event for
             // the three dispatched-judge verdict predicates

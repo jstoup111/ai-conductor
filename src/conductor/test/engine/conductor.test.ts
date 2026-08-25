@@ -76,6 +76,8 @@ import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.j
 import {
   checkStepCompletion,
   stampGateRunIdentity,
+  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+  MANUAL_TEST_CODE_STAMP,
   PRD_AUDIT_CODE_STAMP,
   type RemediationGap,
 } from '../../src/engine/artifacts.js';
@@ -2597,6 +2599,82 @@ describe('engine/conductor', () => {
       expect(logs[0]).toContain('prd_audit');
       expect(logs[0]).toContain(PRD_AUDIT_CODE_STAMP);
       await expect(readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf8')).rejects.toThrow();
+    });
+
+    // Covers: task:6
+    it.each([
+      ['manual_test', '.pipeline/manual-test-results.md', MANUAL_TEST_CODE_STAMP],
+      ['prd_audit', '.pipeline/prd-audit.md', PRD_AUDIT_CODE_STAMP],
+      [
+        'architecture_review_as_built',
+        '.pipeline/architecture-review-as-built.md',
+        ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+      ],
+    ] as const)(
+      'accepts a freshly written %s verdict report with the settled dispatch identity',
+      async (step, reportPath) => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        const runId = `task-6-${step}`;
+        const dispatchStartedAt = Date.now();
+        await writeFile(join(dir, reportPath), 'fresh verdict report\n');
+        await stampGateRunIdentity(dir, step, runId);
+        const conductor = new Conductor({
+          projectRoot: dir,
+          stateFilePath: statePath,
+          stepRunner: createMockStepRunner({ success: true }),
+          events,
+        });
+
+        await expect(
+          (conductor as unknown as {
+            verdictDispatchHandshake: (
+              name: StepName,
+              expectedRunId: string,
+              startedAt: number,
+            ) => Promise<unknown>;
+          }).verdictDispatchHandshake(step, runId, dispatchStartedAt),
+        ).resolves.toBeUndefined();
+      },
+    );
+
+    it('rejects a prior-lap prd report before its stale findings can be routed', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
+      const dispatchStartedAt = Date.now();
+      await utimes(report, new Date(dispatchStartedAt - 60_000), new Date(dispatchStartedAt - 60_000));
+      await stampGateRunIdentity(dir, 'prd_audit', 'current-run');
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+      });
+
+      await expect(
+        (conductor as unknown as {
+          verdictDispatchHandshake: (
+            name: StepName,
+            expectedRunId: string,
+            startedAt: number,
+          ) => Promise<{ done: boolean; routeClass?: string; reason?: string }>;
+        }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt),
+      ).resolves.toEqual({
+        done: false,
+        routeClass: 'absent',
+        reason: expect.stringContaining('.pipeline/prd-audit.md'),
+      });
+
+      const result = await (conductor as unknown as {
+        verdictDispatchHandshake: (
+          name: StepName,
+          expectedRunId: string,
+          startedAt: number,
+        ) => Promise<{ reason?: string }>;
+      }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt);
+      expect(result.reason).toContain('expected run id current-run');
+      expect(result.reason).toContain('found run id current-run');
+      expect(result.reason).not.toContain('FR-17');
     });
 
     it('a review retry whose session does not rewrite the verdict does not pass the gate', async () => {
@@ -7388,6 +7466,11 @@ describe('engine/conductor', () => {
       // resolves) actually settle before firing SIGINT.
       await new Promise((r) => setImmediate(r));
       await new Promise((r) => setImmediate(r));
+      // The D3 write handshake now performs its own artifact reads after the
+      // branch settles and before it publishes this completion to the
+      // interrupt side-channel. Give that bounded filesystem work time to
+      // finish before simulating SIGINT.
+      await new Promise((r) => setTimeout(r, 25));
       // The engine's registered handler is `() => signalHandlerBase('SIGINT')`,
       // which returns the handler's own promise — awaiting it (instead of a
       // fixed sleep) makes the state-file write deterministically complete
