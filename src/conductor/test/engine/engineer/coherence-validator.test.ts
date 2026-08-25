@@ -1823,6 +1823,78 @@ Reject the broken widget before shipping.
     ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
   });
 
+  // Plan Task 17 — the #1799 census regression, using the real criterion text
+  // that invalidated itself between authoring and BUILD. Recovered verbatim
+  // from `git show e93914b2f^:.docs/plans/plan-tasks-lack-falsifiable-done-criteria-so-revie.md`
+  // line 99, as a fixture rather than a paraphrase: the point is that THIS
+  // sentence is the one that rotted, because its truth depends on state
+  // outside the feature's own diff.
+  //
+  // Per adr-2026-08-23-diff-locality-is-an-authored-disposition the engine
+  // never infers diff-locality — it reads the authored cell and nothing else.
+  // So the census criterion is rejected exactly when its author says
+  // `outside-diff`, and accepted when they say `diff-local`, with identical
+  // prose either way. The pair is the proof; neither half alone shows it.
+  describe('the census criterion (#1799, plan Task 17)', () => {
+    const CENSUS =
+      'A corpus test over every landed plan on main finds exactly one plan with a non-empty map and an empty map for every other.';
+    // `extractAuthoritativeStoryCriteria` (artifacts.ts:1774) only enumerates a
+    // bullet carrying both `given` and `then`, so the recovered sentence cannot
+    // BE a criterion — it was a plan Done-when bullet, which is exactly where
+    // the #1799 defect lived. It is carried verbatim INSIDE a well-formed
+    // criterion instead, so the fixture is still the real rotted text and not a
+    // paraphrase.
+    const censusStories = `# Stories
+
+## Story 1: Census
+
+### Happy Path
+- Given a plan whose Done-when reads "${CENSUS}", when the coherence gate reads its criterion row, then the land is rejected unless the row is dispositioned diff-local
+`;
+    const censusPlan = `# Plan
+
+### Task 1: Census the corpus
+**Story:** Story 1
+**Type:** happy-path
+
+Count the landed plans on main.
+`;
+    const censusCriterion =
+      `Story 1 happy: Given a plan whose Done-when reads "${CENSUS}", when the coherence gate reads its criterion row, then the land is rejected unless the row is dispositioned diff-local`;
+
+    const censusRow = (disposition: string) => {
+      const parsed = parseCoherenceArtifact(
+        `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n` +
+          `| --- | --- | --- | --- | --- | --- |\n` +
+          `| criterion | ${censusCriterion} | task-1 | covered | "Count the landed plans on main." | ${disposition} |\n`,
+      );
+      expect(parsed.ok).toBe(true);
+      return parsed.ok ? parsed.rows : [];
+    };
+
+    it('is rejected when its author dispositions it `outside-diff`, naming the criterion', () => {
+      const result = checkCriterionCoverage(censusRow('outside-diff'), censusStories, censusPlan);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.gaps.map((gap) => gap.gapId)).toEqual(['criterion:disposition-negative:1']);
+      expect(result.gaps[0].detail).toContain(CENSUS);
+    });
+
+    it('is accepted with identical prose when dispositioned `diff-local` — the cell decides, not the words', () => {
+      expect(checkCriterionCoverage(censusRow('diff-local'), censusStories, censusPlan).ok).toBe(true);
+    });
+
+    it('never inspects criterion prose for corpus-shaped wording', () => {
+      // The censoring signal, if one existed, would live in these words. A
+      // keyword matcher over them is the anti-pattern the ADR rejected, so
+      // assert the engine is not doing it: same words, opposite verdicts above.
+      for (const word of ['corpus', 'landed plan', 'main']) {
+        expect(CENSUS).toContain(word);
+      }
+      expect(checkCriterionCoverage(censusRow('diff-local'), censusStories, censusPlan).ok).toBe(true);
+    });
+  });
+
   it('enumerates every coverage-layer rejection as a stable waiver-compatible gap', async () => {
     const coverageLayerRejectionClasses = [
       'omitted',
