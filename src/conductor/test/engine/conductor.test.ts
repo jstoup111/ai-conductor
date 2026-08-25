@@ -2798,6 +2798,52 @@ describe('engine/conductor', () => {
       }
     });
 
+    // Covers: task:11
+    it('halts with the stale prd-audit handshake identity after its retry budget is exhausted', async () => {
+      const seedResult = await readState(statePath);
+      const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        state[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        state[step.name] = 'done';
+      }
+      state.prd_audit = 'pending';
+      state.architecture_review_as_built = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'done';
+      await writeState(statePath, state as ConductState);
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | stale finding must not be surfaced |\n');
+      const staleAt = Date.now() - 60_000;
+      await utimes(report, new Date(staleAt), new Date(staleAt));
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        fromStep: 'prd_audit',
+        verifyArtifacts: true,
+        mode: 'auto',
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).toBe('needs-human');
+      expect(halt).toContain('prd_audit');
+      expect(halt).toContain('.pipeline/prd-audit.md');
+      expect(halt).toContain('expected run id');
+      expect(halt).toContain('found run id');
+      expect(halt).toContain('found mtime');
+      expect(halt).not.toContain('FR-17');
+      expect(halt).not.toContain('stale finding must not be surfaced');
+    });
+
     it('verdict_freshness event identifies stale invalidation and rewritten verdict outcomes', async () => {
       await seedToBuildReview();
       await writeBuildReviewVerdict(Date.now() - 60_000);

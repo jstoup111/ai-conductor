@@ -7727,6 +7727,12 @@ export class Conductor {
         let priorCompletionReason: string | undefined;
         let priorHeadSha: string | null = null;
         let priorRetryInputSignature: string | undefined;
+        // Retain only the handshake's structured, report-text-free diagnostic
+        // until the retry loop terminates. `currentRunId` is intentionally
+        // cleared immediately after each completion check, so rebuilding this
+        // at exhaustion would lose the dispatch identity that made the verdict
+        // stale in the first place.
+        let lastVerdictHandshakeFailure: string | undefined;
         // D5: set only for a signal-(b) identical-repeat route; threaded into
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
@@ -8786,11 +8792,15 @@ export class Conductor {
             // D3: do not let a completion predicate or its downstream
             // routing readers parse a prior-lap SHIP report. The handshake
             // must observe this dispatch's report write first.
-            let completion = await this.verdictDispatchHandshake(
+            const handshake = await this.verdictDispatchHandshake(
               step.name,
               this.currentRunId,
               this.currentAttemptStartedAt,
             );
+            if (handshake?.routeClass === 'absent' && handshake.reason) {
+              lastVerdictHandshakeFailure = handshake.reason;
+            }
+            let completion = handshake;
             if (!completion) {
               completion = await checkStepCompletion(
                 this.projectRoot,
@@ -10595,6 +10605,9 @@ export class Conductor {
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
+                : lastVerdictHandshakeFailure
+                  ? `step '${step.name}' exhausted retries without a fresh verdict: ` +
+                    lastVerdictHandshakeFailure
                 : unretryableInputFailure
                   ? `step '${unretryableInputFailure.failingStep}' cannot make progress: its inputs cannot change on a re-dispatch. ` +
                     `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`
