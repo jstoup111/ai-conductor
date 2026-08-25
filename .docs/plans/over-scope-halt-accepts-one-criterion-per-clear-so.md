@@ -314,3 +314,27 @@ All criteria diff-local: each is decided by this feature's own diff and its test
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a falsifiable Done when block
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s75-1: src/conductor/src/engine/conductor.ts:712-736 — make the recorded-findings projection fail closed on the local sibling pattern: change `recordedPrdAuditFindingsBlock` to return `{ok: true, block} | {ok: false, message}` (rejecting a finding whose criterion/summary/decision/rationale cannot be rendered, mirroring `validRecord` in build-review-accepted-risk.ts:34 and renderBuildReviewReducedCoverageEvidence in build-review-projections.ts:144), and change `persistPrdAuditRecordedFindings` from `Promise<void>` to propagate that result without writing the report when `ok` is false.
+**Gate:** prd-audit
+**Rationale:** Implementation drift against approved architecture with the repair owned verbatim by an existing plan task, so it is build and not plan: APPROVED ADR D8 (.docs/decisions/adr-2026-08-24-over-scope-decision-block-and-durable-refusals.md:74) and Plan Task 12 step 3 both require an unrenderable recorded decision to block completion with a named reason, but src/conductor/src/engine/conductor.ts:722 `JSON.stringify`s the findings unconditionally, `persistPrdAuditRecordedFindings` returns `Promise<void>` at :726, and its caller at :2969 has no refusal result to surface — a decision that cannot be projected disappears silently or throws into the route. Same defect as as-built Blocking Violation 2; the local fail-closed pattern already exists at src/conductor/src/engine/build-review-projections.ts:144 and build-review-accepted-risk.ts:34. No approved architecture needs to change or be clarified, so architecture_review is not applicable.
+**Criterion:** S7.5
+**Parent task:** 12
+**Done when:**
+- S7.5 is satisfied by this task.
+
+### Task rem-prd-audit-rem-s75-2: src/conductor/src/engine/conductor.ts:2964-2972 — surface the `ok:false` result from rem-s75-1 as a named blocker instead of dropping it: carry it as an `{kind: 'unrenderable-decision'}` harvest defect onto the over-scope route (the existing `defects` channel declared at conductor.ts:640 and rendered by accepted-widenings.ts:71) and escalate a `record` route to `halt` when the projection refused, so the message reaches the halt body and prd_audit completion rather than passing silently. Preserves the D8 projection-on-both-routes behavior landed in f40634726 (Task 12's Recorded Findings bullet): the write still happens on both `record` and `halt` when rendering succeeds.
+**Gate:** prd-audit
+**Rationale:** Implementation drift against approved architecture with the repair owned verbatim by an existing plan task, so it is build and not plan: APPROVED ADR D8 (.docs/decisions/adr-2026-08-24-over-scope-decision-block-and-durable-refusals.md:74) and Plan Task 12 step 3 both require an unrenderable recorded decision to block completion with a named reason, but src/conductor/src/engine/conductor.ts:722 `JSON.stringify`s the findings unconditionally, `persistPrdAuditRecordedFindings` returns `Promise<void>` at :726, and its caller at :2969 has no refusal result to surface — a decision that cannot be projected disappears silently or throws into the route. Same defect as as-built Blocking Violation 2; the local fail-closed pattern already exists at src/conductor/src/engine/build-review-projections.ts:144 and build-review-accepted-risk.ts:34. No approved architecture needs to change or be clarified, so architecture_review is not applicable.
+**Criterion:** S7.5
+**Parent task:** 12
+**Done when:**
+- S7.5 is satisfied by this task.
+
+### Task rem-prd-audit-rem-s75-3: src/conductor/test/prd-audit-kickback.test.ts — add the named test Plan Task 12's Done-when requires: a recorded decision that cannot be rendered blocks with a named reason (assert the refusal message text reaches the halt body and that the verdict artifact is left unwritten), alongside the existing verdict-projection and cleanliness-flip tests, which stay unchanged.
+**Gate:** prd-audit
+**Rationale:** Implementation drift against approved architecture with the repair owned verbatim by an existing plan task, so it is build and not plan: APPROVED ADR D8 (.docs/decisions/adr-2026-08-24-over-scope-decision-block-and-durable-refusals.md:74) and Plan Task 12 step 3 both require an unrenderable recorded decision to block completion with a named reason, but src/conductor/src/engine/conductor.ts:722 `JSON.stringify`s the findings unconditionally, `persistPrdAuditRecordedFindings` returns `Promise<void>` at :726, and its caller at :2969 has no refusal result to surface — a decision that cannot be projected disappears silently or throws into the route. Same defect as as-built Blocking Violation 2; the local fail-closed pattern already exists at src/conductor/src/engine/build-review-projections.ts:144 and build-review-accepted-risk.ts:34. No approved architecture needs to change or be clarified, so architecture_review is not applicable.
+**Criterion:** S7.5
+**Parent task:** 12
+**Done when:**
+- S7.5 is satisfied by this task.
