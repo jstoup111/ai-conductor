@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-25T01:29:21.463Z
 Slug: coherence-rows-assert-story-task-coverage-that-not
 Class: plan-gap
 Halting step: prd_audit
