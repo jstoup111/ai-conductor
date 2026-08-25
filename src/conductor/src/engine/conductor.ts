@@ -6412,6 +6412,25 @@ export class Conductor {
         const gate = checkGate(step, state);
         if (!gate.passed) {
           await emitTracked({ type: 'gate_blocked', step: step.name, reason: gate.reason });
+          // A pending predecessor remains runnable in the ordinary forward
+          // walk, so preserve the existing generic daemon backstop for that
+          // selected-entry shape. Only the residual state — every direct
+          // prerequisite is already non-runnable — needs an immediate,
+          // actionable HALT naming the durable blocker.
+          const noRunnablePrerequisite = gate.unsatisfied.every(
+            (prerequisite) => getStepStatus(state, prerequisite) !== 'pending',
+          );
+          if (this.daemon && noRunnablePrerequisite) {
+            const prerequisites = gate.unsatisfied.map(
+              (prerequisite) => `${prerequisite} (${getStepStatus(state, prerequisite)})`,
+            );
+            const haltReason =
+              `Step '${step.name}' is blocked by unsatisfied prerequisite${prerequisites.length === 1 ? '' : 's'}: ` +
+              prerequisites.join(', ') +
+              '. Operator action is required before this run can continue.';
+            await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+            await this.emitLoopHalt(haltReason);
+          }
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
           return;
