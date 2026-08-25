@@ -1141,6 +1141,88 @@ describe('DefaultStepRunner', () => {
     }
   });
 
+  it('keeps a quiet streaming step working from its activity heartbeat, not stream observations', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'quiet-stream-status-'));
+    const worktreeBase = join(root, '.worktrees');
+    const projectDir = join(worktreeBase, 'quiet-stream-feature');
+    const pipelineDir = join(projectDir, '.pipeline');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(pipelineDir, 'events.jsonl'), events);
+    persister.start();
+    const progressEvents = vi.fn();
+    events.on('provider_stream_progress', progressEvents);
+    let pulseWasSupplied = false;
+    let enteredInvocation!: () => void;
+    const invocationEntered = new Promise<void>((resolve) => {
+      enteredInvocation = resolve;
+    });
+    let releaseProvider!: () => void;
+    const providerMayFinish = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      pulseWasSupplied = typeof options.onActivity === 'function';
+      options.onActivity?.();
+      enteredInvocation();
+      await providerMayFinish;
+      return { success: true, output: 'quiet stream complete', exitCode: 0 };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+      mode: 'auto',
+      config: {
+        llm_provider: ['claude'],
+        step_heartbeat_stall_minutes: 1,
+        steps: { explore: { llm_provider: 'claude' } },
+      },
+      events,
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
+      configuredProviders: ['claude'],
+      sessionStore: new ProviderSessionStore(),
+      heartbeatWatchdog: {
+        pollIntervalMs: 1,
+        now: () => Date.now() + 60 * 60_000,
+      },
+    });
+
+    try {
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(join(pipelineDir, 'conduct-state.json'), JSON.stringify({ explore: 'in_progress' }));
+      await events.emit({ type: 'step_started', step: 'explore', index: 1 });
+
+      const run = runner.run('explore', emptyState);
+      await invocationEntered;
+      // The provider is silent after its initial activity boundary. This is
+      // the existing heartbeat's persisted shape, not a stream observation.
+      await writeFile(
+        join(pipelineDir, 'step-heartbeat'),
+        JSON.stringify({ step: 'explore', ts: new Date().toISOString() }),
+      );
+      const liveStatus = await scanInheritedState({
+        worktreeBase,
+        processedDir: join(root, '.daemon/processed'),
+        discover: async () => [],
+      });
+      const entry = liveStatus.inProgress.find((candidate) => candidate.slug === 'quiet-stream-feature');
+
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+        interactive: false,
+        onActivity: expect.any(Function),
+      }));
+      expect(pulseWasSupplied).toBe(true);
+      expect(progressEvents).not.toHaveBeenCalled();
+      expect(entry).toMatchObject({ step: 'explore', activityState: 'working' });
+      expect(entry?.heartbeatAgeMs).toEqual(expect.any(Number));
+      expect(entry?.providerStreamProgress).toBeUndefined();
+
+      releaseProvider();
+      await expect(run).resolves.toMatchObject({ success: true, output: 'quiet stream complete' });
+    } finally {
+      releaseProvider();
+      persister.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('dispatches a streaming step through its adapter invoke entry with fresh provider sessions', async () => {
     const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
