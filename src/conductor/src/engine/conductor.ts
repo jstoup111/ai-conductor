@@ -1712,8 +1712,9 @@ export class Conductor {
 
   /**
    * Terminal validation-group exit. The group opened `parallel:<entry>`, so a
-   * member refusal cannot close that window — close it first, then record the
-   * refusal against the member whose judgement actually ended the attempt.
+   * member refusal is delivered while that window remains open, then the group
+   * closes. Attribute the refusal to the member whose judgement ended the
+   * attempt.
    * Attributing it to the fan-out entry step (whose own work decided nothing)
    * both mis-states the halt and leaves the judging validator unrefused.
    */
@@ -1725,12 +1726,6 @@ export class Conductor {
     refusedSteps?: readonly StepName[];
     reason: string;
   }): Promise<void> {
-    await this.emitExecutionEvent({
-      type: 'parallel_failure',
-      step: input.groupStep,
-      branch: input.judgingStep,
-      error: input.reason,
-    });
     const refused = new Set<StepName>(input.refusedSteps ?? []);
     refused.add(input.judgingStep);
     const changes: Record<string, unknown> = { last_step: input.judgingStep };
@@ -1745,6 +1740,12 @@ export class Conductor {
       step: input.judgingStep,
       kind: 'validation-verdict',
       reason: input.reason,
+    });
+    await this.emitExecutionEvent({
+      type: 'parallel_failure',
+      step: input.groupStep,
+      branch: input.judgingStep,
+      error: input.reason,
     });
   }
   private featureSlug?: string;
