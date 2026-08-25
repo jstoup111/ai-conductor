@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { ClaudeProvider, parseRateLimitWaitSeconds } from '../../src/execution/claude-provider.js';
+import { classifyMetering } from '../../src/engine/metering.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 
@@ -63,6 +64,38 @@ describe('ClaudeProvider', () => {
     sessionId: 'abc-123',
     resume: false,
   };
+
+  it.each([
+    {
+      name: 'non-zero streaming exit with an otherwise valid envelope',
+      stdout: JSON.stringify({
+        type: 'result',
+        result: 'partial completion',
+        usage: { input_tokens: 12, output_tokens: 7 },
+      }),
+      exitCode: 1,
+    },
+    {
+      name: 'unparseable streaming stdout',
+      stdout: 'not a Claude stream-json envelope',
+      exitCode: 0,
+    },
+    {
+      name: 'streaming envelope without a terminal result record',
+      stdout: JSON.stringify({ type: 'assistant', message: 'partial completion' }),
+      exitCode: 0,
+      expectedMessage: 'missing terminal result record',
+    },
+  ])('records no usage for $name', async ({ stdout, exitCode, expectedMessage }) => {
+    mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode, failed: exitCode !== 0 } as any);
+
+    const result = await provider.invoke({ ...baseOptions, interactive: false });
+
+    expect(result).toMatchObject({ success: false, exitCode });
+    expect(result.tokenUsage).toBeUndefined();
+    expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
+    if (expectedMessage) expect(result.output).toContain(expectedMessage);
+  });
 
   describe('invoke', () => {
     it('declares synchronous spawn-permit lifecycle capability', () => {
@@ -1624,7 +1657,7 @@ describe('ClaudeProvider', () => {
       mockExeca.mockResolvedValue(fixture.response as any);
       const result = await provider.invoke({
         ...baseOptions,
-        interactive: 'interactive' in fixture && fixture.interactive,
+        ...('interactive' in fixture && fixture.interactive ? { interactive: true } : {}),
       });
       const [, , execaOptions] = mockExeca.mock.calls.at(-1) as [
         string,

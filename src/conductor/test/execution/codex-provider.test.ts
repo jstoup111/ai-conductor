@@ -20,6 +20,7 @@ import {
   deriveBindSet,
   wrapForContainment,
 } from '../../src/engine/self-host/live-containment.js';
+import { classifyMetering } from '../../src/engine/metering.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -102,6 +103,37 @@ describe('CodexProvider', () => {
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
     );
+  });
+
+  it.each([
+    {
+      name: 'non-zero streaming exit with an otherwise valid envelope',
+      stdout: jsonlMessage('partial completion'),
+      exitCode: 1,
+    },
+    {
+      name: 'unparseable streaming stdout',
+      stdout: 'not a Codex JSONL envelope',
+      exitCode: 0,
+    },
+    {
+      name: 'streaming envelope without a terminal result record',
+      stdout: JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'partial completion' },
+      }),
+      exitCode: 0,
+      expectedMessage: 'missing terminal result record',
+    },
+  ])('records no usage for $name', async ({ stdout, exitCode, expectedMessage }) => {
+    mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode, failed: exitCode !== 0 } as any);
+
+    const result = await provider.invoke({ ...baseOptions, interactive: false });
+
+    expect(result).toMatchObject({ success: false, exitCode });
+    expect(result.tokenUsage).toBeUndefined();
+    expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
+    if (expectedMessage) expect(result.output).toContain(expectedMessage);
   });
 
   it('preserves an autonomous step envelope output and usage on the unified dispatch', async () => {
@@ -1515,7 +1547,7 @@ describe('CodexProvider', () => {
     {
       name: 'initial automatic stream succeeds',
       resume: false,
-      response: { stdout: 'Real invocation completed.', stderr: '', exitCode: 0 },
+      response: { stdout: jsonlMessage('Real invocation completed.'), stderr: '', exitCode: 0 },
       expected: { success: true },
       authenticationState: 'probe-failed',
     },

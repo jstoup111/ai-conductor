@@ -658,7 +658,13 @@ export class ClaudeProvider implements LLMProvider {
       }),
     );
 
-    return this.classifyCompletion(observed.value, hasMachineEnvelope, observed.interval, options.prompt);
+    return this.classifyCompletion(
+      observed.value,
+      hasMachineEnvelope,
+      observed.interval,
+      options.prompt,
+      options.interactive === false,
+    );
   }
 
   private classifyCompletion(
@@ -671,13 +677,15 @@ export class ClaudeProvider implements LLMProvider {
     jsonOutput: boolean,
     observedInterval: ObservedInterval,
     prompt?: string,
+    strictMachineEnvelope = false,
   ): InvokeResult {
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
 
+    const terminalResult = jsonOutput ? selectTerminalResult(stdout) : undefined;
     const parsed = jsonOutput
-      ? parseJsonResult(selectTerminalResult(stdout) ?? stdout)
+      ? parseJsonResult(terminalResult ?? stdout)
       : { output: stdout, tokenUsage: undefined };
 
     // Combine stdout + stderr so the caller has full context
@@ -695,6 +703,20 @@ export class ClaudeProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
+        observedIntervals: [observedInterval],
+      };
+    }
+
+    // A successful machine-envelope dispatch must end in Claude's terminal
+    // result record. Plain or truncated stdout is not a successful completion:
+    // it cannot safely supply output or usage for accounting.
+    if (strictMachineEnvelope && exitCode === 0 && (!terminalResult || parsed.output === terminalResult)) {
+      return {
+        success: false,
+        output: !terminalResult
+          ? 'Claude provider parse failure: missing terminal result record.'
+          : 'Claude provider parse failure: terminal result record is missing its result field.',
+        exitCode,
         observedIntervals: [observedInterval],
       };
     }
@@ -743,7 +765,7 @@ export class ClaudeProvider implements LLMProvider {
       modelUnavailable: modelUnavailable || undefined,
       commandUnresolved: commandUnresolvedName !== undefined || undefined,
       commandUnresolvedName,
-      tokenUsage: parsed.tokenUsage,
+      tokenUsage: !strictMachineEnvelope || exitCode === 0 ? parsed.tokenUsage : undefined,
       waitSeconds,
       deadline,
       observedIntervals: [observedInterval],
