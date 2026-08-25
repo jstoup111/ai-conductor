@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-25T10:26:29.503Z
 Slug: a-gate-halt-marks-a-completed-build-failed-and-the
 Class: needs-human
 Halting step: prd_audit
