@@ -44,7 +44,7 @@ function createMockProvider(): LLMProvider {
 
 function interactiveRuntime(
   key: 'claude' | 'codex',
-  invokeInteractive: LLMProvider['invokeInteractive'],
+  invokeResponse: LLMProvider['invokeInteractive'],
 ) {
   const policy =
     key === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
@@ -54,12 +54,9 @@ function interactiveRuntime(
     provider: {
       supportsSessionResume: key === 'claude',
       lifecycleCapability,
-      invoke: vi.fn(async (): Promise<InvokeResult> => ({
-        success: true,
-        output: 'wrong captured path',
-        exitCode: 0,
-      })),
-      invokeInteractive,
+      invoke: async (options: InvokeOptions): Promise<InvokeResult> =>
+        (await invokeResponse(options)) ?? { success: true, output: '', exitCode: 0 },
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     },
     lifecycleCapability,
     policy,
@@ -1006,7 +1003,7 @@ describe('DefaultStepRunner', () => {
       exitCode: 0,
       tokenUsage: { input: 11, output: 4 },
     }));
-    const claudeInteractive = vi.fn(async (): Promise<InvokeResult> => ({
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
       output: 'claude explored',
       exitCode: 0,
@@ -1034,12 +1031,8 @@ describe('DefaultStepRunner', () => {
       {
         key: 'claude',
         provider: provider(
-          vi.fn(async (): Promise<InvokeResult> => ({
-            success: true,
-            output: 'wrong Claude path',
-            exitCode: 0,
-          })),
-          claudeInteractive,
+          claudeInvoke,
+          vi.fn().mockResolvedValue(undefined),
         ),
         policy: CLAUDE_POLICY,
         builtIn: true,
@@ -1103,7 +1096,7 @@ describe('DefaultStepRunner', () => {
       codexInvoke.mock.calls as unknown as Array<[InvokeOptions]>
     )[0]?.[0]?.sessionId;
     const exploreSessionId = (
-      claudeInteractive.mock.calls as unknown as Array<[InvokeOptions]>
+      claudeInvoke.mock.calls as unknown as Array<[InvokeOptions]>
     )[0]?.[0]?.sessionId;
     expectUniqueFreshSessionIds([buildSessionId, exploreSessionId]);
 
@@ -1113,7 +1106,7 @@ describe('DefaultStepRunner', () => {
         interactive: legacyInteractive.mock.calls,
       },
       codexCalls: codexInvoke.mock.calls,
-      claudeInteractiveCalls: claudeInteractive.mock.calls,
+      claudeCalls: claudeInvoke.mock.calls,
       beginStepCalls: beginStep.mock.calls,
       buildSession,
       exploreSession: sessions.current('claude'),
@@ -1134,7 +1127,7 @@ describe('DefaultStepRunner', () => {
           }),
         ],
       ],
-      claudeInteractiveCalls: [
+      claudeCalls: [
         [
           expect.objectContaining({
             cwd: '/tmp/project',
@@ -1482,14 +1475,55 @@ describe('DefaultStepRunner', () => {
     expect(opts).toMatchObject({ model: 'gpt-5.6-luna', effort: 'low' });
   });
 
-  it('all steps use invokeInteractive (stdio: inherit)', async () => {
+  it('dispatches collaborative and branch-session steps through invoke with their existing options', async () => {
     const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { mode: 'auto' });
 
     await runner.run('explore', emptyState);
+    await runner.run('explore', emptyState, { sessionId: 'branch-session', resume: true });
 
-    expect(provider.invokeInteractive).toHaveBeenCalledOnce();
-    expect(provider.invoke).not.toHaveBeenCalled();
+    expect(provider.invoke).toHaveBeenCalledTimes(2);
+    expect(provider.invokeInteractive).not.toHaveBeenCalled();
+
+    const [serial, branch] = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls
+      .map(([options]) => options as InvokeOptions);
+    expect(serial).toMatchObject({
+      prompt: '/explore',
+      resume: false,
+      interactive: false,
+      cwd: '/tmp/project',
+      dangerouslySkipPermissions: true,
+      systemPrompt: expect.any(String),
+      model: expect.any(String),
+      effort: expect.any(String),
+    });
+    expect(branch).toMatchObject({
+      prompt: serial.prompt,
+      sessionId: 'branch-session',
+      resume: true,
+      interactive: serial.interactive,
+      cwd: serial.cwd,
+      dangerouslySkipPermissions: serial.dangerouslySkipPermissions,
+      systemPrompt: serial.systemPrompt,
+      model: serial.model,
+      effort: serial.effort,
+    });
+    expect(serial.streamConsumer).toEqual(expect.objectContaining({
+      onProviderStream: expect.any(Function),
+      close: expect.any(Function),
+    }));
+    expect(branch.streamConsumer).toEqual(expect.objectContaining({
+      onProviderStream: expect.any(Function),
+      close: expect.any(Function),
+    }));
+
+    const replProvider = createMockProvider();
+    const replRunner = new DefaultStepRunner(replProvider, 'session-2', '/tmp/project');
+    await replRunner.run('explore', emptyState);
+    const repl = (replProvider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(repl).toMatchObject({ interactive: true });
+    expect(repl).not.toHaveProperty('streamConsumer');
+    expect(replProvider.invokeInteractive).not.toHaveBeenCalled();
   });
 
   it('passes correct prompt for explore', async () => {
@@ -1498,7 +1532,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.prompt).toContain('/explore');
   });
 
@@ -1531,7 +1565,7 @@ describe('DefaultStepRunner', () => {
         providerKey,
         invokeCalls: (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.length,
         interactiveCalls: (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls.length,
-        options: (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions,
+        options: (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions,
       });
     }
 
@@ -1575,8 +1609,8 @@ describe('DefaultStepRunner', () => {
         { providerKey: 'codex', prompt: '$stories' },
       ],
       routes: [
-        { providerKey: 'claude', invokeCalls: 0, interactiveCalls: 1 },
-        { providerKey: 'codex', invokeCalls: 0, interactiveCalls: 1 },
+        { providerKey: 'claude', invokeCalls: 1, interactiveCalls: 0 },
+        { providerKey: 'codex', invokeCalls: 1, interactiveCalls: 0 },
       ],
       claudeInvocation: {
         systemPrompt: expect.stringContaining('Stories'),
@@ -1682,7 +1716,7 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
     await runner.run('explore', emptyState);
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.cwd).toBe('/wt/feature-x');
   });
 
@@ -1771,7 +1805,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('maintain-documentation' as StepName, emptyState);
 
-    expect(provider.invokeInteractive).toHaveBeenCalledWith(
+    expect(provider.invoke).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: '/maintain-documentation' }),
     );
   });
@@ -1793,7 +1827,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('constructor' as StepName, emptyState);
 
-    expect(provider.invokeInteractive).toHaveBeenCalledWith(
+    expect(provider.invoke).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: '/constructor' }),
     );
   });
@@ -1814,7 +1848,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.dangerouslySkipPermissions).toBe(false);
   });
 
@@ -1824,7 +1858,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     // Otherwise the spawned claude launches in the user's default permission
     // mode (possibly `plan`), blocking the PRD write and looping the step.
     expect(opts.dangerouslySkipPermissions).toBe(true);
@@ -1842,7 +1876,7 @@ describe('DefaultStepRunner', () => {
       delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
       const provider = createMockProvider();
       let seenDuringDispatch: string | undefined;
-      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         seenDuringDispatch = process.env.CONDUCT_DAEMON_AUTO_FINISH;
         return { success: true, output: '', exitCode: 0 };
       });
@@ -1858,7 +1892,7 @@ describe('DefaultStepRunner', () => {
       delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
       const provider = createMockProvider();
       let seenDuringDispatch: string | undefined;
-      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         seenDuringDispatch = process.env.CONDUCT_DAEMON_AUTO_FINISH;
         return { success: true, output: '', exitCode: 0 };
       });
@@ -1873,7 +1907,7 @@ describe('DefaultStepRunner', () => {
       delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
       const provider = createMockProvider();
       let seenDuringDispatch: string | undefined;
-      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         seenDuringDispatch = process.env.CONDUCT_DAEMON_AUTO_FINISH;
         return { success: true, output: '', exitCode: 0 };
       });
@@ -1912,7 +1946,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('stories', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.dangerouslySkipPermissions).toBe(false);
   });
 
@@ -1927,7 +1961,7 @@ describe('DefaultStepRunner', () => {
 
   it('returns failure when session throws', async () => {
     const provider = createMockProvider();
-    (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('crash'));
+    (provider.invoke as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('crash'));
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
     const result = await runner.run('explore', emptyState);
@@ -1937,7 +1971,7 @@ describe('DefaultStepRunner', () => {
 
   it('logs and surfaces the real thrown error instead of swallowing it (interactive dispatch)', async () => {
     const provider = createMockProvider();
-    (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockRejectedValue(
+    (provider.invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('ECONNRESET: provider process died'),
     );
     const log = vi.fn();
@@ -2004,7 +2038,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('[Conduct step 3/14]');
     expect(opts.systemPrompt).toContain('Feature: Add user auth');
   });
@@ -2019,7 +2053,7 @@ describe('DefaultStepRunner', () => {
     // explore is collaborative (not autonomous)
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('Complete ONLY this step');
     expect(opts.systemPrompt).toContain('Explore');
   });
@@ -2051,7 +2085,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('PR title and body');
     expect(opts.systemPrompt).not.toContain('finish-record');
     expect(opts.systemPrompt).not.toContain('gh pr create');
@@ -2070,7 +2104,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState, { finishProsePass: 'author' });
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('FINISH PR PROSE AUTHORING');
     expect(opts.systemPrompt).toContain('full diff');
     expect(opts.systemPrompt).toContain('base branch');
@@ -2092,7 +2126,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState, { finishProsePass: 'judge' });
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).not.toContain('FINISH PR PROSE AUTHORING');
     expect(opts.systemPrompt).toContain('revision_required');
     expect(opts.systemPrompt).toContain('separate authoring pass');
@@ -2106,7 +2140,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('PR title and body');
     expect(opts.systemPrompt).not.toContain('--pipeline-dir');
   });
@@ -2120,7 +2154,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).not.toContain('conduct-ts finish-record');
   });
 
@@ -2133,7 +2167,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).not.toContain('write the single word');
   });
 
@@ -2145,7 +2179,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).not.toContain('finish-record');
     expect(opts.systemPrompt).not.toContain('--pipeline-dir');
   });
@@ -2159,7 +2193,7 @@ describe('DefaultStepRunner', () => {
 
     // finish, but not auto mode (collaborative path)
     await runner.run('finish', emptyState);
-    const finishOpts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const finishOpts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(finishOpts.systemPrompt).toContain('operator publication intent');
     expect(finishOpts.systemPrompt).not.toContain('finish-record');
     expect(finishOpts.systemPrompt).not.toContain('gh pr create');
@@ -2183,7 +2217,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('may repair only that title/body');
     expect(opts.systemPrompt).toContain('"revision_required"');
     expect(opts.systemPrompt).toContain('Do not create, push, merge, or ready a PR');
@@ -2248,7 +2282,7 @@ describe('DefaultStepRunner', () => {
 
       await runner.run('explore', emptyState);
 
-      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.resume).toBe(false);
     });
 
@@ -2993,7 +3027,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(true);
       });
 
@@ -3005,7 +3039,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(false);
       });
 
@@ -3017,7 +3051,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(true);
       });
     }
@@ -3033,7 +3067,7 @@ TIER: M`,
 
       await runner.run('prd_audit', emptyState);
 
-      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.interactive).toBe(false);
     });
 
@@ -3045,7 +3079,7 @@ TIER: M`,
 
       await runner.run('prd_audit', emptyState);
 
-      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.interactive).toBe(true);
     });
 
@@ -3063,8 +3097,8 @@ TIER: M`,
       expect(result1.success).toBe(true);
       expect(result2.success).toBe(true);
       // Both should have been dispatched with interactive: true
-      const opts1 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-      const opts2 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
+      const opts1 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts2 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
       expect(opts1.interactive).toBe(true);
       expect(opts2.interactive).toBe(true);
     });
@@ -3083,7 +3117,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(false);
       }
     });
@@ -3103,7 +3137,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(false);
       }
     });
@@ -3115,7 +3149,7 @@ TIER: M`,
 
       await runner.run('explore', emptyState);
 
-      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.interactive).toBe(true);
     });
   });
@@ -3175,10 +3209,10 @@ TIER: M`,
     });
 
     it('interactive dispatch substitutes a live model when the configured one is dead', async () => {
-      const invokeInteractive = vi.fn().mockResolvedValue(undefined);
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 });
       const provider: LLMProvider = {
-        invoke: vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 }),
-        invokeInteractive,
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
       };
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         modelOverride: 'fable',
@@ -3188,11 +3222,11 @@ TIER: M`,
         .modelAvailability.markDead('fable');
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      // explore is collaborative (not in AUTONOMOUS_STEPS) → invokeInteractive()
+      // explore is collaborative (not in AUTONOMOUS_STEPS) → invoke()
       await runner.run('explore', emptyState);
 
-      expect(invokeInteractive).toHaveBeenCalledOnce();
-      const opts = invokeInteractive.mock.calls[0][0] as InvokeOptions;
+      expect(invoke).toHaveBeenCalledOnce();
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
       expect(opts.model).toBe('opus');
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('Downgraded from fable to opus'),
@@ -4271,87 +4305,5 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(repairPrompt).toContain(
       'Your previous response (bounded excerpt):\nRuntime-candidates repair output marker.',
     );
-  });
-});
-
-describe('streamingProviderRuntimes preserves every adapter capability (#1855)', () => {
-  class FakeAdapter implements LLMProvider {
-    supportsSessionResume = true;
-    lifecycleCapability = { synchronousSpawnPermit: true } as const;
-    interactiveCalls = 0;
-
-    async invoke(): Promise<InvokeResult> {
-      return { success: true, output: 'direct', exitCode: 0 };
-    }
-
-    async invokeInteractive(): Promise<InvokeResult> {
-      this.interactiveCalls += 1;
-      return { success: true, output: 'interactive', exitCode: 0 };
-    }
-
-    async readiness() {
-      return { provider: 'codex', authenticated: true } as never;
-    }
-
-    async prepareSelfHostAuth() {
-      return { args: [] };
-    }
-
-    async resolveSelfHostExecutable(): Promise<string> {
-      return '/usr/bin/codex';
-    }
-  }
-
-  function streamingRuntimeFor(adapter: LLMProvider): LLMProvider {
-    const policy = CODEX_MODEL_POLICY;
-    const runner = new DefaultStepRunner(createMockProvider(), 's', '/tmp/p', {
-      config: { llm_provider: ['codex'] },
-      providerRuntimes: new ProviderRuntimeSet([
-        {
-          key: 'codex',
-          provider: adapter,
-          policy,
-          builtIn: true,
-          availability: new ModelAvailability(policy.modelFallbackLadder),
-        },
-      ]),
-      sessionStore: new ProviderSessionStore(),
-      configuredProviders: ['codex'],
-    });
-    const streaming = (runner as unknown as {
-      streamingProviderRuntimes: (set: ProviderRuntimeSet) => ProviderRuntimeSet;
-      providerRuntimes: ProviderRuntimeSet;
-    });
-    return streaming.streamingProviderRuntimes(streaming.providerRuntimes).get('codex').provider;
-  }
-
-  it('carries the self-host members the codex isolation path requires', async () => {
-    const wrapped = streamingRuntimeFor(new FakeAdapter());
-    // conductor.ts:3961 reads exactly these two before provisioning codex.
-    expect(typeof wrapped.resolveSelfHostExecutable).toBe('function');
-    expect(typeof wrapped.prepareSelfHostAuth).toBe('function');
-    await expect(wrapped.resolveSelfHostExecutable!()).resolves.toBe('/usr/bin/codex');
-  });
-
-  it('carries `readiness`, so auth recovery still engages on a streaming step', () => {
-    expect(typeof streamingRuntimeFor(new FakeAdapter()).readiness).toBe('function');
-  });
-
-  it('still routes `invoke` through `invokeInteractive` — the reason the wrapper exists', async () => {
-    const adapter = new FakeAdapter();
-    const wrapped = streamingRuntimeFor(adapter);
-    const result = await wrapped.invoke({ prompt: 'p' } as InvokeOptions);
-    expect(result.output).toBe('interactive');
-    expect(adapter.interactiveCalls).toBe(1);
-  });
-
-  it('drops no member of the adapter it wraps', () => {
-    const adapter = new FakeAdapter();
-    const wrapped = streamingRuntimeFor(adapter);
-    const members = ['supportsSessionResume', 'lifecycleCapability', 'invoke', 'invokeInteractive',
-      'readiness', 'prepareSelfHostAuth', 'resolveSelfHostExecutable'];
-    for (const member of members) {
-      expect(wrapped[member as keyof LLMProvider], `missing ${member}`).toBeDefined();
-    }
   });
 });
