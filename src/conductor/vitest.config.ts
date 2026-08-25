@@ -33,7 +33,10 @@ export default defineConfig({
     // Three concurrent forks peak above the 28 GiB user-slice ceiling and
     // are OOM-killed after completing their files. Two retain parallelism
     // while leaving enough headroom for the suite's real-Git fixtures.
-    poolOptions: { forks: { maxForks: 2, minForks: 1 } },
+    // vitest 4 removed `poolOptions`; `maxWorkers` is the same cap. The
+    // branch arrived here with 3 — the count that gets OOM-killed — because
+    // it predates that finding.
+    maxWorkers: 2,
     testTimeout: 20000,
     hookTimeout: 30000,
   },

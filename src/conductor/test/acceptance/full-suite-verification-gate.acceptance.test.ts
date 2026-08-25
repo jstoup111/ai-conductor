@@ -321,9 +321,10 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     }
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);
-    expect(vitestConfig).toMatch(
-      /poolOptions:\s*\{\s*forks:\s*\{\s*maxForks:\s*2,\s*minForks:\s*1\s*\}\s*\}/s,
-    );
+    // vitest 4 removed `poolOptions`; the fork cap is `maxWorkers` now. It
+    // must stay at 2 — 3 is the count that gets OOM-killed on this host.
+    expect(vitestConfig).toMatch(/maxWorkers:\s*2/);
+    expect(vitestConfig).not.toMatch(/poolOptions/);
   });
 
   it('executes the declared command in its working directory and records one PASS', async () => {
