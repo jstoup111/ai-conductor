@@ -305,7 +305,8 @@ export interface InvokeOptions {
   onProviderStream?: (observation: ProviderStreamObservation) => void;
   /**
    * Optional candidate-scoped stream observer. It grants no timeout, kill,
-   * retry, or lifecycle authority.
+   * retry, or lifecycle authority. On an interactive REPL dispatch, it is
+   * inert: the adapter neither invokes nor closes it.
    */
   streamConsumer?: ProviderStreamCandidateObserver;
   /**
