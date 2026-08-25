@@ -528,6 +528,39 @@ describe('executeProviderCandidates', () => {
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ streamConsumer: observer }));
   });
 
+  it('supplies no stream consumer to an interactive dispatch', async () => {
+    // adr-2026-08-24-one-dispatch-member-on-the-provider-contract: the REPL
+    // path supplies no consumer. Its output goes to the operator's terminal,
+    // never as machine envelopes an observer could read.
+    const observerForCandidate = vi.fn();
+    const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
+      success: true,
+      output: 'operator recovery session',
+      exitCode: 0,
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('session')),
+      options: {
+        prompt: 'build',
+        cwd: '/workspace',
+        interactive: true,
+        providerStreamObserverForCandidate: observerForCandidate,
+      },
+    });
+
+    expect(observerForCandidate).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith(
+      expect.not.objectContaining({ streamConsumer: expect.anything() }),
+    );
+  });
+
   it('never resumes into a freshly provisioned self-host home, even after the session was created earlier in the step', async () => {
     // Each self-host dispatch provisions its own throwaway provider home and
     // tears it down afterwards, so no rollout/session state survives into the
