@@ -2844,6 +2844,80 @@ describe('engine/conductor', () => {
       expect(halt).not.toContain('stale finding must not be surfaced');
     });
 
+    // Covers: task:15
+    it('emits and persists stale run-identity telemetry from the verdict handshake', async () => {
+      const seedResult = await readState(statePath);
+      const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        state[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        state[step.name] = 'done';
+      }
+      state.prd_audit = 'pending';
+      state.architecture_review_as_built = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'done';
+      await writeState(statePath, state as ConductState);
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | prior-lap finding |\n');
+      await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ runId: 'prior-run' }));
+
+      const eventsPath = join(dir, '.pipeline/events.jsonl');
+      const persister = new EventPersister(eventsPath, events);
+      const retryDecisions: ConductorEvent[] = [];
+      events.on('retry_decision', (event) => {
+        retryDecisions.push(event);
+      });
+      persister.start();
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        fromStep: 'prd_audit',
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 1,
+      });
+      // A failed sidecar stamp leaves the prior run identity in place. The
+      // production method deliberately treats this as non-fatal, so this is
+      // the real handshake boundary that must surface the stale decision.
+      (conductor as unknown as {
+        stampVerdictRunIdentity: (step: StepName, runId?: string) => Promise<void>;
+      }).stampVerdictRunIdentity = async () => {};
+
+      try {
+        await conductor.run();
+      } finally {
+        persister.stop();
+      }
+
+      const persisted = (await readFile(eventsPath, 'utf8'))
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(persisted).toContainEqual(expect.objectContaining({
+        type: 'verdict_freshness',
+        step: 'prd_audit',
+        artifact: report,
+        floorSource: 'run-identity',
+        outcome: 'stale_invalidated',
+        fresh: false,
+      }));
+      expect(retryDecisions).toContainEqual(expect.objectContaining({
+        type: 'retry_decision',
+        step: 'prd_audit',
+        decision: 'rerun',
+        signal: 'stale-run-identity',
+      }));
+    });
+
     // Covers: task:12
     it('recovers from a cleared stale-verdict halt without deleting its prior-lap artifacts', async () => {
       const seedResult = await readState(statePath);

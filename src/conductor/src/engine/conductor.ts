@@ -2592,6 +2592,17 @@ export class Conductor {
       return {
         done: false,
         routeClass: 'absent',
+        ...(identities.state === 'stale-run-identity'
+          ? {
+              retrySignal: 'stale-run-identity' as const,
+              verdictFreshness: {
+                artifact: files[0] ?? marker,
+                floorSource: 'run-identity' as const,
+                outcome: 'stale_invalidated' as const,
+                fresh: false,
+              },
+            }
+          : {}),
         reason:
           `post-dispatch verdict write handshake failed for ${step}: ${failures.join('; ')}; ` +
           `expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId}`,

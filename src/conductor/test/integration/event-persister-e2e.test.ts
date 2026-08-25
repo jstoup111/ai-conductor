@@ -91,55 +91,6 @@ describe('Integration: EventPersister e2e', () => {
     expect(completed.tokenUsage?.output).toBe(50);
   });
 
-  // Covers: task:15
-  it('routes run-identity freshness and retry-decision telemetry through the existing spine', async () => {
-    const persister = new EventPersister(eventsPath, emitter);
-    persister.start();
-    const retryDecisions: Array<Record<string, unknown>> = [];
-    emitter.on('retry_decision', (event) => {
-      retryDecisions.push(event as Record<string, unknown>);
-    });
-
-    await emitter.emit({
-      type: 'verdict_freshness',
-      step: 'prd_audit',
-      artifact: '.pipeline/prd-audit.md',
-      outcome: 'stale_invalidated',
-      fresh: false,
-      floorSource: 'run-identity',
-    });
-    await emitter.emit({
-      type: 'retry_decision',
-      step: 'prd_audit',
-      attempt: 1,
-      decision: 'rerun',
-      signal: 'stale-run-identity',
-    });
-
-    persister.stop();
-
-    const events = (await readFile(eventsPath, 'utf-8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-
-    expect(events).toEqual([
-      expect.objectContaining({
-        type: 'verdict_freshness',
-        floorSource: 'run-identity',
-      }),
-    ]);
-    // retry_decision deliberately remains live-only per EVENT_SINKS; this
-    // asserts its existing emitter path without changing sink routing.
-    expect(retryDecisions).toEqual([
-      expect.objectContaining({
-        type: 'retry_decision',
-        decision: 'rerun',
-        signal: 'stale-run-identity',
-      }),
-    ]);
-  });
-
   // ─── Task 16: events before stop() are parseable (interrupt resilience) ────
 
   it('exactly 5 events are written after emitting 5 and calling stop()', async () => {
