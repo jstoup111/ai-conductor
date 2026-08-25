@@ -2341,7 +2341,7 @@ describe('CodexProvider', () => {
     const cases = [
       {
         name: 'success',
-        response: { stdout: 'Done!', stderr: '', exitCode: 0, failed: false },
+        response: { stdout: jsonlMessage('Done!'), stderr: '', exitCode: 0, failed: false },
         expected: { success: true, output: 'Done!', exitCode: 0 },
       },
       {

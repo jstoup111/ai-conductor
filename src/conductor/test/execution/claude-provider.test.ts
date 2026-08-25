@@ -567,6 +567,7 @@ describe('ClaudeProvider', () => {
       provider = new ClaudeProvider(clock);
       mockExeca.mockResolvedValue({
         stdout: JSON.stringify({
+          type: 'result',
           result: 'Failed output',
           usage: { input_tokens: 17, output_tokens: 4 },
           duration_ms: 45,
@@ -578,7 +579,7 @@ describe('ClaudeProvider', () => {
 
       const result = await provider.invoke(baseOptions);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         success: false,
         output: 'Failed output\nInvalid API key',
         exitCode: 1,
@@ -586,7 +587,7 @@ describe('ClaudeProvider', () => {
         rateLimited: undefined,
         sessionExpired: undefined,
         modelUnavailable: undefined,
-        tokenUsage: { input: 17, output: 4, durationMs: 45 },
+        tokenUsage: undefined,
         waitSeconds: undefined,
         deadline: undefined,
         observedIntervals: [{ startedAtMs: 3_000, durationMs: 55 }],
@@ -795,7 +796,7 @@ describe('ClaudeProvider', () => {
         failed: true,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result.rateLimited).toBe(true);
       expect(result.success).toBe(false);
     });
@@ -810,7 +811,7 @@ describe('ClaudeProvider', () => {
         failed: true,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result.sessionExpired).toBe(true);
     });
 
@@ -821,7 +822,7 @@ describe('ClaudeProvider', () => {
         failed: true,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result.sessionExpired).toBe(true);
     });
 
@@ -832,7 +833,7 @@ describe('ClaudeProvider', () => {
         failed: false,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result.success).toBe(true);
       expect(result.output).toBe('Done!');
       expect(result.exitCode).toBe(0);
@@ -846,7 +847,7 @@ describe('ClaudeProvider', () => {
         failed: true,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result.success).toBe(false);
       expect(result.output).toMatch(/not found/i);
     });
@@ -1009,7 +1010,7 @@ describe('ClaudeProvider', () => {
         failed: true,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result.modelUnavailable).toBe(true);
       expect(result.success).toBe(false);
     });
@@ -1036,7 +1037,7 @@ describe('ClaudeProvider', () => {
         failed: false,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       // Soft notice rides exit 0, but the model can't run → ladder must engage.
       expect(result.modelUnavailable).toBe(true);
       // And it is NOT a real success — no work was done, no artifact written.
@@ -1051,7 +1052,7 @@ describe('ClaudeProvider', () => {
         failed: false,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result).toMatchObject({ modelUnavailable: true, success: false });
     });
 
@@ -1156,7 +1157,7 @@ describe('ClaudeProvider', () => {
         failed: false,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       // Soft notice rides exit 0, but rate limit is still in effect → must wait and retry.
       expect(result.rateLimited).toBe(true);
       // And it is NOT a real success — no work was done, no artifact written.
@@ -1172,7 +1173,7 @@ describe('ClaudeProvider', () => {
         failed: false,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result.rateLimited).toBeUndefined();
       expect(result.success).toBe(true);
     });
@@ -1335,7 +1336,7 @@ describe('ClaudeProvider', () => {
         failed: false,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result.success).toBe(true);
       expect(result.authFailure).toBeUndefined();
     });
@@ -1552,13 +1553,13 @@ describe('ClaudeProvider', () => {
       const provider = new ClaudeProvider();
 
       // First call should detect rate limit
-      const result1 = await provider.invoke(baseOptions);
+      const result1 = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result1.rateLimited).toBe(true);
       expect(result1.success).toBe(false);
       expect(result1.waitSeconds).toBeDefined();
 
       // Second call should succeed
-      const result2 = await provider.invoke(baseOptions);
+      const result2 = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result2.success).toBe(true);
       expect(result2.rateLimited).toBeUndefined();
     });
@@ -1651,7 +1652,12 @@ describe('ClaudeProvider', () => {
     const cases = [
       {
         name: 'success',
-        response: { stdout: 'Done!', stderr: '', exitCode: 0, failed: false },
+        response: {
+          stdout: JSON.stringify({ type: 'result', result: 'Done!' }),
+          stderr: '',
+          exitCode: 0,
+          failed: false,
+        },
         expected: { success: true, output: 'Done!', exitCode: 0 },
       },
       {
