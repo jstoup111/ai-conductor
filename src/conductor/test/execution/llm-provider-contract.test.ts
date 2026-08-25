@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type {
   AuthenticationReadiness,
   AuthenticationSource,
   InvokeOptions,
   InvokeResult,
   LLMProvider,
+  ProviderStreamCandidateObserver,
 } from '../../src/execution/llm-provider.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -65,6 +66,28 @@ async function executeCodexCandidate(
 }
 
 describe('InvokeResult provider-unavailable contract', () => {
+  it('accepts InvokeOptions with and without an optional stream consumer', () => {
+    const optionsWithoutStreamConsumer: InvokeOptions = {
+      prompt: 'contract check',
+      sessionId: 'streamless-session',
+      resume: false,
+    };
+    const streamConsumer: ProviderStreamCandidateObserver = {
+      onProviderStream: async () => {},
+      close: async () => {},
+    };
+    const optionsWithStreamConsumer: InvokeOptions = {
+      prompt: 'contract check',
+      sessionId: 'streaming-session',
+      resume: false,
+      streamConsumer,
+    };
+
+    expectTypeOf<InvokeOptions['streamConsumer']>().toEqualTypeOf<
+      ProviderStreamCandidateObserver | undefined
+    >();
+  });
+
   it('exposes the #1069 fail-closed Codex session-resume capability seam', () => {
     const provider: LLMProvider = new CodexProvider();
     const buildArgs = (

@@ -304,6 +304,11 @@ export interface InvokeOptions {
    */
   onProviderStream?: (observation: ProviderStreamObservation) => void;
   /**
+   * Optional candidate-scoped stream observer. It grants no timeout, kill,
+   * retry, or lifecycle authority.
+   */
+  streamConsumer?: ProviderStreamCandidateObserver;
+  /**
    * Internal candidate boundary: supplies a fresh observer for each invoked
    * provider, preventing fallback candidates from inheriting stream state.
    */
