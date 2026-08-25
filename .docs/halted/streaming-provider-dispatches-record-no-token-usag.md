@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-25T10:38:41.646Z
 Slug: streaming-provider-dispatches-record-no-token-usag
 Class: needs-human
 Halting step: prd_audit
