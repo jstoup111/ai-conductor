@@ -663,7 +663,7 @@ export class ClaudeProvider implements LLMProvider {
       hasMachineEnvelope,
       observed.interval,
       options.prompt,
-      options.interactive === false,
+      hasMachineEnvelope,
     );
   }
 

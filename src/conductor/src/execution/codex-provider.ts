@@ -317,7 +317,7 @@ export class CodexProvider implements LLMProvider {
       !repl,
       readiness,
       { model: options.model, cwd: options.cwd },
-      options.interactive === false,
+      !repl,
     );
     return { ...completion, observedIntervals: [interval] };
   }

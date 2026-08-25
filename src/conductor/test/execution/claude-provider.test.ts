@@ -97,6 +97,22 @@ describe('ClaudeProvider', () => {
     if (expectedMessage) expect(result.output).toContain(expectedMessage);
   });
 
+  it('rejects malformed successful machine output when interactive is omitted', async () => {
+    mockExeca.mockResolvedValue({
+      stdout: 'not a Claude stream-json envelope',
+      stderr: '',
+      exitCode: 0,
+      failed: false,
+    } as any);
+
+    const result = await provider.invoke(baseOptions);
+
+    expect(result).toMatchObject({ success: false, exitCode: 0 });
+    expect(result.tokenUsage).toBeUndefined();
+    expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
+    expect(result.output).toContain('missing terminal result record');
+  });
+
   describe('invoke', () => {
     it('declares synchronous spawn-permit lifecycle capability', () => {
       expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
