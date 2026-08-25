@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-25T10:11:01.289Z
 Slug: land-time-validation-that-every-plan-task-carries-
 Class: needs-human
 Halting step: prd_audit
