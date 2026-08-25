@@ -13,13 +13,13 @@ graph TD
     RA[parsePrdAuditReport + overScopeRelations]
     RT[routePrdAuditOverScope<br/>selects blocking findings:<br/>outside-visible AND undecided]
     HS[Halt sites x2 in conductor.ts<br/>render OVER_SCOPE_DECISIONS block<br/>for ALL blocking findings]
-    RD[readClearedOverScopeDecisions<br/>parses fenced JSON array wholesale]
+    RD[parseClearedOverScopeDecisions<br/>parses fenced JSON array wholesale]
     REC[recordOverScopeDecisions<br/>accept → widening entry<br/>refuse → refusal entry<br/>accept overrides prior refusal]
   end
   subgraph Pipeline state
     HALT[.pipeline/HALT<br/>body carries OVER_SCOPE_DECISIONS array]
     CLR[.pipeline/HALT.cleared<br/>operator-edited decisions]
-    AW[.pipeline/accepted-widenings.json<br/>version 2: accepted + refused entries]
+    AW[.pipeline/accepted-widenings.json<br/>version 1: accepted + refused entries]
   end
   OP((Operator))
 
@@ -45,7 +45,7 @@ sequenceDiagram
   O->>P: clear halt (body preserved at HALT.cleared)
   D->>C: re-dispatch
   C->>P: read HALT.cleared, parse array wholesale
-  C->>P: record 2 widenings + 1 refusal (accepted-widenings.json v2)
+  C->>P: record 2 widenings + 1 refusal (accepted-widenings.json v1)
   C->>C: re-route: S4.1/S4.3 accepted, S5.2 refused
   C->>P: write NEW halt: «S5.2 refused — rework required»<br/>never the unchanged original halt
 ```

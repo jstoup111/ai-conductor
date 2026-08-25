@@ -9,12 +9,15 @@ import {
   remediationLapCapForGate,
   routePrdAuditPlanGaps,
   routePrdAuditOverScope,
+  recordedPrdAuditFindingsBlock,
   type StepRunner,
 } from '../src/engine/conductor.js';
 import {
-  acceptClearedOverScopeHalt,
-  readAcceptedWidenings,
-  renderOverScopeAcceptanceCandidate,
+  classifyOverScopeCriterion,
+  parseClearedOverScopeDecisions,
+  readOverScopeDecisions,
+  recordOverScopeDecisions,
+  renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
 import { readGrowth, readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
@@ -197,7 +200,219 @@ describe('prd_audit kickback', () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  async function runGroupedPrdAudit(report: string, stories: string) {
+  it('reads only conforming version-one over-scope decision stores', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'over-scope-decisions-reader-'));
+    dirs.push(root);
+    const path = join(root, '.pipeline', 'accepted-widenings.json');
+
+    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions: [] });
+
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(path, '{ not json');
+    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions: [] });
+
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      entries: [{ criterion: 'S3.1', summary: 'Old store.', acceptedAt: '2026-08-24T00:00:00.000Z' }],
+    }));
+    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions: [] });
+
+    const decisions = [{
+      criterion: 'S3.1',
+      summary: 'Visible optional behavior.',
+      decision: 'accept',
+      rationale: 'The operator approved this visible widening.',
+      operator: 'operator@example.test',
+      decidedAt: '2026-08-24T00:00:00.000Z',
+    }];
+    await writeFile(path, JSON.stringify({ version: 1, decisions }));
+    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions });
+  });
+
+  it('records durable decisions idempotently and permits a later override', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'over-scope-decisions-record-'));
+    dirs.push(root);
+    const refuse = { criterion: 'S3.1', summary: 'Visible behavior.', decision: 'refuse' as const, rationale: 'Needs rework.', operator: 'operator' };
+    await expect(recordOverScopeDecisions(root, [refuse])).resolves.toMatchObject({ recorded: [expect.objectContaining(refuse)] });
+    await expect(recordOverScopeDecisions(root, [refuse])).resolves.toEqual({ recorded: [] });
+    await recordOverScopeDecisions(root, [{ ...refuse, decision: 'accept', rationale: 'Approved after review.' }]);
+    const decisions = (await readOverScopeDecisions(root)).decisions;
+    expect(classifyOverScopeCriterion('S3.1', new Map([['S3.1', 'outside-visible']]), decisions)).toBe('accepted');
+  });
+
+  it('carries harvest defects and recorded decisions out of a halted over-scope route', async () => {
+    // ADR D7: a defect the operator's edit produced must reach the next halt
+    // body, not only the spine. ADR D8: recorded decisions project into the
+    // verdict artifact even when the route halts on a refusal.
+    const root = await mkdtemp(join(tmpdir(), 'over-scope-halt-route-'));
+    dirs.push(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'prd-audit.md'), [
+      '# PRD Audit',
+      '',
+      '**PRD:** none',
+      '',
+      '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:1 |',
+      '',
+    ].join('\n'));
+    await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+      version: 1,
+      decisions: [{
+        criterion: 'S3.1',
+        summary: 'Visible behavior outside the approved intent.',
+        decision: 'refuse',
+        rationale: 'Rework it inside scope.',
+        operator: 'operator@example.test',
+        decidedAt: '2026-08-24T00:00:00.000Z',
+      }],
+    }));
+    // An entry naming a criterion the halt never offered is a named defect.
+    await writeFile(join(root, '.pipeline', 'HALT.cleared'), [
+      '```json over-scope-decisions',
+      '[{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"}]',
+      '```',
+    ].join('\n'));
+
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline/conduct-state.json'),
+      stepRunner: { run: async () => ({ success: true }) },
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+
+    const route = await (conductor as unknown as {
+      routeCurrentPrdAuditOverScope: () => Promise<{
+        kind: string;
+        refused?: Array<{ criterion: string }>;
+        defects?: Array<{ kind: string; criterion?: string }>;
+      }>;
+    }).routeCurrentPrdAuditOverScope();
+
+    expect(route.kind).toBe('halt');
+    expect(route.refused).toEqual([expect.objectContaining({ criterion: 'S3.1' })]);
+    expect(route.defects).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'unknown-criterion', criterion: 'S9.9' })]),
+    );
+
+    const report = await readFile(join(root, '.pipeline', 'prd-audit.md'), 'utf8');
+    expect(report).toContain('## Recorded Findings');
+    expect(report).toContain('"decision": "refuse"');
+    expect(report).toContain('"rationale": "Rework it inside scope."');
+  });
+
+  it('refuses to render a recorded decision that carries no rationale, naming the reason', () => {
+    // ADR adr-2026-08-24 D8 / adr-2026-08-13 §6: a recorded decision that
+    // cannot be rendered blocks with a named reason rather than silently
+    // disappearing from the verdict artifact.
+    const renderable = recordedPrdAuditFindingsBlock([
+      { gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.1', summary: 'Visible.', decision: 'refuse', rationale: 'Rework.' },
+    ]);
+    expect(renderable.ok).toBe(true);
+    expect(renderable.ok && renderable.block).toContain('"decision": "refuse"');
+
+    const missingRationale = recordedPrdAuditFindingsBlock([
+      { gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.1', summary: 'Visible.', decision: 'accept', rationale: '   ' },
+    ]);
+    expect(missingRationale).toEqual({
+      ok: false,
+      message: 'recorded decision accept on S3.1 carries no rationale',
+    });
+
+    const missingSummary = recordedPrdAuditFindingsBlock([
+      { gate: 'prd_audit', grade: 'PLAN_GAP', criterion: 'S4.2', summary: '' },
+    ]);
+    expect(missingSummary).toEqual({ ok: false, message: 'recorded finding S4.2 carries no summary' });
+
+    const unrenderableDecision = {
+      gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.2', summary: 'Visible.',
+      decision: 'accept', rationale: 'Accepted.', unrenderableDetail: 1n,
+    };
+    expect(recordedPrdAuditFindingsBlock([unrenderableDecision] as never)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('recorded findings are not serializable'),
+    });
+  });
+
+  it('halts with the named serialization refusal and leaves the verdict unwritten', async () => {
+    // D8 fail-closed: exercise the renderer's own unrenderable-decision path,
+    // not filesystem permissions (which a privileged test process can bypass).
+    const report = overScopeReport('S9.7', 'outside-visible');
+    const originalStringify = JSON.stringify;
+    const stringify = vi.spyOn(JSON, 'stringify').mockImplementation(
+      ((value: unknown, replacer?: Parameters<typeof JSON.stringify>[1], space?: Parameters<typeof JSON.stringify>[2]) => {
+        if (
+          typeof value === 'object' && value !== null &&
+          'findings' in value && Array.isArray((value as { findings?: unknown }).findings)
+        ) {
+          throw new Error('recorded decision is unrenderable');
+        }
+        return originalStringify(value, replacer, space);
+      }) as typeof JSON.stringify,
+    );
+    try {
+      const fixture = await runGroupedPrdAudit(
+        report,
+        storiesWithCriterion('Happy Path'),
+        async (root) => {
+          await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+            version: 1,
+            decisions: [{
+              criterion: 'S9.7',
+              summary: 'A recorded visible widening.',
+              decision: 'accept',
+              rationale: 'The operator explicitly accepted it.',
+              operator: 'operator@example.test',
+              decidedAt: '2026-08-25T00:00:00.000Z',
+            }],
+          }), 'utf8');
+        },
+      );
+
+      await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+        'Unreadable scope decisions: unrenderable-decision (recorded findings are not serializable: recorded decision is unrenderable).',
+      );
+      // Fail closed: the artifact is exactly the judge's original verdict;
+      // it never settles without the recorded operator decision.
+      await expect(readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).resolves.toBe(report);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it('renders all undecided criteria and parses valid decision siblings while naming defects', () => {
+    const rendered = renderOverScopeDecisionBlock([
+      { criterion: 'S3.1', summary: 'First.', relation: 'outside-visible' },
+      { criterion: 'S3.2', summary: 'Second.', relation: 'outside-visible' },
+      { criterion: 'S3.3', summary: 'Third.', relation: 'outside-visible' },
+    ]);
+    expect(rendered).toContain('```json over-scope-decisions');
+    expect(rendered.match(/"decision": "pending"/g)).toHaveLength(3);
+    const edited = rendered
+      .replace('"criterion": "S3.1",\n    "summary": "First.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.1", "summary": "First.", "decision": "accept", "rationale": "Approved."')
+      .replace('"criterion": "S3.2",\n    "summary": "Second.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.2", "summary": "Second.", "decision": "refuse", "rationale": "Rework."')
+      .replace('"criterion": "S3.3",\n    "summary": "Third.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.3", "summary": "Third.", "decision": "accept", "rationale": ""');
+    const parsed = parseClearedOverScopeDecisions(edited, new Set(['S3.1', 'S3.2', 'S3.3']));
+    expect(parsed).toMatchObject({ kind: 'parsed', decisions: [{ criterion: 'S3.1', decision: 'accept' }, { criterion: 'S3.2', decision: 'refuse' }], defects: [{ kind: 'missing-rationale', criterion: 'S3.3' }] });
+  });
+
+  it('treats pending, absent, malformed, unknown, and invalid decision entries safely', () => {
+    expect(parseClearedOverScopeDecisions('ordinary halt', new Set(['S3.1']))).toEqual({ kind: 'absent' });
+    expect(parseClearedOverScopeDecisions('```json over-scope-decisions\n{ nope\n```', new Set(['S3.1']))).toMatchObject({ defects: [{ kind: 'malformed-block' }] });
+    const body = '```json over-scope-decisions\n[{"criterion":"S3.1","summary":"x","decision":"pending"},{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"},{"criterion":"S3.1","summary":"x","decision":"wat","rationale":"x"}]\n```';
+    expect(parseClearedOverScopeDecisions(body, new Set(['S3.1']))).toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }, { kind: 'invalid-decision', criterion: 'S3.1' }] });
+  });
+
+  async function runGroupedPrdAudit(
+    report: string,
+    stories: string,
+    setup?: (root: string) => Promise<void>,
+  ) {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
     dirs.push(root);
     const statePath = join(root, '.pipeline', 'conduct-state.json');
@@ -223,6 +438,7 @@ describe('prd_audit kickback', () => {
       state[step.name] = 'done';
     }
     await writeState(statePath, state as ConductState);
+    await setup?.(root);
 
     const calls: StepName[] = [];
     const runner: StepRunner = {
@@ -642,23 +858,21 @@ describe('prd_audit kickback', () => {
     expect(route).toEqual({ kind: 'none' });
   });
 
-  it('records an operator acceptance from a cleared over-scope halt and regrades it within intent', async () => {
+  it('parses a cleared decision block and regrades an accepted criterion', async () => {
     const root = await mkdtemp(join(tmpdir(), 'accepted-widenings-'));
     dirs.push(root);
     await mkdir(join(root, '.pipeline'), { recursive: true });
     const report = overScopeReport('S3.4', 'outside-visible', 'A visible optional feature.');
-    await writeFile(
-      join(root, '.pipeline', 'HALT.cleared'),
-      `prd-audit halted\n\n${renderOverScopeAcceptanceCandidate({
-        criterion: 'S3.4',
-        summary: 'A visible optional feature.',
-      })}\n`,
-    );
-
-    await acceptClearedOverScopeHalt(root);
-    const accepted = await readAcceptedWidenings(root);
-    expect(accepted.entries).toHaveLength(1);
-    expect(routePrdAuditOverScope(report, accepted.entries)).toMatchObject({
+    const body = renderOverScopeDecisionBlock([{ criterion: 'S3.4', summary: 'A visible optional feature.', relation: 'outside-visible' }])
+      .replace('"pending"', '"accept"')
+      .replace('"decision": "accept"', '"decision": "accept", "rationale": "Approved."');
+    const parsed = parseClearedOverScopeDecisions(body, new Set(['S3.4']));
+    expect(parsed.kind).toBe('parsed');
+    if (parsed.kind !== 'parsed') return;
+    await recordOverScopeDecisions(root, parsed.decisions.map((decision) => ({ ...decision, operator: 'test' })));
+    const decisions = await readOverScopeDecisions(root);
+    expect(decisions.decisions).toHaveLength(1);
+    expect(routePrdAuditOverScope(report, decisions.decisions)).toMatchObject({
       kind: 'record',
       findings: [{ criterion: 'S3.4', accepted: true }],
     });

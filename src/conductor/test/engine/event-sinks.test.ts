@@ -117,6 +117,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'contained_live_checkout_drift',
   'provider_stream_progress',
   'self_host_containment_verdict',
+  'over_scope_decision',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -274,6 +275,34 @@ describe('event sink subscriptions', () => {
         type: 'loop_halt',
         reason: 'kickback cap exceeded',
       });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists recorded over-scope decisions and named defects through the shared ledger', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'over-scope-decision-event-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const event = {
+      type: 'over_scope_decision' as const,
+      criteria: ['S2.1', 'S2.2'],
+      decisions: [
+        { criterion: 'S2.1', decision: 'accept' as const },
+        { criterion: 'S2.2', decision: 'refuse' as const },
+      ],
+      defects: [{ kind: 'missing-rationale' as const, criterion: 'S2.3' }],
+    } satisfies ConductorEvent;
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+
+      expect(
+        JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')),
+      ).toEqual({ ...event, ts: expect.any(String) });
     } finally {
       persister.stop();
       await rm(projectRoot, { recursive: true, force: true });

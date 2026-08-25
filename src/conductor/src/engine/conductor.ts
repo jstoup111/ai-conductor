@@ -182,12 +182,13 @@ import {
   type OverScopeHaltClass,
 } from './halt-classification.js';
 import {
-  acceptClearedOverScopeHalt,
-  overScopeCriterionIsAccepted,
+  classifyOverScopeCriterion,
   overScopeRelations,
-  readAcceptedWidenings,
-  renderOverScopeAcceptanceCandidate,
-  type AcceptedWidening,
+  parseClearedOverScopeDecisions,
+  readOverScopeDecisions,
+  recordOverScopeDecisions,
+  renderOverScopeDecisionBlock,
+  type OverScopeDecision,
   type IntentRelation,
 } from './accepted-widenings.js';
 import type { ScopeTrailer } from './scope-trailer.js';
@@ -555,6 +556,8 @@ export interface RecordedPrdAuditFinding {
   criterion: string;
   summary: string;
   accepted?: boolean;
+  decision?: 'accept' | 'refuse';
+  rationale?: string;
 }
 
 export type PrdAuditPlanGapRoute =
@@ -634,7 +637,7 @@ export function routePrdAuditPlanGaps(
 export type PrdAuditOverScopeRoute =
   | { kind: 'none' }
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
-  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[] };
+  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; defects?: Array<{ kind: string; criterion?: string; message?: string }> };
 
 /**
  * One PRD-audit route result shared by the serial SHIP walk and the
@@ -647,12 +650,15 @@ type CurrentPrdAuditRoute =
   | { kind: 'none' }
   | { kind: 'record' }
   | { kind: 'plan-gap-halt'; route: Extract<PrdAuditPlanGapRoute, { kind: 'halt' }> }
-  | { kind: 'over-scope-halt'; route: Extract<PrdAuditOverScopeRoute, { kind: 'halt' }> };
+  | { kind: 'over-scope-halt'; route: Extract<PrdAuditOverScopeRoute, { kind: 'halt' }> }
+  // D8: the projection itself refused. Named, blocking, and ahead of every
+  // other route — an unrenderable decision must not be settled as satisfied.
+  | { kind: 'projection-halt'; reason: string };
 
 /** Route OVER_SCOPE findings through intent relation and prior operator acceptance. */
 export function routePrdAuditOverScope(
   reportText: string,
-  acceptedWidenings: readonly AcceptedWidening[],
+  decisions: readonly OverScopeDecision[],
 ): PrdAuditOverScopeRoute {
   const parsed = parsePrdAuditReport(reportText);
   if (!parsed.ok) return { kind: 'none' };
@@ -663,26 +669,32 @@ export function routePrdAuditOverScope(
     .map((finding) => {
       const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
       const relation = relations.get(finding.criterion) as IntentRelation;
-      const accepted = overScopeCriterionIsAccepted(finding.criterion, relations, acceptedWidenings);
+      const classification = classifyOverScopeCriterion(finding.criterion, relations, decisions);
+      const durableDecision = decisions.filter((entry) => entry.criterion === finding.criterion).at(-1);
       return {
         gate: 'prd_audit' as const,
         grade: 'OVER_SCOPE' as const,
         criterion: finding.criterion,
         summary,
-        accepted,
-        relation: accepted ? 'within' as const : relation,
+        accepted: classification === 'accepted' || relation === 'within',
+        ...(durableDecision ? { decision: durableDecision.decision, rationale: durableDecision.rationale } : {}),
+        classification,
+        relation,
       };
     });
   if (findings.length === 0) return { kind: 'none' };
 
-  const visible = findings.filter((finding) => finding.relation === 'outside-visible');
-  const recorded = findings.map(({ relation: _relation, ...finding }) => finding);
-  if (visible.length > 0) {
+  const undecided = findings.filter((finding) => finding.classification === 'blocking-undecided');
+  const refused = findings.filter((finding) => finding.classification === 'blocking-refused');
+  const recorded = findings.map(({ relation: _relation, classification: _classification, ...finding }) => finding);
+  if (undecided.length > 0 || refused.length > 0) {
     return {
       kind: 'halt',
       haltClass: OVER_SCOPE_HALT_CLASS,
-      detail: `OVER_SCOPE visible behavior on ${visible.map((finding) => finding.criterion).join(', ')}.`,
+      detail: `OVER_SCOPE visible behavior on ${[...undecided, ...refused].map((finding) => finding.criterion).join(', ')}.`,
       findings: recorded,
+      undecided: undecided.map(({ classification: _classification, ...finding }) => finding),
+      refused: refused.map(({ classification: _classification, ...finding }) => finding),
     };
   }
   const hasOtherBlockingGrade = parsed.value.findings.some(
@@ -710,20 +722,71 @@ export function prdAuditScopeProjection(input: {
   };
 }
 
-function recordedPrdAuditFindingsBlock(findings: readonly RecordedPrdAuditFinding[]): string {
-  return `## Recorded Findings\n\n\`\`\`json\n${JSON.stringify({ findings }, null, 2)}\n\`\`\``;
+/**
+ * ADR adr-2026-08-24 D8 (with adr-2026-08-13 §6): a recorded decision that
+ * cannot be rendered BLOCKS with a named reason — it never silently
+ * disappears from the verdict artifact. Rendering is therefore a fail-closed
+ * result, not a string: every finding must carry the fields the projection
+ * promises, and the block must survive a JSON round-trip.
+ */
+export type RecordedFindingsProjection =
+  | { ok: true; block: string }
+  | { ok: false; message: string };
+
+export function recordedPrdAuditFindingsBlock(
+  findings: readonly RecordedPrdAuditFinding[],
+): RecordedFindingsProjection {
+  for (const finding of findings) {
+    const where = finding.criterion?.trim() || '<criterion missing>';
+    if (!finding.criterion?.trim()) {
+      return { ok: false, message: 'a recorded finding carries no criterion id' };
+    }
+    if (!finding.summary?.trim()) {
+      return { ok: false, message: `recorded finding ${where} carries no summary` };
+    }
+    if (finding.decision && !finding.rationale?.trim()) {
+      return {
+        ok: false,
+        message: `recorded decision ${finding.decision} on ${where} carries no rationale`,
+      };
+    }
+  }
+  let json: string;
+  try {
+    json = JSON.stringify({ findings }, null, 2);
+  } catch (error) {
+    return {
+      ok: false,
+      message: `recorded findings are not serializable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (typeof json !== 'string') {
+    return { ok: false, message: 'recorded findings rendered to no JSON body' };
+  }
+  return { ok: true, block: `## Recorded Findings\n\n\`\`\`json\n${json}\n\`\`\`` };
 }
 
 async function persistPrdAuditRecordedFindings(
   reportPath: string,
   reportText: string,
   findings: readonly RecordedPrdAuditFinding[],
-): Promise<void> {
-  const recordedBlock = recordedPrdAuditFindingsBlock(findings);
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const rendered = recordedPrdAuditFindingsBlock(findings);
+  // Fail closed: write nothing rather than a verdict artifact that omits a
+  // decision the operator authored.
+  if (!rendered.ok) return rendered;
   const next = reportText.match(/^## Recorded Findings\s*$/im)
-    ? reportText.replace(/^## Recorded Findings\s*$[\s\S]*$/im, recordedBlock)
-    : `${reportText.trimEnd()}\n\n${recordedBlock}\n`;
-  await writeFile(reportPath, next, 'utf8');
+    ? reportText.replace(/^## Recorded Findings\s*$[\s\S]*$/im, rendered.block)
+    : `${reportText.trimEnd()}\n\n${rendered.block}\n`;
+  try {
+    await writeFile(reportPath, next, 'utf8');
+  } catch (error) {
+    return {
+      ok: false,
+      message: `recorded findings could not be written to ${reportPath}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  return { ok: true };
 }
 
 /**
@@ -1790,6 +1853,13 @@ export class Conductor {
    * in-flight dispatch (resume/backstop/idle completionCtx calls).
    */
   private currentAttemptStartedAt: number | undefined;
+
+  /**
+   * Set when a recorded prd-audit finding could not be projected into the
+   * verdict artifact (D8). Consumed once by `routeCurrentPrdAudit`, which
+   * turns it into a named blocking route.
+   */
+  private prdAuditProjectionRefusal: string | undefined;
 
   /**
    * Optional rate-limit episode coordinator (Task 10). When active, coordinates
@@ -2918,7 +2988,8 @@ export class Conductor {
     const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
     const route = routePrdAuditPlanGaps(reportText, storiesText, this.config);
     if (route.kind === 'record') {
-      await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+      const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+      if (!projected.ok) this.prdAuditProjectionRefusal = projected.message;
     }
     return route;
   }
@@ -2933,13 +3004,55 @@ export class Conductor {
     } catch {
       return { kind: 'none' };
     }
-    await acceptClearedOverScopeHalt(this.projectRoot);
-    const accepted = await readAcceptedWidenings(this.projectRoot);
-    const route = routePrdAuditOverScope(reportText, accepted.entries);
-    if (route.kind === 'record') {
-      await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+    const relations = overScopeRelations(reportText);
+    const blockingCriteria = new Set([...relations].filter(([, relation]) => relation === 'outside-visible').map(([criterion]) => criterion));
+    const cleared = await readFile(join(this.projectRoot, '.pipeline', 'HALT.cleared'), 'utf8').catch(() => '');
+    const parsed = parseClearedOverScopeDecisions(cleared, blockingCriteria);
+    // D7: a defect the operator's edit produced must reach the next halt body,
+    // not only the spine. Emitting it and dropping it made the re-halt look
+    // identical to a halt where the operator had never touched the block.
+    let harvestDefects: Array<{ kind: string; criterion?: string; message?: string }> = [];
+    if (parsed.kind === 'parsed') {
+      let operator: string | undefined;
+      try {
+        const identity = await resolveDaemonOwner(await readMachineOwnerConfig(), this.gh, this.projectRoot);
+        operator = identity.resolved ? identity.id : undefined;
+      } catch { /* emitted as a defect below */ }
+      const result = operator ? await recordOverScopeDecisions(this.projectRoot, parsed.decisions.map((decision) => ({ ...decision, operator }))) : { recorded: [], failure: 'missing-operator' as const };
+      const defects = [...parsed.defects, ...(result.failure ? [{ kind: result.failure === 'missing-operator' ? 'missing-operator' as const : 'write-failed' as const }] : [])];
+      harvestDefects = defects;
+      if (parsed.decisions.length || defects.length) await this.events.emit({ type: 'over_scope_decision', criteria: [...blockingCriteria], decisions: result.recorded.map((decision) => ({ criterion: decision.criterion, decision: decision.decision })), defects });
     }
-    return route;
+    const decisions = await readOverScopeDecisions(this.projectRoot);
+    const route = routePrdAuditOverScope(reportText, decisions.decisions);
+    // D8: recorded decisions project into the verdict artifact whichever way
+    // the route went. A halted route carries the same findings — including the
+    // refusal that caused the halt — and previously persisted none of them.
+    if (route.kind === 'record' || route.kind === 'halt') {
+      const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+      if (!projected.ok) {
+        // D8's projection refusal is an evidentiary defect on the same
+        // operator-facing over-scope route, never a generic side channel.
+        // A record route must become a halt so completion cannot pass while
+        // the decision is absent from the verdict artifact.
+        const defects = [...harvestDefects, { kind: 'unrenderable-decision', message: projected.message }];
+        if (route.kind === 'record') {
+          return {
+            kind: 'halt',
+            haltClass: OVER_SCOPE_HALT_CLASS,
+            detail: 'OVER_SCOPE recorded decision could not be rendered.',
+            findings: route.findings,
+            undecided: [],
+            refused: [],
+            defects,
+          };
+        }
+        return { ...route, defects };
+      }
+    }
+    return route.kind === 'halt' && harvestDefects.length > 0
+      ? { ...route, defects: harvestDefects }
+      : route;
   }
 
   /**
@@ -2949,13 +3062,22 @@ export class Conductor {
    * OVER_SCOPE decision from the same report.
    */
   private async routeCurrentPrdAudit(state: ConductState): Promise<CurrentPrdAuditRoute> {
+    this.prdAuditProjectionRefusal = undefined;
     const planGapRoute = await this.routeCurrentPrdAuditPlanGaps(state);
+    const overScopeRoute =
+      planGapRoute.kind === 'halt' ? undefined : await this.routeCurrentPrdAuditOverScope();
+
+    // D8 first: a decision that could not be projected blocks with its own
+    // named reason, whatever the content route would otherwise have done.
+    if (this.prdAuditProjectionRefusal) {
+      const reason = this.prdAuditProjectionRefusal;
+      this.prdAuditProjectionRefusal = undefined;
+      return { kind: 'projection-halt', reason };
+    }
     if (planGapRoute.kind === 'halt') return { kind: 'plan-gap-halt', route: planGapRoute };
+    if (overScopeRoute?.kind === 'halt') return { kind: 'over-scope-halt', route: overScopeRoute };
 
-    const overScopeRoute = await this.routeCurrentPrdAuditOverScope();
-    if (overScopeRoute.kind === 'halt') return { kind: 'over-scope-halt', route: overScopeRoute };
-
-    return planGapRoute.kind === 'record' || overScopeRoute.kind === 'record'
+    return planGapRoute.kind === 'record' || overScopeRoute?.kind === 'record'
       ? { kind: 'record' }
       : { kind: 'none' };
   }
@@ -5916,6 +6038,19 @@ export class Conductor {
               return;
             }
 
+            if (prdAuditRoute?.kind === 'projection-halt') {
+              const reason =
+                `prd-audit halted: a recorded finding could not be projected into the verdict ` +
+                `artifact — ${prdAuditRoute.reason}`;
+              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+
             if (prdAuditRoute?.kind === 'plan-gap-halt') {
               const reason = `prd-audit halted: needs human DECIDE — ${prdAuditRoute.route.detail}`;
               await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
@@ -5928,11 +6063,10 @@ export class Conductor {
             }
 
             if (prdAuditRoute?.kind === 'over-scope-halt') {
-              const candidate = prdAuditRoute.route.findings.find((finding) => !finding.accepted);
               const reason =
                 `prd-audit halted: user-visible scope requires operator acceptance — ` +
                 `${prdAuditRoute.route.detail}` +
-                (candidate ? `\n\n${renderOverScopeAcceptanceCandidate(candidate)}` : '');
+                `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused, prdAuditRoute.route.defects ?? [])}`;
               await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -7698,6 +7832,18 @@ export class Conductor {
 
             if (step.name === 'prd_audit') {
               const prdAuditRoute = await this.routeCurrentPrdAudit(state);
+              if (prdAuditRoute.kind === 'projection-halt') {
+                const reason =
+                  `prd-audit halted: a recorded finding could not be projected into the verdict ` +
+                  `artifact — ${prdAuditRoute.reason}`;
+                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               if (prdAuditRoute.kind === 'plan-gap-halt') {
                 const reason = `prd-audit halted: needs human DECIDE — ${prdAuditRoute.route.detail}`;
                 await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
@@ -7709,13 +7855,10 @@ export class Conductor {
                 return;
               }
               if (prdAuditRoute.kind === 'over-scope-halt') {
-                const candidate = prdAuditRoute.route.findings.find((finding) => !finding.accepted);
                 const reason =
                   `prd-audit halted: user-visible scope requires operator acceptance — ` +
                   `${prdAuditRoute.route.detail}` +
-                  (candidate
-                    ? `\n\n${renderOverScopeAcceptanceCandidate(candidate)}`
-                    : '');
+                  `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused, prdAuditRoute.route.defects ?? [])}`;
                 await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);

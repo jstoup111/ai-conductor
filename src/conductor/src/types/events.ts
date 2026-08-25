@@ -98,6 +98,26 @@ export type VerdictFreshnessClassification =
       fresh: false;
     };
 
+/** A durable operator decision recorded from an OVER_SCOPE halt clear. */
+export interface OverScopeDecisionEventRecord {
+  criterion: string;
+  decision: 'accept' | 'refuse';
+}
+
+/** Closed, sanitized evidentiary failures observed while harvesting a clear. */
+export type OverScopeDecisionEventDefectKind =
+  | 'malformed-block'
+  | 'unknown-criterion'
+  | 'missing-rationale'
+  | 'invalid-decision'
+  | 'missing-operator'
+  | 'write-failed';
+
+export interface OverScopeDecisionEventDefect {
+  kind: OverScopeDecisionEventDefectKind;
+  criterion?: string;
+}
+
 /**
  * Extra state threaded into onRecovery so the UI can adapt its menu
  * without the engine dictating the layout.
@@ -711,6 +731,16 @@ export type ConductorEvent =
        * not create a PR (zero commits, push failure, gh error).
        */
       prUrl?: string;
+    }
+  | {
+      /** Recorded OVER_SCOPE decisions and any evidentiary defects from one clear. */
+      type: 'over_scope_decision';
+      /** Blocking criteria considered while harvesting this clear. */
+      criteria: string[];
+      /** Decisions durably recorded by this occurrence. */
+      decisions: OverScopeDecisionEventRecord[];
+      /** Named evidentiary defects; defective entries are never recorded. */
+      defects: OverScopeDecisionEventDefect[];
     }
   | {
       /** Writing the durable HALT marker failed, so the feature may not be parked. */

@@ -167,6 +167,7 @@ take the first that matches.
 | `.daemon/parked/<slug>` exists | Operator-parked — not a failure; nothing dispatches until unparked | `runbooks/emergency-stop-a-running-feature.md` |
 | `.worktrees/<slug>` missing, or state says past `worktree` with no directory | Worktree / evidence loss | `runbooks/worktree-and-evidence-recovery.md` |
 | `HALT.class` is `needs-human` | Needs-human halt — an operator decision is required; clearing it without deciding just re-halts | `runbooks/stalled-or-stuck-feature.md` |
+| `HALT.class` is `over-scope` | Edit every desired entry in the fenced `over-scope-decisions` block to `accept` or `refuse` and add a rationale before clearing; pending entries are inert | `runbooks/stalled-or-stuck-feature.md` |
 | `HALT` body reads `heartbeat stalled: no provider activity in …` | Watchdog kill (already handled; `mechanical`) | `runbooks/stalled-or-stuck-feature.md` |
 | `HALT.class` is `mechanical`, or absent/unrecognized | Mechanical halt — daemon may retry; clears on base-branch advance | `runbooks/stalled-or-stuck-feature.md` |
 | `credentials_park` event, or `build-auth-status` exits non-zero | Auth park — waiting on a credential, not on your code | `runbooks/stalled-or-stuck-feature.md` |

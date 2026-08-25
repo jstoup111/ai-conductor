@@ -38,6 +38,10 @@ export type RecordedShipmentFinding =
     summary: string;
     /** False for harmless scope additions; true for an operator-accepted widening. */
     accepted: boolean;
+    /** The operator's durable decision, when one was recorded (ADR D8). */
+    decision?: 'accept' | 'refuse';
+    /** The rationale the operator wrote beside that decision. */
+    rationale?: string;
   }
   | {
     gate: 'architecture_review_as_built';
@@ -77,6 +81,10 @@ export function appendRecordedShipmentFindings(
       : `    outcome: ${yamlScalar(finding.outcome)}`,
     `    summary: ${yamlScalar(finding.summary)}`,
     ...('accepted' in finding ? [`    accepted: ${finding.accepted}`] : []),
+    ...('decision' in finding && finding.decision ? [`    decision: ${finding.decision}`] : []),
+    ...('rationale' in finding && finding.rationale
+      ? [`    rationale: ${yamlScalar(finding.rationale)}`]
+      : []),
   ].join('\n')).join('\n');
   return `${record.slice(0, frontmatterEnd)}\nfindings:\n${rendered}${record.slice(frontmatterEnd)}`;
 }
@@ -121,9 +129,23 @@ function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentF
       if (finding.grade === 'PLAN_GAP') {
         return [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion, summary }];
       }
-      return finding.grade === 'OVER_SCOPE' && typeof finding.accepted === 'boolean'
-        ? [{ gate: 'prd_audit', grade: 'OVER_SCOPE', criterion, summary, accepted: finding.accepted }]
-        : [];
+      if (finding.grade !== 'OVER_SCOPE' || typeof finding.accepted !== 'boolean') return [];
+      // D8: a recorded decision and its rationale ride into the shipped record
+      // with the finding. Dropping them left the record saying a criterion was
+      // accepted with no trace of who decided what, or that it was refused at all.
+      const decision = finding.decision === 'accept' || finding.decision === 'refuse'
+        ? finding.decision
+        : undefined;
+      const rationale = nonEmptyString(finding.rationale);
+      return [{
+        gate: 'prd_audit',
+        grade: 'OVER_SCOPE',
+        criterion,
+        summary,
+        accepted: finding.accepted,
+        ...(decision ? { decision } : {}),
+        ...(decision && rationale ? { rationale } : {}),
+      }];
     });
   } catch {
     return [];

@@ -129,6 +129,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_member_evidence_recomputed: 'not-audited-by-design',
   kickback: 'friction-mapped',
   loop_halt: 'friction-mapped',
+  over_scope_decision: 'not-audited-by-design',
   halt_marker_write_failed: 'friction-mapped',
   halt_record_written: 'friction-mapped',
   halt_record_write_failed: 'friction-mapped',
@@ -405,6 +406,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   kickback: { type: 'kickback', from: 'conflict_check', to: 'architecture_review', evidence: 'missing seam', count: 1 },
   loop_halt: { type: 'loop_halt', reason: 'kickback cap exceeded' },
+  over_scope_decision: {
+    type: 'over_scope_decision',
+    criteria: ['S2.1'],
+    decisions: [{ criterion: 'S2.1', decision: 'accept' }],
+    defects: [],
+  },
   halt_marker_write_failed: {
     type: 'halt_marker_write_failed',
     path: '/tmp/project/.pipeline/HALT',
