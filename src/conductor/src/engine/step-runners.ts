@@ -1018,6 +1018,7 @@ export class DefaultStepRunner implements StepRunner {
                 }
               : {}),
           }),
+        opts?.runId,
       );
       const verifiedResult = safety?.verify(result) ?? result;
       this.callCount++;
@@ -1106,6 +1107,7 @@ export class DefaultStepRunner implements StepRunner {
               }
             : {}),
         }),
+      request.dispatch?.runId,
     );
     return safety?.verify(result) ?? result;
   }
@@ -1121,13 +1123,29 @@ export class DefaultStepRunner implements StepRunner {
     run: (
       options: ExecuteProviderCandidatesInput['options'],
     ) => Promise<ProviderExecutionResult>,
+    dispatchRunId?: string,
   ): Promise<ProviderExecutionResult> {
     const pulse = createHeartbeatPulse(this.projectDir, step);
     const providerStreamIntervalMs = resolveProviderStreamMinIntervalMs(this.config);
-    const nextAttempt = () => ({
-      logicalStep: step,
-      id: `${this.runId}:${step}:${++this.providerLifecycleAttempt}`,
-    });
+    // adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity D1: when the
+    // engine supplies this dispatch's run identity, the provider-lifecycle
+    // `attempt.id` IS that value — the id this dispatch logs and the id stamped
+    // into the verdict sidecar are one value, so there is a single identity
+    // authority per dispatch rather than two independently minted ids. A
+    // recovery replacement attempt derives from the same identity (`#2`, `#3`)
+    // so it stays attributable to the dispatch that owns it. Callers outside
+    // the identity seam supply nothing and keep the run-scoped id format.
+    let dispatchAttempt = 0;
+    const nextAttempt = () => {
+      const sequence = ++this.providerLifecycleAttempt;
+      dispatchAttempt += 1;
+      return {
+        logicalStep: step,
+        id: dispatchRunId
+          ? (dispatchAttempt === 1 ? dispatchRunId : `${dispatchRunId}#${dispatchAttempt}`)
+          : `${this.runId}:${step}:${sequence}`,
+      };
+    };
     const supervisor = createProviderLifecycleSupervisor({
       attempt: nextAttempt(),
       recoveryCount: 0,

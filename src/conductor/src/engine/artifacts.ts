@@ -2352,6 +2352,17 @@ const VERDICT_RUN_ID_SIDECARS: Partial<Record<StepName, string>> = {
   architecture_review_as_built: ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
 };
 
+/**
+ * The SHIP-tail gates that carry an engine-stamped run identity
+ * (adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity, Decision
+ * scope). Only these dispatches hand their identity to the provider lifecycle
+ * as its `attempt.id`; every other step keeps the runner's own run-scoped
+ * attempt-id format, which daemon logs and lifecycle telemetry read.
+ */
+export function isVerdictRunIdentityStep(step: StepName): boolean {
+  return Object.prototype.hasOwnProperty.call(VERDICT_RUN_ID_SIDECARS, step);
+}
+
 async function readGateCodeStampMarker(path: string): Promise<GateCodeStampMarker> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'));

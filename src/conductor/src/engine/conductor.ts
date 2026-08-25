@@ -177,6 +177,7 @@ import {
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
   stampGateRunIdentity,
+  isVerdictRunIdentityStep,
 } from './artifacts.js';
 import { parsePlanTaskBodies } from './plan-task-parse.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
@@ -1238,6 +1239,16 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 
 export interface StepRunOptions {
   /**
+   * This dispatch's engine-owned run identity, passed INTO the provider
+   * lifecycle so its `attempt.id` is this exact value
+   * (adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity D1). One id
+   * authority per dispatch: the value logged by the lifecycle is the value
+   * stamped into the verdict sidecar and read back by every identity reader.
+   * Absent for dispatches outside the identity seam, which keep the runner's
+   * own run-scoped attempt-id format.
+   */
+  runId?: string;
+  /**
    * Retry hint injected into the system prompt when the conductor re-invokes
    * this step after a completion-gate miss. Example: "previous attempt did not
    * produce .docs/plans/*.md".
@@ -2158,10 +2169,13 @@ export class Conductor {
   private currentAttemptStartedAt: number | undefined;
 
   /**
-   * Engine-owned identity for the current generic dispatch. The provider
-   * lifecycle attempt id is minted inside DefaultStepRunner, after this seam,
-   * so it is not reachable through the StepRunner contract. Cleared alongside
-   * currentAttemptStartedAt after the dispatch completion check.
+   * Identity of the current generic dispatch. Minted once here and passed
+   * into the dispatch as `StepRunOptions.runId`, where it becomes the
+   * provider-lifecycle `attempt.id` (adr-2026-08-25-engine-stamped-ship-tail-
+   * verdict-run-identity D1) — so the lifecycle id, the verdict sidecar stamp,
+   * and every identity reader share one value instead of two authorities.
+   * Cleared alongside currentAttemptStartedAt after the dispatch completion
+   * check.
    */
   private currentRunId: string | undefined;
 
@@ -6277,7 +6291,13 @@ export class Conductor {
             const branchDispatchStartedAt = new Map<string, number>();
             const branchHandshakeFailures = new Map<string, CompletionResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
-              const branchRunIds = new Map(members.map((member) => [member.name, randomUUID()]));
+              // D1: one identity per branch dispatch, minted here and passed
+              // into the branch below so the provider-lifecycle `attempt.id`
+              // is this exact value. Native members run no provider dispatch,
+              // so their id is only the stamp's.
+              const branchRunIds = new Map(
+                members.map((member) => [member.name, randomUUID()] as const),
+              );
               const roundChanges: Record<string, unknown> = {};
               for (const member of members) {
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
@@ -6323,6 +6343,9 @@ export class Conductor {
                     state,
                     {
                       stepRunner: this.stepRunner,
+                      ...(isVerdictRunIdentityStep(member.name as StepName)
+                        ? { runId: branchRunIds.get(member.name) }
+                        : {}),
                       config: this.config,
                       // Task 8 (#817): threaded so sweepStaleReviewArtifacts's
                       // gate_code_validity kill-switch is honored on this
@@ -8084,17 +8107,21 @@ export class Conductor {
             }
           } else
           try {
-            if (
+            const dispatchIdentityArmed =
               step.name !== 'complexity' &&
               step.name !== 'worktree' &&
               step.name !== 'test_suite' &&
               step.name !== 'rebase' &&
-              !(this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name)))))
-            ) {
+              !(this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name)))));
+            if (dispatchIdentityArmed) {
               // Task 2, session-fresh-verdict-artifacts: stamp immediately
               // before the generic dispatch call so completionCtx can
               // require the verdict artifact to postdate THIS attempt.
               this.currentAttemptStartedAt = Date.now();
+              // D1: one identity per dispatch. This id is passed into the
+              // dispatch below, where it becomes the provider-lifecycle
+              // `attempt.id`, so the lifecycle and the verdict sidecar never
+              // carry two independently minted identities.
               this.currentRunId = randomUUID();
             }
             // Dispatch preflight: a step whose working directory no longer
@@ -8140,6 +8167,16 @@ export class Conductor {
                             escalate: resolved.escalate,
                             modelOverride: esc.model,
                             effortOverride: esc.effort,
+                            // D1 scope: only a SHIP-tail verdict gate hands its
+                            // identity to the lifecycle, so that gate's
+                            // `attempt.id` and its sidecar stamp are one value.
+                            // Other steps stamp no identity and keep the
+                            // runner's run-scoped attempt-id format.
+                            ...(dispatchIdentityArmed &&
+                            this.currentRunId &&
+                            isVerdictRunIdentityStep(step.name)
+                              ? { runId: this.currentRunId }
+                              : {}),
                           }));
           } finally {
             buildWatcher?.stop();
@@ -8803,9 +8840,15 @@ export class Conductor {
             // D3: do not let a completion predicate or its downstream
             // routing readers parse a prior-lap SHIP report. The handshake
             // must observe this dispatch's report write first.
+            // Retained for this attempt's readers: `currentRunId` is cleared
+            // below, before the retry-input classifier runs, so reading the
+            // field there would score every stamped verdict `unstamped` and
+            // silently fall back to mtime (D4 requires one identity reader
+            // keyed on the stamp wherever a stamp exists).
+            const dispatchRunId = this.currentRunId;
             const handshake = await this.verdictDispatchHandshake(
               step.name,
-              this.currentRunId,
+              dispatchRunId,
               this.currentAttemptStartedAt,
             );
             if (handshake?.routeClass === 'absent' && handshake.reason) {
@@ -8971,7 +9014,7 @@ export class Conductor {
                 const runIdentity = await verdictProducedByRun(
                   this.projectRoot,
                   step.name,
-                  this.currentRunId,
+                  dispatchRunId,
                 );
                 const retryInputSignature = runIdentity.state === 'unstamped'
                   ? `mtime:${artifactMtimeSignature}`
