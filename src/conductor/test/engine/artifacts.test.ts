@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { execa } from 'execa';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { renderDecideEntryHalt } from '../../src/engine/decide-entry-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -506,7 +507,7 @@ describe('engine/artifacts', () => {
           diagnostic: {
             code: 'ambiguous',
             reason:
-              'stories has 2 artifact candidates and none can be associated with active feature "feature-b"',
+              'stories has 2 artifact candidates and none can be associated with active feature "feature-b". Naming rule: normalized-stem (date prefix stripped); expected stem "feature-b"; example expected filename ".docs/stories/feature-b.md".',
           },
         },
         missing: {
@@ -517,6 +518,31 @@ describe('engine/artifacts', () => {
           },
         },
       });
+    });
+
+    it('reports the #1743 conflict naming rule in ambiguous and forward-walk HALT evidence', async () => {
+      const featureIdentity = 'clean-rubric-judgements-rejected-as-invalid-provid';
+      await createFile('.docs/conflicts/2026-08-19-clean-rubric-judgements.md');
+      await createFile('.docs/conflicts/another-feature.md');
+
+      const resolution = await resolveArtifactFiles(dir, 'conflict_check', {
+        featureIdentities: [featureIdentity],
+        changedPaths: new Set<string>(),
+      });
+      const diagnostic = resolution.diagnostic!;
+      const halt = renderDecideEntryHalt({
+        sourceGate: 'forward-walk',
+        target: 'conflict_check',
+        evidence: diagnostic.reason,
+        reason: 'fixture refusal',
+      });
+
+      expect(diagnostic).toEqual({
+        code: 'ambiguous',
+        reason:
+          'conflict_check has 2 artifact candidates and none can be associated with active feature "clean-rubric-judgements-rejected-as-invalid-provid". Naming rule: normalized-stem (date prefix stripped); expected stem "clean-rubric-judgements-rejected-as-invalid-provid"; example expected filename ".docs/conflicts/clean-rubric-judgements-rejected-as-invalid-provid.md".',
+      });
+      expect(halt).toContain(`Evidence:          ${diagnostic.reason}`);
     });
   });
 
@@ -3450,7 +3476,7 @@ describe('engine/artifacts', () => {
             diagnostic: {
               code: 'ambiguous',
               reason:
-                'plan has 2 artifact candidates and none can be associated with active feature "feature-b"',
+                'plan has 2 artifact candidates and none can be associated with active feature "feature-b". Naming rule: plan-stem; expected stem "feature-b"; example expected filename ".docs/plans/feature-b.md".',
             },
           },
         ],

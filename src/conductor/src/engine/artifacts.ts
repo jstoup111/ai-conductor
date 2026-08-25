@@ -538,18 +538,47 @@ export async function resolveArtifactFiles(
   const identityLabel = activeIdentity
     ? `active feature "${activeIdentity}"`
     : 'the active feature (identity unavailable)';
-  const diagnosticFor = (candidateCount: number): ArtifactResolutionDiagnostic => {
+  const namingRuleFor = (contract: Extract<ArtifactPatternContract, { scope: 'feature' }>): string => {
+    const { identity } = contract;
+    if (identity.strategy === 'plan-stem') return identity.strategy;
+
+    const qualifiers = [
+      identity.stripDatePrefix ? 'date prefix stripped' : undefined,
+      ...(identity.stripPrefixes ?? []).map((prefix) => `"${prefix}" prefix stripped`),
+    ].filter((qualifier): qualifier is string => Boolean(qualifier));
+    return qualifiers.length > 0
+      ? `${identity.strategy} (${qualifiers.join(', ')})`
+      : identity.strategy;
+  };
+  const exampleExpectedPathFor = (
+    contract: Extract<ArtifactPatternContract, { scope: 'feature' }>,
+    expectedStem: string,
+  ): string => {
+    const segments = contract.pattern.split('/');
+    const wildcardIndex = segments.findIndex((segment) => segment.includes('*'));
+    const directory = segments.slice(0, wildcardIndex === -1 ? -1 : wildcardIndex).join('/');
+    return `${directory}/${expectedStem}.md`;
+  };
+  const diagnosticFor = (
+    candidateCount: number,
+    contract?: Extract<ArtifactPatternContract, { scope: 'feature' }>,
+  ): ArtifactResolutionDiagnostic => {
     if (candidateCount === 0) {
       return {
         code: 'missing',
         reason: `${step} has no artifact candidates for ${identityLabel}`,
       };
     }
+    const namingRule =
+      contract && activeIdentity
+        ? `. Naming rule: ${namingRuleFor(contract)}; expected stem "${activeIdentity}"; example expected filename "${exampleExpectedPathFor(contract, activeIdentity)}".`
+        : '';
     return {
       code: 'ambiguous',
-      reason: `${step} has ${candidateCount} artifact candidates and none can be associated with ${identityLabel}`,
+      reason: `${step} has ${candidateCount} artifact candidates and none can be associated with ${identityLabel}${namingRule}`,
     };
   };
+  let firstFeatureContract: Extract<ArtifactPatternContract, { scope: 'feature' }> | undefined;
   for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
     const candidates = await matchGlob(dir, contract.pattern);
     if (contract.scope !== 'feature') {
@@ -559,6 +588,7 @@ export async function resolveArtifactFiles(
     }
 
     hasFeatureContract = true;
+    firstFeatureContract ??= contract;
     featureCandidateCount += candidates.length;
     const associated = candidates.filter((file) => {
       const repoPath = relative(dir, file).replaceAll('\\', '/');
@@ -579,7 +609,7 @@ export async function resolveArtifactFiles(
       patternResults.push({
         pattern: contract.pattern,
         files: [],
-        diagnostic: diagnosticFor(candidates.length),
+        diagnostic: diagnosticFor(candidates.length, contract),
       });
     }
   }
@@ -598,7 +628,7 @@ export async function resolveArtifactFiles(
 
   return withPatterns({
     files: [],
-    diagnostic: diagnosticFor(featureCandidateCount),
+    diagnostic: diagnosticFor(featureCandidateCount, firstFeatureContract),
   });
 }
 
