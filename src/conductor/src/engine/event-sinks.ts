@@ -87,6 +87,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_member_evidence_recomputed: { render: true, persist: true, audit: false },
   kickback: { render: true, persist: true, audit: true },
   loop_halt: { render: true, persist: true, audit: true },
+  over_scope_decision: { render: false, persist: true, audit: false },
   halt_marker_write_failed: { render: true, persist: true, audit: true },
   halt_record_written: { render: true, persist: true, audit: true },
   halt_record_write_failed: { render: true, persist: true, audit: true },
