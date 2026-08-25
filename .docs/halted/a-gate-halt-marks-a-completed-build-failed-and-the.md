@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-25T10:26:29.503Z
+Status: halted
 Slug: a-gate-halt-marks-a-completed-build-failed-and-the
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-a-gate-halt-marks-a-completed-build-failed-and-the
-Head SHA: bac03947efc54957a2efc9e2d7904e703b542ff2
-Halted at: 2026-08-25T05:48:24.854Z
+Head SHA: 4dc8a93d2565c5271f1f5604bc77fd8cdaaf225c
+Halted at: 2026-08-25T10:59:33.463Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
