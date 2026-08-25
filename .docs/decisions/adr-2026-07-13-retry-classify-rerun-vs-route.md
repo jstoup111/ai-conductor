@@ -75,6 +75,12 @@ unchangedInput?: string }`, scoped to the verdict steps (`architecture_review_as
   attempt (`currentCommitSha`, already called in-loop) AND the step's verdict-artifact mtimes
   (`STEP_ARTIFACT_GLOBS[step]`) unchanged since the prior attempt.
 
+> **Amended 2026-08-25 by #1838:** Per
+> adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity, for the SHIP-tail verdict
+> steps `inputsUnchanged` keys on the engine-stamped run identity where a stamp exists
+> (mtime otherwise). The D1 mapping — no fresh verdict ⇒ `absent` ⇒ rerun — is preserved
+> and load-bearing: an identity mismatch is scored `absent`, never `named-route`.
+
 Otherwise `rerun`. The `build` step is never passed to the classifier — its retry/progress accounting
 is #280's and stays untouched.
 

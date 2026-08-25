@@ -46,6 +46,14 @@ declared surface is unchanged since the verdict was recorded — reusing `GATE_S
 Replace the cross-dispatch mtime-freshness rejection with this code-validity check; keep the
 within-dispatch mtime attempt-floor unchanged.**
 
+> **Amended 2026-08-25 by #1838:** Per
+> adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity, a second engine-stamped
+> field (run identity, the dispatch attempt.id) is recorded beside `codeStamp` on the same
+> sidecar contract, and where that stamp exists the identity check supersedes the
+> within-dispatch mtime attempt-floor as the freshness authority. D3 (unstamped falls back
+> to mtime), D4 (sweep gated on the same helper), and D6 (kill-switch) apply verbatim to
+> the new field.
+
 1. **Stamp.** When a judged-gate verdict artifact is written (at judge dispatch), record a `codeStamp`
    = the current HEAD SHA the verdict was formed against, as an additive field on the verdict JSON
    (`build-review.json` etc.). This mirrors `wiring_check`'s `evidence.head` and the `manual_test`
