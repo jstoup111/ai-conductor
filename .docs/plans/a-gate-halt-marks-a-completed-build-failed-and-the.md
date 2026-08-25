@@ -1,359 +1,325 @@
-# Implementation Plan: A gate halt marks a completed build failed, and the residue blocks every later resume
+# Implementation Plan: A gate halt marks a completed build failed, and the residue blocks every later resume (respec)
 
-**Date:** 2026-08-21
-**Source:** jstoup111/ai-conductor#1753
-**Track:** technical
-**Tier:** M
+**Date:** 2026-08-24
 **Stories:** .docs/stories/a-gate-halt-marks-a-completed-build-failed-and-the.md
-**Architecture review:** .docs/decisions/architecture-review-2026-08-21-a-gate-halt-marks-a-completed-build-failed-and-the.md
-**Conflict check:** Clean as of 2026-08-21
+**Conflict check:** Clean as of 2026-08-24 (two degrading overlaps accepted; kickback-cap HALT pinned out of scope)
 
 ## Summary
 
-Give the conductor one typed "refused" step outcome for the three pre-dispatch refusals (protected-artifact seal, missing worktree, live boundary) so none of them can stamp a step `failed`; make resume entry always land on a step the prerequisite gate admits; and make the residual gate-blocked halt name the prerequisite and its status. 14 tasks.
+Adds a typed `refused` step status and a `step_refused` spine event, adopts them at the three
+dispatch-loop sites that still stamp `failed` for non-failure terminations, and makes the residual
+gate-blocked loop exit halt with the unsatisfied prerequisite and its status. 12 tasks.
 
 ## Technical Approach
 
-- **Typed refusal facet.** `StepRunResult` gains `refused?: { kind: 'protected-artifact' | 'missing-worktree' | 'live-boundary'; reason: string }`, following the existing typed-facet precedent (`worktreeMissing`, `permissionDenied`, `unretryableInputs`). The dispatch loop checks `result.refused` in ONE handler placed before the retry/escalation bookkeeping and before the retries-exhausted `saveConductorStepStatus(..., 'failed')`. The handler writes the HALT (class per kind: seal keeps `PROTECTED_ARTIFACT_HALT_CLASS` and its existing attempt-≥2 threshold; the other two keep their existing `emitLoopHalt` behaviour), emits the spine event, stamps the T7 `lastResolvedCount` exactly as the seal exit does today, and returns — it performs **no** status write. Routing is on the facet, never on `output` text (adr-2026-08-19 D1).
-- **Spine event.** New `ConductorEvent` member `{ type: 'step_refused'; step; kind; reason }` declared in `EVENT_SINKS` as `{ render: true, persist: true, audit: false }` (the exhaustive `Record` forces the declaration). `retry_decision` is `persist: false`, so it cannot carry the persisted record Story 2 requires; a new member is the sanctioned route.
-- **Resume entry.** In `Conductor.run`'s `this.resume` branch, after `findResumeIndex` and the optional verdict clamp, apply `clampToRunnablePrerequisite(steps, state, startIndex)` unconditionally. It is the same backward-only, `checkGate`-based walk adr-2026-08-03-build-repair D4 already applies at the selection site; it reads state and never writes. `--from-step` stays exempt. Task 9 pins the gap with a test on the unmodified engine first; if that test is already green, Task 10 is skipped and an intake issue records the unexplained observed jump.
-- **Gate-blocked residual.** `checkGate` returns the unsatisfied prerequisites with their statuses (`unsatisfied: Array<{ step; status }>`) alongside the existing `reason` string. The markerless `gate_blocked` return writes a `needs-human` HALT whose reason is `Prerequisite gate blocked <step>: <prereq> (status: <status>)[, …]`. The finally-backstop keeps its existing wording for every other exit shape.
-- **Local test pattern.** Conductor loop tests build a temp project with `createTempProject`-style fixtures and inject a fake step runner returning a scripted `StepRunResult` per attempt; seal tests seed `.pipeline/protected-artifact-seal.json` and a committed `.docs/` artifact then mutate it. Traits to preserve: fake runner per attempt, real `.pipeline/` on disk, assertions read `conduct-state.json` and `events.jsonl` back. Search hints: `test/engine/conductor.test.ts` (`step_failed`, `loop exited without a terminal verdict`), `test/engine/resume-verdict-clamp.test.ts`, `test/engine/protected-artifact-seal.test.ts`, `test/acceptance/protected-artifact-seal-rebaseline-976.acceptance.test.ts`. Allowed variation: a fresh `test/engine/step-refusal.test.ts` file for the new handler rather than growing `conductor.test.ts`.
+Per adr-2026-08-24-refused-step-status: widen `StepStatus` (`src/conductor/src/types/steps.ts`)
+with `refused`, written only through the `ConductStateStore` mutation port. `stepSatisfied`
+(`src/conductor/src/engine/state.ts`) is deliberately unchanged (`done | skipped | stale`), so a
+refused step is re-admitted by the existing read-only resume clamp after its HALT is cleared. A
+single refusal handler in `src/conductor/src/engine/conductor.ts` receives a typed refusal
+(discriminated `kind: 'seal' | 'needs-human' | 'validation-verdict'`), records `refused`, emits a
+new `step_refused` `ConductorEvent` (declared exhaustively in
+`src/conductor/src/engine/event-sinks.ts` — render, persist, audit), and writes the HALT through
+the existing `writeHaltMarker` seam with the existing class vocabulary. The three adopter sites
+are: the seal retries-exhausted path (search seed `verifyProtectedArtifactSeal`), the two
+step-written needs-human halt stamps (seed: `'failed'` saves adjacent to `emitLoopHalt`), and the
+validation-group halt commit (seed: `commitStateChanges` with `[step.name]: 'failed'`). Routing is
+by typed facet only — never output text (adr-2026-08-19-unretryable). The gate-blocked residual:
+when the loop exits because `checkGate` refused a step and no runnable prerequisite exists, write
+a `needs-human` HALT naming each unsatisfied prerequisite and its recorded status before the loop
+returns, so the generic finally-backstop (whose wording is untouched for every other no-verdict
+exit) never fires for this class.
 
-All paths below are relative to the repository root; the engine lives under `src/conductor/`.
+Local pattern (refusal exits): `worktreeMissing` and `pendingLiveBoundaryHalt` in `conductor.ts`
+are the exemplars — typed facet, early return before any `failed` save, halt via `writeHaltMarker`
+with a closed class. Preserve those traits; allowed variation is the facet's internal shape.
+
+Out of scope (pinned by the conflict report): the kickback-cap exhausted HALT keeps its current
+status behavior; build_review verdict-FAIL kickback routing is untouched; live-boundary,
+missing-worktree, and finish-gate paths are untouched.
 
 ## Prerequisites
 
-- None beyond a clean `npm test` baseline in `src/conductor`.
+None — no migrations, no new dependencies.
 
 ## Tasks
 
-### Task 1: Add the `refused` facet and the `step_refused` spine event
-**Story:** 2
+### Task 1: Add `refused` to StepStatus and pin `stepSatisfied`
+**Story:** 5
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: a type-level test in `test/engine/step-refusal.test.ts` constructs `{ success: false, refused: { kind: 'protected-artifact', reason: 'x' } }` as `StepRunResult` and emits `{ type: 'step_refused', step: 'build', kind: 'protected-artifact', reason: 'x' }` through `ConductorEventEmitter`; assert it lands in `events.jsonl`.
-2. Verify test fails (RED) — compile error on the unknown facet / event member.
-3. Implement: add `refused?: { kind: RefusalKind; reason: string }` to `StepRunResult`; add the `step_refused` member to the `ConductorEvent` union; add `step_refused: { render: true, persist: true, audit: false }` to `EVENT_SINKS`; add a minimal renderer line.
-4. Verify test passes (GREEN).
-5. Commit: "feat(engine): typed refused facet and step_refused spine event"
-
-**Done when:**
-- `StepRunResult.refused` exists with the closed `kind` union (`protected-artifact | missing-worktree | live-boundary`).
-- `EVENT_SINKS` compiles with `step_refused` declared `persist: true`; the test finds the record in `events.jsonl`.
-- No existing test changes.
-
-**Files:**
-- src/conductor/src/engine/conductor.ts — `StepRunResult` facet
-- src/conductor/src/types/events.ts — event member
-- src/conductor/src/engine/event-sinks.ts — sink declaration
-- src/conductor/src/engine/report-renderer.ts — render line
-- src/conductor/test/engine/step-refusal.test.ts — new
-
-**Dependencies:** none
-
-### Task 2: Seal refusal produces the refused facet instead of a bare failure
-**Story:** 1
-**Type:** happy-path
-
-**Steps:**
-1. Write failing test: in `test/engine/step-refusal.test.ts`, drive a BUILD step dispatch whose injected `verifyProtectedArtifactSeal` returns `ok: false`; assert the result handed to the loop carries `refused.kind === 'protected-artifact'` and `refused.reason` equals the seal reason.
+1. Write failing test: a state-store round-trip records `refused` for a step and reads it back; a companion test pins `stepSatisfied` to exactly `done | skipped | stale` (refused, failed, pending, in_progress all unsatisfied).
 2. Verify test fails (RED).
-3. Implement: at the `protectedArtifactIssue` branch, set `result = { success: false, output: dispatchIssue, refused: { kind: 'protected-artifact', reason: dispatchIssue } }`. Leave the attempt-≥2 HALT write and the T7 `lastResolvedCount` stamp in place.
+3. Implement: add `refused` to the `StepStatus` union; fix every compile-time-exhaustive consumer the compiler surfaces without behavior change beyond a distinct label.
 4. Verify test passes (GREEN).
-5. Commit: "feat(engine): seal refusal carries the refused facet"
+5. Commit: "feat(state): add refused step status; stepSatisfied unchanged".
 
 **Done when:**
-- The seal-refusal result carries `refused.kind: 'protected-artifact'`.
-- Seal HALT class and reason text are byte-identical to before (existing `protected-artifact-seal` tests pass unchanged).
+- [ ] `StepStatus` in src/conductor/src/types/steps.ts includes `refused` and the engine compiles
+- [ ] A test asserts `stepSatisfied` returns false for `refused` and true for exactly `done`, `skipped`, `stale`
+- [ ] No call site writes `refused` yet (grep of src shows only type/test references)
 
-**Files:**
-- src/conductor/src/engine/conductor.ts
-- src/conductor/test/engine/step-refusal.test.ts
-
-**Dependencies:** Task 1
-
-### Task 3: One refusal handler short-circuits before retry bookkeeping and the failed stamp
-**Story:** 1
-**Type:** happy-path
-
-**Steps:**
-1. Write failing test: `build = done` in `conduct-state.json`, seal refuses on attempts 1 and 2; run the loop; assert `conduct-state.json` still reads `build: done`, `events.jsonl` contains `step_refused` for `build` and no `step_failed`, and the HALT marker exists with class `protected-artifact`. Second case: `build = pending`, refusal on attempt 1 only; assert `build` stays `pending` and no `step_failed`.
-2. Verify test fails (RED) — today `build` flips to `failed`.
-3. Implement: immediately after `result` is produced in the per-attempt loop, `if (result.refused) { … }`: emit `step_refused`; on the seal kind keep the existing attempt-1 retry (`continue`) and attempt-≥2 HALT; when the HALT is written, stop the watchers, `process.off` the signal handlers, and `return` from the step — never reaching `saveConductorStepStatus(state, step.name, 'failed')`.
-4. Verify test passes (GREEN).
-5. Commit: "fix(engine): refused dispatch never stamps the step failed (#1753)"
-
-**Done when:**
-- Test A: `build: done` survives two seal refusals; `HALT.class` reads `protected-artifact`; no `step_failed` in `events.jsonl`.
-- Test B: `build: pending` survives one refusal; no `step_failed`.
-- The refusal handler contains no call to `saveConductorStepStatus` or `ConductStateStore` mutation (asserted by Task 5).
-
-**Files:**
-- src/conductor/src/engine/conductor.ts
-- src/conductor/test/engine/step-refusal.test.ts
-
-**Dependencies:** Task 2
-
-### Task 4: A genuine provider failure still stamps `failed` and emits `step_failed`
-**Story:** 5
-**Type:** negative-path
-
-**Steps:**
-1. Write test: seal `ok: true`, fake runner returns `{ success: false, output: 'boom' }` on every attempt with `max_retries: 2`; assert `build: failed`, a `step_failed` event, and the build-outcome record `terminalOutcome: 'failed'`. Second case: seal `ok: true`, assert no `step_refused` event and the runner was invoked.
-2. Verify (expected GREEN on current code — this is the preserved contract; keep it as the regression guard).
-3. No implementation unless RED.
-4. Commit: "test(engine): genuine build failure keeps failed semantics"
-
-**Done when:**
-- Both cases pass after Task 3 lands.
-- `grep -c step_refused events.jsonl` is 0 for the genuine-failure run.
-
-**Files:**
-- src/conductor/test/engine/step-refusal.test.ts
-
-**Preserves:** a dispatched step whose own work fails on every retry is recorded failed and blocks its dependents
-
-**Dependencies:** Task 3
-
-### Task 5: Refusal path performs no state mutation (mutation-port spy)
-**Story:** 1
-**Type:** negative-path
-
-**Steps:**
-1. Write failing test: wrap/spy the conductor's state-write seam (`saveConductorStepStatus` / `ConductStateStore`), run the Task 3 scenario, assert zero writes for `build` during the refusal path and that `conduct-state.json` bytes are unchanged between dispatch start and halt.
-2. Verify test fails or passes (RED expected only if Task 3 left a write; otherwise GREEN is the proof).
-3. Implement: remove any write found.
-4. Commit: "test(engine): refusal path is mutation-free"
-
-**Done when:**
-- Spy records zero status writes for the refused step.
-- `conduct-state.json` SHA before == after.
-
-**Files:**
-- src/conductor/test/engine/step-refusal.test.ts
-- src/conductor/src/engine/conductor.ts
-
-**Dependencies:** Task 3
-
-### Task 6: Missing-worktree preflight routes through the refused facet
-**Story:** 2
-**Type:** happy-path
-
-**Steps:**
-1. Write failing test: `build = done`, project root removed before dispatch of `build_review`; assert HALT written with the existing missing-worktree reason, `build_review` prior status unchanged, `step_refused` with `kind: 'missing-worktree'` emitted, no `step_failed`. Negative: root present → no `step_refused`, runner invoked.
-2. Verify test fails (RED) on the missing `step_refused` event.
-3. Implement: `missingWorktreeResult` sets `refused: { kind: 'missing-worktree', reason }` (keep `worktreeMissing: true` for existing consumers); the Task 3 handler covers the `missing-worktree` kind by calling the existing `emitLoopHalt(reason)` path and returning. The old `if (result.worktreeMissing)` branch is removed or delegates to the handler.
-4. Verify test passes (GREEN).
-5. Commit: "refactor(engine): missing-worktree refusal shares the refused handler"
-
-**Done when:**
-- Missing-worktree run emits `step_refused` kind `missing-worktree` and the unchanged HALT reason.
-- Existing #681 tests (`no .pipeline/ written into the absent path`) pass unchanged.
-
-**Files:**
-- src/conductor/src/engine/conductor.ts
-- src/conductor/test/engine/step-refusal.test.ts
-
-**Dependencies:** Task 3
-
-### Task 7: Live-boundary halt routes through the refused facet
-**Story:** 2
-**Type:** happy-path
-
-**Steps:**
-1. Write failing test: seed `pendingLiveBoundaryHalt` (via the existing test seam for `consumePendingLiveBoundaryHalt`) with a reason; at the next dispatch boundary assert the completed prior step keeps `done`, a `step_refused` with `kind: 'live-boundary'` is emitted, and the HALT class is `mechanical` (unchanged).
-2. Verify test fails (RED) on the missing event.
-3. Implement: at the `consumePendingLiveBoundaryHalt()` consumption sites in the dispatch loop, construct `refused: { kind: 'live-boundary', reason }` and route through the Task 3 handler (which for this kind calls the existing `surfaceRemediationPr` + `emitLoopHalt` sequence).
-4. Verify test passes (GREEN).
-5. Commit: "refactor(engine): live-boundary refusal shares the refused handler"
-
-**Done when:**
-- Live-boundary run emits `step_refused` kind `live-boundary`; HALT reason and class unchanged.
-- Existing self-host live-boundary tests pass unchanged.
-
-**Files:**
-- src/conductor/src/engine/conductor.ts
-- src/conductor/test/engine/step-refusal.test.ts
-
-**Dependencies:** Task 3
-
-### Task 8: Refusal records stay on the spine and inside the closed HALT-class set
-**Story:** 2
-**Type:** negative-path
-
-**Steps:**
-1. Write test: for each of the three kinds, after the halt assert (a) `.pipeline/` contains no new file other than `HALT`, `HALT.class`, `events.jsonl`, `conduct-state.json`, and the pre-existing evidence sidecar; (b) `HALT.class` content ∈ {`needs-human`, `mechanical`, `protected-artifact`}; (c) the `step_refused` line is in `events.jsonl`.
-2. Verify (GREEN expected after Tasks 3, 6, 7; RED pinpoints any stray write).
-3. Commit: "test(engine): refusal writes only the spine and closed halt classes"
-
-**Done when:**
-- All three kinds pass (a)–(c).
-
-**Files:**
-- src/conductor/test/engine/step-refusal.test.ts
-
-**Dependencies:** Task 6, Task 7
-
-### Task 9: Pin the unclamped-resume gap on the unmodified engine
-**Story:** 3
-**Type:** negative-path
-
-**Steps:**
-1. Write test in `test/engine/resume-verdict-clamp.test.ts`: state `build: failed`, `build_review: stale`, `test_suite: stale`, earlier steps `done`, NO verdict files under `.pipeline/gates/`; `conductor.run({ resume: true })` in daemon mode with a fake runner; assert the first dispatched step is `build` and no `gate_blocked` event is emitted.
-2. Run it against the unmodified engine and record the result in the commit body.
-3. If RED: commit the failing test (skipped/todo-marked so CI stays green) and proceed to Task 10. If GREEN: commit it as a passing regression test, mark Task 10 `Evidence: skipped` with reason "pin test green on HEAD", and open an intake issue via `/intake` describing the observed `test_suite` jump with the events from #1753 as the unexplained residue.
-4. Commit: "test(engine): pin resume entry for build=failed with no verdict clamp"
-
-**Done when:**
-- The test exists and its RED/GREEN result on the unmodified engine is stated in the commit body.
-- If GREEN, an intake issue URL is recorded in the same commit body.
-
-**Files:**
-- src/conductor/test/engine/resume-verdict-clamp.test.ts
+**Files likely touched:**
+- src/conductor/src/types/steps.ts — union member
+- src/conductor/src/engine/state.ts — satisfaction pin test target
+- test/engine/state.test.ts — round-trip + satisfaction pin
 
 **Dependencies:** none
 
-### Task 10: Apply the runnable-prerequisite walk unconditionally at resume entry
-**Story:** 3
-**Type:** happy-path
-
-**Steps:**
-1. Un-skip the Task 9 test (RED).
-2. Implement: in `Conductor.run`'s `this.resume` branch, after the verdict-clamp block, `startIndex = clampToRunnablePrerequisite(steps, state, startIndex)`. No change to `findResumeIndex`, `checkGate`, `stepSatisfied`, `gateSatisfied`, or any state write.
-3. Add assertions: `conduct-state.json` bytes unchanged across entry; a candidate whose gate already passes keeps its index (walk never moves forward) — use the existing `finish:'in_progress'` + all-satisfied fixture.
-4. Verify GREEN; run `test/engine/resume-verdict-clamp.test.ts` whole.
-5. Commit: "fix(engine): resume entry always lands on an admitted step (#1753)"
-
-**Done when:**
-- Task 9 test passes; all pre-existing resume-clamp tests pass unchanged.
-- `git diff` touches no line inside `checkGate`, `stepSatisfied`, `gateSatisfied`, or `findResumeIndex`.
-- State-bytes-unchanged assertion passes.
-
-**Files:**
-- src/conductor/src/engine/conductor.ts
-- src/conductor/test/engine/resume-verdict-clamp.test.ts
-
-**Preserves:** the resume clamp only ever lowers the start index and never mutates pipeline state
-
-**Dependencies:** Task 9
-
-### Task 11: `--from-step` stays exempt from the walk
-**Story:** 3
-**Type:** negative-path
-**Verify-only:** yes
-
-**Steps:**
-1. Confirm the existing `--from-step finish` exemption test in `test/engine/resume-verdict-clamp.test.ts` still passes after Task 10 and that the new walk sits inside the `this.resume` branch only.
-2. If the fixture does not cover `build: failed` + `--from-step test_suite`, add that one case asserting `test_suite` is targeted.
-3. Commit (empty allowed): "test(engine): from-step exempt from runnable-prerequisite walk"
-
-**Done when:**
-- A test asserts `fromStep: 'test_suite'` with `build: failed` targets `test_suite`.
-
-**Files:**
-- src/conductor/test/engine/resume-verdict-clamp.test.ts
-
-**Dependencies:** Task 10
-
-### Task 12: `checkGate` reports each unsatisfied prerequisite with its status
+### Task 2: Add `step_refused` to the ConductorEvent union with exhaustive sinks
 **Story:** 4
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test in `test/engine/gates.test.ts` (create if absent): `checkGate('test_suite', { build: 'failed', … })` returns `{ passed: false, reason: 'Prerequisites not satisfied: build', unsatisfied: [{ step: 'build', status: 'failed' }] }`; two-prerequisite case lists both.
-2. Verify RED.
-3. Implement: extend the `GateResult` failure branch with `unsatisfied: Array<{ step: StepName; status: StepStatus }>` using `getStepStatus`; `reason` string unchanged.
-4. Verify GREEN.
-5. Commit: "feat(engine): checkGate names unsatisfied prerequisites with status"
+1. Write failing test: constructing a `step_refused` event (step, kind, reason) persists to the events file via `EventPersister`; update the pinned persisted-type-set test to include `step_refused` in the same diff (accepted resolution in the conflict report).
+2. Verify test fails (RED).
+3. Implement: add the union member in src/conductor/src/types/events.ts and its sink-registry row (render, persist, audit) in src/conductor/src/engine/event-sinks.ts.
+4. Verify test passes (GREEN); confirm removing the registry row breaks compilation (exhaustiveness).
+5. Commit: "feat(events): step_refused spine event with exhaustive sinks".
 
 **Done when:**
-- Both cases pass; `reason` text is unchanged so existing `gate_blocked` consumers are untouched.
+- [ ] `step_refused` is a `ConductorEvent` member carrying step name, `kind: 'seal' | 'needs-human' | 'validation-verdict'`, and reason
+- [ ] The sink registry declares all three sinks for it and the exhaustiveness check fails compilation when the row is removed
+- [ ] The pinned persisted-type-set test lists `step_refused` and passes
+- [ ] The refusal record rides the spine only — no sidecar file or second ledger is written (a test asserts the pipeline directory gains no new file beyond the events file and HALT markers)
 
-**Files:**
-- src/conductor/src/engine/gates.ts
-- src/conductor/test/engine/gates.test.ts
+**Files likely touched:**
+- src/conductor/src/types/events.ts — union member
+- src/conductor/src/engine/event-sinks.ts — registry row
+- test/engine/event-sinks.test.ts — persistence + pin update
 
-**Dependencies:** none
+**Dependencies:** 1
 
-### Task 13: The residual gate-blocked exit writes a `needs-human` HALT naming the prerequisite
+### Task 3: One refusal handler: typed facet → refused status + event + HALT
+**Story:** 1
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing test: feeding a `StepRunResult` carrying a refused facet (kind `seal`) through the loop's outcome handling records `refused` via the mutation port, emits `step_refused`, writes the HALT through `writeHaltMarker`, and performs no `failed` save.
+2. Verify test fails (RED).
+3. Implement: add the refused facet to the step result type and a single handler in src/conductor/src/engine/conductor.ts that short-circuits before the retry/failed stamp. Follow the refusal-exit pattern (`worktreeMissing`, `pendingLiveBoundaryHalt` seeds): typed facet, early return, closed HALT class.
+4. Verify test passes (GREEN).
+5. Commit: "feat(conductor): single refusal handler records refused, never failed".
+
+**Done when:**
+- [ ] A refused-facet result records `refused` for the entered step and statuses of all other steps are byte-identical before/after
+- [ ] The handler emits exactly one `step_refused` and zero `step_failed` events for the attempt
+- [ ] The HALT is written by the existing `writeHaltMarker` seam and `HALT.class` holds a value from the existing closed set
+
+**Files likely touched:**
+- src/conductor/src/engine/conductor.ts — handler + facet consumption
+- src/conductor/src/engine/step-runners.ts — facet on the result type
+- test/engine/step-refusal.test.ts — handler behavior
+
+**Dependencies:** 2
+
+### Task 4: Seal retries-exhausted path adopts the refusal handler
+**Story:** 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing test: with `build` recorded `done` and a seal verdict of `ok: false` for the entering step, retries exhaust and the run halts with the seal reason; `build` still reads `done`; the entered step reads `refused`; HALT class is `protected-artifact`.
+2. Verify test fails (RED).
+3. Implement: the seal-violation synthetic result (seed `verifyProtectedArtifactSeal`) sets the refused facet with kind `seal` instead of falling into the retries-exhausted `failed` save.
+4. Verify test passes (GREEN).
+5. Commit: "fix(conductor): seal refusal records refused; completed steps keep verdicts".
+
+**Done when:**
+- [ ] The Story 1 happy-path test passes: `build: done` preserved, entered step `refused`, no `step_failed` in the events file
+- [ ] Seal HALT class and reason wording are byte-identical to current main (existing seal-halt test unchanged)
+- [ ] An `ok: true` verdict dispatches the provider with no refused facet set (existing dispatch tests pass)
+
+**Files likely touched:**
+- src/conductor/src/engine/conductor.ts — seal site rerouting
+- test/engine/step-refusal.test.ts — seal scenarios
+
+**Dependencies:** 3
+
+### Task 5: Step-written needs-human halt sites record refused
+**Story:** 2
+**Type:** happy-path
+
+**Steps:**
+1. Write failing test: a step run that concludes with a needs-human halt leaves the step `refused` (kind `needs-human`), HALT class `needs-human`, wording unchanged; cover both stamp sites (the mid-loop and the post-run save adjacent to `emitLoopHalt`).
+2. Verify test fails (RED).
+3. Implement: both sites set the refused facet and route through the Task 3 handler instead of saving `failed`.
+4. Verify test passes (GREEN).
+5. Commit: "fix(conductor): needs-human halts record refused, not failed".
+
+**Done when:**
+- [ ] Both needs-human stamp sites route through the single refusal handler (no remaining `failed` save adjacent to a needs-human `emitLoopHalt`)
+- [ ] HALT text for the covered sites is unchanged from current main (snapshot/wording assertions pass)
+- [ ] The kickback-cap exhausted HALT keeps its current status behavior (a test pins it — out-of-scope boundary from the conflict report)
+
+**Files likely touched:**
+- src/conductor/src/engine/conductor.ts — both stamp sites
+- test/engine/step-refusal.test.ts — needs-human scenarios
+
+**Dependencies:** 3
+
+### Task 6: Validation-group halt records refused for the judging step
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write failing test: an as-built plan-gap verdict with the outcome undelivered halts the validation group with the judging step `refused` (kind `validation-verdict`), existing plan-gap classification and wording unchanged, sibling steps' statuses untouched.
+2. Verify test fails (RED).
+3. Implement: the validation-group halt commit (seed `commitStateChanges` writing `[step.name]: 'failed'`) writes `refused` for the judging step via the handler; the group's non-halting members are untouched.
+4. Verify test passes (GREEN).
+5. Commit: "fix(conductor): validation-group halts record refused for the judge".
+
+**Done when:**
+- [ ] The plan-gap halt test passes: judging step `refused`, `HALT.class` unchanged from current main for that verdict, sibling statuses byte-identical
+- [ ] All three validation-group halt commit sites write `refused` instead of `failed` for the halting step
+- [ ] `step_refused` with kind `validation-verdict` appears in the events file for the scenario
+
+**Files likely touched:**
+- src/conductor/src/engine/conductor.ts — validation-group commit sites
+- test/engine/step-refusal.test.ts — validation scenarios
+
+**Dependencies:** 3
+
+### Task 7: Regression: build_review verdict-FAIL kickback is unchanged
+**Story:** 3
+**Type:** negative-path
+
+**Steps:**
+1. Write test: a build_review FAIL verdict routes kickback-to-build with kickback-ledger counts and lap accounting identical to current main, and records no `refused` status and no `step_refused` event.
+2. If it fails, the Task 6 change leaked into verdict-FAIL routing — constrain the facet to halt paths only.
+3. Commit: "test(conductor): verdict-FAIL kickback untouched by refusal lane".
+
+**Done when:**
+- [ ] The kickback regression test passes with ledger counts equal to a pre-change baseline run
+- [ ] Grep of the kickback routing path shows no refused-facet involvement
+
+**Files likely touched:**
+- test/engine/kickback-ledger.test.ts — regression scenario
+
+**Dependencies:** 6
+
+### Task 8: Genuine failures keep failed and block dependents; text can never refuse
+**Story:** 7
+**Type:** negative-path
+
+**Steps:**
+1. Write failing test: (a) a provider work failure exhausting retries records `failed`, emits `step_failed`, and a dependent's gate refuses entry; (b) provider output text containing the word "refused" flows the failure path and records `failed` with zero `step_refused` events; (c) a result cannot carry both a refused facet and a work failure — the handler asserts mutual exclusivity.
+2. Verify (b) fails only if classification touches text; fix by construction (facet-only classification).
+3. Implement any needed assertion; run the existing retry/escalation suite unchanged.
+4. Commit: "test(conductor): failure lane untouched; refusal is facet-only".
+
+**Done when:**
+- [ ] Tests (a), (b), (c) pass and the pre-existing retry/escalation tests pass without edits
+- [ ] The refusal facet is set at exactly the three adopter sites (grep enumerates the producers)
+
+**Files likely touched:**
+- src/conductor/src/engine/conductor.ts — exclusivity assertion if needed
+- test/engine/step-refusal.test.ts — failure-lane scenarios
+
+**Dependencies:** 4
+
+### Task 9: Refused steps render distinctly in reports and daemon status
 **Story:** 4
 **Type:** happy-path
 
 **Steps:**
-1. Write failing test in `test/engine/conductor.test.ts`: daemon mode, `test_suite` selected, `build: failed`, and `build` itself gated off by an unsatisfied prerequisite so the walk has no admitted step; run; assert HALT body matches `/Prerequisite gate blocked test_suite: build \(status: failed\)/`, `HALT.class` is `needs-human`, and the `loop_halt` event carries the same reason. Negatives: (a) a runnable prerequisite is dispatched and no gate HALT is written; (b) with the breadcrumb file replaced by garbage the HALT is still written with a classifiable reason; (c) a non-gate markerless exit keeps the literal "loop exited without a terminal verdict" wording.
-2. Verify RED on the new wording.
-3. Implement: at the `gate_blocked` return, build the reason from `gate.unsatisfied` and call `writeHaltMarker(reason, 'needs-human')` + `emitLoopHalt` before returning; the finally-backstop is untouched (it sees the marker and does not fire).
-4. Verify GREEN.
-5. Commit: "fix(engine): gate-blocked residual halt names the prerequisite and its status (#1753)"
+1. Write failing test: a state with one `refused` step renders in the report renderer and daemon status rendering with a refused label distinct from failed.
+2. Verify test fails (RED).
+3. Implement: handle the new member in src/conductor/src/engine/report-renderer.ts and the daemon status render path (compiler-surfaced sites from Task 1).
+4. Verify test passes (GREEN).
+5. Commit: "feat(render): refused steps display distinctly from failed".
 
 **Done when:**
-- Happy case HALT matches the regex; class `needs-human`.
-- Negatives (a)–(c) pass; the backstop wording test in `conductor.test.ts` is unchanged.
+- [ ] Renderer test asserts distinct output strings for `refused` vs `failed`
+- [ ] Daemon status render test covers a feature containing a refused step without throwing
 
-**Files:**
-- src/conductor/src/engine/conductor.ts
-- src/conductor/test/engine/conductor.test.ts
+**Files likely touched:**
+- src/conductor/src/engine/report-renderer.ts — refused rendering
+- test/engine/daemon-render.test.ts — status display
 
-**Dependencies:** Task 12, Task 10
+**Dependencies:** 1
 
-### Task 14: Output text can never manufacture a refusal; the provider-throw path is unchanged
+### Task 10: Resume after a cleared refusal re-admits the refused step
 **Story:** 5
+**Type:** happy-path
+
+**Steps:**
+1. Write failing integration test: refuse a step (seal scenario), remove the HALT marker files from the pipeline directory, re-run the conductor against the same state, and assert the refused step is dispatched with no state file edit between runs; assert resume derivation performed no status mutation.
+2. Verify test fails (RED) if resume mishandles the new member; otherwise it should pass from Tasks 1+4 — in that case keep it as the pinned proof.
+3. Implement only what the RED reveals; the clamp stays read-only and backward-only; the `--from-step` exemption is asserted unchanged.
+4. Commit: "test(conductor): cleared refusal resumes without hand-edit".
+
+**Done when:**
+- [ ] The refuse → clear → resume integration test passes with zero writes to the state file between the two runs other than the engine's own step dispatch
+- [ ] An assertion covers `--from-step` forcing entry at a later step exactly as on current main
+
+**Files likely touched:**
+- test/engine/resume-verdict-clamp.test.ts — refusal resume scenarios
+
+**Dependencies:** 4
+
+### Task 11: Residual gate-blocked exit writes a prerequisite-naming needs-human HALT
+**Story:** 6
+**Type:** happy-path
+
+**Steps:**
+1. Write failing test: a step blocked on a `failed` prerequisite with no runnable predecessor makes the loop write a `needs-human` HALT before returning, whose reason contains the prerequisite name and its recorded status; the events file carries `gate_blocked` then `loop_halt` for the same step.
+2. Verify test fails (RED).
+3. Implement: at the loop's gate-refusal exit (seed `gate_blocked` emission after `checkGate`), when no runnable prerequisite exists, compose the reason from the gate's unsatisfied names plus each name's status from state, and write the HALT via `writeHaltMarker` with class `needs-human`.
+4. Verify test passes (GREEN).
+5. Commit: "fix(conductor): gate-blocked exits halt naming the prerequisite and status".
+
+**Done when:**
+- [ ] The HALT reason for the scenario contains the prerequisite name and its status word, and `HALT.class` reads `needs-human`
+- [ ] The runnable-prerequisite common path still dispatches the prerequisite and writes no gate-blocked HALT (existing clamp tests pass)
+- [ ] The finally-backstop's generic no-verdict wording no longer appears for gate-blocked exits
+
+**Files likely touched:**
+- src/conductor/src/engine/conductor.ts — gate-refusal exit path
+- src/conductor/src/engine/gates.ts — expose per-prerequisite names if not already structured
+- test/engine/gates.test.ts — blocked-exit scenarios
+
+**Dependencies:** 1
+
+### Task 12: Non-gate-blocked no-verdict exits keep the enriched backstop
+**Story:** 6
 **Type:** negative-path
 
 **Steps:**
-1. Write test: fake runner returns `{ success: false, output: 'Protected artifact changed: .docs/plans/x.md' }` with seal `ok: true`; assert `build: failed`, `step_failed` emitted, no `step_refused`. Second case: runner throws; assert the existing catch path stamps `failed` and writes its HALT as before. Third: with `build: failed` from the first case, `checkGate('test_suite')` is not passed.
-2. Verify GREEN (contract guard); RED would reveal text-based routing, which must be removed.
-3. Commit: "test(engine): refusal is never derived from output text"
+1. Write test: a loop exit with no DONE/HALT for a non-gate reason still produces the finally-backstop HALT with its current enriched wording (breadcrumb, last event), byte-compatible with current main.
+2. If it fails, Task 11 over-reached — constrain the new HALT write to the gate-refusal branch.
+3. Commit: "test(conductor): backstop wording preserved for non-gate exits".
 
 **Done when:**
-- All three cases pass; `grep -n "refused" src/conductor/src/engine/conductor.ts` shows no branch keyed on `output`/`reason` string content.
+- [ ] The existing backstop tests pass unchanged and the new non-gate scenario asserts the enriched wording is intact
+- [ ] The gate-blocked branch is the only site writing the new prerequisite-naming HALT (grep shows one producer)
 
-**Files:**
-- src/conductor/test/engine/step-refusal.test.ts
+**Files likely touched:**
+- test/engine/conductor.test.ts — backstop scenarios
 
-**Dependencies:** Task 3
+**Dependencies:** 11
 
 ## Task Dependency Graph
 
 ```
-1 → 2 → 3 → 4
-          ├→ 5
-          ├→ 6 ┐
-          ├→ 7 ┴→ 8
-          └→ 14
-9 → 10 → 11
-12 ┐
-10 ┴→ 13
+1 ─▶ 2 ─▶ 3 ─▶ 4 ─▶ 8
+     │         └▶ 10
+     │    ├▶ 5
+     │    └▶ 6 ─▶ 7
+1 ─▶ 9
+1 ─▶ 11 ─▶ 12
 ```
 
 ## Integration Points
 
-- After Task 3: the #1753 scenario (seal refusal on a completed build) no longer rewrites `build`.
-- After Task 10: clearing a refusal HALT and re-dispatching reaches `test_suite` without a hand-edit.
-- After Task 13: the only remaining markerless gate exit produces an operator-readable halt.
-
-## Coverage
-
-| Story criterion | Task |
-|---|---|
-| 1 happy 1–3 | 3 |
-| 1 neg 1–2 | 4 |
-| 1 neg 3 | 5 |
-| 2 happy 1, neg 1 | 6 |
-| 2 happy 2 | 7 |
-| 2 happy 3, neg 2–3 | 8 (event emission in 1/3) |
-| 3 happy 1–2, neg 1–2 | 10 |
-| 3 happy 3 | 11 |
-| 3 neg 3 | 9 |
-| 4 happy 1–3, neg 1–3 | 13 (status shape in 12) |
-| 5 happy 1 | 4 |
-| 5 happy 2, neg 1–2 | 14 |
+- After Task 4: a seal refusal on a real worktree preserves completed statuses end-to-end.
+- After Task 10: the full refuse → clear → resume cycle works with no operator state edits.
+- After Task 11: a prerequisite-blocked run is operator-diagnosable from the HALT alone.
 
 ## Verification
-- [x] All happy path criteria covered by at least one task
-- [x] All negative path criteria covered by at least one task
-- [x] No task exceeds 5 minutes of work
-- [x] Every task has a `Done when:` block of falsifiable checks
-- [x] Dependencies are explicit and acyclic
+
+- [ ] All happy path criteria covered by at least one task
+- [ ] All negative path criteria covered by at least one task
+- [ ] No task exceeds 5 minutes of work
+- [ ] Every task has a `Done when:` block of falsifiable checks
+- [ ] Dependencies are explicit and acyclic

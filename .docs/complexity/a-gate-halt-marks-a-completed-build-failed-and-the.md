@@ -2,4 +2,8 @@
 
 Tier: M
 
-Rationale: single engine module cluster (conductor dispatch loop, gates, halt marker, resume entry) with a `StepRunResult` type change; no new integrations, auth, or models; three refusal sites plus resume and halt wording — roughly 6–8 stories. Not S because the dispatch/outcome seam is the hottest path in the engine and needs architecture review; not L because there is no cross-service or schema surface.
+Rationale: single-repo engine change, no new integrations or auth, but it widens a core state
+union (`StepStatus`) consumed by the conductor loop, gates, state persistence, renderers, and the
+daemon, adds a new spine event (`step_refused`), and touches three distinct halt paths plus the
+gate-blocked exit path. Roughly 5 stories; well above S, no L signals (no new models, providers,
+or state machines).
