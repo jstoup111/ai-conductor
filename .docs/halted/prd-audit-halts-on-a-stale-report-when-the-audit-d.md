@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-25T19:42:21.632Z
 Slug: prd-audit-halts-on-a-stale-report-when-the-audit-d
 Class: needs-human
 Halting step: unknown
