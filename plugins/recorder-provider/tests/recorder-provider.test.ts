@@ -53,6 +53,13 @@ describe('RecorderProvider', () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it('implements only the invoke provider dispatch method', () => {
+    const provider = new RecorderProvider({ recordingPath });
+
+    expect(provider).toHaveProperty('invoke');
+    expect(provider).not.toHaveProperty('invokeInteractive');
+  });
+
   // -------------------------------------------------------------------------
   // T4: Parent directory creation
   // -------------------------------------------------------------------------
@@ -92,7 +99,7 @@ describe('RecorderProvider', () => {
     const provider = new RecorderProvider({ recordingPath });
     await provider.invoke(makeOptions('first'));
     await provider.invoke(makeOptions('second'));
-    await provider.invokeInteractive(makeOptions('third'));
+    await provider.invoke(makeOptions('third'));
 
     const content = await readFile(recordingPath, 'utf-8');
     const lines = content.trim().split('\n').filter(Boolean);
@@ -117,30 +124,7 @@ describe('RecorderProvider', () => {
   });
 
   // -------------------------------------------------------------------------
-  // T7: invokeInteractive
-  // -------------------------------------------------------------------------
-
-  it('invokeInteractive() appends a JSONL line with kind=invokeInteractive', async () => {
-    const provider = new RecorderProvider({ recordingPath });
-    await provider.invokeInteractive(makeOptions('interactive prompt'));
-
-    const content = await readFile(recordingPath, 'utf-8');
-    const lines = content.trim().split('\n').filter(Boolean);
-    expect(lines).toHaveLength(1);
-
-    const record = JSON.parse(lines[0]);
-    expect(record.kind).toBe('invokeInteractive');
-    expect(record.options.prompt).toBe('interactive prompt');
-  });
-
-  it('invokeInteractive() resolves immediately (returns void)', async () => {
-    const provider = new RecorderProvider({ recordingPath });
-    const result = await provider.invokeInteractive(makeOptions());
-    expect(result).toBeUndefined();
-  });
-
-  // -------------------------------------------------------------------------
-  // T8: Concurrent writes
+  // T7: Concurrent writes
   // -------------------------------------------------------------------------
 
   it('handles concurrent invoke() calls without data loss', async () => {
@@ -162,14 +146,14 @@ describe('RecorderProvider', () => {
     }
   });
 
-  it('handles mixed concurrent invoke() and invokeInteractive() calls', async () => {
+  it('handles concurrent invoke() calls with distinct prompts', async () => {
     const provider = new RecorderProvider({ recordingPath });
 
     await Promise.all([
       provider.invoke(makeOptions('a')),
-      provider.invokeInteractive(makeOptions('b')),
+      provider.invoke(makeOptions('b')),
       provider.invoke(makeOptions('c')),
-      provider.invokeInteractive(makeOptions('d')),
+      provider.invoke(makeOptions('d')),
     ]);
 
     const content = await readFile(recordingPath, 'utf-8');
@@ -177,7 +161,6 @@ describe('RecorderProvider', () => {
     expect(lines).toHaveLength(4);
 
     const kinds = lines.map((l) => JSON.parse(l).kind);
-    expect(kinds.filter((k) => k === 'invoke')).toHaveLength(2);
-    expect(kinds.filter((k) => k === 'invokeInteractive')).toHaveLength(2);
+    expect(kinds).toEqual(['invoke', 'invoke', 'invoke', 'invoke']);
   });
 });

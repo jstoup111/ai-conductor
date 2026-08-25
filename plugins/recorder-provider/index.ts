@@ -17,8 +17,8 @@ export interface RecorderProviderOptions {
 }
 
 /**
- * Reference LLM provider plugin that records every invoke() and invokeInteractive()
- * call as a JSONL line, then returns a canned response.
+ * Reference LLM provider plugin that records every invoke() call as a JSONL
+ * line, then returns a canned response.
  *
  * Designed to install through the Wave A plugin loader with zero edits to
  * src/conductor/src/index.ts.
@@ -44,13 +44,6 @@ export class RecorderProvider implements LLMProvider {
     };
   }
 
-  /**
-   * Appends a JSONL record and resolves immediately.
-   */
-  async invokeInteractive(options: InvokeOptions): Promise<void> {
-    await this.appendRecord('invokeInteractive', options);
-  }
-
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
@@ -61,7 +54,7 @@ export class RecorderProvider implements LLMProvider {
     this.dirEnsured = true;
   }
 
-  private async appendRecord(kind: 'invoke' | 'invokeInteractive', options: InvokeOptions): Promise<void> {
+  private async appendRecord(kind: 'invoke', options: InvokeOptions): Promise<void> {
     try {
       await this.ensureDir();
       const record = JSON.stringify({
