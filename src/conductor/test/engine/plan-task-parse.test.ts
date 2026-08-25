@@ -202,4 +202,40 @@ See \`.docs/specs/feature.md\` before editing.
       new Map([['1', new Set(['.docs/specs/other-feature.md'])], ['2', new Set()]]),
     );
   });
+  it('ignores task headings and metadata inside fenced code blocks', () => {
+    const plan = ['### Task 1: Real task',
+      '**Files:** src/one.ts',
+      '',
+      'Authoring example:',
+      '',
+      '```markdown',
+      '### Task phantom: Example heading',
+      '**Files:** src/phantom.ts',
+      '**Done when:**',
+      '- A phantom criterion.',
+      '```',
+      ''].join('\n');
+
+    expect([...parsePlanTaskBodies(plan).keys()]).toEqual(['1']);
+    expect([...parsePlanTaskPaths(plan).keys()]).toEqual(['1']);
+    expect(parsePlanTaskPaths(plan).get('1')).toEqual(new Set(['src/one.ts']));
+    expect([...parsePlanTaskDoneWhen(plan).keys()]).toEqual([]);
+  });
+
+  it('resumes structural parsing after a fenced block closes', () => {
+    const plan = ['### Task 1: Real task',
+      '```text',
+      '### Task phantom: Example heading',
+      '```',
+      '**Done when:**',
+      '- The first observable result exists.',
+      '- The second observable result exists.',
+      ''].join('\n');
+
+    expect([...parsePlanTaskDoneWhen(plan).keys()]).toEqual(['1']);
+    expect(parsePlanTaskDoneWhen(plan).get('1')).toEqual([
+      'The first observable result exists.',
+      'The second observable result exists.',
+    ]);
+  });
 });
