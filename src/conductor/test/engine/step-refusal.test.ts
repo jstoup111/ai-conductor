@@ -113,18 +113,56 @@ describe('validation-group refusal persistence', () => {
     expect(groupFailureIndex).toBeGreaterThan(refusalIndex);
   }
 
-  it('persists the judging member when a width-2+ group halts for no verdict', async () => {
-    await runAndReadRefusal({
-      expectedStep: 'manual_test',
-      runner: {
-        run: vi.fn(async (step) => {
-          if (step !== 'manual_test') await writeValidatorArtifact(roots[roots.length - 1]!, step);
-          return step === 'manual_test'
-            ? { success: false, output: 'validator exited before recording a verdict' }
-            : { success: true };
-        }),
-      },
-    });
+  it('keeps a crashed validator failed, not refused, when a width-2+ group runs out of retries', async () => {
+    // Story 3, negative path (S3.4): a no-verdict outcome is the validator's
+    // own runner dying. The refusal lane must never absorb it — the step keeps
+    // `failed` and the spine keeps `step_failed`.
+    const root = await mkdtemp(join(tmpdir(), 'step-refusal-no-verdict-'));
+    roots.push(root);
+    await Promise.all([
+      seedValidationInputs(root),
+      writeState(join(root, '.pipeline/conduct-state.json'), VALIDATION_GROUP_PREREQS),
+    ]);
+    const events = new ConductorEventEmitter();
+    const eventsPath = join(root, '.pipeline/events.jsonl');
+    const persister = new EventPersister(eventsPath, events);
+    persister.start();
+    try {
+      await new Conductor({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline/conduct-state.json'),
+        stepRunner: {
+          run: vi.fn(async (step) => {
+            if (step !== 'manual_test') await writeValidatorArtifact(root, step);
+            return step === 'manual_test'
+              ? { success: false, output: 'validator exited before recording a verdict' }
+              : { success: true };
+          }),
+        },
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 1,
+        verifyArtifacts: false,
+        escalateBuildFailure: async () => ({}),
+      }).run();
+    } finally {
+      persister.stop();
+    }
+
+    const persisted = persistedEvents(await readFile(eventsPath, 'utf8'));
+    // No refusal is recorded for this lane, on the spine or in state.
+    expect(persisted.some((event) => event.type === 'step_refused')).toBe(false);
+    expect(persisted).toContainEqual(expect.objectContaining({
+      type: 'loop_halt',
+      step: 'manual_test',
+    }));
+
+    const state = JSON.parse(
+      await readFile(join(root, '.pipeline/conduct-state.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(state.manual_test).toBe('failed');
   });
 
   it('persists the as-built judge when its gate halts a width-2+ group', async () => {

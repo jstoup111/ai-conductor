@@ -427,7 +427,7 @@ describe('acceptance: Codex readiness park #970', () => {
       const persisted = await readState(flowStatePath);
       expect(persisted.ok).toBe(true);
       if (persisted.ok) {
-        expect(persisted.value.manual_test).toBe(trialKind === 'success' ? 'done' : 'refused');
+        expect(persisted.value.manual_test).toBe(trialKind === 'success' ? 'done' : 'failed');
       }
       if (trialKind === 'success') {
         expect(halts).toEqual([]);

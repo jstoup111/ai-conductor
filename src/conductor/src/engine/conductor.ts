@@ -5972,13 +5972,25 @@ export class Conductor {
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
-              await this.recordGroupRefusal({
-                state,
-                groupStep: step.name,
-                judgingStep: noVerdictMember.name as StepName,
-                reason: haltReason,
+              // Story 3, negative path: a no-verdict outcome is the validator's
+              // own runner dying (thrown branch, terminal error, or exhausted
+              // retry budget) — a work failure, not a judgement awaiting a
+              // human. It keeps `failed` so the refusal lane can never mask a
+              // broken validator.
+              await this.commitStateChanges(state, `fail ${step.name} validation group`, {
+                [step.name]: 'failed',
+                last_step: step.name,
               });
               await this.emitLoopHalt(haltReason);
+              await emitTracked({
+                type: 'step_failed',
+                step: step.name,
+                error: haltReason,
+                retryCount: 0,
+                ...(noVerdictOutcome.observedIntervals
+                  ? { observedIntervals: noVerdictOutcome.observedIntervals }
+                  : {}),
+              });
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) {
                 process.off('SIGTERM', sigterm);
