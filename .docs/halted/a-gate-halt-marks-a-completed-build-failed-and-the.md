@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-25T14:53:06.423Z
 Slug: a-gate-halt-marks-a-completed-build-failed-and-the
 Class: needs-human
 Halting step: unknown
