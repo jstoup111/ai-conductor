@@ -119,6 +119,26 @@ grep -E 'build_stall|build_no_progress|zero_work_product|rate_limit|credentials_
   .worktrees/<slug>/.pipeline/events.jsonl | tail -20
 ```
 
+### A later step is blocked by an unsatisfied prerequisite
+
+**Symptom:** `.pipeline/HALT` says `Step '<step>' is blocked by unsatisfied prerequisite` and
+lists one or more prerequisite names with their recorded statuses. The HALT class is
+`needs-human`.
+
+**Diagnosis:** The listed prerequisite cannot run again automatically: it is no longer `pending`.
+Read that prerequisite's halt record or its earlier events before changing anything. A `refused`
+status means the prerequisite's own work was not judged failed; its original HALT explains the
+operator action required.
+
+**Recovery:** Resolve the prerequisite's stated cause, then clear `HALT` and `HALT.class` using
+[the resume procedure](#clear-a-halt-and-let-the-feature-resume). Do not hand-edit
+`conduct-state.json` to mark the prerequisite done or failed. The resumed conductor admits the
+unsatisfied prerequisite again and preserves already completed steps.
+
+**Verification:** Run `conduct-ts daemon status` after the next dispatch. The prerequisite runs
+again; the blocked later step does not remain the terminal step unless the underlying condition is
+still unresolved.
+
 #### `no_task_progress`
 
 The build step's circuit breaker. From attempt 2 onward, the step is declared stalled only when
