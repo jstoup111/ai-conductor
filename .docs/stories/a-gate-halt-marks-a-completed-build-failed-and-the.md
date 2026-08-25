@@ -2,114 +2,170 @@
 
 # Stories: A gate halt marks a completed build failed, and the residue blocks every later resume
 
-Source: jstoup111/ai-conductor#1753. Track: technical. Tier: M.
-Scope boundary (binding): every pre-dispatch refusal — protected-artifact seal, missing-worktree preflight, self-host live boundary — is one typed refused outcome that never stamps the step `failed`; resume entry always lands on a step the prerequisite gate admits; a residual prerequisite-gate halt names the prerequisite and its status; genuine step failures keep `failed`. Excluded: seal/live-boundary detection rules, task-status counter desync, daemon re-kick policy.
+Source: jstoup111/ai-conductor#1753. Track: technical. Tier: M. Respec 2026-08-24 against
+post-#1824 main per `adr-2026-08-24-refused-step-status.md` and
+`architecture-review-2026-08-24-a-gate-halt-marks-a-completed-build-failed-and-the.md`.
 
-Outcome ids used below: O1 refusal never records failed; O2 resume needs no hand-edit; O3 gate block names the prerequisite and its status; O4 genuine failure still fails and blocks.
+Scope boundary (binding): a typed `refused` step status plus a `step_refused` spine event at the
+three sites that still stamp `failed` — the protected-artifact seal retries-exhausted path, the
+step-written needs-human halt sites, and the validation-group halt commit — and a
+prerequisite-naming needs-human HALT on residual gate-blocked loop exits. Excluded: paths already
+delivered on main (live-boundary deferral, missing-worktree preflight, finish-gate stale
+restaging, resume runnable-prerequisite walk), retired build_review rubrics, genuine-failure
+semantics, seal/live-boundary detection rules, daemon re-kick policy.
 
-## Story 1: A protected-artifact seal refusal leaves the step's status untouched
+Outcome ids used below: O1 a refusal never records the step failed and completed steps keep their
+verdicts; O2 clearing the halt is enough to resume with no hand-edit of pipeline state; O3 a
+prerequisite-blocked exit halts naming the prerequisite and the status that caused it; O4 a
+genuine failure still records failed and blocks dependents.
+
+## Story 1: A protected-artifact seal refusal records refused, never failed
 
 **Requirement:** O1
 
-As an operator, I want a seal refusal on a BUILD/SHIP step to halt without recording that step as failed, so that a completed build is not rewritten as a failure by an environmental check.
+As an operator, I want a seal refusal on a BUILD/SHIP step to record a typed `refused` status and
+halt, so that a completed build is never rewritten as a failure by an environmental check.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `build` is `done` in `conduct-state.json` and the seal verdict for the next dispatch is `ok: false`, when the step is dispatched, then the run halts with the seal reason and `build` remains `done`
-- Given `build` is `pending` and the seal verdict is `ok: false` on attempt 1, when the attempt ends, then `build` remains `pending` and no `step_failed` event is emitted
-- Given the seal refuses on attempt 2 or later, when the attempt ends, then the HALT marker carries the `protected-artifact` class and the seal reason, exactly as today
+- Given `build` is `done` in `conduct-state.json` and the seal verdict for the next step's dispatch is `ok: false`, when retries exhaust, then the run halts with the seal reason, `build` remains `done`, and the entered step reads `refused`
+- Given the seal refuses a step, when the refusal is recorded, then the write goes through the `ConductStateStore` mutation port and no `failed` value is written for any step
+- Given the seal refuses on attempt 2 or later, when the halt is written, then the HALT marker carries the `protected-artifact` class and the seal reason through the existing `writeHaltMarker` seam
 
 #### Negative Paths
-- Given the seal verdict is `ok: true`, when the step is dispatched, then the provider runs and the step's result is recorded exactly as before (no refused facet set)
-- Given the dispatched build's own work fails on every retry, when retries are exhausted, then `build` is recorded `failed` and a `step_failed` event is emitted
-- Given the seal refuses, when the refusal is recorded, then no `saveConductorStepStatus` call for that step occurs on the refusal path (asserted via the mutation-port spy)
+- Given the seal verdict is `ok: true`, when the step is dispatched, then the provider runs and the result is recorded exactly as before with no refused facet set
+- Given the dispatched step's own work fails on every retry, when retries are exhausted, then the step is recorded `failed` and a `step_failed` event is emitted
+- Given the seal refuses, when `events.jsonl` is read back, then no `step_failed` event exists for the refused step
 
 ### Done When
-- [ ] A unit test dispatches a BUILD step with `build = done` and an `ok: false` seal verdict and asserts `conduct-state.json` still reads `build: done` and `events.jsonl` has no `step_failed` for `build`
-- [ ] The refusal is carried as a typed facet on `StepRunResult` (no string match on `output`) and the existing seal HALT class and wording are unchanged
+- [ ] A unit test with `build = done` and an `ok: false` seal verdict asserts `conduct-state.json` reads `build: done`, the entered step reads `refused`, and `events.jsonl` has no `step_failed` for it
+- [ ] The refusal is carried as a typed facet on `StepRunResult` with no string match on output text
 
-## Story 2: Missing-worktree and live-boundary refusals use the same typed refused outcome
+## Story 2: A step-written needs-human halt records refused, not failed
 
 **Requirement:** O1
 
-As a maintainer, I want all three pre-dispatch refusals to terminate through one typed outcome, so that a future refusal site cannot fall into the failed stamp by omission.
+As an operator, I want a step that halts for human judgement to be recorded as `refused`, so that
+"a human must decide" is mechanically distinguishable from "the work failed".
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the feature worktree directory is absent, when any step is dispatched, then the run halts with the missing-worktree reason and the step's prior status is unchanged
-- Given a self-host live-boundary verdict of `ok: false` is pending at a dispatch boundary, when the boundary is reached, then the run halts with that reason and the completed step keeps its prior `done` status
-- Given any of the three refusals fires, when the halt is written, then a `retry_decision` event with `decision: 'route'` and `signal: 'refused'` (or the equivalent persisted spine record chosen by the plan) is emitted for that step
+- Given a step's run concludes with a needs-human halt, when the loop records the outcome, then the step reads `refused` in `conduct-state.json` and the HALT keeps its `needs-human` class and existing wording
+- Given a needs-human halt is recorded as refused, when the committed halt record is written, then it is produced by the existing `writeHaltMarker` seam with no new machinery
 
 #### Negative Paths
-- Given the worktree directory exists and the live boundary is `ok: true`, when the step is dispatched, then no refused facet is set and the step runs normally
-- Given a refusal fires, when the run halts, then the HALT class is one of the existing closed set (`needs-human`, `mechanical`, `protected-artifact`) and no new class value appears in `HALT.class`
-- Given a refusal fires, when `events.jsonl` is read back, then the refusal record is on the engine's spine file and no sidecar or second ledger was written
+- Given a step's provider work errors terminally without writing a needs-human halt, when retries exhaust, then the step is recorded `failed`, not `refused`
+- Given a needs-human refusal fires, when `HALT.class` is read, then its value is from the existing closed class set and no new class value appears
 
 ### Done When
-- [ ] One test per refusal site asserts: prior status unchanged, HALT written, spine event present, no `step_failed`
-- [ ] `StepRunResult` exposes a single refused facet (or discriminated `kind`) shared by the three sites, and the three early-return shapes route through one handler
+- [ ] A unit test drives a step to a needs-human halt and asserts status `refused`, class `needs-human`, and no `step_failed` event
+- [ ] Both step-written needs-human halt sites in the dispatch loop route through the same refusal handler
 
-## Story 3: Resume after a cleared refusal halt lands on the first admitted step
+## Story 3: A validation-group halt records refused for the judging step
+
+**Requirement:** O1
+
+As an operator, I want a validation-group halt (including an as-built plan-gap awaiting a human)
+to record the judging step as `refused`, so that a verdict awaiting judgement is not stored as a
+failure of the step's work.
+
+### Acceptance Criteria
+
+#### Happy Path
+- Given the as-built review returns a plan-gap verdict with the outcome undelivered, when the validation group halts, then the judging step reads `refused` and the HALT keeps its existing `plan-gap` classification and wording
+- Given a validation-group member halts for a human, when the group outcome is committed, then completed sibling steps keep their own verdicts unchanged
+
+#### Negative Paths
+- Given a build_review verdict is FAIL, when the gate routes kickback-to-build, then the routing, kickback counting, and lap accounting behave exactly as on current main with no refusal recorded
+- Given a validation step's runner itself crashes, when retries exhaust, then that step is recorded `failed`, not `refused`
+
+### Done When
+- [ ] A unit test drives an as-built plan-gap halt and asserts the judging step reads `refused`, the HALT class is unchanged, and sibling statuses are untouched
+- [ ] A regression test asserts a build_review FAIL still routes to build with unchanged kickback-ledger counts
+
+## Story 4: Refusals are visible on the event spine and in operator rendering
+
+**Requirement:** O1
+
+As an operator, I want every refusal emitted as a `step_refused` event and rendered distinctly,
+so that telemetry and status displays tell refusals apart from failures.
+
+### Acceptance Criteria
+
+#### Happy Path
+- Given any of the three refusal sites fires, when the halt is written, then a `step_refused` event with the step name, a refusal kind, and the reason is persisted to `.pipeline/events.jsonl`
+- Given a `step_refused` event exists, when the event sink registry is compiled, then the member declares render, persist, and audit sinks exhaustively
+- Given a step is `refused`, when `conduct daemon status` or the report renderer displays the feature, then the step is shown as refused, not failed
+
+#### Negative Paths
+- Given a refusal fires, when the spine is inspected, then no sidecar file, ad-hoc log, or second ledger carries the refusal record
+- Given an event sink registry entry for `step_refused` is removed, when the engine compiles, then compilation fails (exhaustiveness holds)
+
+### Done When
+- [ ] `step_refused` is a member of the `ConductorEvent` union with a complete sink-registry row, proven by a compile-time exhaustiveness test
+- [ ] A renderer test asserts a refused step displays distinctly from a failed step
+
+## Story 5: Clearing a refusal halt is enough to resume
 
 **Requirement:** O2
 
-As an operator, I want clearing a refusal halt to be enough for the feature to resume to its next step, so that I never hand-edit `conduct-state.json`.
+As an operator, I want the feature to resume to the refused step after I clear the halt, so that
+I never hand-edit `conduct-state.json`.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `build = done`, `build_review = stale`, `test_suite = stale` and the HALT markers are removed, when the daemon re-dispatches, then the run enters `test_suite` (or the earliest non-done step its gate admits) and dispatches it
-- Given `build = failed` and every downstream step is `stale` or `pending`, when the run resumes without a verdict clamp firing, then the start index is walked backward to `build` and `build` is dispatched rather than `test_suite` being gate-blocked
-- Given `--from-step` is supplied, when the run starts, then the walk-back is not applied and the requested step is targeted exactly as today
+- Given a step reads `refused` and its HALT markers are removed, when the conductor re-runs, then the resume entry admits that step and dispatches it with no state hand-edit
+- Given earlier steps are `done` and one step is `refused`, when prerequisites are evaluated, then `refused` does not satisfy the prerequisite predicate and the refused step re-runs
 
 #### Negative Paths
-- Given the walk-back runs, when resume entry completes, then `conduct-state.json` has the same bytes as before entry (resume never mutates state)
-- Given the candidate index already passes its gate, when the walk-back runs, then the index is unchanged (the walk never moves forward)
-- Given a pinning test for the unclamped resume path passes on the unmodified engine, when the story is implemented, then the resume-entry change is omitted and an intake issue records the unexplained observed jump (the ~60% hypothesis in the review is not baked in)
+- Given a step reads `refused`, when resume entry derivation runs, then no status is mutated by the resume path itself
+- Given `--from-step` names a later step, when the operator forces entry there, then the existing `--from-step` exemption behaves exactly as on current main
 
 ### Done When
-- [ ] A test reproduces the issue's state (`build: failed`, downstream `stale`, no clamp) on the unmodified engine and fails with a `gate_blocked` on `test_suite`; the same test passes after the change with `build` dispatched
-- [ ] `checkGate`, `stepSatisfied`, and `gateSatisfied` are byte-for-byte unchanged
+- [ ] An integration test refuses a step, clears the HALT files, re-runs the conductor with the same state, and asserts the refused step is dispatched without any state edit
+- [ ] `stepSatisfied` counts exactly `done | skipped | stale` before and after the change
 
-## Story 4: A residual prerequisite-gate halt names the prerequisite and the status that blocked it
+## Story 6: A residual gate-blocked exit halts naming the prerequisite and its status
 
 **Requirement:** O3
 
-As an operator, I want the halt that follows a blocked prerequisite gate to say which prerequisite was unsatisfied and what its status was, so that the operator-visible output points at the real cause.
+As an operator, I want a run that exits because a prerequisite is unsatisfied to halt telling me
+which prerequisite and what status caused it, so that I can act without reading the event log.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `test_suite` is selected, `build = failed`, and `build` itself is not runnable because its own prerequisite is unsatisfied (so the walk-back has no admitted step), when the gate blocks, then the HALT text contains `test_suite`, `build`, and `failed` in a single reason line
-- Given a gate blocks on two prerequisites, when the HALT is written, then every unsatisfied prerequisite is named with its status
-- Given the gate-blocked HALT is written, when the daemon classifies it, then `HALT.class` reads `needs-human`
+- Given a step's prerequisite is unsatisfied and no runnable prerequisite exists to dispatch, when the loop exits, then a `needs-human` HALT is written whose reason names each unsatisfied prerequisite and that prerequisite's recorded status
+- Given such a halt is written, when the persisted spine is read, then the `loop_halt` event carries the same step and the `gate_blocked` event precedes it
 
 #### Negative Paths
-- Given the selected step has an unsatisfied prerequisite that is runnable, when selection happens, then the prerequisite is dispatched and no gate-blocked HALT is written (the common path is unchanged)
-- Given the breadcrumb or state is unreadable when the backstop assembles the reason, when the HALT is written, then it still contains a classifiable reason and the marker is present
-- Given the finally-backstop fires for a reason other than a blocked gate, when the HALT is written, then the existing "loop exited without a terminal verdict" wording is preserved
+- Given an unsatisfied prerequisite is itself runnable, when the loop evaluates it, then the loop dispatches the prerequisite as on current main and writes no gate-blocked HALT
+- Given the loop exits for a reason other than a blocked gate, when the backstop HALT is written, then its wording is unchanged from current main
 
 ### Done When
-- [ ] A test drives the markerless `gate_blocked` return and asserts the HALT body matches `/Prerequisite .*build.* \(status: failed\)/` and `HALT.class` is `needs-human`
+- [ ] A unit test blocks a step on a `failed` prerequisite with no runnable predecessor and asserts the HALT text contains the prerequisite name and the word naming its status
+- [ ] The generic "loop exited without a terminal verdict" wording no longer appears for gate-blocked exits
 
-## Story 5: A genuinely failed build still records failed and blocks its dependents
+## Story 7: A genuine failure still fails and blocks dependents
 
 **Requirement:** O4
 
-As a maintainer, I want the refused outcome to be impossible to reach from a provider failure, so that real failures keep their gating semantics.
+As a maintainer, I want real failures untouched, so that the refusal lane cannot mask a broken
+build.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the seal is `ok: true` and the build provider returns `success: false` on every attempt, when retries are exhausted, then `build = failed`, a `step_failed` event is emitted, and the build-outcome record carries `terminalOutcome: 'failed'`
-- Given `build = failed` from a genuine failure, when `test_suite` is selected, then its gate does not admit it until `build` is re-run
+- Given a step's provider work fails on every retry with no refusal condition present, when retries exhaust, then the step is recorded `failed`, a `step_failed` event is emitted, and its dependents remain blocked
+- Given a step is `failed`, when a dependent's gate is checked, then the gate refuses entry exactly as on current main
 
 #### Negative Paths
-- Given a provider result whose `output` text contains the literal seal reason string, when the result is handled, then it is treated as an ordinary failure (the refused facet is never derived from output text)
-- Given the build provider throws, when the exception is caught, then the existing catch path stamps `failed` and writes its HALT exactly as before
+- Given provider output text contains the word "refused", when the outcome is classified, then classification uses only the typed facet and the step is recorded `failed`
+- Given a refusal facet and a work failure cannot both be true for one attempt, when the handler receives a result, then exactly one of `refused` or `failed` is recorded
 
 ### Done When
-- [ ] Existing retry/escalation and build-outcome tests pass unchanged
-- [ ] A test feeds a provider `success: false` result whose output equals a seal reason and asserts `build: failed` and `step_failed` emitted
+- [ ] Existing retry/escalation tests pass unchanged
+- [ ] A test feeds refusal-like provider output text through the failure path and asserts status `failed` with no `step_refused` event

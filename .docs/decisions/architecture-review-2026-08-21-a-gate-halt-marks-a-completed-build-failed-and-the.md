@@ -6,6 +6,14 @@
 **Stories reviewed:** none yet — input is `.docs/track/a-gate-halt-marks-a-completed-build-failed-and-the.md` (approach A, comprehensive scope) and `.docs/architecture/a-gate-halt-marks-a-completed-build-failed-and-the.md`
 **Verdict:** APPROVED WITH CONDITIONS
 
+> **Amended 2026-08-24 by #1753 respec:** this review and its spec were superseded after PR
+> #1824 rewrote the dispatch seam and delivered part of the scope (live-boundary deferral,
+> missing-worktree preflight, resume runnable-prerequisite walk). The governing review is now
+> `architecture-review-2026-08-24-a-gate-halt-marks-a-completed-build-failed-and-the.md`;
+> conditions 2 and 5 below (no status mutation; extend `retry_decision.signal`) are replaced by
+> `adr-2026-08-24-refused-step-status.md` (typed `refused` status via the mutation port; a
+> `step_refused` event declaring all sinks).
+
 ## Scope boundary (binding, from the track marker)
 
 Comprehensive: every pre-dispatch refusal (protected-artifact seal, missing-worktree preflight, self-host live boundary) gets one typed refused outcome that never stamps the step `failed`; resume entry always lands on a step `checkGate` admits; a prerequisite-gate halt names the unsatisfied prerequisite and the blocking step's status. Genuine step failures keep `failed`. Excluded: seal/live-boundary detection rules, task-status counter desync, daemon re-kick policy.

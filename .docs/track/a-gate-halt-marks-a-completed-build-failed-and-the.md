@@ -1,7 +1,14 @@
-# Track: A gate halt marks a completed build failed, and the residue blocks every later resume
+# Track: a-gate-halt-marks-a-completed-build-failed-and-the
 
 Track: technical
 
-Scope boundary: Comprehensive — every pre-dispatch refusal (protected-artifact seal, missing worktree path, live-boundary) gets one typed `refused` outcome that never stamps the step failed; resume entry always lands on a step `checkGate` admits; a prerequisite-gate halt names the unsatisfied prerequisite and the blocking step's status. Genuine step failures keep their `failed` semantics. Excludes: changing seal/live-boundary detection rules themselves, task-status counter desync (#497-class), daemon re-kick policy.
+Scope boundary: Comprehensive (operator-selected Approach A). Close the residual gaps of #1753 on
+post-#1824 main: a typed `refused` step outcome recorded on the spine for the three remaining
+refusal paths (protected-artifact seal violations, step-written needs-human halts,
+validation-group/plan-gap halts), and a prerequisite-naming needs-human HALT on gate-blocked loop
+exits. Excludes: paths already fixed on main (live-boundary deferral, missing-worktree preflight,
+finish-gate stale restaging, resume runnable-prerequisite clamp), build_review rubric machinery
+(retired by #1824), and any change to genuine-failure semantics.
 
-Engine state/halt semantics with no product requirements; acceptance criteria live in stories. Source: jstoup111/ai-conductor#1753.
+Engine-internal halt/state semantics respec of issue #1753; no product requirements — acceptance
+criteria live in stories.
