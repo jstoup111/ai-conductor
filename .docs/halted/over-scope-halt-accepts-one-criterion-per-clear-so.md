@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-25T14:53:06.424Z
 Slug: over-scope-halt-accepts-one-criterion-per-clear-so
 Class: needs-human
 Halting step: prd_audit
