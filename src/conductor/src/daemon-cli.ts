@@ -2037,6 +2037,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   );
 
   subscriber.stop();
+  // A finite daemon invocation (including test/CLI bounded runs) has no
+  // remaining work for the process-level signal handler to coordinate.
+  // Leaving it installed makes later SIGTERM delivery invoke stale shutdown
+  // state, and accumulates one listener per completed invocation.
+  process.off('SIGTERM', daemonSigtermHandler);
   log(`finished: ${result.processed.length} feature(s) (${result.stoppedReason})`);
   for (const o of result.processed) {
     log(
@@ -2239,6 +2244,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'halt_marker_write_failed':
       log(`${dot} ${chalk.red('✋')} ${chalk.red(`halt marker write failed: ${event.path} — ${event.reason}`)}`);
+      break;
+    case 'halt_record_written':
+      log(`${dot} ${chalk.green('✓')} ${chalk.green(`halt record committed: ${event.path} (${event.haltClass})`)}`);
+      break;
+    case 'halt_record_write_failed':
+      log(`${dot} ${chalk.red('✋')} ${chalk.red(`halt record write failed: ${event.path} — ${event.reason}`)}`);
+      break;
+    case 'halt_record_push_failed':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`halt record push failed: ${event.path} — ${event.reason}`)}`);
       break;
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);

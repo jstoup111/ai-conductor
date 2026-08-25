@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -41,9 +42,11 @@ void readDispositionIsWiderThanHaltClass;
 
 describe('writeHaltMarker', () => {
   let root: string;
+  let repositoryRoot: string | undefined;
 
   afterEach(async () => {
     if (root) await rm(root, { recursive: true, force: true });
+    if (repositoryRoot) await rm(repositoryRoot, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
 
@@ -52,6 +55,67 @@ describe('writeHaltMarker', () => {
     await expect(writeHaltMarker(root, 'reason', 'needs-human')).resolves.toEqual({ status: 'written' });
     const contents = await readFile(join(root, HALT_CLASS_MARKER), 'utf-8');
     expect(contents).toContain('needs-human');
+  });
+
+  it('commits a record and emits its outcome for a needs-human halt', async () => {
+    ({ worktree: root, repositoryRoot } = await makeFeatureRepository());
+    const emitter = new ConductorEventEmitter();
+    const emitted: Array<{ type: string; path: string; slug?: string; haltClass?: string }> = [];
+    emitter.on('halt_record_written', (event) => {
+      if (event.type === 'halt_record_written') emitted.push(event);
+    });
+
+    await expect(writeHaltMarker(root, 'operator decision required\n', 'needs-human', emitter)).resolves.toEqual({
+      status: 'written',
+    });
+
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('operator decision required\n');
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    await expect(readFile(join(root, '.docs', 'halted', 'operator-decision.md'), 'utf8')).resolves.toContain('Status: halted');
+    expect(emitted).toEqual([expect.objectContaining({
+      type: 'halt_record_written',
+      path: '.docs/halted/operator-decision.md',
+      slug: 'operator-decision',
+      haltClass: 'needs-human',
+    })]);
+  });
+
+  it('does not produce a record for a mechanical halt', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+
+    await expect(writeHaltMarker(root, 'retry automatically\n', 'mechanical')).resolves.toEqual({ status: 'written' });
+
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('retry automatically\n');
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+    await expect(stat(join(root, '.docs', 'halted'))).rejects.toThrow();
+  });
+
+  it('reports a record write failure without changing the written marker outcome', async () => {
+    ({ worktree: root, repositoryRoot } = await makeFeatureRepository());
+    const emitter = new ConductorEventEmitter();
+    const emitted: Array<{ type: string; path: string; reason?: string }> = [];
+    emitter.on('halt_record_write_failed', (event) => {
+      if (event.type === 'halt_record_write_failed') emitted.push(event);
+    });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(writeFile).mockImplementation(async (path: any, ...rest: any[]) => {
+      if (path === join(root, '.docs', 'halted', 'operator-decision.md')) {
+        throw new Error('halt record disk full');
+      }
+      return (actual.writeFile as any)(path, ...rest);
+    });
+
+    await expect(writeHaltMarker(root, 'operator decision required\n', 'needs-human', emitter)).resolves.toEqual({
+      status: 'written',
+    });
+
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('operator decision required\n');
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect(emitted).toEqual([expect.objectContaining({
+      type: 'halt_record_write_failed',
+      path: '.docs/halted/operator-decision.md',
+      reason: 'halt record disk full',
+    })]);
   });
 
   it('reports a failed marker write and emits its path and reason', async () => {
@@ -222,3 +286,20 @@ describe('readHaltClass', () => {
     await expect(readHaltClass(root)).resolves.toBe('unclassified');
   });
 });
+
+async function makeFeatureRepository(): Promise<{ worktree: string; repositoryRoot: string }> {
+  const main = await mkdtemp(join(tmpdir(), 'halt-marker-main-'));
+  const worktree = join(main, '.worktrees', 'operator-decision');
+  const remote = join(main, 'remote.git');
+  await execa('git', ['init', '-q', '-b', 'main'], { cwd: main });
+  await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: main });
+  await execa('git', ['config', 'user.name', 'Test User'], { cwd: main });
+  await (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).writeFile(join(main, 'README.md'), 'test\n');
+  await execa('git', ['add', 'README.md'], { cwd: main });
+  await execa('git', ['commit', '-q', '-m', 'initial'], { cwd: main });
+  await execa('git', ['init', '--bare', '-b', 'main', '-q', remote]);
+  await execa('git', ['worktree', 'add', '-q', '-b', 'feat/operator-decision', worktree], { cwd: main });
+  await execa('git', ['remote', 'add', 'origin', remote], { cwd: worktree });
+  await execa('git', ['push', '-q', '--set-upstream', 'origin', 'feat/operator-decision'], { cwd: worktree });
+  return { worktree, repositoryRoot: main };
+}

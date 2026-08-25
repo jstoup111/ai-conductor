@@ -761,10 +761,9 @@ apply to this repository. See [self-hosting](../guides/self-hosting.md).
   or `model`.
 - **Engine step** — a custom step wired in `.ai-conductor/config.yml` with `after: maintain-documentation`,
   `enforcement: gating`, and `completion_artifact: .pipeline/release-disposition-pass`. It lands before
-  `finish` and inherits the SHIP loop-gate behavior. It also pins `llm_provider: claude` and
-  `model: sonnet`: the step judges a diff and writes a short structured disposition, so it needs a
-  cheap tier rather than a frontier model, and pinning the provider keeps `claude` first in the
-  candidate order instead of resolving this repository's run-level `codex` entry first.
+  `finish` and inherits the SHIP loop-gate behavior. It pins `llm_provider: codex` and
+  `model: gpt-5.6-terra`: the step judges a diff and writes a short structured disposition, so the
+  standard Codex tier is sufficient; its structured output is validated by the required CI check.
 - **Inputs** — the implementation diff, the retained SHIP draft PR, and the migration-surface classifier.
   The diff decides the disposition; the PR body is the authority once written.
 - **Outputs** — structured metadata written directly to the PR body plus

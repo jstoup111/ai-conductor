@@ -49,6 +49,7 @@ Twenty entries. Alphabetized; the five with no code reference are marked.
 | `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, engineer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line. Missing ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
 | `conflicts/` | `YYYY-MM-DD-<slug>.md` | `conflict-check` skill | `conflict_check` completion glob |
 | `decisions/` | `adr-<topic>.md`, `adr-YYYY-MM-DD-<topic>.md`, `NNN-<topic>.md`, `architecture-review-*.md`, `technical-assessment-*.md` | `architecture-review`, `assess`, `bootstrap`, `prd`, `simplify`, `debugging`, `finish` | `architecture_review` and `assess` completion globs; the land gate and daemon discovery both scan every `adr-*.md` and reject one whose first declared status is not `APPROVED` or `SUPERSEDED` |
+| `halted/` | `<slug>.md` | the halt-marker writer | An operator-readable halt record on the feature branch. It records status, slug, halt class, halting step, phase, branch, HEAD SHA, UTC halt time, the full HALT body, and whether the record may be ahead of the remote. It is written and committed for an operator-actionable (`needs-human`, `plan-gap`, or `protected-artifact`) halt off the default branch, then pushed best-effort; `mechanical` halts produce no record. Clearing the halt changes the record's status to resolved while retaining its original details. |
 | `intake/` | `<plan-stem>.md` | `intake` skill | `parseIntakeSourceRef` reads `Source-Ref: owner/repo#N`; `Owner: <id>` drives the daemon owner gate |
 | `manual-test-results.md` | loose file | legacy | **no code reference** — superseded by `.pipeline/manual-test-results.md` |
 | `observation/` | free-form | manual | **no code reference** |
@@ -736,12 +737,14 @@ type AuditRecord = {
 
 `at` is epoch milliseconds, not the ISO `ts` used by `events.jsonl`, and `event` is a derived string,
 not a raw event type. `phase` is omitted for an `operator`-origin record — an interactive reseal runs
-outside any step's phase. It subscribes to eleven source events (`gate_verdict`, `step_retry`,
+outside any step's phase. It subscribes to fourteen source events (`gate_verdict`, `step_retry`,
 `kickback`, `loop_halt`, `step_completed`, `halt_cleared`, `protected_artifact_reseal`,
-`protected_artifact_reseal_refused`, `halt_marker_write_failed`,
-`remediation_sealed_artifact_redirect`, `verdict_freshness`) and emits ten strings (`gate_pass`,
+`protected_artifact_reseal_refused`, `halt_marker_write_failed`, `halt_record_written`,
+`halt_record_write_failed`, `halt_record_push_failed`,
+`remediation_sealed_artifact_redirect`, `verdict_freshness`) and emits thirteen strings (`gate_pass`,
 `gate_fail`, `retry`, `kickback`, `intervention`, `halt_cleared`, `reseal`, `reseal_refused`,
-`halt_marker_write_failed`, `verdict_freshness`). `remediation_sealed_artifact_redirect` is
+`halt_marker_write_failed`, `halt_record_written`, `halt_record_write_failed`,
+`halt_record_push_failed`, `verdict_freshness`). `remediation_sealed_artifact_redirect` is
 subscribed but intentionally emits no audit record. A write failure drops a
 `WRITE-FAILED` marker beside it and, for
 [`conduct-ts reseal`](cli.md#conduct-ts-reseal) specifically, fails the reseal itself — its writer is

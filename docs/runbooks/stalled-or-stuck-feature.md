@@ -53,7 +53,32 @@ review the plan before starting the daemon if those older specs are not ready to
 **Verification:** Run `conduct-ts daemon status` after the next pass. A repaired spec disappears
 from `BLOCKED` and is eligible for dispatch; a remaining entry includes its current remedy.
 
-### 1. Read the halt marker first
+### First, read the committed halt record
+
+For an operator-actionable halt, read `.docs/halted/<slug>.md` from the feature branch before
+consulting worktree-local state. The committed record survives a recreated worktree and can be
+read from any clone that has the feature branch:
+
+```bash
+git show <feature-branch>:.docs/halted/<slug>.md
+```
+
+It gives the halt class, step, phase, branch, HEAD SHA, timestamp, and complete HALT body. A
+`Status: resolved` record preserves those original details and also records how and when it was
+cleared. `mechanical` halts deliberately create no record, so begin with the live marker when this
+file is absent for that class.
+
+The push is best-effort. If the daemon reports `halt_record_push_failed`, the record was still
+committed locally on the daemon host but may not be visible from the remote branch. Read it from
+that feature worktree instead:
+
+```bash
+git -C .worktrees/<slug> show HEAD:.docs/halted/<slug>.md
+```
+
+Repair the push failure separately; do not treat a missing remote copy as a missing halt record.
+
+### 1. Read the halt marker
 
 ```bash
 head -1 .worktrees/<slug>/.pipeline/HALT

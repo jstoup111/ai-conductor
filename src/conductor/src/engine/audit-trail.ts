@@ -192,6 +192,21 @@ export class AuditTrailWriter {
           path: event.path,
           reason: event.reason,
         };
+      case 'halt_record_written':
+        return {
+          origin: 'build',
+          event: event.type,
+          path: event.path,
+          reason: `halt record written for ${event.slug} (${event.haltClass})`,
+        };
+      case 'halt_record_write_failed':
+      case 'halt_record_push_failed':
+        return {
+          origin: 'build',
+          event: event.type,
+          path: event.path,
+          reason: event.reason,
+        };
       case 'halt_cleared':
         return {
           origin: event.step ?? 'build',

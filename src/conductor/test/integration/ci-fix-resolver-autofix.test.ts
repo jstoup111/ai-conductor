@@ -171,7 +171,7 @@ describe('CF-4: spawn/exec failures are classified, never a bare unclassified Ex
   it('a fixRunner failure resembling an unclassified ExecaError is logged with a classification tag', async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), 'ci-fix-classify-'));
     try {
-      execSync('git init --bare origin.git', { cwd: tmpDir });
+      execSync('git init --bare -b main origin.git', { cwd: tmpDir });
       const repoPath = join(tmpDir, 'repo');
       execSync(`git init -b main "${repoPath}"`);
       execSync('git config user.email test@example.com', { cwd: repoPath });

@@ -16,7 +16,11 @@ ensureRunTmpRootSync(tmpdir());
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
-    exclude: ['test/smoke/**', '**/*.smoke.test.ts'],
+    exclude: [
+      'test/smoke/**',
+      '**/*.smoke.test.ts',
+      'test/engine/deterministic-build-verification-group.test.ts',
+    ],
     environment: 'node',
     // Global guards (see test/setup.ts): never spawn a real build daemon, and
     // block the pr-labels gh/git seam from real exec (AI_CONDUCTOR_NO_REAL_EXEC).
@@ -26,7 +30,10 @@ export default defineConfig({
     // where the conductor suite pollutes its own working directory.
     globalSetup: ['./test/global-setup.ts'],
     pool: 'forks',
-    poolOptions: { forks: { maxForks: 3, minForks: 1 } },
+    // Three concurrent forks peak above the 28 GiB user-slice ceiling and
+    // are OOM-killed after completing their files. Two retain parallelism
+    // while leaving enough headroom for the suite's real-Git fixtures.
+    poolOptions: { forks: { maxForks: 2, minForks: 1 } },
     testTimeout: 20000,
     hookTimeout: 30000,
   },

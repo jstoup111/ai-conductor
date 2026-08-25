@@ -712,6 +712,25 @@ export type ConductorEvent =
       reason: string;
     }
   | {
+      /** A durable halt record was written and committed for the feature. */
+      type: 'halt_record_written';
+      path: string;
+      slug: string;
+      haltClass: 'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap';
+    }
+  | {
+      /** Writing or committing a durable halt record failed. */
+      type: 'halt_record_write_failed';
+      path: string;
+      reason: string;
+    }
+  | {
+      /** Pushing a committed durable halt record failed. */
+      type: 'halt_record_push_failed';
+      path: string;
+      reason: string;
+    }
+  | {
       /** The gate loop reached a fully-satisfied state (.pipeline/DONE). */
       type: 'loop_converged';
     }
