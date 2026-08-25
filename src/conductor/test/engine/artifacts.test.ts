@@ -488,7 +488,7 @@ describe('engine/artifacts', () => {
       });
     });
 
-    it('diagnoses ambiguous or missing candidates', async () => {
+    it('diagnoses ambiguous candidates with the feature naming rule', async () => {
       await createFile('.docs/stories/feature-a.md');
       await createFile('.docs/stories/feature-c.md');
       const featureB = {
@@ -496,27 +496,48 @@ describe('engine/artifacts', () => {
         changedPaths: new Set<string>(),
       };
 
-      const [ambiguous, missing] = await Promise.all([
-        resolveArtifactFiles(dir, 'stories', featureB),
-        resolveArtifactFiles(dir, 'retro', featureB),
-      ]);
+      const ambiguous = await resolveArtifactFiles(dir, 'stories', featureB);
 
-      expect({ ambiguous, missing }).toEqual({
-        ambiguous: {
-          files: [],
-          diagnostic: {
-            code: 'ambiguous',
-            reason:
-              'stories has 2 artifact candidates and none can be associated with active feature "feature-b". Naming rule: normalized-stem (date prefix stripped); expected stem "feature-b"; example expected filename ".docs/stories/feature-b.md".',
-          },
+      expect(ambiguous).toEqual({
+        files: [],
+        diagnostic: {
+          code: 'ambiguous',
+          reason:
+            'stories has 2 artifact candidates and none can be associated with active feature "feature-b". Naming rule: normalized-stem (date prefix stripped); expected stem "feature-b"; example expected filename ".docs/stories/feature-b.md".',
         },
-        missing: {
-          files: [],
-          diagnostic: {
-            code: 'missing',
-            reason: 'retro has no artifact candidates for active feature "feature-b"',
-          },
+      });
+    });
+
+    it('keeps the empty-candidate missing diagnostic byte-identical', async () => {
+      const result = await resolveArtifactFiles(dir, 'retro', {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set<string>(),
+      });
+
+      expect(result).toEqual({
+        files: [],
+        diagnostic: {
+          code: 'missing',
+          reason: 'retro has no artifact candidates for active feature "feature-b"',
         },
+      });
+    });
+
+    it('keeps repository-scoped resolution diagnostic-free', async () => {
+      const result = await resolveArtifactFiles(
+        dir,
+        'architecture_diagram',
+        {
+          featureIdentities: ['feature-b'],
+          changedPaths: new Set<string>(),
+        },
+        [],
+        true,
+      );
+
+      expect(result).toEqual({
+        files: [],
+        patternResults: [{ pattern: '.docs/architecture/*.md', files: [] }],
       });
     });
 
