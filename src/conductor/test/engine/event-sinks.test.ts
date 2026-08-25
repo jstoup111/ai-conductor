@@ -20,6 +20,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_started',
   'step_completed',
   'step_failed',
+  'step_refused',
   'provider_attempt',
   'scratch_cleanup_reclaimed',
   'scratch_cleanup_retained',
@@ -141,6 +142,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'kickback',
   'loop_halt',
   'step_completed',
+  'step_refused',
   'halt_cleared',
   'operator_rewind',
 ] satisfies Array<ConductorEvent['type']>;
@@ -153,6 +155,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'step_started',
   'step_completed',
   'step_failed',
+  'step_refused',
   'step_retry',
   'rate_limit',
   'session_reset',

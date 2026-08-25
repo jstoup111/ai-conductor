@@ -784,6 +784,11 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** A typed refusal is an entry/environment outcome, never provider text. */
+  refusal?: {
+    kind: 'seal' | 'needs-human' | 'validation-verdict';
+    reason: string;
+  };
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
   /**
@@ -1571,7 +1576,7 @@ export class Conductor {
       : event.type === 'parallel_started'
         ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
         : undefined;
-    const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
+    const terminalKey = event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_refused'
       ? `step:${event.step}`
       : event.type === 'parallel_completed'
         || (event.type === 'parallel_failure' && event.terminal !== false)
@@ -1670,6 +1675,24 @@ export class Conductor {
       ? await this.surfaceRemediationPr(input.reason)
       : undefined;
     await this.emitLoopHalt(input.loopHaltReason ?? input.reason, prUrl);
+  }
+
+  /**
+   * Record a typed refusal without rewriting the step as a work failure. The
+   * caller has already written the authoritative HALT marker through the
+   * shared marker seam; this method owns only its state and spine effects.
+   */
+  private async recordStepRefusal(
+    state: ConductState,
+    step: StepName,
+    kind: 'seal' | 'needs-human' | 'validation-verdict',
+    reason: string,
+  ): Promise<void> {
+    await this.commitStateChanges(state, `record refused ${step} step`, {
+      [step]: 'refused',
+      last_step: step,
+    });
+    await this.emitExecutionEvent({ type: 'step_refused', step, kind, reason });
   }
   private featureSlug?: string;
   private operatorParkBoundary?: () => Promise<boolean>;
@@ -5895,20 +5918,8 @@ export class Conductor {
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
-              await this.commitStateChanges(state, `fail ${step.name} validation group`, {
-                [step.name]: 'failed',
-                last_step: step.name,
-              });
+              await this.recordStepRefusal(state, step.name, 'validation-verdict', haltReason);
               await this.emitLoopHalt(haltReason);
-              await emitTracked({
-                type: 'step_failed',
-                step: step.name,
-                error: haltReason,
-                retryCount: 0,
-                ...(noVerdictOutcome.observedIntervals
-                  ? { observedIntervals: noVerdictOutcome.observedIntervals }
-                  : {}),
-              });
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) {
                 process.off('SIGTERM', sigterm);
@@ -6025,10 +6036,7 @@ export class Conductor {
                 reason + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
               );
-              await this.commitStateChanges(state, `fail ${step.name} validation group`, {
-                [step.name]: 'failed',
-                last_step: step.name,
-              });
+              await this.recordStepRefusal(state, step.name, 'validation-verdict', reason);
               await this.emitLoopHalt(reason);
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) process.off('SIGTERM', sigterm);
@@ -6380,22 +6388,10 @@ export class Conductor {
                   (failedMemberReasons.length > 0
                     ? failedMemberReasons.join('; ')
                     : 'non-green branch outcome');
-            await this.commitStateChanges(state, `fail ${step.name} validation group`, {
-              [step.name]: 'failed',
-              last_step: step.name,
-            });
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
               await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human');
             }
-            await emitTracked({
-              type: 'step_failed',
-              step: step.name,
-              // Carry the per-member gate reasons (e.g. the manual_test
-              // whitewash-guard refusal), not just a generic label — the
-              // serial walk's step_failed carried the gate reason too.
-              error: groupHaltReason,
-              retryCount: 0,
-            });
+            await this.recordStepRefusal(state, step.name, 'validation-verdict', groupHaltReason);
             await this.emitLoopHalt(groupHaltReason);
             process.off('SIGINT', sigintHandler);
             if (!this.daemon) {
@@ -6912,7 +6908,11 @@ export class Conductor {
             buildWatcher?.stop();
             closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
-            result = { success: false, output: dispatchIssue };
+            result = {
+              success: false,
+              output: dispatchIssue,
+              refusal: { kind: 'seal', reason: dispatchIssue },
+            };
             // Write the HALT marker directly rather than relying solely on
             // the generic "retries exhausted" flow below. Gated on `attempt
             // >= 2` — the SAME literal threshold the pre-existing stall
@@ -7584,8 +7584,7 @@ export class Conductor {
                 haltBeforeAttempt,
               );
               if (stepWrittenHalt) {
-                state[step.name] = 'failed';
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
                 await this.emitLoopHalt(stepWrittenHalt);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
@@ -8361,8 +8360,7 @@ export class Conductor {
                   haltBeforeAttempt,
                 );
                 if (stepWrittenHalt) {
-                  state[step.name] = 'failed';
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
                   await this.emitLoopHalt(stepWrittenHalt);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
@@ -8495,6 +8493,18 @@ export class Conductor {
         }
 
         if (!succeeded) {
+          if (failedStepResult?.refusal) {
+            const { kind, reason } = failedStepResult.refusal;
+            await this.writeHaltMarker(
+              reason + '\n',
+              kind === 'seal' ? PROTECTED_ARTIFACT_HALT_CLASS : 'needs-human',
+            );
+            await this.recordStepRefusal(state, step.name, kind, reason);
+            await this.emitLoopHalt(reason);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
           // Exhausted retries — route through the recovery menu.
           await this.saveConductorStepStatus(state, step.name, 'failed');
           if (step.name === 'build') {

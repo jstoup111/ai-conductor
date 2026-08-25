@@ -657,7 +657,7 @@ those:
 `build_review_cache_hit`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
 `build_review_stale_aggregate`,
 `build_review_disposition_version_invalidated`,
-`step_started`, `deprecated_step`, `step_completed`, `step_failed`, `provider_attempt`,
+`step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_attempt`,
 `provider_stream_progress`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
 `feature_usage_total`,

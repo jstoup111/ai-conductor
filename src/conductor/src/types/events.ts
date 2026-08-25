@@ -274,6 +274,13 @@ export type ConductorEvent =
       retryCount: number;
       observedIntervals?: readonly ObservedInterval[];
     }
+  | {
+      /** The step was stopped before its own work could be judged a failure. */
+      type: 'step_refused';
+      step: StepName;
+      kind: 'seal' | 'needs-human' | 'validation-verdict';
+      reason: string;
+    }
   | ProviderAttemptEvent
   | ProviderStreamProgressEvent
   | {

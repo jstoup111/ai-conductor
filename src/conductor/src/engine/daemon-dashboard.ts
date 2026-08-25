@@ -299,7 +299,7 @@ function haltReason(content: string): string {
 
 /**
  * The last meaningful step recorded in a conduct-state object: the furthest
- * `in_progress` step, else the furthest `done`/`failed` step (canonical
+ * `in_progress` step, else the furthest `done`/`failed`/`refused` step (canonical
  * `ALL_STEPS` order). `unknown` when no step has a meaningful status.
  */
 function lastMeaningfulStep(state: Record<string, unknown>): string {
@@ -313,7 +313,7 @@ function lastMeaningfulStep(state: Record<string, unknown>): string {
   for (const name of order) {
     const s = statusOf(name);
     if (s === 'in_progress') furthestInProgress = name;
-    if (s === 'done' || s === 'failed') furthestSettled = name;
+    if (s === 'done' || s === 'failed' || s === 'refused') furthestSettled = name;
   }
   return furthestInProgress ?? furthestSettled ?? 'unknown';
 }

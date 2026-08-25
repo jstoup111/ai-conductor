@@ -32,7 +32,7 @@ export type StepName =
   // (like remediate) that validates task attribution metadata in commits.
   | 'attribution_verify';
 
-export type StepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped' | 'stale';
+export type StepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'refused' | 'skipped' | 'stale';
 
 export type Phase = 'SETUP' | 'UNDERSTAND' | 'DECIDE' | 'BUILD' | 'SHIP';
 
