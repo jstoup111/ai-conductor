@@ -10,7 +10,7 @@ assertPublishWrapperEnv(process.env);
 export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm'],
-  target: 'node20',
+  target: 'node26',
   clean: true,
   dts: true,
   sourcemap: true,

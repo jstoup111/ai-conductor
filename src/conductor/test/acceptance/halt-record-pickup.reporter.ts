@@ -1,38 +1,37 @@
-import type { File, Task, Test } from '@vitest/runner';
-import type { Reporter } from 'vitest/reporters';
+import type { Reporter, TestCase, TestModule } from 'vitest/node';
+import type { SerializedError } from '@vitest/utils';
 
 const INTENT_RATIONALE =
   'The real halt path does not yet commit and push a branch-readable halt record, so a separate clone cannot read the operator pickup artifact.';
 
 export default class HaltRecordPickupReporter implements Reporter {
-  onFinished(files: File[], errors: unknown[]): void {
-    const tests: Test[] = [];
-    const visit = (task: Task): void => {
-      if (task.type === 'test') {
-        tests.push(task);
-        return;
-      }
-      if ('tasks' in task) {
-        for (const child of task.tasks) visit(child);
-      }
-    };
-    for (const file of files) visit(file);
+  // vitest 4 replaced `onFinished(files, errors)` with
+  // `onTestRunEnd(testModules, unhandledErrors, reason)` and moved the task
+  // tree behind `module.children`, so the hand-rolled recursive walk is gone:
+  // `allTests()` already yields every test case transitively. State also moved
+  // from `task.result?.state` / `task.mode` to a single `test.result().state`,
+  // where `skipped` covers both skip and todo.
+  onTestRunEnd(
+    testModules: ReadonlyArray<TestModule>,
+    unhandledErrors: ReadonlyArray<SerializedError>,
+  ): void {
+    const tests: TestCase[] = [];
+    for (const testModule of testModules) tests.push(...testModule.children.allTests());
 
-    const passed = tests.filter((test) => test.result?.state === 'pass');
-    const failed = tests.filter((test) => test.result?.state === 'fail');
-    const skipped = tests.filter(
-      (test) => test.mode === 'skip' || test.mode === 'todo',
-    );
+    const passed = tests.filter((test) => test.result().state === 'passed');
+    const failed = tests.filter((test) => test.result().state === 'failed');
+    const skipped = tests.filter((test) => test.result().state === 'skipped');
+
     process.stdout.write(`ACCEPTANCE_RED_EVIDENCE: ${JSON.stringify({
       executed: passed.length + failed.length,
       passed: passed.length,
       failed: failed.length,
       skipped: skipped.length,
-      errors: errors.length,
+      errors: unhandledErrors.length,
       failingTests: failed.map((test) => ({
         name: test.name,
         reason:
-          test.result?.errors?.[0]?.message?.split('\n')[0] ??
+          test.result().errors?.[0]?.message?.split('\n')[0] ??
           'the branch-readable halt record is not implemented',
       })),
       intentRationale: INTENT_RATIONALE,

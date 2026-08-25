@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
-import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { AuthenticationReadiness, InvokeOptions } from '../../src/execution/llm-provider.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -115,8 +115,8 @@ describe('acceptance: Codex readiness park #970', () => {
     await rm(flowDir, { recursive: true, force: true });
   });
 
-  function recoveryRuntimes(readiness: ReturnType<typeof vi.fn>) {
-    const fallbackReadiness = vi.fn();
+  function recoveryRuntimes(readiness: () => Promise<AuthenticationReadiness>) {
+    const fallbackReadiness = vi.fn<() => Promise<AuthenticationReadiness>>();
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',

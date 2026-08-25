@@ -186,7 +186,7 @@ function defaultHasCommand(command: string): boolean {
 }
 
 interface SmokeDiscoveryVitest {
-  globTestFiles(): Promise<readonly { moduleId: string }[]>;
+  globTestSpecifications(): Promise<readonly { moduleId: string }[]>;
   close(): Promise<void>;
 }
 
@@ -223,7 +223,7 @@ export async function discoverSmokeFiles(
       config: resolve(config),
       root: process.cwd(),
     });
-    const files = await vitest.globTestFiles();
+    const files = await vitest.globTestSpecifications();
     return Promise.all(files.map(async ({ moduleId }) => {
       const file = relative(process.cwd(), moduleId).replaceAll('\\', '/');
       const source = await readDiscoveredFile(moduleId);

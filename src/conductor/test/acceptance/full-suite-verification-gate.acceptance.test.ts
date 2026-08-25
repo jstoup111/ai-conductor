@@ -149,7 +149,7 @@ function invokeScriptWithFakeVitest(
     'sh',
     ['-c', `${script} ${argumentsToForward.map(shellQuote).join(' ')}`],
     {
-      cwd: repo,
+      cwd: CONDUCTOR_ROOT,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -291,7 +291,10 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     const testScript = JSON.parse(packageJson).scripts.test as string;
     // Signal simulation needs a thread worker, but runs concurrently with the
     // fork-pool batch rather than after it.
-    expect(testScript.match(/vitest run/g)).toHaveLength(3);
+    // Every invocation goes through the Node 26 temp-dir wrapper
+    // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
+    expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(3);
+    expect(testScript).not.toMatch(/(^|[^-])vitest run/);
     expect(testScript).toContain('vitest.signal.config.ts');
     expect(testScript).toContain('wait "$ordinary"');
     expect(testScript).toContain('wait "$signals"');
@@ -318,9 +321,10 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     }
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);
-    expect(vitestConfig).toMatch(
-      /poolOptions:\s*\{\s*forks:\s*\{\s*maxForks:\s*2,\s*minForks:\s*1\s*\}\s*\}/s,
-    );
+    // vitest 4 removed `poolOptions`; the fork cap is `maxWorkers` now. It
+    // must stay at 2 — 3 is the count that gets OOM-killed on this host.
+    expect(vitestConfig).toMatch(/maxWorkers:\s*2/);
+    expect(vitestConfig).not.toMatch(/poolOptions/);
   });
 
   it('executes the declared command in its working directory and records one PASS', async () => {

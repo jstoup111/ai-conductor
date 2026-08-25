@@ -8,6 +8,7 @@ const tsc = resolve(projectRoot, 'node_modules/typescript/bin/tsc');
 export function compileTypeFixture(path: string) {
   return spawnSync(process.execPath, [
     tsc,
+    '--ignoreConfig',
     '--noEmit',
     '--target', 'ES2022',
     '--module', 'NodeNext',
@@ -16,6 +17,7 @@ export function compileTypeFixture(path: string) {
     '--esModuleInterop',
     '--skipLibCheck',
     '--isolatedModules',
+    '--types', 'node',
     resolve(projectRoot, path),
   ], {
     cwd: projectRoot,

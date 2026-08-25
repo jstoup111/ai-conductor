@@ -14,7 +14,7 @@ import {
 } from './live-provider-home.js';
 import { ProvisionedHome } from './live-e2e-run-body.js';
 
-vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
+vi.mock('./daemon-e2e-diagnostics.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 

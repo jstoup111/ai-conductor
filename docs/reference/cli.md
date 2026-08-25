@@ -17,7 +17,8 @@ The legacy bash `bin/conduct` is deprecated and is not documented here — use `
 bundled engine at `src/conductor/dist/index.js`, resolving the `dist` symlink to a concrete
 `dist-versions/<id>/index.js` so a running process is pinned to one engine version. It exports
 `ASDF_NODEJS_VERSION` from `src/conductor/.tool-versions` when `asdf` is on `PATH`, then `exec`s node,
-so the engine's exit code is the shim's.
+so the engine's exit code is the shim's. The current pin is Node.js `26.7.0`, and the engine requires
+Node `>=26.0.0` when the asdf override is unavailable.
 
 | Condition | Message | Exit |
 | --- | --- | --- |

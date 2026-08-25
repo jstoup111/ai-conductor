@@ -7,10 +7,10 @@ import { ensureRunTmpRootSync } from './test/tmpdir-leak-guard.js';
 // `mkdtemp(join(tmpdir(), …))` in the suite — the ~1,426 call sites, most of
 // which never clean up — lands inside that root, and test/global-setup.ts
 // deletes it wholesale at teardown. Installed here rather than in globalSetup
-// because vitest's own project tmpDir is computed between the two (see
-// ensureRunTmpRootSync). The forked workers inherit this env when the pool
-// spawns them; test/tmpdir-redirect-propagation.test.ts proves that from
-// inside a worker.
+// because vitest's project tmpDir is computed before globalSetup (see
+// ensureRunTmpRootSync). Package scripts install the redirect before Vitest 4
+// itself loads; this idempotent call covers programmatic project creation.
+// Forked workers inherit the env, proven by tmpdir-redirect-propagation.test.ts.
 ensureRunTmpRootSync(tmpdir());
 
 export default defineConfig({
@@ -33,7 +33,10 @@ export default defineConfig({
     // Three concurrent forks peak above the 28 GiB user-slice ceiling and
     // are OOM-killed after completing their files. Two retain parallelism
     // while leaving enough headroom for the suite's real-Git fixtures.
-    poolOptions: { forks: { maxForks: 2, minForks: 1 } },
+    // vitest 4 removed the per-pool options block; `maxWorkers` is the same
+    // cap. The branch arrived here with 3 — the count that gets OOM-killed —
+    // because it predates that finding.
+    maxWorkers: 2,
     testTimeout: 20000,
     hookTimeout: 30000,
   },
