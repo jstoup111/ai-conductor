@@ -4,6 +4,56 @@ import { dirname, join } from 'node:path';
 export const ACCEPTED_WIDENINGS_PATH = '.pipeline/accepted-widenings.json';
 const OVER_SCOPE_ACCEPTANCE_CANDIDATE = 'OVER_SCOPE_ACCEPT:';
 
+export interface OverScopeDecision {
+  criterion: string;
+  summary: string;
+  decision: 'accept' | 'refuse';
+  rationale: string;
+  operator: string;
+  decidedAt: string;
+}
+
+interface OverScopeDecisionsFile {
+  version: 1;
+  decisions: OverScopeDecision[];
+}
+
+function isOverScopeDecision(value: unknown): value is OverScopeDecision {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const decision = value as Record<string, unknown>;
+  return typeof decision.criterion === 'string' && decision.criterion.trim().length > 0 &&
+    typeof decision.summary === 'string' && decision.summary.trim().length > 0 &&
+    (decision.decision === 'accept' || decision.decision === 'refuse') &&
+    typeof decision.rationale === 'string' && decision.rationale.trim().length > 0 &&
+    typeof decision.operator === 'string' && decision.operator.trim().length > 0 &&
+    typeof decision.decidedAt === 'string' && decision.decidedAt.trim().length > 0;
+}
+
+/** Read a tolerant, feature-local record of operator OVER_SCOPE decisions. */
+export async function readOverScopeDecisions(
+  projectRoot: string,
+): Promise<{ decisions: OverScopeDecision[] }> {
+  try {
+    const parsed: unknown = JSON.parse(
+      await readFile(join(projectRoot, ACCEPTED_WIDENINGS_PATH), 'utf8'),
+    );
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      (parsed as { version?: unknown }).version === 1 &&
+      Array.isArray((parsed as { decisions?: unknown }).decisions) &&
+      (parsed as { decisions: unknown[] }).decisions.every(isOverScopeDecision)
+    ) {
+      return { decisions: (parsed as OverScopeDecisionsFile).decisions };
+    }
+  } catch {
+    // A missing or malformed prior decision never becomes an implicit one.
+  }
+  return { decisions: [] };
+}
+
+// Kept only until the legacy one-candidate clear path is removed in Task 12.
 export interface AcceptedWidening {
   criterion: string;
   summary: string;
