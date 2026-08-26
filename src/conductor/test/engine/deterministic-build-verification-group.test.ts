@@ -307,7 +307,7 @@ describe('deterministic BUILD verification group', () => {
       if (event === 'SIGHUP') sighupHandler = handler as () => Promise<void>;
       return process;
     }) as typeof process.on);
-    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const exitProcess = vi.fn();
     const events = new ConductorEventEmitter();
     const ensure = vi.fn(async () => ({
       status: 'FAILED' as const,
@@ -333,6 +333,7 @@ describe('deterministic BUILD verification group', () => {
         inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
         ensure,
       },
+      exitProcess,
       onRecovery: async () => 'quit',
     });
 
@@ -471,7 +472,7 @@ describe('deterministic BUILD verification group', () => {
       if (event === 'SIGINT') sigintHandler = handler as () => Promise<void>;
       return process;
     }) as typeof process.on);
-    const processExit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const exitProcess = vi.fn();
 
     const interrupted = new Conductor({
       stateFilePath,
@@ -494,6 +495,7 @@ describe('deterministic BUILD verification group', () => {
         inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
         ensure: firstEnsure,
       },
+      exitProcess,
       onRecovery: async () => 'quit',
     });
 
@@ -519,7 +521,6 @@ describe('deterministic BUILD verification group', () => {
     await interruptedRun;
     await writeFile(stateFilePath, JSON.stringify(interruptedState));
     processOn.mockRestore();
-    processExit.mockRestore();
 
     const resumedDispatches: string[] = [];
     const resumedVerifier = {
@@ -595,7 +596,7 @@ describe('deterministic BUILD verification group', () => {
         if (event === 'SIGINT') sigintHandler = handler as () => Promise<void>;
         return process;
       }) as typeof process.on);
-      const processExit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const exitProcess = vi.fn();
       const verifier = {
         inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
         ensure: vi.fn(() => {
@@ -619,6 +620,7 @@ describe('deterministic BUILD verification group', () => {
         maxRetries: 1,
         config: { validation_concurrency: 2 },
         fullSuiteVerifier: verifier,
+        exitProcess,
         onRecovery: async () => 'quit',
       });
 
@@ -649,7 +651,6 @@ describe('deterministic BUILD verification group', () => {
       }
 
       processOn.mockRestore();
-      processExit.mockRestore();
     },
   );
 });
