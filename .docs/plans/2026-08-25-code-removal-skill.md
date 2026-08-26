@@ -21,7 +21,7 @@ This is a skill-text feature: no engine code changes except the model-table meta
 **Steps:**
 1. Create `skills/code-removal/SKILL.md` with YAML frontmatter: `name: code-removal`, a `description` that triggers on removal-shaped work (deleting a file, seam, flag, or code path), `enforcement: advisory`, `phase: all` (both DECIDE and BUILD read it — match the value style used by existing multi-phase skills; check what `verify-claims` uses and copy its convention).
 2. Write the Purpose section: removal is a first-class change type; the deliverable of a removal is the deletion itself plus an intact surviving suite — never a test asserting absence.
-3. Write the Absence-Test Prohibition section: at spec time, no plan task or story criterion may have as its subject that code/files/symbols no longer exist; at build time, no agent authors such a test; the removal-anchored tautology exemption ADR (adr-2026-08-12) governs review treatment. State the evidence rule: deletion diff + full suite green.
+3. Write the Absence-Test Prohibition section: at spec time, no plan task or story criterion may have as its subject that code/files/symbols no longer exist; at build time, no agent authors such a test; review ownership is APPROVED `adr-2026-08-22-one-owner-per-review-question.md`, which retires the rubric exemptions the superseded `adr-2026-08-12-removal-anchored-tautology-exemption.md` carried — cite the APPROVED ADR, never the superseded one. State the evidence rule: deletion diff + full suite green.
 
 **Done when:**
 - `skills/code-removal/SKILL.md` exists; frontmatter carries `name`, `description`, `enforcement`, `phase` (integrity check 2 passes for it)
@@ -95,11 +95,11 @@ This is a skill-text feature: no engine code changes except the model-table meta
 **Type:** infrastructure
 
 **Steps:**
-1. In `skills/tdd/SKILL.md`, rewrite the Removal Boundary section to keep its local build-time rule (deletion starts no RED cycle; maintenance edits keeping tests compiling are ordinary edits) and the removal-anchored tautology exemption ADR citation, while deferring doctrine — survivor method, test triage, sweep — to `/code-removal`.
+1. In `skills/tdd/SKILL.md`, rewrite the Removal Boundary section to keep its local build-time rule (deletion starts no RED cycle; maintenance edits keeping tests compiling are ordinary edits) and cite review ownership from APPROVED `adr-2026-08-22-one-owner-per-review-question.md`, while deferring doctrine — survivor method, test triage, sweep — to `/code-removal`.
 2. Verify the section no longer duplicates doctrine now owned by the new skill.
 
 **Done when:**
-- The Removal Boundary section references `/code-removal` and retains the `adr-2026-08-12-removal-anchored-tautology-exemption.md` citation
+- The Removal Boundary section references `/code-removal` and cites review ownership from APPROVED `adr-2026-08-22-one-owner-per-review-question.md` (the superseded `adr-2026-08-12` citation is removed)
 - The no-RED-for-deletion rule remains stated locally in tdd
 - No paragraph in tdd restates survivor/triage/sweep doctrine
 
@@ -152,11 +152,39 @@ This is a skill-text feature: no engine code changes except the model-table meta
 
 **Dependencies:** 4
 
+### Task 8: Route removal-shaped tasks to `/code-removal` from pipeline
+
+**Story:** 2
+**Type:** infrastructure
+
+**Steps:**
+1. Establish the gap: the `plan`, `stories`, and `tdd` pointers are authoring guidance; the session that actually executes a task is the `/pipeline` build session, which dispatches a TDD implementer and restates the RED cycle inline (`skills/pipeline/SKILL.md:89-95`). Nothing routed a removal-shaped task anywhere, so the doctrine never reached the implementer.
+2. In `skills/pipeline/SKILL.md`, extend the DISPATCH step: a removal-shaped task (deletes a file, seam, flag, symbol, or code path) dispatches the implementer to `/code-removal` in place of opening a RED cycle, naming the evidence rule.
+3. Make `/code-removal` activatable from that dispatch: replace `disable-model-invocation: true` with `implicit_invocation: required` in its frontmatter, delete `skills/code-removal/agents/openai.yaml`, and add `code-removal` to `EXPECTED_IMPLICIT_REQUIRED` in `test/check_skill_invocation_policy.sh`. Check 2a's own rule reserves implicit invocation for exactly this case — a verified model-initiated caller inside an already-active skill.
+4. Update `docs/reference/skills.md`'s invocation-policy section: the implicit-required table gains `code-removal` with `/pipeline` named as its caller, and the explicit-only list drops it.
+5. Verify `test/check_skill_invocation_policy.sh`, `test/test_skill_invocation_policy.sh`, and the full `test/test_harness_integrity.sh` all exit 0.
+
+**Done when:**
+- `skills/pipeline/SKILL.md` DISPATCH names `/code-removal` for removal-shaped tasks.
+- `code-removal` declares `implicit_invocation: required`, carries no host disable, and appears in `EXPECTED_IMPLICIT_REQUIRED`; check 2a's implicit-required set does not drift.
+- `docs/reference/skills.md` lists `code-removal` as implicit-required and no longer as explicit-only.
+- The invocation-policy checker, its mutation test, and the integrity suite all exit 0.
+
+**Files likely touched:**
+- skills/pipeline/SKILL.md — DISPATCH routing line
+- skills/code-removal/SKILL.md — frontmatter invocation classification
+- skills/code-removal/agents/openai.yaml — deleted
+- test/check_skill_invocation_policy.sh — allowlist entry
+- docs/reference/skills.md — invocation-policy section
+
+**Dependencies:** 4
+
 ## Task Dependency Graph
 ```
 Task 1 ─┬─ Task 2
         ├─ Task 3
-        ├─ Task 4 ── Task 7
+        ├─ Task 4 ─┬─ Task 7
+        │           └─ Task 8
         ├─ Task 5
         └─ Task 6
 ```
@@ -164,6 +192,7 @@ Task 1 ─┬─ Task 2
 ## Integration Points
 - After Task 6: full integrity suite green over the complete skill + routing + registration set
 - After Task 7: the same suite goes red when the referenced skill directory is removed — the pointers are guarded, not merely present
+- After Task 8: a removal-shaped task in a real build reaches `/code-removal` through `/pipeline`'s dispatch — the doctrine is reachable, not merely documented
 
 ## Verification
 - [ ] All happy path criteria covered by at least one task

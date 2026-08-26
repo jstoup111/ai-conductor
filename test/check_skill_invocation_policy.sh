@@ -13,8 +13,8 @@ if [ -z "$POLICY_ROOT" ] || [ ! -d "$POLICY_ROOT/skills" ] \
 fi
 
 EXPECTED_IMPLICIT_REQUIRED=$(printf '%s\n' \
-  architecture-diagram architecture-review coherence-check conflict-check debugging explore intake \
-  plan prd simplify stories verify-claims | sort)
+  architecture-diagram architecture-review code-removal coherence-check conflict-check debugging \
+  explore intake plan prd simplify stories verify-claims | sort)
 OBSERVED_IMPLICIT_REQUIRED=""
 VIOLATIONS=""
 

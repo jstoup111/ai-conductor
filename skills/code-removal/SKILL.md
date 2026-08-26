@@ -1,6 +1,6 @@
 ---
 name: code-removal
-disable-model-invocation: true
+implicit_invocation: required
 description: "Use when removing a file, seam, flag, symbol, or code path. Defines the evidence and test discipline for deletion-shaped work."
 enforcement: advisory
 phase: all
@@ -24,11 +24,12 @@ symbols no longer exist. Plans and stories describe the deletion and the observa
 must survive it; they never prescribe an absence test or label one verify-only to force its
 creation.
 
-At build time, do not author a test whose subject is that removed code no longer exists. The
-removal-anchored tautology exemption ADR,
-`adr-2026-08-12-removal-anchored-tautology-exemption.md`, governs review treatment for test
-maintenance directly anchored to removal evidence; it does not make an absence assertion useful
-evidence. Use the deletion diff and a green full surviving suite as the evidence instead.
+At build time, do not author a test whose subject is that removed code no longer exists. There is
+no rubric exemption to lean on: APPROVED `adr-2026-08-22-one-owner-per-review-question.md` retires
+the `scope`, `completeness`, and `rootCause` rubrics together with their exemptions — superseding
+`adr-2026-08-12-removal-anchored-tautology-exemption.md` — and leaves `test-quality` as the only
+shipped rubric. Removal evidence is the deletion diff plus a green full surviving suite, not an
+absence assertion.
 
 ## Survivor Method
 
