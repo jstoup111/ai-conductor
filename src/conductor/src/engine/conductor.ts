@@ -2068,9 +2068,9 @@ export class Conductor {
   private prdAuditProjectionRefusal: string | undefined;
 
   /**
-   * BLOCKED rows that authorized the current as-built remediation lap. They
-   * become durable only after the rebuilt as-built gate returns a successful
-   * verdict, so the record never calls an unverified planned repair completed.
+   * BLOCKED rows that authorized as-built remediation laps. They become
+   * durable only after the rebuilt as-built gate returns a successful verdict,
+   * so the record never calls an unverified planned repair completed.
    */
   private readonly pendingAsBuiltRemediationFindings = new Map<
     string,
@@ -3416,7 +3416,6 @@ export class Conductor {
       (provenance) => provenance.gate === 'architecture_review_as_built',
     )?.evidenceFile;
     const asBuiltRemediation = asBuiltEvidenceFile !== undefined;
-    if (asBuiltRemediation) this.pendingAsBuiltRemediationFindings.clear();
     const asBuiltEvidenceExists = asBuiltEvidenceFile !== undefined && await accessFile(
       join(this.projectRoot, asBuiltEvidenceFile),
     ).then(() => true).catch(() => false);

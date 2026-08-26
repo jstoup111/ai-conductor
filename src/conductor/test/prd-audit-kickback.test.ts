@@ -789,7 +789,7 @@ describe('prd_audit kickback', () => {
     expect(await readFile(planPath, 'utf8')).toContain('### Task rem-arch: Repair approved architecture drift');
   });
 
-  it('constructs one clause-bound as-built gap per finding from approved ADR and plan-task clauses', async () => {
+  it('constructs clause-bound as-built gaps and projects every remediated lap', async () => {
     const root = await mkdtemp(join(tmpdir(), 'as-built-clause-bound-'));
     dirs.push(root);
     const planPath = join(root, '.docs', 'plans', 'feature.md');
@@ -824,21 +824,29 @@ describe('prd_audit kickback', () => {
     await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), 'Task 7'))
       .resolves.toEqual({ kind: 'plan-task', clause: 'Task 7', parentTask: '7' });
 
+    let remediationRound = 0;
     const runner: StepRunner = {
       run: async () => {
+        remediationRound++;
         await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-          dispositions: [
-            {
-              id: 'AB-ADR', disposition: 'build', category: null,
-              rationale: 'Conform to the approved ADR.',
-              tasks: [{ id: 'adr-guard', title: 'Add the approved architecture guard' }],
-            },
-            {
-              id: 'AB-TASK', disposition: 'build', category: null,
-              rationale: 'Conform to the active plan task.',
-              tasks: [{ id: 'task-guard', title: 'Complete the existing approved work' }],
-            },
-          ],
+          dispositions: remediationRound === 1
+            ? [
+                {
+                  id: 'AB-ADR', disposition: 'build', category: null,
+                  rationale: 'Conform to the approved ADR.',
+                  tasks: [{ id: 'adr-guard', title: 'Add the approved architecture guard' }],
+                },
+                {
+                  id: 'AB-TASK', disposition: 'build', category: null,
+                  rationale: 'Conform to the active plan task.',
+                  tasks: [{ id: 'task-guard', title: 'Complete the existing approved work' }],
+                },
+              ]
+            : [{
+                id: 'AB-LATER', disposition: 'build', category: null,
+                rationale: 'Complete the later as-built finding.',
+                tasks: [{ id: 'later-guard', title: 'Complete the later approved work' }],
+              }],
         }));
         return { success: true };
       },
@@ -848,8 +856,11 @@ describe('prd_audit kickback', () => {
       events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
       verifyArtifacts: false, maxRetries: 1,
       config: {
-        prd_audit: { max_appended_tasks: 2, max_appended_ratio: 2 },
-        architecture_review_as_built: { remediation: { enabled: true } },
+        prd_audit: { max_appended_tasks: 3, max_appended_ratio: 3 },
+        architecture_review_as_built: {
+          remediation: { enabled: true },
+          max_remediation_laps: 2,
+        },
       } as never,
     });
 
@@ -866,9 +877,26 @@ describe('prd_audit kickback', () => {
     const appended = await readFile(planPath, 'utf8');
     expect(appended.match(/^### Task rem-as-built-/gm)).toHaveLength(2);
 
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-LATER | REMEDIABLE | Task 7 | Complete the later approved work |',
+    ].join('\n'));
+    await expect((conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked again',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    )).resolves.toMatchObject({ kind: 'route', target: 'build' });
+
     // A rebuilt gate replaces its BLOCKED report with its converged verdict.
     // The conductor carries the authorized rows through that replacement and
-    // projects them only once the re-evaluation is green.
+    // projects every lap only once the re-evaluation is green.
     await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), 'Verdict: APPROVED\n');
     await expect((conductor as unknown as {
       projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
@@ -879,6 +907,7 @@ describe('prd_audit kickback', () => {
     expect(projected).toContain(`"governingClause": "${adrStem} decision 1"`);
     expect(projected).toContain('"finding": "AB-TASK"');
     expect(projected).toContain('"governingClause": "Task 7"');
+    expect(projected).toContain('"finding": "AB-LATER"');
   });
 
   it('records as-built plan growth and an isolated remediation lap', async () => {
