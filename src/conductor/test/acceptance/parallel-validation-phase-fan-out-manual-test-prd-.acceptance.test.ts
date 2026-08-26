@@ -1,3 +1,4 @@
+// Covers: task:14
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -667,6 +668,225 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       const ledger = JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'));
       expect(ledger.gates.architecture_review_as_built.laps).toBe(1);
       expect(ledger.gates.prd_audit).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('routes valid PRD criterion-bound and as-built clause-bound gaps through one append while preserving each gate ledger and growth entry', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-mixed-remediation-'));
+    const statePath = join(dir, 'conduct-state.json');
+    const slug = 'parallel-validation-phase-fan-out-manual-test-prd-';
+    const planPath = join(dir, '.docs', 'plans', `${slug}.md`);
+    try {
+      await seedToValidators(dir, statePath);
+      await Promise.all([
+        mkdir(join(dir, '.docs', 'plans'), { recursive: true }),
+        mkdir(join(dir, '.docs', 'stories'), { recursive: true }),
+        mkdir(join(dir, '.docs', 'specs'), { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(planPath, [
+          '# Plan',
+          '',
+          '### Task 1: Existing work',
+          '',
+          '**Files:** src/feature.ts',
+          '',
+          '**Criterion:** S1.1',
+          '',
+          ...Array.from({ length: 7 }, (_, index) => `### Task ${index + 2}: Existing work`),
+        ].join('\n')),
+        writeFile(join(dir, '.docs', 'stories', `${slug}.md`), [
+          '# Stories',
+          '',
+          '## Story 1',
+          '',
+          '### Happy Path',
+          '',
+          '- Given a request, when it succeeds, then the result is returned.',
+        ].join('\n')),
+        writeFile(join(dir, '.docs', 'specs', `${slug}.md`), [
+          '# PRD',
+          '',
+          '## Functional Requirements',
+          '',
+          '- **FR-1:** The requested result exists.',
+        ].join('\n')),
+        writeFile(
+          join(dir, '.pipeline', 'engine-state.json'),
+          JSON.stringify({ activePlanPath: planPath }),
+        ),
+      ]);
+
+      const remediationReasons: string[] = [];
+      const events = new ConductorEventEmitter();
+      const growthEvents: Array<Extract<ConductorEvent, { type: 'plan_growth' }>> = [];
+      events.on('plan_growth', (event) => {
+        if (event.type === 'plan_growth') growthEvents.push(event);
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state, opts) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
+              '**PRD:** present',
+              '',
+              '## Verdict Table',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '|---|---|---|---|---|',
+              '| S1.1 | FIXABLE | 1 | FR-1 | Missing implementation |',
+              '',
+              '## FR Evidence',
+              '| FR | Verdict | Gap-class | Evidence | Accepted? |',
+              '|---|---|---|---|---|',
+              '| FR-1 | MISSING | impl-gap | src/feature.ts:1 | no |',
+            ].join('\n'));
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), [
+              'Verdict: BLOCKED',
+              '',
+              '## Blocking Findings',
+              '| Finding | Class | Governing clause | Summary |',
+              '| --- | --- | --- | --- |',
+              '| FR-1 | REMEDIABLE | Task 1 | Repair the same approved behavior |',
+              '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
+            ].join('\n'));
+          } else if (step === 'remediate') {
+            remediationReasons.push(opts?.retryReason ?? '');
+            await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
+              dispositions: [
+                {
+                  id: 'FR-1',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Implement the existing PRD criterion.',
+                  tasks: [{ id: 'prd-fix', title: 'Implement S1.1' }],
+                },
+                {
+                  id: 'ARCH-1',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Add the approved architecture guard.',
+                  tasks: [{ id: 'as-built-fix', title: 'Add the missing guard' }],
+                },
+              ],
+            }));
+          } else if (step === 'build') {
+            return { success: false, error: 'stop after observing mixed remediation route' } as StepRunResult;
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const conductor = makeConductor(dir, statePath, runner, events, {
+        config: {
+          prd_audit: { max_appended_tasks: 5, max_appended_ratio: 1 },
+          architecture_review_as_built: { remediation: { enabled: true } },
+        } as never,
+      });
+      await conductor.run();
+
+      expect(remediationReasons).toHaveLength(1);
+      expect(remediationReasons[0]).toContain('.pipeline/prd-audit.md');
+      expect(remediationReasons[0]).toContain('.pipeline/architecture-review-as-built.md');
+
+      const plan = await readFile(planPath, 'utf8');
+      expect(plan).toContain('### Task rem-prd-audit-prd-fix: Implement S1.1');
+      expect(plan).toContain('**Criterion:** S1.1');
+      expect(plan).toContain('### Task rem-as-built-as-built-fix: Add the missing guard');
+      expect(plan).toContain('**Governing clause:** Task 1');
+
+      const ledger = JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'));
+      expect(ledger.gates.prd_audit.laps).toBe(1);
+      expect(ledger.gates.architecture_review_as_built.laps).toBe(1);
+      expect(ledger.growth).toEqual({
+        authored: 8,
+        added: 2,
+        byGate: {
+          prd_audit: 1,
+          architecture_review_as_built: 1,
+        },
+      });
+      expect(growthEvents).toEqual([
+        expect.objectContaining({
+          type: 'plan_growth',
+          added: 1,
+          byGate: { prd_audit: 1 },
+        }),
+        expect.objectContaining({
+          type: 'plan_growth',
+          added: 2,
+          byGate: { prd_audit: 1, architecture_review_as_built: 1 },
+        }),
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('halts a mixed valid group before appending when its shared growth allowance has one task left', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-mixed-remediation-cap-'));
+    const statePath = join(dir, 'conduct-state.json');
+    const slug = 'parallel-validation-phase-fan-out-manual-test-prd-';
+    const planPath = join(dir, '.docs', 'plans', `${slug}.md`);
+    try {
+      await seedToValidators(dir, statePath);
+      await Promise.all([
+        mkdir(join(dir, '.docs', 'plans'), { recursive: true }),
+        mkdir(join(dir, '.docs', 'stories'), { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(planPath, '### Task 1: Existing work\n'),
+        writeFile(join(dir, '.docs', 'stories', `${slug}.md`), [
+          '## Story 1: remediation', '', '### Happy Path',
+          '- Given a request, when repaired, then it succeeds.',
+        ].join('\n')),
+        writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath })),
+      ]);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
+              '**PRD:** none', '', '## Verdict Table',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '|---|---|---|---|---|',
+              '| S1.1 | FIXABLE | 1 | FR-1 | Missing implementation |',
+            ].join('\n'));
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), [
+              'Verdict: BLOCKED', '', '## Blocking Findings',
+              '| Finding | Class | Governing clause | Summary |',
+              '| --- | --- | --- | --- |',
+              '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
+            ].join('\n'));
+          } else if (step === 'remediate') {
+            await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
+              dispositions: [
+                { id: 'FR-1', disposition: 'build', category: null, rationale: 'Implement criterion.', tasks: [{ id: 'prd-fix', title: 'Implement S1.1' }] },
+                { id: 'ARCH-1', disposition: 'build', category: null, rationale: 'Add guard.', tasks: [{ id: 'as-built-fix', title: 'Add the missing guard' }] },
+              ],
+            }));
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter(), {
+        config: {
+          prd_audit: { max_appended_tasks: 1, max_appended_ratio: 1 },
+          architecture_review_as_built: { remediation: { enabled: true } },
+        } as never,
+      });
+      await conductor.run();
+
+      expect(await readFile(planPath, 'utf8')).not.toContain('rem-prd-audit-prd-fix');
+      expect(await readFile(planPath, 'utf8')).not.toContain('rem-as-built-as-built-fix');
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

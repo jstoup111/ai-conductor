@@ -31,6 +31,7 @@ export type CriterionBoundRemediationGap = RemediationGap & {
   criterion?: string;
   parentTask?: number | string;
   governingClause?: string;
+  gateSource?: string;
 };
 
 /** H9 id grammar — must stay in lockstep with autoheal.ts TASK_ID_PATTERN. */
@@ -112,13 +113,16 @@ export function appendRemediationTasks(
   gaps: CriterionBoundRemediationGap[],
   gateSource: string,
 ): AppendRemediationResult {
-  const source = sanitizeSegment(gateSource, 'gate source');
+  const defaultSource = sanitizeSegment(gateSource, 'gate source');
   const existing = existingTaskTitles(planText);
 
   const ids: string[] = [];
   const blocks: string[] = [];
 
   for (const gap of gaps) {
+    const source = gap.gateSource === undefined
+      ? defaultSource
+      : sanitizeSegment(gap.gateSource, 'gate source');
     // A gap without concrete tasks still yields one addressable plan task
     // derived from the gap itself.
     const gapTasks = gap.tasks.length > 0 ? gap.tasks : [{ id: gap.id, title: gap.rationale }];

@@ -699,14 +699,18 @@ async function recordRemediationGateAppend(
     ...ledger,
     gates: { ...ledger.gates, [budget.gate]: next },
   });
-  const priorGateGrowth = budget.growth.byGate[budget.gate] ?? 0;
+  // Earlier gate updates in a consolidated validation group are now durable;
+  // merge them before recording this gate rather than replacing their growth
+  // snapshot captured before the shared append.
+  const growth = ledger.growth ?? budget.growth;
+  const priorGateGrowth = growth.byGate[budget.gate] ?? 0;
   await recordGrowth(
     projectRoot,
     {
-      authored: budget.growth.authored,
-      added: budget.growth.added + budget.taskCount,
+      authored: growth.authored,
+      added: growth.added + budget.taskCount,
       byGate: {
-        ...budget.growth.byGate,
+        ...growth.byGate,
         [budget.gate]: priorGateGrowth + budget.taskCount,
       },
     },
@@ -3656,14 +3660,13 @@ export class Conductor {
         const asBuiltFinding = asBuiltFindings.get(gap.id);
         // A prd_audit repair may append only work owned by a parsed FIXABLE
         // finding and its existing parent plan task.  The planner's FR-N id
-        // is associated above through the report's PRD: column.
-        if (
-          (prdAuditRemediation && (!prdAuditFinding || !prdAuditValidated)) ||
-          (asBuiltRemediation && asBuiltValidated && !asBuiltFinding && prdAuditFinding === undefined)
-        ) continue;
+        // is associated above through the report's PRD: column. In a mixed
+        // validation group either validated gate may admit its own gap.
+        const prdAuditAdmits = prdAuditValidated && prdAuditFinding !== undefined;
+        const asBuiltAdmits = asBuiltValidated && asBuiltFinding !== undefined;
+        if ((prdAuditValidated || asBuiltValidated) && !prdAuditAdmits && !asBuiltAdmits) continue;
         const admittedGap = {
           ...gap,
-          ...(prdAuditFinding === undefined ? {} : prdAuditFinding),
           ...(asBuiltFinding === undefined
             ? {}
             : {
@@ -3672,12 +3675,17 @@ export class Conductor {
                   ? { parentTask: asBuiltFinding.parentTask }
                   : {}),
               }),
+          ...(prdAuditFinding === undefined ? {} : prdAuditFinding),
+          // A single planner gap can name both findings. Preserve both
+          // rendered bindings, but charge its one appended task to the PRD
+          // source that owns mixed-source plan growth.
+          gateSource: prdAuditAdmits ? 'prd-audit' : 'as-built',
         };
         appendGaps.push(admittedGap);
         admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
-        if (prdAuditFinding !== undefined) prdAuditTasks.push(...gap.tasks);
-        if (asBuiltFinding !== undefined) asBuiltTasks.push(...gap.tasks);
+        if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
+        else if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
       }
     }
 
@@ -3724,12 +3732,6 @@ export class Conductor {
     let appendAttempted = allTasks.length === 0;
 
     if (allTasks.length > 0) {
-      const criterionBoundGaps = appendGaps.filter(
-        (gap) => gap.criterion !== undefined && gap.parentTask !== undefined,
-      );
-      const clauseBoundGaps = appendGaps.filter(
-        (gap) => gap.governingClause !== undefined,
-      );
       const authoredTaskCount = activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
       const prdAuditBudget = prdAuditCapEnforced
         ? await readRemediationGateAppendBudget(
@@ -3785,14 +3787,30 @@ export class Conductor {
           };
         }
       }
+      // Each gate has its own lap allowance, but both draw from the same
+      // bounded plan-growth record. Check the consolidated append before
+      // either ledger update so two individually valid gap sets cannot spend
+      // more than the shared remaining allowance together.
+      const sharedGrowthBudget = prdAuditBudget ?? asBuiltBudget;
+      if (sharedGrowthBudget && allTasks.length > sharedGrowthBudget.growth.remaining) {
+        return {
+          kind: 'halt',
+          haltClass: KICKBACK_CAP_HALT_CLASS,
+          detail:
+            `remediation shared plan-growth allowance exhausted (${sharedGrowthBudget.growth.added}/` +
+            `${sharedGrowthBudget.growthCap} appended; ${allTasks.length} requested, ` +
+            `${sharedGrowthBudget.growth.remaining} remaining) before appending fix tasks.`,
+        };
+      }
       // Append remediation tasks to the plan
       if (planPath) {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
-          ...(prdAuditRemediation
-            ? { criterionBoundGaps, gateSource: 'prd-audit' }
-            : asBuiltRemediation && asBuiltValidated
-              ? { criterionBoundGaps: clauseBoundGaps, gateSource: 'as-built' }
-              : {}),
+          ...(prdAuditRemediation || (asBuiltRemediation && asBuiltValidated)
+            ? {
+                criterionBoundGaps: appendGaps,
+                gateSource: prdAuditRemediation ? 'prd-audit' : 'as-built',
+              }
+            : {}),
         });
         if (appendResult.success) {
           appendAttempted = true;
