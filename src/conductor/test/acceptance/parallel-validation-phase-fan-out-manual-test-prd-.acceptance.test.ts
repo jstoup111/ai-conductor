@@ -583,6 +583,95 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     }
   });
 
+  it('routes a remediable as-built group gap through one consolidated remediation dispatch', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-as-built-remediation-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath);
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'parallel-validation-phase-fan-out-manual-test-prd-.md'),
+        [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n'),
+      );
+
+      const remediateReasons: string[] = [];
+      let asBuiltRestagedBeforeBuild = false;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state, opts) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
+              '# PRD Audit',
+              '',
+              '**PRD:** none',
+              '',
+              '## Verdict Table',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '| --- | --- | --- | --- | --- |',
+              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
+              '',
+              PRD_PASS,
+            ].join('\n'));
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              [
+                'Verdict: BLOCKED',
+                '',
+                '## Blocking Findings',
+                '| Finding | Class | Governing clause | Summary |',
+                '| --- | --- | --- | --- |',
+                '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
+              ].join('\n'),
+            );
+          } else if (step === 'remediate') {
+            remediateReasons.push(opts?.retryReason ?? '');
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [{
+                  id: 'ARCH-1',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Add the missing guard.',
+                  tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
+                }],
+              }),
+            );
+          } else if (step === 'build') {
+            const current = await readState(statePath);
+            asBuiltRestagedBeforeBuild =
+              current.ok && current.value.architecture_review_as_built === 'stale';
+            return { success: false, error: 'stop after observing group reroute' } as StepRunResult;
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      const events = new ConductorEventEmitter();
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+      });
+      const conductor = makeConductor(dir, statePath, runner, events, {
+        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+      });
+
+      await conductor.run();
+
+      expect(remediateReasons).toHaveLength(1);
+      expect(remediateReasons[0]).toContain('.pipeline/architecture-review-as-built.md');
+      expect(kickbacks).toContainEqual({ from: 'manual_test', to: 'build' });
+      expect(asBuiltRestagedBeforeBuild).toBe(true);
+      const ledger = JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'));
+      expect(ledger.gates.architecture_review_as_built.laps).toBe(1);
+      expect(ledger.gates.prd_audit).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // ── D2. validation-group remediation halt is classified needs-human ─────
   it('a validation-group /remediate "halt" disposition HALTs with a needs-human HALT.class sidecar', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'parvalid-halt-class-'));

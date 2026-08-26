@@ -5191,6 +5191,7 @@ export class Conductor {
         gates: {
           ...ledger.gates,
           [sourceGate]: {
+            ...existing,
             count: existing?.count ?? 0,
             cumulative: existing?.cumulative ?? 0,
             treeHash: treeBefore,
@@ -6410,13 +6411,9 @@ export class Conductor {
               continue;
             }
 
-            // The as-built review owns architecture/plan-limit judgement. It
-            // never re-opens BUILD: a BLOCKED report halts directly, while an
-            // undelivered PLAN_GAP is a classified plan-gap halt. If prd_audit
-            // independently found a FIXABLE issue in this same validation
-            // round, let its planner append that authorized task first, but
-            // deliberately ignore the planner's route — the as-built halt is
-            // still terminal for this run.
+            // A remediable as-built finding joins the other group-owned
+            // remediation evidence. DESIGN, malformed, and undelivered-plan
+            // verdicts remain terminal and retain their refusal stamping.
             const asBuiltMember = membership.dispatchable.find(
               (member) => member.name === 'architecture_review_as_built',
             );
@@ -6431,7 +6428,97 @@ export class Conductor {
                 outcomes[idx]?.verdict === 'pass' &&
                 gateVerdicts.get('prd_audit')?.satisfied !== true,
               );
-              if (this.daemon && prdAuditUnsatisfied && remediationRounds < prdAuditRemediationLapCap) {
+              const asBuiltFiles = await findArtifactFilesForStep(
+                this.projectRoot,
+                'architecture_review_as_built',
+              );
+              const asBuiltOutcome = asBuiltFiles[0]
+                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
+                : { kind: 'invalid' as const };
+              const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
+                architecture_review_as_built?: { remediation?: { enabled?: boolean } };
+              }).architecture_review_as_built?.remediation?.enabled ?? true;
+              const remediableAsBuiltRoute =
+                this.daemon &&
+                asBuiltRemediationEnabled &&
+                asBuiltOutcome.kind === 'blocked-remediable' &&
+                remediationRounds < MAX_KICKBACKS_PER_GATE;
+              if (remediableAsBuiltRoute) {
+                const evidence: RemediationGateProvenance[] = [];
+                if (prdAuditUnsatisfied) {
+                  evidence.push({ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' });
+                }
+                evidence.push({
+                  gate: 'architecture_review_as_built',
+                  evidenceFile: '.pipeline/architecture-review-as-built.md',
+                });
+                const dispatchContext =
+                  `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
+                  'Plan remediation per the /remediate skill and write ' +
+                  '.pipeline/remediation.json.';
+                remediationRounds++;
+                const remediationOutcome = await this.planRemediation(
+                  state,
+                  steps,
+                  dispatchContext,
+                  {
+                    source: 'validation-group',
+                    evidence,
+                  },
+                );
+                if (remediationOutcome.kind === 'route') {
+                  await emitTracked({
+                    type: 'kickback',
+                    from: step.name,
+                    to: remediationOutcome.target,
+                    evidence: remediationOutcome.evidence,
+                    count: remediationRounds,
+                  });
+                  pendingRetryHints.set(remediationOutcome.target, remediationOutcome.hint);
+
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+
+                  if (remediationOutcome.target === 'build') {
+                    for (const provenance of evidence) {
+                      await captureKickbackToBuildContext(provenance.gate);
+                    }
+                  }
+                  const navigationIndex = await this.navigateStateBack(
+                    state, remediationOutcome.target, steps,
+                  );
+                  const staleChanges: Record<string, unknown> = {};
+                  for (const provenance of evidence) {
+                    staleChanges[provenance.gate] = 'stale';
+                  }
+                  await this.commitStateChanges(
+                    state,
+                    'restage validation gaps after as-built remediation kickback',
+                    staleChanges,
+                  );
+                  i = navigationIndex - 1;
+                  continue;
+                }
+                if (remediationOutcome.kind === 'halt') {
+                  const reason =
+                    `Validation group "${step.name}" halted: needs human DECIDE — ` +
+                    remediationOutcome.detail;
+                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+              } else if (
+                this.daemon &&
+                prdAuditUnsatisfied &&
+                remediationRounds < prdAuditRemediationLapCap
+              ) {
+                // Preserve the pre-existing PRD-audit append attempt before
+                // the terminal design/invalid as-built refusal. Its planner
+                // route remains deliberately ignored here.
                 remediationRounds++;
                 await this.planRemediation(
                   state,
@@ -6451,13 +6538,6 @@ export class Conductor {
                   },
                 );
               }
-              const asBuiltFiles = await findArtifactFilesForStep(
-                this.projectRoot,
-                'architecture_review_as_built',
-              );
-              const asBuiltOutcome = asBuiltFiles[0]
-                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
-                : { kind: 'invalid' as const };
               const asBuiltReason = gateVerdicts.get('architecture_review_as_built')?.reason ??
                 'as-built architecture review gate unsatisfied';
               const reason = `Validation group "${step.name}" halted: ${asBuiltReason}`;
