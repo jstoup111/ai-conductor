@@ -1639,4 +1639,47 @@ describe('prd_audit kickback', () => {
     expect(prompt).toContain('optional.ts');
     expect(prompt).toContain('supports the optional behavior');
   });
+
+  /**
+   * AB-R12: 11 of this repo's APPROVED ADRs write their decisions as `**D<n>`
+   * headings rather than a numbered list. Clause resolution only accepted the
+   * numbered form, so a REMEDIABLE finding citing a D-heading decision could
+   * never enter the bounded remediation path decision 1 promises.
+   */
+  it('resolves a governing clause against a D-heading ADR decision', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-clause-d-heading-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const adrStem = 'adr-2026-08-25-d-heading-architecture';
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.docs', 'decisions'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 1: Existing approved work\n');
+    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
+      '# ADR: D-heading architecture',
+      '**Status:** APPROVED',
+      '',
+      '## Decision',
+      '',
+      '**D1 — Engine-minted run identity.** The engine binds an identity per dispatch.',
+      '',
+      '**D2 — Engine-stamped, never provider-echoed.** Skills write only content.',
+      '',
+      '## Consequences',
+      '',
+      '- Something else entirely.',
+    ].join('\n'));
+
+    const plan = await readFile(planPath, 'utf8');
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 1`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 1` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 2`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 2` });
+    // Fail closed on a decision the ADR does not carry, and never let D1 match D10.
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 3`))
+      .resolves.toBeNull();
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 10`))
+      .resolves.toBeNull();
+  });
 });

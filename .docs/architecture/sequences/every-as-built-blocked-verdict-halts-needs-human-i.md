@@ -17,7 +17,7 @@ sequenceDiagram
     participant K as HALT (kickback-cap)
 
     AR->>P: report with Verdict BLOCKED + Blocking Findings table
-    P->>P: parse rows (closed class set; clause cell required for REMEDIABLE)
+    P->>P: parse rows — closed class set, clause cell required for REMEDIABLE
     Note over P: shape and class only — planRemediation resolves each<br/>clause to a plan task via resolveAsBuiltGoverningClause
     alt any row malformed or unclassified
         P->>C: outcome invalid (fail toward human)
@@ -36,7 +36,7 @@ sequenceDiagram
             C->>L: reload pending findings, project into verdict artifact, clear
         else rebuilt gate returns PLAN_GAP with Outcome delivered: yes
             C->>L: reload pending findings, project the remediation JSON block
-            Note over C,L: convergence terminal — the projected block and the<br/>reviewer's PLAN_GAP narrative are ADDITIVE; the shipped<br/>record carries both, and the reader takes the narrative<br/>section in whichever order the two appear
+            Note over C,L: convergence terminal — the projected block and the<br/>reviewer's PLAN_GAP narrative are ADDITIVE. The shipped<br/>record carries both, and the reader takes the narrative<br/>section in whichever order the two appear
         else lap or growth cap exhausted
             C->>K: kickback-cap halt: exhausted allowance + every finding
         end

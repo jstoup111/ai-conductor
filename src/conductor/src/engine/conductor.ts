@@ -606,7 +606,16 @@ export async function resolveAsBuiltGoverningClause(
   const decisionBody = decisionText.slice(decisionHeading.index + decisionHeading[0].length);
   const nextHeading = decisionBody.search(/^##\s+/m);
   const section = nextHeading === -1 ? decisionBody : decisionBody.slice(0, nextHeading);
-  if (!new RegExp(`^\\s*${decisionNumber}\\.\\s+\\S`, 'm').test(section)) return null;
+  // AB-R12: APPROVED ADRs in this repo write decisions two ways — a numbered
+  // list (`4. **Termination.**`) and a bolded D-heading (`**D4 — Termination.**`).
+  // Accepting only the first made every D-heading decision uncitable as a
+  // governing clause, so those findings could never enter the bounded
+  // remediation path. `D${n}` is word-bounded so D1 never matches D10.
+  const decisionPresent = new RegExp(
+    `^\\s*(?:${decisionNumber}\\.\\s+\\S|\\*{0,2}D${decisionNumber}\\b)`,
+    'm',
+  );
+  if (!decisionPresent.test(section)) return null;
 
   return { kind: 'adr', clause: normalizedClause };
 }
