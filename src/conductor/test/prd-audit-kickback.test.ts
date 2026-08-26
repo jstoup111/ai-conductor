@@ -1743,16 +1743,6 @@ describe('prd_audit kickback', () => {
 
         const ledger = await readKickbackLedger(fixture.root);
         const plan = await readFile(fixture.planPath, 'utf8');
-        require('node:fs').appendFileSync('/tmp/claude-1000/-home-james-stoup-code-ai-conductor/1a13e694-818d-4cd1-b92b-9336b35c191f/scratchpad/m2.txt', JSON.stringify({
-          prd: withPrdEvidence, outcome: fixture.outcome,
-          gates: Object.keys(ledger.gates ?? {}), growth: ledger.growth,
-          asBuilt: plan.includes('rem-as-built-'), prdTask: plan.includes('rem-prd-audit-'),
-        }) + '\n');
-        require('node:fs').appendFileSync('/tmp/claude-1000/-home-james-stoup-code-ai-conductor/1a13e694-818d-4cd1-b92b-9336b35c191f/scratchpad/matrix.txt', JSON.stringify({
-          round: '${round}', outcome: fixture.outcome,
-          gates: Object.keys(ledger.gates ?? {}), growth: ledger.growth,
-          planHasAsBuilt: plan.includes('rem-as-built-'), planHasPrd: plan.includes('rem-prd-audit-'),
-        }) + '\n');
 
         // No as-built lap, no as-built growth attribution, no appended
         // as-built task — the switch removes the authority, not just the route.
