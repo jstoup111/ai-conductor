@@ -608,6 +608,24 @@ export async function resolveAsBuiltGoverningClause(
   return { kind: 'adr', clause: normalizedClause };
 }
 
+/** Render parser-validated BLOCKED findings into an operator-facing halt body. */
+function renderAsBuiltBlockedFindingDetail(report: string | undefined): string {
+  if (
+    report === undefined ||
+    !/^\s*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*BLOCKED\b/im.test(report)
+  ) {
+    return '';
+  }
+  const parsed = parseAsBuiltBlockedFindings(report);
+  return parsed.ok
+    ? '\n\nBlocking findings:\n' + parsed.value.findings
+      .map((finding) =>
+        `${finding.id} (${finding.class}; ${finding.clause || 'no governing clause'}): ${finding.summary}`,
+      )
+      .join('\n')
+    : `\n\nBlocking Findings parse fault: ${parsed.error}`;
+}
+
 /** The prd-audit cap is both an absolute count and a fraction of authored plan work. */
 export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: number): number {
   const prdAudit = (config as HarnessConfig & {
@@ -6432,8 +6450,11 @@ export class Conductor {
                 this.projectRoot,
                 'architecture_review_as_built',
               );
-              const asBuiltOutcome = asBuiltFiles[0]
-                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
+              const asBuiltReport = asBuiltFiles[0]
+                ? await readFile(asBuiltFiles[0], 'utf8')
+                : undefined;
+              const asBuiltOutcome = asBuiltReport !== undefined
+                ? classifyAsBuiltReviewOutcome(asBuiltReport)
                 : { kind: 'invalid' as const };
               const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
                 architecture_review_as_built?: { remediation?: { enabled?: boolean } };
@@ -6540,7 +6561,11 @@ export class Conductor {
               }
               const asBuiltReason = gateVerdicts.get('architecture_review_as_built')?.reason ??
                 'as-built architecture review gate unsatisfied';
-              const reason = `Validation group "${step.name}" halted: ${asBuiltReason}`;
+              const reason =
+                `Validation group "${step.name}" halted: ${asBuiltReason}` +
+                (asBuiltOutcome.kind === 'blocked-design'
+                  ? renderAsBuiltBlockedFindingDetail(asBuiltReport)
+                  : '');
               await this.writeHaltMarker(
                 reason + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
@@ -9813,19 +9838,7 @@ export class Conductor {
                   return;
                 }
               }
-              const asBuiltFindingDetail = asBuiltReport !== undefined &&
-                /^\s*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*BLOCKED\b/im.test(asBuiltReport)
-                ? (() => {
-                    const parsed = parseAsBuiltBlockedFindings(asBuiltReport);
-                    return parsed.ok
-                      ? '\n\nBlocking findings:\n' + parsed.value.findings
-                        .map((finding) =>
-                          `${finding.id} (${finding.class}; ${finding.clause || 'no governing clause'}): ${finding.summary}`,
-                        )
-                        .join('\n')
-                      : `\n\nBlocking Findings parse fault: ${parsed.error}`;
-                  })()
-                : '';
+              const asBuiltFindingDetail = renderAsBuiltBlockedFindingDetail(asBuiltReport);
               const reason = `as-built architecture review halted: ${lastError}`;
               await this.writeHaltMarker(
                 reason + asBuiltFindingDetail + '\n',

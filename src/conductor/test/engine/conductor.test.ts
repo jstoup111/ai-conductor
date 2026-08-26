@@ -5133,18 +5133,25 @@ describe('engine/conductor', () => {
       expect(halted).toBe(true); // the test stops the rerouted build deliberately
     });
 
-    it('keeps a serial as-built DESIGN finding needs-human and lists its clause', async () => {
+    it('halts a mixed serial as-built report with every finding listed and re-dispatches it freshly after clearing HALT', async () => {
       await seedShipTail({ architecture_review_as_built: 'pending' });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'feat.md');
+      const originalPlan = [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n');
+      await writeFile(planPath, originalPlan);
+      let asBuiltCalls = 0;
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
           if (step === 'architecture_review_as_built') {
+            asBuiltCalls++;
             await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
               'Verdict: BLOCKED',
               '',
               '## Blocking Findings',
               '| Finding | Class | Governing clause | Summary |',
               '| --- | --- | --- | --- |',
-              '| ARCH-DESIGN | DESIGN | Task 1 | Choose the incompatible boundary |',
+              '| ARCH-REMEDIABLE | REMEDIABLE | Task 1 | Add the missing guard |',
+              '| ARCH-DESIGN | DESIGN | ADR-auth decision 2 | Choose the incompatible boundary |',
             ].join('\n'));
           }
           return { success: true };
@@ -5160,10 +5167,28 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
-      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
-        'ARCH-DESIGN (DESIGN; Task 1): Choose the incompatible boundary',
+      const firstHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; Task 1): Add the missing guard');
+      expect(firstHalt).toContain(
+        'ARCH-DESIGN (DESIGN; ADR-auth decision 2): Choose the incompatible boundary',
       );
       expect(vi.mocked(runner.run).mock.calls.map(([step]) => step)).not.toContain('remediate');
+      await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
+
+      await rm(join(dir, '.pipeline/HALT'), { force: true });
+      await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+      const redispatchedConductor = new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+        mode: 'auto', daemon: true, verifyArtifacts: true,
+        fromStep: 'architecture_review_as_built', maxRetries: 1,
+        escalateBuildFailure: async () => ({}),
+      });
+
+      await redispatchedConductor.run();
+
+      expect(asBuiltCalls).toBe(2);
+      expect(vi.mocked(runner.run).mock.calls.map(([step]) => step)).not.toContain('remediate');
+      await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
     });
 
     it('keeps a malformed serial as-built BLOCKED report needs-human with its parse fault', async () => {
@@ -7701,6 +7726,85 @@ describe('engine/conductor', () => {
       expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
 
       expect(kickbacks.some((k) => k.to === 'build')).toBe(false);
+    });
+
+    it('halts a mixed as-built group report with every finding listed and re-runs the refused gate after HALT clears', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'mixed-as-built.md');
+      const originalPlan = [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n');
+      await writeFile(planPath, originalPlan);
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const mixedReport = [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-REMEDIABLE | REMEDIABLE | Task 1 | Add the missing guard |',
+        '| ARCH-DESIGN | DESIGN | ADR-auth decision 2 | Choose the incompatible boundary |',
+      ].join('\n');
+      let asBuiltCalls = 0;
+      let remediateCalls = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
+              '**PRD:** none',
+              '',
+              '## Verdict Table',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '| --- | --- | --- | --- | --- |',
+              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
+            ].join('\n'));
+          } else if (step === 'architecture_review_as_built') {
+            asBuiltCalls++;
+            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), mixedReport);
+          } else if (step === 'remediate') {
+            remediateCalls++;
+          }
+          return { success: true };
+        }),
+      };
+      const options = {
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test' as StepName,
+        mode: 'auto' as const,
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      };
+
+      await new Conductor(options).run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      const firstHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; Task 1): Add the missing guard');
+      expect(firstHalt).toContain(
+        'ARCH-DESIGN (DESIGN; ADR-auth decision 2): Choose the incompatible boundary',
+      );
+      expect(remediateCalls).toBe(0);
+      await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
+      const refused = await readState(statePath);
+      expect(refused.ok && refused.value.architecture_review_as_built).toBe('refused');
+
+      await rm(join(dir, '.pipeline/HALT'), { force: true });
+      await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+      await new Conductor(options).run();
+
+      expect(asBuiltCalls).toBe(2);
+      expect(remediateCalls).toBe(0);
+      await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
     });
   });
 
