@@ -9654,17 +9654,101 @@ export class Conductor {
               return;
             }
 
-            // As-built reports never route to BUILD. Their architecture/plan-limit
-            // judgement halts directly: an undelivered PLAN_GAP is classified for
-            // the operator, and BLOCKED/malformed reports remain needs-human.
             if (step.name === 'architecture_review_as_built') {
               const asBuiltFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
-              const asBuiltOutcome = asBuiltFiles[0]
-                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
+              const asBuiltReport = asBuiltFiles[0]
+                ? await readFile(asBuiltFiles[0], 'utf8')
+                : undefined;
+              const asBuiltOutcome = asBuiltReport !== undefined
+                ? classifyAsBuiltReviewOutcome(asBuiltReport)
                 : { kind: 'invalid' as const };
+              const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
+                architecture_review_as_built?: { remediation?: { enabled?: boolean } };
+              }).architecture_review_as_built?.remediation?.enabled ?? true;
+              if (
+                this.daemon &&
+                asBuiltRemediationEnabled &&
+                asBuiltOutcome.kind === 'blocked-remediable'
+              ) {
+                const escalation = await checkKickbackToBuildEscalation(step.name);
+                if (escalation.halt) {
+                  const reason = `as-built architecture review kickback-to-build no-op: ${escalation.reason}`;
+                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+                const remediation = await this.planRemediation(
+                  state,
+                  steps,
+                  'A blocking as-built architecture review is at ' +
+                    '.pipeline/architecture-review-as-built.md. Plan remediation per the ' +
+                    '/remediate skill and write .pipeline/remediation.json.',
+                  {
+                    source: 'architecture-review-as-built',
+                    evidence: [{
+                      gate: 'architecture_review_as_built',
+                      evidenceFile: '.pipeline/architecture-review-as-built.md',
+                    }],
+                  },
+                );
+                if (remediation.kind === 'route') {
+                  remediationRounds++;
+                  await emitTracked({
+                    type: 'kickback',
+                    from: step.name,
+                    to: remediation.target,
+                    evidence: remediation.evidence,
+                    count: remediationRounds,
+                    ...(escalation.kickbackOutcome
+                      ? { kickback_outcome: escalation.kickbackOutcome }
+                      : {}),
+                  });
+                  pendingRetryHints.set(remediation.target, remediation.hint);
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+                  if (remediation.target === 'build') {
+                    await captureKickbackToBuildContext(step.name);
+                  }
+                  const nav = navigateBack(state, remediation.target, steps);
+                  state = nav.state;
+                  this.haltState = state;
+                  (state as Record<string, unknown>)[step.name] = 'stale';
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  i = nav.index - 1; // for-loop i++ lands on the remediation target
+                  continue;
+                }
+                if (remediation.kind === 'halt') {
+                  const reason = `as-built architecture review halted: needs human DECIDE — ${remediation.detail}`;
+                  await this.writeHaltMarker(reason + '\n', remediation.haltClass ?? 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+              }
+              const asBuiltFindingDetail = asBuiltReport !== undefined &&
+                /^\s*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*BLOCKED\b/im.test(asBuiltReport)
+                ? (() => {
+                    const parsed = parseAsBuiltBlockedFindings(asBuiltReport);
+                    return parsed.ok
+                      ? '\n\nBlocking findings:\n' + parsed.value.findings
+                        .map((finding) =>
+                          `${finding.id} (${finding.class}; ${finding.clause || 'no governing clause'}): ${finding.summary}`,
+                        )
+                        .join('\n')
+                      : `\n\nBlocking Findings parse fault: ${parsed.error}`;
+                  })()
+                : '';
               const reason = `as-built architecture review halted: ${lastError}`;
               await this.writeHaltMarker(
-                reason + '\n',
+                reason + asBuiltFindingDetail + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
               );
               await this.persistPendingStateChanges(state, 'persist conductor transition');
