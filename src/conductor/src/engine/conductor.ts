@@ -230,6 +230,7 @@ import {
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
+  type PendingAsBuiltRemediationFinding,
   type PlanGrowth,
   type PlanGrowthEventSink,
 } from './kickback-ledger.js';
@@ -729,14 +730,7 @@ export interface RecordedPrdAuditFinding {
 }
 
 /** A remediated as-built BLOCKED row retained after the rebuilt gate converges. */
-export interface RecordedAsBuiltRemediationFinding {
-  gate: 'architecture_review_as_built';
-  finding: string;
-  class: 'REMEDIABLE';
-  governingClause: string;
-  summary: string;
-  outcome: 'remediated';
-}
+export type RecordedAsBuiltRemediationFinding = PendingAsBuiltRemediationFinding;
 
 export type RecordedReviewFinding = RecordedPrdAuditFinding | RecordedAsBuiltRemediationFinding;
 
@@ -2159,7 +2153,29 @@ export class Conductor {
     RecordedAsBuiltRemediationFinding
   >();
 
+  private async reloadPendingAsBuiltRemediationFindings(): Promise<void> {
+    const ledger = await readKickbackLedger(this.projectRoot);
+    for (const finding of ledger.pendingAsBuiltRemediationFindings ?? []) {
+      this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
+    }
+  }
+
+  private async persistPendingAsBuiltRemediationFindings(): Promise<void> {
+    const ledger = await readKickbackLedger(this.projectRoot);
+    await writeKickbackLedger(this.projectRoot, {
+      ...ledger,
+      pendingAsBuiltRemediationFindings: [...this.pendingAsBuiltRemediationFindings.values()],
+    });
+  }
+
+  private async clearPendingAsBuiltRemediationFindings(): Promise<void> {
+    const ledger = await readKickbackLedger(this.projectRoot);
+    const { pendingAsBuiltRemediationFindings: _pending, ...cleared } = ledger;
+    await writeKickbackLedger(this.projectRoot, cleared);
+  }
+
   private async projectPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
+    await this.reloadPendingAsBuiltRemediationFindings();
     if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
     const [reportPath] = await findArtifactFilesForStep(
       this.projectRoot,
@@ -2178,6 +2194,7 @@ export class Conductor {
       [...this.pendingAsBuiltRemediationFindings.values()],
     );
     if (!projected.ok) return projected.message;
+    await this.clearPendingAsBuiltRemediationFindings();
     this.pendingAsBuiltRemediationFindings.clear();
     return undefined;
   }
@@ -3814,11 +3831,17 @@ export class Conductor {
         });
         if (appendResult.success) {
           appendAttempted = true;
+          await this.reloadPendingAsBuiltRemediationFindings();
+          let appendedAsBuiltFinding = false;
           for (const gap of appendGaps) {
             if (!gap.tasks?.length) continue;
             const finding = asBuiltRecordedFindings.get(gap.id);
-            if (finding) this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
+            if (finding) {
+              this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
+              appendedAsBuiltFinding = true;
+            }
           }
+          if (appendedAsBuiltFinding) await this.persistPendingAsBuiltRemediationFindings();
           if (prdAuditBudget) await recordRemediationGateAppend(
             this.projectRoot,
             prdAuditBudget,

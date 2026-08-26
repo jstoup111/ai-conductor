@@ -41,6 +41,16 @@ export interface PlanGrowth extends PlanGrowthRecord {
   remaining: number;
 }
 
+/** Durable pending state for a remediable as-built finding appended to the plan. */
+export interface PendingAsBuiltRemediationFinding {
+  gate: 'architecture_review_as_built';
+  finding: string;
+  class: 'REMEDIABLE';
+  governingClause: string;
+  summary: string;
+  outcome: 'remediated';
+}
+
 export interface PlanGrowthEventSink {
   emit(event: Extract<ConductorEvent, { type: 'plan_growth' }>): void | Promise<void>;
 }
@@ -50,6 +60,7 @@ export interface KickbackLedger {
   version: 1;
   gates: Record<string, KickbackGateEntry>;
   growth?: PlanGrowthRecord;
+  pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
 }
 
 type PersistedKickbackGateEntry = Omit<KickbackGateEntry, 'cumulative' | 'mechanicalFaults'> & {
@@ -61,6 +72,7 @@ interface PersistedKickbackLedger {
   version: 1;
   gates: Record<string, PersistedKickbackGateEntry>;
   growth?: PlanGrowthRecord;
+  pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
 }
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
@@ -173,6 +185,29 @@ function isPlanGrowthRecord(value: unknown): value is PlanGrowthRecord {
     );
 }
 
+function isPendingAsBuiltRemediationFinding(
+  value: unknown,
+): value is PendingAsBuiltRemediationFinding {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const finding = value as Record<string, unknown>;
+  return (
+    finding.gate === 'architecture_review_as_built' &&
+    typeof finding.finding === 'string' && finding.finding.trim().length > 0 &&
+    finding.class === 'REMEDIABLE' &&
+    typeof finding.governingClause === 'string' && finding.governingClause.trim().length > 0 &&
+    typeof finding.summary === 'string' && finding.summary.trim().length > 0 &&
+    finding.outcome === 'remediated'
+  );
+}
+
+function isPendingAsBuiltRemediationFindings(
+  value: unknown,
+): value is PendingAsBuiltRemediationFinding[] {
+  return Array.isArray(value) &&
+    value.every(isPendingAsBuiltRemediationFinding) &&
+    new Set(value.map((finding) => finding.finding)).size === value.length;
+}
+
 function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
@@ -182,7 +217,11 @@ function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
   }
 
   return Object.values(ledger.gates).every(isKickbackGateEntry) &&
-    (ledger.growth === undefined || isPlanGrowthRecord(ledger.growth));
+    (ledger.growth === undefined || isPlanGrowthRecord(ledger.growth)) &&
+    (
+      ledger.pendingAsBuiltRemediationFindings === undefined ||
+      isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
+    );
 }
 
 function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedger {
