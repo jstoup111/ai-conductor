@@ -1603,6 +1603,66 @@ else
   assert "test/check_build_review_rubric_skill_vocabularies.sh exists" 1
 fi
 
+# ── 26. Apache-2.0 licensing surface ────────────────────────────────────────
+# Keep the repository license, package metadata, attribution, and contributor
+# notice aligned. Pinning the complete LICENSE digest prevents a partial or
+# edited license text from looking valid merely because its title survived.
+# Canonical text source: https://www.apache.org/licenses/LICENSE-2.0.txt
+echo ""
+echo -e "${BOLD}26. Apache-2.0 licensing surface${NC}"
+
+expected_license_sha="c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+if [ ! -f "${HARNESS_DIR}/LICENSE" ]; then
+  assert "LICENSE contains the canonical Apache License 2.0 text" 1
+else
+  actual_license_sha=$(node -e '
+    const { createHash } = require("node:crypto");
+    const { readFileSync } = require("node:fs");
+    process.stdout.write(createHash("sha256").update(readFileSync(process.argv[1])).digest("hex"));
+  ' "${HARNESS_DIR}/LICENSE")
+  if [ "$actual_license_sha" = "$expected_license_sha" ]; then
+    assert "LICENSE contains the canonical Apache License 2.0 text" 0
+  else
+    echo "    expected LICENSE sha256: ${expected_license_sha}"
+    echo "    actual LICENSE sha256:   ${actual_license_sha}"
+    assert "LICENSE contains the canonical Apache License 2.0 text" 1
+  fi
+fi
+
+notice_ok=1
+if [ -f "${HARNESS_DIR}/NOTICE" ] &&
+   grep -Fqx "AI Conductor" "${HARNESS_DIR}/NOTICE" &&
+   grep -Fqx "Copyright 2026 James Stoup and contributors" "${HARNESS_DIR}/NOTICE" &&
+   grep -Fq "Apache License, Version 2.0" "${HARNESS_DIR}/NOTICE"; then
+  notice_ok=0
+fi
+assert "NOTICE carries project attribution and the Apache-2.0 reference" "$notice_ok"
+
+package_license_ok=0
+for package_metadata in \
+  "${HARNESS_DIR}/src/conductor/package.json" \
+  "${HARNESS_DIR}/src/conductor/package-lock.json" \
+  "${HARNESS_DIR}/plugins/recorder-provider/package.json" \
+  "${HARNESS_DIR}/plugins/recorder-provider/package-lock.json"; do
+  if ! node -e '
+    const metadata = require(process.argv[1]);
+    const license = metadata.lockfileVersion ? metadata.packages?.[""]?.license : metadata.license;
+    process.exit(license === "Apache-2.0" ? 0 : 1);
+  ' "$package_metadata"; then
+    echo "    missing Apache-2.0 metadata: ${package_metadata#"${HARNESS_DIR}/"}"
+    package_license_ok=1
+  fi
+done
+assert "package and lockfile metadata declare Apache-2.0" "$package_license_ok"
+
+license_docs_ok=1
+if [ -f "${HARNESS_DIR}/CONTRIBUTING.md" ] &&
+   grep -Fq "[Apache License, Version 2.0](LICENSE)" "${HARNESS_DIR}/README.md" &&
+   grep -Fq "[Apache License, Version 2.0](LICENSE)" "${HARNESS_DIR}/CONTRIBUTING.md"; then
+  license_docs_ok=0
+fi
+assert "README and CONTRIBUTING document the Apache-2.0 grant" "$license_docs_ok"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

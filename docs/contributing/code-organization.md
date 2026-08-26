@@ -10,6 +10,13 @@ The module map of the engine — the TypeScript conductor under `src/conductor/`
 owns, where execution enters, and which direction imports flow. For contributors changing engine code.
 For the operator-facing role model, see [architecture](../explanation/architecture.md).
 
+## Contribution license
+
+AI Conductor is licensed under the [Apache License, Version 2.0](../../LICENSE). Unless a contributor
+explicitly states otherwise, intentionally submitted contributions use the same license without
+additional terms. The root [contribution guide](../../CONTRIBUTING.md) records the complete submission
+notice and links the required branch, validation, documentation, and release-metadata workflow.
+
 ## Repository layout
 
 | Path | Contents |

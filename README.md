@@ -169,3 +169,9 @@ bash test/test_harness_integrity.sh
 All work happens on a feature branch; never commit directly to `main`. File bugs, ideas, and observations as
 [GitHub issues](https://github.com/jstoup111/ai-conductor/issues) — see [Intake](docs/guides/intake.md) for
 the structure that turns an issue into buildable work.
+
+## License
+
+Unless otherwise noted, the code, skills, templates, and documentation in this repository are
+licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for attribution
+information.
