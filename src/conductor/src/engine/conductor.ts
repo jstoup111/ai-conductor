@@ -6484,6 +6484,23 @@ export class Conductor {
                 asBuiltOutcome.kind === 'blocked-remediable' &&
                 remediationRounds < MAX_KICKBACKS_PER_GATE;
               if (remediableAsBuiltRoute) {
+                // The join bypasses the serial as-built halt site, so it
+                // must consume the same single-use gate-scoped no-op
+                // baseline before it asks /remediate to route BUILD again.
+                const escalation = await checkKickbackToBuildEscalation(
+                  'architecture_review_as_built',
+                );
+                if (escalation.halt) {
+                  const reason =
+                    `as-built architecture review kickback-to-build no-op: ${escalation.reason}`;
+                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
                 const evidence: RemediationGateProvenance[] = [];
                 if (prdAuditUnsatisfied) {
                   evidence.push({ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' });
