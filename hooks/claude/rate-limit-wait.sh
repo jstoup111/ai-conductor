@@ -6,21 +6,46 @@ set -e
 MARKER=".pipeline/rate-limit-hit"
 mkdir -p .pipeline
 
-# Try to extract wait time from the error message (passed via stdin or env)
+# Try to extract wait time from the StopFailure JSON payload.
 # Common patterns: "retry after 300 seconds", "try again in 5 minutes", "resets at HH:MM"
 wait_seconds=""
 
-# Check if CLAUDE_ERROR or last output contains retry info
-error_text="${CLAUDE_ERROR:-}"
+# StopFailure sends JSON on stdin. Keep the old environment/log sources as
+# compatibility fallbacks for older hosts and direct script invocations.
+payload=""
+if [ ! -t 0 ]; then
+  payload=$(head -c 1048576 2>/dev/null || true)
+fi
+
+error_text=""
+if [ -n "$payload" ] && command -v python3 >/dev/null 2>&1; then
+  error_text=$(printf '%s' "$payload" | python3 -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+parts = [payload.get("error_details"), payload.get("last_assistant_message")]
+print("\n".join(part for part in parts if isinstance(part, str)))
+' 2>/dev/null || true)
+fi
+if [ -z "$error_text" ]; then
+  error_text="${CLAUDE_ERROR:-}"
+fi
 if [ -z "$error_text" ] && [ -f ".pipeline/conduct.log" ]; then
   error_text=$(tail -5 .pipeline/conduct.log 2>/dev/null || echo "")
 fi
 
-# Parse "retry after N seconds"
-if echo "$error_text" | grep -qoiE "retry.*(after|in)\s*[0-9]+" 2>/dev/null; then
-  wait_seconds=$(echo "$error_text" | grep -oiE "[0-9]+" | head -1)
-  # If the number looks like minutes (< 60), convert to seconds
-  if [ -n "$wait_seconds" ] && [ "$wait_seconds" -lt 60 ] 2>/dev/null; then
+# Parse "retry after N seconds" and "try again in N minutes".
+duration=$(printf '%s' "$error_text" \
+  | grep -oiE "(retry|try again).*(after|in)[[:space:]]*[0-9]+[[:space:]]*(seconds?|minutes?)?" \
+  | head -1 || true)
+if [ -n "$duration" ]; then
+  wait_seconds=$(printf '%s' "$duration" | grep -oE "[0-9]+" | tail -1)
+  unit=$(printf '%s' "$duration" | grep -oiE "(seconds?|minutes?)" | tail -1 || true)
+  if printf '%s' "$unit" | grep -qi '^minute'; then
+    wait_seconds=$((wait_seconds * 60))
+  elif [ -z "$unit" ] && [ -n "$wait_seconds" ] && [ "$wait_seconds" -lt 60 ] 2>/dev/null; then
     wait_seconds=$((wait_seconds * 60))
   fi
 fi
