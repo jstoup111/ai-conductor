@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-26T14:48:35.015Z
 Slug: every-as-built-blocked-verdict-halts-needs-human-i
 Class: needs-human
 Halting step: prd_audit
