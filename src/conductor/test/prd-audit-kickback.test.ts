@@ -26,6 +26,7 @@ import { readGrowth, readKickbackLedger, writeKickbackLedger } from '../src/engi
 import { ALL_STEPS } from '../src/engine/steps.js';
 import { readState, writeState } from '../src/engine/state.js';
 import type { ConductState, StepName } from '../src/types/index.js';
+import type { ConductorEvent } from '../src/types/events.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { DefaultStepRunner } from '../src/engine/step-runners.js';
 import { PROTECTED_ARTIFACT_SEAL_PATH } from '../src/engine/protected-artifact-seal.js';
@@ -748,6 +749,85 @@ describe('prd_audit kickback', () => {
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
     const appended = await readFile(planPath, 'utf8');
     expect(appended.match(/^### Task rem-as-built-/gm)).toHaveLength(2);
+  });
+
+  it('records as-built plan growth and an isolated remediation lap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-ledger-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.pipeline'), { recursive: true }),
+    ]);
+    await writeFile(planPath, [1, 2, 3, 4].map((id) => `### Task ${id}: Authored work`).join('\n'));
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-1 | REMEDIABLE | Task 1 | Add the approved guard |',
+    ].join('\n'));
+    const buildReview = {
+      count: 2, cumulative: 4, treeHash: 'build-tree', lastReason: 'prior build review',
+      priorVerdict: true, resolvedBefore: 3,
+    };
+    const prdAudit = {
+      count: 1, cumulative: 1, treeHash: 'prd-tree', lastReason: 'prior prd audit',
+      priorVerdict: true, resolvedBefore: 1, laps: 1,
+    };
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: { build_review: buildReview, prd_audit: prdAudit },
+      growth: { authored: 4, added: 0, byGate: {} },
+    });
+    const initialLedger = await readKickbackLedger(root);
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'AB-1', disposition: 'build', category: null, rationale: 'Add the approved guard.',
+            tasks: [{ id: 'approved-guard', title: 'Add the approved guard' }],
+          }],
+        }));
+        return { success: true };
+      },
+    };
+    const events = new ConductorEventEmitter();
+    const growthEvents: Array<Extract<ConductorEvent, { type: 'plan_growth' }>> = [];
+    events.on('plan_growth', (event) => {
+      if (event.type === 'plan_growth') growthEvents.push(event);
+    });
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+      events, projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    const ledger = await readKickbackLedger(root);
+    expect((ledger.gates.architecture_review_as_built as { laps?: number } | undefined)?.laps).toBe(1);
+    expect(ledger.growth).toMatchObject({
+      authored: 4,
+      added: 1,
+      byGate: { architecture_review_as_built: 1 },
+    });
+    expect(ledger.gates.build_review).toEqual(initialLedger.gates.build_review);
+    expect(ledger.gates.prd_audit).toEqual(initialLedger.gates.prd_audit);
+    expect(growthEvents).toEqual([expect.objectContaining({
+      type: 'plan_growth', added: 1, byGate: { architecture_review_as_built: 1 },
+    })]);
   });
 
   it.each([

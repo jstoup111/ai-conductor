@@ -3398,6 +3398,7 @@ export class Conductor {
           isAbsolute(planPath) ? planPath : join(this.projectRoot, planPath),
           'utf8',
         );
+        activePlanText = asBuiltPlanText;
         const report = await readFile(join(this.projectRoot, asBuiltEvidenceFile), 'utf8');
         const parsed = parseAsBuiltBlockedFindings(report);
         if (!parsed.ok) {
@@ -3449,6 +3450,8 @@ export class Conductor {
     // gate's bounded append allowance.
     const prdAuditCapEnforced = prdAuditRemediation && prdAuditValidated;
     const prdAuditTasks: Array<{ id: string; title: string }> = [];
+    const asBuiltCapEnforced = asBuiltRemediation && asBuiltValidated;
+    const asBuiltTasks: Array<{ id: string; title: string }> = [];
     for (const gap of gaps) {
       if (
         sealedArtifactGapIds.has(gap.id) ||
@@ -3489,6 +3492,7 @@ export class Conductor {
         admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
         if (prdAuditFinding !== undefined) prdAuditTasks.push(...gap.tasks);
+        if (asBuiltFinding !== undefined) asBuiltTasks.push(...gap.tasks);
       }
     }
 
@@ -3538,6 +3542,9 @@ export class Conductor {
       let priorPrdAuditLaps = 0;
       let prdAuditGrowth: Awaited<ReturnType<typeof readGrowth>> | undefined;
       let prdAuditGrowthCap = 0;
+      let priorAsBuiltLaps = 0;
+      let asBuiltGrowth: Awaited<ReturnType<typeof readGrowth>> | undefined;
+      let asBuiltGrowthCap = 0;
       const criterionBoundGaps = appendGaps.filter(
         (gap) => gap.criterion !== undefined && gap.parentTask !== undefined,
       );
@@ -3571,6 +3578,17 @@ export class Conductor {
             detail: `prd_audit remediation ${capReason} before appending fix tasks. Findings: ${findingList}.`,
           };
         }
+      }
+      if (asBuiltCapEnforced) {
+        const ledger = await readKickbackLedger(this.projectRoot);
+        priorAsBuiltLaps = (
+          ledger.gates.architecture_review_as_built as (KickbackGateEntry & { laps?: number }) | undefined
+        )?.laps ?? 0;
+        asBuiltGrowthCap = prdAuditAppendCap(
+          this.config,
+          activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0,
+        );
+        asBuiltGrowth = await readGrowth(this.projectRoot, asBuiltGrowthCap);
       }
       // Append remediation tasks to the plan
       if (planPath) {
@@ -3614,6 +3632,40 @@ export class Conductor {
                   },
                 },
                 { cap: prdAuditGrowthCap, events: this.events },
+              );
+            }
+          }
+          if (asBuiltCapEnforced) {
+            const ledger = await readKickbackLedger(this.projectRoot);
+            const existing = ledger.gates.architecture_review_as_built;
+            const next: KickbackGateEntry & { laps: number } = {
+              ...(existing ?? {
+                count: 0,
+                cumulative: 0,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: true,
+                resolvedBefore: 0,
+              }),
+              laps: priorAsBuiltLaps + (asBuiltTasks.length > 0 ? 1 : 0),
+            };
+            await writeKickbackLedger(this.projectRoot, {
+              ...ledger,
+              gates: { ...ledger.gates, architecture_review_as_built: next },
+            });
+            if (asBuiltGrowth) {
+              const priorGateGrowth = asBuiltGrowth.byGate.architecture_review_as_built ?? 0;
+              await recordGrowth(
+                this.projectRoot,
+                {
+                  authored: asBuiltGrowth.authored,
+                  added: asBuiltGrowth.added + asBuiltTasks.length,
+                  byGate: {
+                    ...asBuiltGrowth.byGate,
+                    architecture_review_as_built: priorGateGrowth + asBuiltTasks.length,
+                  },
+                },
+                { cap: asBuiltGrowthCap, events: this.events },
               );
             }
           }
