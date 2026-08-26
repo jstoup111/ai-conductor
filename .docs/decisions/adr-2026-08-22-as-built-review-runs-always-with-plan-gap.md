@@ -34,6 +34,14 @@ the design does not close the defect — an architecture judgement.
 3. The as-built review **never kicks back to BUILD**. The as-built→build route and its capture/check
    pair in adr-2026-07-13-kickback-build-no-op-escalation are retired; prd_audit's route remains
    under that ADR's no-op escalation.
+
+> **Amended 2026-08-25 by #1874:** decision 3 is superseded by
+> adr-2026-08-25-as-built-remediable-findings-bounded-build-route. A BLOCKED report whose
+> findings are all classified REMEDIABLE (schema-constrained per-finding classification) now
+> takes a bounded route to BUILD through the single-appender remediation seam under gate key
+> `architecture_review_as_built` (lap cap default 1, shared growth allowance, capture/check
+> escalation re-armed); DESIGN findings, malformed classification, and cap exhaustion still
+> halt for a human. Decisions 1, 2, and 4 stand unchanged.
 4. The S-tier pinned gate set (adr-2026-07-21 D4) is updated to include this step.
 
 ## Consequences
