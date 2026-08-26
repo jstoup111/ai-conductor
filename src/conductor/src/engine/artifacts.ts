@@ -1500,7 +1500,10 @@ export type AsBuiltReviewOutcome =
   | { kind: 'plan-gap-undelivered' }
   | { kind: 'blocked-remediable' }
   | { kind: 'blocked-design' }
-  | { kind: 'invalid' };
+  | { kind: 'invalid'; cause: 'no-verdict-line' }
+  | { kind: 'invalid'; cause: 'unrecognized-verdict'; value: string }
+  | { kind: 'invalid'; cause: 'plan-gap-missing-outcome' }
+  | { kind: 'invalid'; cause: 'unparseable-blocked-findings'; detail: string };
 
 /**
  * Classify the as-built review's explicit verdict without giving its prose any
@@ -1509,23 +1512,29 @@ export type AsBuiltReviewOutcome =
  * halt, while an omitted/malformed outcome remains fail-closed as invalid.
  */
 export function classifyAsBuiltReviewOutcome(content: string): AsBuiltReviewOutcome {
-  const verdict = parseAsBuiltVerdict(content);
-  if (verdict === null) return { kind: 'invalid' };
-  if (verdict === 'APPROVED' || verdict === 'APPROVED WITH DRIFT NOTES') return { kind: 'approved' };
-  if (verdict === 'BLOCKED') {
+  const verdict = readAsBuiltVerdictLine(content);
+  if (!verdict.found) return { kind: 'invalid', cause: 'no-verdict-line' };
+  if (verdict.recognized === null) {
+    return { kind: 'invalid', cause: 'unrecognized-verdict', value: verdict.raw };
+  }
+  const recognizedVerdict = verdict.recognized;
+  if (recognizedVerdict === 'APPROVED' || recognizedVerdict === 'APPROVED WITH DRIFT NOTES') return { kind: 'approved' };
+  if (recognizedVerdict === 'BLOCKED') {
     const findings = parseAsBuiltBlockedFindings(content);
-    if (!findings.ok) return { kind: 'invalid' };
+    if (!findings.ok) {
+      return { kind: 'invalid', cause: 'unparseable-blocked-findings', detail: findings.error };
+    }
     return findings.value.findings.some((finding) => finding.class === 'DESIGN')
       ? { kind: 'blocked-design' }
       : { kind: 'blocked-remediable' };
   }
-  if (verdict !== 'PLAN_GAP') return { kind: 'invalid' };
+  if (recognizedVerdict !== 'PLAN_GAP') return { kind: 'invalid', cause: 'unrecognized-verdict', value: recognizedVerdict };
 
   const outcome = content.match(/^[^\S\n]*\*{0,2}\s*Outcome delivered\s*\*{0,2}\s*:+\s*(yes|no)\s*$/im)?.[1]
     ?.toLowerCase();
   if (outcome === 'yes') return { kind: 'plan-gap-delivered' };
   if (outcome === 'no') return { kind: 'plan-gap-undelivered' };
-  return { kind: 'invalid' };
+  return { kind: 'invalid', cause: 'plan-gap-missing-outcome' };
 }
 
 /**

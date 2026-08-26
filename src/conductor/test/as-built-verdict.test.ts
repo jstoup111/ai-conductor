@@ -219,7 +219,11 @@ describe('as-built verdict gate', () => {
       class: 'mechanical-fault',
       error: 'As-built BLOCKED report has duplicate Blocking Findings sections.',
     });
-    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'As-built BLOCKED report has duplicate Blocking Findings sections.',
+    });
   });
 
   it('rejects a second Blocking Findings table within the authoritative section', () => {
@@ -241,7 +245,11 @@ describe('as-built verdict gate', () => {
       class: 'mechanical-fault',
       error: 'As-built BLOCKED report has duplicate Blocking Findings tables.',
     });
-    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'As-built BLOCKED report has duplicate Blocking Findings tables.',
+    });
   });
 
   it('returns a typed fault naming a duplicate Finding id within one table', () => {
@@ -260,7 +268,11 @@ describe('as-built verdict gate', () => {
       class: 'mechanical-fault',
       error: 'As-built Blocking Findings table has duplicate Finding id "ARCH-1".',
     });
-    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'As-built Blocking Findings table has duplicate Finding id "ARCH-1".',
+    });
   });
 
   it('classifies an all-REMEDIABLE BLOCKED findings table as blocked-remediable', () => {
@@ -321,8 +333,45 @@ describe('as-built verdict gate', () => {
     ];
 
     for (const report of reports) {
-      expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+      expect(classifyAsBuiltReviewOutcome(report)).toMatchObject({
+        kind: 'invalid',
+        cause: 'unparseable-blocked-findings',
+        detail: expect.any(String),
+      });
     }
+  });
+
+  it('classifies a heading-style verdict as a missing verdict line', () => {
+    expect(classifyAsBuiltReviewOutcome('## Verdict\n\n**BLOCKED**')).toEqual({
+      kind: 'invalid',
+      cause: 'no-verdict-line',
+    });
+  });
+
+  it('classifies an unrecognized verdict with its raw value', () => {
+    expect(classifyAsBuiltReviewOutcome('Verdict: REJECTED')).toEqual({
+      kind: 'invalid',
+      cause: 'unrecognized-verdict',
+      value: 'REJECTED',
+    });
+  });
+
+  it.each(['Verdict: PLAN_GAP', 'Verdict: PLAN_GAP\nOutcome delivered: maybe'])(
+    'classifies PLAN_GAP report %j without a valid outcome as missing its outcome',
+    (report) => {
+      expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+        kind: 'invalid',
+        cause: 'plan-gap-missing-outcome',
+      });
+    },
+  );
+
+  it('classifies malformed BLOCKED findings with the parser error', () => {
+    expect(classifyAsBuiltReviewOutcome('Verdict: BLOCKED')).toEqual({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'As-built BLOCKED report is missing its Blocking Findings table.',
+    });
   });
 
   it('keeps non-BLOCKED outcomes unchanged without a findings table', () => {
