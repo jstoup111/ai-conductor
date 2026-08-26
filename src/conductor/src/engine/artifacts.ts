@@ -4155,6 +4155,7 @@ function parseFrVerdictRow(line: string): ParsedFrRow | null {
 
 /** Heading that opens the authoritative verdict table, at any heading level. */
 const VERDICT_TABLE_HEADING_RE = /^\s{0,3}#{1,6}\s+Verdict\s+Table\s*$/i;
+const NO_OWNER_FINDINGS_HEADING_RE = /^\s{0,3}#{1,6}\s+Findings\s+without\s+an\s+owning\s+criterion\s*$/i;
 const MARKDOWN_HEADING_RE = /^\s{0,3}#{1,6}\s+/;
 
 /**
@@ -4178,6 +4179,16 @@ function verdictTableLines(content: string): string[] {
   if (start === -1) return lines; // no heading — legacy whole-document scan
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((l) => MARKDOWN_HEADING_RE.test(l));
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+/** Return the lines in the explicit no-owner findings section, when present. */
+function noOwnerFindingsLines(content: string): string[] {
+  const lines = content.split('\n');
+  const start = lines.findIndex((line) => NO_OWNER_FINDINGS_HEADING_RE.test(line));
+  if (start === -1) return [];
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => MARKDOWN_HEADING_RE.test(line));
   return end === -1 ? rest : rest.slice(0, end);
 }
 
@@ -4209,6 +4220,11 @@ const PRD_AUDIT_GRADES: ReadonlySet<PrdAuditGrade> = new Set([
   'OVER_SCOPE',
 ]);
 const CRITERION_ID_RE = /^S\d+\.\d+$/i;
+const NO_OWNER_KEY_RE = /^NC\.\d+$/i;
+
+export function isNoOwnerKey(key: string): boolean {
+  return NO_OWNER_KEY_RE.test(key);
+}
 
 function tableCells(line: string): string[] {
   return line
@@ -4438,6 +4454,46 @@ export function parsePrdAuditReport(
       prdIds: Object.freeze([...(prdIndex === -1 ? '' : cells[prdIndex] ?? '').matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((match) => match[0].toUpperCase())),
       evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
     });
+  }
+
+  const noOwnerLines = noOwnerFindingsLines(content);
+  const noOwnerHeaderIndex = noOwnerLines.findIndex((line) => {
+    if (!/^\s*\|/.test(line)) return false;
+    const cells = tableCells(line).map((cell) => cell.toLowerCase());
+    return cells.includes('finding') && cells.includes('grade');
+  });
+  if (noOwnerHeaderIndex !== -1) {
+    const noOwnerHeader = tableCells(noOwnerLines[noOwnerHeaderIndex]).map((cell) => cell.toLowerCase());
+    const findingIndex = noOwnerHeader.indexOf('finding');
+    const noOwnerGradeIndex = noOwnerHeader.indexOf('grade');
+    const noOwnerEvidenceIndex = noOwnerHeader.indexOf('evidence');
+    let readingNoOwnerTable = false;
+
+    for (const line of noOwnerLines.slice(noOwnerHeaderIndex + 1)) {
+      if (!/^\s*\|/.test(line)) {
+        if (readingNoOwnerTable && line.trim() === '') break;
+        continue;
+      }
+      readingNoOwnerTable = true;
+      const cells = tableCells(line);
+      if (isTableSeparator(cells)) continue;
+      const criterion = cells[findingIndex]?.toUpperCase();
+      if (!criterion || !isNoOwnerKey(criterion)) {
+        return prdAuditMechanicalFault('PRD audit finding has an empty or malformed Finding.');
+      }
+
+      const rawGrade = cells[noOwnerGradeIndex]?.toUpperCase();
+      if (!rawGrade || !PRD_AUDIT_GRADES.has(rawGrade as PrdAuditGrade)) {
+        return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Grade.`);
+      }
+
+      findings.push({
+        criterion,
+        grade: rawGrade as PrdAuditGrade,
+        prdIds: Object.freeze([]),
+        evidence: noOwnerEvidenceIndex === -1 ? '' : cells[noOwnerEvidenceIndex] ?? '',
+      });
+    }
   }
 
   return {

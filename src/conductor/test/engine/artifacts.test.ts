@@ -1,3 +1,4 @@
+// Covers: S1.1, S1.2, S1.3, task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
@@ -89,6 +90,8 @@ import {
   removeBuildReviewVerdict,
   PR_BODY_REGEN_ATTEMPT_MARKER,
   uncommittedPathsOrNull,
+  isNoOwnerKey,
+  parsePrdAuditReport,
 } from '../../src/engine/artifacts.js';
 import type {
   CompletionResult,
@@ -141,6 +144,84 @@ describe('engine/artifacts', () => {
     await mkdir(dirPath, { recursive: true });
     await writeFile(fullPath, content);
   }
+
+  describe('parsePrdAuditReport', () => {
+    it('parses no-owner OVER_SCOPE findings alongside Verdict Table findings', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | FR-1 | — | Existing criterion evidence |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Intent relation | Evidence |
+| --- | --- | --- | --- |
+| nc.1 | OVER_SCOPE | outside-visible | src/engine/no-owner.ts:10 — visible unplanned behavior |
+| NC.2 | OVER_SCOPE | within | src/engine/no-owner.ts:20 — harmless implementation detail |
+`);
+
+      expect(parsed).toEqual({
+        ok: true,
+        value: {
+          prd: 'present',
+          findings: [
+            {
+              criterion: 'S1.1',
+              grade: 'PASS',
+              prdIds: ['FR-1'],
+              evidence: 'Existing criterion evidence',
+            },
+            {
+              criterion: 'NC.1',
+              grade: 'OVER_SCOPE',
+              prdIds: [],
+              evidence: 'src/engine/no-owner.ts:10 — visible unplanned behavior',
+            },
+            {
+              criterion: 'NC.2',
+              grade: 'OVER_SCOPE',
+              prdIds: [],
+              evidence: 'src/engine/no-owner.ts:20 — harmless implementation detail',
+            },
+          ],
+        },
+      });
+    });
+
+    it('keeps the sectionless report result shape unchanged', () => {
+      expect(parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| S2.1 | FIXABLE | 3 | none | — | Missing guard |
+`)).toEqual({
+        ok: true,
+        value: {
+          prd: 'none',
+          findings: [
+            {
+              criterion: 'S2.1',
+              grade: 'FIXABLE',
+              planTask: 3,
+              prdIds: [],
+              evidence: 'Missing guard',
+            },
+          ],
+        },
+      });
+    });
+
+    it('identifies no-owner keys without accepting story criteria', () => {
+      expect([isNoOwnerKey('NC.1'), isNoOwnerKey('S1.2')]).toEqual([true, false]);
+    });
+  });
 
   describe('STEP_ARTIFACT_GLOBS', () => {
     it('derives the complete ordered compatibility map while retaining per-pattern scope', async () => {
