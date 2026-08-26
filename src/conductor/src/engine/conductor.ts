@@ -6708,10 +6708,26 @@ export class Conductor {
               // suppress a lap the gate-local budget still allows — and it reset
               // to zero on every dispatch, so it bounded nothing durably either.
               // The authority is planRemediation's budget, not this counter.
+              // AB-R14 / decision 8: this route is a FALLBACK for the coverage
+              // gap the consolidated kickback leaves — an as-built
+              // blocked-remediable verdict with nothing else failing. It must
+              // never preempt `adr-2026-07-10-validation-group-join` decision 3,
+              // which merges a manual_test FAIL and review gaps into ONE work
+              // order with a single rewind (that merge already admits as-built
+              // gaps). Authored as the `if` arm ahead of the consolidated path,
+              // it rewound before the merge could attach the FAIL rows. The
+              // condition is the guard, not the ordering.
+              // Scoped to exactly what decision 3's merge clause covers: a
+              // manual_test FAIL in the same round. A mixed PRD/as-built round
+              // with no FAIL still belongs to this route — that shared repair,
+              // with its single-counted plan growth, is what decision 4 and
+              // finding AB-R6 established.
+              const consolidatedKickbackOwnsThisRound = manualTestFailRows.length > 0;
               const remediableAsBuiltRoute =
                 this.daemon &&
                 asBuiltRemediationEnabled &&
-                asBuiltOutcome.kind === 'blocked-remediable';
+                asBuiltOutcome.kind === 'blocked-remediable' &&
+                !consolidatedKickbackOwnsThisRound;
               if (remediableAsBuiltRoute) {
                 // The join bypasses the serial as-built halt site, so it
                 // must consume the same single-use gate-scoped no-op
@@ -6862,35 +6878,45 @@ export class Conductor {
                   },
                 );
               }
-              const asBuiltReason = gateVerdicts.get('architecture_review_as_built')?.reason ??
-                'as-built architecture review gate unsatisfied';
-              const reason =
-                `Validation group "${step.name}" halted: ${asBuiltReason}` +
-                (asBuiltOutcome.kind === 'blocked-design' || asBuiltOutcome.kind === 'invalid'
-                  ? renderAsBuiltBlockedFindingDetail(asBuiltReport)
-                  : '');
-              await this.writeHaltMarker(
-                reason + '\n',
-                asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
-              );
-              await this.recordGroupRefusal({
-                state,
-                groupStep: step.name,
-                judgingStep: 'architecture_review_as_built',
-                // Siblings that missed their own gate are ended by this halt
-                // too; leaving them unstamped understated the group's exit.
-                refusedSteps: membership.dispatchable
-                  .filter((member, idx) =>
-                    outcomes[idx]?.kind !== 'verdict' ||
-                    outcomes[idx]?.verdict !== 'pass' ||
-                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
-                  .map((member) => member.name as StepName),
-                reason,
-              });
-              await this.emitLoopHalt(reason);
-              process.off('SIGINT', sigintHandler);
-              if (!this.daemon) process.off('SIGTERM', sigterm);
-              return;
+              // AB-R14 / decision 8: when the consolidated kickback owns this
+              // round, an all-REMEDIABLE as-built verdict must NOT halt here —
+              // it has to reach the manual-test merge below so both streams
+              // become one work order. Every terminal outcome (DESIGN,
+              // invalid, undelivered PLAN_GAP) still halts exactly as before.
+              if (
+                !consolidatedKickbackOwnsThisRound ||
+                asBuiltOutcome.kind !== 'blocked-remediable'
+              ) {
+                const asBuiltReason = gateVerdicts.get('architecture_review_as_built')?.reason ??
+                  'as-built architecture review gate unsatisfied';
+                const reason =
+                  `Validation group "${step.name}" halted: ${asBuiltReason}` +
+                  (asBuiltOutcome.kind === 'blocked-design' || asBuiltOutcome.kind === 'invalid'
+                    ? renderAsBuiltBlockedFindingDetail(asBuiltReport)
+                    : '');
+                await this.writeHaltMarker(
+                  reason + '\n',
+                  asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
+                );
+                await this.recordGroupRefusal({
+                  state,
+                  groupStep: step.name,
+                  judgingStep: 'architecture_review_as_built',
+                  // Siblings that missed their own gate are ended by this halt
+                  // too; leaving them unstamped understated the group's exit.
+                  refusedSteps: membership.dispatchable
+                    .filter((member, idx) =>
+                      outcomes[idx]?.kind !== 'verdict' ||
+                      outcomes[idx]?.verdict !== 'pass' ||
+                      (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
+                    .map((member) => member.name as StepName),
+                  reason,
+                });
+                await this.emitLoopHalt(reason);
+                process.off('SIGINT', sigintHandler);
+                if (!this.daemon) process.off('SIGTERM', sigterm);
+                return;
+              }
             }
 
             // Task 20 (adr-2026-07-10-validation-group-join.md): MT-only

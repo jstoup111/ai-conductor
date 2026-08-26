@@ -1299,4 +1299,93 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  /**
+   * AB-R14 / adr-2026-07-10-validation-group-join decision 3, as subordinated by
+   * adr-2026-08-25 decision 8: when a join carries a manual_test FAIL AND an
+   * all-REMEDIABLE as-built BLOCKED verdict, the bounded as-built route must NOT
+   * preempt the consolidated kickback. Both streams merge into ONE work order —
+   * one /remediate dispatch whose retry hint carries the manual-test FAIL rows
+   * alongside the as-built evidence, and a single rewind.
+   */
+  it('merges a manual-test FAIL with a remediable as-built verdict into one work order', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-mt-fail-as-built-merge-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath);
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'parallel-validation-phase-fan-out-manual-test-prd-.md'),
+        [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n'),
+      );
+
+      const remediateReasons: string[] = [];
+      let buildHint = '';
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state, opts) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
+              '# PRD Audit',
+              '',
+              '**PRD:** none',
+              '',
+              '## Verdict Table',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '| --- | --- | --- | --- | --- |',
+              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
+              '',
+              PRD_PASS,
+            ].join('\n'));
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              [
+                'Verdict: BLOCKED',
+                '',
+                '## Blocking Findings',
+                '| Finding | Class | Governing clause | Summary |',
+                '| --- | --- | --- | --- |',
+                '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
+              ].join('\n'),
+            );
+          } else if (step === 'remediate') {
+            remediateReasons.push(opts?.retryReason ?? '');
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [{
+                  id: 'ARCH-1',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Add the missing guard.',
+                  tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
+                }],
+              }),
+            );
+          } else if (step === 'build') {
+            buildHint = opts?.retryReason ?? '';
+            return { success: false, error: 'stop after observing the merged reroute' } as StepRunResult;
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter(), {
+        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+      });
+      await conductor.run();
+
+      // ONE /remediate dispatch over the union of review gaps...
+      expect(remediateReasons).toHaveLength(1);
+      expect(remediateReasons[0]).toContain('.pipeline/architecture-review-as-built.md');
+      // ...and ONE merged work order whose BUILD hint carries the deterministic
+      // manual-test FAIL rows alongside the remediation guidance (decision 3).
+      expect(buildHint).toContain('FAIL');
+      expect(buildHint).toContain('missing guard');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

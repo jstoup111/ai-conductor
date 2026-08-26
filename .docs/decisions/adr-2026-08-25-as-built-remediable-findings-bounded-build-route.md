@@ -6,6 +6,8 @@
 **Amends:** adr-2026-08-22-one-owner-per-review-question, adr-2026-07-13-kickback-build-no-op-escalation
 **Amended:** 2026-08-26 by operator (James Stoup) — decision 7 added; the "no new ledger
 schema" consequence below is corrected to match it.
+**Amended:** 2026-08-26 by operator (James Stoup) — decision 8 added, subordinating this
+route to `adr-2026-07-10-validation-group-join` decision 3.
 
 ## Context
 
@@ -112,6 +114,29 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    projection. This is the only durable surface the feature adds, and no component outside the
    remediation seam reads it.
 
+8. **The bounded route is a fallback, never a preemption (added 2026-08-26 by operator
+   amendment).** `adr-2026-07-10-validation-group-join` decision 3 is unchanged and keeps
+   primacy: when a validation-group join carries a `manual_test` FAIL alongside review gaps,
+   the engine merges both classification streams into ONE work order with a single rewind and
+   the FAIL rows attached as evidence. That merge already admits
+   `architecture_review_as_built` gaps. This ADR's route therefore applies **only where the
+   consolidated kickback does not** — an as-built `blocked-remediable` verdict with no
+   `manual_test` FAIL in the same round. Whenever a FAIL is present, as-built gaps ride the
+   consolidated dispatch and this route must not run. A mixed `prd_audit`/as-built round with
+   no FAIL still belongs to this route: that shared repair, with its single-counted plan
+   growth, is what decision 4 establishes.
+
+   The route was authored as the `if` arm ahead of the consolidated path, so a
+   `blocked-remediable` verdict rewound before the merge could attach manual-test FAIL rows
+   (as-built finding AB-R14). Ordering is not the guard; the condition is.
+
+   Budget follows the same split. In the consolidated cases the existing shared accounting
+   applies unchanged, satisfying decision 3's clause that `MAX_KICKBACKS_PER_GATE`,
+   `manualTestSelfHeals`, and `remediationRounds` keep their per-gate accounting. Only on the
+   as-built-only path is decision 4's gate-local durable budget the sole authority — which is
+   why the process-local `remediationRounds` pre-cap was removed from that branch and from
+   that branch alone.
+
 ## Consequences
 
 ### Positive
@@ -129,6 +154,9 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
 - The ledger now carries state whose lifetime spans a BUILD traversal, so a ledger deleted
   mid-lap (for example with a discarded worktree) loses the per-finding record even though the
   repair itself is committed on the branch.
+- Two remediation entry points into the validation group now coexist, separated by an explicit
+  condition rather than by ordering. A future edit that widens either one must re-check the
+  other, or the AB-R14 class returns.
 
 ### Follow-up Actions
 - [ ] Parser + outcome widening; both halt writers branch on the widened outcome.
