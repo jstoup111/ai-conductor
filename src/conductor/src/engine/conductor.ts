@@ -6698,9 +6698,16 @@ export class Conductor {
                   'architecture_review_as_built',
                 );
                 if (escalation.halt) {
+                  // AB-R7 / APPROVED decision 4: a no-op escalation is a
+                  // termination-bound exit for THIS gate, so it takes the
+                  // existing `kickback-cap` class and lists every finding —
+                  // the same terminal shape as an exceeded lap cap. Writing
+                  // `needs-human` with no listing hid both which bound was
+                  // reached and what remained unrepaired.
                   const reason =
-                    `as-built architecture review kickback-to-build no-op: ${escalation.reason}`;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
+                    renderAsBuiltBlockedFindingDetail(asBuiltReport);
+                  await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   await this.recordGroupRefusal({
                     state,
@@ -10058,8 +10065,13 @@ export class Conductor {
               ) {
                 const escalation = await checkKickbackToBuildEscalation(step.name);
                 if (escalation.halt) {
-                  const reason = `as-built architecture review kickback-to-build no-op: ${escalation.reason}`;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  // AB-R7 / APPROVED decision 4 — see the validation-group
+                  // exit above; both terminals carry the same class and the
+                  // same per-finding listing.
+                  const reason =
+                    `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
+                    renderAsBuiltBlockedFindingDetail(asBuiltReport);
+                  await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);

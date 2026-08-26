@@ -227,3 +227,84 @@ describe('acceptance: an all-REMEDIABLE as-built verdict returns the daemon to B
     });
   });
 });
+
+/**
+ * AB-R7 / APPROVED decision 4, serial side. A no-op escalation is a
+ * termination-bound exit for this gate, so BOTH exits write the existing
+ * `kickback-cap` class and list every finding with its class and governing
+ * clause. The group side is covered in the parallel-validation fan-out
+ * acceptance; this pins the serial SHIP walk.
+ *
+ * Reaching the serial branch takes auto mode (the branch is nested under
+ * `if (this.mode === 'auto')`) AND a group that declines to fan out. The
+ * width-1 degrade does exactly that: with manual_test skipped and prd_audit
+ * already done, `architecture_review_as_built` is the only dispatchable
+ * member, so the join is skipped and the walk dispatches it serially.
+ */
+describe('acceptance: a serial as-built kickback-to-build no-op is a capped terminal', () => {
+  it('halts kickback-cap and lists every blocking finding', async () => {
+    const { root, statePath } = await seedFixture();
+
+    // Width-1 degrade: only the as-built member is left to dispatch.
+    const seeded = await readState(statePath);
+    const state = (seeded.ok ? seeded.value : {}) as Record<string, unknown>;
+    state.manual_test = 'skipped';
+    state.prd_audit = 'done';
+    state.architecture_review_as_built = 'pending';
+    await writeState(statePath, state as ConductState);
+    await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_PASS);
+
+    // The single-use no-op baseline this gate consumes: a prior lap already
+    // routed BUILD, and neither the tree nor the resolved tasks have moved.
+    await writeFile(
+      join(root, '.pipeline', 'kickback-ledger.json'),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          architecture_review_as_built: {
+            count: 1,
+            treeHash: null,
+            lastReason: 'prior as-built kickback',
+            priorVerdict: false,
+            resolvedBefore: 1,
+          },
+        },
+      }),
+    );
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(root, '.pipeline', 'architecture-review-as-built.md'),
+            AS_BUILT_REMEDIABLE,
+          );
+        }
+        return { success: true };
+      }),
+      resetSession: async () => {},
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'architecture_review_as_built',
+      verifyArtifacts: true,
+      maxRetries: 1,
+      escalateBuildFailure: async () => ({}),
+      git: async () => ({ stdout: '' }),
+    });
+    await conductor.run();
+
+    const halt = await readFile(join(root, '.pipeline', 'HALT'), 'utf8');
+    const haltClass = await readFile(join(root, '.pipeline', 'HALT.class'), 'utf8');
+    expect(halt).toContain('as-built architecture review kickback-to-build no-op');
+    expect(haltClass.trim()).toBe('kickback-cap');
+    expect(halt).toContain('Blocking findings:');
+    expect(halt).toContain('AB-1 (REMEDIABLE; 1): The approved task is not wired into the live gate.');
+  });
+});

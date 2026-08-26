@@ -996,10 +996,15 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       }).run();
 
       expect(remediateCalls).toBe(1);
-      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
-        'as-built architecture review kickback-to-build no-op',
-      );
-      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      const noOpHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(noOpHalt).toContain('as-built architecture review kickback-to-build no-op');
+      // APPROVED decision 4: a no-op escalation is a termination-bound exit
+      // for this gate, so it carries `kickback-cap` and lists every finding
+      // with its class and governing clause — the same terminal shape as an
+      // exceeded lap cap. This assertion previously encoded the defect.
+      expect(noOpHalt).toContain('Blocking findings:');
+      expect(noOpHalt).toContain('ARCH-1 (REMEDIABLE; Task 1): Add the missing guard');
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
       const ledger = JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'));
       expect(ledger.gates.architecture_review_as_built.priorVerdict).toBe(true);
       expect(ledger.gates.prd_audit).toBeUndefined();
