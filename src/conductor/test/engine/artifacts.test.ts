@@ -81,6 +81,7 @@ import {
   MANUAL_TEST_SKIP_SENTINEL,
   MANUAL_TEST_WARN_SENTINEL,
   readManualTestFailRows,
+  stampGateRunIdentity,
   stampCode,
   BUILD_REVIEW_VERDICT,
   MANUAL_TEST_CODE_STAMP,
@@ -93,7 +94,6 @@ import type {
   CompletionResult,
   CompletionContext,
   ArtifactResolutionContext,
-  GateCodeStampMarker,
 } from '../../src/engine/artifacts.js';
 import type { StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -119,16 +119,19 @@ describe('engine/artifacts', () => {
 
   // Covers: task:1
   describe('gate code-stamp marker contract', () => {
-    it('exports the manual-test sidecar path and accepts run-scoped markers', () => {
-      const marker: GateCodeStampMarker = {
-        codeStamp: 'abc123',
-        runId: 'run-123',
-      };
-      const legacyMarker: GateCodeStampMarker = {};
+    it('round-trips an engine-stamped run identity through the manual-test sidecar', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, MANUAL_TEST_CODE_STAMP),
+        '{\n  "codeStamp": "abc123"\n}\n',
+      );
+
+      await stampGateRunIdentity(dir, 'manual_test', 'run-123');
 
       expect(MANUAL_TEST_CODE_STAMP).toBe('.pipeline/manual-test-code-stamp.json');
-      expect(marker).toEqual({ codeStamp: 'abc123', runId: 'run-123' });
-      expect(legacyMarker.runId).toBeUndefined();
+      await expect(readFile(join(dir, MANUAL_TEST_CODE_STAMP), 'utf8')).resolves.toBe(
+        '{\n  "codeStamp": "abc123",\n  "runId": "run-123"\n}\n',
+      );
     });
   });
 
