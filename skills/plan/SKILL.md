@@ -99,6 +99,10 @@ change whether this criterion is true?” Record `diff-local` only when the
 answer is no; `outside-diff` requires a documented coherence waiver rather
 than silently becoming a BUILD assertion.
 
+Removal-shaped tasks follow `/code-removal`: specify the deletion, including what dies and which
+observable behavior survives. Do not specify a test whose subject is the removed code's absence, or
+mark a removal task `Verify-only:` merely to document that absence.
+
 ```markdown
 ### Task [N]: [Descriptive title]
 **Story:** [Reference to story and specific acceptance criterion]
