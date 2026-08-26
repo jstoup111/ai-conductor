@@ -93,7 +93,7 @@ describe('verdict retry-input identity reader', () => {
     expect(new Set(expectedRunIds)).toEqual(new Set([stamped.runId]));
   });
 
-  it('completes a serial prd-audit dispatch from a fresh report when gate validity is disabled', async () => {
+  it('ignores a prior run identity during a serial prd-audit dispatch when gate validity is disabled', async () => {
     const seedResult = await readState(statePath);
     const seed = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
     for (const step of ALL_STEPS) {
@@ -125,6 +125,14 @@ describe('verdict retry-input identity reader', () => {
             '| S1.1 | PASS | — | — | fixture.ts:1 |',
             '',
           ].join('\n'),
+        );
+        // The disabled branch must bypass run-identity matching entirely and
+        // retain the fresh report's mtime semantics. If it consulted the
+        // sidecar, this deliberately prior identity would make completion
+        // reject the report as stale.
+        await writeFile(
+          join(dir, PRD_AUDIT_CODE_STAMP),
+          JSON.stringify({ runId: 'prior-run' }),
         );
         return { success: true };
       }),
