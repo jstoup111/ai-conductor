@@ -869,7 +869,7 @@ async function sweptArtifactStillValid(
   expectedRunId?: string,
 ): Promise<boolean> {
   if (!resolveGateCodeValidityConfig(config).enabled) return false;
-  if ((await verdictProducedByRun(dir, step, expectedRunId)).state === 'stale-run-identity') {
+  if ((await verdictProducedByRun(dir, step, expectedRunId, config)).state === 'stale-run-identity') {
     return false;
   }
   const git = makeGitRunner(dir);
@@ -2427,7 +2427,7 @@ async function completionVerdictRunIdentity(
   ctx: CompletionContext,
 ): Promise<VerdictRunIdentity> {
   if (!resolveGateCodeValidityConfig(ctx.config).enabled) return { state: 'unstamped' };
-  return verdictProducedByRun(dir, step, ctx.attemptRunId);
+  return verdictProducedByRun(dir, step, ctx.attemptRunId, ctx.config);
 }
 
 function staleVerdictRunIdentityResult(
@@ -4618,10 +4618,11 @@ export async function classifyPrdAuditGaps(
   dir: string,
   sessionStartedAt: number | undefined,
   expectedRunId?: string,
+  config?: Pick<HarnessConfig, 'gate_code_validity'>,
 ): Promise<PrdGapClassification> {
   const files = await findArtifactFiles(dir, 'prd_audit');
   const decisions = (await readOverScopeDecisions(dir)).decisions;
-  const identity = await verdictProducedByRun(dir, 'prd_audit', expectedRunId);
+  const identity = await verdictProducedByRun(dir, 'prd_audit', expectedRunId, config);
   const blocking: UnalignedFrRow[] = [];
   for (const f of files) {
     if (identity.state === 'stale-run-identity') continue;

@@ -154,6 +154,19 @@ describe('verdictProducedByRun', () => {
       state: 'unstamped',
     });
   });
+
+  it('returns unstamped when gate-code-validity is disabled, even for a matching sidecar', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
+    scratches.push(dir);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ runId: 'run-current' }));
+
+    await expect(
+      verdictProducedByRun(dir, 'prd_audit', 'run-current', {
+        gate_code_validity: { enabled: false },
+      }),
+    ).resolves.toEqual({ state: 'unstamped' });
+  });
 });
 
 describe('gateVerdictStillValid', () => {

@@ -3863,6 +3863,18 @@ describe('engine/artifacts', () => {
       expect(c.kind).toBe('impl-only');
       expect(c.summary).toContain('FR-17 (impl-gap)');
     });
+
+    it('uses pure mtime freshness when gate-code-validity is disabled', async () => {
+      await writeAudit('| FR-17 | MISSING | impl-gap | fresh evidence | no |\n');
+      await createFile(PRD_AUDIT_CODE_STAMP, JSON.stringify({ runId: 'earlier-run' }));
+
+      const c = await classifyPrdAuditGaps(dir, undefined, 'current-run', {
+        gate_code_validity: { enabled: false },
+      });
+
+      expect(c.kind).toBe('impl-only');
+      expect(c.summary).toContain('FR-17 (impl-gap)');
+    });
   });
 
   describe('classifyRetryDecision', () => {

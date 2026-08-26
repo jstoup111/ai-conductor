@@ -13,6 +13,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StepName } from '../types/index.js';
+import type { HarnessConfig } from '../types/config.js';
 import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
@@ -21,6 +22,7 @@ import {
 import type { GitRunner } from './rebase.js';
 import { originDefaultBranch, changedPathsBetween } from './rebase.js';
 import { featureTestPaths, GATE_SURFACE, partitionDelta } from './gate-invalidation.js';
+import { resolveGateCodeValidityConfig } from './config.js';
 
 /** Minimal context the decision helper needs: an injected git runner rooted
  * at the project's working directory. Mirrors the `GitRunner` convention
@@ -68,7 +70,9 @@ export async function verdictProducedByRun(
   dir: string,
   gate: StepName,
   expectedRunId: string | undefined,
+  config?: Pick<HarnessConfig, 'gate_code_validity'>,
 ): Promise<VerdictRunIdentity> {
+  if (!resolveGateCodeValidityConfig(config).enabled) return { state: 'unstamped' };
   if (!expectedRunId) return { state: 'unstamped' };
 
   const sidecar = verdictRunIdentitySidecar(gate);

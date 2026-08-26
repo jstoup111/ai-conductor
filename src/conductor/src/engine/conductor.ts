@@ -2551,7 +2551,12 @@ export class Conductor {
 
     try {
       const files = await findArtifactFilesForStep(this.projectRoot, step);
-      const identities = await verdictProducedByRun(this.projectRoot, step, expectedRunId);
+      const identities = await verdictProducedByRun(
+        this.projectRoot,
+        step,
+        expectedRunId,
+        this.config,
+      );
       const sidecarPath: Partial<Record<StepName, string>> = {
         manual_test: MANUAL_TEST_CODE_STAMP,
         prd_audit: PRD_AUDIT_CODE_STAMP,
@@ -9012,6 +9017,7 @@ export class Conductor {
                     this.projectRoot,
                     state.session_started_at,
                     lastPrdAuditRunId,
+                    this.config,
                   );
                   prdAuditNonClean = cls.kind !== 'clean';
                 }
@@ -9029,6 +9035,7 @@ export class Conductor {
                   this.projectRoot,
                   step.name,
                   dispatchRunId,
+                  this.config,
                 );
                 const retryInputSignature = runIdentity.state === 'unstamped'
                   ? `mtime:${artifactMtimeSignature}`
@@ -9078,6 +9085,7 @@ export class Conductor {
                   this.projectRoot,
                   state.session_started_at,
                   lastPrdAuditRunId,
+                  this.config,
                 );
                 if (cls.kind !== 'clean') break;
               }
@@ -10297,6 +10305,7 @@ export class Conductor {
                 this.projectRoot,
                 state.session_started_at,
                 lastPrdAuditRunId,
+                this.config,
               );
               if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
                 prdAuditSelfHeals++;
