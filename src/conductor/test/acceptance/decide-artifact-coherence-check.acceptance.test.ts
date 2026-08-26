@@ -45,7 +45,7 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { landSpec } from '../../src/engine/engineer/land-spec.js';
-import { slugify } from '../../src/engine/engineer/authoring.js';
+import { slugify } from '../../src/engine/engineer/spec-branch.js';
 import { createEngineerWorktree } from '../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 

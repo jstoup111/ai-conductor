@@ -133,8 +133,9 @@ path-prefix confinement (A).** Supersede ADR-004 and ADR-007.
 
 ### Follow-up Actions
 - [x] Mark ADR-004 and ADR-007 `SUPERSEDED by ADR-008`. *(done 2026-06-26)*
-- [ ] Loop runs agent-hosted; test asserts no `claude -p`/authoring subprocess spawned **and** no Node
-      readline REPL substrate remains (the one-shot `ClaudeProvider` authoring path is removed).
+- [x] Loop runs agent-hosted; test asserts no `claude -p`/authoring subprocess spawned **and** no Node
+      readline REPL substrate remains (the dormant scripted loop and its one-shot authoring path were
+      removed by #1638 on 2026-08-25).
 - [ ] Authoring supports a **clarity loop**: a DECIDE step can ask the operator a question and refine
       before acceptance; the next step gates on operator approval (no auto-proceed past a gate).
 - [ ] Retain routing discriminated union + exhaustive switch + type-enforced zero-writes-on-decline.

@@ -10,8 +10,8 @@
 //      `resolveTargetRepo` to throw `TargetPathMissingError` before any write
 //      is attempted. No stray writes appear in cwd or in sibling repos.
 //
-// These tests focus on the PRIMITIVE level (AuthoringGuard + resolveTargetRepo)
-// as building blocks for the higher-level `runAuthoring` seam (Task 32).
+// These tests focus on the primitive level used by live engineer worktree and
+// land operations (AuthoringGuard + resolveTargetRepo).
 // They are falsifiable: pre/post snapshots use byte-for-byte file content.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

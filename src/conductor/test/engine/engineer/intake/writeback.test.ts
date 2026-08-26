@@ -1,6 +1,6 @@
 // writeback.test.ts — shared intake write-back helpers (reportRouted / reportDone).
-// One implementation backs both the test-only runEngineerMode loop and the live
-// CLI primitives (`engineer land`/`handoff --source-ref`). These unit tests pin the
+// One implementation backs the live CLI primitives (`engineer land`/`handoff
+// --source-ref`) and background intake processing. These unit tests pin the
 // contract: correct report status/meta, ledger transition, and ADVISORY semantics
 // (a thrown port/ledger error is swallowed — write-back never aborts the caller).
 

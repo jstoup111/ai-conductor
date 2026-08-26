@@ -5,9 +5,8 @@
 // default branch — where the daemon (which never sees the intake ledger) reads it
 // to put `Closes owner/repo#N` on the implementation PR.
 //
-// Shared by both authoring paths: landSpec (live/interactive `engineer land`)
-// and runAuthoring (autonomous). No-op for hand-authored specs (no sourceRef),
-// so non-intake specs are byte-for-byte unchanged.
+// Called by live spec landing and daemon artifact maintenance. No-op for
+// hand-authored specs (no sourceRef), so non-intake specs are unchanged.
 
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';

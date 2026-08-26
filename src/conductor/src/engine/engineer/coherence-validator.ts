@@ -23,7 +23,7 @@ import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { runOverlapScan, type RunOverlapScanArgs, type OverlapReport } from '../overlap-scan.js';
 import { createBlockerResolver } from '../blocker-resolver.js';
 import type { GhRunner } from '../owner-gate/identity.js';
-import { deriveDefaultBranch } from './authoring.js';
+import { deriveDefaultBranch } from './spec-branch.js';
 import type { AuthoringGuard } from './authoring-guard.js';
 import {
   evaluateCoherenceWaiver,

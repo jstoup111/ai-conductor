@@ -78,6 +78,10 @@ currently imported by exactly one consumer (verified by grep).
    flow, ADR-008); its edit was reverted rather than retained as dormant code, and the dead
    path's cleanup is tracked as a follow-up intake.
 
+   > **Amended 2026-08-25 by #1638:** the follow-up cleanup is complete. The dormant
+   > `engineer/loop.ts` module and its test-only orchestration dependencies were removed;
+   > `engineer-cli.ts` and `intake/intake-loop.ts` remain the live ledger boundaries.
+
 5. **Every read-modify-write is serialized by a lease** obtained from `conduct-state-lease.ts`
    at `«ledger path».lease`, following the `whileHoldingLease(read → mutate → write)` shape of
    `filesystem-conduct-state-store.ts`. Read-only methods (`known`, `get`, `list`) also acquire,

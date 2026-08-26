@@ -1,6 +1,6 @@
 # Components (L3): Intake Ledger Durability Hardening
 
-**Last updated:** 2026-08-12
+**Last updated:** 2026-08-25
 **Scope:** `src/conductor/src/engine/engineer/intake/ledger.ts` and its mutating callers,
 after the corrupt-read fail-closed + lease-guarded read-modify-write change (intake #1476).
 Extends [components-engineer-intake.md](components-engineer-intake.md), which shows the
@@ -12,7 +12,7 @@ ledger as a single opaque node.
 graph TD
   subgraph writers["Mutating processes (concurrent, separate OS processes)"]
     CLI["engineer-cli verbs<br/>claim / unclaim / forget /<br/>reopen / writeback / handoff<br/>(7 createLedger sites)"]:::existing
-    LOOP["intake/intake-loop.ts<br/>background intake capture<br/>(record on every polled envelope;<br/>engineer/loop.ts runEngineerMode is dormant — no live caller)"]:::existing
+    INTAKE["intake/intake-loop.ts<br/>background intake capture<br/>(record on every polled envelope)"]:::existing
   end
 
   subgraph ledger["engineer/intake/ledger.ts"]
@@ -38,7 +38,7 @@ graph TD
   end
 
   CLI --> API
-  LOOP --> API
+  INTAKE --> API
   API --> GUARD
   GUARD -- "acquire / release" --> LEASE
   LEASE -- "mkdir / rmdir" --> LOCKDIR
@@ -87,7 +87,7 @@ graph TD
    `~/.ai-conductor/engineer/` (`engineer-store.ts:185-193`). Note that this is a **user-global
    path outside every repository**, despite the `.engineer/` shorthand used in ADR-011 and
    `components-engineer-intake.md`: the ledger is one cross-repo singleton shared by every
-   project's engineer verbs and loops, which is precisely why invariant 2's no-bypass rule
+   project's engineer verbs and background intake loop, which is precisely why invariant 2's no-bypass rule
    matters. The daemon's `.daemon/` state is untouched either way.
 4. **The quarantine artifact is a copy, not a rename.** Unlike `halt-issues/ledger.ts`,
    the original `ledger.json` stays in place so that the refusal is repeatable and the
@@ -98,4 +98,5 @@ graph TD
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-08-25 | Removed the dormant `runEngineerMode` writer from the component graph | #1638 deleted the dead launch path; `intake-loop.ts` is the live background writer |
 | 2026-08-12 | Initial generation | Intake #1476 — corrupt-read wipe + unguarded concurrent read-modify-write |

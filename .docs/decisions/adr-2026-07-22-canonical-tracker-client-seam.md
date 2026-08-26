@@ -17,6 +17,10 @@ shapes (verified, agent audit 2026-07-22):
   `engineer/intake/delivery-guard.ts:16`, `engineer/issue-dep-migration.ts:204`,
   `engineer/intake/file-issue.ts:18` (`FileIssueGhRunner`), `backlog-priority.ts:7`
   (`ExecRunner`).
+
+> **Amended 2026-08-25 by #1638:** `engineer/loop.ts` was a dormant test harness and is
+> removed. The canonical runner remains `tracker-client.ts`'s `GhRunner`; live engineer
+> composition occurs in `engineer-cli.ts`.
 - Narrower no-opts shape: `blocker-resolver.ts:23` (`BlockerRunner`), `wiring-probe.ts:503`.
 - Object-shaped issue-ops interface: `GhAbstraction` (`halt-issues/sweep.ts:30`,
   `halt-issues/closer.ts:19`) with named methods (`getIssueLabels`, `closeIssue`, …).

@@ -38,7 +38,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
-import { slugify } from './authoring.js';
+import { slugify } from './spec-branch.js';
 import {
   adrApprovalStatus,
   isStoriesApproved,
@@ -49,7 +49,7 @@ import {
   validateFeatureArtifactStems,
 } from '../artifacts.js';
 import type { StepName } from '../../types/index.js';
-import { deriveDefaultBranch } from './authoring.js';
+import { deriveDefaultBranch } from './spec-branch.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import {
