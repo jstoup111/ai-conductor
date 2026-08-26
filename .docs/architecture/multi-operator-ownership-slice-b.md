@@ -1,6 +1,6 @@
 # Architecture: Multi-operator ownership — Slice B (authoring-side)
 
-**Last updated:** 2026-07-02
+**Last updated:** 2026-08-25
 **Scope:** Component view of the authoring-side identity flow after Slice B, anchored to
 the post-#185 (worktree-isolation) module layout. Companion sequence:
 `sequences/slice-b-fail-closed-land.md`. Parent end-state view:
@@ -17,14 +17,12 @@ flowchart TD
   machineId -->|"absent -> gh login"| resolved
   machineId -->|"gh unauth"| unresolved["UNRESOLVED"]
 
-  subgraph entries["Authoring entry points (all three converge on landSpec)"]
-    cli["engineer-cli.ts land -- interim: loadConfig(target) project config"]
-    loop["engineer/loop.ts run -- interim: loadConfig(target) project config"]
+  subgraph entries["Authoring entry points (both converge on landSpec)"]
+    cli["engineer-cli.ts land"]
     conduct["plain /conduct DECIDE authoring -- B1: currently stamps nothing"]
   end
 
   cli -.->|"Slice B rewires"| machineId
-  loop -.->|"Slice B rewires"| machineId
   conduct -.->|"B1 adds"| machineId
 
   land["engineer/land-spec.ts landSpec -- runs inside per-idea worktree"]
@@ -53,4 +51,5 @@ flowchart TD
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-08-25 | Removed the dormant `engineer/loop.ts` entry | #1638 deleted the dead launch path; live authoring reaches `landSpec` through `engineer-cli.ts` or `/conduct` |
 | 2026-07-02 | Initial generation | Slice B spec (issue #184), post-#185 anchoring |

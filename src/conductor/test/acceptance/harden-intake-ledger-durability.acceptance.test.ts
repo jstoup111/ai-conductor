@@ -110,9 +110,7 @@ describe('Story 4 — corrupt ledger fails the real claim command loudly', () =>
 describe('Story 5 — corrupt ledger stops the launch-time intake flow', () => {
   // The live launch-time flow is the engineer CLI's pre-poll (engineer-cli.ts
   // `dispatchEngineer({kind:'launch'})`): a corrupt ledger stops the launch
-  // before any enqueue or interactive session. `runEngineerMode` carries the
-  // same guard but has no live production caller (as-built audit, 2026-08-16);
-  // these cases target the production boundary.
+  // before any enqueue or interactive session.
   it('stops the launch before enqueue or session when the real ledger file is corrupt', async () => {
     const root = await freshDir('intake-ledger-launch-');
     const engineerDir = join(root, 'engineer');

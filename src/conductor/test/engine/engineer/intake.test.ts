@@ -1,7 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, readdir } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for the NOT-YET-BUILT intake port (Phase 9.3 redesign,
@@ -83,34 +80,5 @@ describe('intake/port: parseEnvelope boundary validation (FR-13/FR-16, C5)', () 
       const env = parseEnvelope(validEnvelopeInput({ status }));
       expect(env.status).toBe(status);
     }
-  });
-});
-
-// ═════════════════════════════════════════════════════════════════════════════
-// FR-13 / C5: the core depends on the PORT interface, not the concrete adapter.
-// Static import-graph assertion: loop.ts must not import the claude-session
-// adapter directly (it consumes the IntakePort interface only).
-// ═════════════════════════════════════════════════════════════════════════════
-describe('intake: core imports the port, not the concrete adapter (FR-13, C5)', () => {
-  it('loop.ts does NOT import intake/claude-session (depends on the port only)', async () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const loopSrc = await readFile(
-      join(here, '..', '..', '..', 'src', 'engine', 'engineer', 'loop.ts'),
-      'utf8',
-    );
-    // Loose-coupling guard: the core loop must not statically import the
-    // concrete claude-session adapter. It may import the port interface.
-    expect(loopSrc).not.toMatch(/from ['"][^'"]*intake\/claude-session(\.js)?['"]/);
-    // And the port module must exist as the dependency seam.
-    expect(loopSrc).toMatch(/intake\/port(\.js)?['"]/);
-  });
-
-  it('the intake port directory exists with a port + adapter module', async () => {
-    // RED until the intake/ tree is created.
-    const here = dirname(fileURLToPath(import.meta.url));
-    const intakeDir = join(here, '..', '..', '..', 'src', 'engine', 'engineer', 'intake');
-    const files = await readdir(intakeDir);
-    expect(files).toContain('port.ts');
-    expect(files).toContain('claude-session.ts');
   });
 });

@@ -251,8 +251,8 @@ Use `acceptance-system-spec` only when this is a distinct multi-step externally 
 that cannot be proven below; otherwise assign a specific lower-layer behavioral test. The test
 must fail if the entry point is still wired to the OLD behavior.
 
-- Identify the real entry point from the story/plan ("when `runEngineerMode` processes an
-  idea…"), not the new symbol ("when `runAuthoring` is called…").
+- Identify the real entry point from the story/plan ("when `dispatchEngineer({ kind: 'land' })`
+  lands a spec…"), not the new helper symbol ("when `landSpec` is called…").
 - Assert the side effect, not the return value of the new unit.
 - Pair with the `/pipeline` batch gate that greps the superseded symbol for zero non-test
   callers: the acceptance test proves the new path runs; the grep proves the old one is gone.

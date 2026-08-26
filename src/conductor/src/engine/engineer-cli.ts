@@ -23,7 +23,6 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import type { EngineerIO, EngineerDeps } from './engineer/loop.js';
 import { createRegistryReader } from './registry.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
@@ -38,8 +37,8 @@ import {
 } from './engineer/worktree-authoring.js';
 import { recordAuthoredKey } from './engineer/authored-ledger.js';
 import { ensureRunning } from './daemon-lock.js';
-// The CLI is the composition root for the github-issues intake adapter — the
-// engineer loop must NOT import a concrete adapter (FR-13), but the CLI must.
+// The CLI is the composition root for the github-issues intake adapter used by
+// deterministic engineer commands and the interactive launch pre-poll.
 import { brainLoopAlive } from './engineer/brain-liveness.js';
 import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
@@ -60,44 +59,6 @@ import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { makeProductionGh } from './tracker-client.js';
-
-/**
- * Production DECIDE seam: gates each authoring step through the io surface.
- * Presents the prompt and waits for the operator to provide the approved artifact.
- * An empty response → rejected (blocks authoring). NO claude subprocess spawned.
- */
-function makeProductionDecide(io: EngineerIO): NonNullable<EngineerDeps['decide']> {
-  return async ({ step, idea, project, prompt }) => {
-    io.print(`\n── DECIDE: ${step} — project "${project}" — idea: ${idea}`);
-    io.print(prompt);
-    io.print(
-      `Provide the approved ${step} artifact as your next response (empty = reject, blocks authoring):`,
-    );
-    const line = await io.prompt();
-    const artifact = line ?? '';
-    if (artifact.trim() === '') return { approved: false, artifact: '' };
-    return { approved: true, artifact };
-  };
-}
-
-/**
- * Production complexity-assessment seam: gates the tier through the io surface.
- * Presents the prompt and waits for the operator to provide S/M/L. An empty or
- * unparseable response → rejected (blocks authoring). NO claude subprocess.
- */
-function makeProductionAssessComplexity(
-  io: EngineerIO,
-): NonNullable<EngineerDeps['assessComplexity']> {
-  return async ({ idea, project, recommended }) => {
-    io.print(`\n── DECIDE: complexity — project "${project}" — idea: ${idea}`);
-    if (recommended) io.print(`Recommended tier: ${recommended}`);
-    io.print('Provide the complexity tier (S, M, or L; empty = reject, blocks authoring):');
-    const line = await io.prompt();
-    const m = (line ?? '').trim().match(/^([SMLsml])/);
-    if (!m) return { approved: false, tier: recommended ?? 'M' };
-    return { approved: true, tier: m[1].toUpperCase() as 'S' | 'M' | 'L' };
-  };
-}
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 

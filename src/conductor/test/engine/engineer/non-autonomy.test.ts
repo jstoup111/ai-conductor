@@ -35,9 +35,8 @@
 // HOW THE IMPORT WALK WORKS
 // ──────────────────────────
 // Engineer entry roots:
-//   - src/engine/engineer/loop.ts    (runEngineerMode — interactive REPL)
-//   - src/engine/engineer-cli.ts     (dispatchEngineer — CLI dispatcher)
-//   - All files under src/engine/engineer/*.ts are considered the engineer surface.
+//   - src/engine/engineer-cli.ts (dispatchEngineer — CLI dispatcher)
+//   - Every TypeScript module under src/engine/engineer/.
 //
 // The walk:
 //   1. Starts from each engineer entry root.
@@ -51,7 +50,7 @@
 // transitively. This is then grepped for forbidden tokens.
 
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { launchDaemon } from '../../../src/engine/engineer/daemon-launch.js';
 import type { LaunchDaemonOpts } from '../../../src/engine/engineer/daemon-launch.js';
@@ -65,21 +64,12 @@ const CONDUCTOR_SRC = resolve(__dirname, '../../../src');
  * Engineer surface: all .ts files that constitute the engineer's reachable source.
  * We seed the walk from these roots.
  */
+const engineerModuleRoot = join(CONDUCTOR_SRC, 'engine/engineer');
 const ENGINEER_ENTRY_ROOTS: string[] = [
-  join(CONDUCTOR_SRC, 'engine/engineer/loop.ts'),
   join(CONDUCTOR_SRC, 'engine/engineer-cli.ts'),
-  // All files under engine/engineer/ are also explicit seeds (belt-and-suspenders
-  // for any engineer module not yet reachable from loop.ts or engineer-cli.ts).
-  join(CONDUCTOR_SRC, 'engine/engineer/authored-ledger.ts'),
-  join(CONDUCTOR_SRC, 'engine/engineer/authoring.ts'),
-  join(CONDUCTOR_SRC, 'engine/engineer/daemon-launch.ts'),
-  join(CONDUCTOR_SRC, 'engine/engineer/flywheel-trend.ts'),
-  join(CONDUCTOR_SRC, 'engine/engineer/governor.ts'),
-  join(CONDUCTOR_SRC, 'engine/engineer/handoff.ts'),
-  join(CONDUCTOR_SRC, 'engine/engineer/lesson-store.ts'),
-  join(CONDUCTOR_SRC, 'engine/engineer/rates.ts'),
-  join(CONDUCTOR_SRC, 'engine/engineer/routing.ts'),
-  join(CONDUCTOR_SRC, 'engine/engineer/target.ts'),
+  ...readdirSync(engineerModuleRoot, { recursive: true, encoding: 'utf8' })
+    .filter((path) => path.endsWith('.ts'))
+    .map((path) => join(engineerModuleRoot, path)),
 ];
 
 /**
@@ -182,12 +172,9 @@ function resolveSpecifier(specifier: string, fromFile: string): string | null {
  * Returns the set of all reachable absolute .ts file paths (including the
  * entry files themselves).
  *
- * NOTE: The dynamic `import('./engineer/loop.js')` in engineer-cli.ts is handled
- * here by recognising it as an explicit known edge — we add loop.ts to the
- * seeds directly (it's already in ENGINEER_ENTRY_ROOTS). The walker ignores
- * dynamic import() calls in the source text because they're not static imports
- * matched by the `from '...'` regex, but since the entry roots include all
- * engineer files, coverage is complete.
+ * The walker ignores dynamic import() calls because they are not static imports
+ * matched by the `from '...'` regex. Every engineer module is also an explicit
+ * seed, so the scanned surface remains complete.
  */
 function buildReachableSet(entryFiles: string[]): Set<string> {
   const visited = new Set<string>();
@@ -228,9 +215,7 @@ describe('engineer import graph: structural non-autonomy (FR-10, ADR-005)', () =
   it('reachable set is non-empty (sanity: seeds resolved correctly)', () => {
     // If the walk returns an empty set, the seeds didn't resolve — test is broken.
     expect(reachable.size).toBeGreaterThan(0);
-    // At minimum, loop.ts must be in the set (it's a direct seed).
-    const loopTs = join(CONDUCTOR_SRC, 'engine/engineer/loop.ts');
-    expect(reachable.has(loopTs)).toBe(true);
+    expect(reachable.has(join(CONDUCTOR_SRC, 'engine/engineer-cli.ts'))).toBe(true);
   });
 
   it('reachable set includes expected engineer surface files (sanity: walk is complete)', () => {
@@ -432,8 +417,8 @@ describe('engineer self-edit: propose-only PR invariant (FR-10 negative path)', 
       // Matches 'checkout', '--' or "checkout -- " as a command token.
       // The `-- ` form (checkout followed by --) is the git flag that switches
       // from branch-name to file-restore mode — it force-writes tracked files.
-      // Does NOT match `checkout -b` (branch creation, which authoring.ts uses
-      // legitimately) because `-b` is not `--` followed by a space.
+      // Does NOT match `checkout -b` branch creation because `-b` is not `--`
+      // followed by a space.
       re: /(?<!^\s*\/\/.*)['"]checkout['"]\s*,\s*['"]--['"](?!\s*['"](?:-b|abbrev-ref|HEAD))/m,
     },
     {
@@ -504,31 +489,6 @@ describe('engineer self-edit: propose-only PR invariant (FR-10 negative path)', 
     expect(
       mergeAsToken.test(handoffSrc),
       "handoff.ts must never contain 'merge' as a string token — self-edit PRs are propose-only",
-    ).toBe(false);
-  });
-
-  it('authoring.ts does not contain git-apply or force-checkout-restore forms', () => {
-    // authoring.ts does use `git checkout -b` (branch creation) and
-    // `git checkout <defaultBranch>` (restoring HEAD after authoring) — both
-    // are legitimate. But it must NOT use `git checkout -- <file>` (force-restore
-    // of working-tree files) or `git apply` (direct patch application).
-    const authoringTs = join(CONDUCTOR_SRC, 'engine/engineer/authoring.ts');
-    const authoringSrc = readFileSync(authoringTs, 'utf-8');
-
-    // MUST NOT contain 'git apply' in any form.
-    const gitApplyPattern = /['"]git['"]\s*,\s*['"]apply['"]|['"]git\s+apply['"]/;
-    expect(
-      gitApplyPattern.test(authoringSrc),
-      "authoring.ts must not contain 'git apply' — patches must go through spec PR",
-    ).toBe(false);
-
-    // The checkout -- <file> form must not appear.
-    // Legitimate uses: ['checkout', '-b', ...], ['checkout', defaultBranch].
-    // Forbidden: ['checkout', '--', '<file>'] which force-restores working-tree files.
-    const checkoutRestorePattern = /['"]checkout['"]\s*,\s*['"]--['"]\s*,\s*['"]/;
-    expect(
-      checkoutRestorePattern.test(authoringSrc),
-      "authoring.ts must not use 'git checkout -- <file>' (force-restore) outside spec branch commit",
     ).toBe(false);
   });
 

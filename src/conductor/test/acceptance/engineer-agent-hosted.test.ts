@@ -25,7 +25,14 @@ const execFile = promisify(execFileCb);
 // ─── Source-file paths (for static grep guards) ───────────────────────────────
 const CONDUCTOR_SRC = join(process.cwd(), 'src', 'engine');
 const ENGINEER_CLI = join(process.cwd(), 'src', 'engine', 'engineer-cli.ts');
-const ENGINEER_LOOP = join(process.cwd(), 'src', 'engine', 'engineer', 'loop.ts');
+const SUPERSEDED_ENGINEER_MODULES = [
+  'authoring.ts',
+  'handoff-step.ts',
+  'lesson-store.ts',
+  'loop.ts',
+  'routing.ts',
+  'track-marker.ts',
+].map((name) => join(process.cwd(), 'src', 'engine', 'engineer', name));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -146,7 +153,13 @@ afterEach(async () => {
 // STATIC ORPHANED-PRIMITIVES GUARDS
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe('static: orphaned-primitive guard — ClaudeProvider + readline must be zero in engineer path', () => {
+describe('static: orphaned-primitive guard — superseded engineer paths stay absent', () => {
+  it('the superseded scripted engineer path has no production modules', async () => {
+    await expect(Promise.all(SUPERSEDED_ENGINEER_MODULES.map(pathExists))).resolves.toEqual(
+      SUPERSEDED_ENGINEER_MODULES.map(() => false),
+    );
+  });
+
   it('engineer-cli.ts contains NO readline import', async () => {
     const src = await readFile(ENGINEER_CLI, 'utf-8');
     expect(src).not.toMatch(/node:readline/);
@@ -156,16 +169,6 @@ describe('static: orphaned-primitive guard — ClaudeProvider + readline must be
   it('engineer-cli.ts contains NO ClaudeProvider import or construction', async () => {
     const src = await readFile(ENGINEER_CLI, 'utf-8');
     expect(src).not.toMatch(/ClaudeProvider/);
-  });
-
-  it('engineer/loop.ts contains NO uuidv4 import', async () => {
-    const src = await readFile(ENGINEER_LOOP, 'utf-8');
-    expect(src).not.toMatch(/uuidv4/);
-  });
-
-  it('engineer/loop.ts contains NO LLMProvider import', async () => {
-    const src = await readFile(ENGINEER_LOOP, 'utf-8');
-    expect(src).not.toMatch(/LLMProvider/);
   });
 
   it('grep: ClaudeProvider has zero occurrences in src/engine/engineer* files', async () => {

@@ -1,10 +1,9 @@
 // engineer/intake/writeback.ts — shared intake write-back helpers.
 //
-// One implementation of the routed/done write-back used by BOTH the test-only
-// runEngineerMode loop AND the deterministic CLI primitives (`engineer land`
-// / `engineer handoff --source-ref`). Keeping it in one place means the live
-// skill-driven path (CLI) and the scripted harness can never drift in how they
-// comment back, apply the `engineer:handled` label, or advance the ledger.
+// One implementation of the routed/done write-back used by deterministic CLI
+// primitives (`engineer land` / `engineer handoff --source-ref`) and background
+// intake processing. Keeping it in one place prevents the live paths from
+// drifting in comments, labels, or ledger transitions.
 //
 // Both helpers are ADVISORY (FR-37): a gh outage or an absent ledger entry must
 // never abort spec authoring or revert a delivered spec PR. They swallow ordinary

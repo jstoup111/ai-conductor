@@ -1,10 +1,8 @@
-// Test: work-track marker + track-aware landSpec (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location, FR-2/13).
+// Test: track parsing + track-aware landSpec (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location, FR-2/13).
 //
 //   - parseTrack: valid / absent / garbled
-//   - writeTrackMarker: writes product/technical, no-op on invalid
 //   - landSpec: product track REQUIRES a PRD/spec; technical track lands WITHOUT
-//     a spec (acceptance criteria live in stories); runAuthoring commits a track
-//     marker (default product).
+//     a spec (acceptance criteria live in stories).
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
@@ -13,9 +11,7 @@ import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { landSpec } from '../../../src/engine/engineer/land-spec.js';
-import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
-import { writeTrackMarker } from '../../../src/engine/engineer/track-marker.js';
 import { parseTrack } from '../../../src/engine/artifacts.js';
 
 const execFile = promisify(execFileCb);
@@ -26,7 +22,6 @@ const ACCEPTED_STORIES = ['# Stories: t', '', '**Status:** Accepted', '', '## S'
 const PLAN = ['# Plan: t', '', '**Stories:** .docs/stories/t.md', '', '## Task Dependency Graph', '```', '1', '```', ''].join('\n');
 
 let repo: string;
-let defaultBranch: string;
 async function git(args: string[], cwd = repo): Promise<string> {
   const { stdout } = await execFile('git', args, { cwd });
   return stdout.trim();
@@ -43,7 +38,6 @@ beforeEach(async () => {
   await writeFile(join(repo, 'README.md'), '# r\n');
   await git(['add', 'README.md']);
   await git(['commit', '-m', 'init']);
-  defaultBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
 });
 afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
 
@@ -80,19 +74,6 @@ describe('parseTrack', () => {
   });
 });
 
-describe('writeTrackMarker', () => {
-  it('writes the marker for a valid track', async () => {
-    const p = await writeTrackMarker(repo, 'slug', 'technical');
-    expect(p).toBeTruthy();
-    const { readFile } = await import('node:fs/promises');
-    expect(await readFile(join(repo, '.docs/track/slug.md'), 'utf8')).toContain('Track: technical');
-  });
-  it('no-ops on an invalid track', async () => {
-    expect(await writeTrackMarker(repo, 'slug', undefined)).toBeNull();
-    expect(await writeTrackMarker(repo, 'slug', 'bogus' as never)).toBeNull();
-  });
-});
-
 describe('landSpec — track-aware required artifacts', () => {
   it('product track (default, no marker) REQUIRES a spec', async () => {
     const worktree = await seedWorktree({ spec: false }); // no spec, no track marker → defaults product
@@ -114,23 +95,5 @@ describe('landSpec — track-aware required artifacts', () => {
     expect(await show(r.branch, `.docs/stories/${STEM}.md`)).toContain('Accepted');
     expect(await show(r.branch, `.docs/track/${STEM}.md`)).toContain('Track: technical');
     expect(await show(r.branch, `.docs/specs/${STEM}.md`)).toBeNull();
-  });
-});
-
-describe('runAuthoring — commits a track marker', () => {
-  function approvedDecide() {
-    return async (step: string) => {
-      if (step === 'brainstorm') return { approved: true, artifact: '# PRD: t\n\nApproved.\n' };
-      if (step === 'stories') return { approved: true, artifact: ACCEPTED_STORIES };
-      if (step === 'plan') return { approved: true, artifact: PLAN };
-      return { approved: true, artifact: '' };
-    };
-  }
-  it('writes .docs/track/<slug>.md defaulting to product', async () => {
-    const r = await runAuthoring({ name: 'a', canonicalPath: repo }, 'idea t', { decide: approvedDecide() });
-    if (r.kind !== 'spec') throw new Error('Expected a spec authoring result');
-    await git(['checkout', defaultBranch]);
-    await git(['merge', '--no-ff', '-m', 'm', r.branch]);
-    expect(parseTrack(await show(defaultBranch, '.docs/track/idea-t.md'))).toBe('product');
   });
 });

@@ -6,7 +6,6 @@
 //
 // Covered:
 //   - writeIntakeMarker / parseIntakeSourceRef unit behavior (valid/absent/garbled)
-//   - runAuthoring (autonomous) commits the marker → discoverBacklog surfaces sourceRef
 //   - landSpec (live path) commits the marker
 //   - NO marker is written for a hand-authored spec (no sourceRef) or a garbled ref,
 //     and the feature is still discoverable (full backward compatibility)
@@ -17,25 +16,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
-import type { RunAuthoringResult, SpecAuthoringResult } from '../../../src/engine/engineer/authoring.js';
 import { landSpec } from '../../../src/engine/engineer/land-spec.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { writeIntakeMarker } from '../../../src/engine/engineer/intake-marker.js';
 import { parseIntakeSourceRef } from '../../../src/engine/artifacts.js';
-import { discoverBacklog } from '../../../src/engine/daemon-backlog.js';
 
 const execFile = promisify(execFileCb);
-
-// Narrow RunAuthoringResult to the spec-branch shape. These tests all drive
-// DECIDE flows that approve into a spec branch (not a documentation-only
-// delivery), so a non-spec result here is a genuine test failure.
-function assertSpecResult(result: RunAuthoringResult): asserts result is SpecAuthoringResult {
-  if (result.kind !== 'spec') {
-    throw new Error(`expected a spec authoring result, got kind=${result.kind}`);
-  }
-}
 
 const ACCEPTED_STORIES = [
   '# Stories: dep bump',
@@ -59,15 +46,6 @@ const PLAN_WITH_DEPS = [
   '```',
   '',
 ].join('\n');
-
-function approvedDecide() {
-  return async (step: string) => {
-    if (step === 'brainstorm') return { approved: true, artifact: '# PRD: dep bump\n\nApproved.\n' };
-    if (step === 'stories') return { approved: true, artifact: ACCEPTED_STORIES };
-    if (step === 'plan') return { approved: true, artifact: PLAN_WITH_DEPS };
-    return { approved: true, artifact: '' };
-  };
-}
 
 let repoPath: string;
 let defaultBranch: string;
@@ -246,72 +224,6 @@ describe('writeIntakeMarker', () => {
   });
 });
 
-describe('runAuthoring intake marker (FR-1, FR-3)', () => {
-  let fakeHome: string;
-  let savedHome: string | undefined;
-
-  beforeEach(async () => {
-    // Isolate $HOME so owner resolution (born-owned at authoring, Task 1) is
-    // deterministic in CI rather than picking up the real dev machine's
-    // ~/.ai-conductor/config.yml spec_owner.
-    fakeHome = await mkdtemp(join(tmpdir(), 'intake-marker-home-'));
-    await mkdir(join(fakeHome, '.ai-conductor'), { recursive: true });
-    await writeFile(join(fakeHome, '.ai-conductor', 'config.yml'), 'spec_owner: fakeowner\n');
-    savedHome = process.env.HOME;
-    process.env.HOME = fakeHome;
-  });
-
-  afterEach(async () => {
-    process.env.HOME = savedHome;
-    await rm(fakeHome, { recursive: true, force: true });
-  });
-
-  it('commits .docs/intake/<slug>.md and discoverBacklog surfaces sourceRef after merge', async () => {
-    const result = await runAuthoring(target(), 'dep bump', {
-      decide: approvedDecide(),
-      sourceRef: 'acme/app#49',
-    });
-    assertSpecResult(result);
-
-    const marker = await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`);
-    expect(marker).toContain('Source-Ref: acme/app#49');
-
-    await git(['checkout', defaultBranch]);
-    await git(['merge', '--no-ff', '-m', 'merge', result.branch]);
-
-    const { items } = await discoverBacklog(repoPath, undefined, undefined, { baseBranch: defaultBranch });
-    const item = items.find((i) => i.slug === slugOf(result.branch));
-    expect(item?.sourceRef).toBe('acme/app#49');
-  });
-
-  it('writes a marker with Owner (born-owned) for a hand-authored spec (no sourceRef) — still discoverable', async () => {
-    const result = await runAuthoring(target(), 'dep bump', { decide: approvedDecide() });
-    assertSpecResult(result);
-
-    const marker = await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`);
-    expect(marker).toContain('Owner: fakeowner');
-    expect(marker ?? '').not.toContain('Source-Ref:');
-
-    await git(['checkout', defaultBranch]);
-    await git(['merge', '--no-ff', '-m', 'merge', result.branch]);
-    const { items } = await discoverBacklog(repoPath, undefined, undefined, { baseBranch: defaultBranch });
-    const item = items.find((i) => i.slug === slugOf(result.branch));
-    expect(item).toBeTruthy();
-    expect(item?.sourceRef).toBeUndefined();
-  });
-
-  it('writes a marker with Owner (born-owned) for a garbled sourceRef', async () => {
-    const result = await runAuthoring(target(), 'dep bump', {
-      decide: approvedDecide(),
-      sourceRef: 'not-a-valid-ref',
-    });
-    assertSpecResult(result);
-    const marker = await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`);
-    expect(marker).toContain('Owner: fakeowner');
-    expect(marker ?? '').not.toContain('Source-Ref:');
-  });
-});
-
 describe('landSpec intake marker (FR-1)', () => {
   it('commits .docs/intake/<slug>.md when given a sourceRef (from the per-idea worktree)', async () => {
     // The live path: create the per-idea worktree, the skills write .docs INTO it,
@@ -386,8 +298,3 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
     );
   });
 });
-
-/** Extract the slug from a `spec/<slug>` branch name. */
-function slugOf(branch: string): string {
-  return branch.replace(/^spec\//, '');
-}

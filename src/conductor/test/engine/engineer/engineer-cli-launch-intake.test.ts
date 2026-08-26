@@ -1,8 +1,6 @@
 // engineer-cli-launch-intake.test.ts — intake wired into the LIVE launch path.
 //
-// Regression coverage for the bug where bare `conduct-ts engineer` dropped straight
-// into `claude /engineer` and never ran intake (poll-on-launch lived only in the
-// test-only runEngineerMode). This pins the three idea sources — github intake,
+// Regression coverage for the live launch pre-poll. This pins the three idea sources — github intake,
 // CLI idea arg, and direct chat — plus the `claim` dequeue seam and the
 // `--source-ref` write-back on land/handoff. gh is injected; no network.
 

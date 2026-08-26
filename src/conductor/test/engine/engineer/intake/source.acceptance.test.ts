@@ -26,12 +26,12 @@ describe('FR-25 IntakeSource capture interface', () => {
     expect(mod.isIntakeSource({ report: async () => {} })).toBe(false);
   });
 
-  it('loop.ts imports no concrete intake adapter (loose coupling)', () => {
+  it('the background intake loop imports no concrete intake adapter (loose coupling)', () => {
     const loopSrc = readFileSync(
-      join(__dirname, '../../../../src/engine/engineer/loop.ts'),
+      join(__dirname, '../../../../src/engine/engineer/intake/intake-loop.ts'),
       'utf8',
     );
-    expect(loopSrc).not.toMatch(/from '\.\/intake\/github-issues/);
-    expect(loopSrc).not.toMatch(/from '\.\/intake\/claude-session/);
+    expect(loopSrc).not.toMatch(/from '\.\/github-issues/);
+    expect(loopSrc).not.toMatch(/from '\.\/claude-session/);
   });
 });

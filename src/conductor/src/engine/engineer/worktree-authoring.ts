@@ -24,7 +24,7 @@ import {
   type EnsureWorktreeResult,
   type WorktreeReconcile,
 } from '../worktree-shared.js';
-import { deriveDefaultBranch, slugify } from './authoring.js';
+import { deriveDefaultBranch, slugify } from './spec-branch.js';
 import { stageIntakeOutcomes } from './outcome-staging.js';
 
 /**
