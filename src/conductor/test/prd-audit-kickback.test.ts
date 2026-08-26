@@ -1761,9 +1761,17 @@ describe('prd_audit kickback', () => {
           appendCap: 4,
         });
 
-        // The switch is the ONLY difference from the cell above: with it on,
-        // the round still reaches a real as-built outcome rather than nothing.
-        expect(fixture.outcome.kind).not.toBe('none');
+        // The switch is the ONLY difference from the cell above: enabling it
+        // admits the as-built findings through the appender and charges their
+        // gate-local budget. These effects distinguish as-built authority
+        // from the PRD-only route that still exists in a mixed round.
+        expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
+        const ledger = await readKickbackLedger(fixture.root);
+        const plan = await readFile(fixture.planPath, 'utf8');
+        expect(plan).toContain('rem-as-built-');
+        expect((ledger.gates?.architecture_review_as_built as { laps?: number } | undefined)?.laps)
+          .toBe(1);
+        expect(ledger.growth?.byGate?.architecture_review_as_built).toBe(2);
       });
     }
   });
