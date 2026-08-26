@@ -3760,6 +3760,13 @@ export class Conductor {
           await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
           return { kind: 'halt', haltClass: 'mechanical', detail };
         }
+        if (parsed.value.rejectedRows.length > 0) {
+          const detail = `PRD audit report rejected rows: ${parsed.value.rejectedRows
+            .map((row) => `${row.key ?? row.rowText} (${row.reason})`)
+            .join('; ')}`;
+          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
+          return { kind: 'halt', haltClass: 'mechanical', detail };
+        }
         const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
         const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
         const criterionOrdinalByStory = new Map<string, number>();

@@ -904,7 +904,11 @@ async function sweptArtifactStillValid(
       // spare a report that does not itself currently read clean.
       const report = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
       const parsed = parsePrdAuditReport(report);
-      if (parsed.ok ? parsed.value.findings.some((finding) => finding.grade !== 'PASS') : findUnalignedFrRows(report).length > 0) return false;
+      if (
+        parsed.ok
+          ? parsed.value.rejectedRows.length > 0 || parsed.value.findings.some((finding) => finding.grade !== 'PASS')
+          : findUnalignedFrRows(report).length > 0
+      ) return false;
       const resolution = artifactResolution ?? (await buildArtifactResolutionContext(dir, { git }));
       if ((await prdAuditCoverageGap(dir, resolution, report)) !== null) return false;
       return (await prdAuditStoryCoverageGap(dir, resolution, undefined, report)) === null;
@@ -3110,7 +3114,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                 const preDecisions = (await readOverScopeDecisions(dir)).decisions;
                 if (
                   (parsed.ok
-                    ? parsed.value.findings.some(
+                    ? parsed.value.rejectedRows.length > 0 || parsed.value.findings.some(
                         (finding) =>
                           finding.grade !== 'PASS' &&
                           !(
@@ -3181,6 +3185,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           break;
         }
         continue;
+      }
+      if (parsed.value.rejectedRows.length > 0) {
+        blockingReason = `prd-audit found rejected rows: ${formatPrdAuditRejectedRows(parsed.value.rejectedRows)} — correct the report and re-audit`;
+        break;
       }
       // An accepted or non-visible OVER_SCOPE finding is recorded, not blocking.
       // Without this the operator could accept scope bloat and still never
@@ -4557,6 +4565,10 @@ function prdAuditMechanicalFault(error: string): PrdAuditReportParseResult {
   return { ok: false, class: 'mechanical-fault', error };
 }
 
+function formatPrdAuditRejectedRows(rows: readonly PrdAuditRejectedRow[]): string {
+  return rows.map((row) => `${row.key ?? row.rowText} (${row.reason})`).join('; ');
+}
+
 /** Return a diagnostic when a resolved PRD requirement lacks an audit verdict row. */
 export async function prdAuditCoverageGap(
   projectRoot: string,
@@ -4777,6 +4789,13 @@ export async function classifyPrdAuditGaps(
       !(await fileIsFreshSinceSession(f, sessionStartedAt))
     ) continue;
     const content = await readFile(f, 'utf-8');
+    const parsed = parsePrdAuditReport(content);
+    if (parsed.ok && parsed.value.rejectedRows.length > 0) {
+      return {
+        kind: 'needs-decide',
+        summary: `rejected rows: ${formatPrdAuditRejectedRows(parsed.value.rejectedRows)}`,
+      };
+    }
     // An OVER_SCOPE criterion the operator already accepted, or one whose
     // intent relation never made it blocking, is not a gap this routing should
     // act on. Reading only the fresh rows made an accepted widening re-route

@@ -3647,6 +3647,18 @@ describe('engine/artifacts', () => {
       expect(result.reason).toContain('S5.7 (PLAN_GAP)');
     });
 
+    it('blocks an otherwise all-PASS report when it contains rejected rows, naming every rejected key and reason', async () => {
+      await writeReport(
+        '| S3.1 | PASS | — | none | within | conductor.ts:8163 |\n' +
+          '| S3.2 | MAYBE | — | none | within | conductor.ts:8164 |\n',
+      );
+
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('rejected rows: S3.2 (PRD audit finding S3.2 has an invalid Grade.)');
+    });
+
     it('accepting one finding does not clear an unaccepted sibling', async () => {
       await writeReport(
         '| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n' +
@@ -5059,6 +5071,29 @@ Task 1 → Task 2
           attemptRunId: 'current-run',
           config: { gate_code_validity: { enabled: false } },
         })).resolves.toMatchObject({ done: true });
+      });
+
+      it('does not preserve a stale all-PASS report when the current report has rejected rows', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        const report = [
+          '**PRD:** none',
+          '',
+          '## Verdict Table',
+          '| Criterion | Grade | Plan task | Evidence |',
+          '| --- | --- | --- | --- |',
+          '| S1.1 | PASS | — | Valid row |',
+          '| S1.2 | MAYBE | — | Rejected row |',
+        ].join('\n');
+        await writeFile(join(gdir, PATH), report);
+        await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
+        await writeSidecar(gdir, baseline);
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
       });
 
       it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {

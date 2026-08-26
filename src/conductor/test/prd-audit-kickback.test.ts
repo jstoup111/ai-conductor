@@ -1399,11 +1399,11 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome).toMatchObject({
       kind: 'halt',
       haltClass: 'mechanical',
-      detail: 'PRD audit report mechanical fault: PRD audit finding S2.1 has an invalid Grade.',
+      detail: 'PRD audit report rejected rows: S2.1 (PRD audit finding S2.1 has an invalid Grade.)',
     });
     expect(fixture.gateBlocks).toEqual([{
       step: 'prd_audit',
-      reason: 'PRD audit report mechanical fault: PRD audit finding S2.1 has an invalid Grade.',
+      reason: 'PRD audit report rejected rows: S2.1 (PRD audit finding S2.1 has an invalid Grade.)',
     }]);
     expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
   });
