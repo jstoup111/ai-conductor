@@ -259,4 +259,42 @@ describe('shipped-record recorded review findings', () => {
     expect(findings).toEqual([]);
     expect(appendRecordedShipmentFindings(record, findings)).toBe(record);
   });
+
+  /**
+   * AB-R9 / adr-2026-08-22-as-built-review-runs-always-with-plan-gap D2: a lap
+   * can both remediate REMEDIABLE findings and deliver a PLAN_GAP. The two
+   * record kinds are ADDITIVE — the projected remediation findings must not
+   * preempt the delivered PLAN_GAP reader, or the shipped record silently
+   * loses the PLAN_GAP whenever remediation also ran.
+   */
+  it('records a delivered PLAN_GAP alongside remediated as-built findings', () => {
+    const findings = recordedShipmentFindings({
+      asBuilt: [
+        'Verdict: PLAN_GAP',
+        'Outcome delivered: yes',
+        '',
+        '## Recorded Findings',
+        '```json',
+        JSON.stringify({ findings: [{
+          gate: 'architecture_review_as_built',
+          finding: 'AB-1',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 1',
+          summary: 'The approved guard was restored.',
+          outcome: 'remediated',
+        }] }),
+        '```',
+        '',
+        '## Recorded Findings',
+        '- Outcome: The status channel stays eventually consistent.',
+        '- Summary: The approved architecture has no synchronous channel.',
+      ].join('\n'),
+    });
+
+    expect(findings).toContainEqual(expect.objectContaining({
+      gate: 'architecture_review_as_built',
+      finding: 'AB-1',
+    }));
+    expect(findings.length).toBeGreaterThan(1);
+  });
 });

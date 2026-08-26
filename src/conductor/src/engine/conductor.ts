@@ -10078,6 +10078,12 @@ export class Conductor {
                   const reason =
                     `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
                     renderAsBuiltBlockedFindingDetail(asBuiltReport);
+                  // AB-R5 class / adr-2026-08-12 D1: this serial exit returns
+                  // between step_started and step_completed, so the open
+                  // execution needs its one terminal before the loop ends. The
+                  // group twin above returns after parallel_completed and does
+                  // not.
+                  await this.closeOpenExecutions();
                   await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
@@ -10129,6 +10135,7 @@ export class Conductor {
                 }
                 if (remediation.kind === 'halt') {
                   const reason = `as-built architecture review halted: needs human DECIDE — ${remediation.detail}`;
+                  await this.closeOpenExecutions();
                   await this.writeHaltMarker(reason + '\n', remediation.haltClass ?? 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);

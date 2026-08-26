@@ -167,8 +167,16 @@ function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentF
 }
 
 function recordedAsBuiltFindings(report: string | undefined): RecordedShipmentFinding[] {
+  // AB-R9 / adr-2026-08-22-as-built-review-runs-always-with-plan-gap D2: the two
+  // record kinds are ADDITIVE, not alternatives. A lap can both remediate
+  // REMEDIABLE findings and deliver a PLAN_GAP, and the shipped record owes the
+  // reader both. Returning early on the projected findings dropped the
+  // delivered PLAN_GAP whenever remediation had also run.
   const projected = recordedAsBuiltRemediationFindings(report);
-  if (projected.length > 0) return projected;
+  return [...projected, ...deliveredPlanGapFinding(report)];
+}
+
+function deliveredPlanGapFinding(report: string | undefined): RecordedShipmentFinding[] {
   if (!report || !/^\s*Verdict\s*:\s*PLAN_GAP\s*$/im.test(report) || !/^\s*Outcome delivered\s*:\s*yes\s*$/im.test(report)) return [];
   // Keep the shipped reader compatible with the writer's annotated heading,
   // while rejecting arbitrary prose sections that only share a prefix.
