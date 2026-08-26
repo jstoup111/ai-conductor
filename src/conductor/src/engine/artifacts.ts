@@ -4204,9 +4204,16 @@ export interface PrdAuditFinding {
   evidence: string;
 }
 
+export interface PrdAuditRejectedRow {
+  rowText: string;
+  key?: string;
+  reason: string;
+}
+
 export interface PrdAuditReport {
   prd: 'present' | 'none';
   findings: PrdAuditFinding[];
+  rejectedRows: PrdAuditRejectedRow[];
 }
 
 export type PrdAuditReportParseResult =
@@ -4363,12 +4370,30 @@ function asBuiltBlockedFindingsMechanicalFault(error: string): AsBuiltBlockedFin
   return { ok: false, class: 'mechanical-fault', error };
 }
 
+function rejectedPrdAuditRow(
+  rejectedRows: PrdAuditRejectedRow[],
+  line: string,
+  key: string | undefined,
+  reason: string,
+): void {
+  rejectedRows.push({
+    rowText: line.trim(),
+    ...(key === undefined ? {} : { key }),
+    reason,
+  });
+}
+
+const CRITERION_KEY_REASON =
+  'Criterion has invalid key; accepted key forms are S<number>.<number> in the Verdict Table and NC.<number> in Findings without an owning criterion.';
+const NO_OWNER_KEY_REASON =
+  'Finding has invalid key; accepted key forms are NC.<number> in Findings without an owning criterion.';
+
 /**
  * Parse the criterion-grade verdict table emitted by `prd_audit`.
  *
  * The existing per-FR table is evidence only; the criterion table is the
- * authoritative routing contract. Invalid grade vocabulary fails closed here
- * instead of being interpreted by a later route as an implicit new grade.
+ * authoritative routing contract. Report-level structure faults fail closed;
+ * invalid rows are retained as diagnostics so valid sibling rows still route.
  */
 export function parsePrdAuditReport(
   content: string,
@@ -4401,6 +4426,7 @@ export function parsePrdAuditReport(
     ? undefined
     : new Set(parsePlanTaskPaths(activePlan).keys());
   const findings: PrdAuditFinding[] = [];
+  const rejectedRows: PrdAuditRejectedRow[] = [];
 
   let readingCriterionTable = false;
   for (const line of lines.slice(headerIndex + 1)) {
@@ -4415,14 +4441,20 @@ export function parsePrdAuditReport(
     readingCriterionTable = true;
     const cells = tableCells(line);
     if (isTableSeparator(cells)) continue;
-    const criterion = cells[criterionIndex]?.toUpperCase();
+    const key = cells[criterionIndex]?.trim();
+    const criterion = key?.toUpperCase();
     if (!criterion || !CRITERION_ID_RE.test(criterion)) {
-      return prdAuditMechanicalFault('PRD audit finding has an empty or malformed Criterion.');
+      const reason = criterion && isNoOwnerKey(criterion)
+        ? 'NC.<number> keys are valid only in Findings without an owning criterion, not the Verdict Table.'
+        : CRITERION_KEY_REASON;
+      rejectedPrdAuditRow(rejectedRows, line, key || undefined, reason);
+      continue;
     }
 
     const rawGrade = cells[gradeIndex]?.toUpperCase();
     if (!rawGrade || !PRD_AUDIT_GRADES.has(rawGrade as PrdAuditGrade)) {
-      return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Grade.`);
+      rejectedPrdAuditRow(rejectedRows, line, criterion, `PRD audit finding ${criterion} has an invalid Grade.`);
+      continue;
     }
 
     const rawPlanTask = planTaskIndex === -1 ? '' : cells[planTaskIndex] ?? '';
@@ -4430,21 +4462,24 @@ export function parsePrdAuditReport(
       ? undefined
       : Number(rawPlanTask);
     if (planTask !== undefined && (!Number.isInteger(planTask) || planTask < 1)) {
-      return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Plan task.`);
+      rejectedPrdAuditRow(rejectedRows, line, criterion, `PRD audit finding ${criterion} has an invalid Plan task.`);
+      continue;
     }
     if (rawGrade === 'FIXABLE' && planTask === undefined) {
-      return prdAuditMechanicalFault(
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
         `PRD audit finding ${criterion} is FIXABLE but has no Plan task.`,
       );
+      continue;
     }
     if (
       rawGrade === 'FIXABLE' &&
       activePlanTaskIds !== undefined &&
       !activePlanTaskIds.has(String(planTask))
     ) {
-      return prdAuditMechanicalFault(
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
         `PRD audit finding ${criterion} names Plan task ${planTask}, which is absent from the active plan.`,
       );
+      continue;
     }
 
     findings.push({
@@ -4477,14 +4512,26 @@ export function parsePrdAuditReport(
       readingNoOwnerTable = true;
       const cells = tableCells(line);
       if (isTableSeparator(cells)) continue;
-      const criterion = cells[findingIndex]?.toUpperCase();
+      const key = cells[findingIndex]?.trim();
+      const criterion = key?.toUpperCase();
       if (!criterion || !isNoOwnerKey(criterion)) {
-        return prdAuditMechanicalFault('PRD audit finding has an empty or malformed Finding.');
+        rejectedPrdAuditRow(rejectedRows, line, key || undefined, NO_OWNER_KEY_REASON);
+        continue;
       }
 
       const rawGrade = cells[noOwnerGradeIndex]?.toUpperCase();
       if (!rawGrade || !PRD_AUDIT_GRADES.has(rawGrade as PrdAuditGrade)) {
-        return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Grade.`);
+        rejectedPrdAuditRow(rejectedRows, line, criterion, `PRD audit finding ${criterion} has an invalid Grade.`);
+        continue;
+      }
+      if (rawGrade !== 'OVER_SCOPE') {
+        rejectedPrdAuditRow(
+          rejectedRows,
+          line,
+          criterion,
+          `PRD audit finding ${criterion} in Findings without an owning criterion admits only OVER_SCOPE.`,
+        );
+        continue;
       }
 
       findings.push({
@@ -4498,7 +4545,11 @@ export function parsePrdAuditReport(
 
   return {
     ok: true,
-    value: { prd: prdMarker[1].toLowerCase() as PrdAuditReport['prd'], findings },
+    value: {
+      prd: prdMarker[1].toLowerCase() as PrdAuditReport['prd'],
+      findings,
+      rejectedRows,
+    },
   };
 }
 

@@ -146,6 +146,99 @@ describe('engine/artifacts', () => {
   }
 
   describe('parsePrdAuditReport', () => {
+    it('salvages valid criterion rows while diagnosing invented criterion keys', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | FR-1 | First valid row |
+| OS.1 | PASS | — | FR-1 | Invented key |
+| S1.2 | PLAN_GAP | — | FR-2 | Second valid row |
+| OS.2 | OVER_SCOPE | — | FR-3 | Another invented key |
+| S1.3 | FIXABLE | 3 | FR-3 | Third valid row |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'S1.2', grade: 'PLAN_GAP' },
+            { criterion: 'S1.3', grade: 'FIXABLE', planTask: 3 },
+          ],
+          rejectedRows: [
+            { key: 'OS.1', reason: expect.stringContaining('accepted key forms') },
+            { key: 'OS.2', reason: expect.stringContaining('accepted key forms') },
+          ],
+        },
+      });
+      if (parsed.ok) {
+        expect(parsed.value.findings).toHaveLength(3);
+        expect(parsed.value.rejectedRows).toHaveLength(2);
+        expect(parsed.value.rejectedRows.map(({ rowText }) => rowText)).toEqual([
+          '| OS.1 | PASS | — | FR-1 | Invented key |',
+          '| OS.2 | OVER_SCOPE | — | FR-3 | Another invented key |',
+        ]);
+      }
+    });
+
+    it('rejects only invalid rows while retaining their valid siblings', () => {
+      const activePlan = '### Task 3: existing task\n';
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | FR-1 | Valid sibling |
+| S1.2 | UNKNOWN | — | FR-1 | Invalid grade |
+| S1.3 | FIXABLE | no | FR-1 | Invalid task |
+| S1.4 | FIXABLE | — | FR-1 | Missing task |
+| S1.5 | FIXABLE | 99 | FR-1 | Absent task |
+| NC.1 | OVER_SCOPE | — | none | Wrong section |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Evidence |
+| --- | --- | --- |
+| NC.1 | PASS | Wrong grade |
+| NC.2 | OVER_SCOPE | Valid no-owner sibling |
+`, activePlan);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'NC.2', grade: 'OVER_SCOPE' },
+          ],
+          rejectedRows: [
+            { key: 'S1.2', reason: expect.stringContaining('invalid Grade') },
+            { key: 'S1.3', reason: expect.stringContaining('invalid Plan task') },
+            { key: 'S1.4', reason: expect.stringContaining('no Plan task') },
+            { key: 'S1.5', reason: expect.stringContaining('absent from the active plan') },
+            { key: 'NC.1', reason: expect.stringContaining('Verdict Table') },
+            { key: 'NC.1', reason: expect.stringContaining('only OVER_SCOPE') },
+          ],
+        },
+      });
+    });
+
+    it('keeps missing report-level structure as a mechanical fault', () => {
+      expect(parsePrdAuditReport('## Verdict Table')).toMatchObject({
+        ok: false,
+        class: 'mechanical-fault',
+      });
+      expect(parsePrdAuditReport('**PRD:** present')).toMatchObject({
+        ok: false,
+        class: 'mechanical-fault',
+      });
+    });
+
     it('parses no-owner OVER_SCOPE findings alongside Verdict Table findings', () => {
       const parsed = parsePrdAuditReport(`
 **PRD:** present
@@ -168,6 +261,7 @@ describe('engine/artifacts', () => {
         ok: true,
         value: {
           prd: 'present',
+          rejectedRows: [],
           findings: [
             {
               criterion: 'S1.1',
@@ -205,6 +299,7 @@ describe('engine/artifacts', () => {
         ok: true,
         value: {
           prd: 'none',
+          rejectedRows: [],
           findings: [
             {
               criterion: 'S2.1',
