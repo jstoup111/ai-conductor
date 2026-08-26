@@ -28,3 +28,20 @@ removal-anchored tautology exemption ADR,
 `adr-2026-08-12-removal-anchored-tautology-exemption.md`, governs review treatment for test
 maintenance directly anchored to removal evidence; it does not make an absence assertion useful
 evidence. Use the deletion diff and a green full surviving suite as the evidence instead.
+
+## Survivor Method
+
+First identify the survivors: enumerate the behavior that must keep working after the removal.
+Write this survivor inventory when the survivors are non-obvious, including a shared seam or
+behavior partially carried by the code being removed. Skip the inventory only when every survivor
+is obvious and fully covered by existing tests.
+
+Follow this order:
+
+1. Write the required survivor inventory.
+2. Check each survivor for existing coverage.
+3. For every uncovered survivor, add and commit a characterization test before any deletion.
+4. Delete the obsolete code.
+5. Run the full suite and leave it green.
+
+Hard stop: do not proceed with deletion until each uncovered survivor has a characterization test.
