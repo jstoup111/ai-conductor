@@ -3660,6 +3660,8 @@ export class Conductor {
     const prdAuditTasks: Array<{ id: string; title: string }> = [];
     const asBuiltCapEnforced = asBuiltRemediation && asBuiltValidated;
     const asBuiltTasks: Array<{ id: string; title: string }> = [];
+    const admittedAsBuiltFindingCounts = new Map<string, number>();
+    const unexpectedAsBuiltGapIds = new Set<string>();
     for (const gap of gaps) {
       if (
         sealedArtifactGapIds.has(gap.id) ||
@@ -3683,7 +3685,16 @@ export class Conductor {
         // validation group either validated gate may admit its own gap.
         const prdAuditAdmits = prdAuditValidated && prdAuditFinding !== undefined;
         const asBuiltAdmits = asBuiltValidated && asBuiltFinding !== undefined;
-        if ((prdAuditValidated || asBuiltValidated) && !prdAuditAdmits && !asBuiltAdmits) continue;
+        if ((prdAuditValidated || asBuiltValidated) && !prdAuditAdmits && !asBuiltAdmits) {
+          if (asBuiltCapEnforced) unexpectedAsBuiltGapIds.add(gap.id);
+          continue;
+        }
+        if (asBuiltAdmits) {
+          admittedAsBuiltFindingCounts.set(
+            gap.id,
+            (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1,
+          );
+        }
         const admittedGap = {
           ...gap,
           ...(asBuiltFinding === undefined
@@ -3705,6 +3716,25 @@ export class Conductor {
         allTasks.push(...gap.tasks);
         if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
         else if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
+      }
+    }
+
+    if (asBuiltCapEnforced) {
+      const missing = [...asBuiltFindings.keys()]
+        .filter((id) => !admittedAsBuiltFindingCounts.has(id));
+      const duplicate = [...admittedAsBuiltFindingCounts]
+        .filter(([, count]) => count !== 1)
+        .map(([id]) => id);
+      if (missing.length > 0 || duplicate.length > 0 || unexpectedAsBuiltGapIds.size > 0) {
+        const detail = [
+          'As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings.',
+          ...(missing.length > 0 ? [`Missing: ${missing.join(', ')}.`] : []),
+          ...(duplicate.length > 0 ? [`Duplicate: ${duplicate.join(', ')}.`] : []),
+          ...(unexpectedAsBuiltGapIds.size > 0
+            ? [`Unexpected: ${[...unexpectedAsBuiltGapIds].join(', ')}.`]
+            : []),
+        ].join(' ');
+        return { kind: 'halt', haltClass: 'needs-human', detail };
       }
     }
 
@@ -6571,6 +6601,7 @@ export class Conductor {
                 const reason =
                   `Validation group "${step.name}" halted: remediated as-built findings could not be ` +
                   `projected into the verdict artifact — ${projectionRefusal}`;
+                await this.closeOpenExecutions();
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
@@ -6617,6 +6648,13 @@ export class Conductor {
               this.verifyArtifacts &&
               gateVerdicts.get('architecture_review_as_built')?.satisfied !== true;
             if (asBuiltUnsatisfied) {
+              const asBuiltGroupRefusedSteps = (): StepName[] =>
+                membership.dispatchable
+                  .filter((member, idx) =>
+                    outcomes[idx]?.kind !== 'verdict' ||
+                    outcomes[idx]?.verdict !== 'pass' ||
+                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
+                  .map((member) => member.name as StepName);
               const prdAuditUnsatisfied = membership.dispatchable.some((member, idx) =>
                 member.name === 'prd_audit' &&
                 outcomes[idx]?.kind === 'verdict' &&
@@ -6651,14 +6689,15 @@ export class Conductor {
                 if (escalation.halt) {
                   const reason =
                     `as-built architecture review kickback-to-build no-op: ${escalation.reason}`;
-                  await emitTracked({
-                    type: 'parallel_failure',
-                    step: step.name,
-                    branch: 'architecture_review_as_built',
-                    error: reason,
-                  });
                   await this.writeHaltMarker(reason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await this.recordGroupRefusal({
+                    state,
+                    groupStep: step.name,
+                    judgingStep: 'architecture_review_as_built',
+                    refusedSteps: asBuiltGroupRefusedSteps(),
+                    reason,
+                  });
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
@@ -6732,13 +6771,14 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await emitTracked({
-                    type: 'parallel_failure',
-                    step: step.name,
-                    branch: 'architecture_review_as_built',
-                    error: reason,
-                  });
                   await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  await this.recordGroupRefusal({
+                    state,
+                    groupStep: step.name,
+                    judgingStep: 'architecture_review_as_built',
+                    refusedSteps: asBuiltGroupRefusedSteps(),
+                    reason,
+                  });
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
@@ -6776,7 +6816,7 @@ export class Conductor {
                 'as-built architecture review gate unsatisfied';
               const reason =
                 `Validation group "${step.name}" halted: ${asBuiltReason}` +
-                (asBuiltOutcome.kind === 'blocked-design'
+                (asBuiltOutcome.kind === 'blocked-design' || asBuiltOutcome.kind === 'invalid'
                   ? renderAsBuiltBlockedFindingDetail(asBuiltReport)
                   : '');
               await this.writeHaltMarker(
@@ -9296,6 +9336,7 @@ export class Conductor {
             const reason =
               `as-built architecture review halted: remediated findings could not be projected ` +
               `into the verdict artifact — ${projectionRefusal}`;
+            await this.closeOpenExecutions();
             await this.writeHaltMarker(reason + '\n', 'needs-human');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
             const prUrl = await this.surfaceRemediationPr(reason);

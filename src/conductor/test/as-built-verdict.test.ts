@@ -122,6 +122,23 @@ describe('as-built verdict gate', () => {
     });
   });
 
+  it.each(['remediable', 'Design'])('rejects the non-exact Class value %s', (classValue) => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      `| ARCH-EXACT | ${classValue} | Task 2 | Use the exact closed vocabulary |`,
+    ].join('\n');
+
+    expect(parseAsBuiltBlockedFindings(report)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: `As-built finding ARCH-EXACT has an invalid Class value "${classValue}".`,
+    });
+  });
+
   it('returns a typed fault naming a REMEDIABLE finding without a governing clause', () => {
     const report = [
       'Verdict: BLOCKED',
@@ -175,6 +192,28 @@ describe('as-built verdict gate', () => {
       ok: false,
       class: 'mechanical-fault',
       error: 'As-built BLOCKED report has duplicate Blocking Findings sections.',
+    });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+  });
+
+  it('rejects a second Blocking Findings table within the authoritative section', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-1 | REMEDIABLE | Task 2 | Add the missing guard |',
+      '',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-2 | REMEDIABLE | Task 3 | Add a second hidden route |',
+    ].join('\n');
+
+    expect(parseAsBuiltBlockedFindings(report)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'As-built BLOCKED report has duplicate Blocking Findings tables.',
     });
     expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
   });
@@ -347,6 +386,7 @@ describe('as-built SHIP routing', () => {
     report: string;
     remediationEnabled?: boolean;
     priorLap?: boolean;
+    projectionRefusal?: boolean;
   }): Promise<ConductorEvent[]> {
     const dir = await fixture();
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -392,7 +432,7 @@ describe('as-built SHIP routing', () => {
         return { success: true };
       }),
     };
-    await new Conductor({
+    const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -408,7 +448,16 @@ describe('as-built SHIP routing', () => {
           max_remediation_laps: 2,
         },
       } as never,
-    }).run();
+    });
+    if (input.projectionRefusal) {
+      vi.spyOn(
+        conductor as unknown as {
+          projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+        },
+        'projectPendingAsBuiltRemediationFindings',
+      ).mockResolvedValue('forced projection refusal');
+    }
+    await conductor.run();
     return observed;
   }
 
@@ -467,6 +516,8 @@ describe('as-built SHIP routing', () => {
   async function runGroupedAsBuiltExit(input: {
     report: string;
     priorLap?: boolean;
+    maxRemediationLaps?: number;
+    projectionRefusal?: boolean;
   }): Promise<ConductorEvent[]> {
     const dir = await fixture();
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -511,14 +562,14 @@ describe('as-built SHIP routing', () => {
             lastReason: '',
             priorVerdict: true,
             resolvedBefore: 0,
-            laps: 1,
+            laps: input.priorLap ? 1 : 0,
           },
         },
       } as never);
     }
     const events = new ConductorEventEmitter();
     const observed: ConductorEvent[] = [];
-    for (const type of ['parallel_started', 'parallel_completed', 'parallel_failure', 'kickback', 'loop_halt'] as const) {
+    for (const type of ['parallel_started', 'parallel_completed', 'parallel_failure', 'step_refused', 'kickback', 'loop_halt'] as const) {
       events.on(type, (event) => { observed.push(event); });
     }
     const runner: StepRunner = {
@@ -550,7 +601,7 @@ describe('as-built SHIP routing', () => {
         return { success: true };
       }),
     };
-    await new Conductor({
+    const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -560,8 +611,22 @@ describe('as-built SHIP routing', () => {
       verifyArtifacts: true,
       fromStep: 'manual_test',
       maxRetries: 1,
-      config: { architecture_review_as_built: { remediation: { enabled: true }, max_remediation_laps: 2 } } as never,
-    }).run();
+      config: {
+        architecture_review_as_built: {
+          remediation: { enabled: true },
+          max_remediation_laps: input.maxRemediationLaps ?? 2,
+        },
+      } as never,
+    });
+    if (input.projectionRefusal) {
+      vi.spyOn(
+        conductor as unknown as {
+          projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+        },
+        'projectPendingAsBuiltRemediationFindings',
+      ).mockResolvedValue('forced projection refusal');
+    }
+    await conductor.run();
     return observed;
   }
 
@@ -591,7 +656,11 @@ describe('as-built SHIP routing', () => {
     const remediable = await runGroupedAsBuiltExit({ report: REMEDIABLE_REPORT });
     expectOneGroupTerminalBefore(remediable, 'kickback');
 
-    const cap = await runGroupedAsBuiltExit({ report: REMEDIABLE_REPORT, priorLap: true });
+    const cap = await runGroupedAsBuiltExit({
+      report: REMEDIABLE_REPORT,
+      priorLap: true,
+      maxRemediationLaps: 1,
+    });
     expectOneGroupTerminalBefore(cap, 'loop_halt');
 
     const design = await runGroupedAsBuiltExit({
@@ -601,6 +670,30 @@ describe('as-built SHIP routing', () => {
 
     const invalid = await runGroupedAsBuiltExit({ report: 'Verdict: BLOCKED\n' });
     expectOneGroupTerminalBefore(invalid, 'loop_halt');
+  });
+
+  it('names the parser fault when the validation-group as-built report is invalid', async () => {
+    const observed = await runGroupedAsBuiltExit({ report: 'Verdict: BLOCKED\n' });
+
+    expect(observed.find((event) => event.type === 'loop_halt')).toMatchObject({
+      reason: expect.stringContaining(
+        'Blocking Findings parse fault: As-built BLOCKED report is missing its Blocking Findings table.',
+      ),
+    });
+  });
+
+  it('closes serial and validation-group executions before projection-refusal halts', async () => {
+    const serial = await runSerialAsBuiltExit({
+      report: 'Verdict: APPROVED\n',
+      projectionRefusal: true,
+    });
+    expectOneAsBuiltTerminalBefore(serial, 'loop_halt');
+
+    const grouped = await runGroupedAsBuiltExit({
+      report: 'Verdict: APPROVED\n',
+      projectionRefusal: true,
+    });
+    expectOneGroupTerminalBefore(grouped, 'loop_halt');
   });
 
   it('records only the capped prd_audit addition from a validation group with prd and as-built evidence, then halts on as-built BLOCKED', async () => {

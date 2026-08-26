@@ -208,6 +208,7 @@ async function createAsBuiltRemediationCapFixture(input: {
   priorLaps?: number;
   priorGrowthAdded?: number;
   appendCap?: number;
+  plannerFindingIds?: string[];
 }) {
   const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-cap-'));
   dirs.push(root);
@@ -263,12 +264,12 @@ async function createAsBuiltRemediationCapFixture(input: {
   const runner: StepRunner = {
     run: async () => {
       await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-        dispositions: findings.map((finding) => ({
-          id: finding.id,
+        dispositions: (input.plannerFindingIds ?? findings.map((finding) => finding.id)).map((id) => ({
+          id,
           disposition: 'build',
           category: null,
-          rationale: finding.summary,
-          tasks: [{ id: `fix-${finding.id.toLowerCase()}`, title: finding.summary }],
+          rationale: `Repair ${id}.`,
+          tasks: [{ id: `fix-${id.toLowerCase()}`, title: `Repair ${id}.` }],
         })),
       }));
       return { success: true };
@@ -1240,6 +1241,18 @@ describe('prd_audit kickback', () => {
       );
     }
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
+  it('halts before appending when planner gaps omit or add parsed as-built findings', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({
+      plannerFindingIds: ['AB-1', 'AB-EXTRA'],
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+    expect(fixture.outcome.detail).toContain('Missing: AB-2');
+    expect(fixture.outcome.detail).toContain('Unexpected: AB-EXTRA');
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+    await expect(readKickbackLedger(fixture.root)).resolves.toMatchObject({ gates: {} });
   });
 
   it.each([

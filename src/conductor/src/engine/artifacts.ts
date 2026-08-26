@@ -4093,11 +4093,20 @@ export function parseAsBuiltBlockedFindings(content: string): AsBuiltBlockedFind
   const findings: AsBuiltBlockedFinding[] = [];
   const findingIds = new Set<string>();
   let readingTable = false;
+  let tableEnded = false;
 
   for (const line of section.slice(headerIndex + 1)) {
     if (!/^\s*\|/.test(line)) {
-      if (readingTable && line.trim() === '') break;
+      if (readingTable && line.trim() === '') {
+        readingTable = false;
+        tableEnded = true;
+      }
       continue;
+    }
+    if (tableEnded) {
+      return asBuiltBlockedFindingsMechanicalFault(
+        'As-built BLOCKED report has duplicate Blocking Findings tables.',
+      );
     }
     readingTable = true;
     const cells = tableCells(line);
@@ -4112,7 +4121,7 @@ export function parseAsBuiltBlockedFindings(content: string): AsBuiltBlockedFind
     }
     findingIds.add(id);
     const classValue = cells[classIndex]?.trim() ?? '';
-    const rawClass = classValue.toUpperCase();
+    const rawClass = classValue;
     if (!AS_BUILT_BLOCKED_FINDING_CLASSES.has(rawClass as AsBuiltBlockedFindingClass)) {
       return asBuiltBlockedFindingsMechanicalFault(`As-built finding ${id} has an invalid Class value "${classValue}".`);
     }
