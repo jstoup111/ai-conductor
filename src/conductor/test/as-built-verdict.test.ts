@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { checkStepCompletion, parseAsBuiltBlockedFindings } from '../src/engine/artifacts.js';
+import {
+  checkStepCompletion,
+  classifyAsBuiltReviewOutcome,
+  parseAsBuiltBlockedFindings,
+} from '../src/engine/artifacts.js';
 import { Conductor, type StepRunner } from '../src/engine/conductor.js';
 import { readKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
@@ -151,6 +155,75 @@ describe('as-built verdict gate', () => {
     });
   });
 
+  it('classifies an all-REMEDIABLE BLOCKED findings table as blocked-remediable', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-1 | REMEDIABLE | Task 2 | Add the missing guard |',
+      '| ARCH-2 | REMEDIABLE | Task 2 | Return a typed fault |',
+    ].join('\n');
+
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'blocked-remediable' });
+  });
+
+  it('classifies a BLOCKED findings table with a DESIGN row as blocked-design', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-1 | REMEDIABLE | Task 2 | Add the missing guard |',
+      '| ARCH-2 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
+    ].join('\n');
+
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'blocked-design' });
+  });
+
+  it('classifies every malformed BLOCKED findings table as invalid', () => {
+    const reports = [
+      'Verdict: BLOCKED',
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-7 | UNKNOWN | Task 2 | Unrecognized classification |',
+      ].join('\n'),
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-8 | REMEDIABLE | | Missing governing clause |',
+      ].join('\n'),
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Summary |',
+        '| --- | --- | --- |',
+        '| ARCH-9 | REMEDIABLE | Missing the clause column |',
+      ].join('\n'),
+    ];
+
+    for (const report of reports) {
+      expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+    }
+  });
+
+  it('keeps non-BLOCKED outcomes unchanged without a findings table', () => {
+    expect(classifyAsBuiltReviewOutcome('Verdict: APPROVED')).toEqual({ kind: 'approved' });
+    expect(classifyAsBuiltReviewOutcome('Verdict: APPROVED WITH DRIFT NOTES')).toEqual({ kind: 'approved' });
+    expect(classifyAsBuiltReviewOutcome('Verdict: PLAN_GAP\nOutcome delivered: yes')).toEqual({ kind: 'plan-gap-delivered' });
+    expect(classifyAsBuiltReviewOutcome('Verdict: PLAN_GAP\nOutcome delivered: no')).toEqual({ kind: 'plan-gap-undelivered' });
+  });
+
   it('accepts a delivered PLAN_GAP as a recorded non-blocking verdict', async () => {
     const dir = await fixture();
     await writeAsBuilt(dir, 'Verdict: PLAN_GAP\nOutcome delivered: yes\n\n## Recorded Findings\n- Plan is the limit.\n');
@@ -160,15 +233,25 @@ describe('as-built verdict gate', () => {
     ).resolves.toMatchObject({ done: true });
   });
 
-  it('keeps undelivered PLAN_GAP, BLOCKED, and missing verdict reports unsatisfied', async () => {
+  it('keeps undelivered PLAN_GAP, blocked-design, and missing verdict reports unsatisfied', async () => {
     const dir = await fixture();
     const ctx = { sessionStartedAt: Date.now() - 1_000 };
 
     await writeAsBuilt(dir, 'Verdict: PLAN_GAP\nOutcome delivered: no\n');
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({ done: false });
 
-    await writeAsBuilt(dir, 'Verdict: BLOCKED\n');
-    await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({ done: false });
+    await writeAsBuilt(dir, [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-1 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
+    ].join('\n'));
+    await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
+      done: false,
+      reason: 'as-built review verdict is BLOCKED — shipped code violates an approved architecture decision',
+    });
 
     await writeAsBuilt(dir, '# As-built review\n');
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({ done: false });

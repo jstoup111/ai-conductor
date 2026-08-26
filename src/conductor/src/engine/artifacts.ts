@@ -1473,7 +1473,8 @@ export type AsBuiltReviewOutcome =
   | { kind: 'approved' }
   | { kind: 'plan-gap-delivered' }
   | { kind: 'plan-gap-undelivered' }
-  | { kind: 'blocked' }
+  | { kind: 'blocked-remediable' }
+  | { kind: 'blocked-design' }
   | { kind: 'invalid' };
 
 /**
@@ -1486,7 +1487,13 @@ export function classifyAsBuiltReviewOutcome(content: string): AsBuiltReviewOutc
   const verdict = parseAsBuiltVerdict(content);
   if (verdict === null) return { kind: 'invalid' };
   if (verdict === 'APPROVED' || verdict === 'APPROVED WITH DRIFT NOTES') return { kind: 'approved' };
-  if (verdict === 'BLOCKED') return { kind: 'blocked' };
+  if (verdict === 'BLOCKED') {
+    const findings = parseAsBuiltBlockedFindings(content);
+    if (!findings.ok) return { kind: 'invalid' };
+    return findings.value.findings.some((finding) => finding.class === 'DESIGN')
+      ? { kind: 'blocked-design' }
+      : { kind: 'blocked-remediable' };
+  }
   if (verdict !== 'PLAN_GAP') return { kind: 'invalid' };
 
   const outcome = content.match(/^[^\S\n]*\*{0,2}\s*Outcome delivered\s*\*{0,2}\s*:+\s*(yes|no)\s*$/im)?.[1]
@@ -3140,7 +3147,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           routeClass: 'named-route',
         };
       }
-      if (outcome.kind === 'blocked') {
+      if (outcome.kind === 'blocked-remediable' || outcome.kind === 'blocked-design') {
         return {
           done: false,
           reason: 'as-built review verdict is BLOCKED — shipped code violates an approved architecture decision',
