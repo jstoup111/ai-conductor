@@ -4019,6 +4019,111 @@ function isTableSeparator(cells: readonly string[]): boolean {
   return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
+/** The closed classification set for a BLOCKED as-built review finding. */
+export type AsBuiltBlockedFindingClass = 'REMEDIABLE' | 'DESIGN';
+
+/** A machine-readable BLOCKED finding emitted by an as-built review. */
+export interface AsBuiltBlockedFinding {
+  id: string;
+  class: AsBuiltBlockedFindingClass;
+  clause: string;
+  summary: string;
+}
+
+export interface AsBuiltBlockedFindings {
+  findings: AsBuiltBlockedFinding[];
+}
+
+/** A parser fault is data, so callers can fail closed without catching. */
+export type AsBuiltBlockedFindingsParseResult =
+  | { ok: true; value: AsBuiltBlockedFindings }
+  | { ok: false; class: 'mechanical-fault'; error: string };
+
+const AS_BUILT_BLOCKING_FINDINGS_HEADING_RE = /^\s{0,3}##\s+Blocking\s+Findings\s*$/i;
+const AS_BUILT_BLOCKED_FINDING_CLASSES: ReadonlySet<AsBuiltBlockedFindingClass> = new Set([
+  'REMEDIABLE',
+  'DESIGN',
+]);
+
+/**
+ * Parse the machine-readable Blocking Findings table from a BLOCKED as-built
+ * review. Only the dedicated section is authoritative; historical or prose
+ * tables elsewhere in the report have no routing authority.
+ */
+export function parseAsBuiltBlockedFindings(content: string): AsBuiltBlockedFindingsParseResult {
+  const lines = content.split('\n');
+  const sectionStart = lines.findIndex((line) => AS_BUILT_BLOCKING_FINDINGS_HEADING_RE.test(line));
+  if (sectionStart === -1) {
+    return asBuiltBlockedFindingsMechanicalFault('As-built BLOCKED report is missing its Blocking Findings table.');
+  }
+
+  const remainingSection = lines.slice(sectionStart + 1);
+  const sectionEnd = remainingSection.findIndex((line) => /^\s{0,3}##\s+/.test(line));
+  const section = sectionEnd === -1 ? remainingSection : remainingSection.slice(0, sectionEnd);
+  const headerIndex = section.findIndex((line) => {
+    if (!/^\s*\|/.test(line)) return false;
+    const cells = tableCells(line).map((cell) => cell.toLowerCase());
+    return ['finding', 'class', 'governing clause', 'summary'].every((column) => cells.includes(column));
+  });
+  if (headerIndex === -1) {
+    return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings table has a malformed header.');
+  }
+
+  const header = tableCells(section[headerIndex]).map((cell) => cell.toLowerCase());
+  const requiredColumns = ['finding', 'class', 'governing clause', 'summary'] as const;
+  if (requiredColumns.some((column) => header.filter((cell) => cell === column).length !== 1)) {
+    return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings table has a malformed header.');
+  }
+  const findingIndex = header.indexOf('finding');
+  const classIndex = header.indexOf('class');
+  const clauseIndex = header.indexOf('governing clause');
+  const summaryIndex = header.indexOf('summary');
+  const findings: AsBuiltBlockedFinding[] = [];
+  let readingTable = false;
+
+  for (const line of section.slice(headerIndex + 1)) {
+    if (!/^\s*\|/.test(line)) {
+      if (readingTable && line.trim() === '') break;
+      continue;
+    }
+    readingTable = true;
+    const cells = tableCells(line);
+    if (isTableSeparator(cells)) continue;
+
+    const id = cells[findingIndex]?.trim() ?? '';
+    if (id === '') {
+      return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings row has an empty Finding.');
+    }
+    const rawClass = cells[classIndex]?.trim().toUpperCase() ?? '';
+    if (!AS_BUILT_BLOCKED_FINDING_CLASSES.has(rawClass as AsBuiltBlockedFindingClass)) {
+      return asBuiltBlockedFindingsMechanicalFault(`As-built finding ${id} has an invalid Class.`);
+    }
+    const clause = cells[clauseIndex]?.trim() ?? '';
+    if (rawClass === 'REMEDIABLE' && clause === '') {
+      return asBuiltBlockedFindingsMechanicalFault(`As-built REMEDIABLE finding ${id} has no Governing clause.`);
+    }
+    const summary = cells[summaryIndex]?.trim() ?? '';
+    if (summary === '') {
+      return asBuiltBlockedFindingsMechanicalFault(`As-built finding ${id} has an empty Summary.`);
+    }
+    findings.push({
+      id,
+      class: rawClass as AsBuiltBlockedFindingClass,
+      clause,
+      summary,
+    });
+  }
+
+  if (findings.length === 0) {
+    return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings table has no finding rows.');
+  }
+  return { ok: true, value: { findings } };
+}
+
+function asBuiltBlockedFindingsMechanicalFault(error: string): AsBuiltBlockedFindingsParseResult {
+  return { ok: false, class: 'mechanical-fault', error };
+}
+
 /**
  * Parse the criterion-grade verdict table emitted by `prd_audit`.
  *

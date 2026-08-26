@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { checkStepCompletion } from '../src/engine/artifacts.js';
+import { checkStepCompletion, parseAsBuiltBlockedFindings } from '../src/engine/artifacts.js';
 import { Conductor, type StepRunner } from '../src/engine/conductor.js';
 import { readKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
@@ -28,6 +28,70 @@ afterEach(async () => {
 });
 
 describe('as-built verdict gate', () => {
+  it('parses an all-remediable BLOCKED findings table', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-1 | REMEDIABLE | adr-2026-08-25-example decision 2 | Add the missing guard |',
+      '| ARCH-2 | REMEDIABLE | Task 2 | Return a typed fault |',
+    ].join('\n');
+
+    expect(parseAsBuiltBlockedFindings(report)).toEqual({
+      ok: true,
+      value: {
+        findings: [
+          {
+            id: 'ARCH-1',
+            class: 'REMEDIABLE',
+            clause: 'adr-2026-08-25-example decision 2',
+            summary: 'Add the missing guard',
+          },
+          {
+            id: 'ARCH-2',
+            class: 'REMEDIABLE',
+            clause: 'Task 2',
+            summary: 'Return a typed fault',
+          },
+        ],
+      },
+    });
+  });
+
+  it('parses a BLOCKED findings table that includes a design finding', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-1 | REMEDIABLE | Task 2 | Add the missing guard |',
+      '| ARCH-2 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
+    ].join('\n');
+
+    expect(parseAsBuiltBlockedFindings(report)).toEqual({
+      ok: true,
+      value: {
+        findings: [
+          {
+            id: 'ARCH-1',
+            class: 'REMEDIABLE',
+            clause: 'Task 2',
+            summary: 'Add the missing guard',
+          },
+          {
+            id: 'ARCH-2',
+            class: 'DESIGN',
+            clause: 'adr-2026-08-25-example decision 3',
+            summary: 'Choose an incompatible policy',
+          },
+        ],
+      },
+    });
+  });
+
   it('accepts a delivered PLAN_GAP as a recorded non-blocking verdict', async () => {
     const dir = await fixture();
     await writeAsBuilt(dir, 'Verdict: PLAN_GAP\nOutcome delivered: yes\n\n## Recorded Findings\n- Plan is the limit.\n');
