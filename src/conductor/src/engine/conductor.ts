@@ -1348,6 +1348,12 @@ export interface ConductorOptions {
    * but its wait controller won't be aborted by process-level SIGTERM.
    */
   registerAbortController?: (controller: AbortController) => void;
+  /**
+   * Process termination boundary for signal handling. Production exits the
+   * process; tests inject a recorder so signal-persistence behavior can run
+   * without terminating the Vitest worker.
+   */
+  exitProcess?: (code: number) => void;
 }
 
 /**
@@ -1950,6 +1956,8 @@ export class Conductor {
    * the daemon-level SIGTERM handler.
    */
   private registerAbortController: ((controller: AbortController) => void) | undefined;
+  /** Process termination boundary; defaults to Node's real process exit. */
+  private exitProcess: (code: number) => void;
 
   /**
    * Durable engine state for task evidence tracking (sidecar JSON).
@@ -2614,6 +2622,7 @@ export class Conductor {
     this.shipmentEvidence = opts.shipmentEvidence;
     this.rateLimitEpisode = opts.rateLimitEpisode;
     this.registerAbortController = opts.registerAbortController;
+    this.exitProcess = opts.exitProcess ?? ((code) => process.exit(code));
   }
 
   private async surfaceProtectedArtifactRebaseline(
@@ -4816,7 +4825,7 @@ export class Conductor {
         SIGTERM: 143,  // 128 + 15
         SIGHUP: 129,   // 128 + 1
       };
-      process.exit(exitCodes[signal] ?? 1);
+      this.exitProcess(exitCodes[signal] ?? 1);
     };
     const sigintHandler = () => signalHandlerBase('SIGINT');
     const sighupHandler = () => signalHandlerBase('SIGHUP');
@@ -4843,7 +4852,7 @@ export class Conductor {
       }
       await this.closeOpenExecutions();
       await this.persistSignalCompletionsBestEffort(state, 'SIGTERM', inFlightGroupCompletions);
-      process.exit(1);
+      this.exitProcess(1);
     };
     if (!this.daemon) {
       process.on('SIGTERM', sigterm);

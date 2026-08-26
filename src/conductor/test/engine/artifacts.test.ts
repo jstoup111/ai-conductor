@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { execa } from 'execa';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { renderDecideEntryHalt } from '../../src/engine/decide-entry-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -58,6 +59,7 @@ vi.mock('../../src/engine/shipment-evidence.js', () => ({
 import {
   STEP_ARTIFACT_CONTRACTS,
   STEP_ARTIFACT_GLOBS,
+  validateFeatureArtifactStems,
   buildArtifactResolutionContext,
   resolveArtifactFiles,
   findArtifactFiles,
@@ -234,6 +236,85 @@ describe('engine/artifacts', () => {
     });
   });
 
+  describe('validateFeatureArtifactStems', () => {
+    const featureIdentity = 'clean-rubric-judgements-rejected-as-invalid-provid';
+
+    it('accepts exact and date-prefixed normalized stems', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [
+            {
+              step: 'conflict_check',
+              paths: [
+                `.docs/conflicts/${featureIdentity}.md`,
+                `.docs/conflicts/2026-08-19-${featureIdentity}.md`,
+              ],
+            },
+          ],
+          featureIdentity,
+        ),
+      ).toEqual([]);
+    });
+
+    it('reports truncated normalized stems with the expected filename', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [
+            {
+              step: 'conflict_check',
+              paths: ['.docs/conflicts/2026-08-19-clean-rubric-judgements.md'],
+            },
+          ],
+          featureIdentity,
+        ),
+      ).toEqual([
+        {
+          step: 'conflict_check',
+          path: '.docs/conflicts/2026-08-19-clean-rubric-judgements.md',
+          strategy: 'normalized-stem',
+          expectedStem: featureIdentity,
+          exampleExpectedPath: `.docs/conflicts/${featureIdentity}.md`,
+        },
+      ]);
+    });
+
+    it('reports plan-stem mismatches for plan and coherence artifacts', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [
+            { step: 'plan', paths: ['.docs/plans/other-feature.md'] },
+            { step: 'coherence_check', paths: ['.docs/coherence/other-feature.md'] },
+          ],
+          featureIdentity,
+        ),
+      ).toEqual([
+        {
+          step: 'plan',
+          path: '.docs/plans/other-feature.md',
+          strategy: 'plan-stem',
+          expectedStem: featureIdentity,
+          exampleExpectedPath: `.docs/plans/${featureIdentity}.md`,
+        },
+        {
+          step: 'coherence_check',
+          path: '.docs/coherence/other-feature.md',
+          strategy: 'plan-stem',
+          expectedStem: featureIdentity,
+          exampleExpectedPath: `.docs/coherence/${featureIdentity}.md`,
+        },
+      ]);
+    });
+
+    it('ignores repository-scoped paths on mixed-scope steps', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [{ step: 'architecture_review', paths: ['.docs/decisions/adr-2026-08-25.md'] }],
+          featureIdentity,
+        ),
+      ).toEqual([]);
+    });
+  });
+
   describe('buildArtifactResolutionContext', () => {
     it('assembles ordered explicit identities and one local changed-path snapshot', async () => {
       await createFile(
@@ -407,7 +488,7 @@ describe('engine/artifacts', () => {
       });
     });
 
-    it('diagnoses ambiguous or missing candidates', async () => {
+    it('diagnoses ambiguous candidates with the feature naming rule', async () => {
       await createFile('.docs/stories/feature-a.md');
       await createFile('.docs/stories/feature-c.md');
       const featureB = {
@@ -415,28 +496,74 @@ describe('engine/artifacts', () => {
         changedPaths: new Set<string>(),
       };
 
-      const [ambiguous, missing] = await Promise.all([
-        resolveArtifactFiles(dir, 'stories', featureB),
-        resolveArtifactFiles(dir, 'retro', featureB),
-      ]);
+      const ambiguous = await resolveArtifactFiles(dir, 'stories', featureB);
 
-      expect({ ambiguous, missing }).toEqual({
-        ambiguous: {
-          files: [],
-          diagnostic: {
-            code: 'ambiguous',
-            reason:
-              'stories has 2 artifact candidates and none can be associated with active feature "feature-b"',
-          },
-        },
-        missing: {
-          files: [],
-          diagnostic: {
-            code: 'missing',
-            reason: 'retro has no artifact candidates for active feature "feature-b"',
-          },
+      expect(ambiguous).toEqual({
+        files: [],
+        diagnostic: {
+          code: 'ambiguous',
+          reason:
+            'stories has 2 artifact candidates and none can be associated with active feature "feature-b". Naming rule: normalized-stem (date prefix stripped); expected stem "feature-b"; example expected filename ".docs/stories/feature-b.md".',
         },
       });
+    });
+
+    it('keeps the empty-candidate missing diagnostic byte-identical', async () => {
+      const result = await resolveArtifactFiles(dir, 'retro', {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set<string>(),
+      });
+
+      expect(result).toEqual({
+        files: [],
+        diagnostic: {
+          code: 'missing',
+          reason: 'retro has no artifact candidates for active feature "feature-b"',
+        },
+      });
+    });
+
+    it('keeps repository-scoped resolution diagnostic-free', async () => {
+      const result = await resolveArtifactFiles(
+        dir,
+        'architecture_diagram',
+        {
+          featureIdentities: ['feature-b'],
+          changedPaths: new Set<string>(),
+        },
+        [],
+        true,
+      );
+
+      expect(result).toEqual({
+        files: [],
+        patternResults: [{ pattern: '.docs/architecture/*.md', files: [] }],
+      });
+    });
+
+    it('reports the #1743 conflict naming rule in ambiguous and forward-walk HALT evidence', async () => {
+      const featureIdentity = 'clean-rubric-judgements-rejected-as-invalid-provid';
+      await createFile('.docs/conflicts/2026-08-19-clean-rubric-judgements.md');
+      await createFile('.docs/conflicts/another-feature.md');
+
+      const resolution = await resolveArtifactFiles(dir, 'conflict_check', {
+        featureIdentities: [featureIdentity],
+        changedPaths: new Set<string>(),
+      });
+      const diagnostic = resolution.diagnostic!;
+      const halt = renderDecideEntryHalt({
+        sourceGate: 'forward-walk',
+        target: 'conflict_check',
+        evidence: diagnostic.reason,
+        reason: 'fixture refusal',
+      });
+
+      expect(diagnostic).toEqual({
+        code: 'ambiguous',
+        reason:
+          'conflict_check has 2 artifact candidates and none can be associated with active feature "clean-rubric-judgements-rejected-as-invalid-provid". Naming rule: normalized-stem (date prefix stripped); expected stem "clean-rubric-judgements-rejected-as-invalid-provid"; example expected filename ".docs/conflicts/clean-rubric-judgements-rejected-as-invalid-provid.md".',
+      });
+      expect(halt).toContain(`Evidence:          ${diagnostic.reason}`);
     });
   });
 
@@ -3370,7 +3497,7 @@ describe('engine/artifacts', () => {
             diagnostic: {
               code: 'ambiguous',
               reason:
-                'plan has 2 artifact candidates and none can be associated with active feature "feature-b"',
+                'plan has 2 artifact candidates and none can be associated with active feature "feature-b". Naming rule: plan-stem; expected stem "feature-b"; example expected filename ".docs/plans/feature-b.md".',
             },
           },
         ],

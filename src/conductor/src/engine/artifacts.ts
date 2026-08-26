@@ -315,6 +315,90 @@ export const STEP_ARTIFACT_CONTRACTS = {
   attribution_verify: [],
 } satisfies Record<StepName, readonly ArtifactPatternContract[]>;
 
+export interface FeatureArtifactStemValidationEntry {
+  step: StepName;
+  paths: readonly string[];
+}
+
+export interface FeatureArtifactStemViolation {
+  step: StepName;
+  path: string;
+  strategy: FeatureArtifactIdentityStrategy['strategy'];
+  expectedStem: string;
+  exampleExpectedPath: string;
+}
+
+function artifactPathMatchesPattern(path: string, pattern: string): boolean {
+  let expression = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    if (pattern.slice(index, index + 3) === '**/') {
+      expression += '(?:.*/)?';
+      index += 2;
+    } else if (pattern[index] === '*') {
+      expression += '[^/]*';
+    } else {
+      expression += pattern[index].replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+    }
+  }
+  return new RegExp(`(?:^|/)${expression}$`).test(path.replaceAll('\\', '/'));
+}
+
+function exampleArtifactPath(pattern: string, featureIdentity: string): string {
+  const wildcardIndex = pattern.indexOf('*');
+  const directory = wildcardIndex === -1 ? dirname(pattern) : pattern.slice(0, wildcardIndex);
+  const extension = pattern.endsWith('.md') ? '.md' : '';
+  return `${directory.endsWith('/') ? directory : `${directory}/`}${basename(featureIdentity, '.md')}${extension}`;
+}
+
+/**
+ * True when any feature-scoped contract for `step` matches descendants rather
+ * than only immediate children — i.e. its glob carries a `**\/` segment. The
+ * `stories` family is the current case (`.docs/stories/**\/*.md`).
+ *
+ * Callers enumerating candidates for `validateFeatureArtifactStems` must walk a
+ * family this returns `true` for; enumerating one directory level would leave a
+ * nested artifact staged but unvalidated. Deriving the answer from the contract
+ * keeps the two in step: widening a pattern to `**\/` widens enumeration with it,
+ * with no second list to update.
+ */
+export function featureArtifactPatternsAreRecursive(step: StepName): boolean {
+  return STEP_ARTIFACT_CONTRACTS[step].some(
+    (contract) => contract.scope === 'feature' && contract.pattern.includes('**/'),
+  );
+}
+
+/**
+ * Validates that candidate artifacts for feature-scoped contracts retain the
+ * active feature identity in their filename stem. Repository- and run-scoped
+ * contracts deliberately have no feature identity requirement.
+ */
+export function validateFeatureArtifactStems(
+  entries: readonly FeatureArtifactStemValidationEntry[],
+  featureIdentity: string,
+): FeatureArtifactStemViolation[] {
+  const violations: FeatureArtifactStemViolation[] = [];
+  const expectedStem = basename(featureIdentity, '.md');
+
+  for (const { step, paths } of entries) {
+    for (const path of paths) {
+      for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
+        if (contract.scope !== 'feature') continue;
+        if (!artifactPathMatchesPattern(path, contract.pattern)) continue;
+        if (artifactMatchesFeatureIdentity(path, featureIdentity, contract.identity)) continue;
+        violations.push({
+          step,
+          path,
+          strategy: contract.identity.strategy,
+          expectedStem,
+          exampleExpectedPath: exampleArtifactPath(contract.pattern, featureIdentity),
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
  * or a literal filename. Empty list = step produces no file artifacts; verification
@@ -471,18 +555,47 @@ export async function resolveArtifactFiles(
   const identityLabel = activeIdentity
     ? `active feature "${activeIdentity}"`
     : 'the active feature (identity unavailable)';
-  const diagnosticFor = (candidateCount: number): ArtifactResolutionDiagnostic => {
+  const namingRuleFor = (contract: Extract<ArtifactPatternContract, { scope: 'feature' }>): string => {
+    const { identity } = contract;
+    if (identity.strategy === 'plan-stem') return identity.strategy;
+
+    const qualifiers = [
+      identity.stripDatePrefix ? 'date prefix stripped' : undefined,
+      ...(identity.stripPrefixes ?? []).map((prefix) => `"${prefix}" prefix stripped`),
+    ].filter((qualifier): qualifier is string => Boolean(qualifier));
+    return qualifiers.length > 0
+      ? `${identity.strategy} (${qualifiers.join(', ')})`
+      : identity.strategy;
+  };
+  const exampleExpectedPathFor = (
+    contract: Extract<ArtifactPatternContract, { scope: 'feature' }>,
+    expectedStem: string,
+  ): string => {
+    const segments = contract.pattern.split('/');
+    const wildcardIndex = segments.findIndex((segment) => segment.includes('*'));
+    const directory = segments.slice(0, wildcardIndex === -1 ? -1 : wildcardIndex).join('/');
+    return `${directory}/${expectedStem}.md`;
+  };
+  const diagnosticFor = (
+    candidateCount: number,
+    contract?: Extract<ArtifactPatternContract, { scope: 'feature' }>,
+  ): ArtifactResolutionDiagnostic => {
     if (candidateCount === 0) {
       return {
         code: 'missing',
         reason: `${step} has no artifact candidates for ${identityLabel}`,
       };
     }
+    const namingRule =
+      contract && activeIdentity
+        ? `. Naming rule: ${namingRuleFor(contract)}; expected stem "${activeIdentity}"; example expected filename "${exampleExpectedPathFor(contract, activeIdentity)}".`
+        : '';
     return {
       code: 'ambiguous',
-      reason: `${step} has ${candidateCount} artifact candidates and none can be associated with ${identityLabel}`,
+      reason: `${step} has ${candidateCount} artifact candidates and none can be associated with ${identityLabel}${namingRule}`,
     };
   };
+  let firstFeatureContract: Extract<ArtifactPatternContract, { scope: 'feature' }> | undefined;
   for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
     const candidates = await matchGlob(dir, contract.pattern);
     if (contract.scope !== 'feature') {
@@ -492,6 +605,7 @@ export async function resolveArtifactFiles(
     }
 
     hasFeatureContract = true;
+    firstFeatureContract ??= contract;
     featureCandidateCount += candidates.length;
     const associated = candidates.filter((file) => {
       const repoPath = relative(dir, file).replaceAll('\\', '/');
@@ -512,7 +626,7 @@ export async function resolveArtifactFiles(
       patternResults.push({
         pattern: contract.pattern,
         files: [],
-        diagnostic: diagnosticFor(candidates.length),
+        diagnostic: diagnosticFor(candidates.length, contract),
       });
     }
   }
@@ -531,7 +645,7 @@ export async function resolveArtifactFiles(
 
   return withPatterns({
     files: [],
-    diagnostic: diagnosticFor(featureCandidateCount),
+    diagnostic: diagnosticFor(featureCandidateCount, firstFeatureContract),
   });
 }
 
