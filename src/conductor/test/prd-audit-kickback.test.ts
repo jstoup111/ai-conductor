@@ -575,7 +575,7 @@ describe('prd_audit kickback', () => {
     expect(ledger.growth).toMatchObject({ added: 3, byGate: { prd_audit: 3 } });
   });
 
-  it('halts a non-prd_audit task append without consuming prd_audit allowance', async () => {
+  it('keeps as-built task append rejection unchanged when remediation is disabled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-cross-gate-'));
     dirs.push(root);
     const planPath = join(root, '.docs', 'plans', 'feature.md');
@@ -605,6 +605,9 @@ describe('prd_audit kickback', () => {
       stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
       events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
       verifyArtifacts: false, maxRetries: 1,
+      config: {
+        architecture_review_as_built: { remediation: { enabled: false } },
+      } as never,
     });
 
     const outcome = await (conductor as unknown as {
@@ -624,6 +627,47 @@ describe('prd_audit kickback', () => {
     await expect(readGrowth(root, 4)).resolves.toEqual({
       authored: 2, added: 1, byGate: { prd_audit: 1 }, remaining: 3,
     });
+  });
+
+  it('admits as-built task append evidence when remediation is enabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-enabled-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(planPath, '### Task 1: authored\n');
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'arch-gap', disposition: 'build', category: null, rationale: 'Repair approved architecture drift.',
+            tasks: [{ id: 'rem-arch', title: 'Repair approved architecture drift' }],
+          }],
+        }));
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: {
+        architecture_review_as_built: { remediation: { enabled: true } },
+      } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(await readFile(planPath, 'utf8')).toContain('### Task rem-arch: Repair approved architecture drift');
   });
 
   it('uses gate-specific configured lap caps without changing the generic cap', () => {

@@ -3362,9 +3362,23 @@ export class Conductor {
     // establish their parent-task and criterion bounds. Production callers
     // identify their gate provenance structurally; older direct callers have
     // no such provenance and retain their compatibility behavior. The
-    // canonical as-built source is likewise unadmitted even for direct calls.
+    // canonical as-built source may grow the plan only while its remediation
+    // switch is enabled. Mixed provenance retains prd_audit's criterion-bound
+    // authority, so enabling as-built remediation cannot bypass that gate.
+    const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
+      architecture_review_as_built?: { remediation?: { enabled?: boolean } };
+    }).architecture_review_as_built?.remediation?.enabled ?? true;
+    const hasOnlyAsBuiltEvidence =
+      remediationEvidenceSources.length > 0 &&
+      remediationEvidenceSources.every(
+        (provenance) => provenance.gate === 'architecture_review_as_built',
+      );
+    const isCanonicalAsBuiltSource = hintSource.source === 'architecture-review-as-built';
+    const asBuiltPlanGrowthAdmitted =
+      asBuiltRemediationEnabled && (hasOnlyAsBuiltEvidence || isCanonicalAsBuiltSource);
     const requiresPlanGrowthAllowance =
-      remediationEvidenceSources.length > 0 || hintSource.source === 'architecture-review-as-built';
+      (remediationEvidenceSources.length > 0 && !asBuiltPlanGrowthAdmitted) ||
+      (isCanonicalAsBuiltSource && !asBuiltPlanGrowthAdmitted);
     if (allTasks.length > 0 && requiresPlanGrowthAllowance && !prdAuditCapEnforced) {
       return {
         kind: 'halt',
