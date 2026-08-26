@@ -627,7 +627,7 @@ complexity:
       expect(result.error.message).toContain('bogus_key');
     });
 
-    it('accepts provider-native TDD RED/GREEN model overrides on the build step', () => {
+    it('rejects the removed TDD model configuration as an unknown step-level key', () => {
       const result = validateConfig({
         llm_provider: 'codex',
         steps: {
@@ -640,43 +640,9 @@ complexity:
         },
       });
 
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.steps?.build?.tdd?.red?.model).toBe('gpt-5.6-luna');
-      expect(result.config.steps?.build?.tdd?.green?.model).toBe('gpt-5.6-terra');
-    });
-
-    it('rejects TDD models that do not belong to the selected provider', () => {
-      const result = validateConfig({
-        llm_provider: 'codex',
-        steps: { build: { tdd: { red: { model: 'haiku' } } } },
-      });
-
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error.message).toContain('steps.build.tdd.red.model');
-      expect(result.error.message).toContain('codex');
-    });
-
-    it('rejects TDD model configuration when llm_provider is not a string', () => {
-      const result = validateConfig({
-        llm_provider: 42,
-        steps: { build: { tdd: { red: { model: 'haiku' } } } },
-      });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.message).toContain('llm_provider');
-    });
-
-    it('rejects TDD model configuration outside the build step', () => {
-      const result = validateConfig({
-        steps: { memory: { tdd: { red: { model: 'haiku' } } } },
-      });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.message).toContain('steps.memory.tdd');
+      expect(result.error.message).toBe('Unknown key in steps.build: "tdd"');
     });
 
     it('rejects invalid phase name', () => {

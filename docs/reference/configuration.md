@@ -286,7 +286,7 @@ other key declares a custom step. `steps` must be an object, and each value must
 
 ### Per-step keys
 
-15 keys are allow-listed (`knownStepKeys`, `config.ts:334-350`). An unknown key is a hard error
+14 keys are allow-listed (`knownStepKeys`, `config.ts`). An unknown key is a hard error
 `Unknown key in steps.<name>: "<k>"`.
 
 | Key | Type | Validation | Default | Consumer |
@@ -302,7 +302,6 @@ other key declares a custom step. `steps` must be an object, and each value must
 | `by_tier` | object | See [by_tier](#by_tier) | none | `resolved-config.ts:236, 348` |
 | `when` | string | Grammar-checked at load time; see [when](#when) | none | `src/conductor/src/engine/when-expression.ts:97-136` |
 | `parallel` | array | See [parallel](#parallel) | none | `config.ts:422-466` |
-| `tdd` | object | Only valid on `steps.build`; see [steps.build.tdd](#stepsbuildtdd) | none | build agent |
 | `after` | string | **Custom steps only** — a built-in step with `after` is a hard error (`config.ts:529-531`) | required for custom steps | `steps.ts:561` |
 | `enforcement` | string | **Custom steps only** (`config.ts:532-534`); `structural`\|`advisory`\|`gating` | `advisory` | `steps.ts:599` |
 | `completion_artifact` | string | **Custom steps only** (`config.ts:535-537`); 7 constraints below | none | `src/conductor/src/engine/artifacts.ts:3086-3135` |
@@ -375,36 +374,6 @@ Each branch writes a synthetic state key `<step_name>__<branch_name>` into
 
 Branch fan-out is bounded by [`validation_concurrency`](#validation_concurrency), clamped to the branch
 count (`src/conductor/src/engine/conductor.ts:6357`).
-
-### steps.build.tdd
-
-Per-sub-phase model hints for the TDD loop inside the build step. Valid only on `steps.build` — anywhere
-else is a hard error `steps.<name>.tdd is only valid for the build step` (`config.ts:387-389`).
-
-```yaml
-llm_provider: claude
-steps:
-  build:
-    tdd:
-      red:
-        model: sonnet
-      green:
-        model: opus
-```
-
-Validated by `validateTddModelConfig` (`config.ts:47-92`):
-
-- The block must be an object with only `red` and `green` keys.
-- Each must be an object containing only a `model` key holding a non-empty string.
-- The model must be a member of the resolved provider's `modelEscalationOrder` — `haiku`, `sonnet`,
-  `opus`, `fable` for `claude`; `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` for `codex`.
-- The provider key comes from top-level `llm_provider` when it is a string, otherwise `claude`
-  (`config.ts:394`). A top-level `llm_provider` **array** is a hard error:
-  `steps.build.tdd requires llm_provider to be a string`.
-- A provider outside `{claude, codex}` fails with `… has no native TDD model policy.`
-
-The values are advisory: the build agent passes the model to its RED or GREEN child dispatch. No separate
-conductor step is created (`src/conductor/src/types/config.ts:59-75`).
 
 ### Disabling a step
 

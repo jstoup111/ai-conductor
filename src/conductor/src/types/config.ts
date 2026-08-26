@@ -57,24 +57,6 @@ export interface ParallelBranch {
 }
 
 /**
- * Advisory model selection for one TDD generator phase. The build agent reads
- * this configuration and passes the native model to its RED or GREEN child
- * dispatch; it does not create a separate conductor step.
- */
-export interface TddPhaseConfig {
-  model?: string;
-}
-
-/**
- * Optional model overrides for the RED and GREEN generator phases inside the
- * structural build step.
- */
-export interface TddConfig {
-  red?: TddPhaseConfig;
-  green?: TddPhaseConfig;
-}
-
-/**
  * Configuration for a single step. Every key is optional — unset values fall
  * back through phases > defaults > hardcoded baselines.
  *
@@ -116,9 +98,6 @@ export interface StepConfig {
 
   /** Tier-specific overrides applied when state.complexity_tier matches. */
   by_tier?: Partial<Record<ComplexityTier, TierOverride>>;
-
-  /** Advisory child-agent model overrides. Valid only for `steps.build`. */
-  tdd?: TddConfig;
 
   // --- Custom-step-only fields -----------------------------------------------
 
