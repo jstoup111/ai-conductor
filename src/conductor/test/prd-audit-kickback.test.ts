@@ -86,6 +86,26 @@ function overScopeReport(
   ].join('\n');
 }
 
+function noOwnerOverScopeReport(
+  criterion: string,
+  summary: string,
+  relation: 'within' | 'outside-harmless' | 'outside-visible' = 'outside-visible',
+) {
+  return [
+    '**PRD:** none',
+    '',
+    '## Verdict Table',
+    '| Criterion | Grade | Plan task | Evidence | Intent relation |',
+    '| --- | --- | --- | --- | --- |',
+    '| S3.1 | PASS | | Covered behavior | within |',
+    '',
+    '## Findings without an owning criterion',
+    '| Finding | Grade | Intent relation | Evidence |',
+    '| --- | --- | --- | --- |',
+    `| ${criterion} | OVER_SCOPE | ${relation} | ${summary} |`,
+  ].join('\n');
+}
+
 async function createPrdAuditRemediationFixture(input: {
   taskCount: number;
   criteria: string[];
@@ -390,7 +410,7 @@ describe('prd_audit kickback', () => {
     await expect(recordOverScopeDecisions(root, [refuse])).resolves.toEqual({ recorded: [] });
     await recordOverScopeDecisions(root, [{ ...refuse, decision: 'accept', rationale: 'Approved after review.' }]);
     const decisions = (await readOverScopeDecisions(root)).decisions;
-    expect(classifyOverScopeCriterion('S3.1', new Map([['S3.1', 'outside-visible']]), decisions)).toBe('accepted');
+    expect(classifyOverScopeCriterion('S3.1', 'Visible behavior.', new Map([['S3.1', 'outside-visible']]), decisions)).toBe('accepted');
   });
 
   it('extracts no-owner intent relations and classifies NC findings uniformly without decisions', () => {
@@ -416,9 +436,34 @@ describe('prd_audit kickback', () => {
       ['NC.2', 'outside-harmless'],
       ['NC.3', 'outside-visible'],
     ]);
-    expect(classifyOverScopeCriterion('NC.1', relations, [])).toBe('not-blocking');
-    expect(classifyOverScopeCriterion('NC.2', relations, [])).toBe('not-blocking');
-    expect(classifyOverScopeCriterion('NC.3', relations, [])).toBe('blocking-undecided');
+    expect(classifyOverScopeCriterion('NC.1', 'Unplanned internal detail', relations, [])).toBe('not-blocking');
+    expect(classifyOverScopeCriterion('NC.2', 'Harmless unplanned detail', relations, [])).toBe('not-blocking');
+    expect(classifyOverScopeCriterion('NC.3', 'Visible unplanned behavior', relations, [])).toBe('blocking-undecided');
+  });
+
+  it('binds NC decisions to their normalized finding summary while criterion decisions remain criterion-only', () => {
+    const relations = new Map([
+      ['NC.1', 'outside-visible' as const],
+      ['NC.2', 'outside-visible' as const],
+      ['S3.1', 'outside-visible' as const],
+    ]);
+    const decisions = [
+      { criterion: 'NC.1', summary: '  Visible addition X.  ', decision: 'refuse' as const, rationale: 'First review.', operator: 'operator', decidedAt: '2026-08-26T00:00:00.000Z' },
+      { criterion: 'NC.1', summary: 'Visible addition X.', decision: 'accept' as const, rationale: 'Second review.', operator: 'operator', decidedAt: '2026-08-26T00:01:00.000Z' },
+      { criterion: 'S3.1', summary: 'Old evidence.', decision: 'accept' as const, rationale: 'Criterion decision.', operator: 'operator', decidedAt: '2026-08-26T00:00:00.000Z' },
+    ];
+
+    expect(classifyOverScopeCriterion('NC.1', 'Visible addition X.', relations, decisions)).toBe('accepted');
+    expect(classifyOverScopeCriterion('NC.2', 'Visible addition X.', relations, decisions)).toBe('blocking-undecided');
+    expect(classifyOverScopeCriterion('NC.1', 'Visible addition Y.', relations, decisions)).toBe('blocking-undecided');
+    expect(classifyOverScopeCriterion('S3.1', 'Drifted evidence.', relations, decisions)).toBe('accepted');
+
+    expect(routePrdAuditOverScope(noOwnerOverScopeReport('NC.1', 'Visible addition X.'), decisions)).toMatchObject({
+      kind: 'record', findings: [{ criterion: 'NC.1', decision: 'accept', rationale: 'Second review.' }],
+    });
+    expect(routePrdAuditOverScope(noOwnerOverScopeReport('NC.1', 'Visible addition Y.'), decisions)).toMatchObject({
+      kind: 'halt', undecided: [{ criterion: 'NC.1', summary: 'Visible addition Y.' }],
+    });
   });
 
   it('carries harvest defects and recorded decisions out of a halted over-scope route', async () => {
@@ -592,15 +637,34 @@ describe('prd_audit kickback', () => {
       .replace('"criterion": "S3.1",\n    "summary": "First.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.1", "summary": "First.", "decision": "accept", "rationale": "Approved."')
       .replace('"criterion": "S3.2",\n    "summary": "Second.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.2", "summary": "Second.", "decision": "refuse", "rationale": "Rework."')
       .replace('"criterion": "S3.3",\n    "summary": "Third.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.3", "summary": "Third.", "decision": "accept", "rationale": ""');
-    const parsed = parseClearedOverScopeDecisions(edited, new Set(['S3.1', 'S3.2', 'S3.3']));
+    const parsed = parseClearedOverScopeDecisions(edited, new Map([['S3.1', 'First.'], ['S3.2', 'Second.'], ['S3.3', 'Third.']]));
     expect(parsed).toMatchObject({ kind: 'parsed', decisions: [{ criterion: 'S3.1', decision: 'accept' }, { criterion: 'S3.2', decision: 'refuse' }], defects: [{ kind: 'missing-rationale', criterion: 'S3.3' }] });
   });
 
   it('treats pending, absent, malformed, unknown, and invalid decision entries safely', () => {
-    expect(parseClearedOverScopeDecisions('ordinary halt', new Set(['S3.1']))).toEqual({ kind: 'absent' });
-    expect(parseClearedOverScopeDecisions('```json over-scope-decisions\n{ nope\n```', new Set(['S3.1']))).toMatchObject({ defects: [{ kind: 'malformed-block' }] });
+    expect(parseClearedOverScopeDecisions('ordinary halt', new Map([['S3.1', 'x']]))).toEqual({ kind: 'absent' });
+    expect(parseClearedOverScopeDecisions('```json over-scope-decisions\n{ nope\n```', new Map([['S3.1', 'x']]))).toMatchObject({ defects: [{ kind: 'malformed-block' }] });
     const body = '```json over-scope-decisions\n[{"criterion":"S3.1","summary":"x","decision":"pending"},{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"},{"criterion":"S3.1","summary":"x","decision":"wat","rationale":"x"}]\n```';
-    expect(parseClearedOverScopeDecisions(body, new Set(['S3.1']))).toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }, { kind: 'invalid-decision', criterion: 'S3.1' }] });
+    expect(parseClearedOverScopeDecisions(body, new Map([['S3.1', 'x']]))).toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }, { kind: 'invalid-decision', criterion: 'S3.1' }] });
+  });
+
+  it('rejects a cleared NC decision that is absent from the current report without recording it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'over-scope-nc-cleared-'));
+    dirs.push(root);
+    const parsed = parseClearedOverScopeDecisions(
+      '```json over-scope-decisions\n[{"criterion":"NC.2","summary":"Visible addition.","decision":"accept","rationale":"Approved."}]\n```',
+      new Map([['NC.1', 'Visible addition.']]),
+    );
+
+    expect(parsed).toMatchObject({
+      kind: 'parsed',
+      decisions: [],
+      defects: [{ kind: 'unknown-criterion', criterion: 'NC.2' }],
+    });
+    if (parsed.kind === 'parsed') {
+      await expect(recordOverScopeDecisions(root, parsed.decisions.map((decision) => ({ ...decision, operator: 'operator' })))).resolves.toEqual({ recorded: [] });
+    }
+    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions: [] });
   });
 
   async function runGroupedPrdAudit(
