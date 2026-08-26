@@ -85,6 +85,10 @@ const PRD_AUDIT_DEFAULTS = {
   max_appended_ratio: 0.25,
   halt_on_any_plan_gap: false,
 } as const;
+const ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS = {
+  max_remediation_laps: 1,
+  remediation: { enabled: true },
+} as const;
 const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
 export const DEPRECATED_BUILD_REVIEW_RUBRIC_IDS = [
   'scope',
@@ -1088,11 +1092,17 @@ export function validateConfig(
     }
   }
 
-  // architecture_review_as_built — optional tier overrides for the review's
-  // closed set of independently applicable checks.
-  if (obj.architecture_review_as_built !== undefined) {
+  // architecture_review_as_built — per-check tier overrides and bounded
+  // remediation policy. Defaults keep the remediation path enabled with one
+  // lap unless the project opts out or raises the cap.
+  {
     const err = validateArchitectureReviewAsBuiltBlock(obj.architecture_review_as_built);
     if (err) return { ok: false, error: err };
+    if (obj.architecture_review_as_built !== undefined || materializeDefaults) {
+      obj.architecture_review_as_built = resolveArchitectureReviewAsBuiltBlock(
+        obj.architecture_review_as_built,
+      );
+    }
   }
 
   // conflict_check — ADR corpus scope for conflict-check. The default keeps
@@ -1494,6 +1504,7 @@ function resolvePrdAuditBlock(raw: unknown): {
 }
 
 function validateArchitectureReviewAsBuiltBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
   if (!isPlainObject(raw)) {
     return {
       type: 'validation_error',
@@ -1503,10 +1514,45 @@ function validateArchitectureReviewAsBuiltBlock(raw: unknown): ConfigError | nul
 
   const obj = raw as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
-    if (key !== 'checks') {
+    if (key !== 'checks' && key !== 'remediation' && key !== 'max_remediation_laps') {
       return {
         type: 'validation_error',
         message: `Unknown key in architecture_review_as_built: "${key}"`,
+      };
+    }
+  }
+
+  if (obj.max_remediation_laps !== undefined && (
+    typeof obj.max_remediation_laps !== 'number' ||
+    !Number.isInteger(obj.max_remediation_laps) ||
+    obj.max_remediation_laps <= 0
+  )) {
+    return {
+      type: 'validation_error',
+      message: 'architecture_review_as_built.max_remediation_laps must be a positive integer',
+    };
+  }
+
+  if (obj.remediation !== undefined) {
+    if (!isPlainObject(obj.remediation)) {
+      return {
+        type: 'validation_error',
+        message: 'architecture_review_as_built.remediation must be an object',
+      };
+    }
+    const remediation = obj.remediation as Record<string, unknown>;
+    for (const key of Object.keys(remediation)) {
+      if (key !== 'enabled') {
+        return {
+          type: 'validation_error',
+          message: `Unknown key in architecture_review_as_built.remediation: "${key}"`,
+        };
+      }
+    }
+    if (remediation.enabled !== undefined && typeof remediation.enabled !== 'boolean') {
+      return {
+        type: 'validation_error',
+        message: 'architecture_review_as_built.remediation.enabled must be a boolean',
       };
     }
   }
@@ -1548,6 +1594,24 @@ function validateArchitectureReviewAsBuiltBlock(raw: unknown): ConfigError | nul
   }
 
   return null;
+}
+
+function resolveArchitectureReviewAsBuiltBlock(raw: unknown): Record<string, unknown> {
+  const obj = isPlainObject(raw) ? raw : {};
+  const remediation = isPlainObject(obj.remediation) ? obj.remediation : {};
+  return {
+    ...(obj.checks === undefined ? {} : { checks: obj.checks }),
+    remediation: {
+      enabled:
+        typeof remediation.enabled === 'boolean'
+          ? remediation.enabled
+          : ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS.remediation.enabled,
+    },
+    max_remediation_laps:
+      typeof obj.max_remediation_laps === 'number'
+        ? obj.max_remediation_laps
+        : ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS.max_remediation_laps,
+  };
 }
 
 function validateConductorBlock(raw: unknown): ConfigError | null {

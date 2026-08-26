@@ -1876,6 +1876,51 @@ complexity:
       });
     });
 
+    it('resolves as-built remediation defaults and preserves configured overrides', () => {
+      expect(validateConfig({})).toMatchObject({
+        ok: true,
+        config: {
+          architecture_review_as_built: {
+            remediation: { enabled: true },
+            max_remediation_laps: 1,
+          },
+        },
+      });
+
+      expect(
+        validateConfig({
+          architecture_review_as_built: {
+            remediation: { enabled: false },
+            max_remediation_laps: 2,
+          },
+        }),
+      ).toMatchObject({
+        ok: true,
+        config: {
+          architecture_review_as_built: {
+            remediation: { enabled: false },
+            max_remediation_laps: 2,
+          },
+        },
+      });
+    });
+
+    it.each([
+      [
+        { remediation: { enabled: 'yes' } },
+        'architecture_review_as_built.remediation.enabled must be a boolean',
+      ],
+      [
+        { max_remediation_laps: 1.5 },
+        'architecture_review_as_built.max_remediation_laps must be a positive integer',
+      ],
+    ])('rejects invalid as-built remediation config %#', (architecture_review_as_built, message) => {
+      expect(validateConfig({ architecture_review_as_built })).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message },
+      });
+    });
+
     it('rejects an unknown as-built check name', () => {
       expect(
         validateConfig({
