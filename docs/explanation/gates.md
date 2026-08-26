@@ -424,6 +424,20 @@ of `APPROVED`, `PLAN_GAP`, or `BLOCKED` (FR-16): `PLAN_GAP` means the code faith
 approved design and the design itself is the limit; it is recorded in the verdict and the shipped record
 and ships when acceptance criteria still pass, and halts when a stated outcome is not delivered.
 
+A `BLOCKED` report must contain exactly one `## Blocking Findings` table with `Finding`, `Class`,
+`Governing clause`, and `Summary` columns. `Class` is either `REMEDIABLE` or `DESIGN`. Every
+`REMEDIABLE` row names an approved ADR decision (`<ADR filename stem> decision <number>`) or a task in
+the feature's active plan; a missing or malformed table, class, clause, or row is invalid and halts for
+a human.
+
+When every valid finding is `REMEDIABLE`, daemon runs with as-built remediation enabled can dispatch the
+bounded remediation route, append the authorized repair work, and re-stage BUILD. The route is bounded by
+`architecture_review_as_built.max_remediation_laps` and the shared plan-growth allowance; exhausting
+either produces a `kickback-cap` halt before another append. A `DESIGN` finding (including a mixed
+report), an invalid report, or the remediation kill switch being off appends nothing and halts needs-human.
+After a later successful as-built verdict, each remediated finding is retained in the verdict artifact and
+the shipped record.
+
 ### Per-task `Done when:` evidence
 
 Per-task delivery is evidenced at `build` when a task closes: each `Done when:` check parsed from the
