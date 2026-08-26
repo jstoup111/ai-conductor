@@ -7833,7 +7833,16 @@ describe('engine/conductor', () => {
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
     const PRD_AUDIT_PASS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
-    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+    const AS_BUILT_BLOCKED = [
+      '# As-Built Architecture Review',
+      '',
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ADR-1 | DESIGN | ADR-auth decision 1 | ADR-1 violated. |',
+    ].join('\n');
 
     // manual_test FAILs deterministically AND architecture_review_as_built
     // is BLOCKED (its own gate unsatisfied) in the SAME join round — the
@@ -7974,7 +7983,16 @@ describe('engine/conductor', () => {
     const PRD_AUDIT_GAPS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
       '| FR-1 | GAP | missing | evidence.ts:1 | no |\n';
-    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+    const AS_BUILT_BLOCKED = [
+      '# As-Built Architecture Review',
+      '',
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ADR-1 | DESIGN | ADR-auth decision 1 | ADR-1 violated. |',
+    ].join('\n');
 
     it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
@@ -8182,7 +8200,16 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+    const AS_BUILT_BLOCKED = [
+      '# As-Built Architecture Review',
+      '',
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ADR-1 | DESIGN | ADR-auth decision 1 | ADR-1 violated. |',
+    ].join('\n');
     const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
     it('readRemediationPlan → null (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
