@@ -286,6 +286,53 @@ describe('engine/artifacts', () => {
       });
     });
 
+    it('parses the prd-audit skill no-owner report example without rejected rows', async () => {
+      const skill = await readFile(join(REPOSITORY_ROOT, 'skills/prd-audit/SKILL.md'), 'utf8');
+      const reportExample = skill.match(/```markdown\n(# PRD Audit:[\s\S]*?)```/)?.[1];
+      const noOwnerSection = reportExample?.match(/## Findings without an owning criterion[\s\S]*/)?.[0];
+
+      expect(noOwnerSection).toBeDefined();
+      expect(reportExample).toBeDefined();
+
+      const parsed = parsePrdAuditReport(reportExample ?? '');
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.value.findings).toContainEqual(
+          expect.objectContaining({ criterion: 'NC.1', grade: 'OVER_SCOPE' }),
+        );
+        expect(parsed.value.rejectedRows).toEqual([]);
+      }
+    });
+
+    it('rejects an old no-owner row without an NC key per-row', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | none | Valid criterion sibling |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Evidence |
+| --- | --- | --- |
+| Unplanned user-visible behavior | OVER_SCOPE | src/engine/no-owner.ts:10 |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [{ criterion: 'S1.1', grade: 'PASS' }],
+          rejectedRows: [{
+            key: 'Unplanned user-visible behavior',
+            reason: expect.stringContaining('NC.<number>'),
+          }],
+        },
+      });
+    });
+
     it('rejects every duplicate Verdict Table finding while retaining unique siblings', () => {
       const parsed = parsePrdAuditReport(`
 **PRD:** present
