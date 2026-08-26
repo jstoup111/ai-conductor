@@ -108,6 +108,43 @@ function noOwnerOverScopeReport(
   ].join('\n');
 }
 
+/**
+ * A report whose rows are mixed: one PASS, one negative-path PLAN_GAP that a
+ * clean report would record, and one no-owner row keyed `OS.1` — an invalid
+ * key, so the parser rejects that row instead of parsing a finding from it.
+ * Every rejected row must block by name, whichever route reads the report.
+ */
+function rejectedRowWithNegativePathPlanGapReport() {
+  return [
+    '**PRD:** none',
+    '',
+    '## Verdict Table',
+    '| Criterion | Grade | Plan task | Evidence |',
+    '| --- | --- | --- | --- |',
+    '| S11.1 | PASS | 1 | Covered behavior |',
+    '| S11.2 | PLAN_GAP | | An edge case is not in the approved plan. |',
+    '',
+    '## Findings without an owning criterion',
+    '| Finding | Grade | Intent relation | Evidence |',
+    '| --- | --- | --- | --- |',
+    '| OS.1 | OVER_SCOPE | outside-visible | A visible behavior exists outside the approved plan. |',
+  ].join('\n');
+}
+
+function storiesForRejectedRowReport() {
+  return [
+    '# Stories',
+    '',
+    '## Story 11: negative boundary',
+    '',
+    '#### Happy Path',
+    '- Given a valid request, when it is served, then the behavior holds.',
+    '',
+    '#### Negative Paths',
+    '- Given an unsupported condition, when it occurs, then it is recorded.',
+  ].join('\n');
+}
+
 async function createPrdAuditRemediationFixture(input: {
   taskCount: number;
   criteria: string[];
@@ -743,7 +780,7 @@ describe('prd_audit kickback', () => {
     report: string,
     stories: string,
     setup?: (root: string) => Promise<void>,
-    options?: { root?: string },
+    options?: { root?: string; mode?: 'auto' | 'default' },
   ) {
     const root = options?.root ?? await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
     if (!options?.root) dirs.push(root);
@@ -805,7 +842,7 @@ describe('prd_audit kickback', () => {
       stepRunner: runner,
       events,
       projectRoot: root,
-      mode: 'auto',
+      mode: options?.mode ?? 'auto',
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 1,
@@ -1729,6 +1766,16 @@ describe('prd_audit kickback', () => {
     expect(route).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
   });
 
+  it('refuses to record a negative-path PLAN_GAP while the report carries a rejected row', () => {
+    const route = routePrdAuditPlanGaps(
+      rejectedRowWithNegativePathPlanGapReport(),
+      storiesForRejectedRowReport(),
+      {} as never,
+    );
+
+    expect(route).toEqual({ kind: 'none' });
+  });
+
   it('records an in-intent OVER_SCOPE finding as an accepted widening and passes', () => {
     const route = routePrdAuditOverScope(overScopeReport('S3.1', 'within'), []);
 
@@ -1811,6 +1858,33 @@ describe('prd_audit kickback', () => {
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
       'user-visible scope requires operator acceptance',
     );
+  });
+
+  it('keeps the grouped prd_audit member unsatisfied when a rejected row rides with a recordable PLAN_GAP', async () => {
+    const fixture = await runGroupedPrdAudit(
+      rejectedRowWithNegativePathPlanGapReport(),
+      storiesForRejectedRowReport(),
+    );
+
+    expect(fixture.state.ok && fixture.state.value.prd_audit).not.toBe('done');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('OS.1');
+  });
+
+  it('keeps the serial prd_audit tail unsatisfied when a rejected row rides with a recordable PLAN_GAP', async () => {
+    const fixture = await runGroupedPrdAudit(
+      rejectedRowWithNegativePathPlanGapReport(),
+      storiesForRejectedRowReport(),
+      undefined,
+      { mode: 'default' },
+    );
+
+    expect(fixture.state.ok && fixture.state.value.prd_audit).not.toBe('done');
+    // The serial tail never reaches its `record` promotion, so the PLAN_GAP is
+    // never projected back into the report as an accepted risk — the rejected
+    // OS.1 row is still the last word on disk.
+    const report = await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8');
+    expect(report).toBe(rejectedRowWithNegativePathPlanGapReport());
+    expect(report).not.toContain('"grade": "PLAN_GAP"');
   });
 
   it('completes an NC.1 operator-acceptance lap through the rendered cleared-halt handoff', async () => {

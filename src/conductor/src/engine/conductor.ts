@@ -798,7 +798,13 @@ export function routePrdAuditPlanGaps(
   config: HarnessConfig,
 ): PrdAuditPlanGapRoute {
   const parsed = parsePrdAuditReport(reportText);
-  if (!parsed.ok) return { kind: 'none' };
+  // A rejected row is a row the parser could not read, not a finding — it never
+  // appears in `parsed.value.findings`, so the `hasOtherBlockingGrade` scan
+  // below cannot see it. Without this guard a rejected row riding with a
+  // recordable negative-path PLAN_GAP returns `record`, and either SHIP path
+  // then overrides the gate as satisfied, so the row never blocks by name.
+  // Matches the sibling guard in `routePrdAuditOverScope`.
+  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
 
   const findings = parsed.value.findings
     .filter((finding) => finding.grade === 'PLAN_GAP')
