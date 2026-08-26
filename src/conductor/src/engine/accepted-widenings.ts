@@ -112,5 +112,17 @@ export function overScopeRelations(reportText: string): Map<string, IntentRelati
     const criterion = cells[criterionIndex]?.trim().toUpperCase(); const relation = cells[relationIndex]?.trim().toLowerCase();
     if (criterion && (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible')) relations.set(criterion, relation);
   }
+  const noOwnerSectionIndex = lines.findIndex((line) => /^\s*##\s+Findings without an owning criterion\s*$/i.test(line));
+  const noOwnerHeaderIndex = noOwnerSectionIndex === -1 ? -1 : lines.findIndex((line, index) => index > noOwnerSectionIndex && /^\s*\|/.test(line) && (() => { const header = prdAuditTableCells(line).map((cell) => cell.toLowerCase()); return header.includes('finding') && header.includes('grade'); })());
+  if (noOwnerHeaderIndex === -1) return relations;
+  const noOwnerHeader = prdAuditTableCells(lines[noOwnerHeaderIndex]!).map((cell) => cell.toLowerCase()); const findingIndex = noOwnerHeader.indexOf('finding'); const noOwnerGradeIndex = noOwnerHeader.indexOf('grade'); const noOwnerRelationIndex = noOwnerHeader.findIndex((cell) => cell === 'intent relation' || cell === 'intentrelation');
+  if (noOwnerRelationIndex === -1) return relations;
+  for (const line of lines.slice(noOwnerHeaderIndex + 1)) {
+    if (/^\s*##\s/.test(line)) break;
+    if (!/^\s*\|/.test(line)) continue;
+    const cells = prdAuditTableCells(line); if (cells.every((cell) => /^:?-{3,}:?$/.test(cell)) || cells[noOwnerGradeIndex]?.toUpperCase() !== 'OVER_SCOPE') continue;
+    const finding = cells[findingIndex]?.trim().toUpperCase(); const relation = cells[noOwnerRelationIndex]?.trim().toLowerCase();
+    if (finding && /^NC\.\d+$/.test(finding) && (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible')) relations.set(finding, relation);
+  }
   return relations;
 }

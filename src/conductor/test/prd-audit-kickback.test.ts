@@ -18,6 +18,7 @@ import {
 } from '../src/engine/conductor.js';
 import {
   classifyOverScopeCriterion,
+  overScopeRelations,
   parseClearedOverScopeDecisions,
   readOverScopeDecisions,
   recordOverScopeDecisions,
@@ -390,6 +391,34 @@ describe('prd_audit kickback', () => {
     await recordOverScopeDecisions(root, [{ ...refuse, decision: 'accept', rationale: 'Approved after review.' }]);
     const decisions = (await readOverScopeDecisions(root)).decisions;
     expect(classifyOverScopeCriterion('S3.1', new Map([['S3.1', 'outside-visible']]), decisions)).toBe('accepted');
+  });
+
+  it('extracts no-owner intent relations and classifies NC findings uniformly without decisions', () => {
+    const relations = overScopeRelations([
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '| Criterion | Grade | Plan task | Evidence | Intent relation |',
+      '| --- | --- | --- | --- | --- |',
+      '| S3.1 | OVER_SCOPE | | Existing criterion behavior | within |',
+      '',
+      '## Findings without an owning criterion',
+      '| Finding | Grade | Intent relation | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| NC.1 | OVER_SCOPE | within | Unplanned internal detail |',
+      '| NC.2 | OVER_SCOPE | outside-harmless | Harmless unplanned detail |',
+      '| NC.3 | OVER_SCOPE | outside-visible | Visible unplanned behavior |',
+    ].join('\n'));
+
+    expect([...relations]).toEqual([
+      ['S3.1', 'within'],
+      ['NC.1', 'within'],
+      ['NC.2', 'outside-harmless'],
+      ['NC.3', 'outside-visible'],
+    ]);
+    expect(classifyOverScopeCriterion('NC.1', relations, [])).toBe('not-blocking');
+    expect(classifyOverScopeCriterion('NC.2', relations, [])).toBe('not-blocking');
+    expect(classifyOverScopeCriterion('NC.3', relations, [])).toBe('blocking-undecided');
   });
 
   it('carries harvest defects and recorded decisions out of a halted over-scope route', async () => {
