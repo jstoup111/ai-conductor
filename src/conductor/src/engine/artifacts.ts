@@ -3119,7 +3119,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                           finding.grade !== 'PASS' &&
                           !(
                             finding.grade === 'OVER_SCOPE' &&
-                            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, preRelations, preDecisions))
+                            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, finding.evidence, preRelations, preDecisions))
                           ),
                       )
                     : findUnalignedFrRows(report).length > 0) ||
@@ -3202,7 +3202,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           finding.grade !== 'PASS' &&
           !(
             finding.grade === 'OVER_SCOPE' &&
-            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, relations, decisions))
+            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, finding.evidence, relations, decisions))
           ),
       );
       if (blocking.length > 0) {
@@ -4841,10 +4841,13 @@ export async function classifyPrdAuditGaps(
     // act on. Reading only the fresh rows made an accepted widening re-route
     // the next lap exactly as it did before the operator decided (ADR D8).
     const relations = overScopeRelations(content);
+    const findingSummaries = new Map(
+      parsed.ok ? parsed.value.findings.map((finding) => [finding.criterion, finding.evidence]) : [],
+    );
     const settled = new Set(
       [...relations.keys()].filter((criterion) =>
         ['accepted', 'not-blocking'].includes(
-          classifyOverScopeCriterion(criterion, relations, decisions),
+          classifyOverScopeCriterion(criterion, findingSummaries.get(criterion) ?? '', relations, decisions),
         )),
     );
     blocking.push(...findUnalignedFrRowsWithClass(content, settled));

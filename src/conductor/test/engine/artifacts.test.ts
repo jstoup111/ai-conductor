@@ -3798,6 +3798,48 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(true);
     });
 
+    it('honors an accepted NC finding only when its normalized evidence summary still matches', async () => {
+      const summary = '  Visible behavior outside the approved plan.  ';
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+          '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
+          '## Findings without an owning criterion\n' +
+          '| Finding | Grade | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- |\n' +
+          `| NC.1 | OVER_SCOPE | outside-visible | ${summary} |\n`,
+      );
+      await createFile(
+        '.pipeline/accepted-widenings.json',
+        JSON.stringify({
+          version: 1,
+          decisions: [{
+            criterion: 'NC.1',
+            summary: summary.trim(),
+            decision: 'accept',
+            rationale: 'Approved for this feature.',
+            operator: 'test',
+            decidedAt: '2026-08-26T00:00:00.000Z',
+          }],
+        }),
+      );
+
+      expect((await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 })).done).toBe(true);
+
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+          '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
+          '## Findings without an owning criterion\n' +
+          '| Finding | Grade | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- |\n' +
+          '| NC.1 | OVER_SCOPE | outside-visible | Changed visible behavior outside the approved plan. |\n',
+      );
+      const mismatched = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(mismatched.done).toBe(false);
+      expect(mismatched.reason).toContain('NC.1 (OVER_SCOPE)');
+    });
+
     it('the same finding still blocks when the operator has NOT accepted it', async () => {
       await writeReport('| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n');
       const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
@@ -5243,6 +5285,38 @@ Task 1 → Task 2
           attemptRunId: 'current-run',
           config: { gate_code_validity: { enabled: false } },
         })).resolves.toMatchObject({ done: true });
+      });
+
+      it('preserves a stale report with a matching accepted NC finding', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        const summary = 'Visible behavior outside the approved plan.';
+        const report = [
+          '**PRD:** none',
+          '',
+          '## Verdict Table',
+          '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |',
+          '| --- | --- | --- | --- | --- | --- |',
+          '| S3.1 | PASS | — | none | within | Covered behavior |',
+          '',
+          '## Findings without an owning criterion',
+          '| Finding | Grade | Intent relation | Evidence |',
+          '| --- | --- | --- | --- |',
+          `| NC.1 | OVER_SCOPE | outside-visible | ${summary} |`,
+        ].join('\n');
+        await writeFile(join(gdir, PATH), report);
+        await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
+        await writeFile(join(gdir, '.pipeline/accepted-widenings.json'), JSON.stringify({
+          version: 1,
+          decisions: [{
+            criterion: 'NC.1', summary, decision: 'accept', rationale: 'Approved.', operator: 'test', decidedAt: '2026-08-26T00:00:00.000Z',
+          }],
+        }));
+        await writeSidecar(gdir, baseline);
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+        expect(result).toMatchObject({ done: true, verdictFreshness: { outcome: 'preserved_surface_miss' } });
       });
 
       it('does not preserve a stale all-PASS report when the current report has rejected rows', async () => {
