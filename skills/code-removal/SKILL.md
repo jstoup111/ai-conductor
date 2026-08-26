@@ -1,5 +1,6 @@
 ---
 name: code-removal
+disable-model-invocation: true
 description: "Use when removing a file, seam, flag, symbol, or code path. Defines the evidence and test discipline for deletion-shaped work."
 enforcement: advisory
 phase: all
