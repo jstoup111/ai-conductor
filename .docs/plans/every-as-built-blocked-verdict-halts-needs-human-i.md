@@ -406,3 +406,40 @@ None — all seams exist on main; the growth ledger is already gate-keyed.
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a falsifiable Done when block; fail-closed and exhaustion enumerations are closed in Tasks 3 and 12
 - [ ] Dependencies are explicit and acyclic
+
+
+### Task rem-as-built-AB-R1: Reject non-exact finding class and any second Blocking Findings table
+**Gate:** as-built
+**Rationale:** parseAsBuiltBlockedFindings uppercases the supplied class before checking the closed set (artifacts.ts:4114), so `remediable` and `Design` are accepted although decision 2 requires the exact vocabulary REMEDIABLE|DESIGN. A blank line ends the first table (artifacts.ts:4097) and success returns (artifacts.ts:4138) without rejecting a second table in the same section.
+**Governing clause:** adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 2
+**Done when:**
+- adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 2 is satisfied by this task.
+
+### Task rem-as-built-AB-R2: Prove every parsed REMEDIABLE finding maps to exactly one admitted gap
+**Gate:** as-built
+**Rationale:** All parsed REMEDIABLE rows are collected (conductor.ts:3608) but admission keeps only ids that match planner-produced gaps (conductor.ts:3663, :3679). No set-equality check runs before the append (:3823), the ledger write (:3833), or route selection (:3931), so a planner response that omits a finding can still append and route the rest. Halt fail-closed naming missing/unexpected ids.
+**Governing clause:** adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 3
+**Done when:**
+- adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 3 is satisfied by this task.
+
+### Task rem-as-built-AB-R3: Render the parser fault on validation-group invalid reports
+**Gate:** as-built
+**Rationale:** The group halt appends renderAsBuiltBlockedFindingDetail only for blocked-design (conductor.ts:6775-6781); an `invalid` outcome gives the operator only the generic predicate reason (artifacts.ts:3133). The serial site already renders the fault (conductor.ts:10070). Decision 2 requires an invalid report to halt needs-human NAMING the defect.
+**Governing clause:** adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 2
+**Done when:**
+- adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 2 is satisfied by this task.
+
+### Task rem-as-built-AB-R4: Stamp refusal on both new validation-group halt exits
+**Gate:** as-built
+**Rationale:** The no-op/cap halt (conductor.ts:6651-6666) and the remediation halt (conductor.ts:6731-6746) emit a terminal and return without recordGroupRefusal, unlike the governing design/invalid halt (conductor.ts:6786) which stamps the judging validator and affected siblings.
+**Governing clause:** adr-2026-08-24-refused-step-status decision 4
+**Done when:**
+- adr-2026-08-24-refused-step-status decision 4 is satisfied by this task.
+
+### Task rem-as-built-AB-R5: Close the open execution before each projection-refusal return
+**Gate:** as-built
+**Rationale:** The group emits parallel_started (conductor.ts:6020) but its projection-refusal branch returns (:6569-6580) before parallel_completed (:6597). The serial path emits step_started (:7266) but its projection-refusal branch returns (:9293-9305) before step_completed (:10523). Every started execution must emit exactly one terminal on every path that can still run code.
+**Governing clause:** adr-2026-08-12-execution-lifecycle-completeness-for-timing decision 1
+**Done when:**
+- adr-2026-08-12-execution-lifecycle-completeness-for-timing decision 1 is satisfied by this task.
+
