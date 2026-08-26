@@ -40,6 +40,20 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    a story criterion id; a finding naming neither is rejected as malformed by the same parser that
    validates the verdict table, and never becomes work. The existing `ALIGNED|PARTIAL|DIVERGED|MISSING`
    per-FR table remains as evidence rows; the grade is what routes.
+
+   > **Amended 2026-08-25 by #1848:** An `OVER_SCOPE` finding that owns no story criterion is a
+   > legitimate first-class finding, not malformed: it is reported under the
+   > `## Findings without an owning criterion` section with a report-scoped `NC.<n>` key (key
+   > semantics and decision binding: adr-2026-08-24-over-scope-decision-block-and-durable-refusals
+   > D4 as amended by #1848). The malformed-rejection rule above continues to apply to
+   > `FIXABLE`/`PLAN_GAP`/`PASS` rows and to any row whose key matches neither the
+   > story-criterion form nor an in-section `NC.<n>` form — but rejection is now per-row: rows
+   > carrying an invalid or duplicated key are rejected individually with a named diagnostic
+   > while sibling rows stay consumed (departing from adr-2026-08-13 §1's whole-result failure —
+   > prd-audit rows are independently meaningful verdicts). A rejected row still blocks the gate
+   > and the halt names each rejected row and why; report-level faults (missing PRD marker or
+   > Verdict Table) remain whole-report mechanical faults. Findings with no owning criterion
+   > still never become work — they route only to the operator decision block.
 4. **Scope-as-intent.** `OVER_SCOPE` judges shipped behavior against the plan and intent (PRD
    Goals/Non-Goals and In/Out Scope, else stories + plan outcome). Within intent → self-accepted and
    recorded as a widening; outside intent, not user-visible → recorded, ships; outside intent,

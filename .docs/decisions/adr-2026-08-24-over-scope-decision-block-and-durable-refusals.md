@@ -50,6 +50,24 @@ representable state: the candidate's `accepted: false` field is written but neve
    (adr-2026-08-09 hook-owned-containment-event-ledger Concern 2); the shared filename is
    historical and the schemas are disjoint.
 
+   > **Amended 2026-08-25 by #1848:** the `criterion` field now carries either a story-criterion id
+   > (`S<s>.<c>`) or a no-owner OVER_SCOPE finding key (`NC.<n>` — a report-scoped ordinal the
+   > audit author assigns within the report's `## Findings without an owning criterion` section;
+   > valid only there, and that section admits only grade `OVER_SCOPE`). For `NC.*` entries the
+   > decision binds on `criterion` AND `summary` together: a decision applies on a later lap only
+   > when both match the re-reported finding; any mismatch (renumbered, reworded) leaves the
+   > finding `blocking-undecided` and the operator is re-asked — never wrong, occasionally
+   > re-asks. Story-criterion entries keep criterion-only matching (criterion ids are stable
+   > across re-audits; `NC.*` ordinals are not). Last-decision-wins is per matched identity.
+   > D1's blocking predicate, D2's block entry shape, and D7's "criterion the audit did not flag"
+   > defect rule read "criterion" as this widened key space. *Recorded departure
+   > (operator-authorized 2026-08-25):* positional + prose-bound identity departs from the
+   > build_review reference-schema family (adr-2026-08-16, adr-2026-08-18
+   > content-anchored-finding-reference-schema); those govern build_review rubric identities, the
+   > decision window is only one feature's re-audit laps (per-worktree `.pipeline/`), and the
+   > mismatch path fails toward a re-ask, never a mis-applied decision. Boundary: prd-audit
+   > no-owner scope findings only — no precedent for other finding-identity schemas.
+
 5. **No backwards compatibility (operator-authorized pre-v1 break).** The single-line
    `OVER_SCOPE_ACCEPT:` marker, its single-match reader, and the old record shape are removed
    in the same change. An old-shape store or an old-form `HALT.cleared` body reads as absent.
