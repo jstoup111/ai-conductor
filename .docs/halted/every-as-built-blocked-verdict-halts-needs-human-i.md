@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-26T17:48:02.274Z
+Status: halted
 Slug: every-as-built-blocked-verdict-halts-needs-human-i
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-every-as-built-blocked-verdict-halts-needs-human-i
-Head SHA: 6c7b7704244ef694ee6f3a8486ba012302496f9a
-Halted at: 2026-08-26T16:29:49.779Z
+Head SHA: d53cfd152a301390ee1e1a9a8405676034251fe2
+Halted at: 2026-08-26T18:02:29.154Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
