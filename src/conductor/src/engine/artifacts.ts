@@ -18,7 +18,8 @@ import {
 import { seedTaskStatus } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
-import { gateVerdictStillValid } from './gate-code-validity.js';
+import { gateVerdictStillValid, verdictProducedByRun } from './gate-code-validity.js';
+import type { VerdictRunIdentity } from './gate-code-validity.js';
 import {
   classifyOverScopeCriterion,
   overScopeRelations,
@@ -865,8 +866,12 @@ async function sweptArtifactStillValid(
   step: StepName,
   config?: HarnessConfig,
   artifactResolution?: ArtifactResolutionContext,
+  expectedRunId?: string,
 ): Promise<boolean> {
   if (!resolveGateCodeValidityConfig(config).enabled) return false;
+  if ((await verdictProducedByRun(dir, step, expectedRunId, config)).state === 'stale-run-identity') {
+    return false;
+  }
   const git = makeGitRunner(dir);
   const ctx = { projectRoot: dir, git };
 
@@ -955,12 +960,13 @@ export async function sweepStaleReviewArtifacts(
   sessionStartedAt: number | undefined,
   config?: HarnessConfig,
   artifactResolution?: ArtifactResolutionContext,
+  expectedRunId?: string,
 ): Promise<string[]> {
   if (!STALE_SWEEP_STEPS.has(step) || sessionStartedAt === undefined) return [];
   const removed: string[] = [];
   for (const f of await findArtifactFiles(dir, step)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
-    if (await sweptArtifactStillValid(dir, step, config, artifactResolution)) continue; // still code-valid → spare
+    if (await sweptArtifactStillValid(dir, step, config, artifactResolution, expectedRunId)) continue; // still code-valid → spare
     try {
       await rm(f);
       removed.push(f);
@@ -1000,8 +1006,10 @@ export interface CompletionResult {
     artifact: string;
     mtimeMs?: number;
     floorMs?: number;
-    floorSource: 'attempt' | 'session';
+    floorSource: 'attempt' | 'session' | 'run-identity';
   } & VerdictFreshnessClassification;
+  /** Telemetry-only classification for a retryable stale verdict identity. */
+  retrySignal?: 'stale-run-identity';
   /**
    * Route-signal facet for retry-classification (issue #646). 'named-route'
    * marks a fresh, parseable, non-passing verdict (a real reviewer decision
@@ -1115,6 +1123,11 @@ export interface CompletionContext {
    * resume/backstop/legacy callers, which fall back to `sessionStartedAt`.
    */
   attemptStartedAt?: number;
+  /**
+   * Engine-owned identity for the in-flight dispatch. Absent for idle,
+   * resume, and backstop completion checks.
+   */
+  attemptRunId?: string;
   /** Used by the retro predicate to prefer slug-matched filenames. */
   featureDesc?: string;
   /** Prepared once by callers that need feature-aware generic artifact resolution. */
@@ -2305,8 +2318,8 @@ export async function stampCode(ctx: CompletionContext): Promise<string | null> 
 }
 
 /**
- * Sidecar code-stamp marker shape for `prd_audit` and
- * `architecture_review_as_built` (gate-code-validity-on-redispatch, #817).
+ * Sidecar code-stamp marker shape for judged gates
+ * (gate-code-validity-on-redispatch, #817).
  * Unlike `build_review` (a JSON verdict) or `manual_test` (which already has
  * a `headSha`-bearing JSON marker), these two gates' verdicts live in
  * markdown reports — so `codeStamp` is recorded in a small adjacent JSON
@@ -2317,6 +2330,7 @@ export async function stampCode(ctx: CompletionContext): Promise<string | null> 
  */
 export interface GateCodeStampMarker {
   codeStamp?: string | null;
+  runId?: string;
 }
 
 /** Sidecar path for prd_audit's code stamp (see `GateCodeStampMarker`). */
@@ -2329,6 +2343,60 @@ export const PRD_AUDIT_CODE_STAMP = '.pipeline/prd-audit-code-stamp.json';
 export const ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP =
   '.pipeline/architecture-review-as-built-code-stamp.json';
 
+/** Sidecar path for manual_test's code stamp (see `GateCodeStampMarker`). */
+export const MANUAL_TEST_CODE_STAMP = '.pipeline/manual-test-code-stamp.json';
+
+const VERDICT_RUN_ID_SIDECARS: Partial<Record<StepName, string>> = {
+  manual_test: MANUAL_TEST_CODE_STAMP,
+  prd_audit: PRD_AUDIT_CODE_STAMP,
+  architecture_review_as_built: ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+};
+
+/**
+ * The SHIP-tail gates that carry an engine-stamped run identity
+ * (adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity, Decision
+ * scope). Only these dispatches hand their identity to the provider lifecycle
+ * as its `attempt.id`; every other step keeps the runner's own run-scoped
+ * attempt-id format, which daemon logs and lifecycle telemetry read.
+ */
+export function isVerdictRunIdentityStep(step: StepName): boolean {
+  return Object.prototype.hasOwnProperty.call(VERDICT_RUN_ID_SIDECARS, step);
+}
+
+async function readGateCodeStampMarker(path: string): Promise<GateCodeStampMarker> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'));
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as GateCodeStampMarker
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Records the engine-owned identity of a verdict dispatch at settle. */
+export async function stampGateRunIdentity(
+  dir: string,
+  step: StepName,
+  runId: string | undefined,
+): Promise<void> {
+  const sidecarPath = VERDICT_RUN_ID_SIDECARS[step];
+  if (!sidecarPath || !runId) return;
+
+  try {
+    const path = join(dir, sidecarPath);
+    const existing = await readGateCodeStampMarker(path);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      JSON.stringify({ ...existing, runId } satisfies GateCodeStampMarker, null, 2) + '\n',
+      'utf-8',
+    );
+  } catch {
+    // Best-effort; Task 4 owns observable write-failure policy.
+  }
+}
+
 /**
  * Writes `{ codeStamp }` to a `GateCodeStampMarker` sidecar at true-completion
  * exit. Best-effort — never throws, never blocks returning `done: true`.
@@ -2339,11 +2407,49 @@ async function writeGateCodeStamp(
   ctx: CompletionContext,
 ): Promise<void> {
   const codeStamp = await stampCode(ctx);
+  const path = join(dir, sidecarPath);
+  const existing = await readGateCodeStampMarker(path);
   await writeFile(
-    join(dir, sidecarPath),
-    JSON.stringify({ codeStamp } satisfies GateCodeStampMarker, null, 2),
+    path,
+    JSON.stringify({ ...existing, codeStamp } satisfies GateCodeStampMarker, null, 2),
     'utf-8',
   ).catch(() => {});
+}
+
+/**
+ * Engine-stamped run identity takes precedence over the mtime floor for the
+ * three SHIP-tail verdict predicates. Legacy and kill-switched callers retain
+ * their existing mtime-only behavior.
+ */
+async function completionVerdictRunIdentity(
+  dir: string,
+  step: StepName,
+  ctx: CompletionContext,
+): Promise<VerdictRunIdentity> {
+  if (!resolveGateCodeValidityConfig(ctx.config).enabled) return { state: 'unstamped' };
+  return verdictProducedByRun(dir, step, ctx.attemptRunId, ctx.config);
+}
+
+function staleVerdictRunIdentityResult(
+  artifact: string,
+  identity: Extract<VerdictRunIdentity, { state: 'stale-run-identity' }>,
+): CompletionResult {
+  return {
+    done: false,
+    // A prior dispatch's report is not an adverse verdict from THIS dispatch.
+    // Keep this typed so retry routing never has to infer freshness from text.
+    routeClass: 'absent',
+    retrySignal: 'stale-run-identity',
+    verdictFreshness: {
+      artifact,
+      floorSource: 'run-identity',
+      outcome: 'stale_invalidated',
+      fresh: false,
+    },
+    reason:
+      `${artifact} was produced by run ${identity.foundRunId}, not the current run ` +
+      `${identity.expectedRunId} — scoring 'no fresh verdict'; the prior run's findings are never reused`,
+  };
 }
 
 async function writePrdAuditCodeStamp(dir: string, ctx: CompletionContext): Promise<void> {
@@ -2717,6 +2823,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   manual_test: async (dir, ctx): Promise<CompletionResult> => {
     const file = join(dir, '.pipeline/manual-test-results.md');
     const markerPath = join(dir, MANUAL_TEST_FAIL_EVIDENCE);
+    const runIdentity = await completionVerdictRunIdentity(dir, 'manual_test', ctx);
 
     // gate-code-validity-on-redispatch (#817, Task 6): before falling into
     // the mtime-freshness check below, see if a stamped FAIL-free marker
@@ -2728,7 +2835,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // could bypass the guard below. Missing marker, parse failure, no
     // codeStamp, or any FAIL/whitewash residue all fall through unchanged
     // to the existing logic (invariant C2/C3).
-    if (resolveGateCodeValidityConfig(ctx.config).enabled) {
+    if (
+      runIdentity.state !== 'stale-run-identity' &&
+      resolveGateCodeValidityConfig(ctx.config).enabled
+    ) {
       try {
         const raw = await readFile(markerPath, 'utf-8');
         const marker = JSON.parse(raw) as ManualTestFailEvidence;
@@ -2771,6 +2881,28 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // ordering bug). Compute/check FAIL rows BEFORE honoring the sentinel.
     const failRows = region.split('\n').filter(isManualTestFailRow);
 
+    // A stale stamp normally means this dispatch has no verdict to judge, so
+    // retain the typed no-fresh-verdict result rather than re-scoring the old
+    // latest attempt. The one exception is an unresolved same-HEAD FAIL: its
+    // marker is the #367 proof that a later clean section would be a
+    // whitewash, and must remain authoritative even across run identities.
+    if (runIdentity.state === 'stale-run-identity') {
+      if (
+        failRows.length === 0 &&
+        headSha &&
+        (await hasFreshFailEvidenceAtHead(markerPath, headSha, ctx.sessionStartedAt))
+      ) {
+        return {
+          done: false,
+          reason:
+            `manual-test results flipped FAIL→PASS but HEAD (${headSha.slice(0, 12)}) has not ` +
+            'moved since the recorded FAIL — no new commits means no fix (whitewash guard). ' +
+            'Implement and commit the fix, then re-run manual-test',
+        };
+      }
+      return staleVerdictRunIdentityResult('.pipeline/manual-test-results.md', runIdentity);
+    }
+
     // Auto-mode SKIP sentinel (#748): the latest attempt was deliberately
     // skipped (no endpoint/UI stories to exercise) rather than carrying a
     // PASS/WARN/FAIL table. Treat it as done once it's fresh for this session —
@@ -2785,7 +2917,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // sha means the gate is still blocked; fall through to the whitewash-guard
     // done:false path below instead of returning done:true here.
     if (failRows.length === 0 && isSkipAttempt(region)) {
-      if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
+      if (
+        runIdentity.state !== 'match' &&
+        !(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))
+      ) {
         return {
           done: false,
           reason: '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
@@ -2820,7 +2955,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: '.pipeline/manual-test-results.md contains FAIL rows (latest attempt) — fix the bugs (commits required) and re-run manual-test',
       };
     }
-    if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
+    if (
+      runIdentity.state !== 'match' &&
+      !(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))
+    ) {
       return {
         done: false,
         reason: '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
@@ -2889,6 +3027,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // the PRD is amended (DECIDE) and the audit re-run. Mirrors manual_test:
   // presence + freshness + no blocking rows.
   prd_audit: async (dir, ctx): Promise<CompletionResult> => {
+    const runIdentity = await completionVerdictRunIdentity(dir, 'prd_audit', ctx);
+    if (runIdentity.state === 'stale-run-identity') {
+      return staleVerdictRunIdentityResult('.pipeline/prd-audit.md', runIdentity);
+    }
     // gate-code-validity-on-redispatch (#817, Task 6): before the
     // freshness/report-parsing checks below, see if the last recorded PASS
     // (the sidecar is written ONLY on the PASS path — Task 4 — so its mere
@@ -2974,7 +3116,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const cmpFloor = verdictFreshnessComparand(ctx);
     const fresh: string[] = [];
     for (const f of files) {
-      if (await fileIsFreshSinceSession(f, cmpFloor)) fresh.push(f);
+      if (runIdentity.state === 'match' || await fileIsFreshSinceSession(f, cmpFloor)) {
+        fresh.push(f);
+      }
     }
     if (fresh.length === 0) {
       const f = files[0];
@@ -3062,6 +3206,17 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // unless the literal word BLOCKED appeared), which let a no-ADR / garbled
   // verdict slip through marked `done` and the loop end without DONE or HALT.
   architecture_review_as_built: async (dir, ctx): Promise<CompletionResult> => {
+    const runIdentity = await completionVerdictRunIdentity(
+      dir,
+      'architecture_review_as_built',
+      ctx,
+    );
+    if (runIdentity.state === 'stale-run-identity') {
+      return staleVerdictRunIdentityResult(
+        '.pipeline/architecture-review-as-built.md',
+        runIdentity,
+      );
+    }
     // gate-code-validity-on-redispatch (#817, Task 6): mirrors prd_audit's
     // preserve-check above — the sidecar is written ONLY on the clean-
     // APPROVED PASS path (Task 4), so its mere presence with a codeStamp IS
@@ -3112,7 +3267,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const cmpFloor = verdictFreshnessComparand(ctx);
     const fresh: string[] = [];
     for (const f of files) {
-      if (await fileIsFreshSinceSession(f, cmpFloor)) fresh.push(f);
+      if (runIdentity.state === 'match' || await fileIsFreshSinceSession(f, cmpFloor)) {
+        fresh.push(f);
+      }
     }
     if (fresh.length === 0) {
       const f = files[0];
@@ -4460,12 +4617,19 @@ export interface PrdGapClassification {
 export async function classifyPrdAuditGaps(
   dir: string,
   sessionStartedAt: number | undefined,
+  expectedRunId?: string,
+  config?: Pick<HarnessConfig, 'gate_code_validity'>,
 ): Promise<PrdGapClassification> {
   const files = await findArtifactFiles(dir, 'prd_audit');
   const decisions = (await readOverScopeDecisions(dir)).decisions;
+  const identity = await verdictProducedByRun(dir, 'prd_audit', expectedRunId, config);
   const blocking: UnalignedFrRow[] = [];
   for (const f of files) {
-    if (!(await fileIsFreshSinceSession(f, sessionStartedAt))) continue;
+    if (identity.state === 'stale-run-identity') continue;
+    if (
+      identity.state === 'unstamped' &&
+      !(await fileIsFreshSinceSession(f, sessionStartedAt))
+    ) continue;
     const content = await readFile(f, 'utf-8');
     // An OVER_SCOPE criterion the operator already accepted, or one whose
     // intent relation never made it blocking, is not a gap this routing should
@@ -4502,7 +4666,7 @@ const RETRY_CLASSIFY_STEPS: ReadonlySet<StepName> = new Set<StepName>([
 ]);
 
 export type RetryDecision =
-  | { decision: 'rerun' }
+  | { decision: 'rerun'; signal?: 'stale-run-identity' }
   | { decision: 'route'; signal: 'named-route' | 'identical-repeat' | 'unretryable-inputs' };
 
 /**
@@ -4534,6 +4698,15 @@ export function classifyRetryDecision(input: {
 
   const namedRoute = step === 'prd_audit' ? prdAuditNonClean === true : completion.routeClass === 'named-route';
   if (namedRoute) return { decision: 'route', signal: 'named-route' };
+
+  // D5: no verdict for this dispatch is a retryable absence, even when its
+  // diagnostic happens to repeat byte-for-byte. This is a typed facet rather
+  // than a reason-string exception, so stale findings cannot become a route.
+  if (completion.routeClass === 'absent') {
+    return completion.retrySignal === 'stale-run-identity'
+      ? { decision: 'rerun', signal: 'stale-run-identity' }
+      : { decision: 'rerun' };
+  }
 
   if (
     attempt >= 2 &&

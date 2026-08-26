@@ -14,8 +14,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { makeGitRunner } from '../../src/engine/rebase.js';
-import { gateVerdictStillValid } from '../../src/engine/gate-code-validity.js';
-import { BUILD_REVIEW_VERDICT } from '../../src/engine/artifacts.js';
+import {
+  gateVerdictStillValid,
+  verdictProducedByRun,
+} from '../../src/engine/gate-code-validity.js';
+import {
+  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+  BUILD_REVIEW_VERDICT,
+  MANUAL_TEST_CODE_STAMP,
+  PRD_AUDIT_CODE_STAMP,
+} from '../../src/engine/artifacts.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
@@ -78,6 +86,87 @@ afterEach(async () => {
   while (scratches.length) {
     await rm(scratches.pop()!, { recursive: true, force: true });
   }
+});
+
+// Covers: task:5
+describe('verdictProducedByRun', () => {
+  const verdictGates = [
+    ['prd_audit', PRD_AUDIT_CODE_STAMP],
+    ['architecture_review_as_built', ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP],
+    ['manual_test', MANUAL_TEST_CODE_STAMP],
+  ] as const;
+
+  for (const [gate, sidecar] of verdictGates) {
+    it(`returns match for ${gate} when its sidecar carries the expected run id`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
+      scratches.push(dir);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, sidecar), JSON.stringify({ runId: 'run-current' }));
+
+      const result = await verdictProducedByRun(dir, gate, 'run-current');
+
+      expect(result).toEqual({ state: 'match', runId: 'run-current' });
+    });
+
+    it(`returns typed stale-run-identity for ${gate} when its sidecar carries another run id`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
+      scratches.push(dir);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, sidecar), JSON.stringify({ runId: 'run-prior' }));
+
+      const result = await verdictProducedByRun(dir, gate, 'run-current');
+
+      expect(result).toEqual({
+        state: 'stale-run-identity',
+        expectedRunId: 'run-current',
+        foundRunId: 'run-prior',
+      });
+    });
+
+    it(`falls back to mtime for ${gate} when its sidecar is missing, unstamped, or corrupt`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
+      scratches.push(dir);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+
+      await expect(verdictProducedByRun(dir, gate, 'run-current')).resolves.toEqual({
+        state: 'unstamped',
+      });
+
+      await writeFile(join(dir, sidecar), JSON.stringify({ codeStamp: 'head' }));
+      await expect(verdictProducedByRun(dir, gate, 'run-current')).resolves.toEqual({
+        state: 'unstamped',
+      });
+
+      await writeFile(join(dir, sidecar), '{not-json');
+      await expect(verdictProducedByRun(dir, gate, 'run-current')).resolves.toEqual({
+        state: 'unstamped',
+      });
+    });
+  }
+
+  it('falls back to mtime when no expected run id is available for a legacy context', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
+    scratches.push(dir);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ runId: 'run-prior' }));
+
+    await expect(verdictProducedByRun(dir, 'prd_audit', undefined)).resolves.toEqual({
+      state: 'unstamped',
+    });
+  });
+
+  it('returns unstamped when gate-code-validity is disabled, even for a matching sidecar', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
+    scratches.push(dir);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ runId: 'run-current' }));
+
+    await expect(
+      verdictProducedByRun(dir, 'prd_audit', 'run-current', {
+        gate_code_validity: { enabled: false },
+      }),
+    ).resolves.toEqual({ state: 'unstamped' });
+  });
 });
 
 describe('gateVerdictStillValid', () => {

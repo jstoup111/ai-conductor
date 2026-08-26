@@ -1,6 +1,6 @@
 # Architecture: SHIP-tail verdict run-identity contract (#1838)
 
-**Last updated:** 2026-08-25
+**Last updated:** 2026-08-26
 **Scope:** How per-dispatch run identity flows from the engine into the SHIP-tail verdict
 artifacts (prd_audit, architecture_review_as_built, manual_test) and back through every
 reader — completion checks, `classifyPrdAuditGaps`, and the halt/routing paths — plus the
@@ -29,9 +29,11 @@ graph TD
         MREPORT["manual-test results + marker<br/>Run-Id: «runId»"]
     end
 
-    subgraph Readers ["Readers (artifacts.ts)"]
-        COMPLETE["Completion checks<br/>identity match, mtime fallback"]
-        CLASSIFY["classifyPrdAuditGaps<br/>identity match (was session-mtime)"]
+    subgraph Readers ["Readers"]
+        COMPLETE["Completion checks (artifacts.ts)<br/>identity match, mtime fallback"]
+        CLASSIFY["classifyPrdAuditGaps (artifacts.ts)<br/>identity match (was session-mtime)"]
+        PLANGAP["routeCurrentPrdAuditPlanGaps (conductor.ts)<br/>PLAN_GAP halt/record route"]
+        OVERSCOPE["routeCurrentPrdAuditOverScope (conductor.ts)<br/>OVER_SCOPE halt/record route"]
     end
 
     DISP --> PRD
@@ -48,6 +50,12 @@ graph TD
     RETRY -->|"budget exhausted"| HALT
     COMPLETE -->|reads| REPORT
     CLASSIFY -->|"fresh-identity rows only"| REPORT
+    HANDSHAKE -->|"cleared: this dispatch wrote it"| PLANGAP
+    HANDSHAKE -->|"cleared: this dispatch wrote it"| OVERSCOPE
+    PLANGAP -->|"current-lap rows only"| REPORT
+    OVERSCOPE -->|"current-lap rows only"| REPORT
+    PLANGAP --> HALT
+    OVERSCOPE --> HALT
 ```
 
 ## Sequence: stale-verdict prevention
@@ -87,3 +95,4 @@ sequenceDiagram
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-08-25 | Initial generation | DECIDE for #1838 (spec authoring) |
+| 2026-08-26 | Added the two prd-audit routing readers and their handshake gate | As-built finding 3: the Readers subgraph omitted the shipped halt/routing readers |

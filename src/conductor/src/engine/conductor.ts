@@ -9,7 +9,7 @@ import {
   stat,
 } from 'node:fs/promises';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   recordGateRepair,
 } from './test-suite-remediation.js';
@@ -87,6 +87,7 @@ import { BuildProgressWatcher } from './build-progress-watcher.js';
 import { CloseoutEventTail } from './closeout-tail.js';
 import {
   resolveBuildProgressConfig,
+  resolveGateCodeValidityConfig,
   BUILD_PROGRESS_HALT_DEFAULTS,
   resolveValidationConcurrency,
   RETRY_ROUTING_DEFAULTS,
@@ -167,12 +168,20 @@ import {
   buildReviewFailureDetails,
   validateBuildReviewVerdict,
   FINISH_CHOICE_MARKER,
+  VERDICT_FRESHNESS_FS_TOLERANCE_MS,
+  PRD_AUDIT_CODE_STAMP,
+  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+  MANUAL_TEST_CODE_STAMP,
   type RemediationGap,
   type CompletionContext,
+  type CompletionResult,
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
+  stampGateRunIdentity,
+  isVerdictRunIdentityStep,
 } from './artifacts.js';
 import { parsePlanTaskBodies } from './plan-task-parse.js';
+import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
   type CriterionBoundRemediationGap,
@@ -1231,6 +1240,16 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 
 export interface StepRunOptions {
   /**
+   * This dispatch's engine-owned run identity, passed INTO the provider
+   * lifecycle so its `attempt.id` is this exact value
+   * (adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity D1). One id
+   * authority per dispatch: the value logged by the lifecycle is the value
+   * stamped into the verdict sidecar and read back by every identity reader.
+   * Absent for dispatches outside the identity seam, which keep the runner's
+   * own run-scoped attempt-id format.
+   */
+  runId?: string;
+  /**
    * Retry hint injected into the system prompt when the conductor re-invokes
    * this step after a completion-gate miss. Example: "previous attempt did not
    * produce .docs/plans/*.md".
@@ -2151,6 +2170,17 @@ export class Conductor {
   private currentAttemptStartedAt: number | undefined;
 
   /**
+   * Identity of the current generic dispatch. Minted once here and passed
+   * into the dispatch as `StepRunOptions.runId`, where it becomes the
+   * provider-lifecycle `attempt.id` (adr-2026-08-25-engine-stamped-ship-tail-
+   * verdict-run-identity D1) — so the lifecycle id, the verdict sidecar stamp,
+   * and every identity reader share one value instead of two authorities.
+   * Cleared alongside currentAttemptStartedAt after the dispatch completion
+   * check.
+   */
+  private currentRunId: string | undefined;
+
+  /**
    * Set when a recorded prd-audit finding could not be projected into the
    * verdict artifact (D8). Consumed once by `routeCurrentPrdAudit`, which
    * turns it into a named blocking route.
@@ -2418,6 +2448,7 @@ export class Conductor {
     return {
       sessionStartedAt: state.session_started_at,
       attemptStartedAt: this.currentAttemptStartedAt,
+      attemptRunId: this.currentRunId,
       featureDesc: state.feature_desc,
       config: this.config,
       getHeadSha: () => currentCommitSha(this.projectRoot),
@@ -2456,6 +2487,166 @@ export class Conductor {
         return retained ?? this.fullSuiteVerifier.inspect();
       },
     };
+  }
+
+  /**
+   * Stamps the engine-owned run identity and makes a best-effort failure
+   * observable at the engine seam. Provider output is never an identity
+   * source: the only value accepted here is the id minted for this dispatch.
+   */
+  private async stampVerdictRunIdentity(
+    step: StepName,
+    runId: string | undefined,
+  ): Promise<void> {
+    if (!resolveGateCodeValidityConfig(this.config).enabled) return;
+
+    const sidecarPath: Partial<Record<StepName, string>> = {
+      manual_test: MANUAL_TEST_CODE_STAMP,
+      prd_audit: PRD_AUDIT_CODE_STAMP,
+      architecture_review_as_built: ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+    };
+    const path = sidecarPath[step];
+    if (!path || !runId) return;
+
+    await stampGateRunIdentity(this.projectRoot, step, runId);
+
+    try {
+      const marker: unknown = JSON.parse(
+        await readFile(join(this.projectRoot, path), 'utf8'),
+      );
+      if (
+        marker !== null &&
+        typeof marker === 'object' &&
+        !Array.isArray(marker) &&
+        (marker as { runId?: unknown }).runId === runId
+      ) {
+        return;
+      }
+    } catch {
+      // The writer is deliberately best-effort. The warning below makes a
+      // missing/corrupt sidecar visible without turning it into a dispatch failure.
+    }
+
+    (this.log ?? console.warn)(
+      `warning: ${step} verdict run-id sidecar ${path} could not be stamped for this dispatch; treating the verdict as unstamped.`,
+    );
+  }
+
+  /**
+   * D3's post-dispatch write handshake. A run-id sidecar is durable proof of
+   * which dispatch settled, but cannot by itself prove that the report was
+   * rewritten: stamping an untouched prior-lap report would otherwise bless
+   * it. Require both the declared report's write time and its settled sidecar.
+   *
+   * This is intentionally a conductor seam rather than a completion predicate;
+   * it runs before a predicate or any routing reader can inspect report text.
+   */
+  private async verdictDispatchHandshake(
+    step: StepName,
+    expectedRunId: string | undefined,
+    dispatchStartedAt: number | undefined,
+  ): Promise<CompletionResult | undefined> {
+    if (
+      step !== 'manual_test' &&
+      step !== 'prd_audit' &&
+      step !== 'architecture_review_as_built'
+    ) return undefined;
+
+    try {
+      const files = await findArtifactFilesForStep(this.projectRoot, step);
+      const identities = await verdictProducedByRun(
+        this.projectRoot,
+        step,
+        expectedRunId,
+        this.config,
+      );
+      const sidecarPath: Partial<Record<StepName, string>> = {
+        manual_test: MANUAL_TEST_CODE_STAMP,
+        prd_audit: PRD_AUDIT_CODE_STAMP,
+        architecture_review_as_built: ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+      };
+      const marker = sidecarPath[step] ?? `${step} verdict sidecar`;
+      const foundRunId = identities.state === 'stale-run-identity'
+        ? identities.foundRunId
+        : identities.state === 'match'
+          ? identities.runId
+          : 'unstamped';
+      const failures: string[] = [];
+
+      if (files.length === 0) {
+        failures.push(`${(STEP_ARTIFACT_GLOBS[step] ?? []).join(', ') || step} is missing`);
+      }
+
+      for (const file of files) {
+        let mtimeMs: number | undefined;
+        try {
+          mtimeMs = (await stat(file)).mtimeMs;
+        } catch {
+          failures.push(`${relative(this.projectRoot, file)} is missing`);
+          continue;
+        }
+        // Match the established per-attempt freshness tolerance: common
+        // filesystems round an immediate write down slightly, but a prior
+        // lap remains far outside this narrow window.
+        if (
+          dispatchStartedAt !== undefined &&
+          mtimeMs < dispatchStartedAt - VERDICT_FRESHNESS_FS_TOLERANCE_MS
+        ) {
+          failures.push(
+            `${relative(this.projectRoot, file)} is stale (found mtime ${new Date(mtimeMs).toISOString()})`,
+          );
+        }
+      }
+
+      if (
+        resolveGateCodeValidityConfig(this.config).enabled &&
+        identities.state !== 'match'
+      ) {
+        const identityState = identities.state === 'stale-run-identity' ? 'stale' : 'unstamped';
+        failures.push(
+          `${marker} is ${identityState} ` +
+          `(expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId})`,
+        );
+        (this.log ?? console.warn)(
+          `warning: post-dispatch verdict write handshake could not verify ${marker} for ${step}; ` +
+          `expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId}`,
+        );
+      }
+
+      if (failures.length === 0) return undefined;
+      return {
+        done: false,
+        routeClass: 'absent',
+        ...(identities.state === 'stale-run-identity'
+          ? {
+              retrySignal: 'stale-run-identity' as const,
+              verdictFreshness: {
+                artifact: files[0] ?? marker,
+                floorSource: 'run-identity' as const,
+                outcome: 'stale_invalidated' as const,
+                fresh: false,
+              },
+            }
+          : {}),
+        reason:
+          `post-dispatch verdict write handshake failed for ${step}: ${failures.join('; ')}; ` +
+          `expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId}`,
+      };
+    } catch {
+      // D3: a read failure is a failed handshake, never a thrown conductor
+      // failure. Task 7 adds the per-artifact corrupt-input diagnostics.
+      (this.log ?? console.warn)(
+        `warning: post-dispatch verdict write handshake could not verify ${step}; ` +
+        `expected run id ${expectedRunId ?? 'none'}; found run id unavailable`,
+      );
+      return {
+        done: false,
+        routeClass: 'absent',
+        reason:
+          `post-dispatch verdict write handshake could not verify ${step}; ` +
+          `expected run id ${expectedRunId ?? 'none'}; found run id unavailable`,
+      };
+    }
   }
 
   /**
@@ -5346,6 +5537,10 @@ export class Conductor {
     // routed back to BUILD to self-heal. Bounded like MAX_KICKBACKS_PER_GATE so
     // an impl-gap the daemon can't actually close eventually halts for a human.
     let prdAuditSelfHeals = 0;
+    // The current attempt id is cleared immediately after completion checks;
+    // retain the last prd_audit dispatch identity for routing that follows the
+    // step loop so stale report text never drives a later fallback route.
+    let lastPrdAuditRunId: string | undefined;
     // Daemon-only: how many times the /remediate planner has routed a blocking
     // prd-audit back to a target step. Bounded like prdAuditSelfHeals so a gap the
     // planner can't actually close still halts for a human.
@@ -6104,7 +6299,16 @@ export class Conductor {
             // their own StepRunResult. The join only observes that result;
             // it does not add another validity predicate.
             const nativeBranchResults = new Map<string, StepRunResult>();
+            const branchDispatchStartedAt = new Map<string, number>();
+            const branchHandshakeFailures = new Map<string, CompletionResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
+              // D1: one identity per branch dispatch, minted here and passed
+              // into the branch below so the provider-lifecycle `attempt.id`
+              // is this exact value. Native members run no provider dispatch,
+              // so their id is only the stamp's.
+              const branchRunIds = new Map(
+                members.map((member) => [member.name, randomUUID()] as const),
+              );
               const roundChanges: Record<string, unknown> = {};
               for (const member of members) {
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
@@ -6129,7 +6333,13 @@ export class Conductor {
                         return settled;
                       },
                       {
-                        onMemberEvent: (event) => {
+                        onMemberEvent: async (event) => {
+                          if (event.phase === 'result') {
+                            await this.stampVerdictRunIdentity(
+                              event.member as StepName,
+                              branchRunIds.get(event.member),
+                            );
+                          }
                           if (event.phase === 'result' && event.outcome === 'verdict:pass') {
                             const syntheticKey = `${builtinGroup.name}__${event.member}`;
                             inFlightGroupCompletions![event.member] = 'done';
@@ -6144,6 +6354,9 @@ export class Conductor {
                     state,
                     {
                       stepRunner: this.stepRunner,
+                      ...(isVerdictRunIdentityStep(member.name as StepName)
+                        ? { runId: branchRunIds.get(member.name) }
+                        : {}),
                       config: this.config,
                       // Task 8 (#817): threaded so sweepStaleReviewArtifacts's
                       // gate_code_validity kill-switch is honored on this
@@ -6162,7 +6375,24 @@ export class Conductor {
                       // via the signal handlers above; a clean round below
                       // clears it before any halt/allGreen/kickback branching
                       // runs, so those paths are entirely unaffected.
-                      onMemberEvent: (event) => {
+                      onMemberEvent: async (event) => {
+                        if (event.phase === 'dispatch') {
+                          branchDispatchStartedAt.set(event.member, Date.now());
+                        }
+                        if (event.phase === 'result') {
+                          // This settles before runGroupBranch returns to the join.
+                          await this.stampVerdictRunIdentity(
+                            event.member as StepName,
+                            branchRunIds.get(event.member),
+                          );
+                          const handshake = await this.verdictDispatchHandshake(
+                            event.member as StepName,
+                            branchRunIds.get(event.member),
+                            branchDispatchStartedAt.get(event.member),
+                          );
+                          if (handshake) branchHandshakeFailures.set(event.member, handshake);
+                          else branchHandshakeFailures.delete(event.member);
+                        }
                         if (event.phase === 'result' && event.outcome === 'verdict:pass') {
                           const syntheticKey = `${builtinGroup.name}__${event.member}`;
                           inFlightGroupCompletions![event.member] = 'done';
@@ -6340,9 +6570,12 @@ export class Conductor {
               const memberName = member.name as StepName;
               const outcome = outcomes[idx];
               if (outcome?.kind === 'verdict' && outcome.verdict === 'pass') {
+                const handshake = branchHandshakeFailures.get(member.name);
                 gateVerdicts.set(
                   memberName,
-                  await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
+                  handshake
+                    ? { satisfied: false, reason: handshake.reason, checkedAt: Date.now() }
+                    : await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
                 );
               }
             }
@@ -6525,10 +6758,17 @@ export class Conductor {
               (member) => member.name === 'prd_audit',
             );
             const prdAuditOutcome = prdAuditIdx === -1 ? undefined : outcomes[prdAuditIdx];
+            // D3/D4, group path: the branch's own handshake result is the
+            // same shared identity seam the serial walk consults above. A
+            // recorded failure means this round did not produce prd_audit's
+            // verdict, so the routers must not read the prior lap's report —
+            // the provider branch's pass outcome alone is not evidence that
+            // the artifact on disk belongs to this dispatch.
             if (
               this.verifyArtifacts &&
               prdAuditOutcome?.kind === 'verdict' &&
-              prdAuditOutcome.verdict === 'pass'
+              prdAuditOutcome.verdict === 'pass' &&
+              !branchHandshakeFailures.get('prd_audit')
             ) {
               prdAuditRoute = await this.routeCurrentPrdAudit(state);
               if (prdAuditRoute.kind === 'record') {
@@ -7538,7 +7778,13 @@ export class Conductor {
         // only compares consecutive attempts of the same step dispatch).
         let priorCompletionReason: string | undefined;
         let priorHeadSha: string | null = null;
-        let priorArtifactMtimeSignature: string | undefined;
+        let priorRetryInputSignature: string | undefined;
+        // Retain only the handshake's structured, report-text-free diagnostic
+        // until the retry loop terminates. `currentRunId` is intentionally
+        // cleared immediately after each completion check, so rebuilding this
+        // at exhaustion would lose the dispatch identity that made the verdict
+        // stale in the first place.
+        let lastVerdictHandshakeFailure: string | undefined;
         // D5: set only for a signal-(b) identical-repeat route; threaded into
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
@@ -7605,6 +7851,7 @@ export class Conductor {
             await this.completionCtx(state),
           );
           this.currentAttemptStartedAt = undefined;
+          this.currentRunId = undefined;
           const hasRepairableRedEvidenceRefusal =
             !preCheck.done &&
             (preCheck.acceptanceRedRefusalClass === 'missing' ||
@@ -7878,17 +8125,22 @@ export class Conductor {
             }
           } else
           try {
-            if (
+            const dispatchIdentityArmed =
               step.name !== 'complexity' &&
               step.name !== 'worktree' &&
               step.name !== 'test_suite' &&
               step.name !== 'rebase' &&
-              !(this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name)))))
-            ) {
+              !(this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name)))));
+            if (dispatchIdentityArmed) {
               // Task 2, session-fresh-verdict-artifacts: stamp immediately
               // before the generic dispatch call so completionCtx can
               // require the verdict artifact to postdate THIS attempt.
               this.currentAttemptStartedAt = Date.now();
+              // D1: one identity per dispatch. This id is passed into the
+              // dispatch below, where it becomes the provider-lifecycle
+              // `attempt.id`, so the lifecycle and the verdict sidecar never
+              // carry two independently minted identities.
+              this.currentRunId = randomUUID();
             }
             // Dispatch preflight: a step whose working directory no longer
             // exists can never succeed. Without this the provider is launched
@@ -7933,6 +8185,16 @@ export class Conductor {
                             escalate: resolved.escalate,
                             modelOverride: esc.model,
                             effortOverride: esc.effort,
+                            // D1 scope: only a SHIP-tail verdict gate hands its
+                            // identity to the lifecycle, so that gate's
+                            // `attempt.id` and its sidecar stamp are one value.
+                            // Other steps stamp no identity and keep the
+                            // runner's run-scoped attempt-id format.
+                            ...(dispatchIdentityArmed &&
+                            this.currentRunId &&
+                            isVerdictRunIdentityStep(step.name)
+                              ? { runId: this.currentRunId }
+                              : {}),
                           }));
           } finally {
             buildWatcher?.stop();
@@ -8152,6 +8414,11 @@ export class Conductor {
             continue;
           }
 
+          // The engine owns verdict identity. Stamp it once the provider call
+          // settles, before any terminal success, error, or halt routing.
+          await this.stampVerdictRunIdentity(step.name, this.currentRunId);
+          if (step.name === 'prd_audit') lastPrdAuditRunId = this.currentRunId;
+
           // A missing command is a deterministic environment failure. Retrying,
           // escalating model/effort, or walking providers cannot make a command
           // appear in the provisioned catalog for this run.
@@ -8359,6 +8626,20 @@ export class Conductor {
           }
 
           if (!result.success) {
+            // D3: a verdict dispatch that returns a non-success outcome still
+            // needs its post-settle write observation before this serial loop
+            // retries, exhausts, or honors a step-authored HALT. Keep the
+            // structured diagnostic for the existing exhaustion-halt seam;
+            // do not clear a prior observation when this dispatch is outside
+            // the three SHIP-tail verdict gates.
+            const handshake = await this.verdictDispatchHandshake(
+              step.name,
+              this.currentRunId,
+              this.currentAttemptStartedAt,
+            );
+            if (handshake?.routeClass === 'absent' && handshake.reason) {
+              lastVerdictHandshakeFailure = handshake.reason;
+            }
             failedStepResult = result;
             // Task 10: the mechanical lane publishes a terminal aggregate
             // only after consuming its separate allowance. That aggregate is
@@ -8465,7 +8746,7 @@ export class Conductor {
                 step: step.name,
                 attempt,
                 decision: retryDecision.decision,
-                ...(retryDecision.decision === 'route' ? { signal: retryDecision.signal } : {}),
+                ...(retryDecision.signal ? { signal: retryDecision.signal } : {}),
               });
               if (retryDecision.decision === 'route') {
                 unretryableInputFailure = {
@@ -8575,6 +8856,7 @@ export class Conductor {
             // consume the in-flight attempt timestamp, so clear it now
             // rather than leaking it into a later completionCtx() call.
             this.currentAttemptStartedAt = undefined;
+            this.currentRunId = undefined;
           }
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity') {
             if (step.name === 'acceptance_specs') {
@@ -8587,11 +8869,31 @@ export class Conductor {
                 viaException: false,
               });
             }
-            let completion = await checkStepCompletion(
-              this.projectRoot,
+            // D3: do not let a completion predicate or its downstream
+            // routing readers parse a prior-lap SHIP report. The handshake
+            // must observe this dispatch's report write first.
+            // Retained for this attempt's readers: `currentRunId` is cleared
+            // below, before the retry-input classifier runs, so reading the
+            // field there would score every stamped verdict `unstamped` and
+            // silently fall back to mtime (D4 requires one identity reader
+            // keyed on the stamp wherever a stamp exists).
+            const dispatchRunId = this.currentRunId;
+            const handshake = await this.verdictDispatchHandshake(
               step.name,
-              await this.completionCtx(state),
+              dispatchRunId,
+              this.currentAttemptStartedAt,
             );
+            if (handshake?.routeClass === 'absent' && handshake.reason) {
+              lastVerdictHandshakeFailure = handshake.reason;
+            }
+            let completion = handshake;
+            if (!completion) {
+              completion = await checkStepCompletion(
+                this.projectRoot,
+                step.name,
+                await this.completionCtx(state),
+              );
+            }
 
             // Task 2, session-fresh-verdict-artifacts: audit-trail event for
             // the three dispatched-judge verdict predicates
@@ -8617,8 +8919,18 @@ export class Conductor {
             // re-checks below, the next step, or an idle/backstop caller)
             // as a stale "in-flight attempt" timestamp.
             this.currentAttemptStartedAt = undefined;
+            this.currentRunId = undefined;
 
-            if (step.name === 'prd_audit') {
+            // D3/D4: the post-dispatch handshake is the shared identity
+            // seam, and it runs before any routing reader may inspect report
+            // text. A non-undefined handshake means THIS dispatch did not
+            // produce the verdict on disk (missing, prior-identity, or
+            // pre-dispatch mtime), so its findings are not current: they are
+            // scored `absent` => rerun (D5) and never read as a route.
+            // Without this guard the PLAN_GAP and OVER_SCOPE readers below
+            // parse the PRIOR lap's report and can halt on it — the exact
+            // forbidden class this ADR removes.
+            if (step.name === 'prd_audit' && !handshake) {
               const prdAuditRoute = await this.routeCurrentPrdAudit(state);
               if (prdAuditRoute.kind === 'projection-halt') {
                 const reason =
@@ -8726,19 +9038,34 @@ export class Conductor {
                   const cls = await classifyPrdAuditGaps(
                     this.projectRoot,
                     state.session_started_at,
+                    lastPrdAuditRunId,
+                    this.config,
                   );
                   prdAuditNonClean = cls.kind !== 'clean';
                 }
 
                 const headSha = await currentCommitSha(this.projectRoot);
                 const artifactSnapshot = await snapshotArtifactMtimes(this.projectRoot, step.name);
-                const artifactSignature = JSON.stringify(
+                const artifactMtimeSignature = JSON.stringify(
                   Array.from(artifactSnapshot.entries()).sort(),
                 );
+                // A stamped verdict is identified by its engine-owned run id;
+                // mtime remains the exact legacy key for unstamped sidecars.
+                // A mismatched run id still produces a stable signature, but
+                // its typed `absent` completion facet forces a rerun above.
+                const runIdentity = await verdictProducedByRun(
+                  this.projectRoot,
+                  step.name,
+                  dispatchRunId,
+                  this.config,
+                );
+                const retryInputSignature = runIdentity.state === 'unstamped'
+                  ? `mtime:${artifactMtimeSignature}`
+                  : `run:${runIdentity.state === 'match' ? runIdentity.runId : runIdentity.foundRunId}`;
                 const inputsUnchanged =
-                  priorArtifactMtimeSignature !== undefined &&
+                  priorRetryInputSignature !== undefined &&
                   headSha === priorHeadSha &&
-                  artifactSignature === priorArtifactMtimeSignature;
+                  retryInputSignature === priorRetryInputSignature;
 
                 const clsDecision = classifyRetryDecision({
                   step: step.name,
@@ -8761,7 +9088,7 @@ export class Conductor {
                   step: step.name,
                   attempt,
                   decision: clsDecision.decision,
-                  ...(clsDecision.decision === 'route' ? { signal: clsDecision.signal } : {}),
+                  ...(clsDecision.signal ? { signal: clsDecision.signal } : {}),
                   ...(unchangedInputNote !== undefined && clsDecision.decision === 'route' &&
                   clsDecision.signal === 'identical-repeat'
                     ? { unchangedInput: unchangedInputNote }
@@ -8770,7 +9097,7 @@ export class Conductor {
 
                 priorCompletionReason = completion.reason;
                 priorHeadSha = headSha;
-                priorArtifactMtimeSignature = artifactSignature;
+                priorRetryInputSignature = retryInputSignature;
 
                 if (clsDecision.decision === 'route') break;
                 // 'rerun' — fall through to the unchanged retry logic below.
@@ -8779,6 +9106,8 @@ export class Conductor {
                 const cls = await classifyPrdAuditGaps(
                   this.projectRoot,
                   state.session_started_at,
+                  lastPrdAuditRunId,
+                  this.config,
                 );
                 if (cls.kind !== 'clean') break;
               }
@@ -8978,7 +9307,7 @@ export class Conductor {
                         daemon: this.daemon,
                         reason: 'empty/missing plan',
                         emit: (evt) =>
-                          void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
+                          void this.events.emit(evt as ConductorEvent),
                       })
                     : { parked: false };
                   if (parkResult.parked) {
@@ -9997,6 +10326,8 @@ export class Conductor {
               const cls = await classifyPrdAuditGaps(
                 this.projectRoot,
                 state.session_started_at,
+                lastPrdAuditRunId,
+                this.config,
               );
               if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
                 prdAuditSelfHeals++;
@@ -10373,6 +10704,9 @@ export class Conductor {
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
+                : lastVerdictHandshakeFailure
+                  ? `step '${step.name}' exhausted retries without a fresh verdict: ` +
+                    lastVerdictHandshakeFailure
                 : unretryableInputFailure
                   ? `step '${unretryableInputFailure.failingStep}' cannot make progress: its inputs cannot change on a re-dispatch. ` +
                     `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`

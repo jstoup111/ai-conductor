@@ -81,8 +81,11 @@ import {
   MANUAL_TEST_SKIP_SENTINEL,
   MANUAL_TEST_WARN_SENTINEL,
   readManualTestFailRows,
+  stampGateRunIdentity,
   stampCode,
   BUILD_REVIEW_VERDICT,
+  MANUAL_TEST_CODE_STAMP,
+  PRD_AUDIT_CODE_STAMP,
   removeBuildReviewVerdict,
   PR_BODY_REGEN_ATTEMPT_MARKER,
   uncommittedPathsOrNull,
@@ -96,6 +99,7 @@ import type { StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { verdictProducedByRun } from '../../src/engine/gate-code-validity.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -111,6 +115,24 @@ describe('engine/artifacts', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  // Covers: task:1
+  describe('gate code-stamp marker contract', () => {
+    it('round-trips an engine-stamped run identity through the manual-test sidecar', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, MANUAL_TEST_CODE_STAMP),
+        '{\n  "codeStamp": "abc123"\n}\n',
+      );
+
+      await stampGateRunIdentity(dir, 'manual_test', 'run-123');
+
+      expect(MANUAL_TEST_CODE_STAMP).toBe('.pipeline/manual-test-code-stamp.json');
+      await expect(readFile(join(dir, MANUAL_TEST_CODE_STAMP), 'utf8')).resolves.toBe(
+        '{\n  "codeStamp": "abc123",\n  "runId": "run-123"\n}\n',
+      );
+    });
   });
 
   async function createFile(relativePath: string, content = 'test') {
@@ -3689,6 +3711,7 @@ describe('engine/artifacts', () => {
     });
   });
 
+  // Covers: task:8
   describe('classifyPrdAuditGaps', () => {
     const header = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
     async function writeAudit(body: string) {
@@ -3824,6 +3847,37 @@ describe('engine/artifacts', () => {
       const c = await classifyPrdAuditGaps(dir, Date.now());
       expect(c.kind).toBe('clean');
     });
+
+    it('ignores blocking rows from an earlier run in the same session', async () => {
+      await writeAudit('| FR-17 | MISSING | impl-gap | stale evidence | no |\n');
+      await createFile(PRD_AUDIT_CODE_STAMP, JSON.stringify({ runId: 'earlier-run' }));
+
+      const c = await classifyPrdAuditGaps(dir, undefined, 'current-run');
+
+      expect(c).toEqual({ kind: 'clean', summary: 'no blocking FRs' });
+    });
+
+    it('keeps blocking rows from the current run', async () => {
+      await writeAudit('| FR-17 | MISSING | impl-gap | current evidence | no |\n');
+      await createFile(PRD_AUDIT_CODE_STAMP, JSON.stringify({ runId: 'current-run' }));
+
+      const c = await classifyPrdAuditGaps(dir, undefined, 'current-run');
+
+      expect(c.kind).toBe('impl-only');
+      expect(c.summary).toContain('FR-17 (impl-gap)');
+    });
+
+    it('uses pure mtime freshness when gate-code-validity is disabled', async () => {
+      await writeAudit('| FR-17 | MISSING | impl-gap | fresh evidence | no |\n');
+      await createFile(PRD_AUDIT_CODE_STAMP, JSON.stringify({ runId: 'earlier-run' }));
+
+      const c = await classifyPrdAuditGaps(dir, undefined, 'current-run', {
+        gate_code_validity: { enabled: false },
+      });
+
+      expect(c.kind).toBe('impl-only');
+      expect(c.summary).toContain('FR-17 (impl-gap)');
+    });
   });
 
   describe('classifyRetryDecision', () => {
@@ -3878,7 +3932,7 @@ describe('engine/artifacts', () => {
             expect(r).toEqual({ decision: 'rerun' });
           });
 
-          it('absent, attempt 2, same reason, inputsUnchanged → route identical-repeat', () => {
+          it('absent, attempt 2, same reason, inputsUnchanged → rerun', () => {
             const r = classifyRetryDecision({
               step,
               completion: completion('absent', 'same'),
@@ -3886,7 +3940,7 @@ describe('engine/artifacts', () => {
               priorReason: 'same',
               inputsUnchanged: true,
             });
-            expect(r).toEqual({ decision: 'route', signal: 'identical-repeat' });
+            expect(r).toEqual({ decision: 'rerun' });
           });
 
           it('absent, attempt 2, same reason, inputsUnchanged:false → rerun', () => {
@@ -3971,6 +4025,33 @@ describe('engine/artifacts', () => {
       expect(r).toEqual({ decision: 'rerun' });
     });
 
+    // Covers: task:10
+    it('reruns a typed absent verdict even when its diagnostic text repeats', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: completion(
+          'absent',
+          'report was produced by run prior-run, not the current run current-run',
+        ),
+        attempt: 2,
+        priorReason: 'report was produced by run prior-run, not the current run current-run',
+        inputsUnchanged: true,
+      });
+      expect(r).toEqual({ decision: 'rerun' });
+    });
+
+    // Covers: task:10
+    it('routes a matching-stamp adverse prd_audit verdict regardless of diagnostic wording', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: { done: false, reason: 'a reworded adverse verdict' },
+        attempt: 1,
+        inputsUnchanged: false,
+        prdAuditNonClean: true,
+      });
+      expect(r).toEqual({ decision: 'route', signal: 'named-route' });
+    });
+
     describe('identical-repeat requires all three conditions', () => {
       it('flips attempt < 2 → rerun', () => {
         const r = classifyRetryDecision({
@@ -4004,6 +4085,22 @@ describe('engine/artifacts', () => {
         });
         expect(r).toEqual({ decision: 'rerun' });
       });
+    });
+
+    // Covers: task:15
+    it('labels a stale run-identity absence without changing its rerun decision', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: {
+          done: false,
+          routeClass: 'absent',
+          retrySignal: 'stale-run-identity',
+        },
+        attempt: 1,
+        inputsUnchanged: false,
+      });
+
+      expect(r).toEqual({ decision: 'rerun', signal: 'stale-run-identity' });
     });
   });
 
@@ -4704,20 +4801,88 @@ Task 1 → Task 2
         await utimes(p, OLD_MTIME, OLD_MTIME);
       }
 
-      async function writeSidecar(d: string, codeStamp: string | undefined): Promise<void> {
+      async function writeSidecar(
+        d: string,
+        codeStamp: string | undefined,
+        runId?: string,
+      ): Promise<void> {
         if (codeStamp === undefined) return;
-        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp }, null, 2));
+        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp, runId }, null, 2));
       }
 
+      // Covers: task:9
       it('preserves a stale-mtime report with a codeStamp sidecar when the surface since the stamp is unchanged', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeReport(gdir);
-        await writeSidecar(gdir, baseline);
+        await writeSidecar(gdir, baseline, 'current-run');
 
-        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+        const result = await checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
         expect(result.done).toBe(true);
+      });
+
+      // Covers: task:9, task:10
+      it('never preserves or completes a report stamped for a prior run', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline, 'prior-run');
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: false, routeClass: 'absent' });
+        expect(result.reason).toContain('.pipeline/prd-audit.md');
+        expect(result.reason).toContain('current-run');
+        expect(result.reason).toContain('prior-run');
+        expect(result.reason).not.toContain('FR-1');
+      });
+
+      // Covers: task:13
+      it('keeps unstamped reports on legacy mtime semantics', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeFile(join(gdir, PATH), ALIGNED);
+
+        await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
+        await expect(checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({
+          done: false,
+          reason: expect.stringMatching(/not rewritten by this judging session/),
+        });
+
+        await writeFile(join(gdir, PATH), ALIGNED);
+        await expect(checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptStartedAt: 0,
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({ done: true });
+      });
+
+      // Covers: task:13
+      it('ignores a mismatched run stamp when gate-code-validity is disabled', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeFile(join(gdir, PATH), ALIGNED);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        await expect(checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptStartedAt: 0,
+          attemptRunId: 'current-run',
+          config: { gate_code_validity: { enabled: false } },
+        })).resolves.toMatchObject({ done: true });
       });
 
       it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
@@ -4767,20 +4932,87 @@ Task 1 → Task 2
         await utimes(p, OLD_MTIME, OLD_MTIME);
       }
 
-      async function writeSidecar(d: string, codeStamp: string | undefined): Promise<void> {
+      async function writeSidecar(
+        d: string,
+        codeStamp: string | undefined,
+        runId?: string,
+      ): Promise<void> {
         if (codeStamp === undefined) return;
-        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp }, null, 2));
+        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp, runId }, null, 2));
       }
 
+      // Covers: task:9
       it('preserves a stale-mtime report with a codeStamp sidecar when the surface since the stamp is unchanged', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeReport(gdir);
-        await writeSidecar(gdir, baseline);
+        await writeSidecar(gdir, baseline, 'current-run');
 
-        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
+        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
         expect(result.done).toBe(true);
+      });
+
+      // Covers: task:9
+      it('never completes an approval report stamped for a prior run', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline, 'prior-run');
+
+        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: false });
+        expect(result.reason).toContain('.pipeline/architecture-review-as-built.md');
+        expect(result.reason).toContain('current-run');
+        expect(result.reason).toContain('prior-run');
+      });
+
+      // Covers: task:13
+      it('keeps unstamped reports on legacy mtime semantics', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeFile(join(gdir, PATH), APPROVED);
+
+        await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
+        await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({
+          done: false,
+          reason: expect.stringMatching(/not rewritten by this judging session/),
+        });
+
+        await writeFile(join(gdir, PATH), APPROVED);
+        await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptStartedAt: 0,
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({ done: true });
+      });
+
+      // Covers: task:13
+      it('ignores a mismatched run stamp when gate-code-validity is disabled', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeFile(join(gdir, PATH), APPROVED);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptStartedAt: 0,
+          attemptRunId: 'current-run',
+          config: { gate_code_validity: { enabled: false } },
+        })).resolves.toMatchObject({ done: true });
       });
 
       it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
@@ -4827,6 +5059,7 @@ Task 1 → Task 2
     describe('manual_test', () => {
       const RESULTS = '.pipeline/manual-test-results.md';
       const MARKER = '.pipeline/manual-test-fail-evidence.json';
+      const RUN_ID_SIDECAR = '.pipeline/manual-test-code-stamp.json';
       const PASS_FILE = '| Story | Result |\n|---|---|\n| Foo | PASS |\n';
 
       async function writeResults(d: string): Promise<void> {
@@ -4835,14 +5068,167 @@ Task 1 → Task 2
         await utimes(p, OLD_MTIME, OLD_MTIME);
       }
 
+      // Covers: task:9
       it('preserves a stale-mtime clean-PASS marker with a codeStamp when the surface since the stamp is unchanged', async () => {
         gdir = await makeGitDir();
         const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
         await writeResults(gdir);
-        await writeFile(join(gdir, MARKER), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await writeFile(
+          join(gdir, MARKER),
+          JSON.stringify({ codeStamp: baseline }, null, 2),
+        );
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'current-run' }, null, 2));
 
-        const result = await checkStepCompletion(gdir, 'manual_test', ctxFor(gdir));
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
         expect(result.done).toBe(true);
+      });
+
+      // Covers: task:9
+      it('never preserves a clean PASS stamped for a prior run', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeResults(gdir);
+        await writeFile(
+          join(gdir, MARKER),
+          JSON.stringify({ codeStamp: baseline }, null, 2),
+        );
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }, null, 2));
+
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: false });
+        expect(result.reason).toContain('.pipeline/manual-test-results.md');
+        expect(result.reason).toContain('current-run');
+        expect(result.reason).toContain('prior-run');
+      });
+
+      // Covers: task:14
+      it('keeps the FAIL→PASS head-movement guard ahead of a stale run identity', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(
+          join(gdir, RESULTS),
+          '## Attempt 1 — 2026-08-25T10:00:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | FAIL |\n\n' +
+            '## Attempt 2 — 2026-08-25T10:01:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | PASS |\n',
+        );
+        await writeFile(
+          join(gdir, MARKER),
+          JSON.stringify({ observedAt: Date.now(), headSha: baseline, failRows: ['| Bar | FAIL |'] }),
+        );
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/no new commits|whitewash/i);
+        expect(result.routeClass).toBeUndefined();
+      });
+
+      // Covers: task:14
+      it('keeps the FAIL→PASS head-movement guard with a matching run identity', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'current-run' }));
+        await writeFile(
+          join(gdir, RESULTS),
+          '## Attempt 1 — 2026-08-25T10:00:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | FAIL |\n',
+        );
+        await expect(checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({ done: false });
+
+        await writeFile(
+          join(gdir, RESULTS),
+          '## Attempt 1 — 2026-08-25T10:00:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | FAIL |\n\n' +
+            '## Attempt 2 — 2026-08-25T10:01:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | PASS |\n',
+        );
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/no new commits|whitewash/i);
+      });
+
+      // Covers: task:14
+      it('treats a mismatched stamp on the latest append attempt as no fresh verdict', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(
+          join(gdir, RESULTS),
+          '## Attempt 1 — 2026-08-25T10:00:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | FAIL |\n\n' +
+            '## Attempt 2 — 2026-08-25T10:01:00Z\n' +
+            '| Story | Result |\n|---|---|\n| Bar | PASS |\n',
+        );
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: false, routeClass: 'absent' });
+        expect(result.reason ?? '').toMatch(/no fresh verdict/);
+        expect(result.reason ?? '').not.toMatch(/contains FAIL rows/);
+      });
+
+      // Covers: task:13
+      it('keeps unstamped results on legacy mtime semantics', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(join(gdir, RESULTS), PASS_FILE);
+
+        await utimes(join(gdir, RESULTS), OLD_MTIME, OLD_MTIME);
+        await expect(checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({
+          done: false,
+          reason: expect.stringMatching(/stale/),
+        });
+
+        await writeFile(join(gdir, RESULTS), PASS_FILE);
+        await expect(checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        })).resolves.toMatchObject({ done: true });
+      });
+
+      // Covers: task:13
+      it('ignores a mismatched run stamp when gate-code-validity is disabled', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeFile(join(gdir, RESULTS), PASS_FILE);
+        await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+
+        await expect(checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+          config: { gate_code_validity: { enabled: false } },
+        })).resolves.toMatchObject({ done: true });
       });
 
       it('falls through to mtime rejection when the delta touches a runtime path since the stamp', async () => {
@@ -4964,6 +5350,33 @@ Task 1 → Task 2
 
         expect(removed).toEqual([]);
         await expect(readFile(join(gdir, PATH), 'utf-8')).resolves.toBe(ALIGNED);
+      });
+
+      // Covers: task:5
+      it('sweeps an otherwise code-valid report when the shared reader finds a prior run identity', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeStaleReport(gdir);
+        await writeFile(
+          join(gdir, SIDECAR),
+          JSON.stringify({ codeStamp: baseline, runId: 'run-prior' }, null, 2),
+        );
+
+        await expect(verdictProducedByRun(gdir, 'prd_audit', 'run-current')).resolves.toEqual({
+          state: 'stale-run-identity',
+          expectedRunId: 'run-current',
+          foundRunId: 'run-prior',
+        });
+        const removed = await sweepStaleReviewArtifacts(
+          gdir,
+          'prd_audit',
+          Date.now(),
+          undefined,
+          undefined,
+          'run-current',
+        );
+
+        expect(removed).toEqual([join(gdir, PATH)]);
       });
 
       it('gate_code_validity.enabled: false restores pure mtime-freshness — deletes a stale report even when the codeStamp sidecar surface is unchanged (Task 8, #817)', async () => {

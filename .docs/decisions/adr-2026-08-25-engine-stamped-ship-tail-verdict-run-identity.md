@@ -81,7 +81,23 @@ condition.
 `verdict_freshness` StepEvent `floorSource` vocabulary (e.g. `run-identity`) and the
 `retry_decision` signal vocabulary. No new event member, no parallel channel.
 
+**D9 amendment (2026-08-26, operator James Stoup).** `retry_decision` carries no enabled
+sink: `event-sinks.ts` has scored it `{ render: false, persist: false, audit: false }` for
+every signal since before this ADR was written, and this feature did not change that file.
+Extending its signal vocabulary therefore adds an *internal typed facet*, not a persisted
+one, and the original clause's promise that the new signal would reach `.pipeline/events.jsonl`
+was mistaken about the channel, not about the design. The persisted, operator-visible surface
+of the identity decision is `verdict_freshness` (`{ render: true, persist: true, audit: true }`),
+which the stale path populates with `floorSource: 'run-identity'` and
+`outcome: 'stale_invalidated'`, alongside the existing `step_retry` event; between them the
+spine already carries which artifact was rejected, why, and both run identities. This ADR
+makes no claim on `retry_decision`'s sink policy — enabling it would change telemetry volume
+for every retry decision in every step and is a separate decision about that channel.
+
 ## Supersessions and amendments
+
+- **Amended 2026-08-26 by operator (James Stoup):** D9's `retry_decision` clause — see the
+  amendment note under the decision. D1–D8 stand unchanged.
 
 - **Supersedes in part:** adr-2026-07-13-session-fresh-verdict-artifacts — its non-goals
   "no session-id stamp inside the artifact" and the manual_test deferral. Its per-attempt

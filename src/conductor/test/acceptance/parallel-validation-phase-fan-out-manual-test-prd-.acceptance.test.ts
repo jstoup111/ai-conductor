@@ -9,6 +9,11 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import {
+  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+  MANUAL_TEST_CODE_STAMP,
+  PRD_AUDIT_CODE_STAMP,
+} from '../../src/engine/artifacts.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -271,6 +276,20 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       const startedAt = Date.now();
       await conductor.run();
       const totalMs = Date.now() - startedAt;
+
+      // Covers: task:3 — runGroupBranch awaits its result callback, so these
+      // engine-authored sidecars must already exist before this test can
+      // observe the group after its join.
+      const runIds = await Promise.all([
+        PRD_AUDIT_CODE_STAMP,
+        ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+        MANUAL_TEST_CODE_STAMP,
+      ].map(async (path) => JSON.parse(await readFile(join(dir, path), 'utf8')) as { runId?: string }));
+      expect(runIds.map(({ runId }) => runId)).toEqual([
+        expect.stringMatching(/\S/),
+        expect.stringMatching(/\S/),
+        expect.stringMatching(/\S/),
+      ]);
 
       // Serial sum is 6t (300ms); a real cap-2 fan-out finishes in ~3t
       // (150ms, the longest single branch). Assert comfortably below the

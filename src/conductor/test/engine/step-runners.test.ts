@@ -313,6 +313,74 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  it('makes the engine-supplied dispatch run id the provider-lifecycle attempt id', async () => {
+    const providerAttempt = vi.fn();
+    const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
+      input.options.spawnPermit?.();
+      return {
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        preferredProvider: 'claude' as const,
+        actualProvider: 'claude' as const,
+        attempts: [],
+      };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+        sessions: new ProviderSessionStore(),
+        executor: providerExecutor,
+      },
+      providerAttempt,
+    });
+
+    await runner.run('build', emptyState, { runId: 'engine-dispatch-identity' });
+
+    const attemptIds = providerAttempt.mock.calls.flatMap(([, metadata]) => {
+      const lifecycle = (metadata as { lifecycle?: { attemptId?: string } }).lifecycle;
+      return lifecycle?.attemptId ? [lifecycle.attemptId] : [];
+    });
+
+    // One identity authority per dispatch: the id the engine stamps into the
+    // verdict sidecar is the id the lifecycle logs, not a second UUID.
+    expect(attemptIds.length).toBeGreaterThan(0);
+    expect(new Set(attemptIds)).toEqual(new Set(['engine-dispatch-identity']));
+  });
+
+  it('keeps its own run-scoped attempt id when no dispatch run id is supplied', async () => {
+    const providerAttempt = vi.fn();
+    const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
+      input.options.spawnPermit?.();
+      return {
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        preferredProvider: 'claude' as const,
+        actualProvider: 'claude' as const,
+        attempts: [],
+      };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+        sessions: new ProviderSessionStore(),
+        executor: providerExecutor,
+      },
+      providerAttempt,
+    });
+
+    await runner.run('build', emptyState);
+
+    const attemptIds = providerAttempt.mock.calls.flatMap(([, metadata]) => {
+      const lifecycle = (metadata as { lifecycle?: { attemptId?: string } }).lifecycle;
+      return lifecycle?.attemptId ? [lifecycle.attemptId] : [];
+    });
+    expect(new Set(attemptIds)).toEqual(new Set(['session:build:1']));
+  });
+
   it('forwards the daemon feature diagnostic logger to a streaming provider invocation', async () => {
     const featureLog = vi.fn();
     const providerExecutor = vi.fn(async (_input: ExecuteProviderCandidatesInput) => ({

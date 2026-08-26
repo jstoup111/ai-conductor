@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readdir, utimes } from 'fs/promises';
+import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { basename, join } from 'path';
 import { tmpdir } from 'os';
 
@@ -73,7 +73,14 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
-import { checkStepCompletion, type RemediationGap } from '../../src/engine/artifacts.js';
+import {
+  checkStepCompletion,
+  stampGateRunIdentity,
+  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+  MANUAL_TEST_CODE_STAMP,
+  PRD_AUDIT_CODE_STAMP,
+  type RemediationGap,
+} from '../../src/engine/artifacts.js';
 import {
   creditKickbackGateLaps,
   readKickbackLedger,
@@ -2454,6 +2461,331 @@ describe('engine/conductor', () => {
       expect(idleCtxAfter.attemptStartedAt).toBeUndefined();
     });
 
+    // Covers: task:2
+    it('completionCtx carries one distinct attemptRunId for each verdict dispatch only', async () => {
+      await seedToBuildReview();
+      const attemptRunIds: Array<string | undefined> = [];
+      let conductor: Conductor;
+      const runner: StepRunner = {
+        run: async () => {
+          const stateResult = await readState(statePath);
+          const state = stateResult.ok ? stateResult.value : ({} as ConductState);
+          const ctx = await (conductor as unknown as {
+            completionCtx: (s: ConductState) => Promise<{ attemptRunId?: string }>;
+          }).completionCtx(state);
+          attemptRunIds.push(ctx.attemptRunId);
+          return { success: true };
+        },
+      };
+      conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'build_review',
+        verifyArtifacts: true,
+        maxRetries: 2,
+        config: { build_review: { rubrics: { testQuality: { enabled: true } } } },
+      });
+
+      const stateResult = await readState(statePath);
+      const state = stateResult.ok ? stateResult.value : ({} as ConductState);
+      const idleCtx = await (conductor as unknown as {
+        completionCtx: (s: ConductState) => Promise<{ attemptRunId?: string }>;
+      }).completionCtx(state);
+      expect(idleCtx.attemptRunId).toBeUndefined();
+
+      await conductor.run();
+
+      expect(attemptRunIds).toHaveLength(2);
+      expect(attemptRunIds[0]).toMatch(/\S/);
+      expect(attemptRunIds[1]).toMatch(/\S/);
+      expect(attemptRunIds[0]).not.toBe(attemptRunIds[1]);
+
+      const idleCtxAfter = await (conductor as unknown as {
+        completionCtx: (s: ConductState) => Promise<{ attemptRunId?: string }>;
+      }).completionCtx(state);
+      expect(idleCtxAfter.attemptRunId).toBeUndefined();
+    });
+
+    // Covers: task:3
+    it('merges an engine-owned run id onto a verdict sidecar without changing its code stamp', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      await writeFile(sidecar, '{"codeStamp":"head-before-settle"}\n');
+
+      await stampGateRunIdentity(dir, 'prd_audit', 'attempt-owned-by-engine');
+
+      await expect(readFile(sidecar, 'utf8')).resolves.toBe(
+        '{\n  "codeStamp": "head-before-settle",\n  "runId": "attempt-owned-by-engine"\n}\n',
+      );
+    });
+
+    it('leaves a verdict sidecar byte-for-byte and mtime unchanged when gate validity is disabled', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      const before = '{"codeStamp":"head-before-settle"}\n';
+      await writeFile(sidecar, before);
+      const beforeStat = await stat(sidecar);
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        config: { gate_code_validity: { enabled: false } },
+      });
+
+      await (conductor as unknown as {
+        stampVerdictRunIdentity: (step: StepName, runId: string | undefined) => Promise<void>;
+      }).stampVerdictRunIdentity('prd_audit', 'attempt-owned-by-engine');
+
+      expect(await readFile(sidecar, 'utf8')).toBe(before);
+      expect((await stat(sidecar)).mtimeMs).toBe(beforeStat.mtimeMs);
+    });
+
+    it('treats a corrupt verdict sidecar as empty when stamping the engine run id', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      await writeFile(sidecar, '{not-json');
+
+      await stampGateRunIdentity(dir, 'prd_audit', 'attempt-owned-by-engine');
+
+      await expect(readFile(sidecar, 'utf8')).resolves.toBe(
+        '{\n  "runId": "attempt-owned-by-engine"\n}\n',
+      );
+    });
+
+    // Covers: task:4
+    it('uses the engine dispatch identity rather than a provider runId echo', async () => {
+      const seedResult = await readState(statePath);
+      const seed = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        seed[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        seed[step.name] = 'done';
+      }
+      seed.prd_audit = 'pending';
+      seed.architecture_review_as_built = 'skipped';
+      seed.retro = 'skipped';
+      seed.rebase = 'skipped';
+      seed.finish = 'done';
+      await writeState(statePath, seed as ConductState);
+
+      let engineRunId: string | undefined;
+      let conductor: Conductor;
+      conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async () => {
+            const stateResult = await readState(statePath);
+            const state = stateResult.ok ? stateResult.value : ({} as ConductState);
+            engineRunId = await (conductor as unknown as {
+              completionCtx: (current: ConductState) => Promise<{ attemptRunId?: string }>;
+            }).completionCtx(state).then((ctx) => ctx.attemptRunId);
+            return { success: true, output: 'provider report { "runId": "bogus" }' };
+          },
+        },
+        events,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      const stamped = JSON.parse(await readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf8')) as {
+        runId?: string;
+      };
+      expect(engineRunId).toMatch(/\S/);
+      expect(stamped.runId).toBe(engineRunId);
+      expect(stamped.runId).not.toBe('bogus');
+    });
+
+    it('warns for the affected verdict branch when its run-id sidecar cannot be written', async () => {
+      await writeFile(join(dir, '.pipeline'), 'not a directory');
+      const logs: string[] = [];
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        log: (message) => logs.push(message),
+      });
+
+      await expect(
+        (conductor as unknown as {
+          stampVerdictRunIdentity: (step: StepName, runId: string | undefined) => Promise<void>;
+        }).stampVerdictRunIdentity('prd_audit', 'engine-attempt-id'),
+      ).resolves.toBeUndefined();
+
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain('prd_audit');
+      expect(logs[0]).toContain(PRD_AUDIT_CODE_STAMP);
+      await expect(readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf8')).rejects.toThrow();
+    });
+
+    // Covers: task:6
+    it.each([
+      ['manual_test', '.pipeline/manual-test-results.md', MANUAL_TEST_CODE_STAMP],
+      ['prd_audit', '.pipeline/prd-audit.md', PRD_AUDIT_CODE_STAMP],
+      [
+        'architecture_review_as_built',
+        '.pipeline/architecture-review-as-built.md',
+        ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+      ],
+    ] as const)(
+      'accepts a freshly written %s verdict report with the settled dispatch identity',
+      async (step, reportPath, _sidecarPath) => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        const runId = `task-6-${step}`;
+        const dispatchStartedAt = Date.now();
+        await writeFile(join(dir, reportPath), 'fresh verdict report\n');
+        await stampGateRunIdentity(dir, step, runId);
+        const conductor = new Conductor({
+          projectRoot: dir,
+          stateFilePath: statePath,
+          stepRunner: createMockStepRunner({ success: true }),
+          events,
+        });
+
+        await expect(
+          (conductor as unknown as {
+            verdictDispatchHandshake: (
+              name: StepName,
+              expectedRunId: string,
+              startedAt: number,
+            ) => Promise<unknown>;
+          }).verdictDispatchHandshake(step, runId, dispatchStartedAt),
+        ).resolves.toBeUndefined();
+      },
+    );
+
+    it('rejects a prior-lap prd report before its stale findings can be routed', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
+      const dispatchStartedAt = Date.now();
+      await utimes(report, new Date(dispatchStartedAt - 60_000), new Date(dispatchStartedAt - 60_000));
+      await stampGateRunIdentity(dir, 'prd_audit', 'current-run');
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+      });
+
+      await expect(
+        (conductor as unknown as {
+          verdictDispatchHandshake: (
+            name: StepName,
+            expectedRunId: string,
+            startedAt: number,
+          ) => Promise<{ done: boolean; routeClass?: string; reason?: string }>;
+        }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt),
+      ).resolves.toEqual({
+        done: false,
+        routeClass: 'absent',
+        reason: expect.stringContaining('.pipeline/prd-audit.md'),
+      });
+
+      const result = await (conductor as unknown as {
+        verdictDispatchHandshake: (
+          name: StepName,
+          expectedRunId: string,
+          startedAt: number,
+        ) => Promise<{ reason?: string }>;
+      }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt);
+      expect(result.reason).toContain('expected run id current-run');
+      expect(result.reason).toContain('found run id current-run');
+      expect(result.reason).toContain('found mtime');
+      expect(result.reason).not.toContain('FR-17');
+    });
+
+    // Covers: task:7
+    it('rejects a partial prd-audit write by naming the missing run-id marker only', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
+      const dispatchStartedAt = Date.now();
+      await utimes(report, new Date(dispatchStartedAt), new Date(dispatchStartedAt));
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+      });
+
+      const result = await (conductor as unknown as {
+        verdictDispatchHandshake: (
+          name: StepName,
+          expectedRunId: string,
+          startedAt: number,
+        ) => Promise<{ done: boolean; routeClass?: string; reason?: string }>;
+      }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt);
+
+      expect(result).toMatchObject({ done: false, routeClass: 'absent' });
+      expect(result.reason).toContain(PRD_AUDIT_CODE_STAMP);
+      expect(result.reason).not.toContain('.pipeline/prd-audit.md is missing');
+      expect(result.reason).not.toContain('FR-17');
+    });
+
+    it('fails closed and warns without throwing when a verdict sidecar is corrupt', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
+      const dispatchStartedAt = Date.now();
+      await utimes(report, new Date(dispatchStartedAt), new Date(dispatchStartedAt));
+      await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), '{not-json');
+      const logs: string[] = [];
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        log: (message) => logs.push(message),
+      });
+
+      await expect(
+        (conductor as unknown as {
+          verdictDispatchHandshake: (
+            name: StepName,
+            expectedRunId: string,
+            startedAt: number,
+          ) => Promise<{ done: boolean; routeClass?: string; reason?: string }>;
+        }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt),
+      ).resolves.toMatchObject({ done: false, routeClass: 'absent' });
+
+      expect(logs).toContainEqual(expect.stringContaining(PRD_AUDIT_CODE_STAMP));
+      expect(logs.join('\n')).not.toContain('FR-17');
+    });
+
+    it.each(['', '{', '[]', 'null', '{"runId":0}', '{"runId":""}'])(
+      'never throws for malformed verdict sidecar input %j',
+      async (sidecar) => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        const report = join(dir, '.pipeline/prd-audit.md');
+        await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
+        const dispatchStartedAt = Date.now();
+        await utimes(report, new Date(dispatchStartedAt), new Date(dispatchStartedAt));
+        await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), sidecar);
+        const conductor = new Conductor({
+          projectRoot: dir,
+          stateFilePath: statePath,
+          stepRunner: createMockStepRunner({ success: true }),
+          events,
+        });
+
+        await expect(
+          (conductor as unknown as {
+            verdictDispatchHandshake: (
+              name: StepName,
+              expectedRunId: string,
+              startedAt: number,
+            ) => Promise<{ done: boolean; routeClass?: string; reason?: string }>;
+          }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt),
+        ).resolves.toMatchObject({ done: false, routeClass: 'absent' });
+      },
+    );
+
     it('a review retry whose session does not rewrite the verdict does not pass the gate', async () => {
       await seedToBuildReview();
       // Stale verdict, written well before this run starts; the stub
@@ -2486,6 +2818,378 @@ describe('engine/conductor', () => {
       for (const e of freshnessEvents) {
         expect(e.fresh).toBe(false);
       }
+    });
+
+    // Covers: rem-prd-audit-rem-fr-s2.2-1
+    it.each([
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ] as const)(
+      'records the %s handshake on failed dispatch retries and preserves its final diagnostic',
+      async (step) => {
+        const seedResult = await readState(statePath);
+        const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+        for (const candidate of ALL_STEPS) {
+          state[candidate.name] = candidate.name === step ? 'pending' : 'skipped';
+          if (candidate.name === step) break;
+          state[candidate.name] = 'done';
+        }
+        state[step] = 'pending';
+        state.retro = 'skipped';
+        state.rebase = 'skipped';
+        state.finish = 'done';
+        await writeState(statePath, state as ConductState);
+
+        const conductor = new Conductor({
+          projectRoot: dir,
+          stateFilePath: statePath,
+          stepRunner: createMockStepRunner({ success: false, output: 'dispatch failed' }),
+          events,
+          fromStep: step,
+          verifyArtifacts: true,
+          mode: 'default',
+          maxRetries: 2,
+          config: { steps: { [step]: { max_retries: 2 } } },
+          onRecovery: async () => 'skip',
+        });
+        const handshakes: Array<{ runId?: string; startedAt?: number }> = [];
+        (conductor as unknown as {
+          verdictDispatchHandshake: (
+            name: StepName,
+            runId: string | undefined,
+            startedAt: number | undefined,
+          ) => Promise<{ done: false; routeClass: 'absent'; reason: string } | undefined>;
+        }).verdictDispatchHandshake = async (name, runId, startedAt) => {
+          expect(name).toBe(step);
+          handshakes.push({ runId, startedAt });
+          return { done: false, routeClass: 'absent', reason: `stale ${step} verdict` };
+        };
+
+        await conductor.run();
+
+        expect(handshakes).toHaveLength(2);
+        for (const handshake of handshakes) {
+          expect(handshake.runId).toMatch(/\S/);
+          expect(handshake.startedAt).toEqual(expect.any(Number));
+        }
+        expect(handshakes[0].runId).not.toBe(handshakes[1].runId);
+      },
+    );
+
+    // Covers: rem-prd-audit-rem-fr-s2.2-1
+    it.each([
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ] as const)(
+      'records the %s handshake before honoring a step-written halt verbatim',
+      async (step) => {
+        const seedResult = await readState(statePath);
+        const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+        for (const candidate of ALL_STEPS) {
+          state[candidate.name] = candidate.name === step ? 'pending' : 'skipped';
+          if (candidate.name === step) break;
+          state[candidate.name] = 'done';
+        }
+        state[step] = 'pending';
+        state.retro = 'skipped';
+        state.rebase = 'skipped';
+        state.finish = 'done';
+        await writeState(statePath, state as ConductState);
+
+        const haltReason = `step-authored ${step} halt`;
+        const conductor = new Conductor({
+          projectRoot: dir,
+          stateFilePath: statePath,
+          stepRunner: {
+            run: async () => {
+              await mkdir(join(dir, '.pipeline'), { recursive: true });
+              await writeFile(join(dir, '.pipeline/HALT'), haltReason + '\n');
+              await writeFile(join(dir, '.pipeline/HALT.class'), 'needs-human\n');
+              return { success: false, output: 'dispatch failed' };
+            },
+          },
+          events,
+          fromStep: step,
+          verifyArtifacts: true,
+          mode: 'default',
+          maxRetries: 2,
+        });
+        const handshakes: Array<{ runId?: string; startedAt?: number }> = [];
+        (conductor as unknown as {
+          verdictDispatchHandshake: (
+            name: StepName,
+            runId: string | undefined,
+            startedAt: number | undefined,
+          ) => Promise<{ done: false; routeClass: 'absent'; reason: string } | undefined>;
+        }).verdictDispatchHandshake = async (name, runId, startedAt) => {
+          expect(name).toBe(step);
+          handshakes.push({ runId, startedAt });
+          return { done: false, routeClass: 'absent', reason: `stale ${step} verdict` };
+        };
+
+        await conductor.run();
+
+        expect(handshakes).toHaveLength(1);
+        expect(handshakes[0].runId).toMatch(/\S/);
+        expect(handshakes[0].startedAt).toEqual(expect.any(Number));
+        await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(haltReason + '\n');
+      },
+    );
+
+    // Covers: task:11
+    it('halts with the stale prd-audit handshake identity after its retry budget is exhausted', async () => {
+      const seedResult = await readState(statePath);
+      const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        state[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        state[step.name] = 'done';
+      }
+      state.prd_audit = 'pending';
+      state.architecture_review_as_built = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'done';
+      await writeState(statePath, state as ConductState);
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | stale finding must not be surfaced |\n');
+      const staleAt = Date.now() - 60_000;
+      await utimes(report, new Date(staleAt), new Date(staleAt));
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        fromStep: 'prd_audit',
+        verifyArtifacts: true,
+        mode: 'auto',
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).toBe('needs-human');
+      expect(halt).toContain('prd_audit');
+      expect(halt).toContain('.pipeline/prd-audit.md');
+      expect(halt).toContain('expected run id');
+      expect(halt).toContain('found run id');
+      expect(halt).toContain('found mtime');
+      expect(halt).not.toContain('FR-17');
+      expect(halt).not.toContain('stale finding must not be surfaced');
+    });
+
+    // Covers: task:15
+    it('emits and persists stale run-identity telemetry from the verdict handshake', async () => {
+      const seedResult = await readState(statePath);
+      const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        state[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        state[step.name] = 'done';
+      }
+      state.prd_audit = 'pending';
+      state.architecture_review_as_built = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'done';
+      await writeState(statePath, state as ConductState);
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      await writeFile(report, '| FR-17 | FIXABLE | prior-lap finding |\n');
+      await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ runId: 'prior-run' }));
+
+      const eventsPath = join(dir, '.pipeline/events.jsonl');
+      const persister = new EventPersister(eventsPath, events);
+      const retryDecisions: ConductorEvent[] = [];
+      events.on('retry_decision', (event) => {
+        retryDecisions.push(event);
+      });
+      persister.start();
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        fromStep: 'prd_audit',
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 1,
+      });
+      // A failed sidecar stamp leaves the prior run identity in place. The
+      // production method deliberately treats this as non-fatal, so this is
+      // the real handshake boundary that must surface the stale decision.
+      (conductor as unknown as {
+        stampVerdictRunIdentity: (step: StepName, runId?: string) => Promise<void>;
+      }).stampVerdictRunIdentity = async () => {};
+
+      try {
+        await conductor.run();
+      } finally {
+        persister.stop();
+      }
+
+      const persisted = (await readFile(eventsPath, 'utf8'))
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(persisted).toContainEqual(expect.objectContaining({
+        type: 'verdict_freshness',
+        step: 'prd_audit',
+        artifact: report,
+        floorSource: 'run-identity',
+        outcome: 'stale_invalidated',
+        fresh: false,
+      }));
+      expect(retryDecisions).toContainEqual(expect.objectContaining({
+        type: 'retry_decision',
+        step: 'prd_audit',
+        decision: 'rerun',
+        signal: 'stale-run-identity',
+      }));
+    });
+
+    // Covers: task:12
+    it('recovers from a cleared stale-verdict halt without deleting its prior-lap artifacts', async () => {
+      const seedResult = await readState(statePath);
+      const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        state[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        state[step.name] = 'done';
+      }
+      state.prd_audit = 'pending';
+      state.architecture_review_as_built = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'done';
+      await writeState(statePath, state as ConductState);
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      await writeFile(report, '| FR-17 | FIXABLE | prior-lap finding |');
+      await writeFile(sidecar, JSON.stringify({ runId: 'prior-lap' }));
+      await writeFile(join(dir, '.pipeline/HALT'), 'stale verdict halt');
+      await writeFile(join(dir, '.pipeline/HALT.class'), 'needs-human');
+
+      // Operator recovery clears only terminal halt markers. The stale report
+      // and sidecar remain until this dispatch replaces their verdict.
+      await unlink(join(dir, '.pipeline/HALT'));
+      await unlink(join(dir, '.pipeline/HALT.class'));
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          expect(step).toBe('prd_audit');
+          await expect(readFile(report, 'utf8')).resolves.toContain('prior-lap finding');
+          await expect(readFile(sidecar, 'utf8')).resolves.toContain('prior-lap');
+          await writeFile(
+            report,
+            [
+              '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '|---|---|---|---|---|',
+              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
+            ].join('\n'),
+          );
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'prd_audit',
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+      });
+
+      await conductor.run();
+
+      expect(runner.run).toHaveBeenCalledTimes(1);
+      const result = await readState(statePath);
+      expect(result.ok && result.value.prd_audit).toBe('done');
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).rejects.toThrow();
+      expect(JSON.parse(await readFile(sidecar, 'utf8'))).toMatchObject({
+        runId: expect.any(String),
+      });
+      expect(await readFile(report, 'utf8')).not.toContain('prior-lap finding');
+    });
+
+    // Covers: task:12
+    it('honors a fresh blocking verdict after the same clear-and-rerun recovery', async () => {
+      const seedResult = await readState(statePath);
+      const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        state[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        state[step.name] = 'done';
+      }
+      state.prd_audit = 'pending';
+      state.architecture_review_as_built = 'skipped';
+      state.retro = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'done';
+      await writeState(statePath, state as ConductState);
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const report = join(dir, '.pipeline/prd-audit.md');
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      await writeFile(report, '| FR-17 | FIXABLE | prior-lap finding |');
+      await writeFile(sidecar, JSON.stringify({ runId: 'prior-lap' }));
+      await writeFile(join(dir, '.pipeline/HALT'), 'stale verdict halt');
+      await writeFile(join(dir, '.pipeline/HALT.class'), 'needs-human');
+      await unlink(join(dir, '.pipeline/HALT'));
+      await unlink(join(dir, '.pipeline/HALT.class'));
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          expect(step).toBe('prd_audit');
+          await expect(readFile(report, 'utf8')).resolves.toContain('prior-lap finding');
+          await expect(readFile(sidecar, 'utf8')).resolves.toContain('prior-lap');
+          await writeFile(
+            report,
+            [
+              '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '|---|---|---|---|---|',
+              '| S1.1 | PLAN_GAP | 12 | FR-1 | evidence.ts:1 |',
+            ].join('\n'),
+          );
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'prd_audit',
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        config: { prd_audit: { halt_on_any_plan_gap: true } } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect(runner.run).toHaveBeenCalledTimes(1);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(halt).toContain('S1.1');
+      expect(halt).toContain('PLAN_GAP');
+      expect(halt).not.toContain('prior-lap finding');
     });
 
     it('verdict_freshness event identifies stale invalidation and rewritten verdict outcomes', async () => {
@@ -7243,6 +7947,11 @@ describe('engine/conductor', () => {
       // resolves) actually settle before firing SIGINT.
       await new Promise((r) => setImmediate(r));
       await new Promise((r) => setImmediate(r));
+      // The D3 write handshake now performs its own artifact reads after the
+      // branch settles and before it publishes this completion to the
+      // interrupt side-channel. Give that bounded filesystem work time to
+      // finish before simulating SIGINT.
+      await new Promise((r) => setTimeout(r, 25));
       // The engine's registered handler is `() => signalHandlerBase('SIGINT')`,
       // which returns the handler's own promise — awaiting it (instead of a
       // fixed sleep) makes the state-file write deterministically complete

@@ -250,8 +250,9 @@ Three specific forms this takes:
 - **Presence is never proof.** Several gates re-derive their answer even when a passing artifact is sitting
   right there, because the artifact could describe a previous state of the code.
 - **Freshness is part of the check.** A verdict must be newer than a floor — the current judging attempt
-  when there is one, otherwise the run's session start. Without the per-attempt floor, a review session that
-  failed to rewrite its verdict would silently re-score the previous session's answer forever. A small
+  when there is one, otherwise the run's session start. The SHIP-tail verdict gates additionally require an
+  engine-stamped dispatch `runId` when one is available; a mismatch is no verdict and retries rather than
+  routing the earlier report's findings. Unstamped legacy artifacts retain the mtime fallback. A small
   filesystem-clock tolerance applies to the attempt floor only.
 - **Undeterminable is a failure, not a pass.** When a gate cannot compute its input at all — an unresolvable
   plan among several, a change set git cannot produce, a scope it cannot bound — it blocks. It does not

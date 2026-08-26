@@ -457,3 +457,27 @@ None — no migrations, no new dependencies, no config keys.
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-fr-s2.2-1: src/conductor/src/engine/conductor.ts — record the handshake observation on non-success terminal outcomes of the serial loop for manual_test/prd_audit/architecture_review_as_built: call verdictDispatchHandshake (conductor.ts:2250) with this dispatch's run id and start time before the retry `continue` at conductor.ts:8103 and before the exhaustion `break` at conductor.ts:8105, and on the step-written-halt exit at conductor.ts:8046, updating `lastVerdictHandshakeFailure` only — the step-written halt reason surfaced at conductor.ts:8047 must still win verbatim (that behavior is delivered and asserted today), and the exhaustion halt composed at conductor.ts:9842 keeps its current message shape; add serial-path error/halt cases to Task 6's handshake test matrix without weakening the existing success-path assertions
+**Gate:** prd-audit
+**Rationale:** Test/impl drift owned by an existing task (confidence 90%, verified both call sites): src/conductor/src/engine/conductor.ts:8130 is the only serial handshake call and sits inside the success block guarded at conductor.ts:8115, while a failed dispatch `continue`s at conductor.ts:8103, so no handshake observation is recorded on error outcomes; the validation-group path already satisfies the criterion via the phase:'result' callback (conductor.ts:5881, group-core.ts:539). Plan Task 6 names this exact obligation ('Handshake observation recorded on success, error, and halt outcomes'), so no plan work is needed.
+**Criterion:** S2.2
+**Parent task:** 6
+**Done when:**
+- S2.2 is satisfied by this task.
+
+### Task rem-prd-audit-rem-fr-s6.2-1: src/conductor/src/engine/gate-code-validity.ts:67 — make verdictProducedByRun itself honor the kill-switch (accept the config and return `unstamped` when resolveGateCodeValidityConfig(config).enabled is false), so the flag lives in one source instead of five reader-side copies; thread config to the two ungated readers src/conductor/src/engine/conductor.ts:2263 and src/conductor/src/engine/artifacts.ts:4348 (adding the parameter to classifyPrdAuditGaps and updating ALL THREE production callers conductor.ts:8278, conductor.ts:8344, conductor.ts:9546 as a matched set), and KEEP the existing gated early returns at artifacts.ts:2273 and artifacts.ts:757 — they deliver Task 13's predicate-level kill-switch coverage and their tests must keep passing
+**Gate:** prd-audit
+**Rationale:** Kill-switch parity is implementation drift against an existing task, not an architecture decision (confidence 95%, verified — three of five readers gate on the flag, two do not): src/conductor/src/engine/conductor.ts:2263 (verdictDispatchHandshake) and src/conductor/src/engine/artifacts.ts:4348 (classifyPrdAuditGaps) call verdictProducedByRun unconditionally, and on a `match` the latter skips the fileIsFreshSinceSession filter at artifacts.ts:4352, so 'pure mtime end-to-end' is not restored; the stamp writer at conductor.ts:2205 is likewise ungated and still rewrites sidecars with the flag off. Plan Task 13 names this ladder-gating work. Fixing it in the shared helper rather than at each call site removes the five-reader matched pair that produced this gap.
+**Criterion:** S6.2
+**Parent task:** 13
+**Done when:**
+- S6.2 is satisfied by this task.
+
+### Task rem-prd-audit-rem-fr-s6.2-2: src/conductor/src/engine/conductor.ts:2205 (stampVerdictRunIdentity, reached from conductor.ts:7688 serial settle and conductor.ts:5877 group settle) — skip the settle-time sidecar stamp when resolveGateCodeValidityConfig(this.config).enabled is false so no sidecar is rewritten with the flag off and mtime behavior is byte-comparable to pre-change; preserve Task 3's Done-when for the flag-ON path (success/error/halt all stamp, pre-seeded codeStamp survives the merge) by scoping the skip to the disabled case only
+**Gate:** prd-audit
+**Rationale:** Kill-switch parity is implementation drift against an existing task, not an architecture decision (confidence 95%, verified — three of five readers gate on the flag, two do not): src/conductor/src/engine/conductor.ts:2263 (verdictDispatchHandshake) and src/conductor/src/engine/artifacts.ts:4348 (classifyPrdAuditGaps) call verdictProducedByRun unconditionally, and on a `match` the latter skips the fileIsFreshSinceSession filter at artifacts.ts:4352, so 'pure mtime end-to-end' is not restored; the stamp writer at conductor.ts:2205 is likewise ungated and still rewrites sidecars with the flag off. Plan Task 13 names this ladder-gating work. Fixing it in the shared helper rather than at each call site removes the five-reader matched pair that produced this gap.
+**Criterion:** S6.2
+**Parent task:** 13
+**Done when:**
+- S6.2 is satisfied by this task.
