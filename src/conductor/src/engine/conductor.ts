@@ -230,6 +230,8 @@ import {
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
+  type PlanGrowth,
+  type PlanGrowthEventSink,
 } from './kickback-ledger.js';
 import {
   consumeOperatorGrant,
@@ -634,6 +636,82 @@ export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: numb
   const maximum = prdAudit?.max_appended_tasks ?? 5;
   const ratio = prdAudit?.max_appended_ratio ?? 0.25;
   return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
+}
+
+type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
+
+interface RemediationGateAppendBudget {
+  gate: RemediationLedgerGate;
+  priorLaps: number;
+  lapCap: number;
+  taskCount: number;
+  growthCap: number;
+  growth: PlanGrowth;
+}
+
+/** Read the shared append allowance for a remediation gate without choosing its halt wording. */
+async function readRemediationGateAppendBudget(
+  projectRoot: string,
+  config: HarnessConfig,
+  gate: RemediationLedgerGate,
+  lapCap: number,
+  taskCount: number,
+  authoredTaskCount: number,
+): Promise<RemediationGateAppendBudget> {
+  const growthCap = prdAuditAppendCap(config, authoredTaskCount);
+  const [ledger, growth] = await Promise.all([
+    readKickbackLedger(projectRoot),
+    readGrowth(projectRoot, growthCap),
+  ]);
+  const priorLaps = (
+    ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
+  )?.laps ?? 0;
+  return { gate, priorLaps, lapCap, taskCount, growthCap, growth };
+}
+
+function remediationGateAppendBudgetExhausted(
+  budget: RemediationGateAppendBudget,
+): 'laps' | 'growth' | undefined {
+  if (budget.priorLaps >= budget.lapCap) return 'laps';
+  return budget.taskCount > budget.growth.remaining ? 'growth' : undefined;
+}
+
+/** Persist one successful remediation append while keeping each gate's ledger and growth isolated. */
+async function recordRemediationGateAppend(
+  projectRoot: string,
+  budget: RemediationGateAppendBudget,
+  events: PlanGrowthEventSink,
+): Promise<void> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const existing = ledger.gates[budget.gate];
+  const next: KickbackGateEntry & { laps: number } = {
+    ...(existing ?? {
+      count: 0,
+      cumulative: 0,
+      treeHash: null,
+      lastReason: '',
+      priorVerdict: true,
+      resolvedBefore: 0,
+    }),
+    laps: budget.priorLaps + (budget.taskCount > 0 ? 1 : 0),
+  };
+  await writeKickbackLedger(projectRoot, {
+    ...ledger,
+    gates: { ...ledger.gates, [budget.gate]: next },
+  });
+  const priorGateGrowth = budget.growth.byGate[budget.gate] ?? 0;
+  await recordGrowth(
+    projectRoot,
+    {
+      authored: budget.growth.authored,
+      added: budget.growth.added + budget.taskCount,
+      byGate: {
+        ...budget.growth.byGate,
+        [budget.gate]: priorGateGrowth + budget.taskCount,
+      },
+    },
+    { cap: budget.growthCap, events },
+  );
 }
 
 export interface RecordedPrdAuditFinding {
@@ -3646,39 +3724,43 @@ export class Conductor {
     let appendAttempted = allTasks.length === 0;
 
     if (allTasks.length > 0) {
-      let priorPrdAuditLaps = 0;
-      let prdAuditGrowth: Awaited<ReturnType<typeof readGrowth>> | undefined;
-      let prdAuditGrowthCap = 0;
-      let priorAsBuiltLaps = 0;
-      let asBuiltGrowth: Awaited<ReturnType<typeof readGrowth>> | undefined;
-      let asBuiltGrowthCap = 0;
       const criterionBoundGaps = appendGaps.filter(
         (gap) => gap.criterion !== undefined && gap.parentTask !== undefined,
       );
       const clauseBoundGaps = appendGaps.filter(
         (gap) => gap.governingClause !== undefined,
       );
-      if (prdAuditCapEnforced) {
-        const ledger = await readKickbackLedger(this.projectRoot);
-        priorPrdAuditLaps = (
-          ledger.gates.prd_audit as (KickbackGateEntry & { laps?: number }) | undefined
-        )?.laps ?? 0;
-        prdAuditGrowthCap = prdAuditAppendCap(
+      const authoredTaskCount = activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
+      const prdAuditBudget = prdAuditCapEnforced
+        ? await readRemediationGateAppendBudget(
+          this.projectRoot,
           this.config,
-          activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0,
-        );
-        prdAuditGrowth = await readGrowth(this.projectRoot, prdAuditGrowthCap);
+          'prd_audit',
+          prdAuditLapCap,
+          prdAuditTasks.length,
+          authoredTaskCount,
+        )
+        : undefined;
+      const asBuiltBudget = asBuiltCapEnforced
+        ? await readRemediationGateAppendBudget(
+          this.projectRoot,
+          this.config,
+          'architecture_review_as_built',
+          asBuiltLapCap,
+          asBuiltTasks.length,
+          authoredTaskCount,
+        )
+        : undefined;
+      if (prdAuditBudget) {
         const findings = [...new Set([...prdAuditFindings.values()].map((finding) => finding.criterion))];
         const findingList = findings.length > 0 ? findings.join(', ') : 'unattributed FIXABLE findings';
-        if (
-          priorPrdAuditLaps >= prdAuditLapCap ||
-          prdAuditTasks.length > prdAuditGrowth.remaining
-        ) {
-          const capReason = priorPrdAuditLaps >= prdAuditLapCap
-            ? `lap cap reached (${priorPrdAuditLaps}/${prdAuditLapCap})`
+        const exhausted = remediationGateAppendBudgetExhausted(prdAuditBudget);
+        if (exhausted) {
+          const capReason = exhausted === 'laps'
+            ? `lap cap reached (${prdAuditBudget.priorLaps}/${prdAuditBudget.lapCap})`
             :
-              `growth cap reached (${prdAuditGrowth.added}/${prdAuditGrowthCap} appended; ` +
-              `${prdAuditTasks.length} requested, ${prdAuditGrowth.remaining} remaining)`;
+              `growth cap reached (${prdAuditBudget.growth.added}/${prdAuditBudget.growthCap} appended; ` +
+              `${prdAuditBudget.taskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
@@ -3686,25 +3768,14 @@ export class Conductor {
           };
         }
       }
-      if (asBuiltCapEnforced) {
-        const ledger = await readKickbackLedger(this.projectRoot);
-        priorAsBuiltLaps = (
-          ledger.gates.architecture_review_as_built as (KickbackGateEntry & { laps?: number }) | undefined
-        )?.laps ?? 0;
-        asBuiltGrowthCap = prdAuditAppendCap(
-          this.config,
-          activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0,
-        );
-        asBuiltGrowth = await readGrowth(this.projectRoot, asBuiltGrowthCap);
-        if (
-          priorAsBuiltLaps >= asBuiltLapCap ||
-          asBuiltTasks.length > asBuiltGrowth.remaining
-        ) {
-          const capReason = priorAsBuiltLaps >= asBuiltLapCap
-            ? `lap cap reached (${priorAsBuiltLaps}/${asBuiltLapCap})`
+      if (asBuiltBudget) {
+        const exhausted = remediationGateAppendBudgetExhausted(asBuiltBudget);
+        if (exhausted) {
+          const capReason = exhausted === 'laps'
+            ? `lap cap reached (${asBuiltBudget.priorLaps}/${asBuiltBudget.lapCap})`
             :
-              `shared plan-growth allowance exhausted (${asBuiltGrowth.added}/${asBuiltGrowthCap} appended; ` +
-              `${asBuiltTasks.length} requested, ${asBuiltGrowth.remaining} remaining)`;
+              `shared plan-growth allowance exhausted (${asBuiltBudget.growth.added}/${asBuiltBudget.growthCap} appended; ` +
+              `${asBuiltBudget.taskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
@@ -3730,74 +3801,16 @@ export class Conductor {
             const finding = asBuiltRecordedFindings.get(gap.id);
             if (finding) this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
           }
-          if (prdAuditCapEnforced) {
-            const ledger = await readKickbackLedger(this.projectRoot);
-            const existing = ledger.gates.prd_audit;
-            const next: KickbackGateEntry & { laps: number } = {
-              ...(existing ?? {
-                count: 0,
-                cumulative: 0,
-                treeHash: null,
-                lastReason: '',
-                priorVerdict: true,
-                resolvedBefore: 0,
-              }),
-              laps: priorPrdAuditLaps + (prdAuditTasks.length > 0 ? 1 : 0),
-            };
-            await writeKickbackLedger(this.projectRoot, {
-              ...ledger,
-              gates: { ...ledger.gates, prd_audit: next },
-            });
-            if (prdAuditGrowth) {
-              const priorGateGrowth = prdAuditGrowth.byGate.prd_audit ?? 0;
-              await recordGrowth(
-                this.projectRoot,
-                {
-                  authored: prdAuditGrowth.authored,
-                  added: prdAuditGrowth.added + prdAuditTasks.length,
-                  byGate: {
-                    ...prdAuditGrowth.byGate,
-                    prd_audit: priorGateGrowth + prdAuditTasks.length,
-                  },
-                },
-                { cap: prdAuditGrowthCap, events: this.events },
-              );
-            }
-          }
-          if (asBuiltCapEnforced) {
-            const ledger = await readKickbackLedger(this.projectRoot);
-            const existing = ledger.gates.architecture_review_as_built;
-            const next: KickbackGateEntry & { laps: number } = {
-              ...(existing ?? {
-                count: 0,
-                cumulative: 0,
-                treeHash: null,
-                lastReason: '',
-                priorVerdict: true,
-                resolvedBefore: 0,
-              }),
-              laps: priorAsBuiltLaps + (asBuiltTasks.length > 0 ? 1 : 0),
-            };
-            await writeKickbackLedger(this.projectRoot, {
-              ...ledger,
-              gates: { ...ledger.gates, architecture_review_as_built: next },
-            });
-            if (asBuiltGrowth) {
-              const priorGateGrowth = asBuiltGrowth.byGate.architecture_review_as_built ?? 0;
-              await recordGrowth(
-                this.projectRoot,
-                {
-                  authored: asBuiltGrowth.authored,
-                  added: asBuiltGrowth.added + asBuiltTasks.length,
-                  byGate: {
-                    ...asBuiltGrowth.byGate,
-                    architecture_review_as_built: priorGateGrowth + asBuiltTasks.length,
-                  },
-                },
-                { cap: asBuiltGrowthCap, events: this.events },
-              );
-            }
-          }
+          if (prdAuditBudget) await recordRemediationGateAppend(
+            this.projectRoot,
+            prdAuditBudget,
+            this.events,
+          );
+          if (asBuiltBudget) await recordRemediationGateAppend(
+            this.projectRoot,
+            asBuiltBudget,
+            this.events,
+          );
           // Record the appended ids so the build completion predicate can
           // reject a later removal of their headings from the plan.
           try {
