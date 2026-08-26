@@ -320,7 +320,9 @@ For
 
 `preserved` means the code changed outside the gate's judged surface, so the prior passing verdict
 remains valid. `invalidated` means the judged surface changed and the stale verdict was rejected;
-the gate must run again. `rewritten` means the current judging attempt produced the artifact.
+the gate must run again. For SHIP-tail gates, a stale verdict can mean that the report belongs to
+an earlier dispatch; the daemon treats it as no verdict, retries within the existing step budget,
+and never routes its findings. `rewritten` means the current judging attempt produced the artifact.
 
 After a BUILD repair, the group still runs its non-skipped members. `wiring_check` remains an
 observable compatibility no-op; `test_suite` is the active verifier, and a prior evidence file does

@@ -408,7 +408,7 @@ Agent-authored, engine-validated. Alphabetized.
 | --- | --- | --- |
 | `acceptance-specs-red.json` | `{ command, targetSpecs[], executed, passed, failed, skipped, errors, failingTests[], ranAt, intentRationale, exception?, summary? }`. Validation hard-fails on `errors > 0`, `skipped > 0`, `executed < 1`, or `failed < 1` unless a recorded `exception` (`{ kind: 'remediation', reason, attribution }`) waives separate RED proof — a RED phase must actually fail, or the waiver must be attributable | `acceptance-red-runner.ts` |
 | `architecture-review-as-built.md` | Markdown with a `Verdict: <value>` line | as-built review step |
-| `architecture-review-as-built-code-stamp.json` | The HEAD sha the review was formed against | engine |
+| `architecture-review-as-built-code-stamp.json` | The HEAD sha the review was formed against, plus the engine-stamped `runId` for its latest dispatch | engine |
 | `assessment/` | Assessment outputs | `assess` skill |
 | `attribution-memo.json` | Fast-lane attribution memo | `attribution-lane.ts` |
 | `attribution-verdict.json` | `{ schema?, anchor?: { head?, residue?[] }, results? }` | `attribution-verdict.ts` |
@@ -422,9 +422,10 @@ Agent-authored, engine-validated. Alphabetized.
 | `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |
 | `manual-test-results.md` | Per-story PASS/WARN/FAIL rows. The recorder stamps attempts containing exact `WARN` cells with `<!-- manual-test:warning -->`; WARN is visible but non-blocking. The gate fails on any FAIL row in the latest attempt, and on an mtime older than session start | `manual-test` skill |
 | `manual-test-fail-evidence.json` | Failure detail for the above | engine |
+| `manual-test-code-stamp.json` | The HEAD sha the manual test was formed against when available, plus the engine-stamped `runId` for its latest dispatch | engine |
 | `per-task-floor.json` | Per-task commit-floor telemetry | `step-runners.ts` |
 | `prd-audit.md` | A `## Verdict Table` with one graded row per story acceptance criterion: `Criterion`, `Grade` (`PASS`\|`FIXABLE`\|`PLAN_GAP`\|`OVER_SCOPE`), `Plan task` (required for `FIXABLE`), `FR`, `Intent relation` (required for `OVER_SCOPE`: `within`\|`outside-harmless`\|`outside-visible`), `Evidence`. The grade is read from the verdict **cell**, not from anywhere else in the row. Every `Criterion` key must be an active story criterion id, each on exactly one row — an invented or unresolvable key fails the whole report as a mechanical fault. A finding that owns no criterion (typically an unplanned change) is reported below the table instead | `prd-audit` skill |
-| `prd-audit-code-stamp.json` | The HEAD sha the audit was formed against | engine |
+| `prd-audit-code-stamp.json` | The HEAD sha the audit was formed against, plus the engine-stamped `runId` for its latest dispatch | engine |
 | `protected-artifact-seal.json` | See above | `protected-artifact-seal.ts` |
 | `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
 | `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |
