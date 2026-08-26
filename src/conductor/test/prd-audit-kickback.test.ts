@@ -199,6 +199,106 @@ async function createPrdAuditRemediationFixture(input: {
   return { outcome, plan, planPath, root, gateBlocks };
 }
 
+async function createAsBuiltRemediationCapFixture(input: {
+  priorLaps?: number;
+  priorGrowthAdded?: number;
+}) {
+  const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-cap-'));
+  dirs.push(root);
+  const planPath = join(root, '.docs', 'plans', 'feature.md');
+  const plan = [1, 2, 3, 4].map((id) => `### Task ${id}: Authored work`).join('\n');
+  const findings = [
+    { id: 'AB-1', clause: 'Task 1', summary: 'Add the approved guard' },
+    { id: 'AB-2', clause: 'Task 2', summary: 'Restore the approved boundary' },
+  ];
+  await Promise.all([
+    mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+    mkdir(join(root, '.pipeline'), { recursive: true }),
+  ]);
+  await writeFile(planPath, plan);
+  await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+  await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+    'Verdict: BLOCKED',
+    '',
+    '## Blocking Findings',
+    '| Finding | Class | Governing clause | Summary |',
+    '| --- | --- | --- | --- |',
+    ...findings.map((finding) =>
+      `| ${finding.id} | REMEDIABLE | ${finding.clause} | ${finding.summary} |`,
+    ),
+  ].join('\n'));
+  if (input.priorLaps !== undefined || input.priorGrowthAdded !== undefined) {
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: input.priorLaps === undefined
+        ? {}
+        : {
+            architecture_review_as_built: {
+              count: 0,
+              cumulative: 0,
+              treeHash: null,
+              lastReason: '',
+              priorVerdict: true,
+              resolvedBefore: 0,
+              laps: input.priorLaps,
+            },
+          },
+      ...(input.priorGrowthAdded === undefined
+        ? {}
+        : {
+            growth: {
+              authored: 4,
+              added: input.priorGrowthAdded,
+              byGate: { prd_audit: input.priorGrowthAdded },
+            },
+          }),
+    } as never);
+  }
+  const runner: StepRunner = {
+    run: async () => {
+      await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+        dispositions: findings.map((finding) => ({
+          id: finding.id,
+          disposition: 'build',
+          category: null,
+          rationale: finding.summary,
+          tasks: [{ id: `fix-${finding.id.toLowerCase()}`, title: finding.summary }],
+        })),
+      }));
+      return { success: true };
+    },
+  };
+  const conductor = new Conductor({
+    stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+    stepRunner: runner,
+    events: new ConductorEventEmitter(),
+    projectRoot: root,
+    mode: 'auto',
+    daemon: true,
+    verifyArtifacts: false,
+    maxRetries: 1,
+    config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+  });
+  const outcome = await (conductor as unknown as {
+    planRemediation: (
+      state: ConductState,
+      steps: typeof ALL_STEPS,
+      dispatchContext: string,
+      hintSource: unknown,
+    ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
+  }).planRemediation(
+    { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+    ALL_STEPS,
+    'as-built blocked',
+    {
+      source: 'architecture-review-as-built',
+      evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }],
+    },
+  );
+
+  return { outcome, plan, planPath, findings };
+}
+
 describe('prd_audit kickback', () => {
   afterEach(async () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -733,6 +833,7 @@ describe('prd_audit kickback', () => {
       events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
       verifyArtifacts: false, maxRetries: 1,
       config: {
+        prd_audit: { max_appended_tasks: 2, max_appended_ratio: 2 },
         architecture_review_as_built: { remediation: { enabled: true } },
       } as never,
     });
@@ -828,6 +929,33 @@ describe('prd_audit kickback', () => {
     expect(growthEvents).toEqual([expect.objectContaining({
       type: 'plan_growth', added: 1, byGate: { architecture_review_as_built: 1 },
     })]);
+  });
+
+  it('halts a second as-built remediation lap before appending and lists every finding', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({ priorLaps: 1 });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    expect(fixture.outcome.detail).toContain('lap cap reached (1/1)');
+    for (const finding of fixture.findings) {
+      expect(fixture.outcome.detail).toContain(
+        `${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`,
+      );
+    }
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
+  it('halts an as-built request beyond the remaining shared growth allowance before appending', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({ priorGrowthAdded: 1 });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    expect(fixture.outcome.detail).toContain('shared plan-growth allowance');
+    expect(fixture.outcome.detail).toContain('0 remaining');
+    for (const finding of fixture.findings) {
+      expect(fixture.outcome.detail).toContain(
+        `${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`,
+      );
+    }
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
   });
 
   it.each([

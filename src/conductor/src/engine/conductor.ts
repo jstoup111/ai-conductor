@@ -3350,12 +3350,14 @@ export class Conductor {
       join(this.projectRoot, asBuiltEvidenceFile),
     ).then(() => true).catch(() => false);
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
+    const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
     const asBuiltFindings = new Map<string, AsBuiltGoverningClauseResolution>();
     const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];
     let prdAuditValidated = false;
     let asBuiltValidated = false;
     let activePlanText = '';
+    let asBuiltReport: string | undefined;
     if (planPath && prdAuditRemediation) {
       try {
         activePlanText = await readFile(
@@ -3417,8 +3419,8 @@ export class Conductor {
           'utf8',
         );
         activePlanText = asBuiltPlanText;
-        const report = await readFile(join(this.projectRoot, asBuiltEvidenceFile), 'utf8');
-        const parsed = parseAsBuiltBlockedFindings(report);
+        asBuiltReport = await readFile(join(this.projectRoot, asBuiltEvidenceFile), 'utf8');
+        const parsed = parseAsBuiltBlockedFindings(asBuiltReport);
         if (!parsed.ok) {
           const detail = `As-built review report mechanical fault: ${parsed.error}`;
           await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
@@ -3607,6 +3609,23 @@ export class Conductor {
           activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0,
         );
         asBuiltGrowth = await readGrowth(this.projectRoot, asBuiltGrowthCap);
+        if (
+          priorAsBuiltLaps >= asBuiltLapCap ||
+          asBuiltTasks.length > asBuiltGrowth.remaining
+        ) {
+          const capReason = priorAsBuiltLaps >= asBuiltLapCap
+            ? `lap cap reached (${priorAsBuiltLaps}/${asBuiltLapCap})`
+            :
+              `shared plan-growth allowance exhausted (${asBuiltGrowth.added}/${asBuiltGrowthCap} appended; ` +
+              `${asBuiltTasks.length} requested, ${asBuiltGrowth.remaining} remaining)`;
+          return {
+            kind: 'halt',
+            haltClass: KICKBACK_CAP_HALT_CLASS,
+            detail:
+              `architecture_review_as_built remediation ${capReason} before appending fix tasks. Findings:` +
+              renderAsBuiltBlockedFindingDetail(asBuiltReport),
+          };
+        }
       }
       // Append remediation tasks to the plan
       if (planPath) {
