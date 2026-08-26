@@ -176,16 +176,33 @@ function recordedAsBuiltFindings(report: string | undefined): RecordedShipmentFi
   return [...projected, ...deliveredPlanGapFinding(report)];
 }
 
+/**
+ * The narrative `## Recorded Findings` section of a delivered-PLAN_GAP report.
+ * Order-independent: the remediation JSON block may precede or follow it, and
+ * a fenced section is never narrative. Returns undefined when none qualifies.
+ */
+function deliveredPlanGapSection(report: string): string | undefined {
+  const headingRe = /^## Recorded Findings(?:\s*\(if PLAN_GAP\s*[\u2014-][^)]*\))?\s*$/gim;
+  for (let match = headingRe.exec(report); match !== null; match = headingRe.exec(report)) {
+    const afterHeading = report.slice(match.index + match[0].length);
+    const nextHeading = afterHeading.search(/^#{1,6}\s/m);
+    const section = (nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading)).trim();
+    if (!section || section.startsWith('```')) continue;
+    return section;
+  }
+  return undefined;
+}
+
 function deliveredPlanGapFinding(report: string | undefined): RecordedShipmentFinding[] {
   if (!report || !/^\s*Verdict\s*:\s*PLAN_GAP\s*$/im.test(report) || !/^\s*Outcome delivered\s*:\s*yes\s*$/im.test(report)) return [];
-  // Keep the shipped reader compatible with the writer's annotated heading,
-  // while rejecting arbitrary prose sections that only share a prefix.
-  const heading = /^## Recorded Findings(?:\s*\(if PLAN_GAP\s*[—-][^)]*\))?\s*$/im.exec(report);
-  if (!heading || heading.index === undefined) return [];
-  const afterHeading = report.slice(heading.index + heading[0].length);
-  const nextHeading = afterHeading.search(/^#{1,6}\s/m);
-  const section = (nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading)).trim();
-  if (!section) return [];
+  // AB-R10: a lap that BOTH remediated findings and delivered a PLAN_GAP
+  // carries two `## Recorded Findings` sections — the remediation JSON block
+  // this engine projects, and the reviewer's PLAN_GAP narrative. Taking the
+  // first heading read the JSON as prose and recorded `outcome: "```json"`
+  // with the whole block as the summary. Scan every candidate section in
+  // either order and take the first that is narrative, never a fenced block.
+  const section = deliveredPlanGapSection(report);
+  if (section === undefined) return [];
   const entries = section.split('\n').map((line) => line.trim()).filter(Boolean);
   const labeled = (name: string): string | undefined => entries
     .map((line) => line.match(new RegExp(`^(?:[-*]\\s*)?${name}:\\s*(.+)$`, 'i'))?.[1]?.trim())

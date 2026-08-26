@@ -43,6 +43,7 @@ graph TD
         HALT["writeHaltMarker needs-human<br/>DESIGN finding,<br/>ambiguous/malformed report"]
         CAPHALT["writeHaltMarker kickback-cap<br/>cap exhausted, second lap,<br/>no-op escalation<br/>body lists every finding:<br/>id, class, governing clause, summary"]
         SHIP["gate satisfied => SHIP tail continues<br/>remediation recorded per finding<br/>in verdict artifact + shipped record"]
+        PGCONV["convergence terminal: PLAN_GAP delivered<br/>after a remediation lap<br/>both records are ADDITIVE — the remediation<br/>JSON block AND the PLAN_GAP narrative<br/>survive into the shipped record"]
     end
 
     FTABLE --> PV --> CLS
@@ -62,6 +63,9 @@ graph TD
     BUILD -.->|rerun gate after rebuild| REPORT
     CLS -->|clean APPROVED after lap| SHIP
     PENDING -->|projected into the verdict artifact, then cleared| SHIP
+    CLS -->|"PLAN_GAP + Outcome delivered: yes<br/>after a lap"| PGCONV
+    PENDING --> PGCONV
+    PGCONV --> SHIP
 ```
 
 ## Legend
@@ -74,6 +78,11 @@ graph TD
 - `pendingAsBuiltRemediationFindings` is the feature's only durable-state addition (ADR
   decision 7). It is optional, validated fail-closed, carries no ledger version bump, and is
   cleared by the same step that projects it — a pending entry never outlives its projection.
+- The two record kinds are additive, never alternatives
+  (`adr-2026-08-22-as-built-review-runs-always-with-plan-gap` D2): a lap can remediate
+  REMEDIABLE findings AND deliver a PLAN_GAP, and the shipped record carries both. The reader
+  selects the narrative `## Recorded Findings` section, never the projected JSON block, in
+  whichever order they appear.
 - Supersedes `adr-2026-08-22-as-built-review-runs-always-with-plan-gap` D3 (bounded revival of
   the as-built→build route) and amends `adr-2026-08-22-one-owner-per-review-question`'s
   appender clause.
@@ -85,3 +94,4 @@ graph TD
 | 2026-08-25 | Initial generation | DECIDE for issue #1874 |
 | 2026-08-26 | Added the `pendingAsBuiltRemediationFindings` ledger node and its projection edge | Operator amendment approving ADR decision 7 (as-built finding AB-D1) |
 | 2026-08-26 | Split the halt terminal into needs-human vs kickback-cap; moved clause binding off the parser | As-built drift notes: cap exhaustion is kickback-cap, and clause resolution happens in planRemediation |
+| 2026-08-26 | Added the delivered-PLAN_GAP convergence terminal | AB-R10: a remediation lap and a delivered PLAN_GAP coexist, and both records are additive |

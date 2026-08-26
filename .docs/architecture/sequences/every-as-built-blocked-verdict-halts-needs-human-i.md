@@ -34,6 +34,9 @@ sequenceDiagram
             AR->>P: fresh report
             P->>C: APPROVED — gate satisfied
             C->>L: reload pending findings, project into verdict artifact, clear
+        else rebuilt gate returns PLAN_GAP with Outcome delivered: yes
+            C->>L: reload pending findings, project the remediation JSON block
+            Note over C,L: convergence terminal — the projected block and the<br/>reviewer's PLAN_GAP narrative are ADDITIVE; the shipped<br/>record carries both, and the reader takes the narrative<br/>section in whichever order the two appear
         else lap or growth cap exhausted
             C->>K: kickback-cap halt: exhausted allowance + every finding
         end
@@ -54,6 +57,9 @@ sequenceDiagram
   clause (verdict artifact + shipped record projection).
 - That record survives a restart because the pending set is durable ledger state (ADR decision
   7); it is cleared by the same step that projects it, so it never outlives the projection.
+- A remediation lap and a delivered PLAN_GAP are not alternatives
+  (`adr-2026-08-22-as-built-review-runs-always-with-plan-gap` D2). Both reach the shipped
+  record; neither preempts the other.
 
 ## Change Log
 
@@ -62,3 +68,4 @@ sequenceDiagram
 | 2026-08-25 | Initial generation | DECIDE for issue #1874 |
 | 2026-08-26 | Added the pending-findings persist and project-then-clear steps | Operator amendment approving ADR decision 7 (as-built finding AB-D1) |
 | 2026-08-26 | Added the kickback-cap terminal; corrected where clause binding happens | As-built drift notes: exhaustion is kickback-cap, and the parser validates shape only |
+| 2026-08-26 | Added the delivered-PLAN_GAP convergence branch | AB-R10: remediation and a delivered PLAN_GAP coexist additively |

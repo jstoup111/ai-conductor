@@ -291,10 +291,63 @@ describe('shipped-record recorded review findings', () => {
       ].join('\n'),
     });
 
-    expect(findings).toContainEqual(expect.objectContaining({
+    // AB-R10: assert the EXACT values of both entries. The first version of
+    // this test asserted only `length > 1` plus the remediated id, so it
+    // passed while the PLAN_GAP entry was corrupt — `outcome` read as the
+    // literal "```json" fence and `summary` as the whole projected block.
+    expect(findings).toEqual([
+      {
+        gate: 'architecture_review_as_built',
+        finding: 'AB-1',
+        class: 'REMEDIABLE',
+        governingClause: 'Task 1',
+        summary: 'The approved guard was restored.',
+        outcome: 'remediated',
+      },
+      {
+        gate: 'architecture_review_as_built',
+        grade: 'PLAN_GAP',
+        outcome: 'The status channel stays eventually consistent.',
+        summary: 'The approved architecture has no synchronous channel.',
+      },
+    ]);
+  });
+
+  /**
+   * AB-R10, order independence: the remediation JSON block may be projected
+   * after the reviewer's narrative as well as before it. Both entries must
+   * still carry their own values.
+   */
+  it('reads both entries when the PLAN_GAP narrative precedes the projected JSON', () => {
+    const findings = recordedShipmentFindings({
+      asBuilt: [
+        'Verdict: PLAN_GAP',
+        'Outcome delivered: yes',
+        '',
+        '## Recorded Findings',
+        '- Outcome: The status channel stays eventually consistent.',
+        '- Summary: The approved architecture has no synchronous channel.',
+        '',
+        '## Recorded Findings',
+        '```json',
+        JSON.stringify({ findings: [{
+          gate: 'architecture_review_as_built',
+          finding: 'AB-1',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 1',
+          summary: 'The approved guard was restored.',
+          outcome: 'remediated',
+        }] }),
+        '```',
+      ].join('\n'),
+    });
+
+    expect(findings).toContainEqual({
       gate: 'architecture_review_as_built',
-      finding: 'AB-1',
-    }));
-    expect(findings.length).toBeGreaterThan(1);
+      grade: 'PLAN_GAP',
+      outcome: 'The status channel stays eventually consistent.',
+      summary: 'The approved architecture has no synchronous channel.',
+    });
+    expect(findings).toContainEqual(expect.objectContaining({ finding: 'AB-1', outcome: 'remediated' }));
   });
 });
