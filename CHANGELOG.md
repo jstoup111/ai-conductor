@@ -51,6 +51,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Validates feature-scoped artifact stems before landing a spec. ([implementation PR #1893](https://github.com/jstoup111/ai-conductor/pull/1893)).
 - Manual testing now warns instead of blocking when browser automation dependencies are unavailable, while continuing curl checks and preserving real application failures. ([implementation PR #1902](https://github.com/jstoup111/ai-conductor/pull/1902)).
 - Restored configurable gate code-validity behavior and reliable Claude rate-limit hook handling. ([implementation PR #1914](https://github.com/jstoup111/ai-conductor/pull/1914)).
+- SHIP validation retries verdict reports from an earlier dispatch instead of routing their stale findings. ([implementation PR #1891](https://github.com/jstoup111/ai-conductor/pull/1891)).
 
 ## Migration
 
