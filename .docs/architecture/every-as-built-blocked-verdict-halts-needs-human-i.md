@@ -1,6 +1,6 @@
 # Components: As-Built BLOCKED Per-Finding Classification and Bounded Remediation
 
-**Last updated:** 2026-08-25
+**Last updated:** 2026-08-26
 **Scope:** issue #1874 — classify each as-built BLOCKED finding (REMEDIABLE vs DESIGN) and
 route REMEDIABLE findings through the existing single-appender remediation seam under a new
 `architecture_review_as_built` gate key; DESIGN, ambiguity, and cap exhaustion all halt
@@ -32,7 +32,8 @@ graph TD
     subgraph Appender["Single-appender seam (unchanged primitive)"]
         ALLOW["requiresPlanGrowthAllowance<br/>as-built source now ADMITTED"]
         APPEND["appendRemediationTasks<br/>remediation-append.ts<br/>rem-as-built-* tasks"]
-        LEDGER["kickback-ledger.json<br/>gates.architecture_review_as_built.laps<br/>growth.byGate (existing gate-keyed shape)"]
+        LEDGER["kickback-ledger.json (version 1, unchanged)<br/>gates.architecture_review_as_built.laps<br/>growth.byGate (existing gate-keyed shape)"]
+        PENDING["pendingAsBuiltRemediationFindings (NEW, optional)<br/>durable per-finding record of the authorized lap<br/>survives the dispatch boundary BUILD crosses<br/>ADR decision 7"]
         CAPS["caps: own lap cap (default 1)<br/>+ shared growth allowance"]
     end
 
@@ -53,10 +54,12 @@ graph TD
     GROUP -->|any DESIGN / invalid| HALT
     PR --> ALLOW --> CAPS
     CAPS -->|within allowance| APPEND --> LEDGER
+    APPEND -->|append succeeded: record the findings it authorized| PENDING
     APPEND --> BUILD
     CAPS -->|exhausted| HALT
     BUILD -.->|rerun gate after rebuild| REPORT
     CLS -->|clean APPROVED after lap| SHIP
+    PENDING -->|projected into the verdict artifact, then cleared| SHIP
 ```
 
 ## Legend
@@ -66,6 +69,9 @@ graph TD
   all bookkeeping (parsing, caps, ledger, halt) is mechanical and fail-closed.
 - One appender preserved: as-built findings enter through the same `planRemediation` →
   `appendRemediationTasks` seam prd_audit uses, under their own gate key — no second appender.
+- `pendingAsBuiltRemediationFindings` is the feature's only durable-state addition (ADR
+  decision 7). It is optional, validated fail-closed, carries no ledger version bump, and is
+  cleared by the same step that projects it — a pending entry never outlives its projection.
 - Supersedes `adr-2026-08-22-as-built-review-runs-always-with-plan-gap` D3 (bounded revival of
   the as-built→build route) and amends `adr-2026-08-22-one-owner-per-review-question`'s
   appender clause.
@@ -75,3 +81,4 @@ graph TD
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-08-25 | Initial generation | DECIDE for issue #1874 |
+| 2026-08-26 | Added the `pendingAsBuiltRemediationFindings` ledger node and its projection edge | Operator amendment approving ADR decision 7 (as-built finding AB-D1) |
