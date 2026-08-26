@@ -37,6 +37,7 @@ import {
   appendRecordedShipmentFindings,
   recordedShipmentFindings,
 } from '../src/engine/shipment-association.js';
+import * as machineIdentity from '../src/engine/owner-gate/machine-identity.js';
 
 const dirs: string[] = [];
 
@@ -742,9 +743,10 @@ describe('prd_audit kickback', () => {
     report: string,
     stories: string,
     setup?: (root: string) => Promise<void>,
+    options?: { root?: string },
   ) {
-    const root = await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
-    dirs.push(root);
+    const root = options?.root ?? await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
+    if (!options?.root) dirs.push(root);
     const statePath = join(root, '.pipeline', 'conduct-state.json');
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await mkdir(join(root, '.docs', 'stories'), { recursive: true });
@@ -793,19 +795,25 @@ describe('prd_audit kickback', () => {
         return { success: true };
       },
     };
+    const events = new ConductorEventEmitter();
+    const gateBlocks: Array<{ step: StepName; reason: string }> = [];
+    events.on('gate_blocked', (event) => {
+      if (event.type === 'gate_blocked') gateBlocks.push({ step: event.step, reason: event.reason });
+    });
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
-      events: new ConductorEventEmitter(),
+      events,
       projectRoot: root,
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 1,
       fromStep: 'manual_test',
+      gh: async () => ({ stdout: 'operator@example.test\n' }),
     });
     await conductor.run();
-    return { root, calls, state: await readState(statePath) };
+    return { root, calls, gateBlocks, state: await readState(statePath) };
   }
 
   it('appends the first capped lap of FIXABLE work with criterion-bound completion checks', async () => {
@@ -1760,6 +1768,43 @@ describe('prd_audit kickback', () => {
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
       'user-visible scope requires operator acceptance',
     );
+  });
+
+  it('completes an NC.1 operator-acceptance lap through the rendered cleared-halt handoff', async () => {
+    const summary = 'A visible behavior exists outside the approved plan.';
+    const report = noOwnerOverScopeReport('NC.1', summary, 'outside-visible');
+    const stories = storiesWithCriterion('Happy Path');
+    const ownerConfig = vi.spyOn(machineIdentity, 'readMachineOwnerConfig').mockResolvedValue({ spec_owner: null });
+    try {
+      const first = await runGroupedPrdAudit(report, stories);
+
+      const halt = await readFile(join(first.root, '.pipeline', 'HALT'), 'utf8');
+      expect(halt).toContain('user-visible scope requires operator acceptance');
+      expect(halt).toContain('"criterion": "NC.1"');
+      expect(halt).toContain(`"summary": "${summary}"`);
+
+      const cleared = halt
+        .replace('"decision": "pending"', '"decision": "accept", "rationale": "Approved for this feature."');
+
+      const second = await runGroupedPrdAudit(report, stories, async (root) => {
+        await writeFile(join(root, '.pipeline', 'HALT.cleared'), cleared);
+        await rm(join(root, '.pipeline', 'HALT'));
+        await rm(join(root, '.pipeline', 'HALT.class'));
+      }, { root: first.root });
+      const decisions = await readOverScopeDecisions(second.root);
+
+      expect(decisions.decisions).toEqual([expect.objectContaining({
+        criterion: 'NC.1',
+        summary,
+        decision: 'accept',
+        rationale: 'Approved for this feature.',
+        operator: 'operator@example.test',
+      })]);
+      expect(second.gateBlocks).not.toContainEqual(expect.objectContaining({ step: 'prd_audit' }));
+      expect(second.state.ok && second.state.value.prd_audit).toBe('done');
+    } finally {
+      ownerConfig.mockRestore();
+    }
   });
 
   it('requires the explicit Intent relation field instead of inferring within intent from evidence', () => {
