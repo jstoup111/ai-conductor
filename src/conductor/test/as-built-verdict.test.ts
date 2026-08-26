@@ -92,6 +92,65 @@ describe('as-built verdict gate', () => {
     });
   });
 
+  it('returns a typed fault when a BLOCKED report has no findings table', () => {
+    expect(parseAsBuiltBlockedFindings('Verdict: BLOCKED')).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'As-built BLOCKED report is missing its Blocking Findings table.',
+    });
+  });
+
+  it('returns a typed fault naming an unknown finding class and its row', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-7 | UNKNOWN | Task 2 | Unrecognized classification |',
+    ].join('\n');
+
+    expect(parseAsBuiltBlockedFindings(report)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'As-built finding ARCH-7 has an invalid Class value "UNKNOWN".',
+    });
+  });
+
+  it('returns a typed fault naming a REMEDIABLE finding without a governing clause', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-8 | REMEDIABLE | | Missing governing clause |',
+    ].join('\n');
+
+    expect(parseAsBuiltBlockedFindings(report)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'As-built REMEDIABLE finding ARCH-8 has no Governing clause.',
+    });
+  });
+
+  it('returns a typed fault for a Blocking Findings table with a malformed header', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Summary |',
+      '| --- | --- | --- |',
+      '| ARCH-9 | REMEDIABLE | Missing the clause column |',
+    ].join('\n');
+
+    expect(parseAsBuiltBlockedFindings(report)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'As-built Blocking Findings table has a malformed header.',
+    });
+  });
+
   it('accepts a delivered PLAN_GAP as a recorded non-blocking verdict', async () => {
     const dir = await fixture();
     await writeAsBuilt(dir, 'Verdict: PLAN_GAP\nOutcome delivered: yes\n\n## Recorded Findings\n- Plan is the limit.\n');

@@ -4094,9 +4094,10 @@ export function parseAsBuiltBlockedFindings(content: string): AsBuiltBlockedFind
     if (id === '') {
       return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings row has an empty Finding.');
     }
-    const rawClass = cells[classIndex]?.trim().toUpperCase() ?? '';
+    const classValue = cells[classIndex]?.trim() ?? '';
+    const rawClass = classValue.toUpperCase();
     if (!AS_BUILT_BLOCKED_FINDING_CLASSES.has(rawClass as AsBuiltBlockedFindingClass)) {
-      return asBuiltBlockedFindingsMechanicalFault(`As-built finding ${id} has an invalid Class.`);
+      return asBuiltBlockedFindingsMechanicalFault(`As-built finding ${id} has an invalid Class value "${classValue}".`);
     }
     const clause = cells[clauseIndex]?.trim() ?? '';
     if (rawClass === 'REMEDIABLE' && clause === '') {
