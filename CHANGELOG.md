@@ -28,6 +28,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Enforce plan-task coverage for every story acceptance criterion. ([implementation PR #1847](https://github.com/jstoup111/ai-conductor/pull/1847)).
 - Unifies provider dispatch so every invocation records complete execution outcomes and usage. ([implementation PR #1871](https://github.com/jstoup111/ai-conductor/pull/1871)).
 
+### Removed
+
+- Removed ineffective TDD RED/GREEN model configuration keys; configured tdd blocks are now rejected as unknown step settings. ([implementation PR #1910](https://github.com/jstoup111/ai-conductor/pull/1910)).
+
 ### Fixed
 
 - A build_review rubric prompt larger than 128 KiB no longer fails to start on the Claude provider, which previously exhausted the mechanical fault allowance and halted the feature. ([implementation PR #1821](https://github.com/jstoup111/ai-conductor/pull/1821)).
@@ -46,6 +50,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon help now lists every supported dispatcher command, including pause and resume. ([implementation PR #1878](https://github.com/jstoup111/ai-conductor/pull/1878)).
 - Validates feature-scoped artifact stems before landing a spec. ([implementation PR #1893](https://github.com/jstoup111/ai-conductor/pull/1893)).
 - Manual testing now warns instead of blocking when browser automation dependencies are unavailable, while continuing curl checks and preserving real application failures. ([implementation PR #1902](https://github.com/jstoup111/ai-conductor/pull/1902)).
+- Restored configurable gate code-validity behavior and reliable Claude rate-limit hook handling. ([implementation PR #1914](https://github.com/jstoup111/ai-conductor/pull/1914)).
 
 ## Migration
 
@@ -78,6 +83,10 @@ echo "No required action beyond a normal 'bin/conduct' update — review build_r
 ```bash migration
 asdf install nodejs 26.7.0
 ASDF_NODEJS_VERSION=26.7.0 "${HARNESS_DIR}/bin/install" --update
+```
+
+```bash migration
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
 ```
 
 ## [0.104.0] - 2026-08-22
