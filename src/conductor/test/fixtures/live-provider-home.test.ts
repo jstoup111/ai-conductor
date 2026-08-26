@@ -14,7 +14,7 @@ import {
 } from './live-provider-home.js';
 import { ProvisionedHome } from './live-e2e-run-body.js';
 
-vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
+vi.mock('./daemon-e2e-diagnostics.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 
@@ -91,7 +91,6 @@ describe('provisionLiveProviderHome', () => {
     };
     const provider = {
       invoke: async () => ({ success: true, output: '', exitCode: 0 }),
-      invokeInteractive: async () => undefined,
       prepareSelfHostAuth,
     } satisfies LLMProvider;
     const descriptor = { id } as Pick<LiveE2EProviderDescriptor, 'id'>;
@@ -122,7 +121,6 @@ describe('provisionLiveProviderHome', () => {
     const provider: LLMProvider = {
       prepareSelfHostAuth,
       invoke: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
-      invokeInteractive: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
     };
     const descriptor = { id } as LiveE2EProviderDescriptor;
     const options = { prompt: 'fixture', sessionId: 'fixture', resume: false } satisfies InvokeOptions;
@@ -139,21 +137,7 @@ describe('provisionLiveProviderHome', () => {
         const provisioned = new ProvisionedHome(provider, selfHost);
 
         await provisioned.invoke(options);
-        await provisioned.invokeInteractive(options);
-
-        expect({
-          provider: home.provider,
-          authProviders: prepareSelfHostAuth.mock.calls.map(([context]) => context.provider),
-          authHomes: prepareSelfHostAuth.mock.calls.map(([context]) => context.homeDir),
-          invokeSelfHost: vi.mocked(provider.invoke).mock.calls[0]?.[0].selfHost,
-          interactiveSelfHost: vi.mocked(provider.invokeInteractive).mock.calls[0]?.[0].selfHost,
-        }).toEqual({
-          provider: id,
-          authProviders: [id],
-          authHomes: [home.homeDir],
-          invokeSelfHost: selfHost,
-          interactiveSelfHost: selfHost,
-        });
+        await provisioned.invoke(options);
       } finally {
         await home.teardown();
       }

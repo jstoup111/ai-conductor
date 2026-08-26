@@ -467,6 +467,56 @@ describe('engine/audit-trail', () => {
     });
   });
 
+  it('subscribe() audits halt-record outcomes with their path and reason', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'halt_record_written',
+      path: '.docs/halted/my-feature.md',
+      slug: 'my-feature',
+      haltClass: 'needs-human',
+    });
+    await emitter.emit({
+      type: 'halt_record_write_failed',
+      path: '.docs/halted/my-feature.md',
+      reason: 'disk full',
+    });
+    await emitter.emit({
+      type: 'halt_record_push_failed',
+      path: '.docs/halted/my-feature.md',
+      reason: 'no remote configured',
+    });
+
+    const contents = await readFile(join(dir, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8');
+    const records = contents
+      .split('\n')
+      .filter((value) => value.length > 0)
+      .map((line) => JSON.parse(line) as AuditRecord);
+
+    expect(records).toMatchObject([
+      {
+        origin: 'build',
+        event: 'halt_record_written',
+        path: '.docs/halted/my-feature.md',
+        reason: 'halt record written for my-feature (needs-human)',
+      },
+      {
+        origin: 'build',
+        event: 'halt_record_write_failed',
+        path: '.docs/halted/my-feature.md',
+        reason: 'disk full',
+      },
+      {
+        origin: 'build',
+        event: 'halt_record_push_failed',
+        path: '.docs/halted/my-feature.md',
+        reason: 'no remote configured',
+      },
+    ]);
+  });
+
   it('subscribe() keeps both records in order when a kickback is immediately followed by loop_halt (cap exceeded)', async () => {
     const writer = new AuditTrailWriter(dir);
     const emitter = new ConductorEventEmitter();

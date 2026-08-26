@@ -115,3 +115,5 @@ manual_test's post-step checkpoint pause is untouched (conductor.ts checkpoint
 handling fires only when mode is not auto — concurrent dispatch would have started
 siblings before the operator's checkpoint response). Resolution recorded in
 .docs/conflicts/2026-07-10-parallel-validation-checkpoint-scoping.md.
+
+> **Amended 2026-08-22 by #1805:** prd_audit now runs on every feature/tier/track, judges stories' acceptance criteria as authority, declares .docs/stories and .docs/specs in its gate surface, grades findings PASS/FIXABLE/PLAN_GAP/OVER_SCOPE, and owns the only bounded plan-task kickback; reseal-rationale and scope-containment judgement move to its OVER_SCOPE grade (adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback).

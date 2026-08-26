@@ -1,38 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BUILD_REVIEW_RUBRIC_IDS,
   BUILD_REVIEW_RUBRIC_REGISTRY,
   fingerprintBuildReviewRubricPolicy,
   getBuildReviewRubricDescriptor,
+  isRegisteredRubric,
 } from '../../src/engine/build-review-registry.js';
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 
 describe('engine/build-review-registry', () => {
-  it('registers each of the four closed rubrics with its versioned execution descriptor', () => {
+  it('registers only the test-quality rubric with its versioned execution descriptor', () => {
+    expect(BUILD_REVIEW_RUBRIC_IDS).toEqual(['testQuality']);
     expect(BUILD_REVIEW_RUBRIC_REGISTRY).toEqual({
-      tautology: {
-        skillName: 'build-review-tautology',
-        contractVersion: 'v3',
-        projectionVersion: 'v2',
-        cachePolicy: 'content-addressed',
-        prerequisite: 'none',
-      },
-      scope: {
-        skillName: 'build-review-scope',
-        contractVersion: 'v3',
-        projectionVersion: 'v2',
-        cachePolicy: 'content-addressed',
-        prerequisite: 'none',
-      },
-      rootCause: {
-        skillName: 'build-review-root-cause',
-        contractVersion: 'v3',
-        projectionVersion: 'v2',
-        cachePolicy: 'content-addressed',
-        prerequisite: 'none',
-      },
-      completeness: {
-        skillName: 'build-review-completeness',
+      testQuality: {
+        skillName: 'build-review-test-quality',
         contractVersion: 'v3',
         projectionVersion: 'v2',
         cachePolicy: 'content-addressed',
@@ -43,12 +25,13 @@ describe('engine/build-review-registry', () => {
     expect(Object.values(BUILD_REVIEW_RUBRIC_REGISTRY).every(Object.isFrozen)).toBe(true);
   });
 
-  it.each(['tautology', 'scope', 'rootCause', 'completeness'] as const)(
-    'looks up the %s descriptor exhaustively and independently of registry ordering',
-    (rubric) => {
-      expect(getBuildReviewRubricDescriptor(rubric)).toBe(BUILD_REVIEW_RUBRIC_REGISTRY[rubric]);
-    },
-  );
+  it('recognizes only registered rubrics', () => {
+    expect(isRegisteredRubric('testQuality')).toBe(true);
+    expect(isRegisteredRubric('completeness')).toBe(false);
+    expect(getBuildReviewRubricDescriptor('testQuality')).toBe(
+      BUILD_REVIEW_RUBRIC_REGISTRY.testQuality,
+    );
+  });
 
   it('fingerprints resolved execution policy canonically while preserving ordered fallback semantics', () => {
     const policy: ResolvedBuildReviewRubricPolicy = {

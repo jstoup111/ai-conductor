@@ -57,19 +57,8 @@ require_landing_destination 'Explanation' 'explanation/' 'explanation/index.md' 
 require_landing_destination 'Runbooks' 'runbooks/' 'runbooks/index.md' || exit 1
 require_landing_destination 'Contributing' 'contributing/' 'contributing/index.md' || exit 1
 
-declare -A TITLE_BY_PATH
-declare -A PARENT_BY_PATH
-declare -A TITLE_PATHS
-declare -A SIBLING_PATHS
-declare -A LANDING_ROOT_PATHS=(
-  ['docs/index.md']=1
-  ['docs/quickstart.md']=1
-  ['docs/guides/index.md']=1
-  ['docs/reference/index.md']=1
-  ['docs/explanation/index.md']=1
-  ['docs/runbooks/index.md']=1
-  ['docs/contributing/index.md']=1
-)
+navigation_records=$(mktemp "${TMPDIR:-/tmp}/docs-navigation.XXXXXX")
+trap 'rm -f "$navigation_records"' EXIT
 
 fail_navigation() {
   local relative_path=$1
@@ -133,56 +122,79 @@ while IFS= read -r -d '' markdown_path; do
     fail_navigation "$relative_path" 'topic has no navigation membership'
   fi
 
-  sibling_key="$parent|$title"
-  TITLE_BY_PATH["$relative_path"]=$title
-  PARENT_BY_PATH["$relative_path"]=$parent
-  SIBLING_PATHS["$sibling_key"]+="$relative_path"$'\n'
-  TITLE_PATHS["$title"]+="$relative_path"$'\n'
+  printf '%s\t%s\t%s\n' "$relative_path" "$title" "$parent" \
+    >> "$navigation_records"
 done < <(find "$ROOT/docs" -type f -name '*.md' -print0 | sort -z)
 
-for sibling_key in "${!SIBLING_PATHS[@]}"; do
-  sibling_paths=${SIBLING_PATHS["$sibling_key"]}
-  sibling_count=$(printf '%s' "$sibling_paths" | sed '/^$/d' | wc -l | tr -d '[:space:]')
+awk -F '\t' '
+  function fail_navigation(path, message) {
+    printf "%s: %s\n", path, message > "/dev/stderr"
+    exit 1
+  }
 
-  if [ "$sibling_count" -ne 1 ]; then
-    fail_navigation "${sibling_paths%$'\n'}" 'duplicate title under one parent'
-  fi
-done
+  BEGIN {
+    landing_roots["docs/index.md"] = 1
+    landing_roots["docs/quickstart.md"] = 1
+    landing_roots["docs/guides/index.md"] = 1
+    landing_roots["docs/reference/index.md"] = 1
+    landing_roots["docs/explanation/index.md"] = 1
+    landing_roots["docs/runbooks/index.md"] = 1
+    landing_roots["docs/contributing/index.md"] = 1
+  }
 
-for relative_path in "${!TITLE_BY_PATH[@]}"; do
-  parent=${PARENT_BY_PATH["$relative_path"]}
-  [ -n "$parent" ] || continue
+  {
+    path = $1
+    title = $2
+    parent = $3
+    title_by_path[path] = title
+    parent_by_path[path] = parent
+    title_count[title]++
+    title_path[title] = path
+    sibling_key = parent SUBSEP title
+    sibling_count[sibling_key]++
+    sibling_paths[sibling_key] = sibling_paths[sibling_key] path "\n"
+  }
 
-  parent_paths=${TITLE_PATHS["$parent"]-}
-  parent_count=$(printf '%s' "$parent_paths" | sed '/^$/d' | wc -l | tr -d '[:space:]')
+  END {
+    for (sibling_key in sibling_count) {
+      if (sibling_count[sibling_key] != 1) {
+        paths = sibling_paths[sibling_key]
+        sub(/\n$/, "", paths)
+        fail_navigation(paths, "duplicate title under one parent")
+      }
+    }
 
-  if [ "$parent_count" -eq 0 ]; then
-    fail_navigation "$relative_path" "parent '$parent' does not name a published topic"
-  fi
+    for (path in title_by_path) {
+      parent = parent_by_path[path]
+      if (parent == "") continue
+      if (title_count[parent] == 0) {
+        fail_navigation(path, "parent \047" parent "\047 does not name a published topic")
+      }
+      if (title_count[parent] != 1) {
+        fail_navigation(path, "parent \047" parent "\047 is ambiguous")
+      }
+    }
 
-  if [ "$parent_count" -ne 1 ]; then
-    fail_navigation "$relative_path" "parent '$parent' is ambiguous"
-  fi
-done
+    for (path in title_by_path) {
+      for (visited_path in visited) delete visited[visited_path]
+      current_path = path
 
-for relative_path in "${!TITLE_BY_PATH[@]}"; do
-  current_path=$relative_path
-  declare -A visited_paths=()
+      while (1) {
+        if (current_path in visited) {
+          fail_navigation(current_path, "navigation parent graph contains a cycle")
+        }
+        visited[current_path] = 1
 
-  while :; do
-    if [ -n "${visited_paths[$current_path]+set}" ]; then
-      fail_navigation "$current_path" 'navigation parent graph contains a cycle'
-    fi
-    visited_paths["$current_path"]=1
+        parent = parent_by_path[current_path]
+        if (parent == "") {
+          if (!(current_path in landing_roots)) {
+            fail_navigation(current_path, "top-level topic is not a landing navigation destination")
+          }
+          break
+        }
 
-    parent=${PARENT_BY_PATH["$current_path"]}
-    if [ -z "$parent" ]; then
-      if [ -z "${LANDING_ROOT_PATHS[$current_path]+set}" ]; then
-        fail_navigation "$current_path" 'top-level topic is not a landing navigation destination'
-      fi
-      break
-    fi
-
-    current_path="$(printf '%s' "${TITLE_PATHS[$parent]}" | sed '/^$/d')"
-  done
-done
+        current_path = title_path[parent]
+      }
+    }
+  }
+' "$navigation_records" || exit 1

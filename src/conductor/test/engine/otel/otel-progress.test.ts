@@ -141,7 +141,7 @@ describe('Task 15: OTel maps the three build-progress event kinds', () => {
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const runSpan = spanExporter.getFinishedSpans().find((s) => !s.parentSpanId)!;
+    const runSpan = spanExporter.getFinishedSpans().find((s) => !s.parentSpanContext)!;
     const progressEvent = runSpan.events.find((e) => e.name === 'build_progress');
     expect(progressEvent).toBeDefined();
   });

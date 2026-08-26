@@ -1,6 +1,7 @@
 ---
 name: manual-test
-description: "Use after /finish to validate stories via curl (API) or browser (full-stack). Bugs found loop back through /tdd."
+disable-model-invocation: true
+description: "Use after /finish to validate stories via curl (API) or browser (full-stack). Browser capability gaps warn; observed bugs loop back through /tdd."
 enforcement: gating
 phase: ship
 standalone: false
@@ -45,6 +46,18 @@ Before starting manual testing, check the stories in `.docs/stories/` for this f
 |---|---|
 | API-only (no views) | `curl` commands against running server |
 | Full-stack (views exist) | Browser automation via Chrome MCP or Capybara |
+
+For a full-stack project, verify that the already-configured browser driver and browser runtime
+are available and can launch before exercising browser criteria. **Do not install browser packages,
+binaries, or system dependencies during `manual-test`/SHIP.**
+
+- If the browser driver, browser binary, or required launch capability is missing or cannot start,
+  record each affected browser criterion as `WARN`. Include the exact dependency/launch error and a
+  concrete recovery command in Notes, then continue exercising any API criteria with `curl`.
+- A `WARN` is non-blocking capability evidence. It does not enter the bug loop or route back to BUILD.
+- Once a browser session launches, an observed mismatch between expected and actual application
+  behavior is `FAIL`, even if other criteria are `WARN`. Do not relabel an application failure as an
+  environment warning.
 
 ### 2. Start the Application
 
@@ -95,7 +108,7 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/abc123
 
 **For each story, record:**
 
-| Story | Criterion | Expected | Actual | Pass? |
+| Story | Criterion | Expected | Actual | Result |
 |---|---|---|---|---|
 | Create link | 201 with short_code | 201 + 6-char code | 201 + "xK9mR2" | PASS |
 | Expired link | 410 Gone | 410 | 410 | PASS |
@@ -155,7 +168,7 @@ Use this format for the content you pass to `--results` (both in chat and to the
 
 | Story | Criterion | Result | Notes |
 |---|---|---|---|
-| ... | ... | PASS/FAIL | ... |
+| ... | ... | PASS/FAIL/WARN | ... |
 
 ### Bugs Found
 1. **BUG-001:** Invalid URL returns 500 instead of 422 (story: create-link, negative path: invalid input)
@@ -183,16 +196,22 @@ conductor watches for; a hand-written one defeats the gate's whole purpose (obje
 CLI-verified on-disk evidence rather than a self-reported claim).
 
 **Whitewash guard (#367):** when the gate observes FAIL rows it records the
-current commit sha; a later attempt whose rows are all PASS is accepted only if
+current commit sha; a later attempt with no FAIL rows is accepted only if
 new commits exist since that sha. Recording PASS without actually committing a
 fix will be refused by the gate — the fix in Step C below MUST land as commits
 before the re-verify attempt. In daemon runs, a manual_test that keeps failing
 is kicked back to the build step with the FAIL rows as evidence (bounded), then
 HALTs for a human if the bug survives the kickback budget.
 
+`WARN` rows are recorded visibly and marked by the CLI as warning-bearing attempts, but they do not
+block the gate. They also cannot whitewash a prior `FAIL`: after a recorded failure, a later
+FAIL-free attempt containing PASS and/or WARN rows still requires HEAD to move. Only unavailable or
+unlaunchable browser automation dependencies qualify for this warning path; observed application
+behavior that violates a story remains `FAIL`.
+
 ### 6. Bug Loop
 
-**Any FAIL result becomes a bug that loops back through `/tdd`:**
+**Any FAIL result becomes a bug that loops back through `/tdd`. WARN results do not:**
 
 **Step A — Confirm the buggy code path is supposed to exist** (the `/debugging` Phase 4
 GATE). Manual-test surfaces defects on *shipped* code — read the governing APPROVED ADR/PRD for
@@ -238,7 +257,9 @@ docker compose down
 - [ ] Application started and accessible
 - [ ] Every story (happy + negative paths) tested manually
 - [ ] Results displayed to user
-- [ ] Every exit path (Step 0 SKIP or Step 5 real-run PASS/FAIL) ended by actually invoking
+- [ ] Browser automation availability was checked without installing dependencies; unavailable or
+      unlaunchable browser criteria were recorded as WARN with the error and recovery command
+- [ ] Every exit path (Step 0 SKIP or Step 5 real-run PASS/FAIL/WARN) ended by actually invoking
       `conduct-ts manual-test-record` (`--skip --reason ...` or `--results ...`) against the
       absolute worktree `.pipeline` path — not a hand-written or fabricated marker
 - [ ] All bugs fixed via TDD loop

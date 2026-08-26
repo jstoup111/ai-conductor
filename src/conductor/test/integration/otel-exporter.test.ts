@@ -172,19 +172,19 @@ describe('T22-otlp: OTLP transport (in-memory exporters) — structure assertion
     const spans = spanExporter.getFinishedSpans();
 
     // One root span (conductor.run).
-    const roots = spans.filter((s) => !s.parentSpanId);
+    const roots = spans.filter((s) => !s.parentSpanContext);
     expect(roots).toHaveLength(1);
     expect(roots[0].name).toBe('conductor.run');
 
     // Two step spans as children of the root.
-    const children = spans.filter((s) => s.parentSpanId);
+    const children = spans.filter((s) => s.parentSpanContext);
     const childNames = children.map((s) => s.name).sort();
     expect(childNames).toEqual(['bootstrap', 'plan'].sort());
 
     // All children share the root's traceId and are parented to the root span.
     for (const child of children) {
       expect(child.spanContext().traceId).toBe(roots[0].spanContext().traceId);
-      expect(child.parentSpanId).toBe(roots[0].spanContext().spanId);
+      expect(child.parentSpanContext?.spanId).toBe(roots[0].spanContext().spanId);
     }
   });
 

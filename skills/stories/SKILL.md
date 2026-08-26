@@ -1,5 +1,6 @@
 ---
 name: stories
+implicit_invocation: required
 description: "Use after architecture-review, when the design is approved. Generates user stories with mandatory happy and negative paths as Given/When/Then scenarios — from the PRD's FRs (product track) or the technical intent (technical track)."
 enforcement: gating
 phase: decide
@@ -64,6 +65,9 @@ more granular stories** — split a requirement into multiple stories when it sp
 behaviors, so each story stays small and independently verifiable. Tag every story with the
 `FR-N` it came from (traceability: PRD → story → plan task). Every `FR-N` must be covered by
 at least one story.
+
+For removal-shaped stories, follow `/code-removal`: acceptance criteria describe surviving
+observable behavior, never that code, files, or symbols no longer exist.
 
 **Every story heading MUST carry an id**, in the form `## Story <id>: <title>` (`## Story 1: …`,
 `## Story 2.1: …`). The id is machine-parsed, not decorative: the engine splits a stories file into

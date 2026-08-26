@@ -32,24 +32,31 @@ assert() {
 
 echo "=== Task 5: tiered prompt fixtures exist and are non-empty ==="
 
-declare -A SIZES
+small_size=0
+medium_size=0
+large_size=0
 
 for tier in small medium large; do
   f="$PROMPTS_DIR/${tier}.md"
   if [ -s "$f" ]; then
     assert "examples/prompts/${tier}.md exists and is non-empty" 0
-    SIZES[$tier]=$(wc -c < "$f")
+    size=$(wc -c < "$f")
   else
     assert "examples/prompts/${tier}.md exists and is non-empty" 1
-    SIZES[$tier]=0
+    size=0
   fi
+  case "$tier" in
+    small) small_size=$size ;;
+    medium) medium_size=$size ;;
+    large) large_size=$size ;;
+  esac
 done
 
 echo ""
 echo "=== Task 5: tier-appropriate sizing (small < medium < large) ==="
 
-if [ "${SIZES[small]:-0}" -gt 0 ] && [ "${SIZES[medium]:-0}" -gt 0 ] && [ "${SIZES[large]:-0}" -gt 0 ]; then
-  if [ "${SIZES[small]}" -lt "${SIZES[medium]}" ] && [ "${SIZES[medium]}" -lt "${SIZES[large]}" ]; then
+if [ "$small_size" -gt 0 ] && [ "$medium_size" -gt 0 ] && [ "$large_size" -gt 0 ]; then
+  if [ "$small_size" -lt "$medium_size" ] && [ "$medium_size" -lt "$large_size" ]; then
     assert "small.md < medium.md < large.md in size" 0
   else
     assert "small.md < medium.md < large.md in size" 1

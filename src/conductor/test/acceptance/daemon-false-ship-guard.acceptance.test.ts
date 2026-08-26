@@ -93,7 +93,6 @@ function makeDeps(
     daemon: true,
     provider: {
       invoke: async () => ({ success: true, output: '' }),
-      invokeInteractive: async () => {},
     },
     project: 'test-project',
     projectRoot,

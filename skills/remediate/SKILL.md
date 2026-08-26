@@ -1,5 +1,6 @@
 ---
 name: remediate
+disable-model-invocation: true
 description: "Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human."
 enforcement: gating
 phase: ship
@@ -98,7 +99,7 @@ gap must be turned into concrete work:
 
 Judgment rules:
 - **Sealed-artifact amendments return to DECIDE.** When a gap requires amending another feature's
-  artifact under `.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`, do
+  artifact under `.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`, do
   not assign `build` or `acceptance_specs`. Route it to the owning DECIDE step through the existing
   operator gate and DECIDE kickback path; make no request, ledger, record, or new artifact to bypass
   that ownership.
@@ -126,6 +127,38 @@ Judgment rules:
   TEST to the new contract — never a task that weakens the production code to appease the old
   test. A test that reveals a real implementation bug gets impl-fix tasks. Reserve `halt` for a
   failure that evidences a genuine design ambiguity, not mere uncertainty about the fix.
+- **Never task a regression — this applies to every trigger, not only finish failures.** A task that
+  removes, replaces, rewrites, or relaxes existing code, tests, or assertions must name, in the task
+  title or the disposition `rationale`, the completed plan task or story criterion whose delivered
+  behavior and coverage survive the change. Removing a workaround does not license removing the
+  assertion the workaround stood beside: unless the evidence shows the coverage is genuinely
+  redundant, task the replacement in the SAME task as the removal. A remediation task that drops
+  coverage a completed task already delivered is invalid — the next audit re-raises it and the lap
+  is wasted.
+- **A regression by omission counts too — edit one of a matched pair, name the other.** Not every
+  regression is a removal. When a task changes an enumeration, registry, vocabulary, id list,
+  grammar, or any value a second location duplicates or must agree with, the task must name that
+  counterpart and bring it along in the same task — or state that both are being derived from one
+  source so they cannot drift again. Prefer the single source when the evidence supports it: two
+  lists that must agree are a defect waiting for the next lap, and the pair that silently diverges
+  is invisible until something reads both.
+- **Close the class, not the cited instance — this is what stops audit cycling.** A gap's evidence
+  names where the auditor happened to look, never the extent of the defect. Before emitting a task,
+  sweep for every other site with the same shape and name them all in the one task. Two forms
+  recur: **a sibling site** — the same wrong predicate, missing guard, or stale literal at another
+  `file:line` — and **what a removal orphans**, where deleting the cited code leaves its last
+  caller, its now-unreferenced helper, or its fixtures behind. An unstated remainder is not out of
+  scope, it is the next lap's finding: a task that repairs one site of a class buys one audit cycle
+  and produces its own successor, which is how a converging feature still spends four cycles on the
+  same FR.
+
+  **The sweep is bounded by plan admission, and never widens the diff on its own authority.** A
+  sibling site is included only when an existing plan task admits it — the same test the
+  plan-coverage rule above applies before selecting `plan`. A sibling site that no plan task admits
+  is named in the `rationale` as found-and-excluded, with the reason; it is never quietly fixed.
+  Sweeping past that boundary trades an audit cycle for a review finding that the change is not
+  authorized by the plan, which is the worse deal: an unauthorized addition can deadlock
+  remediation, while an excluded sibling is at least recorded where the next reader can see it.
 - **Sibling trigger routes remain unchanged.** A clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`. A `build_stall` question answerable from committed artifacts routes `build`; a question needing architecture, product, or unanswerable judgment routes `halt`.
 - An `intended-drift` is `halt: product-scope` **only** if it reflects unplanned product
   functionality; if it preserves approved architecture, it is `build`. Route to
@@ -239,6 +272,13 @@ Headers re-parse via the Task 18 grammar and must include:
       missing `Closes`) uses `publication`, never `build` — and `publication` is not used for any
       gap that requires a code, test, spec, or configuration change
 - [ ] Every `build` disposition (gap) has ≥1 concrete, file-scoped task drawn from the evidence; stall-question answers have `tasks: []` and the answer in `rationale`
+- [ ] No emitted task removes, replaces, or relaxes existing code, tests, or assertions without
+      naming the completed plan task or criterion whose coverage it preserves
+- [ ] No emitted task edits one side of a matched pair — an enumeration, registry, vocabulary, id
+      list, or grammar duplicated elsewhere — without naming the counterpart or deriving both from
+      one source
+- [ ] Every task was swept for sibling sites of the same shape, and for what any removal orphans;
+      sites found and deliberately excluded are named in the `rationale` with why
 - [ ] `category` set iff `disposition == "halt"`; `tasks` empty iff `disposition == "halt"` OR (stall-question answer with `disposition == "build"`)
 - [ ] For a stall-question answer (`build_stall` disposition `build`), the `rationale` clearly answers the original question and cites the artifacts that support it
 - [ ] A gap requiring another feature's sealed-artifact amendment routes to its owning DECIDE step,

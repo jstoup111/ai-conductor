@@ -9,6 +9,7 @@ import {
   renderDaemonHelp,
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
+  detectBuildReviewRecordReducedCoverageCommand,
 } from '../../src/cli.js';
 
 describe('CLI', () => {
@@ -21,6 +22,17 @@ describe('CLI', () => {
     expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'known risk']))
       .toEqual({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: 'sha256:abc', rationale: 'known risk' });
     expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'risk', '--operator', 'forged'])).toBeNull();
+  });
+  it('requires the closed reduced-coverage command grammar without a caller-supplied cause', () => {
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'rootCause', '--rationale', 'known provider risk',
+    ])).toEqual({ kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'known provider risk' });
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'rootCause', '--rationale', 'risk', '--reason', 'provider-error',
+    ])).toBeNull();
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'unknown', '--rationale', 'risk',
+    ])).toMatchObject({ kind: 'record-reduced-coverage', rubric: 'unknown' });
   });
   it('parses feature description as positional arg', () => {
     const opts = parseArgs(['node', 'conduct', 'URL shortener']);

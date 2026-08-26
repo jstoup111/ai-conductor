@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
-import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { AuthenticationReadiness, InvokeOptions } from '../../src/execution/llm-provider.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -70,6 +70,16 @@ function documentedDoctor(
   });
 }
 
+function codexCompleted(output = 'completed') {
+  return [
+    JSON.stringify({
+      type: 'item.completed',
+      item: { type: 'agent_message', text: output },
+    }),
+    JSON.stringify({ type: 'turn.completed' }),
+  ].join('\n');
+}
+
 function cachedLoginConductor(
   readiness: () => Promise<{ provider: 'codex'; source: 'cached-login'; state: 'ready' | 'unusable' }>,
   events: ConductorEventEmitter,
@@ -77,7 +87,7 @@ function cachedLoginConductor(
 ) {
   const runtimes = new ProviderRuntimeSet([{
     key: 'codex',
-    provider: { invoke: vi.fn(), invokeInteractive: vi.fn(), readiness },
+    provider: { invoke: vi.fn(), readiness },
     policy: CODEX_MODEL_POLICY,
     builtIn: true,
     availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -115,19 +125,19 @@ describe('acceptance: Codex readiness park #970', () => {
     await rm(flowDir, { recursive: true, force: true });
   });
 
-  function recoveryRuntimes(readiness: ReturnType<typeof vi.fn>) {
-    const fallbackReadiness = vi.fn();
+  function recoveryRuntimes(readiness: () => Promise<AuthenticationReadiness>) {
+    const fallbackReadiness = vi.fn<() => Promise<AuthenticationReadiness>>();
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
       },
       {
         key: 'claude',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: fallbackReadiness },
+        provider: { invoke: vi.fn(), readiness: fallbackReadiness },
         policy: CLAUDE_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
@@ -167,7 +177,7 @@ describe('acceptance: Codex readiness park #970', () => {
   it('proceeds through the public Codex invocation boundary when auth is ok but unrelated doctor health fails', async () => {
     mockExeca
       .mockResolvedValueOnce({ stdout: documentedDoctor('ok', 'fail'), stderr: '', exitCode: 1 } as never)
-      .mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as never);
+      .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as never);
 
     const result = await new CodexProvider().invoke(base);
 
@@ -182,7 +192,7 @@ describe('acceptance: Codex readiness park #970', () => {
   ] as const)('contrasts unavailable doctor evidence with %s auth evidence', async (_case, stdout, state) => {
     mockExeca
       .mockResolvedValueOnce({ stdout: '{not-json', stderr: '', exitCode: 0 } as never)
-      .mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as never);
+      .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as never);
     const degraded = await new CodexProvider().invoke(base);
     expect(degraded).toMatchObject({
       success: true,
@@ -192,7 +202,7 @@ describe('acceptance: Codex readiness park #970', () => {
 
     mockExeca.mockResolvedValueOnce({ stdout, stderr: 'raw doctor diagnostic', exitCode: 1 } as never);
     if (state === 'unverifiable') {
-      mockExeca.mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as never);
+      mockExeca.mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as never);
     }
 
     const result = await new CodexProvider().invoke(base);

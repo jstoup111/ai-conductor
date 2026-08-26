@@ -20,6 +20,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_started',
   'step_completed',
   'step_failed',
+  'step_refused',
   'provider_attempt',
   'scratch_cleanup_reclaimed',
   'scratch_cleanup_retained',
@@ -94,10 +95,15 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_skipped',
   'build_review_cache_hit',
   'build_review_rubric_infrastructure_failure',
+  'build_review_mechanical_allowance_exhausted',
   'build_review_disposition_version_invalidated',
   'build_review_outer_verdict',
+  'build_review_stale_aggregate',
   'loop_halt',
   'halt_marker_write_failed',
+  'halt_record_written',
+  'halt_record_write_failed',
+  'halt_record_push_failed',
   'rebase_conflict_halt',
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -106,8 +112,13 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 const PINNED_PERSISTED_EVENT_TYPES = [
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
+  'operator_rewind',
+  'plan_growth',
+  'config_deprecated_key',
   'contained_live_checkout_drift',
+  'provider_stream_progress',
   'self_host_containment_verdict',
+  'over_scope_decision',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -132,15 +143,20 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'kickback',
   'loop_halt',
   'step_completed',
+  'step_refused',
   'halt_cleared',
+  'operator_rewind',
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
+  'operator_rewind',
+  'plan_growth',
   'contained_live_checkout_drift',
   'self_host_containment_verdict',
   'step_started',
   'step_completed',
   'step_failed',
+  'step_refused',
   'step_retry',
   'rate_limit',
   'session_reset',
@@ -262,6 +278,34 @@ describe('event sink subscriptions', () => {
         type: 'loop_halt',
         reason: 'kickback cap exceeded',
       });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists recorded over-scope decisions and named defects through the shared ledger', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'over-scope-decision-event-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const event = {
+      type: 'over_scope_decision' as const,
+      criteria: ['S2.1', 'S2.2'],
+      decisions: [
+        { criterion: 'S2.1', decision: 'accept' as const },
+        { criterion: 'S2.2', decision: 'refuse' as const },
+      ],
+      defects: [{ kind: 'missing-rationale' as const, criterion: 'S2.3' }],
+    } satisfies ConductorEvent;
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+
+      expect(
+        JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')),
+      ).toEqual({ ...event, ts: expect.any(String) });
     } finally {
       persister.stop();
       await rm(projectRoot, { recursive: true, force: true });
@@ -515,6 +559,18 @@ describe('event sink subscriptions', () => {
     expect(new Set(persistedEventTypes())).toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
   });
 
+  it('declares sink policies for halt-record outcomes', () => {
+    expect({
+      written: EVENT_SINKS.halt_record_written,
+      writeFailed: EVENT_SINKS.halt_record_write_failed,
+      pushFailed: EVENT_SINKS.halt_record_push_failed,
+    }).toEqual({
+      written: { render: true, persist: true, audit: true },
+      writeFailed: { render: true, persist: true, audit: true },
+      pushFailed: { render: true, persist: true, audit: true },
+    });
+  });
+
   it('keeps non-halt lifecycle events out of the persisted set', () => {
     const neverPersisted = [
       'loop_converged',
@@ -535,6 +591,9 @@ describe('event sink subscriptions', () => {
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
       'verdict_freshness',
       'halt_marker_write_failed',
+      'halt_record_written',
+      'halt_record_write_failed',
+      'halt_record_push_failed',
       'build_review_disposition_version_invalidated',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
@@ -545,6 +604,9 @@ describe('event sink subscriptions', () => {
     expect(new Set(renderedEventTypes())).toEqual(new Set([
       ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
       'halt_marker_write_failed',
+      'halt_record_written',
+      'halt_record_write_failed',
+      'halt_record_push_failed',
     ]));
   });
 });

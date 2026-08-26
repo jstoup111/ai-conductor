@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { execa } from 'execa';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { renderDecideEntryHalt } from '../../src/engine/decide-entry-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -58,6 +59,7 @@ vi.mock('../../src/engine/shipment-evidence.js', () => ({
 import {
   STEP_ARTIFACT_CONTRACTS,
   STEP_ARTIFACT_GLOBS,
+  validateFeatureArtifactStems,
   buildArtifactResolutionContext,
   resolveArtifactFiles,
   findArtifactFiles,
@@ -77,6 +79,7 @@ import {
   validateBuildReviewVerdict,
   isSkipAttempt,
   MANUAL_TEST_SKIP_SENTINEL,
+  MANUAL_TEST_WARN_SENTINEL,
   readManualTestFailRows,
   stampCode,
   BUILD_REVIEW_VERDICT,
@@ -91,6 +94,8 @@ import type {
 } from '../../src/engine/artifacts.js';
 import type { StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -229,6 +234,85 @@ describe('engine/artifacts', () => {
 
     it('declares manual_test results file', () => {
       expect(STEP_ARTIFACT_GLOBS.manual_test).toEqual(['.pipeline/manual-test-results.md']);
+    });
+  });
+
+  describe('validateFeatureArtifactStems', () => {
+    const featureIdentity = 'clean-rubric-judgements-rejected-as-invalid-provid';
+
+    it('accepts exact and date-prefixed normalized stems', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [
+            {
+              step: 'conflict_check',
+              paths: [
+                `.docs/conflicts/${featureIdentity}.md`,
+                `.docs/conflicts/2026-08-19-${featureIdentity}.md`,
+              ],
+            },
+          ],
+          featureIdentity,
+        ),
+      ).toEqual([]);
+    });
+
+    it('reports truncated normalized stems with the expected filename', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [
+            {
+              step: 'conflict_check',
+              paths: ['.docs/conflicts/2026-08-19-clean-rubric-judgements.md'],
+            },
+          ],
+          featureIdentity,
+        ),
+      ).toEqual([
+        {
+          step: 'conflict_check',
+          path: '.docs/conflicts/2026-08-19-clean-rubric-judgements.md',
+          strategy: 'normalized-stem',
+          expectedStem: featureIdentity,
+          exampleExpectedPath: `.docs/conflicts/${featureIdentity}.md`,
+        },
+      ]);
+    });
+
+    it('reports plan-stem mismatches for plan and coherence artifacts', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [
+            { step: 'plan', paths: ['.docs/plans/other-feature.md'] },
+            { step: 'coherence_check', paths: ['.docs/coherence/other-feature.md'] },
+          ],
+          featureIdentity,
+        ),
+      ).toEqual([
+        {
+          step: 'plan',
+          path: '.docs/plans/other-feature.md',
+          strategy: 'plan-stem',
+          expectedStem: featureIdentity,
+          exampleExpectedPath: `.docs/plans/${featureIdentity}.md`,
+        },
+        {
+          step: 'coherence_check',
+          path: '.docs/coherence/other-feature.md',
+          strategy: 'plan-stem',
+          expectedStem: featureIdentity,
+          exampleExpectedPath: `.docs/coherence/${featureIdentity}.md`,
+        },
+      ]);
+    });
+
+    it('ignores repository-scoped paths on mixed-scope steps', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [{ step: 'architecture_review', paths: ['.docs/decisions/adr-2026-08-25.md'] }],
+          featureIdentity,
+        ),
+      ).toEqual([]);
     });
   });
 
@@ -405,7 +489,7 @@ describe('engine/artifacts', () => {
       });
     });
 
-    it('diagnoses ambiguous or missing candidates', async () => {
+    it('diagnoses ambiguous candidates with the feature naming rule', async () => {
       await createFile('.docs/stories/feature-a.md');
       await createFile('.docs/stories/feature-c.md');
       const featureB = {
@@ -413,28 +497,74 @@ describe('engine/artifacts', () => {
         changedPaths: new Set<string>(),
       };
 
-      const [ambiguous, missing] = await Promise.all([
-        resolveArtifactFiles(dir, 'stories', featureB),
-        resolveArtifactFiles(dir, 'retro', featureB),
-      ]);
+      const ambiguous = await resolveArtifactFiles(dir, 'stories', featureB);
 
-      expect({ ambiguous, missing }).toEqual({
-        ambiguous: {
-          files: [],
-          diagnostic: {
-            code: 'ambiguous',
-            reason:
-              'stories has 2 artifact candidates and none can be associated with active feature "feature-b"',
-          },
-        },
-        missing: {
-          files: [],
-          diagnostic: {
-            code: 'missing',
-            reason: 'retro has no artifact candidates for active feature "feature-b"',
-          },
+      expect(ambiguous).toEqual({
+        files: [],
+        diagnostic: {
+          code: 'ambiguous',
+          reason:
+            'stories has 2 artifact candidates and none can be associated with active feature "feature-b". Naming rule: normalized-stem (date prefix stripped); expected stem "feature-b"; example expected filename ".docs/stories/feature-b.md".',
         },
       });
+    });
+
+    it('keeps the empty-candidate missing diagnostic byte-identical', async () => {
+      const result = await resolveArtifactFiles(dir, 'retro', {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set<string>(),
+      });
+
+      expect(result).toEqual({
+        files: [],
+        diagnostic: {
+          code: 'missing',
+          reason: 'retro has no artifact candidates for active feature "feature-b"',
+        },
+      });
+    });
+
+    it('keeps repository-scoped resolution diagnostic-free', async () => {
+      const result = await resolveArtifactFiles(
+        dir,
+        'architecture_diagram',
+        {
+          featureIdentities: ['feature-b'],
+          changedPaths: new Set<string>(),
+        },
+        [],
+        true,
+      );
+
+      expect(result).toEqual({
+        files: [],
+        patternResults: [{ pattern: '.docs/architecture/*.md', files: [] }],
+      });
+    });
+
+    it('reports the #1743 conflict naming rule in ambiguous and forward-walk HALT evidence', async () => {
+      const featureIdentity = 'clean-rubric-judgements-rejected-as-invalid-provid';
+      await createFile('.docs/conflicts/2026-08-19-clean-rubric-judgements.md');
+      await createFile('.docs/conflicts/another-feature.md');
+
+      const resolution = await resolveArtifactFiles(dir, 'conflict_check', {
+        featureIdentities: [featureIdentity],
+        changedPaths: new Set<string>(),
+      });
+      const diagnostic = resolution.diagnostic!;
+      const halt = renderDecideEntryHalt({
+        sourceGate: 'forward-walk',
+        target: 'conflict_check',
+        evidence: diagnostic.reason,
+        reason: 'fixture refusal',
+      });
+
+      expect(diagnostic).toEqual({
+        code: 'ambiguous',
+        reason:
+          'conflict_check has 2 artifact candidates and none can be associated with active feature "clean-rubric-judgements-rejected-as-invalid-provid". Naming rule: normalized-stem (date prefix stripped); expected stem "clean-rubric-judgements-rejected-as-invalid-provid"; example expected filename ".docs/conflicts/clean-rubric-judgements-rejected-as-invalid-provid.md".',
+      });
+      expect(halt).toContain(`Evidence:          ${diagnostic.reason}`);
     });
   });
 
@@ -872,6 +1002,99 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'acceptance_specs');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/invalid JSON/i);
+    });
+  });
+
+  describe('acceptance_specs: criterion-coherence remediation hint', () => {
+    const criterion = 'Story 1 happy: Given a widget, when it ships, then it arrives';
+    const omitted = 'Story 1 negative: Given a broken widget, when it ships, then it is rejected';
+    const legacyMessage =
+      `disposition-only records must be an exact one-to-one set of the authoritative story criteria — omitted: ${omitted}`;
+
+    async function writeDispositionFixture(withCriterionRow: boolean) {
+      await createFile('.docs/stories/foo.md', `# Stories
+
+## Story 1: Widget
+
+### Happy Path
+- Given a widget, when it ships, then it arrives
+
+### Negative Paths
+- Given a broken widget, when it ships, then it is rejected
+`);
+      await createFile('.docs/plans/foo.md', '# Plan\n\n### Task 1: Widget\n');
+      await createFile('test/cover.ts', 'covered\n');
+      await createFile(
+        '.pipeline/acceptance-specs-red.json',
+        JSON.stringify({
+          outcome: 'disposition-only',
+          dispositions: [{ criterion, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' }],
+        }),
+      );
+      if (withCriterionRow) {
+        await createFile(
+          '.docs/coherence/foo.md',
+          `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | ${criterion} | task-1 | covered | "Widget" | diff-local |
+`,
+        );
+      }
+    }
+
+    it('names the DECIDE-time criterion check only for omitted criteria on a criterion-row spec', async () => {
+      await writeDispositionFixture(true);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(`${legacyMessage}; the DECIDE-time criterion coherence check should have caught the omitted criterion before BUILD`);
+    });
+
+    it('preserves the legacy omitted-criterion message byte-for-byte without criterion rows', async () => {
+      await writeDispositionFixture(false);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(legacyMessage);
+    });
+
+    // Plan Task 23 — an invented disposition record keeps its own message,
+    // distinct from the omitted-criterion message, and never triggers the
+    // DECIDE-check hint in either the legacy or the criterion-row branch.
+    const invented = 'Story 1 happy: Given a phantom, when it ships, then nothing happens';
+
+    async function writeInventedOnlyFixture(withCriterionRow: boolean) {
+      await writeDispositionFixture(withCriterionRow);
+      await createFile(
+        '.pipeline/acceptance-specs-red.json',
+        JSON.stringify({
+          outcome: 'disposition-only',
+          dispositions: [
+            { criterion, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' },
+            { criterion: omitted, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' },
+            { criterion: invented, disposition: 'existing-sufficient-test', citation: 'test/cover.ts:1' },
+          ],
+        }),
+      );
+    }
+
+    it('keeps the invented-record message distinct from the omitted message in the legacy branch', async () => {
+      await writeInventedOnlyFixture(false);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(
+        `disposition-only records must be an exact one-to-one set of the authoritative story criteria — invented: ${invented}`,
+      );
+      expect(result.reason).not.toBe(legacyMessage);
+      expect(result.reason).not.toContain('omitted:');
+    });
+
+    it('adds no DECIDE-check hint to an invented-only refusal even on a criterion-row spec', async () => {
+      await writeInventedOnlyFixture(true);
+      const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
+      expect(result.done).toBe(false);
+      expect(result.reason).toBe(
+        `disposition-only records must be an exact one-to-one set of the authoritative story criteria — invented: ${invented}`,
+      );
+      expect(result.reason).not.toContain('DECIDE-time criterion coherence check');
     });
   });
 
@@ -2988,6 +3211,32 @@ describe('engine/artifacts', () => {
       expect(result).toEqual({ done: true });
     });
 
+    it('passes a fresh attempt whose browser criteria are WARN and records no FAIL evidence', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-08-25T00:00:00Z\n${MANUAL_TEST_WARN_SENTINEL}\n` +
+          '| Story | Criterion | Result | Notes |\n|---|---|---|---|\n' +
+          '| Browser smoke | UI loads | WARN | Playwright browser is unavailable |\n' +
+          '| API smoke | Health endpoint responds | PASS | curl returned 200 |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+      expect(await readManualTestFailRows(dir)).toEqual([]);
+    });
+
+    it('fails when a warning attempt also contains an observed application FAIL', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-08-25T00:00:00Z\n${MANUAL_TEST_WARN_SENTINEL}\n` +
+          '| Story | Criterion | Result | Notes |\n|---|---|---|---|\n' +
+          '| Browser smoke | UI loads | WARN | Playwright browser is unavailable |\n' +
+          '| API smoke | Invalid input returns 422 | FAIL | curl returned 500 |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAIL/);
+    });
+
     it('passes when the latest attempt is a fresh SKIP sentinel (auto mode, no stories to exercise)', async () => {
       await createFile(
         RESULTS,
@@ -3061,6 +3310,28 @@ describe('engine/artifacts', () => {
       const failRows = await readManualTestFailRows(dir);
       expect(failRows.join('\n')).toMatch(/Bar.*FAIL/);
     });
+
+    it('a later WARN attempt cannot launder a FAIL recorded earlier at the same HEAD sha', async () => {
+      await createFile(RESULTS, FAIL_FILE);
+      await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      await createFile(
+        RESULTS,
+        FAIL_FILE +
+          `\n## Attempt 2 — 2026-08-25T00:01:00Z\n${MANUAL_TEST_WARN_SENTINEL}\n` +
+          '| Story | Criterion | Result | Notes |\n|---|---|---|---|\n' +
+          '| Browser smoke | UI loads | WARN | Playwright browser is unavailable |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/whitewash|no new commits/i);
+      expect((await readManualTestFailRows(dir)).join('\n')).toMatch(/Bar.*FAIL/);
+    });
   });
 
   describe('checkStepCompletion: manual_test codeStamp (gate-code-validity, #817)', () => {
@@ -3118,6 +3389,76 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(true);
       const marker = JSON.parse(await readFile(join(dir, SIDECAR), 'utf-8'));
       expect(marker.codeStamp).toBe('ddd444');
+    });
+  });
+
+  describe('checkStepCompletion: prd_audit operator-accepted OVER_SCOPE (#1854)', () => {
+    const table =
+      '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |\n' +
+      '| --- | --- | --- | --- | --- | --- |\n';
+
+    async function writeReport(rows: string): Promise<void> {
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' + table + rows,
+      );
+    }
+
+    async function accept(...criteria: string[]): Promise<void> {
+      await createFile(
+        '.pipeline/accepted-widenings.json',
+        JSON.stringify({
+          version: 1,
+          decisions: criteria.map((criterion) => ({
+            criterion,
+            summary: `operator accepted ${criterion}`,
+            decision: 'accept',
+            rationale: 'Approved for this feature.',
+            operator: 'test',
+            decidedAt: '2026-08-24T00:00:00.000Z',
+          })),
+        }),
+      );
+    }
+
+    it('an OVER_SCOPE finding the operator accepted no longer blocks the gate', async () => {
+      await writeReport('| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n');
+      await accept('S3.1');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(true);
+    });
+
+    it('the same finding still blocks when the operator has NOT accepted it', async () => {
+      await writeReport('| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('S3.1 (OVER_SCOPE)');
+    });
+
+    it('an OVER_SCOPE finding the audit graded intent-relation `within` does not block', async () => {
+      await writeReport('| S3.1 | OVER_SCOPE | — | none | within | conductor.ts:8163 |\n');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(true);
+    });
+
+    it('acceptance is scoped to OVER_SCOPE — an accepted criterion graded PLAN_GAP still blocks', async () => {
+      await writeReport('| S5.7 | PLAN_GAP | — | none | — | coherence-validator.ts:1710 |\n');
+      await accept('S5.7');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('S5.7 (PLAN_GAP)');
+    });
+
+    it('accepting one finding does not clear an unaccepted sibling', async () => {
+      await writeReport(
+        '| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n' +
+          '| S4.2 | OVER_SCOPE | — | none | outside-visible | daemon-cli.ts:2044 |\n',
+      );
+      await accept('S3.1');
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('S4.2 (OVER_SCOPE)');
+      expect(result.reason).not.toContain('S3.1');
     });
   });
 
@@ -3205,7 +3546,7 @@ describe('engine/artifacts', () => {
             diagnostic: {
               code: 'ambiguous',
               reason:
-                'plan has 2 artifact candidates and none can be associated with active feature "feature-b"',
+                'plan has 2 artifact candidates and none can be associated with active feature "feature-b". Naming rule: plan-stem; expected stem "feature-b"; example expected filename ".docs/plans/feature-b.md".',
             },
           },
         ],
@@ -3354,6 +3695,60 @@ describe('engine/artifacts', () => {
       // sessionStartedAt=undefined below treats any mtime as fresh.
       await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n' + header + body);
     }
+
+    it('an accepted OVER_SCOPE widening flips cleanliness on the next lap', async () => {
+      // ADR D8 / Plan Task 12: the operator's recorded acceptance must reach
+      // the classifier that routes the next lap, not only the gate predicate.
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- | --- | --- |\n' +
+          '| S3.1 | OVER_SCOPE | — | FR-1 | outside-visible | conductor.ts:8163 |\n',
+      );
+      expect((await classifyPrdAuditGaps(dir, undefined)).kind).not.toBe('clean');
+
+      await createFile(
+        '.pipeline/accepted-widenings.json',
+        JSON.stringify({
+          version: 1,
+          decisions: [{
+            criterion: 'S3.1',
+            summary: 'operator accepted S3.1',
+            decision: 'accept',
+            rationale: 'Approved for this feature.',
+            operator: 'test',
+            decidedAt: '2026-08-24T00:00:00.000Z',
+          }],
+        }),
+      );
+      expect((await classifyPrdAuditGaps(dir, undefined)).kind).toBe('clean');
+    });
+
+    it('a refused OVER_SCOPE criterion still routes as a gap', async () => {
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- | --- | --- |\n' +
+          '| S3.1 | OVER_SCOPE | — | FR-1 | outside-visible | conductor.ts:8163 |\n',
+      );
+      await createFile(
+        '.pipeline/accepted-widenings.json',
+        JSON.stringify({
+          version: 1,
+          decisions: [{
+            criterion: 'S3.1',
+            summary: 'operator refused S3.1',
+            decision: 'refuse',
+            rationale: 'Rework it instead.',
+            operator: 'test',
+            decidedAt: '2026-08-24T00:00:00.000Z',
+          }],
+        }),
+      );
+      expect((await classifyPrdAuditGaps(dir, undefined)).kind).not.toBe('clean');
+    });
 
     it('returns clean when there is no audit report', async () => {
       const c = await classifyPrdAuditGaps(dir, undefined);
@@ -3526,6 +3921,28 @@ describe('engine/artifacts', () => {
         attempt: 2,
         priorReason: 'same',
         inputsUnchanged: true,
+      });
+      expect(r).toEqual({ decision: 'rerun' });
+    });
+
+    it('routes a typed unretryable input failure on attempt 1', () => {
+      const r = classifyRetryDecision({
+        step: 'build_review',
+        completion: completion('absent'),
+        attempt: 1,
+        inputsUnchanged: false,
+        unretryableInputs: { retryAfterStep: 'test_suite' },
+      });
+      expect(r).toEqual({ decision: 'route', signal: 'unretryable-inputs' });
+    });
+
+    it('never classifies build from an unretryable input facet', () => {
+      const r = classifyRetryDecision({
+        step: 'build',
+        completion: completion('absent'),
+        attempt: 1,
+        inputsUnchanged: false,
+        unretryableInputs: { retryAfterStep: 'test_suite' },
       });
       expect(r).toEqual({ decision: 'rerun' });
     });
@@ -3758,96 +4175,81 @@ Task 1 → Task 2
   });
 
   describe('validateBuildReviewVerdict', () => {
-    it('preserves multiple independent findings for one failed rubric', () => {
+    it('preserves multiple independent findings for the test-quality rubric', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
-        reasons: ['completeness has two independent gaps'],
+        reasons: ['test-quality has two independent gaps'],
         findings: {
-          completeness: [
+          testQuality: [
             'The feature logger does not cover retry transition output.',
             'The feature logger does not cover teardown transition output.',
           ],
         },
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+        rubric: { testQuality: true },
       });
 
       expect(result).toEqual({
         ok: true,
         verdict: 'FAIL',
-        reasons: ['completeness has two independent gaps'],
+        reasons: ['test-quality has two independent gaps'],
         findings: {
-          completeness: [
+          testQuality: [
             'The feature logger does not cover retry transition output.',
             'The feature logger does not cover teardown transition output.',
           ],
         },
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+        rubric: { testQuality: true },
       });
     });
 
     it('rejects malformed structured findings without rejecting legacy artifacts', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
-        findings: { completeness: 'two gaps' },
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+        findings: { testQuality: 'two gaps' },
+        rubric: { testQuality: true },
       });
 
       expect(result).toEqual({
         ok: false,
-        reason: '.pipeline/build-review.json "findings.completeness" must be a string array when present',
+        reason: '.pipeline/build-review.json "findings.testQuality" must be a string array when present',
       });
     });
 
     it('renders legacy summaries and every structured finding for completion feedback', () => {
       expect(buildReviewFailureDetails({
-        reasons: ['completeness has gaps'],
-        findings: { completeness: ['missing setup output', 'missing teardown output'] },
+        reasons: ['test-quality has gaps'],
+        findings: { testQuality: ['missing setup output', 'missing teardown output'] },
       })).toEqual([
-        'completeness has gaps',
-        '[completeness] missing setup output',
-        '[completeness] missing teardown output',
+        'test-quality has gaps',
+        '[testQuality] missing setup output',
+        '[testQuality] missing teardown output',
       ]);
     });
 
     it('accepts a valid PASS verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        rubric: { testQuality: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        rubric: { testQuality: false },
       });
     });
 
-    it.each([
-      'tautology',
-      'scope',
-      'rootCause',
-      'completeness',
-    ] as const)('rejects a verdict with missing or non-boolean rubric.%s', (member) => {
-      const completeRubric = {
-        tautology: false,
-        scope: false,
-        rootCause: false,
-        completeness: false,
-        };
-      const missing = { ...completeRubric } as Record<string, unknown>;
-      delete missing[member];
-      const nonBoolean = { ...completeRubric, [member]: 'false' };
-
-      for (const rubric of [missing, nonBoolean]) {
+    it('rejects a verdict with missing or non-boolean rubric.testQuality', () => {
+      for (const rubric of [{}, { testQuality: 'false' }]) {
         expect(validateBuildReviewVerdict({ verdict: 'PASS', rubric })).toEqual({
           ok: false,
-          reason: `.pipeline/build-review.json "rubric.${member}" must be a boolean`,
+          reason: '.pipeline/build-review.json "rubric.testQuality" must be a boolean',
         });
       }
     });
 
     it.each([
-      ['PASS', { tautology: false, scope: false, rootCause: false, completeness: true }],
-      ['FAIL', { tautology: false, scope: false, rootCause: false, completeness: false }],
+      ['PASS', { testQuality: true }],
+      ['FAIL', { testQuality: false }],
     ] as const)('%s enforces all-or-FAIL across every complete rubric', (verdict, rubric) => {
       expect(validateBuildReviewVerdict({ verdict, rubric }).ok).toBe(false);
     });
@@ -3864,7 +4266,7 @@ Task 1 → Task 2
 
     it('rejects a verdict missing the "verdict" field as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
-        rubric: { tautology: false },
+        rubric: { testQuality: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3877,47 +4279,47 @@ Task 1 → Task 2
     it('accepts a FAIL verdict with reasons and preserves them', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
-        reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
-        rubric: { tautology: true, scope: true, rootCause: false, completeness: false },
+        reasons: ['test assertion does not observe changed behavior'],
+        rubric: { testQuality: true },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'FAIL',
-        reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
-        rubric: { tautology: true, scope: true, rootCause: false, completeness: false },
+        reasons: ['test assertion does not observe changed behavior'],
+        rubric: { testQuality: true },
       });
     });
 
-    it('accepts and round-trips a verdict containing rubric.completeness', () => {
+    it('accepts and round-trips a PASS test-quality verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        rubric: { testQuality: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        rubric: { testQuality: false },
       });
     });
 
-    it('validates a verdict where only rubric.completeness fails as overall FAIL (all-or-FAIL semantics)', () => {
+    it('validates a test-quality FAIL verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
-        reasons: ['implementation addresses only part of the task scope'],
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+        reasons: ['changed test remains insensitive to the claimed behavior'],
+        rubric: { testQuality: true },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'FAIL',
-        reasons: ['implementation addresses only part of the task scope'],
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+        reasons: ['changed test remains insensitive to the claimed behavior'],
+        rubric: { testQuality: true },
       });
     });
 
     it('rejects lowercase "pass" as invalid-or-FAIL (fail-closed, exact match only)', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'pass',
-        rubric: { completeness: false },
+        rubric: { testQuality: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3925,7 +4327,7 @@ Task 1 → Task 2
     it('rejects unrecognized string "APPROVED" as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'APPROVED',
-        rubric: { completeness: false },
+        rubric: { testQuality: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3933,7 +4335,7 @@ Task 1 → Task 2
     it('rejects an empty string verdict as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
         verdict: '',
-        rubric: { completeness: false },
+        rubric: { testQuality: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3941,25 +4343,25 @@ Task 1 → Task 2
     it('accepts and round-trips a verdict carrying a codeStamp', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        rubric: { testQuality: false },
         codeStamp: 'abc123def456',
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        rubric: { testQuality: false },
         codeStamp: 'abc123def456',
       });
     });
 
-    it('rejects a stamp-less verdict that omits the required wiring judgement', () => {
+    it('rejects a verdict that omits the required test-quality judgement', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { tautology: false, scope: false, rootCause: false },
+        rubric: {},
       });
       expect(result).toEqual({
         ok: false,
-        reason: '.pipeline/build-review.json "rubric.completeness" must be a boolean',
+        reason: '.pipeline/build-review.json "rubric.testQuality" must be a boolean',
       });
     });
   });
@@ -4014,7 +4416,7 @@ Task 1 → Task 2
       const p = join(d, '.pipeline/build-review.json');
       const body: Record<string, unknown> = {
         verdict,
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        rubric: { testQuality: false },
       };
       if (codeStamp !== undefined) body.codeStamp = codeStamp;
       await writeFile(p, JSON.stringify(body, null, 2));
@@ -4073,7 +4475,7 @@ Task 1 → Task 2
       const p = join(gdir, '.pipeline/build-review.json');
       await writeFile(
         p,
-        JSON.stringify({ verdict: 'FAIL', reasons: ['nope'], rubric: { tautology: true, scope: false, rootCause: false, completeness: false }, codeStamp: baseline }, null, 2),
+        JSON.stringify({ verdict: 'FAIL', reasons: ['nope'], rubric: { testQuality: true }, codeStamp: baseline }, null, 2),
       );
       // Fresh mtime (not backdated) — never touches the preserve path anyway.
       const result = await checkStepCompletion(gdir, 'build_review', ctxFor(gdir));
@@ -4106,6 +4508,136 @@ Task 1 → Task 2
       };
       const result = await checkStepCompletion(gdir, 'build_review', ctx);
       expect(result.done).toBe(true);
+    });
+  });
+
+  describe('checkStepCompletion: stale build-review aggregate laps (#1740)', () => {
+    const makeAggregate = (lap: string, finding = true) => {
+      const lapId = parseBuildReviewLapId(lap)!;
+      const judged = {
+        kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot',
+        contractVersion: 'v2' as never,
+        findings: finding ? [{
+          concernKind: 'test-insensitive', summary: 'old finding', evidenceLocations: ['src/a.ts:1'],
+          anchor: { rubric: 'testQuality' as const, locus: { path: 'src/a.ts', contentHash: 'sha256:test', display: 'src/a.ts:1' } },
+        }] : [],
+        verdict: finding ? 'FAIL' as const : 'PASS' as const,
+      };
+      return joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
+        testQuality: judged,
+      } });
+    };
+
+    it('classifies a session-fresh prior-lap FAIL aggregate as absent without reviving its finding', async () => {
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-A')));
+      const result = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now() - 1_000,
+        git: async () => ({ exitCode: 0, stdout: 'B\n', stderr: '' }),
+      });
+      expect(result).toMatchObject({
+        done: false, routeClass: 'absent', staleLap: { storedLapId: 'lap-A', currentLapId: 'lap-B' },
+      });
+      expect(result.reason).toContain('lap-A');
+      expect(result.reason).toContain('lap-B');
+      expect(result.reason).not.toContain('old finding');
+    });
+
+    it('preserves a stamped PASS from a different HEAD when its code delta misses the gate surface', async () => {
+      const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({
+        ...makeAggregate('lap-A', false),
+        codeStamp: 'A',
+      }));
+      const stale = new Date(Date.now() - 10_000);
+      await utimes(verdictPath, stale, stale);
+
+      const result = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now(),
+        config: { gate_code_validity: { enabled: true } },
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'fixture' },
+          effective: {
+            rawVerdict: 'PASS' as const,
+            verdict: 'PASS' as const,
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            skippedRubrics: [],
+            infrastructureFailureRubrics: [],
+          },
+        }),
+        git: async (args) => {
+          if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+          if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return { exitCode: 0, stdout: '', stderr: '' };
+          if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
+          if (args[0] === 'diff' && args[2] === 'A..HEAD') return { exitCode: 0, stdout: 'docs/guide.md\n', stderr: '' };
+          if (args[0] === 'diff') return { exitCode: 0, stdout: 'src/feature.ts\n', stderr: '' };
+          throw new Error(`unexpected git command: ${args.join(' ')}`);
+        },
+      });
+
+      expect(result).toMatchObject({
+        done: true,
+        verdictFreshness: { outcome: 'preserved_surface_miss' },
+      });
+      expect(result.staleLap).toBeUndefined();
+    });
+
+    it('rejects a matching-lap FAIL whose mtime predates the session without reporting a stale lap', async () => {
+      const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-B')));
+      const stale = new Date(Date.now() - 10_000);
+      await utimes(verdictPath, stale, stale);
+
+      const result = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now(),
+        git: async () => ({ exitCode: 0, stdout: 'B\n', stderr: '' }),
+      });
+
+      expect(result).toMatchObject({
+        done: false,
+        routeClass: 'absent',
+        verdictFreshness: { outcome: 'stale_invalidated' },
+      });
+      expect(result.reason).toMatch(/not rewritten by this judging session/);
+      expect(result.staleLap).toBeUndefined();
+    });
+
+    it('keeps a pre-session stamp-less PASS aggregate absent without reporting a stale lap', async () => {
+      const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-A', false)));
+      const stale = new Date(Date.now() - 10_000);
+      await utimes(verdictPath, stale, stale);
+
+      const result = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now(),
+        git: async () => ({ exitCode: 0, stdout: 'B\n', stderr: '' }),
+      });
+
+      expect(result).toMatchObject({
+        done: false,
+        routeClass: 'absent',
+        verdictFreshness: { outcome: 'stale_invalidated' },
+      });
+      expect(result.staleLap).toBeUndefined();
+    });
+
+    it('keeps a current-lap FAIL aggregate on its named route and fails open when HEAD is unavailable', async () => {
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-B')));
+      const current = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now() - 1_000,
+        git: async () => ({ exitCode: 0, stdout: 'B\n', stderr: '' }),
+      });
+      expect(current).toMatchObject({ done: false, routeClass: 'named-route' });
+      expect(current.staleLap).toBeUndefined();
+
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-A')));
+      const unavailable = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now() - 1_000,
+        git: async () => { throw new Error('unavailable'); },
+      });
+      expect(unavailable).toMatchObject({ done: false, routeClass: 'named-route' });
+      expect(unavailable.staleLap).toBeUndefined();
     });
   });
 
@@ -4705,7 +5237,7 @@ Task 1 → Task 2
 
   describe('removeBuildReviewVerdict (build-review-grades-plan-vs-diff-against-a-stale-o, Task 7)', () => {
     it('deletes an existing build_review verdict artifact', async () => {
-      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({ verdict: 'FAIL', rubric: { completeness: false } }));
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({ verdict: 'FAIL', rubric: { testQuality: false } }));
       await removeBuildReviewVerdict(dir);
       await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf-8')).rejects.toThrow();
     });
@@ -4724,7 +5256,7 @@ Task 1 → Task 2
       // read "missing verdict" — never a preserved/reconstructed prior PASS.
       await createFile(
         BUILD_REVIEW_VERDICT,
-        JSON.stringify({ verdict: 'PASS', rubric: { completeness: false }, codeStamp: 'deadbeef' }),
+        JSON.stringify({ verdict: 'PASS', rubric: { testQuality: false }, codeStamp: 'deadbeef' }),
       );
       await removeBuildReviewVerdict(dir);
       const result = await checkStepCompletion(dir, 'build_review');

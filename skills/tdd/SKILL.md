@@ -1,5 +1,6 @@
 ---
 name: tdd
+disable-model-invocation: true
 description: "Use when implementing any feature or bugfix. Five-step cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT. Enforces test-first development with domain integrity review at every phase boundary."
 enforcement: structural
 phase: build
@@ -74,13 +75,12 @@ authored during this lap, do not amend the sealed plan, and close the task with 
 
 ### Removal Boundary
 
-Deleting code is not new behavior and starts no RED cycle. When a task's subject is a removal —
-a file, a seam, a flag, a code path going away — do not author a test whose subject is the code
-being deleted, and do not restate coverage the deleted code used to carry. The deletion itself,
-plus the survival of the existing suite, is the evidence. Removal-anchored review treatment is
-defined by `adr-2026-08-12-removal-anchored-tautology-exemption.md`; maintenance edits that keep
-existing tests compiling after a removal (updating imports, dropping dead selectors) are ordinary
-edits, not new coverage, and need no RED of their own.
+Deleting code starts no RED cycle. For removal-shaped work, follow `/code-removal` for the
+absence-test prohibition, survivor method, test triage, and completeness sweep. Review ownership is
+defined by APPROVED `adr-2026-08-22-one-owner-per-review-question.md`, which retires the rubric
+exemptions the earlier removal-anchored ADR carried; maintenance edits that keep existing tests
+compiling after a removal (updating imports, dropping dead selectors) are ordinary edits, not new
+coverage, and need no RED of their own.
 
 ### Phase 1: RED
 
@@ -113,6 +113,15 @@ Never call a raw project aggregate command directly.
 - Test must fail for the RIGHT reason (not syntax error, not missing import)
 - Test name describes the behavior: `test_expired_token_returns_401`, not `test_auth`
 - If tech-context loaded: follow stack test conventions (e.g., RSpec `describe`/`context`/`it`)
+- **Declare feature coverage with a `Covers:` marker.** Every test file this cycle creates or
+  changes carries a leading comment line binding it to the active feature, using the same marker
+  contract as `/writing-system-tests`: a criterion in the active stories (`Covers: S<n>.<m>`), a
+  task in the active plan (`Covers: task:<id>`), or — product track — a PRD requirement
+  (`Covers: FR-N`). Markers are resolvable only against the feature's own stories and plan; the
+  build_review test-quality rubric scopes itself to changed tests with a resolvable `Covers:`
+  binding, so a changed test without one is invisible to that review and the rubric passes
+  vacuously. A file-level marker listing every covered id is sufficient; keep it current when the
+  cycle extends an existing test file.
 
 **If the test passes immediately:** The behavior already exists. Either the test is wrong
 (testing something already implemented) or the criterion is already met. Investigate — don't
@@ -426,5 +435,7 @@ exact replication still follows its full delta cycle and required scoped verific
 - [ ] Type-check passes before commit (typed stacks — run as the Phase 4 pre-check; skipped for stacks with no compile step)
 - [ ] Working tree clean at commit
 - [ ] One behavior per cycle (not multiple changes lumped together)
+- [ ] Every new/changed test file carries a resolvable `Covers:` marker bound to the active
+      feature's stories or plan (build_review test-quality scope)
 - [ ] Coverage proves each changed behavior or failure boundary at the lowest sufficient layer
 - [ ] Non-obvious gotchas or new patterns persisted to `.memory/` (if encountered this cycle)

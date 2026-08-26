@@ -45,6 +45,7 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { landSpec } from '../../src/engine/engineer/land-spec.js';
+import { slugify } from '../../src/engine/engineer/authoring.js';
 import { createEngineerWorktree } from '../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 
@@ -111,12 +112,22 @@ const PLAN = [
   '**Type:** happy-path',
   '**Files likely touched:**',
   '- src/conductor/src/engine/engineer/outcome-staging.ts',
+  'implement outcome one and reject an unmapped outcome',
+  '',
+  '**Done when:**',
+  '- A staged outcome is committed to the intake marker.',
+  '- An unmapped outcome is rejected at land.',
   '',
   '### Task 2: implement story two',
   '**Story:** Story 2 (happy path — stories map)',
   '**Type:** happy-path',
   '**Files likely touched:**',
   '- src/conductor/src/engine/engineer/coherence-validator.ts',
+  'implement story two and reject an uncovered story',
+  '',
+  '**Done when:**',
+  '- A covered story maps to its plan task.',
+  '- An uncovered story is rejected at land.',
   '',
   '## Task Dependency Graph',
   '```',
@@ -151,6 +162,10 @@ const COHERENCE = [
   '| task    | task-1    | story-1  | covered | "task 1 maps to story 1"     |',
   '| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |',
   '| adr     | adr-coherence | story-1 | covered | "ADR is adjudicated by story 1" |',
+  '| criterion | Story 1 happy: Given a mapped outcome, when land validates, then it passes. | task-1 | covered | "implement outcome one" | diff-local |',
+  '| criterion | Story 1 negative: Given an unmapped outcome, when land validates, then it is rejected. | task-1 | covered | "reject an unmapped outcome" | diff-local |',
+  '| criterion | Story 2 happy: Given a covered story, when land validates, then it passes. | task-2 | covered | "implement story two" | diff-local |',
+  '| criterion | Story 2 negative: Given an uncovered story, when land validates, then it is rejected. | task-2 | covered | "reject an uncovered story" | diff-local |',
   '',
 ].join('\n');
 
@@ -187,12 +202,13 @@ interface SeedOverrides {
  * refusal must come from the (new) coherence rung.
  */
 async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promise<string> {
+  const stem = slugify(idea);
   const {
     prd = PRD,
     stories = STORIES,
     plan = PLAN,
     coherence = COHERENCE,
-    coherenceFilename = 'coherence-demo.md',
+    coherenceFilename = `${stem}.md`,
     tier = 'M',
     track = 'product',
     stageOutcomes = true,
@@ -217,11 +233,11 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
   await mkdir(join(dir, '.docs', 'complexity'), { recursive: true });
   await mkdir(join(dir, '.docs', 'track'), { recursive: true });
 
-  if (prd !== null) await w('specs/coherence-demo.md', prd);
-  await w('stories/coherence-demo.md', stories);
-  await w('plans/coherence-demo.md', plan);
-  await w('complexity/coherence-demo.md', `# Complexity\n\nTier: ${tier}\n`);
-  await w('track/coherence-demo.md', `# Track\n\nTrack: ${track}\n`);
+  if (prd !== null) await w(`specs/${stem}.md`, prd);
+  await w(`stories/${stem}.md`, stories);
+  await w(`plans/${stem}.md`, plan.replace('.docs/stories/coherence-demo.md', `.docs/stories/${stem}.md`));
+  await w(`complexity/${stem}.md`, `# Complexity\n\nTier: ${tier}\n`);
+  await w(`track/${stem}.md`, `# Track\n\nTrack: ${track}\n`);
 
   // Non-Small tiers require conflicts + architecture + decisions to satisfy the
   // EXISTING land completeness guard (land-spec.ts step 4d). Seed them so the
@@ -230,7 +246,7 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     await mkdir(join(dir, '.docs', 'conflicts'), { recursive: true });
     await mkdir(join(dir, '.docs', 'architecture'), { recursive: true });
     await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
-    await w('conflicts/coherence-demo.md', '# Conflicts\n\nClean.\n');
+    await w(`conflicts/${stem}.md`, '# Conflicts\n\nClean.\n');
     // Plain markdown, NO ```mermaid block, so the render gate resolves to
     // no-diagrams and never needs mmdc.
     await w('architecture/coherence-demo.md', '# Architecture\n\nComponents A and B.\n');
@@ -254,7 +270,7 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
 
   if (waiver !== null) {
     await mkdir(join(dir, '.docs', 'coherence-waivers'), { recursive: true });
-    await w('coherence-waivers/coherence-demo.md', waiver);
+    await w(`coherence-waivers/${stem}.md`, waiver);
   }
 
   if (stageOutcomes) {
@@ -494,11 +510,19 @@ describe('Story 6 / FR-5 — orphan-task detection (task-<id>)', () => {
         '**Files likely touched:**',
         '- src/orphan-one.ts',
         '',
+        '**Done when:**',
+        '- The first deliberate orphan task is represented.',
+        '- Its waiver can name the task identifier.',
+        '',
         '### Task 4: orphan two',
         '**Story:** Story 405 (also nonexistent)',
         '**Type:** happy-path',
         '**Files likely touched:**',
         '- src/orphan-two.ts',
+        '',
+        '**Done when:**',
+        '- The second deliberate orphan task is represented.',
+        '- Its waiver can name the task identifier.',
         '',
         '## Task Dependency Graph',
       ].join('\n'),
@@ -536,7 +560,9 @@ describe('Story 6 / FR-5 — orphan-task detection (task-<id>)', () => {
     const coherence = COHERENCE
       .replace('| fr      | FR-2      | story-2  | covered | "FR-2 maps to story 2"       |\n', '')
       .replace('| story   | story-2   | task-2   | covered | "story 2 maps to task 2"     |\n', '')
-      .replace('| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |\n', '');
+      .replace('| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |\n', '')
+      .replace('| criterion | Story 2 happy: Given a covered story, when land validates, then it passes. | task-2 | covered | "implement story two" | diff-local |\n', '')
+      .replace('| criterion | Story 2 negative: Given an uncovered story, when land validates, then it is rejected. | task-2 | covered | "reject an uncovered story" | diff-local |\n', '');
     const wt = await seedWorktree('coherence demo', { plan, stories, prd, coherence });
     await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
   });
@@ -769,5 +795,27 @@ describe('Story 14 / FR-14 — fail-closed on missing/empty/unparseable record',
       stampCoherenceSignal: false,
     });
     await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
+  });
+});
+
+// Covers: S1.4, task:6
+// The criterion layer is a land-time extension of this acceptance flow. Keep
+// driving landSpec itself so the spec fails if the new validator exists but is
+// never wired into the production landing entry point.
+describe('Criterion-level coherence coverage — every accepted criterion is owned before land', () => {
+  it('negative: an M-tier artifact with no criterion rows is refused and names the omitted criterion verbatim', async () => {
+    const mappedCriterion =
+      'Story 1 happy: Given a mapped outcome, when land validates, then it passes.';
+    const coherenceWithoutCriterionRows = COHERENCE
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('| criterion'))
+      .join('\n');
+    const wt = await seedWorktree('coherence demo', {
+      coherence: coherenceWithoutCriterionRows,
+    });
+
+    await expect(
+      landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
+    ).rejects.toThrow(mappedCriterion);
   });
 });

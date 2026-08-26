@@ -10,6 +10,7 @@ import {
 } from '../../src/engine/shipped-record-cli.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { specHash } from '../../src/engine/shipped-record.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,6 +180,40 @@ describe('conduct shipped-record — record committed on the implementation bran
     expect(await git(['rev-list', '--count', 'HEAD'])).toBe(firstCount);
   });
 
+  it.each([
+    { kind: 'invalid' as const, message: 'current reduced-coverage state is invalid' },
+    { kind: 'lock' as const, message: 'reduced-coverage state lease is unavailable' },
+    { kind: 'filesystem' as const, message: 'reduced-coverage state I/O failed' },
+  ])('blocks publication when reduced-coverage state is $kind rather than omitting its evidence', async ({ kind, message }) => {
+    vi.spyOn(BuildReviewDispositionStore.prototype, 'listReducedCoverage').mockResolvedValue({
+      ok: false,
+      kind,
+      message,
+    });
+    const errors: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((message: unknown) => {
+      errors.push(String(message));
+    });
+
+    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(1);
+    expect(errors.join('\n')).toContain(message);
+    await expect(readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8')).rejects.toThrow();
+    expect(await git(['log', '--format=%s'])).not.toContain(`shipped record: ${SLUG}`);
+  });
+
+  it('treats explicitly unreadable reduced-coverage state as absent evidence and still commits the record', async () => {
+    vi.spyOn(BuildReviewDispositionStore.prototype, 'listReducedCoverage').mockResolvedValue({
+      ok: false,
+      kind: 'unreadable',
+      message: 'reduced-coverage state cannot be read',
+    });
+
+    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(0);
+    const record = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
+    expect(record).not.toContain('## Reduced build-review coverage');
+    expect(await git(['log', '-1', '--format=%s'])).toBe(`shipped record: ${SLUG}`);
+  });
+
   // The daemon runs `dispatchShippedRecord` IN-PROCESS (finish-publication-production.ts),
   // and daemon-cli.ts tees `console.error` into `.daemon/daemon.log` stamped `[error]`.
   // A successful record write therefore has to leave stderr entirely, or every ship
@@ -264,7 +299,6 @@ describe('daemon ship path — writes NO shipped record (ADR Decision 1 complian
       daemon: false,
       provider: {
         invoke: async () => ({ success: true, output: '', exitCode: 0 }),
-        invokeInteractive: async () => {},
       },
       project: 'test-project',
       projectRoot: mainCheckout,

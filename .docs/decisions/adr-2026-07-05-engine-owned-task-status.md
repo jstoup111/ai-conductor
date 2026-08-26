@@ -201,3 +201,5 @@ Carried over from the Opus round:
   the migration grandfather (H8), and the survivable park.
 - Follow-up coordination with #280 is required for the shared park/forward-progress surface; this ADR
   scopes the park as the empty/no-evidence trigger of that mechanism, not a competing one.
+
+> **Amended 2026-08-22 by #1805:** task close records Done-when: evidence when the task carries the block; verify-only and Evidence: skipped closures satisfy checks by their existing path (adr-2026-08-22-done-when-evidence-at-task-close).

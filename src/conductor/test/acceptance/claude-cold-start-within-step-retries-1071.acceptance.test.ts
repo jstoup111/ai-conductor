@@ -75,7 +75,6 @@ describe('ST-1071 cross-component cold-start contracts', () => {
           invocations.push(options);
           return ok('attempt completed');
         }),
-        invokeInteractive: vi.fn(),
       };
       const runner = new DefaultStepRunner(
         provider,

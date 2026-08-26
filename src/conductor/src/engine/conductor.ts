@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import {
   recordGateRepair,
 } from './test-suite-remediation.js';
-import { dirname, relative, join, isAbsolute } from 'node:path';
+import { basename, dirname, relative, join, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execa } from 'execa';
 import {
@@ -143,17 +143,21 @@ import {
   resolveArtifactFiles,
   extraArtifactGlobs,
   resolveFeaturePlanPath,
+  resolveFeatureStoriesPath,
   recordAppendedRemediationTaskIds,
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
+  parsePrdAuditReport,
+  extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   readRemediationPlan,
   REMEDIATION_PUBLICATION_DISPOSITION,
   remediationDispositionAppendsToPlan,
   remediationDispositionStep,
   sweepStaleReviewArtifacts,
+  classifyAsBuiltReviewOutcome,
   parseTrack,
   parseIntakeSourceRef,
   planStem,
@@ -167,6 +171,28 @@ import {
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
 } from './artifacts.js';
+import {
+  appendRemediationTasks as appendCriterionBoundRemediationTasks,
+  type CriterionBoundRemediationGap,
+} from './remediation-append.js';
+import {
+  KICKBACK_CAP_HALT_CLASS,
+  OVER_SCOPE_HALT_CLASS,
+  type KickbackCapHaltClass,
+  type OverScopeHaltClass,
+} from './halt-classification.js';
+import {
+  classifyOverScopeCriterion,
+  overScopeRelations,
+  parseClearedOverScopeDecisions,
+  readOverScopeDecisions,
+  recordOverScopeDecisions,
+  renderOverScopeDecisionBlock,
+  type OverScopeDecision,
+  type IntentRelation,
+} from './accepted-widenings.js';
+import type { ScopeTrailer } from './scope-trailer.js';
+import { resolveScopeWideningRationale } from './scope-widening-rationale.js';
 import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
@@ -175,7 +201,6 @@ import {
 } from './full-suite-verifier.js';
 import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
 import {
-  buildReviewFailRoute,
   extractFlaggedPaths,
   runScopeFailDisposition,
   readRegradeCount,
@@ -196,8 +221,12 @@ import {
   clearKickbackLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  readGrowth,
   readKickbackLedger,
+  recordGrowth,
   writeKickbackLedger,
+  type KickbackGateEntry,
   type KickbackLedger,
 } from './kickback-ledger.js';
 import {
@@ -274,6 +303,7 @@ import {
   normalizeTasks,
   resolveTaskIds,
 } from './task-progress.js';
+import { supersedeHaltRecord } from './halt-record.js';
 import {
   makeGitRunner,
   performRebase,
@@ -483,6 +513,283 @@ export function isEngineComputedStep(step: StepName): boolean {
 const MAX_KICKBACKS_PER_GATE = 2;
 
 /**
+ * Identifies the gate evidence that authorized a remediation dispatch. A
+ * validation-group round can carry more than one gate, so this deliberately
+ * preserves each gate-to-artifact pairing rather than flattening it into a
+ * comma-delimited filename string.
+ */
+interface RemediationGateProvenance {
+  gate: StepName;
+  evidenceFile: string;
+}
+
+interface RemediationHintSource {
+  source: string;
+  evidence: readonly RemediationGateProvenance[];
+}
+
+/** PRD-audit owns its configured remediation allowance; other gates share the generic cap. */
+export function remediationLapCapForGate(
+  gate: string,
+  config: HarnessConfig,
+  genericCap = MAX_KICKBACKS_PER_GATE,
+): number {
+  if (gate !== 'prd_audit') return genericCap;
+  return (config as HarnessConfig & {
+    prd_audit?: { max_remediation_laps?: number };
+  }).prd_audit?.max_remediation_laps ?? 1;
+}
+
+/** The prd-audit cap is both an absolute count and a fraction of authored plan work. */
+export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: number): number {
+  const prdAudit = (config as HarnessConfig & {
+    prd_audit?: { max_appended_tasks?: number; max_appended_ratio?: number };
+  }).prd_audit;
+  const maximum = prdAudit?.max_appended_tasks ?? 5;
+  const ratio = prdAudit?.max_appended_ratio ?? 0.25;
+  return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
+}
+
+export interface RecordedPrdAuditFinding {
+  gate: 'prd_audit';
+  grade: 'PLAN_GAP' | 'OVER_SCOPE';
+  criterion: string;
+  summary: string;
+  accepted?: boolean;
+  decision?: 'accept' | 'refuse';
+  rationale?: string;
+}
+
+export type PrdAuditPlanGapRoute =
+  | { kind: 'none' }
+  | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
+  | { kind: 'halt'; haltClass: 'plan-gap'; detail: string; findings: RecordedPrdAuditFinding[] };
+
+function criterionStorySection(
+  storiesText: string,
+  criterion: string,
+): 'happy' | 'negative' | undefined {
+  const id = criterion.match(/^S(\d+)\.(\d+)$/i);
+  if (!id) return undefined;
+
+  const [, storyId, ordinal] = id;
+  const storyPrefix = `Story ${storyId} `;
+  const storyCriteria = extractAuthoritativeStoryCriteria(storiesText).filter((candidate) =>
+    candidate.toLowerCase().startsWith(storyPrefix.toLowerCase()),
+  );
+  const matchedCriterion = storyCriteria[Number(ordinal) - 1];
+  if (!matchedCriterion) return undefined;
+  if (matchedCriterion.toLowerCase().startsWith(`${storyPrefix}happy:`.toLowerCase())) {
+    return 'happy';
+  }
+  if (matchedCriterion.toLowerCase().startsWith(`${storyPrefix}negative:`.toLowerCase())) {
+    return 'negative';
+  }
+  return undefined;
+}
+
+/**
+ * A PLAN_GAP on a main path needs an operator to amend the approved plan;
+ * an edge-case gap is durable review information unless the feature opts in
+ * to stopping on every plan gap. Unknown locations deliberately fail closed
+ * as main-path gaps.
+ */
+export function routePrdAuditPlanGaps(
+  reportText: string,
+  storiesText: string,
+  config: HarnessConfig,
+): PrdAuditPlanGapRoute {
+  const parsed = parsePrdAuditReport(reportText);
+  if (!parsed.ok) return { kind: 'none' };
+
+  const findings = parsed.value.findings
+    .filter((finding) => finding.grade === 'PLAN_GAP')
+    .map((finding) => ({
+      gate: 'prd_audit' as const,
+      grade: 'PLAN_GAP' as const,
+      criterion: finding.criterion,
+      summary: finding.evidence.trim() || `No approved plan task covers ${finding.criterion}.`,
+    }));
+  if (findings.length === 0) return { kind: 'none' };
+
+  const haltOnAnyPlanGap = (config as HarnessConfig & {
+    prd_audit?: { halt_on_any_plan_gap?: boolean };
+  }).prd_audit?.halt_on_any_plan_gap === true;
+  const blocking = findings.filter(
+    (finding) => haltOnAnyPlanGap || criterionStorySection(storiesText, finding.criterion) !== 'negative',
+  );
+  if (blocking.length > 0) {
+    return {
+      kind: 'halt',
+      haltClass: 'plan-gap',
+      detail: `PLAN_GAP on ${blocking.map((finding) => finding.criterion).join(', ')}.`,
+      findings,
+    };
+  }
+
+  const hasOtherBlockingGrade = parsed.value.findings.some(
+    (finding) => finding.grade !== 'PASS' && finding.grade !== 'PLAN_GAP',
+  );
+  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings };
+}
+
+
+export type PrdAuditOverScopeRoute =
+  | { kind: 'none' }
+  | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
+  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; defects?: Array<{ kind: string; criterion?: string; message?: string }> };
+
+/**
+ * One PRD-audit route result shared by the serial SHIP walk and the
+ * validation-group join. A recorded finding is an explicit accepted risk;
+ * a halted finding keeps its route-specific operator decision. Keeping this
+ * result above either execution shape prevents their gate-satisfaction logic
+ * from drifting apart.
+ */
+type CurrentPrdAuditRoute =
+  | { kind: 'none' }
+  | { kind: 'record' }
+  | { kind: 'plan-gap-halt'; route: Extract<PrdAuditPlanGapRoute, { kind: 'halt' }> }
+  | { kind: 'over-scope-halt'; route: Extract<PrdAuditOverScopeRoute, { kind: 'halt' }> }
+  // D8: the projection itself refused. Named, blocking, and ahead of every
+  // other route — an unrenderable decision must not be settled as satisfied.
+  | { kind: 'projection-halt'; reason: string };
+
+/** Route OVER_SCOPE findings through intent relation and prior operator acceptance. */
+export function routePrdAuditOverScope(
+  reportText: string,
+  decisions: readonly OverScopeDecision[],
+): PrdAuditOverScopeRoute {
+  const parsed = parsePrdAuditReport(reportText);
+  if (!parsed.ok) return { kind: 'none' };
+  const relations = overScopeRelations(reportText);
+  const overScopeFindings = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
+  if (overScopeFindings.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
+  const findings = overScopeFindings
+    .map((finding) => {
+      const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
+      const relation = relations.get(finding.criterion) as IntentRelation;
+      const classification = classifyOverScopeCriterion(finding.criterion, relations, decisions);
+      const durableDecision = decisions.filter((entry) => entry.criterion === finding.criterion).at(-1);
+      return {
+        gate: 'prd_audit' as const,
+        grade: 'OVER_SCOPE' as const,
+        criterion: finding.criterion,
+        summary,
+        accepted: classification === 'accepted' || relation === 'within',
+        ...(durableDecision ? { decision: durableDecision.decision, rationale: durableDecision.rationale } : {}),
+        classification,
+        relation,
+      };
+    });
+  if (findings.length === 0) return { kind: 'none' };
+
+  const undecided = findings.filter((finding) => finding.classification === 'blocking-undecided');
+  const refused = findings.filter((finding) => finding.classification === 'blocking-refused');
+  const recorded = findings.map(({ relation: _relation, classification: _classification, ...finding }) => finding);
+  if (undecided.length > 0 || refused.length > 0) {
+    return {
+      kind: 'halt',
+      haltClass: OVER_SCOPE_HALT_CLASS,
+      detail: `OVER_SCOPE visible behavior on ${[...undecided, ...refused].map((finding) => finding.criterion).join(', ')}.`,
+      findings: recorded,
+      undecided: undecided.map(({ classification: _classification, ...finding }) => finding),
+      refused: refused.map(({ classification: _classification, ...finding }) => finding),
+    };
+  }
+  const hasOtherBlockingGrade = parsed.value.findings.some(
+    (finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE',
+  );
+  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings: recorded };
+}
+
+/** Direct, immutable scope evidence passed to the PRD-audit reviewer. */
+export function prdAuditScopeProjection(input: {
+  resealEvidence: readonly { path: string; reason: string }[];
+  scopeTrailers: readonly ScopeTrailer[];
+}): {
+  resealEvidence: readonly { path: string; reason: string }[];
+  scopeTrailers: readonly ScopeTrailer[];
+} {
+  return {
+    resealEvidence: input.resealEvidence.map((entry) => ({ ...entry })),
+    // Reuse the common widening rationale precedence: a matching `Scope:`
+    // trailer is authored evidence, not an engine-invented explanation.
+    scopeTrailers: input.scopeTrailers.map((entry) => ({
+      path: entry.path,
+      rationale: resolveScopeWideningRationale(entry.path, input.scopeTrailers, '').rationale,
+    })),
+  };
+}
+
+/**
+ * ADR adr-2026-08-24 D8 (with adr-2026-08-13 §6): a recorded decision that
+ * cannot be rendered BLOCKS with a named reason — it never silently
+ * disappears from the verdict artifact. Rendering is therefore a fail-closed
+ * result, not a string: every finding must carry the fields the projection
+ * promises, and the block must survive a JSON round-trip.
+ */
+export type RecordedFindingsProjection =
+  | { ok: true; block: string }
+  | { ok: false; message: string };
+
+export function recordedPrdAuditFindingsBlock(
+  findings: readonly RecordedPrdAuditFinding[],
+): RecordedFindingsProjection {
+  for (const finding of findings) {
+    const where = finding.criterion?.trim() || '<criterion missing>';
+    if (!finding.criterion?.trim()) {
+      return { ok: false, message: 'a recorded finding carries no criterion id' };
+    }
+    if (!finding.summary?.trim()) {
+      return { ok: false, message: `recorded finding ${where} carries no summary` };
+    }
+    if (finding.decision && !finding.rationale?.trim()) {
+      return {
+        ok: false,
+        message: `recorded decision ${finding.decision} on ${where} carries no rationale`,
+      };
+    }
+  }
+  let json: string;
+  try {
+    json = JSON.stringify({ findings }, null, 2);
+  } catch (error) {
+    return {
+      ok: false,
+      message: `recorded findings are not serializable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (typeof json !== 'string') {
+    return { ok: false, message: 'recorded findings rendered to no JSON body' };
+  }
+  return { ok: true, block: `## Recorded Findings\n\n\`\`\`json\n${json}\n\`\`\`` };
+}
+
+async function persistPrdAuditRecordedFindings(
+  reportPath: string,
+  reportText: string,
+  findings: readonly RecordedPrdAuditFinding[],
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const rendered = recordedPrdAuditFindingsBlock(findings);
+  // Fail closed: write nothing rather than a verdict artifact that omits a
+  // decision the operator authored.
+  if (!rendered.ok) return rendered;
+  const next = reportText.match(/^## Recorded Findings\s*$/im)
+    ? reportText.replace(/^## Recorded Findings\s*$[\s\S]*$/im, rendered.block)
+    : `${reportText.trimEnd()}\n\n${rendered.block}\n`;
+  try {
+    await writeFile(reportPath, next, 'utf8');
+  } catch (error) {
+    return {
+      ok: false,
+      message: `recorded findings could not be written to ${reportPath}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * How many times one run may re-dispatch `finish` for a PUBLICATION defect —
  * a completion-gate refusal where every evidence check passed and only the
  * recorded PR's own body/title/draft state is wrong.
@@ -540,6 +847,13 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** A typed refusal is an entry/environment outcome, never provider text. */
+  refusal?: {
+    kind: 'seal' | 'needs-human' | 'validation-verdict';
+    reason: string;
+  };
+  /** True only when this build-review lap observed an infrastructure fault. */
+  currentLapMechanicalFault?: boolean;
   /**
    * Typed only by the FINISH composition boundary. Kept unknown at this edge
    * so malformed adapter results fail closed instead of reaching remediation.
@@ -549,6 +863,13 @@ export interface StepRunResult {
   observedIntervals?: readonly ObservedInterval[];
   /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
   fullSuiteVerification?: FullSuiteVerifierResult;
+  /**
+   * Set when re-dispatching this step cannot change its inputs. The named
+   * prerequisite must complete before another attempt can make progress.
+   */
+  unretryableInputs?: {
+    retryAfterStep: StepName;
+  };
   /** Provider routing identity and ordered candidate-attempt accounting. */
   preferredProvider?: string;
   actualProvider?: string;
@@ -1027,6 +1348,12 @@ export interface ConductorOptions {
    * but its wait controller won't be aborted by process-level SIGTERM.
    */
   registerAbortController?: (controller: AbortController) => void;
+  /**
+   * Process termination boundary for signal handling. Production exits the
+   * process; tests inject a recorder so signal-persistence behavior can run
+   * without terminating the Vitest worker.
+   */
+  exitProcess?: (code: number) => void;
 }
 
 /**
@@ -1078,6 +1405,36 @@ async function selectChangedArtifacts(
     }
   }
   return changed;
+}
+
+/**
+ * Render the operator-facing recovery for a terminal mechanical review fault.
+ * The aggregate is the current-lap authority for the rubric and closed cause;
+ * the ledger only supplies the shared allowance consumption.
+ */
+export function renderExhaustedMechanicalBuildReviewHalt(
+  entry: Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'>,
+  currentLap: unknown,
+): string {
+  const aggregate = parseBuildReviewAggregate(currentLap);
+  const failure = aggregate && Object.values(aggregate.results).find(
+    (result) => result.kind === 'infrastructure-failure',
+  );
+  const consumed = entry.mechanicalFaults ?? 0;
+  if (!aggregate || !failure || failure.kind !== 'infrastructure-failure') {
+    const lastMechanicalFault = entry.lastMechanicalFault;
+    return `build_review mechanical fault allowance exhausted: ${consumed} of ` +
+      `${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed; current-lap diagnostic is unavailable` +
+      (lastMechanicalFault === undefined ? '' :
+        `; Last recorded fault: ${lastMechanicalFault.rubric} closed cause ${lastMechanicalFault.reason} ` +
+        `on lap ${lastMechanicalFault.lapId} (${lastMechanicalFault.detail}).`);
+  }
+  return [
+    `build_review mechanical fault allowance exhausted: ${consumed} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed.`,
+    `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
+    `1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
+    '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
+  ].join('\n');
 }
 
 function hasCompletionContract(step: StepName, config: HarnessConfig): boolean {
@@ -1268,9 +1625,17 @@ export class Conductor {
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
-    haltClass: Parameters<typeof writeHaltMarker>[2],
+    haltClass: Parameters<typeof writeHaltMarker>[2] | KickbackCapHaltClass | OverScopeHaltClass,
   ) {
-    return writeHaltMarker(this.projectRoot, body, haltClass, this.events);
+    // `kickback-cap` is an operator-owned remediation halt. Older readers
+    // conservatively treat an unknown class as operator action, so introducing
+    // this narrower machine-readable reason does not make it re-kickable.
+    return writeHaltMarker(
+      this.projectRoot,
+      body,
+      haltClass as Parameters<typeof writeHaltMarker>[2],
+      this.events,
+    );
   }
 
   /** Emit through the existing spine while retaining the conductor's open execution state. */
@@ -1280,8 +1645,14 @@ export class Conductor {
       : event.type === 'parallel_started'
         ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
         : undefined;
+    // A refusal normally closes its own step execution. Validation-group
+    // members run inside their entry's parallel execution instead, so their
+    // refusal is deliverable (but non-terminal) while that enclosing window
+    // remains open.
     const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
       ? `step:${event.step}`
+      : event.type === 'step_refused'
+        ? (this.openExecutions.has(`step:${event.step}`) ? `step:${event.step}` : undefined)
       : event.type === 'parallel_completed'
         || (event.type === 'parallel_failure' && event.terminal !== false)
         ? `parallel:${event.step}`
@@ -1298,6 +1669,15 @@ export class Conductor {
       // still resolve. Its ordinary terminal is then an orphan: the ledger
       // listener cannot recover an interval after the shutdown terminal consumed it.
       if (!this.openExecutions.has(terminalKey)) return Promise.resolve();
+    }
+    if (event.type === 'step_refused' && !terminalKey) {
+      const group = getGroupForStep(event.step);
+      const hasOpenGroupExecution = group?.members.some((member) =>
+        this.openExecutions.has(`parallel:${member}`),
+      ) ?? false;
+      // A missing step key is valid only for a currently-running group member.
+      // Otherwise this is the same late orphan that SIGTERM must suppress.
+      if (!hasOpenGroupExecution) return Promise.resolve();
     }
     const deliver = async () => {
       this.activeExecutionEventDeliveries += 1;
@@ -1379,6 +1759,63 @@ export class Conductor {
       ? await this.surfaceRemediationPr(input.reason)
       : undefined;
     await this.emitLoopHalt(input.loopHaltReason ?? input.reason, prUrl);
+  }
+
+  /**
+   * Record a typed refusal without rewriting the step as a work failure. The
+   * caller has already written the authoritative HALT marker through the
+   * shared marker seam; this method owns only its state and spine effects.
+   */
+  private async recordStepRefusal(
+    state: ConductState,
+    step: StepName,
+    kind: 'seal' | 'needs-human' | 'validation-verdict',
+    reason: string,
+  ): Promise<void> {
+    await this.commitStateChanges(state, `record refused ${step} step`, {
+      [step]: 'refused',
+      last_step: step,
+    });
+    await this.emitExecutionEvent({ type: 'step_refused', step, kind, reason });
+  }
+
+  /**
+   * Terminal validation-group exit. The group opened `parallel:<entry>`, so a
+   * member refusal is delivered while that window remains open, then the group
+   * closes. Attribute the refusal to the member whose judgement ended the
+   * attempt.
+   * Attributing it to the fan-out entry step (whose own work decided nothing)
+   * both mis-states the halt and leaves the judging validator unrefused.
+   */
+  private async recordGroupRefusal(input: {
+    state: ConductState;
+    groupStep: StepName;
+    judgingStep: StepName;
+    /** Members whose attempt this halt ended; defaults to the judging step. */
+    refusedSteps?: readonly StepName[];
+    reason: string;
+  }): Promise<void> {
+    const refused = new Set<StepName>(input.refusedSteps ?? []);
+    refused.add(input.judgingStep);
+    const changes: Record<string, unknown> = { last_step: input.judgingStep };
+    for (const step of refused) changes[step] = 'refused';
+    await this.commitStateChanges(
+      input.state,
+      `record refused ${input.judgingStep} step`,
+      changes,
+    );
+    await this.emitExecutionEvent({
+      type: 'step_refused',
+      step: input.judgingStep,
+      kind: 'validation-verdict',
+      reason: input.reason,
+    });
+    await this.emitExecutionEvent({
+      type: 'parallel_failure',
+      step: input.groupStep,
+      branch: input.judgingStep,
+      error: input.reason,
+    });
   }
   private featureSlug?: string;
   private operatorParkBoundary?: () => Promise<boolean>;
@@ -1501,6 +1938,13 @@ export class Conductor {
   private currentAttemptStartedAt: number | undefined;
 
   /**
+   * Set when a recorded prd-audit finding could not be projected into the
+   * verdict artifact (D8). Consumed once by `routeCurrentPrdAudit`, which
+   * turns it into a named blocking route.
+   */
+  private prdAuditProjectionRefusal: string | undefined;
+
+  /**
    * Optional rate-limit episode coordinator (Task 10). When active, coordinates
    * deadline-aware backoff during rate-limit waits. May be undefined (graceful
    * fallback to bare sleep).
@@ -1512,6 +1956,8 @@ export class Conductor {
    * the daemon-level SIGTERM handler.
    */
   private registerAbortController: ((controller: AbortController) => void) | undefined;
+  /** Process termination boundary; defaults to Node's real process exit. */
+  private exitProcess: (code: number) => void;
 
   /**
    * Durable engine state for task evidence tracking (sidecar JSON).
@@ -1730,6 +2176,7 @@ export class Conductor {
       },
       projectRoot: this.projectRoot,
       planPath,
+      git: makeGitRunner(this.projectRoot),
       gh: this.gh,
       buildReviewEffectiveResolver: this.buildReviewEffectiveResolver,
       repairFinishPr,
@@ -1861,11 +2308,37 @@ export class Conductor {
   ): Promise<void> {
     const result = await this.stateStore.applyBatch(batch);
     if ('message' in result) throw new Error(result.message);
+    this.recordPersistedFields(batch.mutations);
   }
 
   private async applyStateMutation(mutation: StateMutation<ConductState>): Promise<void> {
     const result = await this.stateStore.apply(mutation);
     if ('message' in result) throw new Error(result.message);
+    this.recordPersistedFields([mutation]);
+  }
+
+  /**
+   * Advance the lost-update baseline over exactly the fields a store write just
+   * made durable.
+   *
+   * `persistPendingStateChanges` derives every mutation's `expected` from this
+   * snapshot, so a durable write that leaves the snapshot behind poisons the
+   * NEXT ordinary transition: it submits a stale `expected` for a field the
+   * conductor itself already persisted, the store reports a conflict, and the
+   * run halts on a phantom concurrent writer. (Observed as
+   * `Expected prd_audit to match before persist conductor transition` after the
+   * selector tail-skip batch marked a track-skipped gate mid-process.)
+   *
+   * Only the written fields are adopted — never a whole-state copy — so
+   * in-memory changes that have NOT been persisted still diff against their
+   * true baseline and genuine peer updates are still caught.
+   */
+  private recordPersistedFields(mutations: readonly StateMutation<ConductState>[]): void {
+    const snapshot = this.persistedStateSnapshot as Record<string, unknown> | undefined;
+    if (!snapshot) return;
+    for (const mutation of mutations) {
+      snapshot[mutation.field as string] = mutation.next;
+    }
   }
 
   /**
@@ -2149,6 +2622,7 @@ export class Conductor {
     this.shipmentEvidence = opts.shipmentEvidence;
     this.rateLimitEpisode = opts.rateLimitEpisode;
     this.registerAbortController = opts.registerAbortController;
+    this.exitProcess = opts.exitProcess ?? ((code) => process.exit(code));
   }
 
   private async surfaceProtectedArtifactRebaseline(
@@ -2585,6 +3059,115 @@ export class Conductor {
     return recordGateRepair(this.projectRoot, gate, { ...failure, observedAt: Date.now() });
   }
 
+  /** Read the current verdict and its authoritative story sections as one route decision. */
+  private async routeCurrentPrdAuditPlanGaps(state: ConductState): Promise<PrdAuditPlanGapRoute> {
+    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
+    if (!reportPath) return { kind: 'none' };
+
+    let reportText: string;
+    try {
+      reportText = await readFile(reportPath, 'utf8');
+    } catch {
+      return { kind: 'none' };
+    }
+    const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
+    const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
+    const route = routePrdAuditPlanGaps(reportText, storiesText, this.config);
+    if (route.kind === 'record') {
+      const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+      if (!projected.ok) this.prdAuditProjectionRefusal = projected.message;
+    }
+    return route;
+  }
+
+  /** Read OVER_SCOPE verdict rows after incorporating an operator-cleared halt acceptance. */
+  private async routeCurrentPrdAuditOverScope(): Promise<PrdAuditOverScopeRoute> {
+    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
+    if (!reportPath) return { kind: 'none' };
+    let reportText: string;
+    try {
+      reportText = await readFile(reportPath, 'utf8');
+    } catch {
+      return { kind: 'none' };
+    }
+    const relations = overScopeRelations(reportText);
+    const blockingCriteria = new Set([...relations].filter(([, relation]) => relation === 'outside-visible').map(([criterion]) => criterion));
+    const cleared = await readFile(join(this.projectRoot, '.pipeline', 'HALT.cleared'), 'utf8').catch(() => '');
+    const parsed = parseClearedOverScopeDecisions(cleared, blockingCriteria);
+    // D7: a defect the operator's edit produced must reach the next halt body,
+    // not only the spine. Emitting it and dropping it made the re-halt look
+    // identical to a halt where the operator had never touched the block.
+    let harvestDefects: Array<{ kind: string; criterion?: string; message?: string }> = [];
+    if (parsed.kind === 'parsed') {
+      let operator: string | undefined;
+      try {
+        const identity = await resolveDaemonOwner(await readMachineOwnerConfig(), this.gh, this.projectRoot);
+        operator = identity.resolved ? identity.id : undefined;
+      } catch { /* emitted as a defect below */ }
+      const result = operator ? await recordOverScopeDecisions(this.projectRoot, parsed.decisions.map((decision) => ({ ...decision, operator }))) : { recorded: [], failure: 'missing-operator' as const };
+      const defects = [...parsed.defects, ...(result.failure ? [{ kind: result.failure === 'missing-operator' ? 'missing-operator' as const : 'write-failed' as const }] : [])];
+      harvestDefects = defects;
+      if (parsed.decisions.length || defects.length) await this.events.emit({ type: 'over_scope_decision', criteria: [...blockingCriteria], decisions: result.recorded.map((decision) => ({ criterion: decision.criterion, decision: decision.decision })), defects });
+    }
+    const decisions = await readOverScopeDecisions(this.projectRoot);
+    const route = routePrdAuditOverScope(reportText, decisions.decisions);
+    // D8: recorded decisions project into the verdict artifact whichever way
+    // the route went. A halted route carries the same findings — including the
+    // refusal that caused the halt — and previously persisted none of them.
+    if (route.kind === 'record' || route.kind === 'halt') {
+      const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+      if (!projected.ok) {
+        // D8's projection refusal is an evidentiary defect on the same
+        // operator-facing over-scope route, never a generic side channel.
+        // A record route must become a halt so completion cannot pass while
+        // the decision is absent from the verdict artifact.
+        const defects = [...harvestDefects, { kind: 'unrenderable-decision', message: projected.message }];
+        if (route.kind === 'record') {
+          return {
+            kind: 'halt',
+            haltClass: OVER_SCOPE_HALT_CLASS,
+            detail: 'OVER_SCOPE recorded decision could not be rendered.',
+            findings: route.findings,
+            undecided: [],
+            refused: [],
+            defects,
+          };
+        }
+        return { ...route, defects };
+      }
+    }
+    return route.kind === 'halt' && harvestDefects.length > 0
+      ? { ...route, defects: harvestDefects }
+      : route;
+  }
+
+  /**
+   * Apply Task 24/25's PRD-audit exception routes once, for either the
+   * serial tail or the concurrent SHIP join. Route order deliberately
+   * mirrors the serial baseline: a blocking PLAN_GAP is surfaced before an
+   * OVER_SCOPE decision from the same report.
+   */
+  private async routeCurrentPrdAudit(state: ConductState): Promise<CurrentPrdAuditRoute> {
+    this.prdAuditProjectionRefusal = undefined;
+    const planGapRoute = await this.routeCurrentPrdAuditPlanGaps(state);
+    const overScopeRoute =
+      planGapRoute.kind === 'halt' ? undefined : await this.routeCurrentPrdAuditOverScope();
+
+    // D8 first: a decision that could not be projected blocks with its own
+    // named reason, whatever the content route would otherwise have done.
+    if (this.prdAuditProjectionRefusal) {
+      const reason = this.prdAuditProjectionRefusal;
+      this.prdAuditProjectionRefusal = undefined;
+      return { kind: 'projection-halt', reason };
+    }
+    if (planGapRoute.kind === 'halt') return { kind: 'plan-gap-halt', route: planGapRoute };
+    if (overScopeRoute?.kind === 'halt') return { kind: 'over-scope-halt', route: overScopeRoute };
+
+    return planGapRoute.kind === 'record' || overScopeRoute?.kind === 'record'
+      ? { kind: 'record' }
+      : { kind: 'none' };
+  }
+
   /**
    * Dispatch the /remediate planner over a blocking SHIP gate and translate its
    * structured plan into a loop decision. One planner serves every gate — only
@@ -2597,10 +3180,10 @@ export class Conductor {
     state: ConductState,
     steps: StepDefinition[],
     dispatchContext: string,
-    hintSource: { source: string; evidenceFile: string },
+    hintSource: RemediationHintSource,
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
-    | { kind: 'halt'; detail: string; kickbackOutcome?: string }
+    | { kind: 'halt'; detail: string; haltClass?: KickbackCapHaltClass | 'mechanical'; kickbackOutcome?: string }
     | { kind: 'none' }
   > {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
@@ -2660,16 +3243,129 @@ export class Conductor {
     // plan work, and appending it would amend `.docs/plans/<slug>.md` — a
     // protected artifact — producing self-amendment warnings for a change that
     // never belonged in the plan.
+    // All production callers supply the provenance array. Keep the private
+    // routing seam tolerant of legacy direct callers while the older fixture
+    // shape is still in use; absent provenance is simply not prd_audit work.
+    const remediationEvidenceSources = hintSource.evidence ?? [];
+    const prdAuditEvidenceFile = remediationEvidenceSources.find(
+      (provenance) => provenance.gate === 'prd_audit',
+    )?.evidenceFile;
+    const prdAuditRemediation = prdAuditEvidenceFile !== undefined;
+    const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
+    const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
+    let prdAuditValidated = false;
+    let activePlanText = '';
+    if (planPath && prdAuditRemediation) {
+      try {
+        activePlanText = await readFile(
+          isAbsolute(planPath) ? planPath : join(this.projectRoot, planPath),
+          'utf8',
+        );
+        const report = await readFile(join(this.projectRoot, prdAuditEvidenceFile), 'utf8');
+        const parsed = parsePrdAuditReport(report, activePlanText);
+        if (!parsed.ok) {
+          const detail = `PRD audit report mechanical fault: ${parsed.error}`;
+          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
+          return { kind: 'halt', haltClass: 'mechanical', detail };
+        }
+        const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
+        const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
+        const criterionOrdinalByStory = new Map<string, number>();
+        const criteria = new Set(extractAuthoritativeStoryCriteria(storiesText).flatMap((criterion) => {
+          const story = criterion.match(/^Story\s+(\d+)\s+/i)?.[1];
+          if (!story) return [];
+          const ordinal = (criterionOrdinalByStory.get(story) ?? 0) + 1;
+          criterionOrdinalByStory.set(story, ordinal);
+          return [`S${story}.${ordinal}`];
+        }));
+        const unresolvedCriteria = parsed.value.findings
+          .map((finding) => finding.criterion)
+          .filter((criterion) => !criteria.has(criterion));
+        if (criteria.size === 0 || unresolvedCriteria.length > 0) {
+          const detail = criteria.size === 0
+            ? 'PRD audit remediation cannot resolve the active story criteria.'
+            : `PRD audit report names criteria absent from the active stories: ${[...new Set(unresolvedCriteria)].join(', ')}.`;
+          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
+          return { kind: 'halt', haltClass: 'mechanical', detail };
+        }
+        for (const finding of parsed.value.findings) {
+          if (finding.grade === 'FIXABLE' && finding.planTask !== undefined) {
+            const boundFinding = {
+              criterion: finding.criterion,
+              parentTask: finding.planTask,
+            };
+            // Planner gap ids are FR-N by contract; reports are criterion
+            // keyed. Bind both identities so every report association remains
+            // available for the cap and append authorization.
+            prdAuditFindings.set(finding.criterion, boundFinding);
+            for (const frId of finding.prdIds) prdAuditFindings.set(frId, boundFinding);
+          }
+        }
+        prdAuditValidated = true;
+      } catch (error) {
+        const detail = `PRD audit report could not be read for remediation authorization: ${error instanceof Error ? error.message : String(error)}`;
+        await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
+        return { kind: 'halt', haltClass: 'mechanical', detail };
+      }
+    }
+
+    const appendGaps: CriterionBoundRemediationGap[] = [];
+    // This is the complete set a bounded remediation route may act on. A
+    // criterion-bound append is admitted by the validated PRD-audit finding;
+    // sealed-artifact redirects, publication, and halt dispositions require no
+    // plan growth, so they remain independently admissible.
+    const admittedGaps: RemediationGap[] = [];
     const allTasks: Array<{ id: string; title: string }> = [];
+    // A `.pipeline/prd-audit.md` path alone is not evidence of a current
+    // criterion verdict. Preserve ordinary remediation routing for stale or
+    // missing audit artifacts; only validated FIXABLE findings consume this
+    // gate's bounded append allowance.
+    const prdAuditCapEnforced = prdAuditRemediation && prdAuditValidated;
+    const prdAuditTasks: Array<{ id: string; title: string }> = [];
     for (const gap of gaps) {
+      if (
+        sealedArtifactGapIds.has(gap.id) ||
+        gap.disposition === REMEDIATION_PUBLICATION_DISPOSITION ||
+        gap.disposition === 'halt'
+      ) {
+        admittedGaps.push(gap);
+        continue;
+      }
       if (
         !sealedArtifactGapIds.has(gap.id) &&
         remediationDispositionAppendsToPlan(gap.disposition) &&
         gap.tasks &&
         gap.tasks.length > 0
       ) {
+        const finding = prdAuditFindings.get(gap.id.toUpperCase());
+        // A prd_audit repair may append only work owned by a parsed FIXABLE
+        // finding and its existing parent plan task.  The planner's FR-N id
+        // is associated above through the report's PRD: column.
+        if (prdAuditRemediation && (!finding || !prdAuditValidated)) continue;
+        const admittedGap = { ...gap, ...(finding === undefined ? {} : finding) };
+        appendGaps.push(admittedGap);
+        admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
+        if (finding !== undefined) prdAuditTasks.push(...gap.tasks);
       }
+    }
+
+    // The approved remediation contract gives prd_audit the sole authority
+    // to grow the sealed plan, and only after the current FIXABLE findings
+    // establish their parent-task and criterion bounds. Production callers
+    // identify their gate provenance structurally; older direct callers have
+    // no such provenance and retain their compatibility behavior. The
+    // canonical as-built source is likewise unadmitted even for direct calls.
+    const requiresPlanGrowthAllowance =
+      remediationEvidenceSources.length > 0 || hintSource.source === 'architecture-review-as-built';
+    if (allTasks.length > 0 && requiresPlanGrowthAllowance && !prdAuditCapEnforced) {
+      return {
+        kind: 'halt',
+        haltClass: KICKBACK_CAP_HALT_CLASS,
+        detail:
+          `${hintSource.source} remediation requested ${allTasks.length} plan task${allTasks.length === 1 ? '' : 's'} ` +
+          'with no plan-growth allowance; only validated prd_audit FIXABLE findings may append remediation work.',
+      };
     }
 
     // Tracks whether the append attempt (when one was needed) actually ran
@@ -2683,11 +3379,81 @@ export class Conductor {
     let appendAttempted = allTasks.length === 0;
 
     if (allTasks.length > 0) {
+      let priorPrdAuditLaps = 0;
+      let prdAuditGrowth: Awaited<ReturnType<typeof readGrowth>> | undefined;
+      let prdAuditGrowthCap = 0;
+      const criterionBoundGaps = appendGaps.filter(
+        (gap) => gap.criterion !== undefined && gap.parentTask !== undefined,
+      );
+      if (prdAuditCapEnforced) {
+        const ledger = await readKickbackLedger(this.projectRoot);
+        priorPrdAuditLaps = (
+          ledger.gates.prd_audit as (KickbackGateEntry & { laps?: number }) | undefined
+        )?.laps ?? 0;
+        prdAuditGrowthCap = prdAuditAppendCap(
+          this.config,
+          activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0,
+        );
+        prdAuditGrowth = await readGrowth(this.projectRoot, prdAuditGrowthCap);
+        const findings = [...new Set([...prdAuditFindings.values()].map((finding) => finding.criterion))];
+        const findingList = findings.length > 0 ? findings.join(', ') : 'unattributed FIXABLE findings';
+        if (
+          priorPrdAuditLaps >= prdAuditLapCap ||
+          prdAuditTasks.length > prdAuditGrowth.remaining
+        ) {
+          const capReason = priorPrdAuditLaps >= prdAuditLapCap
+            ? `lap cap reached (${priorPrdAuditLaps}/${prdAuditLapCap})`
+            :
+              `growth cap reached (${prdAuditGrowth.added}/${prdAuditGrowthCap} appended; ` +
+              `${prdAuditTasks.length} requested, ${prdAuditGrowth.remaining} remaining)`;
+          return {
+            kind: 'halt',
+            haltClass: KICKBACK_CAP_HALT_CLASS,
+            detail: `prd_audit remediation ${capReason} before appending fix tasks. Findings: ${findingList}.`,
+          };
+        }
+      }
       // Append remediation tasks to the plan
       if (planPath) {
-        const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks);
+        const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
+          ...(prdAuditRemediation ? { criterionBoundGaps, gateSource: 'prd-audit' } : {}),
+        });
         if (appendResult.success) {
           appendAttempted = true;
+          if (prdAuditCapEnforced) {
+            const ledger = await readKickbackLedger(this.projectRoot);
+            const existing = ledger.gates.prd_audit;
+            const next: KickbackGateEntry & { laps: number } = {
+              ...(existing ?? {
+                count: 0,
+                cumulative: 0,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: true,
+                resolvedBefore: 0,
+              }),
+              laps: priorPrdAuditLaps + (prdAuditTasks.length > 0 ? 1 : 0),
+            };
+            await writeKickbackLedger(this.projectRoot, {
+              ...ledger,
+              gates: { ...ledger.gates, prd_audit: next },
+            });
+            if (prdAuditGrowth) {
+              const priorGateGrowth = prdAuditGrowth.byGate.prd_audit ?? 0;
+              await recordGrowth(
+                this.projectRoot,
+                {
+                  authored: prdAuditGrowth.authored,
+                  added: prdAuditGrowth.added + prdAuditTasks.length,
+                  byGate: {
+                    ...prdAuditGrowth.byGate,
+                    prd_audit: priorGateGrowth + prdAuditTasks.length,
+                  },
+                },
+                { cap: prdAuditGrowthCap, events: this.events },
+              );
+            }
+          }
           // Record the appended ids so the build completion predicate can
           // reject a later removal of their headings from the plan.
           try {
@@ -2765,8 +3531,31 @@ export class Conductor {
         detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; '),
       };
     }
-    if (fixes.length > 0) {
-      const { target, unresolved } = earliestRemediationTarget(fixes, steps);
+    const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
+    // Build-stall answers are not requests to expand the approved plan. Only
+    // the two established sources, carrying their matching build provenance,
+    // retain their raw retry hint.
+    const buildStallEvidenceFile = hintSource.source === 'build_stall'
+      ? '.pipeline/build-stall-question.md'
+      : hintSource.source === 'build-stall'
+        ? '.pipeline/halt-user-input-required'
+        : undefined;
+    const buildStallSource = buildStallEvidenceFile !== undefined && remediationEvidenceSources.some(
+      (provenance) =>
+        provenance.gate === 'build' && provenance.evidenceFile === buildStallEvidenceFile,
+    );
+    const routedFixes = buildStallSource ? fixes : admittedFixes;
+    if (fixes.length > 0 && routedFixes.length === 0) {
+      return {
+        kind: 'halt',
+        haltClass: KICKBACK_CAP_HALT_CLASS,
+        detail:
+          `${hintSource.source} remediation requested no admitted remediation gap; ` +
+          'only criterion-bound appends and non-appending publication or halt gaps may route.',
+      };
+    }
+    if (routedFixes.length > 0) {
+      const { target, unresolved } = earliestRemediationTarget(routedFixes, steps);
       if (unresolved.length > 0) {
         return {
           kind: 'halt',
@@ -2807,7 +3596,7 @@ export class Conductor {
           satisfied = 'unknown';
         }
       }
-      const remediationEvidence = fixes.map((g) => `${g.id}→${g.disposition}`).join('; ');
+      const remediationEvidence = routedFixes.map((g) => `${g.id}→${g.disposition}`).join('; ');
       const disposition = await this.resolveDecideEntryDisposition({
         target,
         steps,
@@ -2855,7 +3644,7 @@ export class Conductor {
           return {
             kind: 'halt',
             detail:
-              fixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
+              routedFixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
               ' — remediation produced no dispatchable build work; the implicated task(s) ' +
               'are already evidence-complete — human needed',
             // #647 D3: this HALT is specifically the D1 no-op guard (target
@@ -2868,7 +3657,11 @@ export class Conductor {
       return {
         kind: 'route',
         target,
-        hint: buildRemediationHint(fixes, hintSource.source, hintSource.evidenceFile),
+        hint: buildRemediationHint(
+          routedFixes,
+          hintSource.source,
+          remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
+        ),
         evidence: remediationEvidence,
       };
     }
@@ -3915,6 +4708,40 @@ export class Conductor {
         // Fall through to the candidate startIndex derived from state alone.
       }
 
+      // A satisfied gate verdict is not sufficient to skip a tree-attesting
+      // gate on resume: its completion predicate is the authority for the
+      // current tree. Re-check only verdict-satisfied gates before the
+      // candidate entry so a stale proof cannot let resume begin downstream.
+      // Do not inspect a terminal no-op resume; there is no downstream entry
+      // to protect in that case.
+      if (resumeClamp && this.verifyArtifacts && startIndex < steps.length) {
+        for (let i = 0; i < startIndex; i++) {
+          const step = steps[i];
+          if (
+            state[step.name] !== 'done' ||
+            !step.treeAttestingCompletion ||
+            resumeClamp.verdicts[step.name]?.satisfied !== true
+          ) continue;
+
+          try {
+            const completion = await checkStepCompletion(
+              this.projectRoot,
+              step.name,
+              await this.completionCtx(state),
+            );
+            if (!completion.done) {
+              startIndex = i;
+              break;
+            }
+          } catch {
+            // An indeterminate tree-attesting predicate must be refreshed,
+            // rather than allowing a downstream gate to consume stale proof.
+            startIndex = i;
+            break;
+          }
+        }
+      }
+
       // Clamp backward (min) only — never move startIndex forward.
       // If earliestGateIdx is valid and precedes the candidate, use it.
       // The clamp on the local startIndex is the ONLY resume-entry mechanism
@@ -3998,7 +4825,7 @@ export class Conductor {
         SIGTERM: 143,  // 128 + 15
         SIGHUP: 129,   // 128 + 1
       };
-      process.exit(exitCodes[signal] ?? 1);
+      this.exitProcess(exitCodes[signal] ?? 1);
     };
     const sigintHandler = () => signalHandlerBase('SIGINT');
     const sighupHandler = () => signalHandlerBase('SIGHUP');
@@ -4025,7 +4852,7 @@ export class Conductor {
       }
       await this.closeOpenExecutions();
       await this.persistSignalCompletionsBestEffort(state, 'SIGTERM', inFlightGroupCompletions);
-      process.exit(1);
+      this.exitProcess(1);
     };
     if (!this.daemon) {
       process.on('SIGTERM', sigterm);
@@ -4060,6 +4887,10 @@ export class Conductor {
     // prd-audit back to a target step. Bounded like prdAuditSelfHeals so a gap the
     // planner can't actually close still halts for a human.
     let remediationRounds = 0;
+    // PRD-audit is deliberately not coupled to the generic remediation
+    // counter. Its configured one-lap default is the sole allowance for a
+    // criterion-bound repair; other gates retain MAX_KICKBACKS_PER_GATE.
+    const prdAuditRemediationLapCap = remediationLapCapForGate('prd_audit', this.config);
     // Daemon-only (#367): how many times a manual_test FAIL has routed back to
     // BUILD. Bounded like prdAuditSelfHeals so a bug BUILD can't actually fix
     // eventually halts for a human instead of ping-ponging.
@@ -4349,9 +5180,35 @@ export class Conductor {
         const alreadyResolved = currentStatus === 'done' || currentStatus === 'skipped';
         const explicitlyTargeted = this.fromStep === step.name;
         if (alreadyResolved && !explicitlyTargeted) {
-          // No event — the step simply isn't re-dispatched. Dashboard renders
-          // the persisted status verbatim.
-          continue;
+          // A declared tree-attesting predicate is the authority for a
+          // persisted `done` status only when artifact verification is on.
+          // `skipped` remains an explicit scheduling decision, not evidence
+          // to re-evaluate. A stale or indeterminate predicate must fall
+          // through so the normal dispatch path can refresh it.
+          if (
+            currentStatus === 'done' &&
+            this.verifyArtifacts &&
+            step.treeAttestingCompletion
+          ) {
+            try {
+              const completion = await checkStepCompletion(
+                this.projectRoot,
+                step.name,
+                await this.completionCtx(state),
+              );
+              if (!completion.done) {
+                // Continue into the ordinary scheduling and dispatch path.
+              } else {
+                continue;
+              }
+            } catch {
+              // On doubt, dispatch rather than silently skipping a stale gate.
+            }
+          } else {
+            // No event — the step simply isn't re-dispatched. Dashboard renders
+            // the persisted status verbatim.
+            continue;
+          }
         }
 
         // Read complexity tier from state each iteration (may change after complexity step)
@@ -4527,8 +5384,9 @@ export class Conductor {
 
         // Check if step is disabled via config
         if (resolved.disabled) {
-          await this.recordStepSkip(state, step, 'disabled in config');
-          await emitTracked({ type: 'config_skip', step: step.name });
+          const configSetting = `steps.${step.name}.disable: true`;
+          await this.recordStepSkip(state, step, `disabled in config (${configSetting})`);
+          await emitTracked({ type: 'config_skip', step: step.name, reason: configSetting });
           continue;
         }
 
@@ -5191,6 +6049,32 @@ export class Conductor {
               ? await readManualTestFailRows(this.projectRoot)
               : [];
 
+            // Tasks 24/25: the serial SHIP tail treats recorded negative-path
+            // PLAN_GAP and harmless/within-intent OVER_SCOPE findings as an
+            // explicit pass, and routes their halt variants directly. Apply
+            // that exact same route result before this join decides whether
+            // prd_audit is a failed sibling. The objective verdict remains
+            // the evidence baseline on disk; only this round's join receives
+            // the serial route's accepted-risk override.
+            let prdAuditRoute: CurrentPrdAuditRoute | undefined;
+            const prdAuditIdx = membership.dispatchable.findIndex(
+              (member) => member.name === 'prd_audit',
+            );
+            const prdAuditOutcome = prdAuditIdx === -1 ? undefined : outcomes[prdAuditIdx];
+            if (
+              this.verifyArtifacts &&
+              prdAuditOutcome?.kind === 'verdict' &&
+              prdAuditOutcome.verdict === 'pass'
+            ) {
+              prdAuditRoute = await this.routeCurrentPrdAudit(state);
+              if (prdAuditRoute.kind === 'record') {
+                const verdict = gateVerdicts.get('prd_audit');
+                if (verdict) {
+                  gateVerdicts.set('prd_audit', { ...verdict, satisfied: true, reason: undefined });
+                }
+              }
+            }
+
             const allGreen = outcomes.every((outcome, idx) => {
               if (outcome.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
               if (!this.verifyArtifacts) return true;
@@ -5219,6 +6103,11 @@ export class Conductor {
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+              // Story 3, negative path: a no-verdict outcome is the validator's
+              // own runner dying (thrown branch, terminal error, or exhausted
+              // retry budget) — a work failure, not a judgement awaiting a
+              // human. It keeps `failed` so the refusal lane can never mask a
+              // broken validator.
               await this.commitStateChanges(state, `fail ${step.name} validation group`, {
                 [step.name]: 'failed',
                 last_step: step.name,
@@ -5237,6 +6126,44 @@ export class Conductor {
               if (!this.daemon) {
                 process.off('SIGTERM', sigterm);
               }
+              return;
+            }
+
+            if (prdAuditRoute?.kind === 'projection-halt') {
+              const reason =
+                `prd-audit halted: a recorded finding could not be projected into the verdict ` +
+                `artifact — ${prdAuditRoute.reason}`;
+              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+
+            if (prdAuditRoute?.kind === 'plan-gap-halt') {
+              const reason = `prd-audit halted: needs human DECIDE — ${prdAuditRoute.route.detail}`;
+              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+
+            if (prdAuditRoute?.kind === 'over-scope-halt') {
+              const reason =
+                `prd-audit halted: user-visible scope requires operator acceptance — ` +
+                `${prdAuditRoute.route.detail}` +
+                `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused, prdAuditRoute.route.defects ?? [])}`;
+              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
 
@@ -5266,6 +6193,81 @@ export class Conductor {
                 return postJoinPark;
               }
               continue;
+            }
+
+            // The as-built review owns architecture/plan-limit judgement. It
+            // never re-opens BUILD: a BLOCKED report halts directly, while an
+            // undelivered PLAN_GAP is a classified plan-gap halt. If prd_audit
+            // independently found a FIXABLE issue in this same validation
+            // round, let its planner append that authorized task first, but
+            // deliberately ignore the planner's route — the as-built halt is
+            // still terminal for this run.
+            const asBuiltMember = membership.dispatchable.find(
+              (member) => member.name === 'architecture_review_as_built',
+            );
+            const asBuiltUnsatisfied =
+              asBuiltMember !== undefined &&
+              this.verifyArtifacts &&
+              gateVerdicts.get('architecture_review_as_built')?.satisfied !== true;
+            if (asBuiltUnsatisfied) {
+              const prdAuditUnsatisfied = membership.dispatchable.some((member, idx) =>
+                member.name === 'prd_audit' &&
+                outcomes[idx]?.kind === 'verdict' &&
+                outcomes[idx]?.verdict === 'pass' &&
+                gateVerdicts.get('prd_audit')?.satisfied !== true,
+              );
+              if (this.daemon && prdAuditUnsatisfied && remediationRounds < prdAuditRemediationLapCap) {
+                remediationRounds++;
+                await this.planRemediation(
+                  state,
+                  steps,
+                  'Blocking validation-group gaps at .pipeline/prd-audit.md and ' +
+                    '.pipeline/architecture-review-as-built.md. Plan remediation per the ' +
+                    '/remediate skill and write .pipeline/remediation.json.',
+                  {
+                    source: 'validation-group',
+                    evidence: [
+                      { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
+                      {
+                        gate: 'architecture_review_as_built',
+                        evidenceFile: '.pipeline/architecture-review-as-built.md',
+                      },
+                    ],
+                  },
+                );
+              }
+              const asBuiltFiles = await findArtifactFilesForStep(
+                this.projectRoot,
+                'architecture_review_as_built',
+              );
+              const asBuiltOutcome = asBuiltFiles[0]
+                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
+                : { kind: 'invalid' as const };
+              const asBuiltReason = gateVerdicts.get('architecture_review_as_built')?.reason ??
+                'as-built architecture review gate unsatisfied';
+              const reason = `Validation group "${step.name}" halted: ${asBuiltReason}`;
+              await this.writeHaltMarker(
+                reason + '\n',
+                asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
+              );
+              await this.recordGroupRefusal({
+                state,
+                groupStep: step.name,
+                judgingStep: 'architecture_review_as_built',
+                // Siblings that missed their own gate are ended by this halt
+                // too; leaving them unstamped understated the group's exit.
+                refusedSteps: membership.dispatchable
+                  .filter((member, idx) =>
+                    outcomes[idx]?.kind !== 'verdict' ||
+                    outcomes[idx]?.verdict !== 'pass' ||
+                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
+                  .map((member) => member.name as StepName),
+                reason,
+              });
+              await this.emitLoopHalt(reason);
+              process.off('SIGINT', sigintHandler);
+              if (!this.daemon) process.off('SIGTERM', sigterm);
+              return;
             }
 
             // Task 20 (adr-2026-07-10-validation-group-join.md): MT-only
@@ -5343,22 +6345,25 @@ export class Conductor {
               // budget runs out).
               if (gapMemberNamesForMerge.length > 0 && remediationRounds < MAX_KICKBACKS_PER_GATE) {
                 mtMergeHandled = true;
-                const evidenceFiles: string[] = [];
+                const evidence: RemediationGateProvenance[] = [];
                 if (gapMemberNamesForMerge.includes('prd_audit' as StepName)) {
-                  evidenceFiles.push('.pipeline/prd-audit.md');
+                  evidence.push({ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' });
                 }
                 if (gapMemberNamesForMerge.includes('architecture_review_as_built' as StepName)) {
-                  evidenceFiles.push('.pipeline/architecture-review-as-built.md');
+                  evidence.push({
+                    gate: 'architecture_review_as_built',
+                    evidenceFile: '.pipeline/architecture-review-as-built.md',
+                  });
                 }
                 const dispatchContext =
-                  `Blocking validation-group gaps at ${evidenceFiles.join(' and ')}. ` +
+                  `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
                   '.pipeline/remediation.json.';
 
                 remediationRounds++;
                 const remediationOutcome = await this.planRemediation(state, steps, dispatchContext, {
                   source: 'validation-group',
-                  evidenceFile: evidenceFiles.join(', '),
+                  evidence,
                 });
 
                 if (remediationOutcome.kind === 'route') {
@@ -5414,7 +6419,7 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
@@ -5497,22 +6502,25 @@ export class Conductor {
                     return;
                   }
                 }
-                const evidenceFiles: string[] = [];
+                const evidence: RemediationGateProvenance[] = [];
                 if (gapMemberNames.includes('prd_audit' as StepName)) {
-                  evidenceFiles.push('.pipeline/prd-audit.md');
+                  evidence.push({ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' });
                 }
                 if (gapMemberNames.includes('architecture_review_as_built' as StepName)) {
-                  evidenceFiles.push('.pipeline/architecture-review-as-built.md');
+                  evidence.push({
+                    gate: 'architecture_review_as_built',
+                    evidenceFile: '.pipeline/architecture-review-as-built.md',
+                  });
                 }
                 const dispatchContext =
-                  `Blocking validation-group gaps at ${evidenceFiles.join(' and ')}. ` +
+                  `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
                   '.pipeline/remediation.json.';
 
                 remediationRounds++;
                 const remediationOutcome = await this.planRemediation(state, steps, dispatchContext, {
                   source: 'validation-group',
-                  evidenceFile: evidenceFiles.join(', '),
+                  evidence,
                 });
 
                 if (remediationOutcome.kind === 'route') {
@@ -5555,7 +6563,7 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
@@ -5577,7 +6585,7 @@ export class Conductor {
             // DONE or HALT" and park). Preserves the #367 guarantee the
             // serial walk gave these same steps: a manual_test FAIL or a
             // no-evidence gate miss HALTs — it is never silently dropped.
-            const failedMemberReasons = membership.dispatchable
+            const failedMembers = membership.dispatchable
               .filter((member, idx) => {
                 const outcome = outcomes[idx];
                 if (outcome?.kind !== 'verdict' || outcome.verdict !== 'pass') return true;
@@ -5585,7 +6593,8 @@ export class Conductor {
                 if (!gateVerdicts.get(member.name)?.satisfied) return true;
                 if (member.name === 'manual_test' && manualTestFailRows.length > 0) return true;
                 return false;
-              })
+              });
+            const failedMemberReasons = failedMembers
               .map((member) => {
                 if (member.name === 'manual_test' && manualTestFailRows.length > 0) {
                   return `step 'manual_test' failed: FAIL rows in .pipeline/manual-test-results.md`;
@@ -5607,21 +6616,18 @@ export class Conductor {
                   (failedMemberReasons.length > 0
                     ? failedMemberReasons.join('; ')
                     : 'non-green branch outcome');
-            await this.commitStateChanges(state, `fail ${step.name} validation group`, {
-              [step.name]: 'failed',
-              last_step: step.name,
-            });
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
               await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human');
             }
-            await emitTracked({
-              type: 'step_failed',
-              step: step.name,
-              // Carry the per-member gate reasons (e.g. the manual_test
-              // whitewash-guard refusal), not just a generic label — the
-              // serial walk's step_failed carried the gate reason too.
-              error: groupHaltReason,
-              retryCount: 0,
+            // Attribute the refusal to the first member that actually failed
+            // its own gate; with none identified the group entry is the only
+            // honest subject left.
+            await this.recordGroupRefusal({
+              state,
+              groupStep: step.name,
+              judgingStep: (failedMembers[0]?.name as StepName | undefined) ?? step.name,
+              refusedSteps: failedMembers.map((member) => member.name as StepName),
+              reason: groupHaltReason,
             });
             await this.emitLoopHalt(groupHaltReason);
             process.off('SIGINT', sigintHandler);
@@ -5643,6 +6649,25 @@ export class Conductor {
         const gate = checkGate(step, state);
         if (!gate.passed) {
           await emitTracked({ type: 'gate_blocked', step: step.name, reason: gate.reason });
+          // A pending predecessor remains runnable in the ordinary forward
+          // walk, so preserve the existing generic daemon backstop for that
+          // selected-entry shape. Only the residual state — every direct
+          // prerequisite is already non-runnable — needs an immediate,
+          // actionable HALT naming the durable blocker.
+          const noRunnablePrerequisite = gate.unsatisfied.every(
+            (prerequisite) => getStepStatus(state, prerequisite) !== 'pending',
+          );
+          if (this.daemon && noRunnablePrerequisite) {
+            const prerequisites = gate.unsatisfied.map(
+              (prerequisite) => `${prerequisite} (${getStepStatus(state, prerequisite)})`,
+            );
+            const haltReason =
+              `Step '${step.name}' is blocked by unsatisfied prerequisite${prerequisites.length === 1 ? '' : 's'}: ` +
+              prerequisites.join(', ') +
+              '. Operator action is required before this run can continue.';
+            await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+            await this.emitLoopHalt(haltReason);
+          }
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
           return;
@@ -5851,6 +6876,10 @@ export class Conductor {
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
         let unchangedInputNote: string | undefined;
+        // A typed runner failure whose inputs cannot change on re-dispatch.
+        // Kept separately from human-facing output so the terminal HALT is
+        // composed from the classified recovery contract, not message text.
+        let unretryableInputFailure: { failingStep: StepName; retryAfterStep: StepName } | undefined;
         // An incompatible build-review verdict is a stable schema failure,
         // not an exhausted-work retry. Keep its validator diagnostic for the
         // terminal HALT instead of replacing it with the generic fallback.
@@ -6135,7 +7164,11 @@ export class Conductor {
             buildWatcher?.stop();
             closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
-            result = { success: false, output: dispatchIssue };
+            result = {
+              success: false,
+              output: dispatchIssue,
+              refusal: { kind: 'seal', reason: dispatchIssue },
+            };
             // Write the HALT marker directly rather than relying solely on
             // the generic "retries exhausted" flow below. Gated on `attempt
             // >= 2` — the SAME literal threshold the pre-existing stall
@@ -6660,6 +7693,56 @@ export class Conductor {
 
           if (!result.success) {
             failedStepResult = result;
+            // Task 10: the mechanical lane publishes a terminal aggregate
+            // only after consuming its separate allowance. That aggregate is
+            // the operator's diagnostic, not a retryable grader-dispatch
+            // failure, so stop here instead of entering the generic retry
+            // loop below.
+            if (step.name === 'build_review') {
+              const ledger = await readKickbackLedger(this.projectRoot);
+              const mechanicalEntry = ledger.gates.build_review;
+              const aggregateRaw = await readFile(
+                join(this.projectRoot, BUILD_REVIEW_VERDICT),
+                'utf-8',
+              ).then((content) => {
+                try {
+                  return JSON.parse(content) as unknown;
+                } catch {
+                  return undefined;
+                }
+              }).catch(() => undefined);
+              if (
+                result.currentLapMechanicalFault === true &&
+                (mechanicalEntry?.mechanicalFaults ?? 0) >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW &&
+                aggregateRaw !== undefined
+              ) {
+                const reason = renderExhaustedMechanicalBuildReviewHalt(
+                  mechanicalEntry ?? { mechanicalFaults: 0 },
+                  aggregateRaw,
+                );
+                const aggregate = parseBuildReviewAggregate(aggregateRaw);
+                const failure = aggregate && Object.values(aggregate.results).find(
+                  (result) => result.kind === 'infrastructure-failure',
+                );
+                if (failure) {
+                  await this.events.emit({
+                    type: 'build_review_mechanical_allowance_exhausted',
+                    lapId: aggregate.lapId,
+                    rubric: failure.rubric,
+                    reason: failure.reason,
+                    consumed: mechanicalEntry!.mechanicalFaults ?? 0,
+                    allowance: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+                  });
+                }
+                state[step.name] = 'failed';
+                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await this.emitLoopHalt(reason);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+            }
             // #814: an EMPTY/whitespace runner output slips past `??` (which
             // only substitutes null/undefined), so `lastError` used to become
             // '' and render as "no reason recorded" — masking a grader/subprocess
@@ -6684,6 +7767,46 @@ export class Conductor {
             // so we back off between re-dispatches below.
             if (result.graderDispatchFailed) {
               graderDispatchFailureReason = `step '${step.name}' grader could not be dispatched: ${lastError}`;
+            }
+
+            // A runner can classify its own inputs as unretryable before it
+            // ever reaches a completion predicate. Route that typed failure
+            // on attempt one rather than spending the ordinary retry budget.
+            // Keep `build` outside this classifier: its progress accounting
+            // owns its retry policy.
+            const retryRoutingEnabled =
+              this.config.retry_routing?.enabled ?? RETRY_ROUTING_DEFAULTS.enabled;
+            const isVerdictStep =
+              step.name === 'architecture_review_as_built' ||
+              step.name === 'prd_audit' ||
+              step.name === 'build_review';
+            if (
+              this.daemon &&
+              retryRoutingEnabled &&
+              isVerdictStep &&
+              result.unretryableInputs !== undefined
+            ) {
+              const retryDecision = classifyRetryDecision({
+                step: step.name,
+                completion: { done: false },
+                attempt,
+                inputsUnchanged: false,
+                unretryableInputs: result.unretryableInputs,
+              });
+              await emitTracked({
+                type: 'retry_decision',
+                step: step.name,
+                attempt,
+                decision: retryDecision.decision,
+                ...(retryDecision.decision === 'route' ? { signal: retryDecision.signal } : {}),
+              });
+              if (retryDecision.decision === 'route') {
+                unretryableInputFailure = {
+                  failingStep: step.name,
+                  retryAfterStep: result.unretryableInputs.retryAfterStep,
+                };
+                break;
+              }
             }
 
             // Preflight opt-out halt (TR-16): if a HALT marker was written by the
@@ -6717,12 +7840,29 @@ export class Conductor {
                 haltBeforeAttempt,
               );
               if (stepWrittenHalt) {
-                state[step.name] = 'failed';
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
                 await this.emitLoopHalt(stepWrittenHalt);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
+              }
+            }
+
+            // A build-review infrastructure fault owns a separate retry
+            // allowance from ordinary step retries.  Let that lane consume
+            // its bounded ledger allowance even when this conductor was
+            // configured with fewer generic retries; its final attempt
+            // materializes the aggregate needed for the operator recovery.
+            if (step.name === 'build_review') {
+              const mechanicalFaults = (await readKickbackLedger(this.projectRoot))
+                .gates.build_review?.mechanicalFaults ?? 0;
+              if (
+                result.currentLapMechanicalFault === true &&
+                mechanicalFaults > 0 &&
+                mechanicalFaults < MAX_MECHANICAL_FAULTS_BUILD_REVIEW
+              ) {
+                attempt--;
+                continue;
               }
             }
 
@@ -6799,11 +7939,63 @@ export class Conductor {
                 ...completion.verdictFreshness,
               });
             }
+            if (step.name === 'build_review' && completion.staleLap) {
+              await emitTracked({
+                type: 'build_review_stale_aggregate',
+                ...completion.staleLap,
+              });
+            }
             // Consumed for this attempt's completion check above — clear so
             // it never leaks into a later completionCtx() call (heal/park
             // re-checks below, the next step, or an idle/backstop caller)
             // as a stale "in-flight attempt" timestamp.
             this.currentAttemptStartedAt = undefined;
+
+            if (step.name === 'prd_audit') {
+              const prdAuditRoute = await this.routeCurrentPrdAudit(state);
+              if (prdAuditRoute.kind === 'projection-halt') {
+                const reason =
+                  `prd-audit halted: a recorded finding could not be projected into the verdict ` +
+                  `artifact — ${prdAuditRoute.reason}`;
+                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              if (prdAuditRoute.kind === 'plan-gap-halt') {
+                const reason = `prd-audit halted: needs human DECIDE — ${prdAuditRoute.route.detail}`;
+                await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              if (prdAuditRoute.kind === 'over-scope-halt') {
+                const reason =
+                  `prd-audit halted: user-visible scope requires operator acceptance — ` +
+                  `${prdAuditRoute.route.detail}` +
+                  `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused, prdAuditRoute.route.defects ?? [])}`;
+                await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              if (prdAuditRoute.kind === 'record') {
+                // Recorded negative-path PLAN_GAP and harmless/within-intent
+                // OVER_SCOPE findings are explicit accepted risk, not repair
+                // requests. Preserve fresh-verdict metadata while allowing
+                // the SHIP tail to settle this gate as satisfied.
+                completion = { ...completion, done: true, reason: undefined, missing: undefined };
+              }
+            }
 
             // Auto-heal hook removed (feature #773, Task 11). It used to
             // reconcile .pipeline/task-status.json against git-trailer
@@ -7191,6 +8383,18 @@ export class Conductor {
                   const isZeroWorkStall = stalled === 'no_task_progress';
 
                   await clearHaltMarker(this.projectRoot);
+                  // adr-2026-08-23-committed-halt-record §7 supersedes the
+                  // committed record at EVERY halt-clear seam, not only the
+                  // daemon's (daemon-deps.ts:338). A record left saying
+                  // `Status: halted` for a feature that has since resumed is
+                  // worse than no record — an operator acts on it. Best-effort
+                  // and swallowed, matching appendHaltClearedRecord: a record
+                  // failure must never throw into the stall path.
+                  try {
+                    await supersedeHaltRecord(this.projectRoot, basename(this.projectRoot), 'operator');
+                  } catch {
+                    /* best-effort halt-record supersession */
+                  }
                   await emitTracked({
                     type: 'halt_cleared',
                     step: step.name,
@@ -7240,7 +8444,7 @@ export class Conductor {
                         `Remediate build stall: ${effectiveQuestion}`,
                         {
                           source: isZeroWorkStall ? 'build_stall_zero_work' : 'build_stall',
-                          evidenceFile: '.pipeline/build-stall-question.md',
+                          evidence: [{ gate: 'build', evidenceFile: '.pipeline/build-stall-question.md' }],
                         },
                       );
                     } catch (err) {
@@ -7421,8 +8625,7 @@ export class Conductor {
                   haltBeforeAttempt,
                 );
                 if (stepWrittenHalt) {
-                  state[step.name] = 'failed';
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
                   await this.emitLoopHalt(stepWrittenHalt);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
@@ -7555,6 +8758,18 @@ export class Conductor {
         }
 
         if (!succeeded) {
+          if (failedStepResult?.refusal) {
+            const { kind, reason } = failedStepResult.refusal;
+            await this.writeHaltMarker(
+              reason + '\n',
+              kind === 'seal' ? PROTECTED_ARTIFACT_HALT_CLASS : 'needs-human',
+            );
+            await this.recordStepRefusal(state, step.name, kind, reason);
+            await this.emitLoopHalt(reason);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
           // Exhausted retries — route through the recovery menu.
           await this.saveConductorStepStatus(state, step.name, 'failed');
           if (step.name === 'build') {
@@ -7868,54 +9083,14 @@ export class Conductor {
                   const pointerLines = await this.buildReviewPointerLines(verdictRaw);
                   const pointerContext = pointerLines.length > 0 ? `\n${pointerLines.join('\n')}` : '';
 
-                  // #989: a build_review FAIL resolves a structured routing
-                  // decision instead of assuming `build`. A completeness
-                  // failure implicates the PLAN (the diff does not cover what
-                  // the plan describes), so it dispatches the existing
-                  // remediation planner, which chooses the target step per gap
-                  // — or HALTs for a human. Every other rubric item is a local
-                  // diff defect and keeps kicking straight back to `build`.
-                  // Kickback counting semantics are deliberately unchanged
-                  // (that is #984's territory).
-                  let reworkTarget: StepName = 'build';
-                  let reworkHint =
+                  // Test-quality FAILs are local diff defects and re-enter BUILD.
+                  // Kickback counting semantics are deliberately unchanged.
+                  const reworkTarget: StepName = 'build';
+                  const reworkHint =
                     `build_review FAILED with these reasons:\n${evidence}\nFix the ` +
                     `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
                     `this build.` + pointerContext;
-                  let reworkEvidence = evidence;
-                  if (buildReviewFailRoute(parsed) === 'remediate') {
-                    const activePlanPath = await this.getActivePlanPath();
-                    const outcome = await this.planRemediation(
-                      state,
-                      steps,
-                      `build_review FAILED on completeness:\n${evidence}\nThe plan task ` +
-                        `requires review. Check the approved plan’s existing tasks before ` +
-                        `proposing a plan-level change. ` +
-                        (activePlanPath ? `Active plan: ${activePlanPath}. ` : '') +
-                        `Plan remediation per the /remediate ` +
-                        `skill and write .pipeline/remediation.json.` + pointerContext,
-                      { source: 'build_review', evidenceFile: BUILD_REVIEW_VERDICT },
-                    );
-                    if (outcome.kind === 'halt') {
-                      if (await reenterBuildReviewIfEffectivePass()) continue;
-                      const reason =
-                        `build_review completeness FAIL needs a human: ${outcome.detail}`;
-                      await this.writeHaltMarker(reason + '\n', 'needs-human');
-                      await this.persistPendingStateChanges(state, 'persist conductor transition');
-                      const prUrl = await this.surfaceRemediationPr(reason);
-                      await this.emitLoopHalt(reason, prUrl);
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
-                    }
-                    if (outcome.kind === 'route') {
-                      reworkTarget = outcome.target;
-                      reworkHint = outcome.hint;
-                      reworkEvidence = outcome.evidence;
-                    }
-                    // outcome.kind === 'none' — no usable remediation plan;
-                    // fall through to the unchanged kickback-to-build path.
-                  }
+                  const reworkEvidence = evidence;
 
                   if (await reenterBuildReviewIfEffectivePass()) continue;
 
@@ -7989,7 +9164,10 @@ export class Conductor {
                   'Build stall detected. Agent needs input to proceed. A question is at ' +
                     '.pipeline/halt-user-input-required. Plan remediation per the /remediate ' +
                     'skill and write .pipeline/remediation.json.',
-                  { source: 'build-stall', evidenceFile: '.pipeline/halt-user-input-required' },
+                  {
+                    source: 'build-stall',
+                    evidence: [{ gate: 'build', evidenceFile: '.pipeline/halt-user-input-required' }],
+                  },
                 );
 
                 if (outcome.kind === 'route') {
@@ -8075,7 +9253,7 @@ export class Conductor {
               // re-surface on the next audit and HALT then. Falls back to the
               // deterministic classifyPrdAuditGaps routing when no usable plan is
               // produced or the remediation budget is exhausted.
-              if (remediationRounds < MAX_KICKBACKS_PER_GATE) {
+              if (remediationRounds < prdAuditRemediationLapCap) {
                 const outcome = await this.planRemediation(
                   state,
                   steps,
@@ -8083,7 +9261,10 @@ export class Conductor {
                     'review may be at .pipeline/architecture-review-as-built.md). Plan ' +
                     'remediation per the /remediate skill and write ' +
                     '.pipeline/remediation.json.',
-                  { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+                  {
+                    source: 'prd-audit',
+                    evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+                  },
                 );
                 if (outcome.kind === 'route') {
                   remediationRounds++;
@@ -8116,7 +9297,7 @@ export class Conductor {
                 }
                 if (outcome.kind === 'halt') {
                   const reason = 'prd-audit halted: needs human DECIDE — ' + outcome.detail;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.writeHaltMarker(reason + '\n', outcome.haltClass ?? 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
@@ -8133,7 +9314,7 @@ export class Conductor {
                 this.projectRoot,
                 state.session_started_at,
               );
-              if (cls.kind === 'impl-only' && prdAuditSelfHeals < MAX_KICKBACKS_PER_GATE) {
+              if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
                 prdAuditSelfHeals++;
                 await emitTracked({
                   type: 'kickback',
@@ -8177,7 +9358,7 @@ export class Conductor {
               }
               const reason =
                 cls.kind === 'impl-only'
-                  ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${cls.summary}`
+                  ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap}): ${cls.summary}`
                   : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
               // Both terminal branches now require an operator: product/plan
               // gaps need DECIDE input, while an implementation gap reaches
@@ -8258,18 +9439,36 @@ export class Conductor {
               return;
             }
 
-            // Finish/as-built remediation (daemon only): give the same /remediate
+            // As-built reports never route to BUILD. Their architecture/plan-limit
+            // judgement halts directly: an undelivered PLAN_GAP is classified for
+            // the operator, and BLOCKED/malformed reports remain needs-human.
+            if (step.name === 'architecture_review_as_built') {
+              const asBuiltFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
+              const asBuiltOutcome = asBuiltFiles[0]
+                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
+                : { kind: 'invalid' as const };
+              const reason = `as-built architecture review halted: ${lastError}`;
+              await this.writeHaltMarker(
+                reason + '\n',
+                asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
+              );
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+
+            // Finish remediation (daemon only): give the same /remediate
             // planner that routes a blocking prd_audit a shot at a failed finish
-            // verification or a BLOCKED as-built review before the generic HALT.
-            // The technical track skips prd_audit entirely, so without this hook
-            // these gates dead-end in a HALT even when the gap is routable (e.g.
-            // collateral test failures after an intentional contract change).
+            // verification before the generic HALT.
             if (
               this.daemon &&
-              (step.name === 'finish' || step.name === 'architecture_review_as_built') &&
+              step.name === 'finish' &&
               remediationRounds < MAX_KICKBACKS_PER_GATE
             ) {
-              const finishGate = step.name === 'finish';
+              const finishGate = true;
               // D2: this gate re-failing right after a prior kickback-to-build
               // cycle that made zero net progress on an unchanged verdict
               // escalates to HALT here instead of spending another
@@ -8298,10 +9497,16 @@ export class Conductor {
                       '.pipeline/architecture-review-as-built.md. Plan remediation per ' +
                       'the /remediate skill and write .pipeline/remediation.json.',
                 finishGate
-                  ? { source: 'finish-verification', evidenceFile: '.pipeline/test-failures.md' }
+                  ? {
+                      source: 'finish-verification',
+                      evidence: [{ gate: 'finish', evidenceFile: '.pipeline/test-failures.md' }],
+                    }
                   : {
                       source: 'as-built architecture review',
-                      evidenceFile: '.pipeline/architecture-review-as-built.md',
+                      evidence: [{
+                        gate: 'architecture_review_as_built',
+                        evidenceFile: '.pipeline/architecture-review-as-built.md',
+                      }],
                     },
               );
               if (outcome.kind === 'route') {
@@ -8400,6 +9605,9 @@ export class Conductor {
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
+                : unretryableInputFailure
+                  ? `step '${unretryableInputFailure.failingStep}' cannot make progress: its inputs cannot change on a re-dispatch. ` +
+                    `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`
                 : uncommittedPathsReason
                   ? uncommittedPathsReason
                   : acceptanceRedHealFailureReason
@@ -10174,7 +11382,7 @@ export function buildRemediationHint(
   // A publication-only plan is a prose defect. The generic wording below tells
   // the agent to "make the code/spec changes", which is exactly how a PR-body
   // gap turned into implementation work.
-  if (fixes.every((g) => g.disposition === REMEDIATION_PUBLICATION_DISPOSITION)) {
+  if (fixes.length > 0 && fixes.every((g) => g.disposition === REMEDIATION_PUBLICATION_DISPOSITION)) {
     return (
       `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
       `${evidenceFile}). These are PUBLICATION gaps: the implementation is complete and ` +
@@ -10414,7 +11622,11 @@ export async function appendRemediationTasks(
   projectRoot: string,
   planPath: string,
   remediationList: Array<{ id: string; title: string }>,
-  options?: { log?: (msg: string) => void },
+  options?: {
+    log?: (msg: string) => void;
+    criterionBoundGaps?: CriterionBoundRemediationGap[];
+    gateSource?: string;
+  },
 ): Promise<{ success: true; appendedIds: string[] } | { success: false; error: string }> {
   const log = options?.log ?? (() => {});
 
@@ -10453,6 +11665,28 @@ export async function appendRemediationTasks(
   } catch {
     // If plan file doesn't exist, start with empty content
     planContent = '';
+  }
+
+  if (options?.criterionBoundGaps !== undefined && options.gateSource !== undefined) {
+    const rendered = appendCriterionBoundRemediationTasks(
+      planContent,
+      options.criterionBoundGaps,
+      options.gateSource,
+    );
+    const pipelineDir = join(projectRoot, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    const tempFile = `${planPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    try {
+      await writeFile(tempFile, rendered.planText, 'utf-8');
+      await renameFile(tempFile, planPath);
+    } catch (error) {
+      await unlinkFile(tempFile).catch(() => {});
+      return {
+        success: false,
+        error: `Failed to append remediation tasks to plan: ${error instanceof Error ? error.message : 'unknown error'}`,
+      };
+    }
+    return { success: true, appendedIds: rendered.ids };
   }
 
   // Parse existing task headers to detect duplicates and content drift

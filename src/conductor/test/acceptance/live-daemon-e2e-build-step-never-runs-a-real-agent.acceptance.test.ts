@@ -45,7 +45,7 @@ type UnresolvedCommandResult = InvokeResult & {
 
 function providerForEnvelope(envelope: Record<string, unknown>): ClaudeProvider {
   const subprocessFactory = () => Promise.resolve({
-    stdout: JSON.stringify(envelope),
+    stdout: JSON.stringify({ ...envelope, type: 'result' }),
     stderr: '',
     exitCode: 0,
     failed: false,

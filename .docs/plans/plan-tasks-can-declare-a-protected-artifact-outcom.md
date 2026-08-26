@@ -42,6 +42,7 @@ and are ordinary BUILD tasks.
 T1 ─┬─▶ T3 ─▶ T4 ─▶ T5
 T2 ─┘
 T6, T7, T8   (documentation chain, independent of the engine chain)
+T3, T5 ─────▶ T9
 ```
 
 ---
@@ -70,7 +71,7 @@ naming `.docs/stories/<plan-stem>.md` yields none (S1.3); a task naming only `sr
 ### Task 3: GREEN — union the `**Files:**` and prose scans
 
 **Story:** 1 (happy)
-**Files:** src/conductor/src/engine/plan-protected-targets.ts
+**Files:** src/conductor/src/engine/plan-protected-targets.ts; src/conductor/src/engine/plan-task-parse.ts
 **Dependencies:** T1; T2
 
 Replace the `hasFilesLineByTaskId` either/or branch with a union over both sources. Keep the
@@ -140,3 +141,24 @@ destination and whose README ownership section governs that list. This task exis
 step decides impact from the surfaces a diff changed, and this diff changes a scanner and prose
 rather than recovery behavior — so it would record an evidence-backed no-op and the runbook would
 never be written.
+### Task rem-stall-parser-scope-1: src/conductor/src/engine/plan-task-parse.ts:219-308 — in architecture review, approve and record a parser/scanner contract that preserves foreign protected prose references for Files-declared tasks without changing the protected-path predicate, then revise Task 3's file scope to match
+
+### Task 9: Restore parser metadata and CLI-contract regression coverage
+
+**Story:** 1 (happy and negative) and 2 (happy)
+**Type:** refactor
+**Files:** src/conductor/src/engine/plan-task-parse.ts; src/conductor/test/engine/plan-task-parse-fence.test.ts; src/conductor/test/acceptance/codex-protected-artifact-prevention.acceptance.test.ts
+**Dependencies:** T3; T5
+
+**Steps:**
+1. Write failing expectations that retain a foreign protected backtick reference for a task with a `**Files:**` declaration, while retaining the parser map's established omission of empty entries for Files-declared tasks.
+2. Update the prior public-gate acceptance expectation from the superseded `Files` guidance to the approved DECIDE redirect; assert the diagnostic still names the protected path and does not advise adding a `**Files:**` line.
+3. Verify the focused tests fail (RED) against the current implementation.
+4. Change `parsePlanTaskPaths` only as needed so `foreignProtectedReferencesByTaskId` records non-empty references for every task, while preserving its existing empty entries for no-Files legacy-fallback tasks; leave `scanPlanProtectedTargets`' protected-path predicate and `taskId\0path` deduplication unchanged.
+5. Verify the focused parser, protected-target scanner, CLI, and acceptance tests pass (GREEN).
+
+**Done when:**
+1. A Files-declared task with a foreign protected backtick path is present in `foreignProtectedReferencesByTaskId` and `scanPlanProtectedTargets` reports that path.
+2. Files-declared tasks with no foreign protected reference do not create empty map entries, while no-Files legacy-fallback tasks retain their existing empty-entry behavior.
+3. The public-gate acceptance test asserts a DECIDE redirect, names the protected path, and rejects `**Files:**`-addition advice.
+4. `npm test -- --run test/engine/plan-task-parse-fence.test.ts test/engine/plan-protected-targets.test.ts test/cli/plan-protected-targets.test.ts test/acceptance/codex-protected-artifact-prevention.acceptance.test.ts` exits 0.

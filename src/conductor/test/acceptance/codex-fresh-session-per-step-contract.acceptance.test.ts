@@ -129,7 +129,6 @@ function scriptedProvider(
       calls.push(options);
       return script(options, calls.length);
     }),
-    invokeInteractive: vi.fn(async () => {}),
   };
   if (capability !== undefined) {
     (provider as unknown as { supportsSessionResume: boolean }).supportsSessionResume =

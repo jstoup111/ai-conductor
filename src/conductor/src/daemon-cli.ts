@@ -2050,6 +2050,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   );
 
   subscriber.stop();
+  // A finite daemon invocation (including test/CLI bounded runs) has no
+  // remaining work for the process-level signal handler to coordinate.
+  // Leaving it installed makes later SIGTERM delivery invoke stale shutdown
+  // state, and accumulates one listener per completed invocation.
+  process.off('SIGTERM', daemonSigtermHandler);
   log(`finished: ${result.processed.length} feature(s) (${result.stoppedReason})`);
   for (const o of result.processed) {
     log(
@@ -2101,6 +2106,22 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'operator_rewind':
+      log(
+        `${chalk.yellow('↶ REWIND:')} ${event.target} (operator; demoted ${event.demoted.join(', ') || 'none'})`,
+      );
+      break;
+    case 'plan_growth': {
+      const byGate = Object.entries(event.byGate)
+        .map(([gate, count]) => `${gate}: ${count}`)
+        .join(', ');
+      log(
+        `${dot} ${chalk.yellow('PLAN GROWTH:')} authored ${event.authored}; ` +
+        `added ${event.added}${byGate ? ` (${byGate})` : ''}; ` +
+        `remaining ${event.remaining}/${event.added + event.remaining}`,
+      );
+      break;
+    }
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;
@@ -2145,6 +2166,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'step_failed':
       log(
         `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} failed (try ${event.retryCount}): ${event.error}`)}`,
+      );
+      break;
+    case 'step_refused':
+      log(
+        `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.step} refused (${event.kind}): ${event.reason}`)}`,
       );
       break;
     case 'step_retry': {
@@ -2236,6 +2262,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'halt_marker_write_failed':
       log(`${dot} ${chalk.red('✋')} ${chalk.red(`halt marker write failed: ${event.path} — ${event.reason}`)}`);
+      break;
+    case 'halt_record_written':
+      log(`${dot} ${chalk.green('✓')} ${chalk.green(`halt record committed: ${event.path} (${event.haltClass})`)}`);
+      break;
+    case 'halt_record_write_failed':
+      log(`${dot} ${chalk.red('✋')} ${chalk.red(`halt record write failed: ${event.path} — ${event.reason}`)}`);
+      break;
+    case 'halt_record_push_failed':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`halt record push failed: ${event.path} — ${event.reason}`)}`);
       break;
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);

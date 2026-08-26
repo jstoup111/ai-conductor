@@ -1,5 +1,6 @@
 ---
 name: intake
+implicit_invocation: required
 description: "Use when filing an intake issue to GitHub — capturing a bug, idea, or observation for a later DECIDE phase. Structures the issue as WHAT (observed evidence, impact) and desired OUTCOMES (observable acceptance signals), with verbatim logs/commands/repro artifacts a zero-context engineer can debug from. Never prescribes HOW — that belongs to DECIDE."
 enforcement: gating
 phase: decide

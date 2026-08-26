@@ -186,7 +186,7 @@ describe('provider lifecycle supervision at the real provider boundary', () => {
     await claudeStarted.promise;
     clock.advance(60 * 60_000);
     quietClaudeCompletion.resolve({
-      stdout: 'quiet-running-success',
+      stdout: JSON.stringify({ type: 'result', result: 'quiet-running-success' }),
       exitCode: 0,
     });
 

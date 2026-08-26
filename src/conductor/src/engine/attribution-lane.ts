@@ -360,8 +360,6 @@ export async function dispatchAttributionVerifier(
             attemptedModels.push(invokeOpts.model ?? '');
             return provider.invoke(invokeOpts);
           },
-          invokeInteractive: (invokeOpts) =>
-            provider.invokeInteractive(invokeOpts),
         };
         const modelAvailability = new ModelAvailability(
           config?.model_fallback_ladder ?? modelPolicy.modelFallbackLadder,

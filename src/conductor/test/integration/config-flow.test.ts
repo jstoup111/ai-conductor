@@ -83,11 +83,11 @@ describe('Integration: config flow', () => {
     // Disabled steps should not appear in runner calls
     expect(runner.calls).not.toContain('retro');
     expect(runner.calls).not.toContain('architecture_review');
-    // Disabling architecture_review also skips the as-built sweep (no ADRs to
-    // audit) via skipWhenSkipped — even on L tier where it isn't tier-skipped.
-    expect(runner.calls).not.toContain('architecture_review_as_built');
+    // The as-built sweep is independent of DECIDE-time architecture review and
+    // runs even when that earlier review was explicitly disabled.
+    expect(runner.calls).toContain('architecture_review_as_built');
 
-    expect(runner.calls).toEqual([]);
+    expect(runner.calls).toEqual(['architecture_review_as_built']);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);
@@ -96,16 +96,15 @@ describe('Integration: config flow', () => {
 
     expect(result.value.retro).toBe('skipped');
     expect(result.value.architecture_review).toBe('skipped');
-    expect(result.value.architecture_review_as_built).toBe('skipped');
+    expect(result.value.architecture_review_as_built).toBe('done');
 
-    // config_skip events emitted for each disabled step, plus the cascade-skip
-    // of architecture_review_as_built (skipWhenSkipped → also a config_skip).
+    // config_skip events are emitted only for the explicitly disabled steps.
     const skipEvents = collectedEvents.filter((e) => e.type === 'config_skip');
-    expect(skipEvents).toHaveLength(3);
+    expect(skipEvents).toHaveLength(2);
     const skippedSteps = skipEvents.map((e) => (e as { step: string }).step);
     expect(skippedSteps).toContain('retro');
     expect(skippedSteps).toContain('architecture_review');
-    expect(skippedSteps).toContain('architecture_review_as_built');
+    expect(skippedSteps).not.toContain('architecture_review_as_built');
   });
 
   it('Conductor with custom step executes it at correct position', () => {

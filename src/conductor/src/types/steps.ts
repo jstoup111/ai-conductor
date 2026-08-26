@@ -32,7 +32,7 @@ export type StepName =
   // (like remediate) that validates task attribution metadata in commits.
   | 'attribution_verify';
 
-export type StepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped' | 'stale';
+export type StepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'refused' | 'skipped' | 'stale';
 
 export type Phase = 'SETUP' | 'UNDERSTAND' | 'DECIDE' | 'BUILD' | 'SHIP';
 
@@ -63,6 +63,11 @@ export interface StepDefinition {
   skippableForTracks?: Track[];
   isCheckpoint: boolean;
   skillName?: string;
+  /**
+   * The completion predicate mechanically re-verifies the current tree or
+   * history, meeting adr-2026-07-08's admission bar (ADR-1 D1).
+   */
+  treeAttestingCompletion?: boolean;
   /**
    * This step participates in the gate-driven tail loop (build…finish): its
    * objective verdict is recomputed after it runs and the selector may route

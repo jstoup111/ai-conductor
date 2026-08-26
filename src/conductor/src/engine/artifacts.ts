@@ -19,6 +19,11 @@ import { seedTaskStatus } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
 import { gateVerdictStillValid } from './gate-code-validity.js';
+import {
+  classifyOverScopeCriterion,
+  overScopeRelations,
+  readOverScopeDecisions,
+} from './accepted-widenings.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveTaskIds } from './task-progress.js';
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
@@ -34,6 +39,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
+import { parsePlanTaskPaths } from './plan-task-parse.js';
 import {
   deriveEffectiveBuildReviewVerdict,
   parseBuildReviewAggregate,
@@ -41,6 +47,7 @@ import {
 } from './build-review-aggregate.js';
 import {
   resolveEffectiveBuildReviewVerdict,
+  type BuildReviewEffectiveResolverDeps,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
 
@@ -308,6 +315,90 @@ export const STEP_ARTIFACT_CONTRACTS = {
   attribution_verify: [],
 } satisfies Record<StepName, readonly ArtifactPatternContract[]>;
 
+export interface FeatureArtifactStemValidationEntry {
+  step: StepName;
+  paths: readonly string[];
+}
+
+export interface FeatureArtifactStemViolation {
+  step: StepName;
+  path: string;
+  strategy: FeatureArtifactIdentityStrategy['strategy'];
+  expectedStem: string;
+  exampleExpectedPath: string;
+}
+
+function artifactPathMatchesPattern(path: string, pattern: string): boolean {
+  let expression = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    if (pattern.slice(index, index + 3) === '**/') {
+      expression += '(?:.*/)?';
+      index += 2;
+    } else if (pattern[index] === '*') {
+      expression += '[^/]*';
+    } else {
+      expression += pattern[index].replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+    }
+  }
+  return new RegExp(`(?:^|/)${expression}$`).test(path.replaceAll('\\', '/'));
+}
+
+function exampleArtifactPath(pattern: string, featureIdentity: string): string {
+  const wildcardIndex = pattern.indexOf('*');
+  const directory = wildcardIndex === -1 ? dirname(pattern) : pattern.slice(0, wildcardIndex);
+  const extension = pattern.endsWith('.md') ? '.md' : '';
+  return `${directory.endsWith('/') ? directory : `${directory}/`}${basename(featureIdentity, '.md')}${extension}`;
+}
+
+/**
+ * True when any feature-scoped contract for `step` matches descendants rather
+ * than only immediate children — i.e. its glob carries a `**\/` segment. The
+ * `stories` family is the current case (`.docs/stories/**\/*.md`).
+ *
+ * Callers enumerating candidates for `validateFeatureArtifactStems` must walk a
+ * family this returns `true` for; enumerating one directory level would leave a
+ * nested artifact staged but unvalidated. Deriving the answer from the contract
+ * keeps the two in step: widening a pattern to `**\/` widens enumeration with it,
+ * with no second list to update.
+ */
+export function featureArtifactPatternsAreRecursive(step: StepName): boolean {
+  return STEP_ARTIFACT_CONTRACTS[step].some(
+    (contract) => contract.scope === 'feature' && contract.pattern.includes('**/'),
+  );
+}
+
+/**
+ * Validates that candidate artifacts for feature-scoped contracts retain the
+ * active feature identity in their filename stem. Repository- and run-scoped
+ * contracts deliberately have no feature identity requirement.
+ */
+export function validateFeatureArtifactStems(
+  entries: readonly FeatureArtifactStemValidationEntry[],
+  featureIdentity: string,
+): FeatureArtifactStemViolation[] {
+  const violations: FeatureArtifactStemViolation[] = [];
+  const expectedStem = basename(featureIdentity, '.md');
+
+  for (const { step, paths } of entries) {
+    for (const path of paths) {
+      for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
+        if (contract.scope !== 'feature') continue;
+        if (!artifactPathMatchesPattern(path, contract.pattern)) continue;
+        if (artifactMatchesFeatureIdentity(path, featureIdentity, contract.identity)) continue;
+        violations.push({
+          step,
+          path,
+          strategy: contract.identity.strategy,
+          expectedStem,
+          exampleExpectedPath: exampleArtifactPath(contract.pattern, featureIdentity),
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
  * or a literal filename. Empty list = step produces no file artifacts; verification
@@ -464,18 +555,47 @@ export async function resolveArtifactFiles(
   const identityLabel = activeIdentity
     ? `active feature "${activeIdentity}"`
     : 'the active feature (identity unavailable)';
-  const diagnosticFor = (candidateCount: number): ArtifactResolutionDiagnostic => {
+  const namingRuleFor = (contract: Extract<ArtifactPatternContract, { scope: 'feature' }>): string => {
+    const { identity } = contract;
+    if (identity.strategy === 'plan-stem') return identity.strategy;
+
+    const qualifiers = [
+      identity.stripDatePrefix ? 'date prefix stripped' : undefined,
+      ...(identity.stripPrefixes ?? []).map((prefix) => `"${prefix}" prefix stripped`),
+    ].filter((qualifier): qualifier is string => Boolean(qualifier));
+    return qualifiers.length > 0
+      ? `${identity.strategy} (${qualifiers.join(', ')})`
+      : identity.strategy;
+  };
+  const exampleExpectedPathFor = (
+    contract: Extract<ArtifactPatternContract, { scope: 'feature' }>,
+    expectedStem: string,
+  ): string => {
+    const segments = contract.pattern.split('/');
+    const wildcardIndex = segments.findIndex((segment) => segment.includes('*'));
+    const directory = segments.slice(0, wildcardIndex === -1 ? -1 : wildcardIndex).join('/');
+    return `${directory}/${expectedStem}.md`;
+  };
+  const diagnosticFor = (
+    candidateCount: number,
+    contract?: Extract<ArtifactPatternContract, { scope: 'feature' }>,
+  ): ArtifactResolutionDiagnostic => {
     if (candidateCount === 0) {
       return {
         code: 'missing',
         reason: `${step} has no artifact candidates for ${identityLabel}`,
       };
     }
+    const namingRule =
+      contract && activeIdentity
+        ? `. Naming rule: ${namingRuleFor(contract)}; expected stem "${activeIdentity}"; example expected filename "${exampleExpectedPathFor(contract, activeIdentity)}".`
+        : '';
     return {
       code: 'ambiguous',
-      reason: `${step} has ${candidateCount} artifact candidates and none can be associated with ${identityLabel}`,
+      reason: `${step} has ${candidateCount} artifact candidates and none can be associated with ${identityLabel}${namingRule}`,
     };
   };
+  let firstFeatureContract: Extract<ArtifactPatternContract, { scope: 'feature' }> | undefined;
   for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
     const candidates = await matchGlob(dir, contract.pattern);
     if (contract.scope !== 'feature') {
@@ -485,6 +605,7 @@ export async function resolveArtifactFiles(
     }
 
     hasFeatureContract = true;
+    firstFeatureContract ??= contract;
     featureCandidateCount += candidates.length;
     const associated = candidates.filter((file) => {
       const repoPath = relative(dir, file).replaceAll('\\', '/');
@@ -505,7 +626,7 @@ export async function resolveArtifactFiles(
       patternResults.push({
         pattern: contract.pattern,
         files: [],
-        diagnostic: diagnosticFor(candidates.length),
+        diagnostic: diagnosticFor(candidates.length, contract),
       });
     }
   }
@@ -524,7 +645,7 @@ export async function resolveArtifactFiles(
 
   return withPatterns({
     files: [],
-    diagnostic: diagnosticFor(featureCandidateCount),
+    diagnostic: diagnosticFor(featureCandidateCount, firstFeatureContract),
   });
 }
 
@@ -777,12 +898,11 @@ async function sweptArtifactStillValid(
       // about to be swept can diverge from what it was stamped from — never
       // spare a report that does not itself currently read clean.
       const report = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
-      if (findUnalignedFrRows(report).length > 0) return false;
-      return (await prdAuditCoverageGap(
-        dir,
-        artifactResolution ?? (await buildArtifactResolutionContext(dir, { git })),
-        report,
-      )) === null;
+      const parsed = parsePrdAuditReport(report);
+      if (parsed.ok ? parsed.value.findings.some((finding) => finding.grade !== 'PASS') : findUnalignedFrRows(report).length > 0) return false;
+      const resolution = artifactResolution ?? (await buildArtifactResolutionContext(dir, { git }));
+      if ((await prdAuditCoverageGap(dir, resolution, report)) !== null) return false;
+      return (await prdAuditStoryCoverageGap(dir, resolution, undefined, report)) === null;
     }
     if (step === 'architecture_review_as_built') {
       const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
@@ -890,6 +1010,12 @@ export interface CompletionResult {
    * `done:true` and on predicates that don't classify.
    */
   routeClass?: 'named-route' | 'absent';
+  /**
+   * A fresh aggregate from an earlier build-review lap. This is telemetry for
+   * the conductor; it is deliberately separate from the human reason so
+   * routing never has to parse prose.
+   */
+  staleLap?: { storedLapId: string; currentLapId: string };
   /**
    * Why acceptance_specs RED evidence was refused. The conductor uses this
    * machine-readable class to decide whether its bounded pre-heal can repair
@@ -1093,6 +1219,7 @@ export interface CompletionContext {
   buildReviewEffectiveResolver?: (
     projectRoot: string,
     aggregate: unknown,
+    dependencies?: BuildReviewEffectiveResolverDeps,
   ) => Promise<BuildReviewEffectiveResolution>;
 }
 
@@ -1239,7 +1366,7 @@ export function latestAttemptRegion(content: string): string {
 
 /**
  * The FAIL rows of the manual-test results file's current verdict region, or
- * [] when the file is missing/unreadable or clean. Used by the daemon's
+ * [] when the file is missing/unreadable or FAIL-free (PASS/WARN). Used by the daemon's
  * manual_test→build kickback (#367) to decide whether there is concrete bug
  * evidence to hand BUILD (no evidence → no kickback, the gate's own reason
  * halts the run instead).
@@ -1279,11 +1406,15 @@ export async function readManualTestFailRows(dir: string): Promise<string[]> {
  * evidence", "fail-closed verdict predicate") must never be mistaken for a failing
  * result.
  */
-function isManualTestFailRow(line: string): boolean {
+function isManualTestVerdictRow(line: string, verdict: 'FAIL' | 'WARN'): boolean {
   return line
     .split('|')
     .map((cell) => cell.trim())
-    .some((cell) => /^FAIL$/i.test(cell));
+    .some((cell) => cell.toUpperCase() === verdict);
+}
+
+function isManualTestFailRow(line: string): boolean {
+  return isManualTestVerdictRow(line, 'FAIL');
 }
 
 /**
@@ -1293,6 +1424,21 @@ function isManualTestFailRow(line: string): boolean {
  * section so `isSkipAttempt` can detect it without parsing table rows.
  */
 export const MANUAL_TEST_SKIP_SENTINEL = '<!-- manual-test:skipped -->';
+
+/**
+ * Fixed, greppable sentinel marking a manual-test attempt that contains one
+ * or more non-blocking WARN verdicts. The results recorder derives this from
+ * exact WARN table cells so dependency/capability gaps remain visible without
+ * being mistaken for application failures.
+ */
+export const MANUAL_TEST_WARN_SENTINEL = '<!-- manual-test:warning -->';
+
+/** True when results content contains at least one exact WARN table cell. */
+export function hasManualTestWarnRows(content: string): boolean {
+  return latestAttemptRegion(content)
+    .split('\n')
+    .some((line) => isManualTestVerdictRow(line, 'WARN'));
+}
 
 /**
  * True when a manual-test attempt section was deliberately skipped (auto
@@ -1315,8 +1461,39 @@ export function parseAsBuiltVerdict(content: string): string | null {
     /^[^\S\n]*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*(.+?)\s*\*{0,2}\s*$/im,
   );
   if (!m) return null;
-  const value = m[1].replace(/\*+/g, '').trim();
-  return value.length > 0 ? value : null;
+  const value = m[1].replace(/\*+/g, '').trim().toUpperCase();
+  return value === 'APPROVED' || value === 'APPROVED WITH DRIFT NOTES' ||
+    value === 'PLAN_GAP' || value === 'BLOCKED'
+    ? value
+    : null;
+}
+
+/** The terminal interpretation of a fresh as-built review report. */
+export type AsBuiltReviewOutcome =
+  | { kind: 'approved' }
+  | { kind: 'plan-gap-delivered' }
+  | { kind: 'plan-gap-undelivered' }
+  | { kind: 'blocked' }
+  | { kind: 'invalid' };
+
+/**
+ * Classify the as-built review's explicit verdict without giving its prose any
+ * routing authority. A PLAN_GAP may ship only when the report also records
+ * `Outcome delivered: yes`; an explicit `no` is the operator-facing plan-gap
+ * halt, while an omitted/malformed outcome remains fail-closed as invalid.
+ */
+export function classifyAsBuiltReviewOutcome(content: string): AsBuiltReviewOutcome {
+  const verdict = parseAsBuiltVerdict(content);
+  if (verdict === null) return { kind: 'invalid' };
+  if (verdict === 'APPROVED' || verdict === 'APPROVED WITH DRIFT NOTES') return { kind: 'approved' };
+  if (verdict === 'BLOCKED') return { kind: 'blocked' };
+  if (verdict !== 'PLAN_GAP') return { kind: 'invalid' };
+
+  const outcome = content.match(/^[^\S\n]*\*{0,2}\s*Outcome delivered\s*\*{0,2}\s*:+\s*(yes|no)\s*$/im)?.[1]
+    ?.toLowerCase();
+  if (outcome === 'yes') return { kind: 'plan-gap-delivered' };
+  if (outcome === 'no') return { kind: 'plan-gap-undelivered' };
+  return { kind: 'invalid' };
 }
 
 /**
@@ -1599,6 +1776,19 @@ function dispositionGroundingRefusal(reason: string): CompletionResult {
   return { done: false, acceptanceRedRefusalClass: 'shape', reason };
 }
 
+/** True only when this feature's committed coherence record opted into criterion rows. */
+async function coherenceArtifactHasCriterionRows(dir: string, ctx: CompletionContext): Promise<boolean> {
+  const planPath = ctx.planPath ?? (await resolveFeaturePlanPath(dir, ctx.featureDesc));
+  if (!planPath) return false;
+  const coherencePath = join(dir, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
+  try {
+    const text = await readFile(coherencePath, 'utf-8');
+    return text.split(/\r?\n/).some((line) => /^\s*\|\s*criterion\s*\|/i.test(line));
+  } catch {
+    return false;
+  }
+}
+
 function escapeDispositionRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -1656,8 +1846,12 @@ async function groundDispositionOnlyEvidence(
       unexpected.length > 0 ? `invented: ${unexpected.join(', ')}` : '',
       omitted.length > 0 ? `omitted: ${omitted.join(', ')}` : '',
     ].filter(Boolean);
+    const criterionCheckHint =
+      omitted.length > 0 && (await coherenceArtifactHasCriterionRows(dir, ctx))
+        ? '; the DECIDE-time criterion coherence check should have caught the omitted criterion before BUILD'
+        : '';
     return dispositionGroundingRefusal(
-      `disposition-only records must be an exact one-to-one set of the authoritative story criteria — ${differences.join('; ')}`,
+      `disposition-only records must be an exact one-to-one set of the authoritative story criteria — ${differences.join('; ')}${criterionCheckHint}`,
     );
   }
 
@@ -1696,7 +1890,11 @@ async function groundDispositionOnlyEvidence(
   return null;
 }
 
-function extractAuthoritativeStoryCriteria(storiesText: string): string[] {
+/**
+ * Return each parseable story criterion in the stable story/section order
+ * that makes the stories artifact the authoritative criterion mapping.
+ */
+export function extractAuthoritativeStoryCriteria(storiesText: string): string[] {
   const criteria: string[] = [];
   for (const block of splitStoryBlocks(storiesText)) {
     for (const type of ['happy', 'negative'] as const) {
@@ -1808,14 +2006,8 @@ export async function removeBuildReviewVerdict(dir: string): Promise<void> {
  * categories while still returning FAIL with free-form `reasons`.
  */
 export interface BuildReviewRubric {
-  /** Test asserts against its own implementation rather than real behavior. */
-  tautology: boolean;
-  /** Change reaches outside the task's declared scope. */
-  scope: boolean;
-  /** Fix addresses a symptom rather than the underlying root cause. */
-  rootCause: boolean;
-  /** Implementation addresses only part of the task's declared scope. */
-  completeness: boolean;
+  /** A changed test is insensitive to the behavior it claims to cover. */
+  testQuality: boolean;
 }
 
 /**
@@ -1845,12 +2037,7 @@ export interface BuildReviewVerdict {
   codeStamp?: string | null;
 }
 
-const BUILD_REVIEW_RUBRIC_NAMES = [
-  'tautology',
-  'scope',
-  'rootCause',
-  'completeness',
-] as const;
+const BUILD_REVIEW_RUBRIC_NAMES = ['testQuality'] as const;
 
 /**
  * Flatten a verdict's legacy summaries and structured findings for every
@@ -2512,7 +2699,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   },
 
   // Manual-test passes only when .pipeline/manual-test-results.md exists, has
-  // no FAIL rows in its LATEST attempt section, was written this session, and —
+  // no FAIL rows in its LATEST attempt section (PASS and WARN are accepted), was written this session, and —
   // when a FAIL was previously recorded — HEAD has moved since (fix commits
   // exist). Previously the step had no gate at all
   // (STEP_ARTIFACT_GLOBS['manual_test'] = []) — any clean REPL exit marked it
@@ -2525,10 +2712,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const markerPath = join(dir, MANUAL_TEST_FAIL_EVIDENCE);
 
     // gate-code-validity-on-redispatch (#817, Task 6): before falling into
-    // the mtime-freshness check below, see if a stamped clean-PASS marker
+    // the mtime-freshness check below, see if a stamped FAIL-free marker
     // can be trusted as-is because the code hasn't changed in manual_test's
     // (all-runtime) surface since it was formed. Only a marker that is
-    // UNAMBIGUOUSLY a clean prior PASS may preserve — one carrying
+    // UNAMBIGUOUSLY a clean prior PASS/WARN verdict may preserve — one carrying
     // failRows/headSha (the whitewash-guard's own unresolved-FAIL shape,
     // #367) must never be short-circuited here, or a laundering marker
     // could bypass the guard below. Missing marker, parse failure, no
@@ -2564,7 +2751,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     } catch {
       return {
         done: false,
-        reason: '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
+        reason: '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/WARN/FAIL results before exiting',
       };
     }
     const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
@@ -2579,8 +2766,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
     // Auto-mode SKIP sentinel (#748): the latest attempt was deliberately
     // skipped (no endpoint/UI stories to exercise) rather than carrying a
-    // PASS/FAIL table. Treat it as done once it's fresh for this session —
-    // same freshness bar as a real PASS/FAIL attempt — so auto mode does not
+    // PASS/WARN/FAIL table. Treat it as done once it's fresh for this session —
+    // same freshness bar as a real PASS/WARN/FAIL attempt — so auto mode does not
     // hang the gate forever waiting for a results table that will never be
     // written. Only applies when there are no FAIL rows in this attempt.
     //
@@ -2664,8 +2851,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         }
       }
     }
-    // Additive PASS-path telemetry (gate-code-validity-on-redispatch, #817):
-    // record the HEAD sha the current PASS verdict was formed against, in
+    // Additive FAIL-free-path telemetry (gate-code-validity-on-redispatch, #817):
+    // record the HEAD sha the current PASS/WARN verdict was formed against, in
     // the same marker file used by the FAIL-path whitewash guard above.
     // Merge onto any existing marker content (there should be none at this
     // point on the fresh-flip path, but merging is defensive) rather than
@@ -2730,9 +2917,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                 }));
               for (const f of preCheckFiles) {
                 const report = await readFile(f, 'utf-8');
+                const parsed = parsePrdAuditReport(report);
+                const preRelations = overScopeRelations(report);
+                const preDecisions = (await readOverScopeDecisions(dir)).decisions;
                 if (
-                  findUnalignedFrRows(report).length > 0 ||
-                  (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null
+                  (parsed.ok
+                    ? parsed.value.findings.some(
+                        (finding) =>
+                          finding.grade !== 'PASS' &&
+                          !(
+                            finding.grade === 'OVER_SCOPE' &&
+                            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, preRelations, preDecisions))
+                          ),
+                      )
+                    : findUnalignedFrRows(report).length > 0) ||
+                  (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null ||
+                  (await prdAuditStoryCoverageGap(dir, artifactResolution, ctx.featureDesc, report)) !== null
                 ) {
                   stillClean = false;
                   break;
@@ -2757,7 +2957,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (files.length === 0) {
       return {
         done: false,
-        reason: 'no .pipeline/prd-audit.md present — the prd-audit skill must record a per-FR verdict table',
+        reason: 'no .pipeline/prd-audit.md present — the prd-audit skill must record its criterion-grade Verdict Table',
       };
     }
     // Only consider reports written by THIS judging attempt (falls back to
@@ -2780,11 +2980,37 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     let blockingReason: string | undefined;
     for (const f of fresh) {
-      const blocking = findUnalignedFrRows(await readFile(f, 'utf-8'));
+      const parsed = parsePrdAuditReport(await readFile(f, 'utf-8'));
+      if (!parsed.ok) {
+        const hasFeatureIdentity = Boolean(ctx.planPath || ctx.featureDesc);
+        const legacyBlocking = findUnalignedFrRows(await readFile(f, 'utf-8'));
+        if (hasFeatureIdentity || legacyBlocking.length > 0) {
+          blockingReason = hasFeatureIdentity
+            ? `PRD audit report mechanical fault: ${parsed.error}`
+            : `prd-audit found un-ALIGNED FRs: ${legacyBlocking.join('; ')} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
+          break;
+        }
+        continue;
+      }
+      // An accepted or non-visible OVER_SCOPE finding is recorded, not blocking.
+      // Without this the operator could accept scope bloat and still never
+      // ship: the gate re-selected prd_audit forever because acceptance was
+      // invisible here (#1854).
+      const reportText = await readFile(f, 'utf-8');
+      const relations = overScopeRelations(reportText);
+      const decisions = (await readOverScopeDecisions(dir)).decisions;
+      const blocking = parsed.value.findings.filter(
+        (finding) =>
+          finding.grade !== 'PASS' &&
+          !(
+            finding.grade === 'OVER_SCOPE' &&
+            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, relations, decisions))
+          ),
+      );
       if (blocking.length > 0) {
-        const shown = blocking.slice(0, 3).join('; ');
+        const shown = blocking.slice(0, 3).map((finding) => `${finding.criterion} (${finding.grade})`).join('; ');
         const more = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : '';
-        blockingReason = `prd-audit found un-ALIGNED FRs: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
+        blockingReason = `prd-audit found blocking criterion grades: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
         break;
       }
     }
@@ -2796,15 +3022,20 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         featureDesc: ctx.featureDesc,
         git: ctx.git,
       }));
-    const coverageGap = await prdAuditCoverageGap(
+    const passReport = await readFile(passF, 'utf-8');
+    const coverageGap = await prdAuditCoverageGap(dir, artifactResolution, passReport);
+    const storyCoverageGap = await prdAuditStoryCoverageGap(
       dir,
       artifactResolution,
-      await readFile(passF, 'utf-8'),
+      ctx.featureDesc,
+      passReport,
     );
-    if (blockingReason || coverageGap) {
+    if (blockingReason || coverageGap || storyCoverageGap) {
       return {
         done: false,
-        reason: [blockingReason, coverageGap].filter((reason): reason is string => Boolean(reason)).join('; '),
+        reason: [blockingReason, coverageGap, storyCoverageGap]
+          .filter((reason): reason is string => Boolean(reason))
+          .join('; '),
       };
     }
     const verdictFreshness = await verdictFreshnessFor(passF, ctx, 'rewritten');
@@ -2848,8 +3079,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             const preCheckFiles = await findArtifactFiles(dir, 'architecture_review_as_built');
             if (preCheckFiles.length > 0) {
               const content = await readFile(preCheckFiles[0], 'utf-8');
-              const verdict = parseAsBuiltVerdict(content);
-              if (verdict !== null && /^APPROVED\b/i.test(verdict)) {
+              if (classifyAsBuiltReviewOutcome(content).kind === 'approved') {
                 const artifact = preCheckFiles[0];
                 return {
                   done: true,
@@ -2889,21 +3119,31 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     for (const f of fresh) {
       const content = await readFile(f, 'utf-8');
-      const verdict = parseAsBuiltVerdict(content);
-      if (verdict === null) {
+      const outcome = classifyAsBuiltReviewOutcome(content);
+      if (outcome.kind === 'invalid') {
         return {
           done: false,
-          reason: 'as-built review has no parseable `Verdict:` line — expected APPROVED / APPROVED WITH DRIFT NOTES / BLOCKED; re-run the as-built review',
+          reason: 'as-built review must record `Verdict:` plus `Outcome delivered: yes|no` for PLAN_GAP; re-run the as-built review',
           routeClass: 'absent',
         };
       }
-      // Clean pass iff the verdict begins with APPROVED (covers both
-      // "APPROVED" and "APPROVED WITH DRIFT NOTES"). Everything else —
-      // BLOCKED or any other string — keeps the gate unsatisfied.
-      if (!/^APPROVED\b/i.test(verdict)) {
+      if (outcome.kind === 'plan-gap-delivered') {
+        return {
+          done: true,
+          verdictFreshness: await verdictFreshnessFor(f, ctx, 'rewritten'),
+        };
+      }
+      if (outcome.kind === 'plan-gap-undelivered') {
         return {
           done: false,
-          reason: `as-built review verdict is "${verdict}" — not a clean APPROVED (BLOCKED means shipped code violates an APPROVED ADR; an unrecognized verdict means the review may have found no ADRs to check). Fix the code or supersede the ADR (human-approved), then re-run`,
+          reason: 'as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome',
+          routeClass: 'named-route',
+        };
+      }
+      if (outcome.kind === 'blocked') {
+        return {
+          done: false,
+          reason: 'as-built review verdict is BLOCKED — shipped code violates an approved architecture decision',
           routeClass: 'named-route',
         };
       }
@@ -3030,6 +3270,30 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // Legacy scalar verdicts intentionally retain their historical predicate.
     const aggregate = parseBuildReviewAggregate(parsed);
     if (aggregate) {
+      // A non-PASS aggregate is a verdict for exactly the HEAD that formed
+      // its lap. Reusing it after a repair would resurrect findings that the
+      // current lap may already have disproved. PASS remains governed by the
+      // earlier code-stamp preservation path.
+      if (aggregate.verdict !== 'PASS') {
+        try {
+          const git = ctx.git ?? makeGitRunner(dir);
+          const head = await git(['rev-parse', 'HEAD']);
+          const currentLapId = head.exitCode === 0 && head.stdout.trim()
+            ? `lap-${head.stdout.trim()}`
+            : undefined;
+          if (currentLapId && aggregate.lapId !== currentLapId) {
+            return {
+              done: false,
+              routeClass: 'absent',
+              reason: `build-review aggregate belongs to lap ${aggregate.lapId}, current lap is ${currentLapId} — scoring 'no fresh verdict'; a prior lap's FAIL is never kicked back`,
+              staleLap: { storedLapId: aggregate.lapId, currentLapId },
+            };
+          }
+        } catch {
+          // A HEAD probe is advisory here: preserve the established fresh
+          // aggregate behavior when git is unavailable.
+        }
+      }
       const effectiveResolution = await (
         ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
       )(dir, aggregate);
@@ -3686,14 +3950,176 @@ function parseFrVerdictRow(line: string): ParsedFrRow | null {
   return { fr: frId, blocking, gapClass };
 }
 
-/** Return expected FR ids that have no parseable verdict row in the report. */
-export function findFrIdsWithoutRows(content: string, expectedIds: ReadonlySet<string>): string[] {
-  const present = new Set<string>();
-  for (const line of content.split('\n')) {
-    const row = parseFrVerdictRow(line);
-    if (row) present.add(row.fr);
+/** Heading that opens the authoritative verdict table, at any heading level. */
+const VERDICT_TABLE_HEADING_RE = /^\s{0,3}#{1,6}\s+Verdict\s+Table\s*$/i;
+const MARKDOWN_HEADING_RE = /^\s{0,3}#{1,6}\s+/;
+
+/**
+ * Return the lines a verdict-row scan may read.
+ *
+ * When the report carries a `## Verdict Table` heading, ONLY the lines of that
+ * section (up to the next heading of any level) are in scope. Auditors routinely
+ * write narrative tables elsewhere in the report — a "what moved since cycle N"
+ * history table whose cells carry PRIOR-cycle verdicts is the observed case — and
+ * a whole-document scan reads those history cells as current verdicts. That
+ * falsely blocked an all-ALIGNED audit: a row reading
+ * `| FR-15 | DIVERGED (intended-drift), blocking | **ALIGNED** | ... |` parsed as
+ * a blocking DIVERGED verdict even though the real Verdict Table row said ALIGNED.
+ *
+ * Reports with no such heading (including the pre-heading report shape) keep the
+ * whole-document scan, so this narrows nothing that was previously correct.
+ */
+function verdictTableLines(content: string): string[] {
+  const lines = content.split('\n');
+  const start = lines.findIndex((l) => VERDICT_TABLE_HEADING_RE.test(l));
+  if (start === -1) return lines; // no heading — legacy whole-document scan
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((l) => MARKDOWN_HEADING_RE.test(l));
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+/** The only grades a criterion-level PRD-audit finding may carry. */
+export type PrdAuditGrade = 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE';
+
+export interface PrdAuditFinding {
+  criterion: string;
+  grade: PrdAuditGrade;
+  planTask?: number;
+  /** Intent FR associations from the table's PRD: column. */
+  prdIds: readonly string[];
+  evidence: string;
+}
+
+export interface PrdAuditReport {
+  prd: 'present' | 'none';
+  findings: PrdAuditFinding[];
+}
+
+export type PrdAuditReportParseResult =
+  | { ok: true; value: PrdAuditReport }
+  | { ok: false; class: 'mechanical-fault'; error: string };
+
+const PRD_AUDIT_GRADES: ReadonlySet<PrdAuditGrade> = new Set([
+  'PASS',
+  'FIXABLE',
+  'PLAN_GAP',
+  'OVER_SCOPE',
+]);
+const CRITERION_ID_RE = /^S\d+\.\d+$/i;
+
+function tableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\||\|$/g, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function isTableSeparator(cells: readonly string[]): boolean {
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+/**
+ * Parse the criterion-grade verdict table emitted by `prd_audit`.
+ *
+ * The existing per-FR table is evidence only; the criterion table is the
+ * authoritative routing contract. Invalid grade vocabulary fails closed here
+ * instead of being interpreted by a later route as an implicit new grade.
+ */
+export function parsePrdAuditReport(
+  content: string,
+  activePlan?: string,
+): PrdAuditReportParseResult {
+  const prdMarker = content.match(
+    /^\s*(?:\*{0,2}\s*PRD\s*\*{0,2}\s*:|\*{0,2}\s*PRD\s*:\s*\*{0,2})\s*(present|none)\s*$/im,
+  );
+  if (!prdMarker) {
+    return prdAuditMechanicalFault('PRD audit report must declare **PRD:** present or none.');
   }
-  return [...expectedIds].filter((id) => !present.has(id.toUpperCase()));
+
+  const lines = verdictTableLines(content);
+  const headerIndex = lines.findIndex((line) => {
+    if (!/^\s*\|/.test(line)) return false;
+    const cells = tableCells(line).map((cell) => cell.toLowerCase());
+    return cells.includes('criterion') && cells.includes('grade');
+  });
+  if (headerIndex === -1) {
+    return prdAuditMechanicalFault('PRD audit report is missing its criterion-grade Verdict Table.');
+  }
+
+  const header = tableCells(lines[headerIndex]).map((cell) => cell.toLowerCase());
+  const criterionIndex = header.indexOf('criterion');
+  const gradeIndex = header.indexOf('grade');
+  const planTaskIndex = header.indexOf('plan task');
+  const prdIndex = header.findIndex((cell) => /^prd\s*:?$/.test(cell));
+  const evidenceIndex = header.indexOf('evidence');
+  const activePlanTaskIds = activePlan === undefined
+    ? undefined
+    : new Set(parsePlanTaskPaths(activePlan).keys());
+  const findings: PrdAuditFinding[] = [];
+
+  let readingCriterionTable = false;
+  for (const line of lines.slice(headerIndex + 1)) {
+    // The criterion table is followed by a retained per-FR context table in
+    // conformant reports.  It is evidence only, not another criterion row.
+    // A blank line ends the contiguous Markdown table, so never interpret
+    // the later table's FR-* cells as malformed story criteria.
+    if (!/^\s*\|/.test(line)) {
+      if (readingCriterionTable && line.trim() === '') break;
+      continue;
+    }
+    readingCriterionTable = true;
+    const cells = tableCells(line);
+    if (isTableSeparator(cells)) continue;
+    const criterion = cells[criterionIndex]?.toUpperCase();
+    if (!criterion || !CRITERION_ID_RE.test(criterion)) {
+      return prdAuditMechanicalFault('PRD audit finding has an empty or malformed Criterion.');
+    }
+
+    const rawGrade = cells[gradeIndex]?.toUpperCase();
+    if (!rawGrade || !PRD_AUDIT_GRADES.has(rawGrade as PrdAuditGrade)) {
+      return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Grade.`);
+    }
+
+    const rawPlanTask = planTaskIndex === -1 ? '' : cells[planTaskIndex] ?? '';
+    const planTask = rawPlanTask.trim() === '' || rawPlanTask.trim() === '—'
+      ? undefined
+      : Number(rawPlanTask);
+    if (planTask !== undefined && (!Number.isInteger(planTask) || planTask < 1)) {
+      return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Plan task.`);
+    }
+    if (rawGrade === 'FIXABLE' && planTask === undefined) {
+      return prdAuditMechanicalFault(
+        `PRD audit finding ${criterion} is FIXABLE but has no Plan task.`,
+      );
+    }
+    if (
+      rawGrade === 'FIXABLE' &&
+      activePlanTaskIds !== undefined &&
+      !activePlanTaskIds.has(String(planTask))
+    ) {
+      return prdAuditMechanicalFault(
+        `PRD audit finding ${criterion} names Plan task ${planTask}, which is absent from the active plan.`,
+      );
+    }
+
+    findings.push({
+      criterion,
+      grade: rawGrade as PrdAuditGrade,
+      ...(planTask === undefined ? {} : { planTask }),
+      prdIds: Object.freeze([...(prdIndex === -1 ? '' : cells[prdIndex] ?? '').matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((match) => match[0].toUpperCase())),
+      evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
+    });
+  }
+
+  return {
+    ok: true,
+    value: { prd: prdMarker[1].toLowerCase() as PrdAuditReport['prd'], findings },
+  };
+}
+
+function prdAuditMechanicalFault(error: string): PrdAuditReportParseResult {
+  return { ok: false, class: 'mechanical-fault', error };
 }
 
 /** Return a diagnostic when a resolved PRD requirement lacks an audit verdict row. */
@@ -3709,25 +4135,127 @@ export async function prdAuditCoverageGap(
   const hasFeatureIdentity = Boolean(context.activePlanPath || context.featureDesc || context.featureIdentities.length > 0);
   if (!hasFeatureIdentity) return null;
 
+  const parsed = parsePrdAuditReport(reportContent);
+  if (!parsed.ok) return parsed.error;
   const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
   if (prdPaths.length === 0) {
-    return 'PRD audit coverage is unresolvable: no approved PRD could be resolved for the feature.';
+    return parsed.value.prd === 'none'
+      ? null
+      : 'PRD audit report declares **PRD:** present but no approved PRD could be resolved for the feature.';
   }
 
-  let frIdSets: Set<string>[];
+  return parsed.value.prd === 'present'
+    ? null
+    : 'PRD audit report declares **PRD:** none but an approved PRD was resolved for the feature.';
+}
+
+/**
+ * Refuse a PRD audit that cannot establish its story-criteria authority, or
+ * that silently treats an uncovered PRD requirement as covered. Stories remain
+ * the audit key; an FR that no story traces must instead be explicitly called
+ * out with a PLAN_GAP row in the report.
+ */
+async function prdAuditStoryCoverageGap(
+  projectRoot: string,
+  context: ArtifactResolutionContext,
+  featureDesc: string | undefined,
+  reportContent: string,
+): Promise<string | null> {
+  const storyIdentity = featureDesc
+    ?? context.featureDesc
+    ?? (context.activePlanPath ? planStem(context.activePlanPath) : undefined)
+    ?? (context.planPath ? planStem(context.planPath) : undefined);
+  const storiesPath = await resolveFeatureStoriesPath(projectRoot, storyIdentity);
+  // Preserve the legacy PRD-only predicate contract for callers whose feature
+  // has no resolvable stories artifact. Once a stories file is resolved it is
+  // authoritative and must be readable.
+  if (!storiesPath) return null;
+
+  let storiesText: string;
   try {
-    frIdSets = await Promise.all(
-      prdPaths.map(async (path) => extractPrdFrIds(await readFile(path, 'utf8'))),
+    storiesText = await readFile(storiesPath, 'utf-8');
+  } catch {
+    return `PRD audit cannot read story criteria at ${relative(projectRoot, storiesPath)}.`;
+  }
+
+  const criterionIds = extractStoryCriterionIds(storiesText);
+  if (criterionIds.length === 0) {
+    return `PRD audit cannot parse story criteria in ${relative(projectRoot, storiesPath)}.`;
+  }
+  const parsed = parsePrdAuditReport(reportContent);
+  if (!parsed.ok) return parsed.error;
+  const expectedCriteria = new Set(criterionIds);
+  const reportedCriteria = new Set(parsed.value.findings.map((finding) => finding.criterion));
+  const unknownCriteria = [...reportedCriteria].filter((criterion) => !expectedCriteria.has(criterion));
+  if (unknownCriteria.length > 0) {
+    return `PRD audit report names criteria absent from the active stories: ${unknownCriteria.join(', ')}.`;
+  }
+  const missingCriteria = [...expectedCriteria].filter((criterion) => !reportedCriteria.has(criterion));
+  if (missingCriteria.length > 0) {
+    return `PRD audit report is missing criterion-grade rows for ${missingCriteria.join(', ')}.`;
+  }
+
+  const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
+  if (prdPaths.length === 0) return null;
+
+  let expectedIds: Set<string>;
+  try {
+    expectedIds = new Set(
+      (await Promise.all(prdPaths.map(async (path) => extractPrdFrIds(await readFile(path, 'utf8')))))
+        .flatMap((ids) => [...ids]),
     );
   } catch {
-    return 'PRD audit coverage is unreadable: a resolved approved PRD could not be read.';
+    // prdAuditCoverageGap owns the primary unreadable-PRD diagnostic.
+    return null;
   }
 
-  const expectedIds = new Set(
-    frIdSets.flatMap((ids) => [...ids]),
+  const covered = extractStoryCoveredFrIds(storiesText);
+  const uncovered = [...expectedIds].filter((id) => !covered.has(id));
+  const declaredPlanGaps = new Set(
+    parsed.value.findings
+      .filter((finding) => finding.grade === 'PLAN_GAP')
+      .flatMap((finding) => finding.prdIds),
   );
-  const missing = findFrIdsWithoutRows(reportContent, expectedIds);
-  return missing.length === 0 ? null : `PRD audit report is missing verdict rows for ${missing.join(', ')}.`;
+  const missingPlanGaps = uncovered.filter((id) => !declaredPlanGaps.has(id));
+  return missingPlanGaps.length === 0
+    ? null
+    : `PRD audit report is missing PLAN_GAP rows for PRD requirements without story coverage: ${missingPlanGaps.join(', ')}.`;
+}
+
+function extractStoryCoveredFrIds(storiesText: string): Set<string> {
+  const ids = new Set<string>();
+  for (const block of splitStoryBlocks(storiesText)) {
+    for (const match of block.text.matchAll(/^\s*\*\*Requirements?\s*:\*\*\s*(.+?)\s*$/gim)) {
+      for (const id of match[1].matchAll(/\bFR-\d+[A-Za-z]?\b/gi)) {
+        ids.add(id[0].toUpperCase());
+      }
+    }
+  }
+  return ids;
+}
+
+/** Map each authoritative Given/When/Then row to its report-table criterion id. */
+function extractStoryCriterionIds(storiesText: string): string[] {
+  const ids: string[] = [];
+  for (const block of splitStoryBlocks(storiesText)) {
+    const story = block.id?.match(/\d+/)?.[0];
+    if (!story) continue;
+    let ordinal = 0;
+    for (const type of ['happy', 'negative'] as const) {
+      const body = sectionBody(
+        block.text,
+        type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i,
+      );
+      if (body === null) continue;
+      for (const line of body.split('\n')) {
+        const match = line.match(/^\s*(?:[-*+] |\d+[.)] )(.+?)\s*$/);
+        if (!match || !/\bgiven\b/i.test(match[1]) || !/\bthen\b/i.test(match[1])) continue;
+        ordinal += 1;
+        ids.push(`S${story}.${ordinal}`);
+      }
+    }
+  }
+  return ids;
 }
 
 /**
@@ -3736,8 +4264,14 @@ export async function prdAuditCoverageGap(
  * blocking row. Verdict is read per-cell (see {@link parseFrVerdictRow}).
  */
 function findUnalignedFrRows(content: string): string[] {
+  const parsed = parsePrdAuditReport(content);
+  if (parsed.ok) {
+    return parsed.value.findings
+      .filter((finding) => finding.grade !== 'PASS')
+      .flatMap((finding) => finding.prdIds);
+  }
   const blocking: string[] = [];
-  for (const line of content.split('\n')) {
+  for (const line of verdictTableLines(content)) {
     const row = parseFrVerdictRow(line);
     if (row?.blocking) blocking.push(row.fr);
   }
@@ -3749,9 +4283,27 @@ function findUnalignedFrRows(content: string): string[] {
  * gap-class cell (`impl-gap | intended-drift | plan-gap`; `unknown` when the
  * class cell can't be read). Used by the daemon to decide self-heal vs HALT.
  */
-function findUnalignedFrRowsWithClass(content: string): UnalignedFrRow[] {
+function findUnalignedFrRowsWithClass(
+  content: string,
+  settledOverScopeCriteria: ReadonlySet<string> = new Set(),
+): UnalignedFrRow[] {
+  const parsed = parsePrdAuditReport(content);
+  if (parsed.ok) {
+    return parsed.value.findings
+      .filter((finding) => finding.grade !== 'PASS')
+      .filter((finding) =>
+        finding.grade !== 'OVER_SCOPE' || !settledOverScopeCriteria.has(finding.criterion))
+      .flatMap((finding) => finding.prdIds.map((fr) => ({
+        fr,
+        gapClass: finding.grade === 'FIXABLE'
+          ? 'impl-gap' as const
+          : finding.grade === 'PLAN_GAP'
+            ? 'plan-gap' as const
+            : 'intended-drift' as const,
+      })));
+  }
   const rows: UnalignedFrRow[] = [];
-  for (const line of content.split('\n')) {
+  for (const line of verdictTableLines(content)) {
     const row = parseFrVerdictRow(line);
     if (row?.blocking) rows.push({ fr: row.fr, gapClass: row.gapClass });
   }
@@ -3778,10 +4330,23 @@ export async function classifyPrdAuditGaps(
   sessionStartedAt: number | undefined,
 ): Promise<PrdGapClassification> {
   const files = await findArtifactFiles(dir, 'prd_audit');
+  const decisions = (await readOverScopeDecisions(dir)).decisions;
   const blocking: UnalignedFrRow[] = [];
   for (const f of files) {
     if (!(await fileIsFreshSinceSession(f, sessionStartedAt))) continue;
-    blocking.push(...findUnalignedFrRowsWithClass(await readFile(f, 'utf-8')));
+    const content = await readFile(f, 'utf-8');
+    // An OVER_SCOPE criterion the operator already accepted, or one whose
+    // intent relation never made it blocking, is not a gap this routing should
+    // act on. Reading only the fresh rows made an accepted widening re-route
+    // the next lap exactly as it did before the operator decided (ADR D8).
+    const relations = overScopeRelations(content);
+    const settled = new Set(
+      [...relations.keys()].filter((criterion) =>
+        ['accepted', 'not-blocking'].includes(
+          classifyOverScopeCriterion(criterion, relations, decisions),
+        )),
+    );
+    blocking.push(...findUnalignedFrRowsWithClass(content, settled));
   }
   if (blocking.length === 0) return { kind: 'clean', summary: 'no blocking FRs' };
 
@@ -3806,7 +4371,7 @@ const RETRY_CLASSIFY_STEPS: ReadonlySet<StepName> = new Set<StepName>([
 
 export type RetryDecision =
   | { decision: 'rerun' }
-  | { decision: 'route'; signal: 'named-route' | 'identical-repeat' };
+  | { decision: 'route'; signal: 'named-route' | 'identical-repeat' | 'unretryable-inputs' };
 
 /**
  * Pure, synchronous rerun-vs-route classifier for the SHIP-tail verdict steps
@@ -3817,7 +4382,9 @@ export type RetryDecision =
  * number. Signal (b) "identical-repeat" fires only when the retry has already
  * happened once (`attempt >= 2`) and produced the exact same reason on inputs
  * that provably haven't changed. The conductor computes `inputsUnchanged` and
- * `prdAuditNonClean` and passes them in; this helper does no I/O.
+ * `prdAuditNonClean` and passes them in. Signal (c) "unretryable-inputs"
+ * fires on the first attempt when the runner reports inputs that only another
+ * step can change. This helper does no I/O.
  */
 export function classifyRetryDecision(input: {
   step: StepName;
@@ -3826,9 +4393,12 @@ export function classifyRetryDecision(input: {
   priorReason?: string;
   inputsUnchanged: boolean;
   prdAuditNonClean?: boolean;
+  unretryableInputs?: { retryAfterStep: StepName };
 }): RetryDecision {
-  const { step, completion, attempt, priorReason, inputsUnchanged, prdAuditNonClean } = input;
+  const { step, completion, attempt, priorReason, inputsUnchanged, prdAuditNonClean, unretryableInputs } = input;
   if (!RETRY_CLASSIFY_STEPS.has(step)) return { decision: 'rerun' };
+
+  if (unretryableInputs) return { decision: 'route', signal: 'unretryable-inputs' };
 
   const namedRoute = step === 'prd_audit' ? prdAuditNonClean === true : completion.routeClass === 'named-route';
   if (namedRoute) return { decision: 'route', signal: 'named-route' };

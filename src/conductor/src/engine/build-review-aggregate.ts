@@ -3,21 +3,32 @@ import {
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
   type BuildReviewLapId,
+  type BuildReviewInfrastructureFailure,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
+import { isRegisteredRubric } from './build-review-registry.js';
+import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 import {
   matchesBuildReviewDisposition,
+  matchesBuildReviewReducedCoverageDisposition,
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
+  type BuildReviewReducedCoverageDispositionRecord,
 } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
-const RUBRICS = ['tautology', 'scope', 'rootCause', 'completeness'] as const;
+const RUBRICS = ['testQuality'] as const;
 
 type Coverage = 'judged' | 'skipped' | 'infrastructure-failure';
 type RubricFlags = Record<BuildReviewRubricId, boolean>;
 type LegacyFindings = Record<BuildReviewRubricId, string[]>;
+
+/** A rejected retired-rubric envelope is infrastructure evidence, never a reviewer FAIL. */
+export type BuildReviewVerdictEnvelopeValidation =
+  | { readonly kind: 'valid'; readonly result: BuildReviewRubricResult }
+  | { readonly kind: 'invalid' }
+  | { readonly kind: 'mechanical-fault'; readonly fault: BuildReviewInfrastructureFailure };
 
 /** The sole raw join: four attributable outcomes plus legacy gate fields. */
 export interface BuildReviewAggregate {
@@ -30,6 +41,8 @@ export interface BuildReviewAggregate {
   readonly rubric: Readonly<RubricFlags>;
   readonly findings: Readonly<LegacyFindings>;
   readonly reasons: readonly string[];
+  /** Engine-stamped current-lap reduced-coverage evidence, when an allowance was used. */
+  readonly reducedCoverageEvidence?: string;
   readonly codeStamp?: string | null;
 }
 
@@ -75,6 +88,42 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
   return exactKeys(candidate, keys) ? parseBuildReviewRubricResult(candidate) : undefined;
 }
 
+/**
+ * Keep registry membership at the verdict boundary: a retired rubric cannot
+ * turn its provider judgement into a semantic feature failure.
+ */
+export function validateBuildReviewVerdictEnvelope(value: unknown): BuildReviewVerdictEnvelopeValidation {
+  const result = strictResult(value);
+  if (!result) {
+    const candidate = record(value);
+    if (candidate?.kind === 'judged' && isNonEmptyString(candidate.rubric) && !isRegisteredRubric(candidate.rubric)) {
+      return {
+        kind: 'mechanical-fault',
+        fault: {
+          kind: 'infrastructure-failure',
+          // The current aggregate has one registered slot. Preserve the rejected
+          // id in detail while routing its bad envelope through that slot's
+          // established mechanical-fault lane.
+          rubric: 'testQuality',
+          reason: 'malformed-artifact',
+          detail: `unregistered build-review rubric: ${candidate.rubric}`,
+        },
+      };
+    }
+    return { kind: 'invalid' };
+  }
+  if (result.kind !== 'judged' || isRegisteredRubric(result.rubric)) return { kind: 'valid', result };
+  return {
+    kind: 'mechanical-fault',
+    fault: {
+      kind: 'infrastructure-failure',
+      rubric: result.rubric,
+      reason: 'malformed-artifact',
+      detail: `unregistered build-review rubric: ${result.rubric}`,
+    },
+  };
+}
+
 function parseResults(
   value: unknown,
   lapId: BuildReviewLapId,
@@ -84,8 +133,10 @@ function parseResults(
   if (!source || !exactKeys(source, RUBRICS)) return undefined;
   const results = {} as Record<BuildReviewRubricId, BuildReviewRubricResult>;
   for (const rubric of RUBRICS) {
-    const result = strictResult(source[rubric]);
-    if (!result || result.rubric !== rubric) return undefined;
+    const envelope = validateBuildReviewVerdictEnvelope(source[rubric]);
+    if (envelope.kind === 'invalid') return undefined;
+    const result = envelope.kind === 'mechanical-fault' ? envelope.fault : envelope.result;
+    if (envelope.kind === 'valid' && result.rubric !== rubric) return undefined;
     if (result.kind === 'judged' && (result.lapId !== lapId || result.snapshotDigest !== snapshotDigest)) return undefined;
     results[rubric] = result;
   }
@@ -98,7 +149,7 @@ function coverageFor(result: BuildReviewRubricResult): Coverage {
 
 function legacyFindingDetails(result: BuildReviewRubricResult): string[] {
   switch (result.kind) {
-    case 'judged': return [...result.findings.map((finding) => finding.concernKind), ...(result.relocationAudit ?? [])];
+    case 'judged': return result.findings.map((finding) => finding.concernKind);
     case 'skipped': return [`skipped: ${result.reason}`];
     case 'infrastructure-failure': return [`infrastructure failure: ${result.detail}`];
   }
@@ -150,9 +201,9 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   // four rubrics rather than be rejected as inconsistent. The relaxation is
   // scoped to aggregates that verifiably carried the retired member — a
   // four-rubric aggregate with a mismatched verdict is still corruption.
-  const carriedRetiredWiring = !!raw && (
+  const carriedRetiredRubric = !!raw && (
     (['results', 'coverage', 'rubric', 'findings'] as const)
-      .some((key) => { const memberMap = record(raw[key]); return !!memberMap && 'wiring' in memberMap; })
+      .some((key) => { const memberMap = record(raw[key]); return !!memberMap && Object.keys(memberMap).some(isRetiredBuildReviewRubric); })
   );
   const source = raw && Object.fromEntries(Object.entries(raw).map(([key, entry]) => {
     const memberMap = key === 'results' || key === 'coverage' || key === 'rubric' || key === 'findings'
@@ -160,14 +211,16 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
       : undefined;
     // A retired Wiring member also contributed legacy reason strings.  Drop
     // those alongside its derived maps before validating the four-rubric view.
-    return [key, carriedRetiredWiring && key === 'reasons' && Array.isArray(entry)
-      ? entry.filter((reason) => typeof reason !== 'string' || !reason.startsWith('[wiring]'))
-      : carriedRetiredWiring && memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => member !== 'wiring')) : entry];
+    return [key, carriedRetiredRubric && key === 'reasons' && Array.isArray(entry)
+      ? entry.filter((reason) => typeof reason !== 'string' || !/^\[(scope|rootCause|causalIntegrity|completeness|wiring)\]/.test(reason))
+      : carriedRetiredRubric && memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => !isRetiredBuildReviewRubric(member))) : entry];
   }));
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
+    ...(source.reducedCoverageEvidence === undefined ? [] : ['reducedCoverageEvidence']),
     ...(source.codeStamp === undefined ? [] : ['codeStamp']),
   ]) || source.aggregateVersion !== AGGREGATE_VERSION || !isNonEmptyString(source.snapshotDigest) ||
+    (source.reducedCoverageEvidence !== undefined && !isNonEmptyString(source.reducedCoverageEvidence)) ||
     (source.codeStamp !== undefined && source.codeStamp !== null && !isNonEmptyString(source.codeStamp))) return undefined;
   const lapId = parseBuildReviewLapId(source.lapId);
   if (!lapId) return undefined;
@@ -190,13 +243,14 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
   }
   const verdict = aggregateVerdict(results);
-  const verdictTolerated = carriedRetiredWiring && (source.verdict === 'PASS' || source.verdict === 'FAIL');
+  const verdictTolerated = carriedRetiredRubric && (source.verdict === 'PASS' || source.verdict === 'FAIL');
   if ((source.verdict !== verdict && !verdictTolerated) || JSON.stringify(coverage) !== JSON.stringify(expectedCoverage) ||
     JSON.stringify(rubric) !== JSON.stringify(expectedRubric) || JSON.stringify(findings) !== JSON.stringify(expectedFindings) ||
     JSON.stringify(source.reasons) !== JSON.stringify(expectedReasons)) return undefined;
   return {
     aggregateVersion: AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest, results, coverage: expectedCoverage,
     verdict, rubric: expectedRubric, findings: expectedFindings, reasons: expectedReasons,
+    ...(source.reducedCoverageEvidence !== undefined ? { reducedCoverageEvidence: source.reducedCoverageEvidence as string } : {}),
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
   };
 }
@@ -209,6 +263,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
 export function deriveEffectiveBuildReviewVerdict(
   value: unknown,
   acceptedFindingIds: ReadonlySet<string> = new Set(),
+  reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -216,6 +271,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const unresolved: string[] = [];
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
+  let uncoveredInfrastructureCount = 0;
   let judgedCount = 0;
   for (const rubric of RUBRICS) {
     const result = aggregate.results[rubric];
@@ -225,6 +281,11 @@ export function deriveEffectiveBuildReviewVerdict(
     }
     if (result.kind === 'infrastructure-failure') {
       infrastructure.push(rubric);
+      if (!reducedCoverage.some((decision) => matchesBuildReviewReducedCoverageDisposition(
+        decision.feature,
+        { rubric, reason: result.reason },
+        [decision],
+      ))) uncoveredInfrastructureCount += 1;
       continue;
     }
     judgedCount += 1;
@@ -238,7 +299,7 @@ export function deriveEffectiveBuildReviewVerdict(
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
-    verdict: judgedCount > 0 && unresolved.length === 0 && infrastructure.length === 0 ? 'PASS' : 'FAIL',
+    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructureCount === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
   });
@@ -253,6 +314,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   value: unknown,
   feature: BuildReviewFeatureIdentity,
   dispositions: readonly BuildReviewDispositionRecord[],
+  reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -268,5 +330,10 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
       if (matchesBuildReviewDisposition(feature, identity, dispositions)) acceptedIds.add(identity.id);
     }
   }
-  return deriveEffectiveBuildReviewVerdict(aggregate, acceptedIds);
+  return deriveEffectiveBuildReviewVerdict(
+    aggregate,
+    acceptedIds,
+    reducedCoverage.filter((decision) => decision.kind === 'reduced-coverage' &&
+      matchesBuildReviewReducedCoverageDisposition(feature, decision.identity, [decision])),
+  );
 }

@@ -366,9 +366,9 @@ describe('conduct create — scaffold + register (FR-6)', () => {
     const originUrl = await execFileAsync('git', [
       '-C',
       proj,
-      'remote',
-      'get-url',
-      'origin',
+      'config',
+      '--get',
+      'remote.origin.url',
     ])
       .then((r) => r.stdout.trim())
       .catch(() => '');
@@ -400,7 +400,7 @@ describe('conduct create — scaffold + register (FR-6)', () => {
 
     // But git still has the REAL credential-bearing URL (git needs it).
     const originUrl = await execFileAsync('git', [
-      '-C', join(sandbox, 'leaky'), 'remote', 'get-url', 'origin',
+      '-C', join(sandbox, 'leaky'), 'config', '--get', 'remote.origin.url',
     ]).then((r) => r.stdout.trim()).catch(() => '');
     expect(originUrl).toBe(tokenUrl);
   });

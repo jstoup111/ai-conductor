@@ -2,13 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { boundedHeadTailExcerpt } from './build-review-tautology-preflight.js';
+import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js';
 
 export const BUILD_REVIEW_REPAIR_LEDGER = '.pipeline/build-review-rebase-repairs.json';
 
 /**
  * Byte cap for one record's persisted diagnostic. Repair records ride into
- * the tautology, scope, and rootCause rubric prompts and accumulate across
+ * the test-quality prompt and accumulate across
  * rebases, so each diagnostic is bounded by construction at creation time —
  * pure byte-position head+tail truncation, no runner-output parsing.
  */

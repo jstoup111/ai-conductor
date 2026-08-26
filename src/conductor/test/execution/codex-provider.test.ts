@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { promisify } from 'node:util';
 import {
   CodexProvider,
@@ -13,12 +14,14 @@ import type {
   AuthenticationReadiness,
   InvokeOptions,
 } from '../../src/execution/llm-provider.js';
+import type { RateCard } from '../../src/execution/rate-card.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
-import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
+import type { Options as ExecaOptions, Result as ExecaResult, ResultPromise } from 'execa';
 import {
   deriveBindSet,
   wrapForContainment,
 } from '../../src/engine/self-host/live-containment.js';
+import { classifyMetering } from '../../src/engine/metering.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -45,6 +48,13 @@ const { mockValidateSpawnPermit } = vi.hoisted(() => ({
 }));
 vi.mock('../../src/engine/provider-runtime.js', () => ({
   validateSpawnPermit: mockValidateSpawnPermit,
+}));
+
+const { mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
+  mockEnforceFreshSessionOptions: vi.fn(),
+}));
+vi.mock('../../src/execution/fresh-session.js', () => ({
+  enforceFreshSessionOptions: mockEnforceFreshSessionOptions,
 }));
 
 const baseOptions: InvokeOptions = {
@@ -84,11 +94,176 @@ describe('CodexProvider', () => {
     vi.resetAllMocks();
     mockValidateSpawnPermit.mockImplementation((permit, purpose) =>
       permit?.(purpose) ?? { permitted: true });
+    mockEnforceFreshSessionOptions.mockImplementation((options, provider) => ({
+      ...options,
+      sessionId: '00000000-0000-4000-8000-000000000002',
+      resume: false,
+    }));
     provider = new CodexProvider(
       vi.fn(async (_command, _args, options) =>
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
     );
+  });
+
+  it.each([
+    {
+      name: 'non-zero streaming exit with an otherwise valid envelope',
+      stdout: jsonlMessage('partial completion'),
+      exitCode: 1,
+    },
+    {
+      name: 'unparseable streaming stdout',
+      stdout: 'not a Codex JSONL envelope',
+      exitCode: 0,
+    },
+    {
+      name: 'streaming envelope without a terminal result record',
+      stdout: JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'partial completion' },
+      }),
+      exitCode: 0,
+      expectedMessage: 'missing terminal result record',
+    },
+  ])('records no usage for $name', async ({ stdout, exitCode, expectedMessage }) => {
+    mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode, failed: exitCode !== 0 } as any);
+
+    const result = await provider.invoke({ ...baseOptions, interactive: false });
+
+    expect(result).toMatchObject({ success: false, exitCode });
+    expect(result.tokenUsage).toBeUndefined();
+    expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
+    if (expectedMessage) expect(result.output).toContain(expectedMessage);
+  });
+
+  it('rejects malformed successful machine output when interactive is omitted', async () => {
+    mockExeca.mockResolvedValue({
+      stdout: 'not a Codex JSONL envelope',
+      stderr: '',
+      exitCode: 0,
+      failed: false,
+    } as any);
+
+    const result = await provider.invoke(baseOptions);
+
+    expect(result).toMatchObject({ success: false, exitCode: 0 });
+    expect(result.tokenUsage).toBeUndefined();
+    expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
+    expect(result.output).toContain('missing terminal result record');
+  });
+
+  it('preserves an autonomous step envelope output and usage on the unified dispatch', async () => {
+    const autonomousProvider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      undefined,
+      undefined,
+      undefined,
+      () => ({
+        as_of: '2026-08-24T00:00:00.000Z',
+        source: 'test',
+        models: {
+          'gpt-5.6-terra': {
+            input_cost_per_token: 1,
+            cache_read_input_token_cost: 1,
+            output_cost_per_token: 1,
+          },
+        },
+      }),
+    );
+    mockExeca.mockResolvedValue({
+      stdout: jsonlMessage('Autonomous task completed.'),
+      stderr: '',
+      exitCode: 0,
+    } as any);
+
+    const result = await autonomousProvider.invoke({
+      ...baseOptions,
+      interactive: false,
+      model: 'gpt-5.6-terra',
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      output: 'Autonomous task completed.',
+      tokenUsage: {
+        input: 8,
+        cacheRead: 4,
+        output: 7,
+        numTurns: 1,
+        costUsd: 19,
+        costSource: 'rate-card',
+      },
+    });
+    expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
+  });
+
+  it('uses the self-host executable for a non-REPL streaming dispatch', async () => {
+    mockExeca.mockResolvedValue({
+      stdout: jsonlMessage('Self-host dispatch completed.'),
+      stderr: '',
+      exitCode: 0,
+      failed: false,
+    } as any);
+
+    await provider.invoke({
+      ...baseOptions,
+      interactive: false,
+      selfHost: {
+        executable: '/isolated/bin/codex',
+        env: { CODEX_HOME: '/isolated/codex-home' },
+        args: ['--config', 'project_doc_max_bytes=0'],
+        teardown: async () => {},
+      },
+    });
+
+    expect(mockExeca).toHaveBeenCalledWith(
+      '/isolated/bin/codex',
+      expect.arrayContaining(['--config', 'project_doc_max_bytes=0', 'exec', '--json']),
+      expect.anything(),
+    );
+  });
+
+  it('keeps tokens from an unpriceable terminal envelope cost-unmetered', async () => {
+    const emptyRateCard: RateCard = {
+      as_of: '2026-08-25T00:00:00.000Z',
+      source: 'test',
+      models: {},
+    };
+    const unpriceable = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      undefined,
+      undefined,
+      undefined,
+      () => emptyRateCard,
+    );
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('completed'), stderr: '', exitCode: 0 } as any);
+
+    const result = await unpriceable.invoke({
+      ...baseOptions,
+      interactive: false,
+      model: 'not-in-the-rate-card',
+    });
+
+    expect(result.tokenUsage).toMatchObject({ input: 8, cacheRead: 4, output: 7 });
+    expect(result.tokenUsage?.costUsd).toBeUndefined();
+    expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
+  });
+
+  it('keeps a usage-absent terminal envelope unmetered', async () => {
+    mockExeca.mockResolvedValue({
+      stdout: JSON.stringify({ type: 'turn.completed' }),
+      stderr: '',
+      exitCode: 0,
+    } as any);
+
+    const result = await provider.invoke({ ...baseOptions, interactive: false });
+
+    expect(result).toMatchObject({ success: true, output: JSON.stringify({ type: 'turn.completed' }) });
+    expect(result.tokenUsage).toBeUndefined();
+    expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
   });
 
   describe('usage-cap exhaustion vs transient throttle', () => {
@@ -132,8 +307,101 @@ describe('CodexProvider', () => {
     });
   });
 
+  // A Codex dispatch whose sandbox cannot create a process for ANY shell tool
+  // call still exits 0 and still emits a confident final answer. Observed on a
+  // host that denies Codex's sandbox its user namespace: every `exec_command`
+  // was rejected, yet the build_review rubric returned `findings: []` — a PASS
+  // from a reviewer that could not run `git diff`. Classify it as a failed
+  // dispatch so it fails loudly instead of degrading silently.
+  describe('tool-call process creation rejected by the provider sandbox', () => {
+    const routerRejection = (command: string) =>
+      'ERROR codex_core::tools::router: error=exec_command failed for `' + command
+      + '`: CreateProcess { message: "Rejected(\\"Failed to create unified exec process: '
+      + 'No such file or directory (os error 2)\\")" }';
+
+    it('fails the dispatch when the provider could not create a tool process, despite exit 0', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: jsonlMessage('{"kind":"judged","rubric":"rootCause","findings":[]}'),
+        stderr: [routerRejection('/usr/bin/zsh -lc pwd'), routerRejection('/bin/sh -c pwd')].join('\n'),
+        exitCode: 0,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect({
+        success: result.success,
+        namesTheFailure: /could not create a process for 2 shell tool call/.test(result.output),
+        leaksTheAnswer: result.output.includes('"kind":"judged"'),
+        rateLimited: result.rateLimited,
+        authFailure: result.authFailure,
+      }).toEqual({
+        success: false,
+        namesTheFailure: true,
+        leaksTheAnswer: false,
+        rateLimited: undefined,
+        authFailure: undefined,
+      });
+    });
+
+    it('leaves an ordinary successful dispatch untouched when the sandbox rejects a single command by policy', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: jsonlMessage('Done.'),
+        stderr: 'command rejected: Rejected("approval policy denied `rm -rf /`")',
+        exitCode: 0,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect({ success: result.success, output: result.output.startsWith('Done.') })
+        .toEqual({ success: true, output: true });
+    });
+  });
+
   it('declares synchronous spawn-permit lifecycle capability', () => {
     expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
+  });
+
+  it('continues a non-REPL dispatch when its JSONL stream consumer throws after receiving token usage', async () => {
+    const stdout = new PassThrough();
+    let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+    let resolveStarted: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+      resolveProcess = resolve;
+    }), { stdout, kill: vi.fn() });
+    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()), 'codex', undefined, () => {
+      resolveStarted!();
+      return process as any;
+    });
+    const observations: unknown[] = [];
+
+    const invocation = provider.invoke({
+      ...baseOptions,
+      streamConsumer: {
+        onProviderStream: (observation) => {
+          observations.push(observation);
+          throw new Error('stream consumer failed');
+        },
+        close: vi.fn(),
+      },
+    });
+    await started;
+    const record = JSON.stringify({
+      type: 'turn.completed',
+      usage: { input_tokens: 17, cached_input_tokens: 5, output_tokens: 7 },
+    });
+    stdout.write(`${record}\n`);
+    resolveProcess!({ stdout: record, stderr: '', exitCode: 0 });
+
+    await expect(invocation).resolves.toMatchObject({ success: true, exitCode: 0 });
+    expect(observations).toEqual([expect.objectContaining({
+      childObservability: 'unsupported',
+      uncachedInputTokens: 12,
+      cachedInputTokens: 5,
+      outputTokens: 7,
+    })]);
   });
 
   it('checks a current permit before readiness and immediately before the injected subprocess factory', async () => {
@@ -161,7 +429,7 @@ describe('CodexProvider', () => {
 
   it.each([
     ['unattended invocation', (options: InvokeOptions) => provider.invoke(options)],
-    ['automatic interactive streaming', (options: InvokeOptions) => provider.invokeInteractive({ ...options, interactive: false })],
+    ['automatic interactive streaming', (options: InvokeOptions) => provider.invoke({ ...options, interactive: false })],
   ])('does not start doctor or exec for a revoked permit during %s', async (_name, invoke) => {
     const processStarts: string[] = [];
     const runDoctor = vi.fn(async () => {
@@ -207,7 +475,7 @@ describe('CodexProvider', () => {
     });
     provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
 
-    await provider.invokeInteractive({ ...baseOptions, interactive: false, spawnPermit });
+    await provider.invoke({ ...baseOptions, interactive: false, spawnPermit });
 
     expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
   });
@@ -343,7 +611,7 @@ describe('CodexProvider', () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('contained'), exitCode: 0 } as any);
 
     await provider.invoke({ ...baseOptions, selfHost });
-    await provider.invokeInteractive({ ...baseOptions, selfHost, interactive: true });
+    await provider.invoke({ ...baseOptions, selfHost, interactive: true });
 
     expect(mockExeca.mock.calls.map(([executable, args]) => ({ executable, args }))).toEqual([
       {
@@ -355,6 +623,7 @@ describe('CodexProvider', () => {
           ...isolatedHomeArgs,
           'exec',
           '--config', 'sandbox_mode="workspace-write"',
+          '--config', 'sandbox_workspace_write.network_access=true',
           '--config', 'approval_policy="on-request"',
           '--config', 'approvals_reviewer="auto_review"',
           '--config', 'shell_environment_policy.ignore_default_excludes=false',
@@ -376,6 +645,55 @@ describe('CodexProvider', () => {
         ],
       },
     ]);
+  });
+
+  it('passes every unattended execution policy through the injected subprocess factory', async () => {
+    const subprocessFactory = vi.fn<
+      (file: string, args: readonly string[], options: ExecaOptions) => ResultPromise
+    >(() =>
+      Promise.resolve({ stdout: jsonlMessage('unattended'), exitCode: 0, failed: false }) as any,
+    );
+    provider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      undefined,
+      subprocessFactory,
+    );
+
+    await provider.invoke(baseOptions);
+
+    expect(subprocessFactory).toHaveBeenCalledOnce();
+    const unattendedArgs = subprocessFactory.mock.calls[0][1] as string[];
+    const configValues = unattendedArgs.flatMap((argument, index) =>
+      argument === '--config' ? [unattendedArgs[index + 1]] : [],
+    );
+    expect(configValues).toEqual(expect.arrayContaining([
+      'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.network_access=true',
+      'approval_policy="on-request"',
+      'approvals_reviewer="auto_review"',
+      'shell_environment_policy.ignore_default_excludes=false',
+    ]));
+  });
+
+  it('passes no --config values through the injected subprocess factory for an interactive REPL dispatch', async () => {
+    const subprocessFactory = vi.fn<
+      (file: string, args: readonly string[], options: ExecaOptions) => ResultPromise
+    >(() =>
+      Promise.resolve({ stdout: 'interactive', exitCode: 0, failed: false }) as any,
+    );
+    provider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      undefined,
+      subprocessFactory,
+    );
+
+    await provider.invoke({ ...baseOptions, interactive: true });
+
+    expect(subprocessFactory).toHaveBeenCalledOnce();
+    const interactiveArgs = subprocessFactory.mock.calls[0][1] as string[];
+    expect(interactiveArgs).not.toContain('--config');
   });
 
   it('passes an engine-derived containment launcher with more than sixteen arguments to Codex', async () => {
@@ -410,6 +728,7 @@ describe('CodexProvider', () => {
             ...contained.args,
             'exec',
             '--config', 'sandbox_mode="workspace-write"',
+            '--config', 'sandbox_workspace_write.network_access=true',
             '--config', 'approval_policy="on-request"',
             '--config', 'approvals_reviewer="auto_review"',
             '--config', 'shell_environment_policy.ignore_default_excludes=false',
@@ -429,7 +748,7 @@ describe('CodexProvider', () => {
     {
       name: 'operator-interactive completion',
       invoke: (subject: CodexProvider) =>
-        subject.invokeInteractive({ ...baseOptions, interactive: true }),
+        subject.invoke({ ...baseOptions, interactive: true }),
       response: { stdout: 'Done!', stderr: '', exitCode: 0 },
       expected: { success: true },
     },
@@ -442,7 +761,7 @@ describe('CodexProvider', () => {
     {
       name: 'automatic permission rejection',
       invoke: (subject: CodexProvider) =>
-        subject.invokeInteractive({ ...baseOptions, interactive: false }),
+        subject.invoke({ ...baseOptions, interactive: false }),
       response: {
         stdout: '',
         stderr: 'Codex automatic review denied the permission request.',
@@ -568,6 +887,7 @@ describe('CodexProvider', () => {
     expect(args).toEqual(expect.arrayContaining(['--config', 'model_reasoning_effort="high"']));
     expect(args).toEqual(expect.arrayContaining([
       '--config', 'sandbox_mode="workspace-write"',
+      '--config', 'sandbox_workspace_write.network_access=true',
       '--config', 'approval_policy="on-request"',
       '--config', 'approvals_reviewer="auto_review"',
       '--config', 'shell_environment_policy.ignore_default_excludes=false',
@@ -598,6 +918,7 @@ describe('CodexProvider', () => {
     expect(args).toEqual(expect.arrayContaining(['--cd', '/workspace/project']));
     expect(args).toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.network_access=true',
       'approval_policy="on-request"',
       'approvals_reviewer="auto_review"',
       'shell_environment_policy.ignore_default_excludes=false',
@@ -605,6 +926,24 @@ describe('CodexProvider', () => {
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(args.at(-1)).toBe('-');
     expect(options.cwd).toBe('/workspace/project');
+  });
+
+  it.each([
+    ['non-REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: false })],
+    ['REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: true })],
+  ])('forces a fresh, non-resumed Codex session exactly once for a %s dispatch', async (_mode, dispatch) => {
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Fresh.'), exitCode: 0 } as any);
+
+    await dispatch({ ...baseOptions, resume: true });
+
+    expect(mockEnforceFreshSessionOptions).toHaveBeenCalledTimes(1);
+    expect(mockEnforceFreshSessionOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'thread-123', resume: true }),
+      'codex',
+    );
+    const [, args] = mockExeca.mock.calls[0];
+    expect(args).not.toContain('thread-123');
+    expect(args).not.toContain('resume');
   });
 
   it('enforces the same policy for automatic streaming while keeping API keys in the Codex client environment', async () => {
@@ -619,7 +958,7 @@ describe('CodexProvider', () => {
     );
 
     try {
-      await apiKeyProvider.invokeInteractive({
+      await apiKeyProvider.invoke({
         ...baseOptions,
         interactive: false,
         dangerouslySkipPermissions: true,
@@ -628,6 +967,7 @@ describe('CodexProvider', () => {
       const [, args, options] = mockExeca.mock.calls[0];
       expect(args).toEqual(expect.arrayContaining([
         'sandbox_mode="workspace-write"',
+        'sandbox_workspace_write.network_access=true',
         'approval_policy="on-request"',
         'approvals_reviewer="auto_review"',
         'shell_environment_policy.ignore_default_excludes=false',
@@ -652,7 +992,7 @@ describe('CodexProvider', () => {
 
     try {
       const oneShot = await apiKeyProvider.invoke(baseOptions);
-      const automatic = await apiKeyProvider.invokeInteractive({ ...baseOptions, interactive: false });
+      const automatic = await apiKeyProvider.invoke({ ...baseOptions, interactive: false });
 
       expect(mockExeca.mock.calls.map(([, , options]) => ({ stdout: options.stdout, stderr: options.stderr }))).toEqual([
         { stdout: 'pipe', stderr: 'pipe' },
@@ -673,7 +1013,7 @@ describe('CodexProvider', () => {
       .mockResolvedValueOnce({ stdout: 'automatic output', stderr: 'automatic stderr', exitCode: 0 } as any);
 
     await provider.invoke({ ...baseOptions, diagnosticLog: featureLog });
-    await provider.invokeInteractive({ ...baseOptions, interactive: false, diagnosticLog: featureLog });
+    await provider.invoke({ ...baseOptions, interactive: false, diagnosticLog: featureLog });
 
     // A recognized JSONL machine stream reaches the daemon log as a readable
     // summary; prose stdout and stderr still pass through verbatim so no
@@ -703,7 +1043,7 @@ describe('CodexProvider', () => {
       .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review failed to produce a decision.', exitCode: 1 } as any);
 
     const oneShot = await provider.invoke(baseOptions);
-    const automaticStream = await provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
+    const automaticStream = await provider.invoke({ ...baseOptions, interactive: false, resume: true });
     const unknownReview = await provider.invoke(baseOptions);
     const failedReview = await provider.invoke(baseOptions);
 
@@ -740,7 +1080,7 @@ describe('CodexProvider', () => {
       .mockResolvedValueOnce({ stdout: '', stderr: 'build failed', exitCode: 1 } as any);
 
     const emptyFailure = await provider.invoke(baseOptions);
-    const timeoutFailure = await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    const timeoutFailure = await provider.invoke({ ...baseOptions, interactive: false });
     const unrelatedUnknown = await provider.invoke(baseOptions);
     const buildFailure = await provider.invoke(baseOptions);
 
@@ -1292,7 +1632,7 @@ describe('CodexProvider', () => {
     {
       name: 'initial automatic stream succeeds',
       resume: false,
-      response: { stdout: 'Real invocation completed.', stderr: '', exitCode: 0 },
+      response: { stdout: jsonlMessage('Real invocation completed.'), stderr: '', exitCode: 0 },
       expected: { success: true },
       authenticationState: 'probe-failed',
     },
@@ -1370,7 +1710,7 @@ describe('CodexProvider', () => {
       const degradedProvider = new CodexProvider(runDoctor);
       mockExeca.mockResolvedValue(response as any);
 
-      const result = await degradedProvider.invokeInteractive({
+      const result = await degradedProvider.invoke({
         ...baseOptions,
         interactive: false,
         resume,
@@ -1388,7 +1728,7 @@ describe('CodexProvider', () => {
 
   it.each([
     ['ordinary', (provider: CodexProvider) => provider.invoke(baseOptions)],
-    ['unattended', (provider: CodexProvider) => provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true })],
+    ['unattended', (provider: CodexProvider) => provider.invoke({ ...baseOptions, interactive: false, resume: true })],
   ] as const)('preserves failed probe evidence when the %s completion reports an unavailable provider', async (_context, invoke) => {
     const runDoctor = vi.fn().mockResolvedValue({ stdout: '{"schemaVersion":', exitCode: 0 });
     const degradedProvider = new CodexProvider(runDoctor);
@@ -1427,7 +1767,7 @@ describe('CodexProvider', () => {
       });
       const gatedProvider = new CodexProvider(runDoctor);
       const initial = await gatedProvider.invoke(baseOptions);
-      const adjacent = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
+      const adjacent = await gatedProvider.invoke({ ...baseOptions, interactive: false, resume: true });
 
       expect({
         initial: initial.authentication?.state,
@@ -1460,7 +1800,7 @@ describe('CodexProvider', () => {
     {
       name: 'rejected selected-source evidence despite a successful mixed doctor result',
       invoke: (subject: CodexProvider) =>
-        subject.invokeInteractive({ ...baseOptions, interactive: false }),
+        subject.invoke({ ...baseOptions, interactive: false }),
       evidence: {
         schemaVersion: 1,
         auth: { selectedMode: 'cached-login', configured: true, rejected: true },
@@ -1541,8 +1881,8 @@ describe('CodexProvider', () => {
     const gatedProvider = new CodexProvider(runDoctor);
     mockExeca.mockResolvedValue({ stdout: 'interactive output', exitCode: 0 } as any);
 
-    const automatic = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false });
-    const interactive = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: true });
+    const automatic = await gatedProvider.invoke({ ...baseOptions, interactive: false });
+    const interactive = await gatedProvider.invoke({ ...baseOptions, interactive: true });
 
     expect({
       automaticState: automatic.authentication?.state,
@@ -1711,7 +2051,7 @@ describe('CodexProvider', () => {
 
     for (const invoke of [
       (provider: CodexProvider) => provider.invoke({ ...baseOptions, diagnosticLog: featureLog }),
-      (provider: CodexProvider) => provider.invokeInteractive({ ...baseOptions, interactive: false, diagnosticLog: featureLog }),
+      (provider: CodexProvider) => provider.invoke({ ...baseOptions, interactive: false, diagnosticLog: featureLog }),
     ]) {
       featureLog.mockClear();
       const result = await invoke(new CodexProvider(runDoctor));
@@ -1964,14 +2304,14 @@ describe('CodexProvider', () => {
     );
   });
 
-  it('captures output for a noninteractive invokeInteractive call', async () => {
+  it('requests JSON output for a non-REPL invokeInteractive call', async () => {
     mockExeca.mockResolvedValue({ exitCode: 0 } as any);
 
-    await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    await provider.invoke({ ...baseOptions, interactive: false });
 
     const [, args, options] = mockExeca.mock.calls[0];
     expect(args).toEqual(expect.arrayContaining(['exec', '-']));
-    expect(args).not.toContain('--json');
+    expect(args).toContain('--json');
     expect(options).toMatchObject({
       stdin: 'pipe',
       stdout: 'pipe',
@@ -1979,10 +2319,19 @@ describe('CodexProvider', () => {
     });
   });
 
+  it('keeps JSON output disabled for a REPL invokeInteractive call', async () => {
+    mockExeca.mockResolvedValue({ stdout: 'visible output', stderr: '', exitCode: 0 } as any);
+
+    await provider.invoke({ ...baseOptions, interactive: true });
+
+    const [, args] = mockExeca.mock.calls[0];
+    expect(args).not.toContain('--json');
+  });
+
   it('live-inherits captured output for a true operator-interactive call', async () => {
     mockExeca.mockResolvedValue({ stdout: 'visible output', stderr: '', exitCode: 0 } as any);
 
-    await provider.invokeInteractive({ ...baseOptions, interactive: true });
+    await provider.invoke({ ...baseOptions, interactive: true });
 
     const [, , options] = mockExeca.mock.calls[0];
     expect({ stdout: options.stdout, stderr: options.stderr }).toEqual({
@@ -1991,13 +2340,34 @@ describe('CodexProvider', () => {
     });
   });
 
+  it('delegates both interactive modes through invoke and classifies automatic JSON output as an envelope', async () => {
+    const dispatch = vi.spyOn(provider, 'invoke');
+    mockExeca.mockResolvedValueOnce({ stdout: jsonlMessage('automatic completion'), stderr: '', exitCode: 0 } as any);
+    mockExeca.mockResolvedValueOnce({ stdout: 'operator completion', stderr: '', exitCode: 0 } as any);
+
+    const automatic = await provider.invoke({ ...baseOptions, interactive: false });
+    const repl = await provider.invoke({ ...baseOptions, interactive: true });
+
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(automatic.tokenUsage).toMatchObject({ input: 8, output: 7 });
+    expect(repl.tokenUsage).toBeUndefined();
+    expect(mockExeca.mock.calls.map(([, args, options]) => ({
+      json: args.includes('--json'),
+      stdout: options.stdout,
+      stderr: options.stderr,
+    }))).toEqual([
+      { json: true, stdout: 'pipe', stderr: 'pipe' },
+      { json: false, stdout: ['pipe', 'inherit'], stderr: ['pipe', 'inherit'] },
+    ]);
+  });
+
   it('streams interactive output and returns classified completion', async () => {
     const missingOutput =
       "LLM provider 'codex' not found. Install it or check your PATH.";
     const cases = [
       {
         name: 'success',
-        response: { stdout: 'Done!', stderr: '', exitCode: 0, failed: false },
+        response: { stdout: jsonlMessage('Done!'), stderr: '', exitCode: 0, failed: false },
         expected: { success: true, output: 'Done!', exitCode: 0 },
       },
       {
@@ -2069,7 +2439,7 @@ describe('CodexProvider', () => {
 
     for (const fixture of cases) {
       mockExeca.mockResolvedValue(fixture.response as any);
-      const result = await provider.invokeInteractive(baseOptions);
+      const result = await provider.invoke(baseOptions);
       const lastCall = mockExeca.mock.calls.at(-1);
       if (!lastCall) throw new Error('expected execa to have been called');
       const [, , execaOptions] = lastCall;

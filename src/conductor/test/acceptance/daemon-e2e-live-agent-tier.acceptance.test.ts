@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
-import { dumpPipelineDiagnostics } from '../engine/daemon-e2e-fixture.test.js';
+import { dumpPipelineDiagnostics } from '../fixtures/daemon-e2e-diagnostics.js';
 import { LIVE_E2E_PROVIDERS } from '../fixtures/live-e2e-providers.js';
 import {
   enforceLiveE2ETokenCap,
@@ -16,7 +16,7 @@ import {
   withLiveE2EFailureDiagnostics,
 } from '../fixtures/live-e2e-run-body.js';
 
-vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
+vi.mock('../fixtures/daemon-e2e-diagnostics.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 
@@ -60,7 +60,6 @@ describe('live-agent daemon E2E tier (#1124)', () => {
       invoke: vi.fn()
         .mockResolvedValueOnce({ success: true, output: 'first', exitCode: 0, tokenUsage: { input: 11, output: 7, numTurns: 1 } })
         .mockResolvedValueOnce({ success: true, output: 'second', exitCode: 0, tokenUsage: { input: 13, output: 11, numTurns: 2 } }),
-      invokeInteractive: vi.fn(),
     };
     const meter = new TokenMeter(provider);
     const report = vi.fn();

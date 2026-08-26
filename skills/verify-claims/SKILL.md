@@ -1,5 +1,6 @@
 ---
 name: verify-claims
+implicit_invocation: required
 description: "Use whenever a statement, theory, or assumption is about to become load-bearing for a spec, plan, ADR, or code. Attaches grounded confidence estimates to claims, always surfaces assumptions, and HARD-BLOCKS work built on unconfirmed assumptions until the operator approves them."
 enforcement: gating
 phase: all

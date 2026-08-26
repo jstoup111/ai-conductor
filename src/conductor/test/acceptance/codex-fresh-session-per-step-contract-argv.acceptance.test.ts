@@ -72,7 +72,7 @@ describe('CodexProvider argv never expresses a session resume', () => {
     } as never);
 
     await provider.invoke({ ...baseOptions });
-    await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    await provider.invoke({ ...baseOptions, interactive: false });
 
     const observed = mockExeca.mock.calls.map(([, args]) => ({
       head: args[0],

@@ -141,7 +141,6 @@ function deps(
     daemon: false,
     provider: {
       invoke: async () => ({ success: true, output: '', exitCode: 0 }),
-      invokeInteractive: async () => {},
     },
     project: 'test-project',
     projectRoot: '/proj',
@@ -565,7 +564,6 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     const configuredProviders = ['claude'] as const;
     const provider = {
       invoke: async () => ({ success: true, output: '', exitCode: 0 }),
-      invokeInteractive: async () => ({ success: true, output: '', exitCode: 0 }),
     };
     const contexts: ProviderExecutionContext[] = [];
     const providerExecution = () => {

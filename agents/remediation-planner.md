@@ -86,8 +86,41 @@ exception — reserved for two human categories only.
   — never a task weakening the production code back to the old behavior. A test exposing a real impl
   bug gets impl-fix tasks. Use gap id `test:<failing file stem>`.
 - **Sibling trigger routes remain unchanged.** A clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`. A `build_stall` question answerable from committed artifacts routes `build`; a question needing architecture, product, or unanswerable judgment routes `halt`.
+- **Never task a regression — every trigger, not just finish failures.** When a task removes,
+  replaces, rewrites, or relaxes existing code, tests, or assertions, name in the task title (or the
+  `rationale`) the completed plan task or story criterion whose delivered behavior and coverage
+  survive it. Positive example: "remove the seeded-PRD workaround AND keep the negative assertion
+  that the run cannot finish without the verdict (plan Task 33(d))". Negative example: a task that
+  says only "remove the workaround", leaving the next lap to discover the assertion went with it.
+  Unless the evidence shows the coverage is redundant, the replacement belongs in the same task as
+  the removal.
+- **Regression by omission — edit one of a matched pair, name the other.** A regression does not
+  have to be a deletion. When a task changes an enumeration, registry, vocabulary, id list, grammar,
+  or any value that a second location duplicates or must agree with, name the counterpart and bring
+  it along in the same task — or derive both from one source so they cannot drift again, which is
+  the better fix whenever the evidence supports it. Positive example: "add `tautology` to
+  `RETIRED_BUILD_REVIEW_RUBRIC_IDS` at `build-review-dispositions.ts:135` AND the retired-key list
+  at `config.ts:89`, or derive both from `DEPRECATED_BUILD_REVIEW_RUBRIC_IDS`". Negative example: a
+  task naming only one of the two lists, leaving them to diverge until something reads both and
+  fails.
+- **Close the class, not the cited instance.** This is the single biggest cause of audit cycling.
+  The gap's evidence tells you where the auditor looked, not how far the defect reaches. Sweep for
+  every site of the same shape and put them all in the one task. Positive example: the gap cites a
+  routing branch keyed on `allTasks.length` at `conductor.ts:3139` — grep the file, find `:3419`
+  keyed the same way, and task both. Positive example: a task deletes a dead code arm — it also
+  covers what that deletion orphans, so the arm's last caller and its fixtures go with it instead
+  of becoming residue. Negative example: task exactly the one `file:line` the auditor quoted, and
+  watch the next cycle raise the sibling site as a fresh finding.
+- **The sweep stops where plan admission stops.** Include a sibling site only when an existing plan
+  task admits it — the same coverage test you apply before selecting `plan`. Name every sibling you
+  found but excluded in the `rationale`, with the reason, so it is recorded rather than lost. Do
+  not widen the diff on your own authority to close a class: work a plan task does not admit is
+  what a scope review flags as `not-authorized-by-plan`, and an unauthorized addition can deadlock
+  remediation outright, which costs more than the extra audit cycle it was meant to save. An
+  excluded sibling that turns out to matter is a plan question, not a task you quietly add.
 - **Tasks are concrete and file-scoped.** Each task names the `file:line` and exactly what to change,
-  drawn from the gap's evidence — never "fix FR-10". A vague task is a failed plan.
+  drawn from the gap's evidence — never "fix FR-10". A vague task is a failed plan. Naming more
+  sites than the evidence cites is not vagueness — it is the sweep above, and it is required.
 - **Evidence drives the plan.** Every disposition cites the gap's `file:line`. If the evidence is
   insufficient to determine a fix AND the uncertainty is a real design question, that is
   `architectural-clarity`; if it's just thin evidence for an obvious bug, still plan the `build` task.

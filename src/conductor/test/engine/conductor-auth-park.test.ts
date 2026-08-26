@@ -100,7 +100,6 @@ describe('conductor auth-park: daemon-token mode', () => {
       .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
     const codex = {
       invoke: vi.fn(),
-      invokeInteractive: vi.fn(async () => {}),
       readiness,
     };
     const runtimes = new ProviderRuntimeSet([
@@ -163,7 +162,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const sleepFn = vi.fn(async (delay: number) => { clockOffset += delay; });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke, invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke, readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -236,13 +235,13 @@ describe('conductor auth-park: daemon-token mode', () => {
     const alternateReadiness = vi.fn();
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
     }, {
       key: 'claude',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternateReadiness },
+      provider: { invoke: vi.fn(), readiness: alternateReadiness },
       policy: CLAUDE_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
@@ -306,14 +305,14 @@ describe('conductor auth-park: daemon-token mode', () => {
       const runtimes = new ProviderRuntimeSet([
         {
           key: 'codex',
-          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: codexReadiness },
+          provider: { invoke: vi.fn(), readiness: codexReadiness },
           policy: CODEX_MODEL_POLICY,
           builtIn: true,
           availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
         },
         {
           key: 'claude',
-          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternativeReadiness },
+          provider: { invoke: vi.fn(), readiness: alternativeReadiness },
           policy: CLAUDE_MODEL_POLICY,
           builtIn: true,
           availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
@@ -378,14 +377,14 @@ describe('conductor auth-park: daemon-token mode', () => {
       runtimes: new ProviderRuntimeSet([
         {
           key: 'codex',
-          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: selectedReadiness },
+          provider: { invoke: vi.fn(), readiness: selectedReadiness },
           policy: CODEX_MODEL_POLICY,
           builtIn: true,
           availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
         },
         {
           key: 'claude',
-          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternateReadiness },
+          provider: { invoke: vi.fn(), readiness: alternateReadiness },
           policy: CLAUDE_MODEL_POLICY,
           builtIn: true,
           availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
@@ -451,7 +450,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       .mockResolvedValue({ provider: 'codex', source: 'cached-login', state: 'unusable' });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -501,7 +500,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -540,7 +539,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -624,7 +623,6 @@ describe('conductor auth-park: daemon-token mode', () => {
         key: 'codex',
         provider: {
           invoke: selectedInvoke,
-          invokeInteractive: vi.fn(async () => {}),
           readiness: selectedReadiness,
         },
         policy: CODEX_MODEL_POLICY,
@@ -635,7 +633,6 @@ describe('conductor auth-park: daemon-token mode', () => {
         key: 'claude',
         provider: {
           invoke: alternateInvoke,
-          invokeInteractive: vi.fn(async () => {}),
           readiness: alternateReadiness,
         },
         policy: CLAUDE_MODEL_POLICY,
@@ -759,13 +756,13 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: selectedReadiness },
+        provider: { invoke: vi.fn(), readiness: selectedReadiness },
         policy: CODEX_MODEL_POLICY, builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
       },
       {
         key: 'claude',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: fallbackReadiness },
+        provider: { invoke: vi.fn(), readiness: fallbackReadiness },
         policy: CLAUDE_MODEL_POLICY, builtIn: true,
         availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
       },
@@ -857,7 +854,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -912,7 +909,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -964,7 +961,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       .mockResolvedValue({ provider: 'codex', source: 'cached-login', state: 'unusable' });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1023,7 +1020,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1069,7 +1066,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1115,7 +1112,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
     });
     const runtimes = new ProviderRuntimeSet([{
-      key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      key: 'codex', provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY, builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
     }]);
@@ -1152,7 +1149,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       probeFailure: { kind: 'unparseable-output', facts: { parserRejection } },
     });
     const runtimes = new ProviderRuntimeSet([{
-      key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      key: 'codex', provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY, builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
     }]);
@@ -1182,7 +1179,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       probeFailure: { kind: 'unparseable-output', facts: { parserRejection } },
     });
     const runtimes = new ProviderRuntimeSet([{
-      key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      key: 'codex', provider: { invoke: vi.fn(), readiness },
       policy: CODEX_MODEL_POLICY, builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
     }]);
@@ -1257,14 +1254,14 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: selectedReadiness },
+        provider: { invoke: vi.fn(), readiness: selectedReadiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
       },
       {
         key: 'claude',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternateReadiness },
+        provider: { invoke: vi.fn(), readiness: alternateReadiness },
         policy: CLAUDE_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
@@ -1318,7 +1315,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1366,7 +1363,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1425,7 +1422,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1475,7 +1472,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1522,7 +1519,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1566,7 +1563,6 @@ describe('conductor auth-park: daemon-token mode', () => {
         key: 'codex',
         provider: {
           invoke: vi.fn(),
-          invokeInteractive: vi.fn(async () => {}),
           readiness,
         },
         policy: CODEX_MODEL_POLICY,
@@ -1620,7 +1616,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1662,7 +1658,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1784,7 +1780,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       });
       const unavailableRuntimes = new ProviderRuntimeSet([{
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: unavailableReadiness },
+        provider: { invoke: vi.fn(), readiness: unavailableReadiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1813,7 +1809,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       const runtimes = new ProviderRuntimeSet([
         {
           key: 'codex',
-          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+          provider: { invoke: vi.fn(), readiness },
           policy: CODEX_MODEL_POLICY,
           builtIn: true,
           availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1881,7 +1877,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -1890,7 +1886,6 @@ describe('conductor auth-park: daemon-token mode', () => {
         key: 'claude',
         provider: {
           invoke: vi.fn(),
-          invokeInteractive: vi.fn(async () => {}),
           readiness: fallbackReadiness,
         },
         policy: CLAUDE_MODEL_POLICY,
@@ -1987,7 +1982,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        provider: { invoke: vi.fn(), readiness },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),

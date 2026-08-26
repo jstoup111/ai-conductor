@@ -6,12 +6,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import {
+  bumpMechanicalFaults,
+  bumpMechanicalFaultsInLedger,
   bumpKickbackGateInLedger,
+  creditKickbackGateLaps,
   KICKBACK_LEDGER_PATH,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
   writeKickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
+import { RUBRIC_FAILURE_DETAIL_CAP_BYTES } from '../../src/engine/step-runners.js';
 import { HALT_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -63,10 +67,8 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         if (step === 'build_review') {
           await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
             verdict,
-            rubric: verdict === 'PASS'
-              ? { tautology: false, scope: false, rootCause: false, completeness: false }
-              : { tautology: true, scope: false, rootCause: false, completeness: false },
-            findings: verdict === 'FAIL' ? { tautology: ['semantic failure remains'] } : {},
+            rubric: { testQuality: verdict === 'FAIL' },
+            findings: verdict === 'FAIL' ? { testQuality: ['test-insensitive'] } : {},
           }));
           return { success: true };
         }
@@ -127,8 +129,8 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
             join(dir, '.pipeline/build-review.json'),
             JSON.stringify({
               verdict: 'FAIL',
-              rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
-              findings: lastReason === '' ? {} : { tautology: [lastReason] },
+              rubric: { testQuality: true },
+              findings: lastReason === '' ? {} : { testQuality: [lastReason] },
             }),
           );
         }
@@ -200,6 +202,130 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     expect(existsSync(ledgerPath)).toBe(true);
   });
 
+  describe('lastMechanicalFault ledger validation (Task 1, #1740)', () => {
+    const entry = {
+      count: 1,
+      cumulative: 2,
+      mechanicalFaults: 1,
+      treeHash: null,
+      lastReason: 'a rejected rubric',
+      priorVerdict: true,
+      resolvedBefore: 1,
+    };
+
+    async function readRawLedger(gate: Record<string, unknown>) {
+      await writeFile(ledgerPath, JSON.stringify({ version: 1, gates: { build_review: gate } }), 'utf8');
+      return readKickbackLedger(dir);
+    }
+
+    it('accepts a legacy entry without lastMechanicalFault', async () => {
+      const ledger = await readRawLedger(entry);
+
+      expect(ledger.gates.build_review).toMatchObject(entry);
+      expect(ledger.gates.build_review.lastMechanicalFault).toBeUndefined();
+    });
+
+    it('preserves a well-formed lastMechanicalFault record', async () => {
+      const lastMechanicalFault = {
+        rubric: 'testQuality',
+        reason: 'malformed-artifact',
+        detail: 'provider result omitted the required verdict',
+        lapId: 'lap-0123456789abcdef0123456789abcdef01234567',
+      };
+
+      const ledger = await readRawLedger({ ...entry, lastMechanicalFault });
+
+      expect(ledger.gates.build_review.lastMechanicalFault).toEqual(lastMechanicalFault);
+    });
+
+    it('rejects a bogus lastMechanicalFault reason with the invalid-mechanicalFaults fallback', async () => {
+      const invalidMechanicalFaults = await readRawLedger({ ...entry, mechanicalFaults: 'one' });
+      const bogusReason = await readRawLedger({
+        ...entry,
+        lastMechanicalFault: {
+          rubric: 'testQuality', reason: 'bogus', detail: 'bad reason', lapId: 'lap-current',
+        },
+      });
+
+      expect(bogusReason).toEqual(invalidMechanicalFaults);
+      expect(bogusReason).toEqual({ version: 1, gates: {} });
+    });
+
+    it('rejects a lastMechanicalFault without lapId with the invalid-mechanicalFaults fallback', async () => {
+      const invalidMechanicalFaults = await readRawLedger({ ...entry, mechanicalFaults: 'one' });
+      const missingLapId = await readRawLedger({
+        ...entry,
+        lastMechanicalFault: {
+          rubric: 'testQuality', reason: 'malformed-artifact', detail: 'missing lap',
+        },
+      });
+
+      expect(missingLapId).toEqual(invalidMechanicalFaults);
+      expect(missingLapId).toEqual({ version: 1, gates: {} });
+    });
+  });
+
+  describe('lastMechanicalFault lifecycle (Task 2, #1740)', () => {
+    const entry = {
+      count: 1,
+      cumulative: 2,
+      mechanicalFaults: 0,
+      treeHash: null,
+      lastReason: 'a rejected rubric',
+      priorVerdict: true,
+      resolvedBefore: 1,
+    };
+    const fault = {
+      rubric: 'testQuality' as const,
+      reason: 'malformed-artifact' as const,
+      detail: 'provider result omitted the required verdict',
+      lapId: 'lap-0123456789abcdef0123456789abcdef01234567',
+    };
+
+    it('records and replaces the latest mechanical fault while incrementing its allowance', () => {
+      const first = bumpMechanicalFaults(entry, fault);
+      const secondFault = {
+        ...fault,
+        rubric: 'testQuality' as const,
+        reason: 'malformed-artifact' as const,
+        detail: 'response was not valid JSON',
+      };
+      const second = bumpMechanicalFaults(first, secondFault);
+
+      expect(first).toMatchObject({ mechanicalFaults: 1, lastMechanicalFault: fault });
+      expect(second).toMatchObject({ mechanicalFaults: 2, lastMechanicalFault: secondFault });
+    });
+
+    it('bounds a persisted mechanical-fault diagnostic and writes it through the ledger helper', async () => {
+      const detail = `${'head '.repeat(300)}${'tail '.repeat(300)}`;
+
+      const updated = await bumpMechanicalFaultsInLedger(dir, 'build_review', { ...fault, detail });
+
+      expect(updated.mechanicalFaults).toBe(1);
+      expect(updated.lastMechanicalFault).toMatchObject({ ...fault, detail: expect.any(String) });
+      expect(Buffer.byteLength(updated.lastMechanicalFault?.detail ?? '', 'utf8'))
+        .toBeLessThanOrEqual(RUBRIC_FAILURE_DETAIL_CAP_BYTES);
+      expect(updated.lastMechanicalFault?.detail).toContain('[...truncated ');
+      expect((await readKickbackLedger(dir)).gates.build_review).toEqual(updated);
+    });
+
+    it('credits every lap counter and removes the recorded mechanical fault', () => {
+      const result = creditKickbackGateLaps(bumpMechanicalFaults(entry, fault));
+
+      expect(result.mechanicalFaults).toBe(0);
+      expect('lastMechanicalFault' in result).toBe(false);
+    });
+
+    it('retains the recorded fault through a build_review PASS', async () => {
+      const initialEntry = bumpMechanicalFaults(entry, fault);
+      await writeKickbackLedger(dir, { version: 1, gates: { build_review: initialEntry } });
+
+      await settleBuildReview('PASS');
+
+      expect((await readKickbackLedger(dir)).gates.build_review).toEqual(initialEntry);
+    });
+  });
+
   describe('classified cap HALTs (Task 14, #984)', () => {
     it('names build_review, its cap lap, and the recorded failure reason in a needs-human HALT', async () => {
       const lastReason = 'build review says the implementation is tautological';
@@ -222,7 +348,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     });
   });
 
-  it('records actionable wiring findings under build_review and re-dispatches build without a wiring_check ledger entry', async () => {
+  it('records actionable test-quality findings under build_review and re-dispatches build', async () => {
     await writeState(statePath, {
       run_started_at: 1,
       complexity_tier: 'S',
@@ -244,8 +370,8 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         if (step === 'build_review') {
           await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
             verdict: 'FAIL',
-            rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
-            findings: { completeness: ['missing wiring from command to handler'] },
+            rubric: { testQuality: true },
+            findings: { testQuality: ['test-insensitive'] },
           }));
         }
         return { success: true };
@@ -265,14 +391,9 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
 
     const ledger = await readKickbackLedger(dir);
     expect(calls).toContain('build');
-    expect(calls).not.toContain('wiring_check');
-    // Only build_review's structured rubric evidence may own this rework.
-    // A generic FAIL reason would leave this vulnerable to the retired
-    // wiring_check path satisfying the same assertion.
     expect(ledger.gates.build_review?.lastReason).toBe(
-      '[completeness] missing wiring from command to handler',
+      '[testQuality] test-insensitive',
     );
-    expect(ledger.gates.wiring_check).toBeUndefined();
   });
 
   it('preserves cumulative kickbacks while capturing the build_review baseline', async () => {
@@ -305,8 +426,8 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         if (step === 'build_review') {
           await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
             verdict: 'FAIL',
-            rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
-            findings: { tautology: ['semantic failure remains'] },
+            rubric: { testQuality: true },
+            findings: { testQuality: ['test-insensitive'] },
           }));
         }
         if (step === 'build') {
@@ -352,6 +473,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     const initialEntry = {
       count: 2,
       cumulative: 4,
+      mechanicalFaults: 2,
       treeHash: '0123456789abcdef0123456789abcdef01234567',
       lastReason: 'repeated semantic failure',
       priorVerdict: true,
@@ -375,9 +497,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
           if (step === 'build_review') {
             await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
               verdict,
-              rubric: verdict === 'PASS'
-                ? { tautology: false, scope: false, rootCause: false, completeness: false }
-                : { tautology: true, scope: false, rootCause: false, completeness: false },
+              rubric: { testQuality: verdict === 'FAIL' },
             }));
             return { success: true };
           }
@@ -412,7 +532,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     const initialEntry = {
       count: 2,
       cumulative: 4,
-      rubricFailures: { tautology: 3, completeness: 1 },
+      rubricFailures: { testQuality: 3 },
       mechanicalFaultAllowance: 2,
       treeHash: '0123456789abcdef0123456789abcdef01234567',
       lastReason: 'repeated semantic failure',
@@ -744,8 +864,8 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
           if (step === 'build_review') {
             await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
               verdict: 'FAIL',
-              rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
-              findings: { tautology: ['semantic failure remains'] },
+              rubric: { testQuality: true },
+              findings: { testQuality: ['test-insensitive'] },
             }));
             return { success: true };
           }

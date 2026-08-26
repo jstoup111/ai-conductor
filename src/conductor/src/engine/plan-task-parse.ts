@@ -15,8 +15,7 @@ export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
 // Shared task-header grammar for parsers that identify task blocks without
 // requiring a title. Keep every consumer on this expression so a supported
-// heading form cannot silently drift between Files, Preserves, and
-// Verify-only metadata.
+// heading form cannot silently drift between Files and Verify-only metadata.
 export const TASK_HEADER_PATTERN =
   /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
 
@@ -38,13 +37,20 @@ export interface ParsedPlanTaskPaths extends Map<string, Set<string>> {
   foreignProtectedReferencesByTaskId: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
+/** Completion checks declared by task-local `**Done when:**` blocks. */
+export interface ParsedPlanTaskDoneWhen extends Map<string, string[]> {
+  /** Declared blocks with no list-item checks, unlike legacy absence. */
+  malformedTaskIds: ReadonlySet<string>;
+}
+
 // A task's **Files:** line is the authoritative declaration of which paths
 // corroborate its commits (#424). Plans write these as plain text (no
 // backticks) with `;`/`,` separators, and use `same` / `same as Task N`
 // shorthand to inherit an earlier task's set. Matches `**Files:**`,
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
-const PRESERVES_LINE = /^\s*(?:[-*]\s+)?\*\*Preserves\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+const DONE_WHEN_LINE = /^\s*\*\*Done when\s*:\s*\*\*\s*$/i;
+const LIST_ITEM_LINE = /^\s*(?:[-*](?:[ \t]+|$)|\d+[.)][ \t]+)(.*?)\s*$/;
 
 // Retired **Wired-into:** metadata must remain excluded from legacy fallback
 // paths in historical plans. This preserves only the old line grammar (case,
@@ -85,19 +91,100 @@ function expandTaskIds(raw: string): string[] {
   return ids;
 }
 
-/**
- * Parses the preserved behavior declared by each plan task.
- *
- * This intentionally uses the same task-header grammar as
- * `parsePlanTaskVerifyOnly`; malformed or empty clauses produce no entry.
- */
-export function parsePlanTaskPreserves(text: string): Map<string, string[]> {
-  const result = new Map<string, string[]>();
-  let currentIds: string[] = [];
+// Markdown fenced code is illustration, never structure. adr-2026-08-21 D1
+// requires fenced content to be excluded before task matching: a plan that
+// documents `### Task N` or a `**Done when:**` block inside a fence must not
+// mint a phantom task id or phantom criteria, which would falsely reject a
+// valid plan at land time.
+const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
 
+/** Yields every line with a flag marking lines inside a fenced code block. */
+function* linesWithFenceState(text: string): Generator<{ line: string; fenced: boolean }> {
+  let openMarker: string | null = null;
   for (const line of text.split('\n')) {
+    const fence = line.match(FENCE_LINE);
+    if (fence) {
+      const marker = fence[1];
+      if (openMarker === null) {
+        openMarker = marker;
+        yield { line, fenced: true };
+        continue;
+      }
+      // A closing fence uses the same character and is at least as long as
+      // the opener, and carries no info string.
+      if (marker[0] === openMarker[0] && marker.length >= openMarker.length && !fence[2].trim()) {
+        openMarker = null;
+        yield { line, fenced: true };
+        continue;
+      }
+    }
+    yield { line, fenced: openMarker !== null };
+  }
+}
+
+/**
+ * Returns the committed body text for every recognized task heading.
+ *
+ * Bodies retain their authored line endings and continue until the next task
+ * heading, so blank lines and fenced code remain available to consumers that
+ * need to resolve evidence inside a task's prose.
+ */
+export function parsePlanTaskBodies(text: string): Map<string, string> {
+  const result = new Map<string, string>();
+  let currentIds: string[] = [];
+  let bodyLines: string[] = [];
+
+  const saveCurrentBody = () => {
+    if (currentIds.length === 0) return;
+    const body = bodyLines.join('\n');
+    for (const id of currentIds) result.set(id, body);
+  };
+
+  for (const { line, fenced } of linesWithFenceState(text)) {
+    const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
+    if (headerMatch) {
+      saveCurrentBody();
+      currentIds = expandTaskIds(
+        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+      );
+      bodyLines = [];
+      continue;
+    }
+
+    if (currentIds.length > 0) bodyLines.push(line);
+  }
+
+  saveCurrentBody();
+  return result;
+}
+
+/**
+ * Parses ordered, task-local `**Done when:**` checks.
+ *
+ * A missing block remains absent for compatibility with historical plans. A
+ * declared block needs at least one list item; otherwise it is malformed and
+ * cannot be silently treated as that legacy absence.
+ */
+export function parsePlanTaskDoneWhen(text: string): ParsedPlanTaskDoneWhen {
+  const result = new Map<string, string[]>() as ParsedPlanTaskDoneWhen;
+  const malformedTaskIds = new Set<string>();
+  let currentIds: string[] = [];
+  let collecting = false;
+  let sawCheck = false;
+
+  const finishBlock = () => {
+    if (collecting && !sawCheck) {
+      for (const id of currentIds) malformedTaskIds.add(id);
+    }
+    collecting = false;
+    sawCheck = false;
+  };
+
+  for (const { line, fenced } of linesWithFenceState(text)) {
+    if (fenced) continue;
     const headerMatch = line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
+      finishBlock();
       currentIds = expandTaskIds(
         headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
       );
@@ -105,16 +192,36 @@ export function parsePlanTaskPreserves(text: string): Map<string, string[]> {
     }
     if (currentIds.length === 0) continue;
 
-    const preservesMatch = line.match(PRESERVES_LINE);
-    const behavior = preservesMatch?.[1].trim();
-    if (!behavior) continue;
-    for (const id of currentIds) {
-      const behaviors = result.get(id);
-      if (behaviors) behaviors.push(behavior);
-      else result.set(id, [behavior]);
+    if (DONE_WHEN_LINE.test(line)) {
+      finishBlock();
+      collecting = true;
+      continue;
     }
+    if (!collecting) continue;
+
+    const listItem = line.match(LIST_ITEM_LINE);
+    if (listItem) {
+      const check = listItem[1].trim();
+      if (!check) {
+        for (const id of currentIds) malformedTaskIds.add(id);
+        continue;
+      }
+      for (const id of currentIds) {
+        const checks = result.get(id);
+        if (checks) checks.push(check);
+        else result.set(id, [check]);
+      }
+      sawCheck = true;
+      continue;
+    }
+
+    // Blank lines are allowed within an authored block. Any non-list content
+    // starts another metadata field and ends the block.
+    if (line.trim()) finishBlock();
   }
 
+  finishBlock();
+  result.malformedTaskIds = malformedTaskIds;
   return result;
 }
 
@@ -167,8 +274,8 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
   // handled at the comparison seams via canonicalTaskId, not by mangling here.
   const sameShorthand = new RegExp(`^same(?:\\s+as\\s+task\\s+(${TASK_ID_PATTERN}))?\\b`, 'i');
 
-  for (const line of text.split('\n')) {
-    const headerMatch = line.match(TASK_HEADER_PATTERN);
+  for (const { line, fenced } of linesWithFenceState(text)) {
+    const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
       current = {
         ids: expandTaskIds(
@@ -187,6 +294,7 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
     if (!current) continue;
 
     current.bodyLines.push(line);
+    if (fenced) continue;
 
     const filesMatch = line.match(FILES_LINE);
     if (filesMatch) {
@@ -280,18 +388,22 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
     for (const id of s.ids) {
       if (s.hasFilesLine) declaredTaskIds.add(id);
       hasFilesLineByTaskId.set(id, s.hasFilesLine);
-      if (!s.hasFilesLine) {
-        const references = new Set<string>();
-        BACKTICK_TOKEN.lastIndex = 0;
-        let match: RegExpExecArray | null;
-        while ((match = BACKTICK_TOKEN.exec(s.bodyLines.join('\n'))) !== null) {
-          const path = match[1].replace(/:\d+(?:-\d+)?$/, '').replace(/^\.\//, '');
-          if (PROTECTED_ARTIFACT_DIRECTORIES.some((directory) =>
-            path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes('/'),
-          ) && !namesOwnFeature(path, featureDesc)) {
-            references.add(path);
-          }
+      const references = new Set<string>();
+      BACKTICK_TOKEN.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = BACKTICK_TOKEN.exec(s.bodyLines.join('\n'))) !== null) {
+        const path = match[1].replace(/:\d+(?:-\d+)?$/, '').replace(/^\.\//, '');
+        if (PROTECTED_ARTIFACT_DIRECTORIES.some((directory) =>
+          path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes('/'),
+        ) && !namesOwnFeature(path, featureDesc)) {
+          references.add(path);
         }
+      }
+      // Files-declared tasks need this metadata only when their prose names a
+      // foreign protected artifact. Preserve the established empty-entry
+      // contract for no-Files legacy-fallback tasks, whose section body has
+      // always been the parser's fallback source.
+      if (references.size > 0 || !s.hasFilesLine) {
         foreignProtectedReferencesByTaskId.set(id, references);
       }
       const existing = result.get(id);

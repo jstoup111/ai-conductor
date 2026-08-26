@@ -190,8 +190,8 @@ providers are routed per step (`llm_provider` top level plus per-step overrides;
 necessarily the repo default.
 
 - **`<provider>: done — <turns>, <duration>, <cost>`** followed by the agent's own prose is the
-  provider subprocess's captured result. Claude's `--print --output-format json` stdout and Codex's
-  `exec --json` stdout are machine envelopes; the daemon summarizes the telemetry and prints the
+  provider subprocess's captured result. Non-interactive Claude `--print --output-format stream-json`
+  stdout and Codex `exec --json` stdout are machine envelopes; the daemon summarizes the telemetry and prints the
   human-readable result text instead of teeing the raw single-line JSON blob. Output the daemon does
   not recognize as a machine envelope — prose, stderr, crash traces — is still logged verbatim, so
   no diagnostic detail is lost.
@@ -199,7 +199,7 @@ necessarily the repo default.
   dispatch. `grep ' via '` over the log answers "which provider ran this step" without inspecting
   process argv. A provider skipped from a cached availability result dispatches no process and is
   not logged; a fallback between providers still prints its own `⚠ PROVIDER FALLBACK` line.
-- **`·   finish: total usage — <dispatches>, <cost>, <fresh> fresh + <cached> cached→<out> tok, <n> unmetered`**
+- **`·   finish: total usage — <dispatches>, <cost>, <fresh> fresh + <cached> cached→<out> tok, <n> cost-unmetered (tokens counted, cost not), <n> unmetered`**
   is logged once,
   when the feature's `finish` step completes. `<fresh>` counts non-cached input tokens; `<cached>`
   counts prompt-cache reads and creation — the conversation an agentic dispatch resubmits on every
@@ -214,6 +214,13 @@ necessarily the repo default.
   that snapshot, without re-dispatching `finish`. A concurrent upstream commit is adopted only when
   its tree exactly matches the verified refresh; unrelated branch content still fails closed under
   the ordinary shipment-evidence gates.
+
+  A non-zero `cost-unmetered` count means `<cost>` is a PARTIAL figure: those dispatches reported
+  token counts that ARE in the token totals, but no dollars. That happens when a provider reports no
+  cost of its own (codex) and the model it ran has no entry in the committed
+  `.ai-conductor/rate-card.json` — see the rate-card section of the configuration reference, and run
+  `conduct-ts rate-card refresh` to close the gap. The clause is omitted when every metered dispatch
+  also carried a cost.
 
   Cost and token figures appear only when at least one dispatch was actually metered. A build whose
   provider reported no usage prints its dispatch count and an explicit `<n> unmetered` instead of a
@@ -282,8 +289,14 @@ What the draft window does and does not mean:
   release disposition is the pre-finish `release-disposition` step's job.
 - **The placeholder body is deliberately marked as one.** It carries the engine's body-floor marker,
   which is how FINISH knows deterministically that the body is unauthored and must be written before
-  anything judges it; FINISH never records completion from placeholder or halt content. If the completion gate still observes that marker on the recorded PR, it re-dispatches
+  anything judges it; FINISH never records completion from placeholder or halt content. If the completion gate still observes a floored body on the recorded PR, it re-dispatches
   `finish` for a body rewrite — never `/remediate`, and never a re-opened `build`.
+  The marker is **provenance, not a verdict**: it is an invisible HTML comment, so an authoring pass
+  can rewrite every word around it and leave it in place. FINISH therefore classifies a marked body
+  by its content — the intact "not yet authored" sections, the draft note, or free text no larger
+  than the one description slot a floor can fill. Authored prose that kept the marker counts as
+  authored, and an untouched floor still counts as a placeholder, without anyone having to instruct
+  the provider to delete the marker.
 - **It inherits the issue's criticality.** When the feature came from an intake issue, the engine
   copies that issue's `priority: <band>` labels onto the PR as it is adopted, so the PR list carries
   the same urgency the daemon dispatched on without anyone opening the linked issue. Only the
@@ -347,12 +360,13 @@ After spawn, activity is observation-only. While a step's provider subprocess is
 boundary (throttled to at most once every few seconds — activity telemetry, not a transcript or
 termination control).
 The IN-PROGRESS dashboard the daemon prints on startup (and re-prints at key transitions) shows
-the current dispatch's elapsed time, the latest validated aggregate test outcome, and the
-heartbeat's age when one exists:
+the current dispatch's elapsed time, the latest validated aggregate test outcome, its current
+input/output token totals when live provider observation is available, and the heartbeat's age when
+one exists:
 
 ```text
 IN-PROGRESS (1)
-  • my-feature [M] @build (working) (activity telemetry: 12s ago) (elapsed: 3m12s) (last test outcome: PASS) (children: unknown)
+  • my-feature [M] @build (working) (activity telemetry: 12s ago) (elapsed: 3m12s) (last test outcome: PASS) (children: 2) (tokens: 12 in / 34 out)
 ```
 
 A feature with no `(activity telemetry: … ago)` suffix hasn't produced its first activity pulse yet (a step
@@ -369,12 +383,15 @@ names its RED-evidence state and the completion predicate's unmet-condition reas
 
 ```text
 IN-PROGRESS (1)
-  • my-feature [M] @acceptance_specs (waiting; RED: rejected; completion condition: acceptance specs RED run shows 0 failed — RED not established) (children: unknown)
+  • my-feature [M] @acceptance_specs (waiting; RED: rejected; completion condition: acceptance specs RED run shows 0 failed — RED not established) (children: unknown) (tokens: unavailable)
 ```
 
 `completion condition: unavailable` means the completion predicate did not supply a reason. The
-`(children: unknown)` suffix is constant — the provider layer cannot observe work done by child
-processes it spawns, so the dashboard never fabricates a count.
+dashboard shows `(children: N)` only when the current live provider observation reports an active
+child count; otherwise it says `(children: unknown)`, never inventing a count. It likewise shows
+`(tokens: <input> in / <output> out)` only from that current live observation, and says
+`(tokens: unavailable)` when no live token observation exists. These figures are current totals for
+the dispatch, not a finish-time usage rollup.
 
 The heartbeat file is overwritten, never cleared, so a worktree keeps its last pulse after the step
 that wrote it ends. The dashboard ignores a heartbeat from another step or from before the current
@@ -399,8 +416,7 @@ conduct-ts daemon resume
 ```
 
 `pause` prints `daemon paused`, or `already paused` when the marker exists. `resume` prints
-`daemon resumed`, or `not paused`. Both are implemented and dispatched, but neither appears in
-`conduct-ts daemon --help`.
+`daemon resumed`, or `not paused`. Both are listed in `conduct-ts daemon --help`.
 
 The marker is `.daemon/PAUSED`. Its existence is authoritative; its JSON body is informational only.
 Reads fail closed — an unreadable marker counts as paused.
@@ -830,17 +846,18 @@ surface its verdict depends on, and only a delta that lands inside that surface 
 | `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
 | `prd_audit`, `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
 
-`build_review` grades the feature's own diff against its plan, so a delta made up entirely of
-foreign, main-side paths cannot change that grade and its verdict is preserved — a rebase that only
-merges in unrelated base work no longer pays for an LLM re-grade. Its own test files DO re-open it,
-because the completeness rubric grades whether the plan's tests were written. `test_suite`
-deliberately stays maximally aggressive: it proves the exact tree, so any delta at all makes that
-proof stale, and it runs no model, so re-running it is cheap.
+`build_review` grades the feature's own code and tests — currently only the opt-in `testQuality`
+rubric's judgement of whether a changed test is insensitive to the behavior it claims to cover — so a
+delta made up entirely of foreign, main-side paths cannot change that grade and its verdict is preserved:
+a rebase that only merges in unrelated base work no longer pays for an LLM re-grade. Its own test files
+DO re-open it, since those are exactly what `testQuality` judges. `test_suite` deliberately stays
+maximally aggressive: it proves the exact tree, so any delta at all makes that proof stale, and it runs
+no model, so re-running it is cheap.
 
 If aggregate verification then exposes a base-induced repair, the daemon records its sanitized
 failure identity in `.pipeline/build-review-rebase-repairs.json`. Entries accumulate across repeated
-rebases. The next `build_review` uses them as context when judging whether an otherwise out-of-plan
-test or compatibility hunk belongs to the rebase repair; unrelated work is not waived.
+rebases, but the retained `testQuality` rubric does not currently consume them as judgement context —
+see [gates](../explanation/gates.md#where-a-build_review-fail-goes).
 
 `build` is the exception. Its predicate re-derives mechanically from the rebased history — the union
 of `Task:` commit trailers with the `.pipeline/task-status.json` rows — so the daemon re-evaluates it

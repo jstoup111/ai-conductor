@@ -51,4 +51,18 @@ the per-feature total is a sum over events — no cumulative-usage query.
   cost and so unmeterable sessions can still record duration.
 - Interactive path (`invokeInteractive`) is unchanged in this feature; its sessions are recorded as
   unmetered where they occur.
+
+  > **Amended 2026-08-24 by #1857:** this consequence no longer holds, because its subject changed
+  > underneath it. When it was written, `invokeInteractive` *was* the interactive path, so "unmetered
+  > where they occur" scoped to operator-facing sessions. `streamingProviderRuntimes`
+  > (`step-runners.ts:1234-1258`) was added later and routes every streaming step's `invoke` through
+  > `invokeInteractive`, so the clause now covers most autonomous dispatches — 26 of 30 claude
+  > dispatches on the feature measured in #1857, including all 15 `opus` `prd_audit` dispatches. The
+  > original assertion is preserved above as written. Going forward, every non-REPL dispatch requests
+  > the machine envelope and is metered; only the REPL is unmetered by design. See
+  > [`adr-2026-08-24-one-dispatch-member-on-the-provider-contract`](adr-2026-08-24-one-dispatch-member-on-the-provider-contract.md)
+  > and
+  > [`adr-2026-08-24-streaming-dispatch-requests-the-machine-envelope`](adr-2026-08-24-streaming-dispatch-requests-the-machine-envelope.md).
+  > **Everything else in this ADR stands unchanged**, including its usage-capture decision and
+  > envelope keys.
 - Verified against Claude Code CLI v2.1.218; schema stable. Re-verify if the CLI result schema changes.

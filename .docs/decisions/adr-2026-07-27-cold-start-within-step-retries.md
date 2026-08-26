@@ -64,7 +64,17 @@ and the machinery that makes the flip actually safe.
    `this.providerRuntimes` is set and no branch session id was supplied; otherwise dispatch
    falls through to `provider.invokeInteractive` at `:630` with the locally-computed `resume`,
    never entering `provider-execution.ts`. `group-core.ts` feeds that same path via
-   `branchSessionId`. #1069's architecture review cites `group-core.ts:438-444` as evidence
+   `branchSessionId`.
+
+   > **Amended 2026-08-24 by #1857:** the fall-through mechanism described here no longer exists.
+   > `invokeInteractive` is removed from the provider contract and the engine dispatches solely
+   > through `invoke`, so the branch-session path no longer diverges into a second provider method.
+   > **The finding this clause supports is unaffected and stands:** #1069's architecture review did
+   > over-claim when it cited `group-core.ts:438-444` as evidence that all paths funnel through the
+   > gate. Only the named mechanism changes; whether the unified path funnels through the gate is a
+   > property to re-verify against current source, not something this note asserts. The original
+   > clause is preserved above as written. See
+   > [`adr-2026-08-24-one-dispatch-member-on-the-provider-contract`](adr-2026-08-24-one-dispatch-member-on-the-provider-contract.md). #1069's architecture review cites `group-core.ts:438-444` as evidence
    that all paths funnel through the gate; that is an over-claim, and it is recorded here as a
    finding against both specs rather than left implicit.
 

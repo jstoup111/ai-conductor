@@ -2,8 +2,9 @@ import { execa } from 'execa';
 import { mkdir, writeFile, readFile, access, stat } from 'node:fs/promises';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import * as chokidar from 'chokidar';
+import chokidar, { type FSWatcher } from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
+import { supersedeHaltRecord } from './halt-record.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { ProviderExecutionContext } from './provider-execution.js';
@@ -332,7 +333,13 @@ async function exists(p: string): Promise<boolean> {
  * teardown race) — that must never crash the daemon process, so failures are
  * caught, logged loudly to stderr, and swallowed (never rethrown).
  */
-function appendHaltClearedRecord(worktreePath: string, cause: 'operator' | 'rekick'): void {
+async function appendHaltClearedRecord(worktreePath: string, cause: 'operator' | 'rekick'): Promise<void> {
+  try {
+    await supersedeHaltRecord(worktreePath, basename(worktreePath), cause);
+  } catch {
+    /* best-effort halt-record supersession */
+  }
+
   try {
     const auditDir = join(worktreePath, '.pipeline', 'audit-trail');
     mkdirSync(auditDir, { recursive: true });
@@ -376,7 +383,7 @@ export function watchHaltCleared(
   const worktreePath = join(worktreeBase, slug);
   const haltPath = join(worktreePath, HALT_MARKER);
   const clearedPath = join(worktreePath, '.pipeline', 'HALT.cleared');
-  let watcher: chokidar.FSWatcher | null = null;
+  let watcher: FSWatcher | null = null;
   let disposed = false;
 
   // Start the watcher
@@ -396,7 +403,7 @@ export function watchHaltCleared(
         // happens BEFORE onCleared() fires, so the record always precedes
         // any re-dispatch/dispose race (AC5).
         const cause: 'operator' | 'rekick' = existsSync(clearedPath) ? 'rekick' : 'operator';
-        appendHaltClearedRecord(worktreePath, cause);
+        await appendHaltClearedRecord(worktreePath, cause);
         onCleared();
       }
     });

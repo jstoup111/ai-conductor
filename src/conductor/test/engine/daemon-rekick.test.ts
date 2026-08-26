@@ -1429,7 +1429,7 @@ describe('engine/daemon-rekick — verified merged-history continuation', () => 
         );
       },
       daemon: false,
-      provider: { invoke: async () => ({ success: true, output: '', exitCode: 0 }), invokeInteractive: async () => {} },
+      provider: { invoke: async () => ({ success: true, output: '', exitCode: 0 }), },
       project: 'test-project',
       log,
     };
@@ -2054,6 +2054,29 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     // Rows stayed pending — the trailer union, not the file, carried the day.
     const rows = JSON.parse(await readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'));
     expect(rows.tasks.every((t: { status: string }) => t.status === 'pending')).toBe(true);
+  });
+
+  it('records a rebase_gate_reverified event for test_suite when its current fingerprint skips dispatch', async () => {
+    await initFeatureRepo(['1', '2'], ['1', '2']);
+    await advanceBaseWithCode();
+    const reverified: Array<{ step: string; skippedDispatch: boolean }> = [];
+    events.on('rebase_gate_reverified', (event) => {
+      if (event.type !== 'rebase_gate_reverified') return;
+      reverified.push({ step: event.step, skippedDispatch: event.skippedDispatch });
+    });
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      preVerify: async () => ({ done: true }),
+    });
+
+    expect({ res, reverified }).toEqual({
+      res: 'rebased',
+      reverified: expect.arrayContaining([{ step: 'test_suite', skippedDispatch: true }]),
+    });
   });
 
   it('still invalidates the non-tree-attesting downstream gates on the same rebase', async () => {

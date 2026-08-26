@@ -266,7 +266,9 @@ To preserve recorded progress, write the step statuses back yourself:
 }
 ```
 
-Valid statuses are `pending`, `in_progress`, `done`, `failed`, `skipped`, `stale`. Only claim
+Valid statuses are `pending`, `in_progress`, `done`, `failed`, `refused`, `skipped`, `stale`. A
+`refused` status means an entry or human-judgment condition stopped the step before its own work
+was judged failed; clear its HALT markers and re-run rather than rewriting the state by hand. Only claim
 `done` for a step whose evidence you can point at — the gates re-verify from disk anyway, and a
 `done` you cannot justify just moves the failure later.
 

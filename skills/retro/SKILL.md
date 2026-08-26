@@ -1,5 +1,6 @@
 ---
 name: retro
+disable-model-invocation: true
 description: "Use after finishing a feature or at any natural milestone. Dual retrospective analyzing both the harness workflow (tool) and the application code produced (product). Generates concrete improvement proposals."
 enforcement: advisory
 phase: ship

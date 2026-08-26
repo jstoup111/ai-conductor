@@ -68,13 +68,13 @@ describe('conductor/terminal-marker-guarantee', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('daemon: a blocked-gate early return writes a diagnostic HALT (not a bare no-marker exit)', async () => {
-    // manual_test's prerequisite (build) is unsatisfied → checkGate blocks and
-    // the loop returns without writing a marker. The finally backstop must
-    // convert that into a HALT.
+  it('daemon: a blocked-gate early return writes a prerequisite-naming HALT', async () => {
+    // There is no runnable predecessor: test_suite's build prerequisite is
+    // already failed. The gate exit itself, rather than the generic finally
+    // backstop, must explain the exact prerequisite and its durable status.
     await writeState(statePath, {
       complexity_tier: 'M',
-      build: 'pending',
+      build: 'failed',
     } as ConductState);
 
     const haltEvents: string[] = [];
@@ -90,7 +90,7 @@ describe('conductor/terminal-marker-guarantee', () => {
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
-      fromStep: 'manual_test',
+      fromStep: 'test_suite',
       escalateBuildFailure: NOOP_ESCALATION,
     });
 
@@ -99,8 +99,9 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
     expect(await exists(join(dir, '.pipeline/DONE'))).toBe(false);
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-    expect(halt).toMatch(/without a terminal verdict/);
-    expect(haltEvents.some((r) => /without a terminal verdict/.test(r))).toBe(true);
+    expect(halt).toContain('build (failed)');
+    expect(halt).not.toMatch(/without a terminal verdict/);
+    expect(haltEvents).toEqual([halt.trim()]);
   });
 
   it('daemon: a complete resume with no tail step run still writes DONE (success side)', async () => {

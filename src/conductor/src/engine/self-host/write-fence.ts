@@ -37,9 +37,24 @@ export function generateFenceScript(worktreeRoot: string, harnessRoot: string): 
 
 set -o pipefail
 
+canonicalize_root() {
+  local path="\$1"
+  local resolved
+  if resolved=\$(cd "\$path" 2>/dev/null && pwd -P); then
+    printf '%s' "\$resolved"
+  else
+    printf '%s' "\$path"
+  fi
+}
+
 # Baked-in roots (no env vars — only these values, baked at provision time).
 WORKTREE_ROOT="${worktreeRoot}"
 HARNESS_ROOT="${harnessRoot}"
+
+# Compare canonical paths so a symlinked parent such as macOS /var ->
+# /private/var cannot make an in-harness write look unrelated.
+WORKTREE_ROOT=\$(canonicalize_root "\$WORKTREE_ROOT")
+HARNESS_ROOT=\$(canonicalize_root "\$HARNESS_ROOT")
 
 # Parse the JSON payload and extract the target path.
 # The input may contain file_path (Edit/Write), notebook_path (NotebookEdit), or command (Bash).
@@ -131,7 +146,7 @@ resolve_path() {
     # Remove trailing slashes and . components
     path="\${path%/}"
     while [[ "\$path" == */../* ]]; do
-      path=\$(printf '%s' "\$path" | sed 's#/[^/]*/\.\./#/#')
+      path=\$(printf '%s' "\$path" | sed 's#/[^/]*/\\.\\./#/#')
     done
     printf '%s' "\$path"
   fi
@@ -145,7 +160,7 @@ extract_bash_target_path() {
   # Try to extract path after redirection operators: > >> &>
   # Match: ...redirection_op whitespace path
   local target
-  target=\$(printf '%s' "\$cmd" | sed -n 's/.*[[:space:]]\\(>>\\|&>\\|>\\)[[:space:]]*\\([^[:space:]>|]*\\).*/\\2/p')
+  target=\$(printf '%s' "\$cmd" | sed -E -n 's/.*[[:space:]](>>|&>|>)[[:space:]]*([^[:space:]>|]*).*/\\2/p')
   if [[ -n "\$target" ]]; then
     printf '%s' "\$target"
     return 0

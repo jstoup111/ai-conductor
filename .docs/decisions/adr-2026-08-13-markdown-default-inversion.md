@@ -133,3 +133,5 @@ re-verification lap, never an incorrect verdict.
 - Some advances previously classified `noop` now classify `changed`, so features rebase-and-
   re-verify slightly more often. This is the cost of the correction and is bounded by one lap.
 - The change is consumer-visible engine behavior and carries a release note.
+
+> **Amended 2026-08-22 by #1805:** prd_audit now runs on every feature/tier/track, judges stories' acceptance criteria as authority, declares .docs/stories and .docs/specs in its gate surface, grades findings PASS/FIXABLE/PLAN_GAP/OVER_SCOPE, and owns the only bounded plan-task kickback; reseal-rationale and scope-containment judgement move to its OVER_SCOPE grade (adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback).

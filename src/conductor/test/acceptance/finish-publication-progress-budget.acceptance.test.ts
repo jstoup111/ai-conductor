@@ -76,6 +76,7 @@ async function createFinishState(): Promise<{ root: string; stateFilePath: strin
     if (step.name === 'finish') break;
     state[step.name] = 'done';
   }
+  state.finish = 'pending';
   await writeState(stateFilePath, state as ConductState);
   return { root, stateFilePath };
 }
@@ -130,7 +131,7 @@ async function runFinishScenario(
     projectRoot: root,
     fromStep: 'finish',
     mode: 'auto',
-    daemon: true,
+    daemon: false,
     verifyArtifacts: false,
     maxRetries,
     git: async () => ({ stdout: '' }),

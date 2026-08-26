@@ -54,7 +54,6 @@ function makeSetupTriageParkingRunner(
     daemon: true,
     provider: {
       invoke: async () => ({ success: true, output: '', exitCode: 0 }),
-      invokeInteractive: async () => {},
     },
     project: 'test-project',
     projectRoot,
@@ -309,7 +308,6 @@ describe('engine/daemon — runDaemon', () => {
         daemon: true,
         provider: {
           invoke: async () => ({ success: true, output: '', exitCode: 0 }),
-          invokeInteractive: async () => {},
         },
         project: 'test-project',
         projectRoot: worktree,

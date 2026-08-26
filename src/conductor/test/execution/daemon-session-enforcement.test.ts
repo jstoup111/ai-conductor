@@ -89,6 +89,19 @@ describe('guardDaemonSessionInvocation', () => {
     expect(guardDaemonSessionInvocation(argvFor('test-suite'), markedEnv()).allowed).toBe(false);
   });
 
+  it('never grants build-review operator authority to a daemon session', () => {
+    // These are intentionally not in the sanctioned worker-command set.  No
+    // daemon config or ordinary environment value may turn a maker session
+    // into the interactive operator who can record reduced coverage.
+    for (const argv of [
+      argvFor('build-review', 'findings', '--feature', 'slug'),
+      argvFor('build-review', 'record-reduced-coverage', '--feature', 'slug'),
+    ]) {
+      expect(guardDaemonSessionInvocation(argv, markedEnv({ CONDUCT_CONFIG: 'daemon.yml' })))
+        .toMatchObject({ allowed: false });
+    }
+  });
+
   it('permits the generated commit-msg hook to invoke scope-check inside a daemon session', () => {
     // git-hook-assets.ts embeds `conduct-ts scope-check "$COMMIT_MSG_FILE"` in
     // the commit-msg hook, which runs inside the daemon-managed maker session
@@ -164,10 +177,13 @@ function codexCapture() {
     (_file: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
       calls.push({ args: [...args], env: options.env });
       return Promise.resolve({
-        stdout: JSON.stringify({
-          type: 'item.completed',
-          item: { type: 'agent_message', text: 'Done.' },
-        }),
+        stdout: [
+          JSON.stringify({
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'Done.' },
+          }),
+          JSON.stringify({ type: 'turn.completed' }),
+        ].join('\n'),
         stderr: '',
         exitCode: 0,
         failed: false,
@@ -186,7 +202,7 @@ describe('daemon-session marker injection (claude adapter)', () => {
 
   it('stamps the marker on the interactive entry too', async () => {
     const { calls, provider } = claudeCapture();
-    await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    await provider.invoke({ ...baseOptions, interactive: false });
     expect(calls[0]!.env?.[DAEMON_SESSION_MARKER]).toBe('1');
   });
 
@@ -219,7 +235,7 @@ describe('daemon-session marker injection (codex adapter)', () => {
 
   it('stamps the marker on the interactive entry and preserves self-host env', async () => {
     const { calls, provider } = codexCapture();
-    await provider.invokeInteractive({
+    await provider.invoke({
       ...baseOptions,
       interactive: false,
       selfHost: {

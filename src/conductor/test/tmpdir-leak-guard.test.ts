@@ -190,6 +190,7 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
       `${RUN_TMP_ROOT_PREFIX}A1b2C3`,
       'self-host-daemon-home',
       'claude-1000',
+      'mission-codex-schema-AbCd12',
       '.X11-unix',
     ]);
 
@@ -200,6 +201,7 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
       `${RUN_TMP_ROOT_PREFIX}A1b2C3`,
       'self-host-daemon-home',
       'claude-1000',
+      'mission-codex-schema-AbCd12',
       '.X11-unix',
     ]);
   });

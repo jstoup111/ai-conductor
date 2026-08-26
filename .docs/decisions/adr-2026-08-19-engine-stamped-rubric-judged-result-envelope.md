@@ -113,6 +113,19 @@ it was judged under — is preserved exactly. Only the writer changes.
 `rubric` comes from the rubric registry, which `adr-2026-08-17-build-review-rubric-repetition-short-circuit`
 D2 already establishes as "an engine-supplied enum from the rubric registry, not grader output".
 
+> **Amended 2026-08-20 by #1748:** D2's "exactly `findings`" is narrowed to the envelope/evidence
+> distinction the shipped code implements. The engine owns every **envelope** field (`kind`,
+> `rubric`, `contractVersion`, `lapId`, `snapshotDigest`) exactly as ruled. The provider payload is
+> `findings` plus, for tautology fixture-relocation results only, the pre-existing audit-only
+> `relocationAudit` array — provider-owned **evidence**, not envelope: the artifact persists it,
+> the aggregate consumes it, and the tautology contract requires it as the record that a
+> relocation exemption was applied legitimately. It is validated at the trust boundary (a
+> non-tautology payload carrying one is rejected with the named problem), which is evidence
+> validation, not the identity-echo validation this ADR removed. **The field set is closed:** a
+> third provider-supplied top-level field requires a superseding ADR, never an extension of this
+> note. #1767 tracks the intended end-state — migrating the audit to a uniform channel so this
+> carve-out can be retired by a superseding ADR.
+
 **D3 — `contractVersion` does not bump; it stays `v3`.**
 `adr-2026-08-16-closed-build-review-finding-vocabularies` D4 rules that "a contract version changes
 only when identity semantics change". Anchors, closed vocabularies, reference kinds and
@@ -207,3 +220,5 @@ reference grammars, so the next tightening cannot ship without its instruction.
 - [ ] Add the additive amendment note to `adr-2026-08-13-engine-managed-build-review-rubric-branches` §2
 - [ ] Update `docs/explanation/gates.md`, which currently documents `invalid-provider-result` as the single settled reason for a contract miss
 - [ ] Coordinate with `review-infrastructure-failures-are-operator-unreco` at implementation time: read the current branch-reason mapping rather than trusting this ADR's description of it
+
+> **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).

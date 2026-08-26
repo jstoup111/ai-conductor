@@ -1,5 +1,6 @@
 ---
 name: conflict-check
+implicit_invocation: required
 description: "Use after writing stories, before creating an implementation plan, or when adding features to an existing system. Detects contradictions, overlaps, state conflicts, resource contention, and oscillating requirements that are individually satisfiable but mutually exclusive in practice — the pair that sends work round a kickback loop that never terminates."
 enforcement: gating
 phase: decide

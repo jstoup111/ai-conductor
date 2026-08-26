@@ -1,0 +1,20 @@
+{
+  "complexity_tier": "M",
+  "memory": "done",
+  "explore": "done",
+  "prd": "done",
+  "complexity": "done",
+  "stories": "done",
+  "conflict_check": "done",
+  "plan": "done",
+  "coherence_check": "done",
+  "architecture_diagram": "done",
+  "architecture_review": "done",
+  "acceptance_specs": "done",
+  "build": "done",
+  "wiring_check": "done",
+  "rebase": "done",
+  "test_suite": "done",
+  "build_review": "failed",
+  "last_step": "build_review"
+}

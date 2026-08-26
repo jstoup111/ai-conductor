@@ -11,7 +11,7 @@ import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { execSync } from 'node:child_process';
-import { mkdtemp, rmdir } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -486,7 +486,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     const originPath = join(tmpDir, 'origin.git');
 
     // Create a bare origin repo
-    execSync(`git init --bare "${originPath}"`);
+    execSync(`git init --bare -b main "${originPath}"`);
 
     // Create the main repo and configure remote
     execSync(`git init -b main "${repoPath}"`);
@@ -508,7 +508,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
 
     const cleanup = async () => {
       try {
-        await rmdir(tmpDir, { recursive: true });
+        await rm(tmpDir, { recursive: true });
       } catch {
         // ignore cleanup errors
       }

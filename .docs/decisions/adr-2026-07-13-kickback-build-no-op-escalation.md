@@ -92,3 +92,5 @@ signals; risk is bounded by the fail-closed HALT and the revert toggle.
 3. D2 escalation wiring at the kickback→build re-entry sites + prior-verdict capture + RED tests.
 4. D3 audit-event distinction + reason text.
 5. Regression/idempotency tests, optional config toggle, CHANGELOG, validate.
+
+> **Amended 2026-08-22 by #1805:** architecture_review_as_built runs on every tier with per-check policy, gains a PLAN_GAP verdict, and never kicks back to BUILD (adr-2026-08-22-as-built-review-runs-always-with-plan-gap).

@@ -22,6 +22,11 @@ import { readRestartPending, type RestartIntent } from './restart-marker.js';
 import { isEngineVersionId } from './engine-store.js';
 import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock } from './gated-snapshot.js';
 import { summarizeAccuracyLedger } from './attribution-audit.js';
+import { scanInheritedState } from './daemon-dashboard.js';
+import { prdAuditAppendCap } from './conductor.js';
+import { loadConfig } from './config.js';
+import { readGrowth } from './kickback-ledger.js';
+import type { HarnessConfig } from '../types/config.js';
 
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
  * isn't a recognized version id (legacy record, dev/unpublished run, etc.). */
@@ -452,6 +457,38 @@ async function renderAgreementLine(repoPath: string, out: (line: string) => void
 }
 
 /**
+ * Render cap accounting for every feature the durable dashboard model classifies
+ * as in progress. The counts themselves stay owned by the kickback ledger;
+ * `readGrowth` also retains its legacy-ledger recomputation contract here.
+ */
+async function renderPlanGrowthSection(repoPath: string, out: (line: string) => void): Promise<void> {
+  const state = await scanInheritedState({
+    worktreeBase: join(repoPath, '.worktrees'),
+    processedDir: join(repoPath, '.daemon', 'processed'),
+    discover: async () => [],
+  });
+
+  for (const feature of state.inProgress) {
+    const featureRoot = join(repoPath, '.worktrees', feature.slug);
+    const initial = await readGrowth(featureRoot, 0);
+    const config = await loadConfig(featureRoot);
+    const cap = prdAuditAppendCap(
+      config.ok ? config.config : ({} as HarnessConfig),
+      initial.authored,
+    );
+    const growth = await readGrowth(featureRoot, cap);
+    const byGate = Object.entries(growth.byGate)
+      .map(([gate, count]) => `${gate}: ${count}`)
+      .join(', ');
+    out(
+      `  PLAN GROWTH [${feature.slug}]: authored ${growth.authored}; ` +
+      `added ${growth.added}${byGate ? ` (${byGate})` : ''}; ` +
+      `remaining ${growth.remaining}/${cap}`,
+    );
+  }
+}
+
+/**
  * `conduct daemon status` — read-only sweep of the registry. Always exits 0
  * (stale/missing entries are reported, not errors). Returns the rows for testing.
  */
@@ -486,6 +523,7 @@ export async function runDaemonStatus(
       await renderGatedSection(record.path, out, clock);
       await renderBlockedSection(record.path, out, clock);
       await renderAgreementLine(record.path, out);
+      await renderPlanGrowthSection(record.path, out);
     }
   }
   return { code: 0, rows };

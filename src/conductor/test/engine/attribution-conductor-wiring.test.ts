@@ -115,10 +115,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
           exitCode: 0,
         };
       },
-
-      invokeInteractive: async () => {
-        throw new Error('invokeInteractive not supported in fixture');
-      },
     };
   }
 
@@ -131,7 +127,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         providerInvoked = true;
         return originalProvider.invoke(opts);
       },
-      invokeInteractive: (opts) => originalProvider.invokeInteractive(opts),
     };
 
     // Create a DefaultStepRunner with the tracked provider
@@ -220,7 +215,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     );
     const provider = (
       invoke: LLMProvider['invoke'],
-      invokeInteractive: LLMProvider['invokeInteractive'],
+      invokeInteractive: LLMProvider['invoke'],
     ): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: async (options) => {
@@ -234,7 +229,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         }
         return invoke(options);
       },
-      invokeInteractive,
     });
     const runtimes = new ProviderRuntimeSet([
       {
@@ -300,8 +294,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       {
         config: {
           llm_provider: ['claude', 'codex'],
-          // #1682: tautology defaults off; this test exercises the four-rubric lap.
-          build_review: { rubrics: { tautology: { enabled: true } } },
+          build_review: { rubrics: { testQuality: { enabled: true } } },
           steps: {
             build_review: { llm_provider: 'codex' },
             attribution_verify: { llm_provider: 'codex' },
@@ -334,7 +327,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     });
 
     // Session reuse was removed by design: every provider invocation — across
-    // all four build_review rubric branches and the attribution dispatch —
+    // the build_review branch and the attribution dispatch —
     // must carry a unique, freshly minted UUID, never the store's ids above.
     // (2026-08-14: store-derived ids resumed a shared ~1.28M-token session.)
     const invocationSessionIds = codexInvoke.mock.calls.map(
@@ -370,11 +363,11 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     }).toEqual({
       capturedCalls: { invoke: [], interactive: [] },
       claudeRuntimeCalls: { invoke: [], interactive: [] },
-      beginBranchCalls: expect.arrayContaining([
-        ['build-review:tautology'], ['build-review:scope'],
-        ['build-review:rootCause'], ['build-review:completeness'],
-        ['attribution_verify'],
-      ]),
+      // test-quality is opt-in and this fixture deliberately provides no
+      // changed test carrying a Covers: marker, so build_review publishes its
+      // empty-set PASS without opening a provider branch. Attribution remains
+      // the production provider-routing assertion under test here.
+      beginBranchCalls: [['attribution_verify']],
       codexCalls: expect.arrayContaining([
         expect.objectContaining({ cwd: projectRoot, model: 'gpt-5.6-sol', effort: 'high', resume: false }),
       ]),
@@ -412,9 +405,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
           'utf-8',
         );
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
-      },
-      invokeInteractive: async () => {
-        throw new Error('invokeInteractive not supported in fixture');
       },
     };
     const runner = new DefaultStepRunner(
@@ -470,9 +460,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         };
         await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
-      },
-      invokeInteractive: async () => {
-        throw new Error('not supported');
       },
     };
 
@@ -537,10 +524,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
 
         await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
-      },
-
-      invokeInteractive: async () => {
-        throw new Error('not supported');
       },
     };
 
@@ -624,10 +607,6 @@ Add comprehensive tests.
         };
         await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
-      },
-
-      invokeInteractive: async () => {
-        throw new Error('not supported');
       },
     };
 
@@ -713,9 +692,6 @@ Add comprehensive tests.
         await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
 
         return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
-      },
-      invokeInteractive: async () => {
-        throw new Error('not supported in test');
       },
     };
 

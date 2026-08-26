@@ -240,13 +240,10 @@ describe('ProviderSessionStore', () => {
 
       const calls: Array<{ sessionId: string; resume: boolean }> = [];
       const provider: LLMProvider = {
-        invoke: async () => ({ success: true, output: '', exitCode: 0 }),
-        invokeInteractive: async (options) => {
-          calls.push({
-            sessionId: options.sessionId,
-            resume: options.resume,
-          });
+        invoke: async (options) => {
+          calls.push({ sessionId: options.sessionId, resume: options.resume });
           if (outcome === 'throw') throw new Error('branch failed');
+          return { success: true, output: '', exitCode: 0 };
         },
       };
       const runner = new DefaultStepRunner(provider, serial.id, pipelineDir, {

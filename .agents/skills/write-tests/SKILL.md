@@ -1,5 +1,6 @@
 ---
 name: write-tests
+disable-model-invocation: true
 description: "Use whenever adding, changing, reviewing, or debugging tests in the ai-conductor repository. Defines repository-specific test scope, isolation, mocking, fixture, performance, and CI-parity rules that prevent cyclic Conductor runs, leaked workers, real third-party calls, and slow aggregate suites. Complements the provider-neutral tdd skill, which controls implementation order rather than test design."
 ---
 

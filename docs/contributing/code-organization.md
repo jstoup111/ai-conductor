@@ -10,6 +10,13 @@ The module map of the engine — the TypeScript conductor under `src/conductor/`
 owns, where execution enters, and which direction imports flow. For contributors changing engine code.
 For the operator-facing role model, see [architecture](../explanation/architecture.md).
 
+## Contribution license
+
+AI Conductor is licensed under the [Apache License, Version 2.0](../../LICENSE). Unless a contributor
+explicitly states otherwise, intentionally submitted contributions use the same license without
+additional terms. The root [contribution guide](../../CONTRIBUTING.md) records the complete submission
+notice and links the required branch, validation, documentation, and release-metadata workflow.
+
 ## Repository layout
 
 | Path | Contents |
@@ -95,7 +102,7 @@ The only layer permitted to reach a third party in ordinary code paths.
 
 | File | Owns |
 | --- | --- |
-| `llm-provider.ts` | The port. `LLMProvider` `:141`, `InvokeOptions` `:109`, `InvokeResult` `:56`. |
+| `llm-provider.ts` | The port. `LLMProvider` exposes one `invoke` entry point; `InvokeOptions.interactive` selects operator-facing behavior and `streamConsumer` carries optional observation. |
 | `claude-provider.ts` | The `claude` host adapter plus its failure detectors. |
 | `codex-provider.ts` | The `codex` host adapter and JSONL parsing. |
 | `codex-self-host-auth.ts` | Codex credential handling for self-host builds. |
@@ -192,7 +199,7 @@ Intended layering is `types ← execution ← engine ← ui ← entry points`. M
 `npm run build` in `src/conductor` runs `scripts/publish-engine.mjs`, which stages the bundle, finalizes
 it into an immutable `dist-versions/<id>/`, and atomically flips the `dist` symlink. Running `npx tsup`
 directly is refused: `tsup.config.ts:8` calls `assertPublishWrapperEnv(process.env)`, because raw tsup
-output would clobber the versioned layout. Node is pinned to `20.19.2` by `src/conductor/.tool-versions`.
+output would clobber the versioned layout. Node is pinned to `26.7.0` by `src/conductor/.tool-versions`.
 
 ## Extending any of this
 

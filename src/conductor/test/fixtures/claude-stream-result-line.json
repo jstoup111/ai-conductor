@@ -1,0 +1,21 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 1842,
+  "duration_api_ms": 1603,
+  "num_turns": 3,
+  "result": "Completed the requested work.",
+  "session_id": "fixture-session-id",
+  "total_cost_usd": 0.0184,
+  "usage": {
+    "input_tokens": 1200,
+    "cache_creation_input_tokens": 320,
+    "cache_read_input_tokens": 640,
+    "output_tokens": 180,
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    }
+  }
+}

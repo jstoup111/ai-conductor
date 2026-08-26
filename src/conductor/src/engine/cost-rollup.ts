@@ -87,6 +87,7 @@ export function toFeatureUsageTotals(rollup: CostRollup): FeatureUsageTotals {
     inputTokens: rollup.tokens.input,
     outputTokens: rollup.tokens.output,
     cachedInputTokens: rollup.tokens.cacheRead + rollup.tokens.cacheCreation,
+    costUnmeteredDispatches: rollup.costUnmetered?.count ?? 0,
   };
 }
 

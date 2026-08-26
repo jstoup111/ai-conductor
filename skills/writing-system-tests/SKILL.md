@@ -1,5 +1,6 @@
 ---
 name: writing-system-tests
+disable-model-invocation: true
 description: "Use BEFORE implementing any feature that has stories in .docs/stories/ — generates failing acceptance specs from acceptance criteria as the RED phase of TDD. Generates HTTP/request-level acceptance tests for headless/API projects, end-to-end UI tests for projects with a frontend, using the project's own test framework and directory conventions."
 enforcement: gating
 phase: build
@@ -405,10 +406,11 @@ verify outcome). Neither duplicates the other.
 - Assert outcomes, not intermediate transport details (request/endpoint tests own those)
 - Auth uses helper methods, not hardcoded tokens
 - Exercise the real internal flow; inject faithful fakes at all third-party adapter boundaries
-- On product track: every generated spec identifies the FR(s) it covers — either in the
-  top-level suite/describe name OR as a leading comment line `Covers: FR-N[, FR-M]`
-  (framework-agnostic; comma-separated for multiple FRs) — so `grep -rE "FR-[0-9]+"` over the
-  acceptance directory finds every FR's specs.
+- Every generated spec must declare feature coverage in a leading comment line. Where the active
+  stories or plan are available, use resolvable `Covers: S<n>.<m>[, task:<id>]` markers (technical
+  and product tracks alike); the marker must name a criterion in the active stories or a task in the
+  active plan. On the product track, also retain `Covers: FR-N[, FR-M]` for PRD coverage reporting.
+  Do not use a test path as a substitute for a Covers marker.
 
 **Helpers:** Create shared request helpers (e.g. response-body parsing and auth-header
 construction) in the project's test-support location if they don't already exist.

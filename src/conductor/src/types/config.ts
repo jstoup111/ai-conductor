@@ -277,6 +277,12 @@ export interface BuildProgressConfig {
   enabled?: boolean;
 }
 
+/** Live provider-stream observation cadence. Non-positive intervals use the default. */
+export interface ProviderStreamConfig {
+  /** Minimum milliseconds between progress events. Defaults to 5000 when absent or non-positive. */
+  min_interval_ms?: number;
+}
+
 /**
  * Progress-aware build halt/park config (build_progress_halt): raises the
  * retry ceiling while a build keeps resolving tasks, so a build resolving
@@ -465,6 +471,8 @@ export interface HarnessConfig {
    * enabled: true }. See `resolveBuildProgressConfig` in engine/config.ts.
    */
   build_progress?: BuildProgressConfig;
+  /** Live provider-stream observation cadence. See `provider_stream` in the configuration reference. */
+  provider_stream?: ProviderStreamConfig;
   /**
    * Progress-aware build halt/park config. Absent block resolves to defaults
    * owned by runtime resolution (not this type). See `BuildProgressHaltConfig`.
@@ -638,11 +646,7 @@ export interface MergeableAutoresolveConfig {
 }
 
 /** The closed set of independently-executed build-review rubric branches. */
-export type BuildReviewRubricId =
-  | 'tautology'
-  | 'scope'
-  | 'rootCause'
-  | 'completeness';
+export type BuildReviewRubricId = 'testQuality';
 
 /** Optional execution overrides for one build-review rubric branch. */
 export interface BuildReviewRubricConfig {
@@ -668,8 +672,6 @@ export type BuildReviewRubricsConfig = Partial<
 export interface BuildReviewConfig {
   /** Enable the build_review gate. Default: true. */
   enabled?: boolean;
-  /** Enable the per-task work-happened commit floor gate. Default: true (on, fail-safe). */
-  perTaskFloor?: boolean;
   /**
    * Refuse commits whose staged paths exceed the active plan task's declared
    * scope. Default: false (report-only).

@@ -257,6 +257,16 @@ export function appendBuildReviewAcceptedRisk(
   return upserted.body;
 }
 
+/** Appends the engine-stamped shared reduced-coverage section to a shipped record. */
+export function appendBuildReviewReducedCoverageEvidence(
+  existingContent: string,
+  section: string | undefined,
+): string {
+  if (section === undefined) return existingContent;
+  const separator = existingContent.endsWith('\n') ? '\n' : '\n\n';
+  return `${existingContent}${separator}${section}\n`;
+}
+
 /** Appends an idempotent, parser-compatible build-review KPI block. */
 export function appendBuildReviewMetrics(
   existingContent: string,

@@ -573,6 +573,7 @@ export async function runProjectTeardown(
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
   const timeoutSeconds = opts?.timeoutSeconds ?? resolveTeardownTimeoutSeconds();
+  let streamedOutput = '';
 
   try {
     await access(join(worktreePath, TEARDOWN_SCRIPT));
@@ -581,7 +582,7 @@ export async function runProjectTeardown(
   }
 
   try {
-    const result = await execa(join(worktreePath, TEARDOWN_SCRIPT), [], {
+    const subprocess = execa(join(worktreePath, TEARDOWN_SCRIPT), [], {
       cwd: worktreePath,
       all: true,
       env: {
@@ -590,6 +591,10 @@ export async function runProjectTeardown(
       },
       timeout: timeoutSeconds * 1000,
     });
+    subprocess.all?.on('data', (chunk: Buffer | string) => {
+      streamedOutput += chunk.toString();
+    });
+    const result = await subprocess;
     const lines = (result.all ?? '').split('\n').filter((line) => line.trim() !== '');
     if (opts?.verbose) {
       for (const line of lines) log?.(`teardown: ${line}`);
@@ -602,23 +607,14 @@ export async function runProjectTeardown(
   } catch (err) {
     if ((err as { timedOut?: unknown }).timedOut === true) {
       const detail = err instanceof Error ? err.message : String(err);
-      const outputText =
-        err !== null && typeof err === 'object' ? (err as { all?: unknown }).all : undefined;
-      const outputTail = extractTail(
-        typeof outputText === 'string' && outputText.trim() ? outputText : detail,
-        50,
-      );
+      const outputTail = extractCommandErrorTail(err, detail, 50, streamedOutput);
       log?.(
         `teardown: timed out in ${worktreePath} after ${timeoutSeconds} second(s): ${outputTail}`,
       );
       return;
     }
     const detail = err instanceof Error ? err.message : String(err);
-    const outputText = (err as { all?: unknown }).all;
-    const outputTail = extractTail(
-      typeof outputText === 'string' && outputText.trim() ? outputText : detail,
-      50,
-    );
+    const outputTail = extractCommandErrorTail(err, detail, 50, streamedOutput);
     log?.(`teardown: failed in ${worktreePath}: ${outputTail}`);
   }
 }
@@ -691,4 +687,22 @@ function extractTail(text: string, lines: number): string {
   const allLines = text.split('\n');
   const tail = allLines.slice(Math.max(0, allLines.length - lines));
   return tail.join('\n');
+}
+
+export function extractCommandErrorTail(
+  error: unknown,
+  detail: string,
+  lines: number,
+  streamedOutput = '',
+): string {
+  const record = error !== null && typeof error === 'object'
+    ? error as { all?: unknown; stdout?: unknown; stderr?: unknown }
+    : {};
+  const combined = typeof record.all === 'string' ? record.all : '';
+  const separated = [record.stdout, record.stderr]
+    .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+    .join('\n');
+  const output = [combined, separated, streamedOutput, detail]
+    .find((value) => value.trim() !== '') ?? detail;
+  return extractTail(output, lines);
 }

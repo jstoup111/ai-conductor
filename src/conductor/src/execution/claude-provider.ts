@@ -14,6 +14,11 @@ import {
   type ObservedInterval,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import {
+  accumulateProviderStreamTokens,
+  ProviderStreamChildTracker,
+  ProviderStreamAssembler,
+} from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
@@ -430,10 +435,9 @@ function parseTokenUsage(stdout: string): TokenUsage | undefined {
 }
 
 /**
- * Parse the payload produced by `claude --print --output-format json`: a
- * single JSON result object on stdout (not the stream-json per-line format
- * handled by parseTokenUsage above). Falls back to raw stdout passthrough
- * on any parse failure — never fabricates a zero-cost tokenUsage.
+ * Parse a terminal result object selected from `claude --print --output-format
+ * stream-json` stdout. Falls back to raw stdout passthrough on any parse
+ * failure — never fabricates a zero-cost tokenUsage.
  */
 export function parseJsonResult(
   stdout: string,
@@ -464,6 +468,7 @@ export function parseJsonResult(
       }
       if (typeof parsed.total_cost_usd === 'number') {
         tokenUsage.costUsd = parsed.total_cost_usd;
+        tokenUsage.costSource = 'provider';
       }
       if (numTurns !== undefined) {
         tokenUsage.numTurns = numTurns;
@@ -476,6 +481,29 @@ export function parseJsonResult(
   } catch {
     return { output: stdout, tokenUsage: undefined };
   }
+}
+
+/** Return the final terminal result record from completed stream-json stdout. */
+function selectTerminalResult(stdout: string): string | undefined {
+  const assembler = new ProviderStreamAssembler();
+  let terminalResult: unknown;
+
+  // stdout is complete here, so its final record can be treated as newline-delimited
+  // even when the subprocess did not include a final newline.
+  for (const record of assembler.push(`${stdout}\n`)) {
+    if (typeof record === 'object' && record !== null && (record as Record<string, unknown>).type === 'result') {
+      terminalResult = record;
+    }
+  }
+
+  const terminalLine = stdout.trimEnd().split('\n').at(-1) ?? '';
+  try {
+    JSON.parse(terminalLine);
+  } catch {
+    return undefined;
+  }
+
+  return terminalResult === undefined ? undefined : JSON.stringify(terminalResult);
 }
 
 function unresolvedCommandName(output: string, prompt: string | undefined): string | undefined {
@@ -517,9 +545,9 @@ export class ClaudeProvider implements LLMProvider {
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
   ) {
-    const { diagnosticLog, onActivity, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
+    const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
       throw new Error(`Claude process spawn denied: ${permit.reason}`);
@@ -537,17 +565,52 @@ export class ClaudeProvider implements LLMProvider {
     // lifecycle authority and never affect provider dispatch.
     try {
       onSpawn?.();
-      subprocess.stdout?.on('data', () => onActivity?.());
-      subprocess.stderr?.on('data', () => onActivity?.());
+      const streamAssembler = new ProviderStreamAssembler();
+      const childTracker = new ProviderStreamChildTracker();
+      let uncachedInputTokens = 0;
+      let cachedInputTokens = 0;
+      let outputTokens = 0;
+      subprocess.stdout?.on('data', (chunk: Buffer | string) => {
+        try {
+          onActivity?.();
+          for (const record of streamAssembler.push(String(chunk))) {
+            childTracker.observe(record);
+            const tokenTotals = accumulateProviderStreamTokens([record]);
+            uncachedInputTokens += tokenTotals.uncachedInputTokens;
+            cachedInputTokens += tokenTotals.cachedInputTokens;
+            outputTokens += tokenTotals.outputTokens;
+            try {
+              onProviderStream?.({
+                childObservability: childTracker.childObservability,
+                activeChildren: childTracker.activeChildren,
+                uncachedInputTokens,
+                cachedInputTokens,
+                outputTokens,
+              });
+            } catch {
+              // Stream consumers are observational; dispatch keeps its authority.
+            }
+          }
+        } catch {
+          // Stream callbacks are observational; dispatch keeps its authority.
+        }
+      });
+      subprocess.stderr?.on('data', () => {
+        try {
+          onActivity?.();
+        } catch {
+          // Stream callbacks are observational; dispatch keeps its authority.
+        }
+      });
     } catch {
       // Watchdog wiring is best-effort; never affects provider dispatch.
     }
     const result = await subprocess;
     if (diagnosticLog) {
       for (const output of [result.stdout, result.stderr]) {
-        // `--print --output-format json` stdout is one enormous machine
-        // envelope. Summarize it for the operator-facing daemon log; anything
-        // unrecognized (prose, stderr, crash traces) passes through verbatim.
+        // Machine-readable provider stdout can be large. Summarize it for the
+        // operator-facing daemon log; anything unrecognized (prose, stderr,
+        // crash traces) passes through verbatim.
         if (typeof output === 'string' && output.length > 0) {
           diagnosticLog(summarizeProviderDiagnostic('claude', output));
         }
@@ -556,109 +619,52 @@ export class ClaudeProvider implements LLMProvider {
     return result;
   }
 
-  /**
-   * Run Claude with --print mode. Captures output for analysis.
-   * Used only for truly non-interactive one-shot queries.
-   */
+  /** Run Claude for both one-shot and REPL dispatches. */
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     // Boundary enforcement: session reuse was removed by design — a fresh
     // session per invocation, regardless of what the caller supplied. See
     // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
+    const hasMachineEnvelope = !options.interactive;
     const args = this.buildArgs(options);
 
-    // Deliver the prompt on STDIN, never as a `-p <prompt>` command-line
-    // argument. A single argv string is capped at MAX_ARG_STRLEN (128 KiB on
-    // Linux); the build_review grader's prompt (plan + full diff) routinely
-    // exceeds that, and passing it as an argument makes exec() fail instantly
-    // with E2BIG ("Argument list too long") BEFORE claude starts — surfacing as
-    // an empty-output, non-zero exit that no classifier catches and that halts
-    // every large feature at build_review. `claude --print` reads the prompt
-    // from stdin when no positional prompt is given, which has no length limit.
-    const hasPrompt = typeof options.prompt === 'string' && options.prompt.length > 0;
-    if (hasPrompt) {
-      args.push('--print', '--output-format', 'json');
+    const promptOnStdin =
+      typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
+
+    if (options.prompt && options.interactive) {
+      // REPL mode keeps the prompt positional and stdin attached to the terminal.
+      args.push(options.prompt);
     }
 
-    // Stream stdout/stderr to terminal while also capturing for analysis.
-    // With a prompt, feed it on stdin (execa closes stdin after writing). With
-    // no prompt, stdin is explicitly closed: otherwise Claude's CLI waits ~3s
-    // for piped input on a TTY and logs "no stdin data received in 3s" per call.
-    const observed = await observeInterval(this.intervalClock, () =>
-      hasPrompt
-        ? this.runClaude(args, {
-          reject: false,
-          input: options.prompt,
-          env: this.buildEnv(options),
-          cwd: options.cwd,
-          diagnosticLog: options.diagnosticLog,
-          onActivity: options.onActivity,
-          onSpawn: options.onSpawn,
-          selfHost: options.selfHost,
-          spawnPermit: options.spawnPermit,
-        })
-        : this.runClaude(args, {
-          reject: false,
-          stdin: 'ignore',
-          env: this.buildEnv(options),
-          cwd: options.cwd,
-          diagnosticLog: options.diagnosticLog,
-          onActivity: options.onActivity,
-          onSpawn: options.onSpawn,
-          selfHost: options.selfHost,
-          spawnPermit: options.spawnPermit,
-        }),
-    );
-
-    return this.classifyCompletion(observed.value, true, observed.interval, options.prompt);
-  }
-
-  /**
-   * Run Claude with stdio inherited — user sees output live.
-   *
-   * Default: every step uses `-p` (print mode) so the session exits when the
-   * skill completes. Matches bin/conduct; prevents the harness from hanging
-   * waiting for `/quit`. The autonomous vs. collaborative distinction is
-   * purely about the `--dangerously-skip-permissions` flag — collaborative
-   * steps still see Claude's permission prompts on the shared terminal.
-   *
-   * `interactive: true` is a deliberate opt-in (used by the recovery menu's
-   * "interactive fix" option) that opens a REPL instead of auto-exiting, so
-   * the user can debug with Claude manually.
-   */
-  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
-    // Boundary enforcement: fresh session per invocation (see invoke()).
-    options = enforceFreshSessionOptions(options, 'claude');
-    const args = this.buildArgs(options);
-
-    if (options.prompt) {
-      if (options.interactive) {
-        // REPL mode — positional arg; session stays open until user /quits.
-        args.push(options.prompt);
-      } else {
-        // Print mode — auto-exit when done.
-        args.push('-p', options.prompt);
-      }
-    }
-
-    // Capture while inheriting output so classification remains available only
-    // after the visibly streamed process completes.
+    // Non-REPL print mode receives its prompt through stdin to avoid the argv
+    // size limit; the REPL retains inherited stdin and positional prompt behavior.
     const observed = await observeInterval(this.intervalClock, () =>
       this.runClaude(args, {
-        stdin: options.interactive ? 'inherit' : 'ignore',
+        ...(promptOnStdin
+          ? { input: options.prompt }
+          : { stdin: options.interactive ? 'inherit' as const : 'ignore' as const }),
         reject: false,
         env: this.buildEnv(options),
         cwd: options.cwd,
         diagnosticLog: options.diagnosticLog,
         onActivity: options.onActivity,
+        onProviderStream: options.interactive
+          ? undefined
+          : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
         onSpawn: options.onSpawn,
         selfHost: options.selfHost,
         spawnPermit: options.spawnPermit,
       }),
     );
 
-    return this.classifyCompletion(observed.value, false, observed.interval, options.prompt);
+    return this.classifyCompletion(
+      observed.value,
+      hasMachineEnvelope,
+      observed.interval,
+      options.prompt,
+      hasMachineEnvelope,
+    );
   }
 
   private classifyCompletion(
@@ -671,13 +677,15 @@ export class ClaudeProvider implements LLMProvider {
     jsonOutput: boolean,
     observedInterval: ObservedInterval,
     prompt?: string,
+    strictMachineEnvelope = false,
   ): InvokeResult {
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
 
+    const terminalResult = jsonOutput ? selectTerminalResult(stdout) : undefined;
     const parsed = jsonOutput
-      ? parseJsonResult(stdout)
+      ? parseJsonResult(terminalResult ?? stdout)
       : { output: stdout, tokenUsage: undefined };
 
     // Combine stdout + stderr so the caller has full context
@@ -695,6 +703,20 @@ export class ClaudeProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
+        observedIntervals: [observedInterval],
+      };
+    }
+
+    // A successful machine-envelope dispatch must end in Claude's terminal
+    // result record. Plain or truncated stdout is not a successful completion:
+    // it cannot safely supply output or usage for accounting.
+    if (strictMachineEnvelope && exitCode === 0 && (!terminalResult || parsed.output === terminalResult)) {
+      return {
+        success: false,
+        output: !terminalResult
+          ? 'Claude provider parse failure: missing terminal result record.'
+          : 'Claude provider parse failure: terminal result record is missing its result field.',
+        exitCode,
         observedIntervals: [observedInterval],
       };
     }
@@ -743,7 +765,7 @@ export class ClaudeProvider implements LLMProvider {
       modelUnavailable: modelUnavailable || undefined,
       commandUnresolved: commandUnresolvedName !== undefined || undefined,
       commandUnresolvedName,
-      tokenUsage: parsed.tokenUsage,
+      tokenUsage: !strictMachineEnvelope || exitCode === 0 ? parsed.tokenUsage : undefined,
       waitSeconds,
       deadline,
       observedIntervals: [observedInterval],
@@ -771,6 +793,12 @@ export class ClaudeProvider implements LLMProvider {
 
     if (options.model) {
       args.push('--model', options.model);
+    }
+
+    // Every non-REPL dispatch uses Claude's machine-readable envelope. The
+    // REPL keeps its plain-text interactive terminal contract.
+    if (!options.interactive) {
+      args.push('--print', '--output-format', 'stream-json', '--verbose');
     }
 
     return args;

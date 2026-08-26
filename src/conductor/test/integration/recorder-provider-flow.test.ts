@@ -79,10 +79,6 @@ class RecorderProvider {
     return { success: true, output: '[RecorderProvider] canned response', exitCode: 0 };
   }
 
-  async invokeInteractive(options) {
-    await this._appendRecord('invokeInteractive', options);
-  }
-
   async _ensureDir() {
     if (this.dirEnsured) return;
     await mkdir(dirname(this.recordingPath), { recursive: true });
@@ -145,7 +141,7 @@ export { RecorderProvider, RecorderProviderError };
     expect(typeof record.ts).toBe('string');
   });
 
-  it('T9b: invokeInteractive() writes JSONL with kind=invokeInteractive and resolves', async () => {
+  it('T9b: interactive invoke() writes JSONL with kind=invoke and resolves', async () => {
     await writeRecorderPlugin();
 
     const registry = new PluginRegistry();
@@ -154,16 +150,18 @@ export { RecorderProvider, RecorderProviderError };
     registry.markInitialized();
 
     const provider = registry.get<LLMProvider>('llm_provider', 'recorder');
-    await provider.invokeInteractive({
+    await provider.invoke({
       prompt: 'interactive test',
       sessionId: 'session-002',
       resume: false,
+      interactive: true,
     });
 
     const content = await readFile(recordingPath, 'utf-8');
     const record = JSON.parse(content.trim());
-    expect(record.kind).toBe('invokeInteractive');
+    expect(record.kind).toBe('invoke');
     expect(record.options.prompt).toBe('interactive test');
+    expect(record.options.interactive).toBe(true);
   });
 
   // ---------------------------------------------------------------------------

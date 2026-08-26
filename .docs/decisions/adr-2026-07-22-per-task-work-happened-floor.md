@@ -92,3 +92,5 @@ wedge-free deterministic subset that safely blocks.
 2. Zero-commit unmarked task surfaced before ship (WARNING + artifact). ✅ (flagged)
 3. Legitimately test-only task doesn't wedge — non-blocking + marker escape. ✅
 4. Composes UNDER build_review as a cheap first pass; LLM keeps semantic judgment. ✅
+
+> **Amended 2026-08-22 by #1805:** the rejected blocking trailer floor stays rejected; a criteria floor on plans that carry Done when: is a different shape and is adopted by adr-2026-08-22-done-when-evidence-at-task-close. The perTaskFloor advisory inside runBuildReview is removed with the completeness rubric.

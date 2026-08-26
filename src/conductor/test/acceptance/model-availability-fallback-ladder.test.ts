@@ -31,18 +31,14 @@ function laddderProvider(
   fallback: Partial<InvokeResult> = { success: true, output: 'done', exitCode: 0 },
 ) {
   const invokeCalls: InvokeOptions[] = [];
-  const invokeInteractiveCalls: InvokeOptions[] = [];
   const provider: LLMProvider = {
     invoke: vi.fn(async (opts: InvokeOptions): Promise<InvokeResult> => {
       invokeCalls.push(opts);
       const canned = (opts.model && resultsByModel[opts.model]) ?? fallback;
       return { success: true, output: '', exitCode: 0, ...canned };
     }),
-    invokeInteractive: vi.fn(async (opts: InvokeOptions): Promise<void> => {
-      invokeInteractiveCalls.push(opts);
-    }),
   };
-  return { provider, invokeCalls, invokeInteractiveCalls };
+  return { provider, invokeCalls };
 }
 
 const modelUnavailable = (): Partial<InvokeResult> => ({
@@ -61,7 +57,7 @@ afterEach(() => {
 });
 
 function warnLines(): string {
-  return warnSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+  return warnSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n');
 }
 
 function configWithLadder(ladder: readonly string[]): HarnessConfig {
@@ -260,8 +256,8 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
 });
 
 describe('Cache consult on the interactive dispatch path (TS-3 negative path)', () => {
-  it('a model marked dead by a prior autonomous downgrade is substituted before invokeInteractive — with the same loud warning', async () => {
-    const { provider, invokeCalls, invokeInteractiveCalls } = laddderProvider({
+  it('a model marked dead by a prior autonomous downgrade is substituted before unified interactive dispatch — with the same loud warning', async () => {
+    const { provider, invokeCalls } = laddderProvider({
       fable: modelUnavailable(),
       opus: { success: true, output: 'done', exitCode: 0 },
     });
@@ -275,13 +271,12 @@ describe('Cache consult on the interactive dispatch path (TS-3 negative path)', 
     expect(invokeCalls.map((c) => c.model)).toEqual(['fable', 'opus']);
     warnSpy.mockClear();
 
-    // Second: a COLLABORATIVE step (reactive detection is impossible here —
-    // invokeInteractive has no captured output) must consult the cache and
-    // substitute BEFORE dispatch, not spawn a doomed fable subprocess.
+    // Second: a COLLABORATIVE step must consult the cache and substitute
+    // BEFORE dispatch, not spawn a doomed fable subprocess.
     await runner.run('explore', emptyState);
 
-    expect(invokeInteractiveCalls).toHaveLength(1);
-    expect(invokeInteractiveCalls[0].model).toBe('opus');
+    expect(invokeCalls).toHaveLength(3);
+    expect(invokeCalls[2]).toMatchObject({ model: 'opus', interactive: true });
     const warned = warnLines();
     expect(warned).toContain('fable');
     expect(warned).toContain('opus');

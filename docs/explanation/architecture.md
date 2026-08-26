@@ -64,23 +64,7 @@ prompt rather than a resumed conversation.
 
 Work moves through two independent loops that meet at exactly one place: the base branch.
 
-```mermaid
-flowchart TB
-  subgraph E["engineer loop — conduct-ts engineer"]
-    direction LR
-    E1["one worktree + spec branch per idea"] --> E2["DECIDE artifacts under .docs/"] --> E3["spec PR"]
-  end
-  subgraph D["daemon — conduct-ts daemon"]
-    direction LR
-    D1["backlog"] --> D2["one worktree + feat branch per feature"] --> D3["engine step loop"] --> D4["implementation PR"]
-  end
-  op(["operator"]) -->|raw idea| E1
-  E3 -->|operator merges| BASE[("base branch: .docs/plans, .docs/stories")]
-  BASE -->|git ls-tree, never the working tree| D1
-  D4 -->|operator merges| BASE
-  D3 -.->|dispatches one step| HOST["host agent: claude or codex"]
-  HOST -.->|writes artifacts| D3
-```
+![The engineer loop turns an operator's idea into a spec PR on the base branch; the daemon reads that branch, dispatches implementation work to a host agent, and returns an implementation PR.](../assets/images/architecture-loops.png)
 
 ### The engineer loop: idea to spec
 

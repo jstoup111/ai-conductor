@@ -192,3 +192,33 @@ export function resolveProviderModelPolicy(
   );
   return CLAUDE_MODEL_POLICY;
 }
+
+/**
+ * Providers that report a per-dispatch dollar figure themselves, so their
+ * models need no rate card. Claude Code returns `total_cost_usd` on every
+ * dispatch; that provider-reported number always outranks a harness estimate.
+ */
+const COST_SELF_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(['claude']);
+
+/**
+ * Every model id a built-in policy can route a dispatch to for a provider that
+ * does NOT report cost: step defaults, tier overrides, and both ladders. This
+ * is the set a token-price rate card must cover — a model reachable only by
+ * escalation or fallback but absent from the card silently leaves its
+ * dispatches cost-unmetered.
+ */
+export function rateCardModelIds(): string[] {
+  const ids = new Set<string>();
+  for (const [provider, policy] of Object.entries(BUILT_IN_PROVIDER_MODEL_POLICIES)) {
+    if (COST_SELF_REPORTING_PROVIDERS.has(provider)) continue;
+    for (const model of Object.values(policy.stepModels)) ids.add(model);
+    for (const model of policy.modelEscalationOrder) ids.add(model);
+    for (const model of policy.modelFallbackLadder) ids.add(model);
+    for (const tiers of Object.values(policy.stepTierOverrides)) {
+      for (const override of Object.values(tiers ?? {})) {
+        if (override?.model) ids.add(override.model);
+      }
+    }
+  }
+  return [...ids].sort();
+}

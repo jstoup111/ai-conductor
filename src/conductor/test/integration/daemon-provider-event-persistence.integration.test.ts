@@ -129,7 +129,6 @@ describe('daemon feature provider-event persistence', () => {
           return {
             lifecycleCapability: { synchronousSpawnPermit: true },
             invoke,
-            invokeInteractive: invoke,
           };
         };
         const runtimes = new ProviderRuntimeSet([

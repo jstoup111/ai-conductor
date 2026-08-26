@@ -1,5 +1,6 @@
 ---
 name: explore
+implicit_invocation: required
 description: "Use at the start of any new feature or change. Explores context, asks clarifying questions one at a time, proposes 2-3 approaches with trade-offs, and decides the work track (product vs technical). Divergent half of the old brainstorm — produces no committed design doc; the product-track PRD is authored by /prd."
 enforcement: advisory
 phase: decide
@@ -79,8 +80,8 @@ Before asking questions, understand what exists. If the conversation already has
 results (from `/bootstrap` or a prior Explore agent), summarize what's known and only fill gaps.
 
 When dispatching Explore agents: **max 2**, directory-partitioned (Agent 1: `app/`+`db/`+`config/`;
-Agent 2: `spec/`+`.docs/`). Do NOT read `.memory/` (auto-loaded). Check `.memory/` context and
-existing `.docs/stories/` for related work.
+Agent 2: `spec/`+`.docs/`). Do not delegate memory reading; this active Explore workflow checks
+relevant `.memory/` context directly, along with existing `.docs/stories/` for related work.
 
 ### 2. Ask Clarifying Questions
 

@@ -201,7 +201,7 @@ describe('Story 4: preventive hook wiring is required', () => {
 });
 
 describe('Story 5: the public plan gate rejects ambiguous protected references', () => {
-  it('rejects a task with no Files declaration and names the required declaration', async () => {
+  it('rejects a task with no Files declaration and redirects the amendment to DECIDE', async () => {
     const root = await mkdtemp(join(tmpdir(), 'protected-plan-command-'));
     roots.push(root);
     const planPath = join(root, 'feature-a.md');
@@ -228,7 +228,8 @@ describe('Story 5: the public plan gate rejects ambiguous protected references',
     expect(command).not.toBeNull();
     await expect(planProtectedTargetsCommand(command!, { print: (line) => output.push(line) })).resolves.toBe(1);
     expect(output.join('\n')).toContain('.docs/specs/2026-07-04-operator-park.md');
-    expect(output.join('\n')).toMatch(/Files/);
+    expect(output.join('\n')).toMatch(/DECIDE/);
+    expect(output.join('\n')).not.toContain('add `**Files:**`');
   });
 });
 

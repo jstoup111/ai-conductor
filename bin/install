@@ -35,6 +35,12 @@ ALLOW_WORKTREE_ROOT=false
 # validate it here so an invalid selection never begins a global installation.
 PROVIDER_SELECTION=""
 
+# CHANNEL_SELECTION is an optional first-run update-channel choice. It is
+# deliberately consulted only while creating conductor configuration, so a
+# re-run cannot overwrite a channel the operator already configured.
+CHANNEL_SELECTION=""
+CHANNEL_SOURCE=""
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -240,7 +246,7 @@ check_installation() {
       warn "conduct-ts bundle built but not on PATH — run ./bin/install"
     fi
   else
-    warn "conduct-ts bundle not built — run ./bin/install (needs Node >=20.5)"
+    warn "conduct-ts bundle not built — run ./bin/install (needs Node >=26)"
   fi
 
   # Check build-auth state (FR-1/FR-3). Delegates entirely to
@@ -917,7 +923,7 @@ configure_conductor() {
     return 1
   fi
 
-  local channel="tagged"
+  local channel="tagged" channel_source=""
   if [ -f "$HARNESS_USER_CONFIG" ]; then
     channel=$(conductor_cfg_get updateChannel tagged) || return 1
   fi
@@ -926,8 +932,10 @@ configure_conductor() {
 
   if [ ! -f "$HARNESS_USER_CONFIG" ]; then
     # First run — pick a channel.
-    channel="stable"
-    if [ "$UPDATE_MODE" != true ] && [ -t 0 ]; then
+    if [ -n "$CHANNEL_SELECTION" ]; then
+      channel="$CHANNEL_SELECTION"
+      channel_source="$CHANNEL_SOURCE"
+    elif [ "$UPDATE_MODE" != true ] && [ -t 0 ]; then
       echo ""
       info "Harness update channel — which version should /conduct follow?"
       echo "    1) stable  — stable release channel (recommended)"
@@ -939,6 +947,10 @@ configure_conductor() {
         3) channel="main" ;;
         *) channel="stable" ;;
       esac
+      channel_source="interactive prompt"
+    else
+      channel="stable"
+      channel_source="stable fallback"
     fi
     local detected
     detected=$(detect_current_version "$channel")
@@ -946,13 +958,19 @@ configure_conductor() {
       conductor_cfg_set autoCheck true && \
       conductor_cfg_set currentVersion "$detected" && \
       conductor_cfg_set lastCheckedAt "$now"; then
-      ok "Created conductor configuration (channel: ${channel}, version: ${detected})"
+      ok "Created conductor configuration (channel: ${channel}, source: ${channel_source}, version: ${detected})"
+      if [ "$channel_source" = "stable fallback" ]; then
+        info "Stable was used as a fallback; choose explicitly with --channel, AI_CONDUCTOR_CHANNEL, or bin/update --set-channel."
+      fi
     else
       warn "Could not create conductor configuration (update checks off until bin/install re-runs)"
       return 1
     fi
   else
     # Update — refresh currentVersion + lastCheckedAt, preserve everything else.
+    if [ -n "$CHANNEL_SELECTION" ]; then
+      info "Ignoring ${CHANNEL_SOURCE} channel '${CHANNEL_SELECTION}': channel '${channel}' is already configured. Use bin/update --set-channel to change it."
+    fi
     local detected
     detected=$(detect_current_version "$channel")
     if conductor_cfg_set currentVersion "$detected" && \
@@ -967,17 +985,14 @@ configure_conductor() {
 
 # ─── conduct-ts build ─────────────────────────────────────────────────────────
 
-# Return 0 if the active Node satisfies conduct-ts's >=20.5 requirement (execa
-# imports addAbortListener, added in Node 20.5). The repo pins 20.19.2 via
-# .tool-versions. Returns 1 if Node is absent or too old.
+# Return 0 if the active Node satisfies conduct-ts's >=26 requirement. The repo
+# pins 26.7.0 via .tool-versions. Returns 1 if Node is absent or too old.
 node_supports_conduct_ts() {
-  local node_v="" major=0 minor=0 rest=""
+  local node_v="" major=0
   node_v=$(node --version 2>/dev/null | sed 's/^v//') || true
   [ -z "$node_v" ] && return 1
   major=${node_v%%.*}
-  rest=${node_v#*.}
-  minor=${rest%%.*}
-  [ "$major" -gt 20 ] || { [ "$major" -eq 20 ] && [ "$minor" -ge 5 ]; }
+  [ "$major" -ge 26 ]
 }
 
 # Build the conduct-ts bundle: npm ci + npm run build in src/conductor/.
@@ -997,13 +1012,13 @@ build_conduct_ts() {
 
   if ! command -v npm &>/dev/null; then
     warn "npm not found — cannot build conduct-ts; skipping"
-    info "Install Node >=20.5 + npm, then re-run bin/install"
+    info "Install Node >=26 + npm, then re-run bin/install"
     return 1
   fi
 
   if ! node_supports_conduct_ts; then
-    warn "Node >=20.5 not active (repo pins 20.19.2 via .tool-versions) — skipping conduct-ts build"
-    info "Install it (e.g. 'asdf install nodejs 20.19.2'), then re-run bin/install"
+    warn "Node >=26 not active (repo pins 26.7.0 via .tool-versions) — skipping conduct-ts build"
+    info "Install it (e.g. 'asdf install nodejs 26.7.0'), then re-run bin/install"
     return 1
   fi
 
@@ -1320,12 +1335,12 @@ install() {
     fi
   else
     # Build (step 3a) was skipped or failed, so the bundle is absent. Surface the
-    # real cause — conduct-ts needs Node >=20.5 (execa imports addAbortListener),
-    # and the repo pins 20.19.2 via .tool-versions.
+    # real cause — conduct-ts needs Node >=26, and the repo pins 26.7.0 via
+    # .tool-versions.
     if node_supports_conduct_ts; then
       info "conduct-ts bundle not found — 'npm run build' in src/conductor/ failed or was skipped; see the conduct-ts section above"
     else
-      warn "conduct-ts bundle not found and Node >=20.5 is not active (the repo pins 20.19.2 via .tool-versions). Install it (e.g. 'asdf install nodejs 20.19.2'), then re-run bin/install."
+      warn "conduct-ts bundle not found and Node >=26 is not active (the repo pins 26.7.0 via .tool-versions). Install it (e.g. 'asdf install nodejs 26.7.0'), then re-run bin/install."
     fi
   fi
 
@@ -1492,12 +1507,45 @@ while [ "$#" -gt 0 ]; do
         exit 1
       fi
       ;;
+    --channel)
+      shift
+      if [ "$#" -eq 0 ] || [ -z "$1" ]; then
+        fail "--channel requires one of: stable, tagged, main"
+        exit 1
+      fi
+      CHANNEL_SELECTION="$1"
+      CHANNEL_SOURCE="--channel flag"
+      ;;
+    --channel=*)
+      CHANNEL_SELECTION="${1#--channel=}"
+      if [ -z "$CHANNEL_SELECTION" ]; then
+        fail "--channel requires one of: stable, tagged, main"
+        exit 1
+      fi
+      CHANNEL_SOURCE="--channel flag"
+      ;;
     *)
       _filtered_args+=("$1")
       ;;
   esac
   shift
 done
+
+if [ -z "$CHANNEL_SELECTION" ] && [ -n "${AI_CONDUCTOR_CHANNEL:-}" ] && \
+  [[ ! "${AI_CONDUCTOR_CHANNEL}" =~ ^[[:space:]]*$ ]]; then
+  CHANNEL_SELECTION="$AI_CONDUCTOR_CHANNEL"
+  CHANNEL_SOURCE="AI_CONDUCTOR_CHANNEL environment variable"
+fi
+
+if [ -n "$CHANNEL_SELECTION" ]; then
+  case "$CHANNEL_SELECTION" in
+    stable|tagged|main) ;;
+    *)
+      fail "Unsupported channel '${CHANNEL_SELECTION}' from ${CHANNEL_SOURCE}. Supported channels: stable, tagged, main"
+      exit 1
+      ;;
+  esac
+fi
 
 if [ -n "$PROVIDER_SELECTION" ]; then
   case ",${PROVIDER_SELECTION}," in
@@ -1528,13 +1576,15 @@ case "${1:-}" in
   --uninstall) uninstall ;;
   --update)    UPDATE_MODE=true; install ;;
   -h|--help)
-    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--providers claude[,codex]] [--allow-worktree-root]"
+    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--providers claude[,codex]] [--channel stable|tagged|main] [--allow-worktree-root]"
     echo ""
     echo "  (no args)     Install/update harness skills and conduct script"
     echo "  --check       Check installation status"
     echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
     echo "  --uninstall   Remove all symlinks"
     echo "  --providers   Comma-separated selection of Claude and/or Codex"
+    echo "  --channel     First-run update channel: stable, tagged, or main"
+    echo "                AI_CONDUCTOR_CHANNEL provides the same first-run choice"
     echo "  --allow-worktree-root"
     echo "                Bypass the refusal to install from a .worktrees/ checkout"
     echo "                (installs from a worktree normally repoint global symlinks"

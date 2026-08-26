@@ -155,3 +155,5 @@ persisted cache to migrate.
 4. **Persist the infrastructure excerpt under `.pipeline/build-review-preflight/`.** A parallel
    telemetry channel by the event-spine skill's schema-not-file test, and written into a directory
    that is deleted on every outcome. Rejected.
+
+> **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).

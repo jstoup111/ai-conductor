@@ -7,6 +7,9 @@ export interface SinkDeclaration {
 }
 
 export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
+  operator_rewind: { render: true, persist: true, audit: true },
+  plan_growth: { render: true, persist: true, audit: false },
+  config_deprecated_key: { render: false, persist: true, audit: false },
   contained_live_checkout_drift: { render: true, persist: true, audit: false },
   self_host_containment_verdict: { render: true, persist: true, audit: false },
   build_review_rubric_started: { render: false, persist: true, audit: false },
@@ -15,19 +18,25 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_review_rubric_skipped: { render: false, persist: true, audit: false },
   build_review_cache_hit: { render: false, persist: true, audit: false },
   build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false },
+  build_review_mechanical_allowance_exhausted: { render: false, persist: true, audit: false },
   // These are written by the external build-review CLI to the pipeline-owned
   // ledger, then tailed onto the live bus. Re-persisting them would duplicate
   // the same occurrence in the engine ledger.
   build_review_disposition_accepted: { render: false, persist: false, audit: false },
+  build_review_reduced_coverage_accepted: { render: false, persist: false, audit: false },
   build_review_disposition_refused: { render: false, persist: false, audit: false },
   build_review_disposition_version_invalidated: { render: false, persist: true, audit: true },
   build_review_outer_verdict: { render: false, persist: true, audit: false },
+  build_review_stale_aggregate: { render: false, persist: true, audit: false },
   step_started: { render: true, persist: true, audit: false },
   containment_check_unresolved: { render: false, persist: true, audit: false },
   deprecated_step: { render: true, persist: true, audit: false },
   step_completed: { render: true, persist: true, audit: true },
   step_failed: { render: true, persist: true, audit: false },
+  step_refused: { render: true, persist: true, audit: true },
   provider_attempt: { render: true, persist: true, audit: false },
+  // Per-interval progress would flood .daemon/daemon.log; daemon status reads the ledger directly.
+  provider_stream_progress: { render: false, persist: true, audit: false },
   scratch_cleanup_reclaimed: { render: true, persist: true, audit: false },
   scratch_cleanup_retained: { render: true, persist: true, audit: false },
   scratch_cleanup_failed: { render: true, persist: true, audit: false },
@@ -79,7 +88,11 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_member_evidence_recomputed: { render: true, persist: true, audit: false },
   kickback: { render: true, persist: true, audit: true },
   loop_halt: { render: true, persist: true, audit: true },
+  over_scope_decision: { render: false, persist: true, audit: false },
   halt_marker_write_failed: { render: true, persist: true, audit: true },
+  halt_record_written: { render: true, persist: true, audit: true },
+  halt_record_write_failed: { render: true, persist: true, audit: true },
+  halt_record_push_failed: { render: true, persist: true, audit: true },
   loop_converged: { render: true, persist: false, audit: false },
   rebase_noop: { render: false, persist: false, audit: false },
   rebase_mergeable_skip: { render: true, persist: false, audit: false },

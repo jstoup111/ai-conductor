@@ -81,8 +81,18 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 
 const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
-const AUDIT_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';
-const PRD_PASS = AUDIT_HEADER + '| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+const PRD_PASS = [
+  '# PRD Audit',
+  '',
+  '**PRD:** present',
+  '',
+  '## Verdict Table',
+  '',
+  '| Criterion | Grade | Plan task | PRD | Evidence |',
+  '|---|---|---|---|---|',
+  '| S1.1 | PASS | | FR-1 | evidence.ts:1 |',
+  '',
+].join('\n');
 const FEATURE_PRD = '# PRD: Build auth token check and classify\n\n## Functional Requirements\n\n- **FR-1 — Group auth recovery.** Authentication failures park and resume.\n';
 
 // Verbatim observed rejected-credential output
@@ -193,7 +203,7 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
             return { success: true };
           }
           if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
             return { success: true };
           }
           if (step === 'architecture_review_as_built') {
@@ -233,6 +243,9 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
         verifyArtifacts: true,
         maxRetries: 1, // a retry-ladder spin on this failure would need > 1
         sleepFn,
+        // This fixture observes the SHIP validation join. Start at its first
+        // member so an unrelated persisted BUILD gate is not revalidated.
+        fromStep: 'manual_test',
         config: selfHostConfig(tokenPath),
         selfHostGuardrails: makeGuardrails(dir),
       });
@@ -281,7 +294,7 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
             return { success: true, output: 'test suite expects a 401 response from /widgets' };
           }
           if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
             return { success: true };
           }
           return { success: true };

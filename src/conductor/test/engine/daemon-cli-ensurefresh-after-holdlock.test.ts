@@ -71,6 +71,7 @@ describe('Task 5 — runDaemonMode calls holdLock before ensureFresh', () => {
   it('propagates an ensureFresh throw (stale-install refusal) after the lock is held, with releaseSync available as the exit backstop', async () => {
     const { runDaemonMode } = await import('../../src/daemon-cli.js');
     const holdLockModule = await import('../../src/engine/daemon-lock.js');
+    const processOnce = vi.spyOn(process, 'once');
 
     let releaseSyncCalled = false;
     const fakeLock = {
@@ -98,11 +99,13 @@ describe('Task 5 — runDaemonMode calls holdLock before ensureFresh', () => {
       } as any),
     ).rejects.toThrow('stale harness install');
 
-    // The exit backstop is registered via process.once('exit', ...) prior to
-    // ensureFresh running (verified by the throw propagating cleanly rather
-    // than crashing before the lock/backstop wiring); simulate process exit
-    // to confirm the backstop this test process registered actually releases.
-    process.emit('exit', 0 as any);
+    // Invoke only this daemon's exit backstop. Broadcasting `exit` reaches
+    // Vitest's own process-level listeners in the reused worker, which can
+    // terminate it after the test file reports success.
+    const exitBackstop = processOnce.mock.calls.find(([event]) => event === 'exit')?.[1];
+    expect(exitBackstop).toBeTypeOf('function');
+    process.removeListener('exit', exitBackstop as () => void);
+    (exitBackstop as () => void)();
     expect(releaseSyncCalled).toBe(true);
   });
 });

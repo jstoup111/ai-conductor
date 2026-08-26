@@ -21,7 +21,7 @@ and reused:
 The denominator is available deterministically. `extractPrdFrIds`
 (`src/conductor/src/engine/engineer/coherence-validator.ts:184`) already parses the `FR-N` ids
 declared under a PRD's `## Functional Requirements` heading, and land-time coherence already gates
-FR coverage with it. `prd_audit` is `skippableForTracks: ['technical']`
+FR coverage with it. `prd_audit` runs on every track (the former `skippableForTracks: ['technical']` was removed by #1805)
 (`src/conductor/src/engine/steps.ts:223`), so whenever it runs the feature is product-track and a
 PRD exists — which is what makes failing closed on an unresolvable PRD safe rather than
 regression-prone.
@@ -136,7 +136,7 @@ the PRD cannot be found.
 
 #### Negative Paths
 
-- Given `prd_audit` is running (so the feature is product-track, per `skippableForTracks`) and no
+- Given `prd_audit` is running (on any track, per #1805) and no
   approved PRD can be resolved for this feature, when the predicate runs, then it returns
   `done: false` with a reason naming the unresolvable PRD — it never falls back to scanning every
   spec in the corpus, and never treats "cannot find the PRD" as "nothing to cover".

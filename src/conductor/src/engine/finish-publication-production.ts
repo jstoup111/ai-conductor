@@ -15,7 +15,7 @@ import type { StepRunResult } from './conductor.js';
 import { type GhRunner, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
-import { PR_BODY_FLOOR_MARKER, hasHaltSignal } from './halt-pr-rehabilitation.js';
+import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
 import { replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import {
   dispatchFinishRecord,
@@ -36,6 +36,12 @@ import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
+import {
+  appendRecordedShipmentFindings,
+  recordedShipmentFindings,
+} from './shipment-association.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -79,7 +85,7 @@ export interface ProductionFinishPublicationDeps {
   repairPresentation?: (input: { prUrl: string; state: ConductState }) => Promise<void>;
   /** Task 38 seams: overridable in tests; production defaults resolve the real worktree identity and store. */
   resolveFeatureIdentity?: (projectRoot: string) => Promise<BuildReviewFeatureIdentity | undefined>;
-  createDispositionStore?: (projectRoot: string) => Pick<BuildReviewDispositionStore, 'list'>;
+  createDispositionStore?: (projectRoot: string) => Pick<BuildReviewDispositionStore, 'list' | 'listReducedCoverage'>;
 }
 
 export interface ProductionReleaseReadinessObserverInput {
@@ -99,6 +105,18 @@ export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
   if (!upserted.ok) return upserted;
   if (upserted.changed) await input.gh(['pr', 'edit', input.prUrl, '--body', upserted.body], { cwd: input.cwd });
   return { ok: true, changed: upserted.changed };
+}
+
+function upsertReducedCoverageEvidence(body: string, section: string | undefined): { ok: true; body: string; changed: boolean } | { ok: false; message: string } {
+  const heading = '## Reduced build-review coverage';
+  const start = body.indexOf(heading);
+  const end = start === -1 ? -1 : body.indexOf('\n## ', start + heading.length);
+  const withoutExisting = start === -1
+    ? body
+    : `${body.slice(0, start).trimEnd()}${end === -1 ? '' : `\n\n${body.slice(end + 1).trimStart()}`}`.trimEnd();
+  if (section === undefined) return { ok: true, body: withoutExisting, changed: withoutExisting !== body };
+  const next = withoutExisting.trim().length === 0 ? section : `${withoutExisting}\n\n${section}`;
+  return { ok: true, body: next, changed: next !== body };
 }
 
 /**
@@ -155,7 +173,14 @@ function prProse(
   const text = `${prTitle}\n${prBody}`.trim();
   if (!text) return 'placeholder';
   if (halted) return 'halt';
-  if (prBody.includes(PR_BODY_FLOOR_MARKER) || /Draft opened automatically/i.test(text)) {
+  // The floor marker is provenance, not a verdict: it is an invisible comment
+  // an authoring pass can preserve while rewriting every word around it, and
+  // marker-presence-alone classification then pinned genuine prose at
+  // 'placeholder' until the non-advancing-transition guard halted FINISH
+  // (#1703). `isEngineFlooredBody` reads the body content instead, so an
+  // intact floor still classifies as a placeholder and authored prose does
+  // not.
+  if (isEngineFlooredBody(prBody) || /Draft opened automatically/i.test(text)) {
     return 'placeholder';
   }
   // Existing prose is a judgment candidate until this coordinator either
@@ -181,6 +206,27 @@ export function createProductionFinishPublicationCoordinator(
   // production, so every `record_outcome` attempt refused with "runGh not
   // implemented" and burned the FINISH retry budget instead of recording.
   const finishRecordRunners = deps.finishRecordRunners ?? makeProductionFinishRecordRunners();
+
+  const copyRecordedReviewFindingsToShippedRecord = async (slug: string): Promise<void> => {
+    const pipeline = join(deps.projectRoot, '.pipeline');
+    const [prdAudit, asBuilt] = await Promise.all([
+      readFile(join(pipeline, 'prd-audit.md'), 'utf8').catch(() => undefined),
+      readFile(join(pipeline, 'architecture-review-as-built.md'), 'utf8').catch(() => undefined),
+    ]);
+    const findings = recordedShipmentFindings({ prdAudit, asBuilt });
+    if (findings.length === 0) return;
+
+    const relativeRecordPath = join('.docs', 'shipped', `${slug}.md`);
+    const recordPath = join(deps.projectRoot, relativeRecordPath);
+    const record = await readFile(recordPath, 'utf8');
+    const next = appendRecordedShipmentFindings(record, findings);
+    if (next === record) return;
+    await writeFile(recordPath, next, 'utf8');
+    await deps.git(['add', relativeRecordPath], { cwd: deps.projectRoot });
+    await deps.git([
+      'commit', '-m', `shipped record findings: ${slug}`, '--no-verify',
+    ], { cwd: deps.projectRoot });
+  };
   // A real provider session is expensive. Retain terminal prose verdicts for
   // the exact observed title/body revision; a changed revision earns one new
   // session, while an unchanged deficient one cannot burn retries.
@@ -243,19 +289,38 @@ export function createProductionFinishPublicationCoordinator(
     // this point fails closed — an unreadable store or unrenderable section
     // blocks the effect instead of letting accepted risk disappear.
     if (!feature) return;
-    const listed = await (deps.createDispositionStore
-      ?? ((root: string) => new BuildReviewDispositionStore(root)))(deps.projectRoot).list(feature);
+    const store = (deps.createDispositionStore
+      ?? ((root: string) => new BuildReviewDispositionStore(root)))(deps.projectRoot);
+    const listed = await store.list(feature);
     if (!listed.ok) throw new Error(`accepted-risk projection: ${listed.message}`);
+    const reducedCoverage = await store.listReducedCoverage(feature);
+    if (!reducedCoverage.ok) throw new Error(`accepted-risk projection: ${reducedCoverage.message}`);
+    const aggregate = await readFile(join(deps.projectRoot, '.pipeline', 'build-review.json'), 'utf8')
+      .then((text) => parseBuildReviewAggregate(JSON.parse(text)))
+      .catch(() => undefined);
+    if (reducedCoverage.records.length > 0 && !aggregate) {
+      throw new Error('accepted-risk projection: reduced build-review coverage has no renderable current-lap evidence');
+    }
+    const renderedReducedCoverage = renderBuildReviewReducedCoverageEvidence({
+      state: 'known',
+      records: reducedCoverage.records,
+      currentFailures: aggregate === undefined
+        ? []
+        : Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+    });
+    if (!renderedReducedCoverage.ok) throw new Error(`accepted-risk projection: ${renderedReducedCoverage.message}`);
     const { stdout } = await deps.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: deps.projectRoot });
     const body = (JSON.parse(stdout) as { body?: unknown }).body;
-    const published = await publishAcceptedBuildReviewRiskToRetainedPr({
-      prUrl,
-      body: typeof body === 'string' ? body : '',
-      records: listed.records,
-      gh: deps.gh,
-      cwd: deps.projectRoot,
-    });
-    if (!published.ok) throw new Error(`accepted-risk projection: ${published.message}`);
+    const reducedCoverageBody = upsertReducedCoverageEvidence(
+      typeof body === 'string' ? body : '',
+      renderedReducedCoverage.section,
+    );
+    if (!reducedCoverageBody.ok) throw new Error(`accepted-risk projection: ${reducedCoverageBody.message}`);
+    const acceptedRiskBody = upsertBuildReviewAcceptedRisk(reducedCoverageBody.body, listed.records);
+    if (!acceptedRiskBody.ok) throw new Error(`accepted-risk projection: ${acceptedRiskBody.message}`);
+    if (acceptedRiskBody.body !== (typeof body === 'string' ? body : '')) {
+      await deps.gh(['pr', 'edit', prUrl, '--body', acceptedRiskBody.body], { cwd: deps.projectRoot });
+    }
   };
 
   return {
@@ -480,6 +545,7 @@ export function createProductionFinishPublicationCoordinator(
             if (!state.feature_desc || !state.pr_url) throw new Error('missing shipment identity');
             const status = await writeShippedRecord({ kind: 'write', slug: state.feature_desc, pr: state.pr_url }, deps.projectRoot);
             if (status !== 0) throw new Error('required shipped-record accepted-risk evidence could not be published');
+            await copyRecordedReviewFindingsToShippedRecord(state.feature_desc);
           },
           repairPresentation: async () => {
             if (!state.pr_url) throw new Error('missing PR identity');

@@ -149,7 +149,7 @@ function invokeScriptWithFakeVitest(
     'sh',
     ['-c', `${script} ${argumentsToForward.map(shellQuote).join(' ')}`],
     {
-      cwd: repo,
+      cwd: CONDUCTOR_ROOT,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -288,14 +288,48 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
       timeout_seconds: 1800,
     });
     expect(template).toMatch(/test_suite:[\s\S]*command:[^\n]*npm test[\s\S]*working_directory:/i);
-    expect(JSON.parse(packageJson).scripts.test).toBe(
-      "sh -c \"vitest run --reporter=dot --silent --slowTestThreshold=1800000 \\\"\\$@\\\" && echo 'AGGREGATE_TEST_SUITE_PASS'\" --",
+    const testScript = JSON.parse(packageJson).scripts.test as string;
+    // Signal simulation needs a thread worker, so it runs in its own process
+    // after the fork-pool batch. Running both Vitest processes concurrently
+    // can terminate the aggregate shell with SIGHUP before it emits the
+    // required aggregate pass sentinel.
+    // Every invocation goes through the Node 26 temp-dir wrapper
+    // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
+    expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(3);
+    expect(testScript).not.toMatch(/(^|[^-])vitest run/);
+    expect(testScript).toContain('vitest.signal.config.ts');
+    expect(testScript).not.toContain('& ordinary=$!');
+    expect(testScript).not.toContain('& signals=$!');
+    expect(testScript).not.toContain('wait "$ordinary"');
+    expect(testScript).not.toContain('wait "$signals"');
+    expect(testScript).toMatch(/vitest\.signal\.config\.ts --reporter=dot(?! --silent)/);
+
+    // The no-argument branch is the aggregate gate's command. Any positional
+    // path passed there narrows the run to those paths, silently dropping
+    // every tier it omits while `AGGREGATE_TEST_SUITE_PASS` still prints —
+    // which is how `test/acceptance/**` (171 files) and `test/types/**` (3)
+    // once left the default run undetected. The default must therefore carry
+    // no path filter and inherit the config's `include` whole.
+    const defaultBranch = testScript.slice(testScript.indexOf('else'), testScript.indexOf('fi &&'));
+    expect(defaultBranch).not.toMatch(/(^|\s)(\.\/)?test\//);
+
+    // Whatever `vitest.config.ts` excludes for pool reasons must be run by the
+    // signal config instead, so the two commands still cover the include set.
+    const signalConfig = await readFile(join(CONDUCTOR_ROOT, 'vitest.signal.config.ts'), 'utf8');
+    const excludeBlock = vitestConfig.match(/exclude:\s*\[([\s\S]*?)\]/)?.[1] ?? '';
+    const poolExcluded = [...excludeBlock.matchAll(/'(test\/[^'*]*\.test\.ts)'/g)].map(
+      (match) => match[1]!,
     );
+    expect(poolExcluded.length).toBeGreaterThan(0);
+    for (const excluded of poolExcluded) {
+      expect(signalConfig).toContain(excluded);
+    }
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);
-    expect(vitestConfig).toMatch(
-      /poolOptions:\s*\{\s*forks:\s*\{\s*maxForks:\s*3,\s*minForks:\s*1\s*\}\s*\}/s,
-    );
+    // vitest 4 removed `poolOptions`; the fork cap is `maxWorkers` now. It
+    // must stay at 2 — 3 is the count that gets OOM-killed on this host.
+    expect(vitestConfig).toMatch(/maxWorkers:\s*2/);
+    expect(vitestConfig).not.toMatch(/poolOptions/);
   });
 
   it('executes the declared command in its working directory and records one PASS', async () => {

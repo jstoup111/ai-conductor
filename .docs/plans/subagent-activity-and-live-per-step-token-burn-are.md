@@ -287,13 +287,15 @@ an opt-in live probe (Task 20), and the throttle lives at the dispatch (Tasks 12
 **Type:** happy-path
 
 **Steps:**
-1. Write failing test: opening a `Task` tool_use with no matching tool_result yields
-   `activeChildren: 1`; three opened and one closed yields 2; all closed yields 0 with
+1. Write failing test: opening a child tool_use (the live-probed contract — currently `Agent`,
+   with `Task` also recognized; see Operator Amendment 2026-08-21) with no matching tool_result
+   yields `activeChildren: 1`; three opened and one closed yields 2; all closed yields 0 with
    `childObservability: 'observed'`; an unmatched tool_result, a duplicated tool_result, and a
    message whose `parent_tool_use_id` names an unopened child each leave the count unchanged and
    never negative.
 2. Verify test fails (RED)
-3. Implement: a set of open child ids keyed by tool_use id; open on a `Task` tool_use block, close
+3. Implement: a set of open child ids keyed by tool_use id; open on a child tool_use block
+   matching the live-probed contract (currently `Agent`; `Task` remains recognized), close
    on the matching tool_result, ignore anything unmatched. Repeat here the pattern trait from the
    Technical Approach that a missing or unrecognized input reads as "no change", never as a failure.
 4. Verify test passes (GREEN)
@@ -558,12 +560,16 @@ an opt-in live probe (Task 20), and the throttle lives at the dispatch (Tasks 12
 **Steps:**
 1. Write failing test: an opt-in smoke test that dispatches a real Claude session which spawns one
    subagent, captures the stream, and asserts the records this feature depends on are present —
-   a `Task` tool_use block, its matching tool_result, and at least one message with a non-null
-   `parent_tool_use_id`.
+   a child tool_use block, its matching tool_result, and at least one message with a non-null
+   `parent_tool_use_id`. (Probe outcome 2026-08-21, Claude Code 2.1.238: the child tool is
+   `Agent`; no `Task` tool_use appears.)
 2. Verify test fails (RED)
 3. Implement: register the smoke leg under the existing opt-in smoke tier so the default suite and
-   CI exclude it, and record the observed outcome. If the assumption does not hold, the honest
-   outcome is `childObservability: 'unsupported'` on Claude too — do not fabricate a count.
+   CI exclude it, and record the observed outcome. If no attributable child lifecycle is observed
+   at all — no child tool_use with a matching tool_result — the honest outcome is
+   `childObservability: 'unsupported'` on Claude too; do not fabricate a count. A child lifecycle
+   observed under a different tool name than assumed (the recorded probe shows `Agent`) IS the
+   attribution contract: record it and track it (Operator Amendment 2026-08-21).
 4. Verify test passes (GREEN)
 5. Commit with message: "test(smoke): confirm subagent stream attribution with an opt-in live probe"
 
@@ -630,3 +636,65 @@ Acyclic. Tasks 1–4 and 5–8 are two independent front chains; the plan conver
 - [ ] All negative path criteria covered by at least one task
 - [ ] No task exceeds 5 minutes of work
 - [ ] Dependencies are explicit and acyclic
+### Task rem-tautology-event-1: src/conductor/test/provider-stream-progress-event.test.ts:3-37 — replace the literal-to-literal assertions with unsupported and observed provider_stream_progress values passed without casts through the runtime ConductorEventEmitter-to-EventPersister path, then read their optional child/token fields from .pipeline/events.jsonl
+**Verify-only:** yes
+Rationale: the tautology rubric this remediation task was appended for is disabled repository-wide by 33dae839c (PR #1771, operator decision 2026-08-21); no rubric drives this work, so no commit can carry its trailer.
+### Task rem-tautology-observation-unsupported-1: src/conductor/test/execution/provider-stream-observation.test.ts:5-18 and src/conductor/test/execution/codex-provider-stream-observation.test.ts — remove the unsupported literal-readback case and strengthen the CodexProvider.invoke assertion to prove its runtime observation has childObservability unsupported and no own activeChildren property
+**Verify-only:** yes
+Rationale: the tautology rubric this remediation task was appended for is disabled repository-wide by 33dae839c (PR #1771, operator decision 2026-08-21); no rubric drives this work, so no commit can carry its trailer.
+### Task rem-tautology-observation-observed-1: src/conductor/test/execution/provider-stream-observation.test.ts:20-31 and src/conductor/test/execution/claude-provider-stream-observation.test.ts — remove the observed literal-readback case and strengthen the ClaudeProvider.invoke assertion so its runtime observation proves the observed child count plus cached, uncached, and output token fields
+**Verify-only:** yes
+Rationale: the tautology rubric this remediation task was appended for is disabled repository-wide by 33dae839c (PR #1771, operator decision 2026-08-21); no rubric drives this work, so no commit can carry its trailer.
+### Task rem-tautology-terminal-result-1: src/conductor/test/execution/claude-stream-result-contract.test.ts:15-29 — feed claude-stream-result-line.json through ClaudeProvider.invoke's streamed terminal-result path and assert derived output and tokenUsage fields including cache read, cache creation, cost, turns, and duration so removing a consumed parser field fails
+**Verify-only:** yes
+Rationale: the tautology rubric this remediation task was appended for is disabled repository-wide by 33dae839c (PR #1771, operator decision 2026-08-21); no rubric drives this work, so no commit can carry its trailer.
+### Task rem-rootcause-heartbeat-1: src/conductor/src/engine/step-runners.ts:146-180 and src/conductor/test/provider-stream-throttle.test.ts — add a dispatch-owned unref'd slow-heartbeat timer that re-emits the latest observation without another provider record, and prove with fake timers that quiet-stream heartbeat emission occurs and the timer stops at dispatch close
+**Verify-only:** yes
+Rationale: the declared work shipped inside another task's commit — throttle.heartbeat (step-runners.ts:176) plus the unref'd dispatch-owned timer (:1110-1112) and fake-timer coverage (provider-stream-throttle.test.ts:81,129).
+### Task rem-rootcause-close-flush-1: src/conductor/src/engine/step-runners.ts:1098-1109 — wrap supervisor.supervise and its result handling in try/finally and call providerStreamThrottle.flush() in finally so success, halt, and thrown exits close observation lifecycle without changing the provider result
+**Verify-only:** yes
+Rationale: the declared work shipped inside another task's commit — close: () => { clearInterval(heartbeat); throttle.flush(); } (step-runners.ts:1112) and candidateObserver?.close() in provider-execution.ts's finally.
+### Task rem-completeness-close-flush-1: src/conductor/test/provider-stream-throttle.test.ts — add dispatch-lifecycle coverage proving a mid-interval final observation emits exactly once on close, an open child remains active, no observation emits nothing, flush failure cannot alter InvokeResult, and no heartbeat timer survives
+**Verify-only:** yes
+Rationale: the declared work shipped inside another task's commit — provider-stream-throttle.test.ts:118,129,153 — throwing close boundary, heartbeat stop on close, suppressed final flush.
+### Task rem-completeness-spine-persistence-1: src/conductor/test/provider-stream-progress-emission.test.ts:1 — add the planned dispatch-level test that drives onProviderStream through dispatchProviderWithLifecycleSupervision, asserts exactly one provider_stream_progress event with step, actual provider, observation fields, and timestamp, then verifies the same record in .pipeline/events.jsonl and no parallel telemetry file
+**Verify-only:** yes
+Rationale: the declared work shipped inside another task's commit — provider-stream-progress-emission.test.ts (4 tests) drives onProviderStream through the dispatch onto the spine.
+### Task rem-rootcause-config-1: src/conductor/src/types/config.ts:414, src/conductor/src/engine/config.ts:341 and :985, and src/conductor/src/engine/step-runners.ts:134 — define provider_stream.min_interval_ms on HarnessConfig, admit and validate/default the optional block through the real config path, and remove ProviderStreamIntervalConfig plus the local cast
+### Task rem-rootcause-config-2: src/conductor/test/provider-stream-throttle.test.ts:49 and docs/reference/configuration.md:112 — prove valid provider_stream configuration loads, absent and non-positive intervals use Task 13's documented default, unknown keys fail closed, and document min_interval_ms with its default and validation behavior
+### Task rem-rootcause-fallback-1: src/conductor/src/engine/step-runners.ts:1070-1129 — bind each provider candidate invocation to a fresh provider-stream throttle, heartbeat, and close flush, and emit provider_stream_progress with that invoked candidate's actual provider identity so failed-candidate observation state cannot leak into fallback
+### Task rem-rootcause-fallback-2: src/conductor/test/provider-stream-progress-emission.test.ts:13 — drive a preferred-provider failure followed by a successful fallback and assert each persisted progress record names its invoked provider while the fallback receives no child or token state from the failed candidate
+### Task rem-rootcause-observer-1: src/conductor/src/execution/codex-provider.ts:309-329 — independently guard stdout and stderr onActivity calls and stdout onProviderStream calls inside their asynchronous data listeners so any observer exception is swallowed and cannot alter provider execution
+### Task rem-rootcause-observer-2: src/conductor/test/acceptance/live-stream-observation-has-no-authority.acceptance.test.ts — make Codex onActivity and onProviderStream throw during streamed output and assert InvokeResult and the step completion verdict remain identical to the non-throwing path
+### Task rem-completeness-probe-1: src/conductor/test/smoke/claude-subagent-stream.smoke.test.ts:41 — run the registered opt-in real-Claude probe and add a dated source-controlled outcome beside the smoke leg stating whether a Task tool_use, its matching tool_result, and at least one non-null parent_tool_use_id were observed; if attribution is absent, record Claude child observability as unsupported rather than fabricating a count
+### Task rem-completeness-retry-1: src/conductor/test/provider-stream-throttle.test.ts:37 — drive the real step-runner candidate path through a first provider attempt that emits progress then fails and a second attempt that succeeds, asserting the retry starts with fresh token totals and throttle timing and emits no terminal state inherited from the failed attempt
+### Task rem-root-cause-agent-1: src/conductor/src/execution/provider-stream.ts:25,44 — recognize the live-probed Agent tool_use lifecycle alongside Task, opening the child by tool_use id and closing it only on the matching tool_result so activeChildren is authoritative for the current Claude stream contract
+### Task rem-root-cause-agent-2: src/conductor/test/execution/provider-stream-children.test.ts:1 — add regression coverage for Agent tool_use and matching tool_result records, asserting childObservability remains observed and activeChildren transitions from 1 to 0 without breaking the existing Task lifecycle cases
+### Task rem-completeness-agent-1: src/conductor/test/smoke/claude-subagent-stream.smoke.test.ts:11-85 — assert the emitted child tool name is exactly the recorded Agent contract, retain assertions for its matching tool_result and non-null parent_tool_use_id, and keep the dated outcome synchronized with those executable assertions
+### Task rem-completeness-agent-2: src/conductor/test/execution/claude-provider-stream-observation.test.ts:1 — drive an Agent tool_use through ClaudeProvider.invoke and assert the emitted observation reports childObservability observed with activeChildren 1 until the matching tool_result returns it to 0, preventing an authoritative zero during live child work
+### Task rem-scope-task-contract-1: src/conductor/src/execution/provider-stream.ts:23-52 and src/conductor/src/execution/claude-provider.ts:567-587 — remove Agent as an authoritative child-lifecycle signal, retain Task-only lifecycle tracking, and report Claude childObservability unsupported with no activeChildren while preserving live token accumulation
+### Task rem-scope-task-contract-2: src/conductor/test/execution/provider-stream-children.test.ts:1-75 and src/conductor/test/execution/claude-provider-stream-observation.test.ts:8-63 — prove Agent records do not open or close Task-tracked children and replace Agent-observed Claude lifecycle assertions with childObservability unsupported, no activeChildren, and unchanged token observations
+### Task rem-scope-task-contract-3: src/conductor/test/smoke/claude-subagent-stream.smoke.test.ts:11-85 — retain the recorded Task-absent and Agent-observed live-probe evidence, and assert that this falsified Task attribution yields unsupported Claude child observability rather than an Agent-derived count
+### Task rem-completeness-daemon-guide-1: docs/guides/running-the-daemon.md:343,360,364-365 — update the IN-PROGRESS examples and explanation to show numeric children only when observed, children unknown otherwise, current input/output token totals when observed, and tokens unavailable when no live observation exists
+
+## Operator Amendment (2026-08-21): Claude child-lifecycle contract is the live-probed `Agent` tool
+
+Successive review laps appended mutually contradictory remediation tasks: Tasks
+rem-root-cause-agent-1/2 and rem-completeness-agent-1/2 direct the build to track the live-probed
+`Agent` tool_use lifecycle, while Tasks rem-scope-task-contract-1/2/3 direct the build to remove
+`Agent` tracking and report Claude child observability as unsupported. Enforcing both cycles the
+build forever. The operator resolves the contradiction as follows:
+
+- The accepted Story 2 outcome — observable Claude child (subagent) activity — stands.
+- The live probe (recorded in `src/conductor/test/smoke/claude-subagent-stream.smoke.test.ts`,
+  2026-08-21, Claude Code 2.1.238) proves the real CLI reports child work as an `Agent` tool_use
+  with a matching tool_result and non-null `parent_tool_use_id`. That probed contract — not the
+  originally assumed `Task` name — is the authorized child-lifecycle signal. Tasks 10 and 21 are
+  amended accordingly above.
+- Tasks rem-scope-task-contract-1, rem-scope-task-contract-2, and rem-scope-task-contract-3 are
+  RETRACTED by this amendment. Their premise — that only a `Task` lifecycle was authorized and an
+  `Agent`-observed probe therefore falsifies attribution — is superseded. Do not re-remove `Agent`
+  lifecycle tracking; do not report `childObservability: 'unsupported'` for Claude while the
+  probed `Agent` contract is implemented.
+- The `unsupported` fallback remains the honest outcome only when no attributable child lifecycle
+  is observed at all.

@@ -303,6 +303,21 @@ describe('report-renderer', () => {
     expect(report).toContain('No retries recorded');
   });
 
+  it('shows "(refused)" for a first-attempt refusal that never retried', async () => {
+    // A needs-human or validation-verdict refusal typically carries zero
+    // retries. Seeding rows from retry counts alone dropped it from the report.
+    const content = makeLines([
+      { event: { type: 'step_started', step: 'acceptance_specs', index: 1 }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'step_refused', step: 'acceptance_specs', kind: 'needs-human', reason: 'operator judgement required' }, ts: '2026-01-01T00:00:02.000Z' },
+    ]);
+    await writeFile(eventsPath, content, 'utf-8');
+
+    const report = renderReport(eventsPath);
+    expect(report).toContain('acceptance_specs');
+    expect(report).toContain('(refused)');
+    expect(report).not.toContain('No retries recorded');
+  });
+
   // ─── Task 12: failed step with retries shown as "(failed)" ───────────────
 
   it('shows "(failed)" for step with retries but no step_completed', async () => {

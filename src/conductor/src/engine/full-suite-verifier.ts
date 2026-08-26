@@ -206,11 +206,14 @@ type ProcessStartIdentityProbe =
   | { status: 'MISSING' }
   | { status: 'UNKNOWN' };
 
-async function processStartIdentity(pid: number): Promise<ProcessStartIdentityProbe> {
+export async function probeProcessStartIdentity(
+  pid: number,
+  procRoot = '/proc',
+): Promise<ProcessStartIdentityProbe> {
   try {
     // `/proc` is deliberately an optional strengthening probe. Platforms
     // without it retain signal-0's conservative occupied result.
-    const processStat = await stat(`/proc/${pid}`, { bigint: true });
+    const processStat = await stat(join(procRoot, String(pid)), { bigint: true });
     return {
       status: 'FOUND',
       identity: {
@@ -219,14 +222,18 @@ async function processStartIdentity(pid: number): Promise<ProcessStartIdentityPr
       },
     };
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { status: 'MISSING' }
-      : { status: 'UNKNOWN' };
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { status: 'UNKNOWN' };
+    try {
+      await stat(procRoot);
+      return { status: 'MISSING' };
+    } catch {
+      return { status: 'UNKNOWN' };
+    }
   }
 }
 
 async function defaultProcessOwnsRecordedLock(owner: FullSuiteLockOwner): Promise<boolean> {
-  const observed = await processStartIdentity(owner.pid);
+  const observed = await probeProcessStartIdentity(owner.pid);
   if (observed.status === 'MISSING') {
     // An owner which vanished after signal-0 cannot still own the lock.
     return false;
@@ -506,7 +513,7 @@ async function acquireFullSuiteLock(
     const token = randomUUID();
     try {
       await mkdir(lockPath);
-      const ownerProcessIdentity = await processStartIdentity(process.pid);
+      const ownerProcessIdentity = await probeProcessStartIdentity(process.pid);
       const owner: FullSuiteLockOwner = {
         version: 1,
         pid: process.pid,

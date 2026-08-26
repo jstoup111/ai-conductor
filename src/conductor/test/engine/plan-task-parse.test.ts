@@ -6,36 +6,118 @@
 // wiring-reachability gate.
 import { describe, expect, it } from 'vitest';
 import {
+  parsePlanTaskBodies,
   parsePlanTaskPaths,
-  parsePlanTaskPreserves,
+  parsePlanTaskDoneWhen,
   TASK_HEADER_PATTERN,
   TASK_ID_PATTERN,
 } from '../../src/engine/plan-task-parse.js';
 import { parsePlanTaskVerifyOnly } from '../../src/engine/autoheal.js';
 
 describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)', () => {
-  it('parses one preserved behavior from its task block', () => {
-    const result = parsePlanTaskPreserves(`# Plan
+  describe('parsePlanTaskBodies', () => {
+    it('returns each task body through the next task header and preserves the final body', () => {
+      const result = parsePlanTaskBodies(`# Plan
 
-### Task 9: Preserve wrapper behavior
-**Preserves:** the ungated TokenMeter wrapper transparency
+### Task 1: First task
+First task body.
+
+### Task 2: Second task
+Second task body.
+
+### Task 3: Final task
+Final task body.`);
+
+      expect(result).toEqual(new Map([
+        ['1', 'First task body.\n'],
+        ['2', 'Second task body.\n'],
+        ['3', 'Final task body.'],
+      ]));
+    });
+
+    it('parses dotted ids and retains CRLF-fenced code verbatim', () => {
+      const body = [
+        'Use this snippet:',
+        '```ts',
+        "const prose = '### Task 99: not a heading';",
+        '```',
+        'Complete the task.',
+      ].join('\r\n');
+      const result = parsePlanTaskBodies([
+        '### Task 1: First',
+        'First body.',
+        '',
+        '### Task 1.2: Dotted',
+        body,
+      ].join('\r\n'));
+
+      expect(result.get('1.2')).toBe(body);
+    });
+
+    it('returns undefined for an unknown task id', () => {
+      const result = parsePlanTaskBodies('### Task 1: Only task\nBody.');
+
+      expect(result.get('missing')).toBeUndefined();
+    });
+
+    it('does not treat similar prose as a task heading', () => {
+      const result = parsePlanTaskBodies(`### Task 1: Real task
+This prose quotes ### Task 2: but is not a heading.
 `);
 
-    expect(result).toEqual(new Map([['9', ['the ungated TokenMeter wrapper transparency']]]));
+      expect(result).toEqual(new Map([
+        ['1', 'This prose quotes ### Task 2: but is not a heading.\n'],
+      ]));
+      expect(result.get('2')).toBeUndefined();
+    });
   });
 
-  it('accumulates separate preserved behaviors from one task block', () => {
-    const result = parsePlanTaskPreserves(`# Plan
+  describe('parsePlanTaskDoneWhen', () => {
+    it('returns ordered Done when checks only for tasks that declare the block', () => {
+      const result = parsePlanTaskDoneWhen(`# Plan
 
-### Task 9: Preserve wrapper behavior
-**Preserves:** the ungated TokenMeter wrapper transparency
-**Preserves:** the provider-facing TokenMeter metric name
+### Task 1: Has verifiable completion criteria
+**Done when:**
+- First check
+- Second check
+- Third check
+
+**Files:** src/one.ts
+
+### Task 2: Keeps the legacy close rule
+**Files:** src/two.ts
 `);
 
-    expect(result).toEqual(new Map([['9', [
-      'the ungated TokenMeter wrapper transparency',
-      'the provider-facing TokenMeter metric name',
-    ]]]));
+      expect(result).toEqual(new Map([['1', [
+        'First check',
+        'Second check',
+        'Third check',
+      ]]]));
+      expect(result.malformedTaskIds).toEqual(new Set());
+    });
+
+    it('marks an empty Done when block malformed instead of treating it as absent', () => {
+      const result = parsePlanTaskDoneWhen(`### Task 1: Incomplete metadata
+**Done when:**
+
+**Files:** src/one.ts
+`);
+
+      expect(result.has('1')).toBe(false);
+      expect(result.malformedTaskIds).toEqual(new Set(['1']));
+    });
+
+    it('marks a whitespace-only criterion malformed even when the block has another criterion', () => {
+      const whitespaceOnly = '   ';
+      const result = parsePlanTaskDoneWhen(`### Task 1: Incomplete metadata
+**Done when:**
+- ${whitespaceOnly}
+- A real criterion
+`);
+
+      expect(result.get('1')).toEqual(['A real criterion']);
+      expect(result.malformedTaskIds).toEqual(new Set(['1']));
+    });
   });
 
   it('exports TASK_ID_PATTERN matching the H9 id grammar', () => {
@@ -44,22 +126,18 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
 
   it('keeps every task parser on the shared supported header grammar', () => {
     const plan = `### Task rem-adr-001: Colon-delimited
-**Preserves:** colon behavior
 **Verify-only:** yes
 **Files:** src/colon.ts
 
 #### Task task_1 — Dash-delimited
-**Preserves:** dash behavior
 **Verify-only:** yes
 **Files:** src/dash.ts
 
 ##### Task 1.2
-**Preserves:** bare numeric behavior
 **Verify-only:** yes
 **Files:** src/bare.ts
 
 ###### T0 — Shorthand
-**Preserves:** shorthand behavior
 **Verify-only:** yes
 **Files:** src/shorthand.ts
 `;
@@ -67,7 +145,6 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
 
     expect(TASK_HEADER_PATTERN).toBeInstanceOf(RegExp);
     expect(Array.from(parsePlanTaskPaths(plan).keys())).toEqual(ids);
-    expect(Array.from(parsePlanTaskPreserves(plan).keys())).toEqual(ids);
     expect(Array.from(parsePlanTaskVerifyOnly(plan).keys())).toEqual(ids);
   });
 
@@ -125,5 +202,41 @@ See \`.docs/specs/feature.md\` before editing.
     expect(result.foreignProtectedReferencesByTaskId).toEqual(
       new Map([['1', new Set(['.docs/specs/other-feature.md'])], ['2', new Set()]]),
     );
+  });
+  it('ignores task headings and metadata inside fenced code blocks', () => {
+    const plan = ['### Task 1: Real task',
+      '**Files:** src/one.ts',
+      '',
+      'Authoring example:',
+      '',
+      '```markdown',
+      '### Task phantom: Example heading',
+      '**Files:** src/phantom.ts',
+      '**Done when:**',
+      '- A phantom criterion.',
+      '```',
+      ''].join('\n');
+
+    expect([...parsePlanTaskBodies(plan).keys()]).toEqual(['1']);
+    expect([...parsePlanTaskPaths(plan).keys()]).toEqual(['1']);
+    expect(parsePlanTaskPaths(plan).get('1')).toEqual(new Set(['src/one.ts']));
+    expect([...parsePlanTaskDoneWhen(plan).keys()]).toEqual([]);
+  });
+
+  it('resumes structural parsing after a fenced block closes', () => {
+    const plan = ['### Task 1: Real task',
+      '```text',
+      '### Task phantom: Example heading',
+      '```',
+      '**Done when:**',
+      '- The first observable result exists.',
+      '- The second observable result exists.',
+      ''].join('\n');
+
+    expect([...parsePlanTaskDoneWhen(plan).keys()]).toEqual(['1']);
+    expect(parsePlanTaskDoneWhen(plan).get('1')).toEqual([
+      'The first observable result exists.',
+      'The second observable result exists.',
+    ]);
   });
 });
