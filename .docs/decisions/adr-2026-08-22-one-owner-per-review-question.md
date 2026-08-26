@@ -58,6 +58,13 @@ Principle, binding on later gate design: **a gate may fail a lap or halt, but on
 append plan tasks, and only under its cap; no gate may direct BUILD to a mechanism the approved plan
 does not authorize.**
 
+> **Amended 2026-08-25 by #1874:** the appender clause is restated by
+> adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 5: only the
+> `planRemediation` → remediation-append seam may append plan tasks, with `prd_audit` and
+> `architecture_review_as_built` as its only admitted sources, each under its own cap; no gate
+> may direct BUILD to a mechanism the approved plan (or the governing approved clause a
+> remediation task cites) does not authorize. The ownership map and all other decisions stand.
+
 ## Consequences
 
 ### Positive
