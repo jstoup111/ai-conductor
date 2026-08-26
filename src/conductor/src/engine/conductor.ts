@@ -158,6 +158,7 @@ import {
   remediationDispositionStep,
   sweepStaleReviewArtifacts,
   classifyAsBuiltReviewOutcome,
+  parseAsBuiltBlockedFindings,
   parseTrack,
   parseIntakeSourceRef,
   planStem,
@@ -171,6 +172,7 @@ import {
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
 } from './artifacts.js';
+import { parsePlanTaskBodies } from './plan-task-parse.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
   type CriterionBoundRemediationGap,
@@ -545,6 +547,65 @@ export function remediationLapCapForGate(
     return remediationConfig.architecture_review_as_built?.max_remediation_laps ?? 1;
   }
   return genericCap;
+}
+
+export type AsBuiltGoverningClauseResolution =
+  | { kind: 'adr'; clause: string }
+  | { kind: 'plan-task'; clause: string; parentTask: string };
+
+/** Resolve a remediable as-built finding's approved ADR decision or active-plan task. */
+export async function resolveAsBuiltGoverningClause(
+  projectRoot: string,
+  activePlan: string,
+  clause: string,
+): Promise<AsBuiltGoverningClauseResolution | null> {
+  const normalizedClause = clause.trim();
+  const taskReference = normalizedClause.match(/^task\s+([A-Za-z0-9._-]+)$/i)?.[1] ??
+    (/^[A-Za-z0-9._-]+$/.test(normalizedClause) ? normalizedClause : undefined);
+  if (taskReference !== undefined) {
+    const parentTask = [...parsePlanTaskBodies(activePlan).keys()].find(
+      (taskId) => taskId.toLowerCase() === taskReference.toLowerCase(),
+    );
+    if (parentTask !== undefined) {
+      return { kind: 'plan-task', clause: normalizedClause, parentTask };
+    }
+  }
+
+  const adrReference = normalizedClause.match(
+    /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+(?:\+\s*)?decision\s+(\d+)$/i,
+  );
+  if (!adrReference) return null;
+  const [, stem, decisionNumber] = adrReference;
+  let decisionFiles: string[];
+  try {
+    decisionFiles = await readdir(join(projectRoot, '.docs', 'decisions'));
+  } catch {
+    return null;
+  }
+  const decisionFile = decisionFiles.find(
+    (file) => file.toLowerCase() === `${stem}.md`.toLowerCase(),
+  );
+  if (decisionFile === undefined) return null;
+
+  let decisionText: string;
+  try {
+    decisionText = await readFile(join(projectRoot, '.docs', 'decisions', decisionFile), 'utf8');
+  } catch {
+    return null;
+  }
+  const approved =
+    /^(?:\*\*)?status(?:\*\*)?\s*:(?:\*\*)?\s*approved\b/im.test(decisionText) ||
+    /^status\s*:\s*approved\b/im.test(decisionText);
+  if (!approved) return null;
+
+  const decisionHeading = decisionText.match(/^##\s+Decision\s*$/im);
+  if (!decisionHeading || decisionHeading.index === undefined) return null;
+  const decisionBody = decisionText.slice(decisionHeading.index + decisionHeading[0].length);
+  const nextHeading = decisionBody.search(/^##\s+/m);
+  const section = nextHeading === -1 ? decisionBody : decisionBody.slice(0, nextHeading);
+  if (!new RegExp(`^\\s*${decisionNumber}\\.\\s+\\S`, 'm').test(section)) return null;
+
+  return { kind: 'adr', clause: normalizedClause };
 }
 
 /** The prd-audit cap is both an absolute count and a fraction of authored plan work. */
@@ -3258,9 +3319,18 @@ export class Conductor {
       (provenance) => provenance.gate === 'prd_audit',
     )?.evidenceFile;
     const prdAuditRemediation = prdAuditEvidenceFile !== undefined;
+    const asBuiltEvidenceFile = remediationEvidenceSources.find(
+      (provenance) => provenance.gate === 'architecture_review_as_built',
+    )?.evidenceFile;
+    const asBuiltRemediation = asBuiltEvidenceFile !== undefined;
+    const asBuiltEvidenceExists = asBuiltEvidenceFile !== undefined && await accessFile(
+      join(this.projectRoot, asBuiltEvidenceFile),
+    ).then(() => true).catch(() => false);
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
+    const asBuiltFindings = new Map<string, AsBuiltGoverningClauseResolution>();
     let prdAuditValidated = false;
+    let asBuiltValidated = false;
     let activePlanText = '';
     if (planPath && prdAuditRemediation) {
       try {
@@ -3316,6 +3386,36 @@ export class Conductor {
       }
     }
 
+    if (planPath && asBuiltEvidenceExists) {
+      try {
+        const asBuiltPlanText = activePlanText || await readFile(
+          isAbsolute(planPath) ? planPath : join(this.projectRoot, planPath),
+          'utf8',
+        );
+        const report = await readFile(join(this.projectRoot, asBuiltEvidenceFile), 'utf8');
+        const parsed = parseAsBuiltBlockedFindings(report);
+        if (!parsed.ok) {
+          const detail = `As-built review report mechanical fault: ${parsed.error}`;
+          await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
+          return { kind: 'halt', haltClass: 'mechanical', detail };
+        }
+        for (const finding of parsed.value.findings) {
+          if (finding.class !== 'REMEDIABLE') continue;
+          const resolution = await resolveAsBuiltGoverningClause(
+            this.projectRoot,
+            asBuiltPlanText,
+            finding.clause,
+          );
+          if (resolution !== null) asBuiltFindings.set(finding.id, resolution);
+        }
+        asBuiltValidated = true;
+      } catch (error) {
+        const detail = `As-built review report could not be read for remediation authorization: ${error instanceof Error ? error.message : String(error)}`;
+        await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
+        return { kind: 'halt', haltClass: 'mechanical', detail };
+      }
+    }
+
     const appendGaps: CriterionBoundRemediationGap[] = [];
     // This is the complete set a bounded remediation route may act on. A
     // criterion-bound append is admitted by the validated PRD-audit finding;
@@ -3344,16 +3444,31 @@ export class Conductor {
         gap.tasks &&
         gap.tasks.length > 0
       ) {
-        const finding = prdAuditFindings.get(gap.id.toUpperCase());
+        const prdAuditFinding = prdAuditFindings.get(gap.id.toUpperCase());
+        const asBuiltFinding = asBuiltFindings.get(gap.id);
         // A prd_audit repair may append only work owned by a parsed FIXABLE
         // finding and its existing parent plan task.  The planner's FR-N id
         // is associated above through the report's PRD: column.
-        if (prdAuditRemediation && (!finding || !prdAuditValidated)) continue;
-        const admittedGap = { ...gap, ...(finding === undefined ? {} : finding) };
+        if (
+          (prdAuditRemediation && (!prdAuditFinding || !prdAuditValidated)) ||
+          (asBuiltRemediation && asBuiltValidated && !asBuiltFinding && prdAuditFinding === undefined)
+        ) continue;
+        const admittedGap = {
+          ...gap,
+          ...(prdAuditFinding === undefined ? {} : prdAuditFinding),
+          ...(asBuiltFinding === undefined
+            ? {}
+            : {
+                governingClause: asBuiltFinding.clause,
+                ...(asBuiltFinding.kind === 'plan-task'
+                  ? { parentTask: asBuiltFinding.parentTask }
+                  : {}),
+              }),
+        };
         appendGaps.push(admittedGap);
         admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
-        if (finding !== undefined) prdAuditTasks.push(...gap.tasks);
+        if (prdAuditFinding !== undefined) prdAuditTasks.push(...gap.tasks);
       }
     }
 
@@ -3406,6 +3521,9 @@ export class Conductor {
       const criterionBoundGaps = appendGaps.filter(
         (gap) => gap.criterion !== undefined && gap.parentTask !== undefined,
       );
+      const clauseBoundGaps = appendGaps.filter(
+        (gap) => gap.governingClause !== undefined,
+      );
       if (prdAuditCapEnforced) {
         const ledger = await readKickbackLedger(this.projectRoot);
         priorPrdAuditLaps = (
@@ -3437,7 +3555,11 @@ export class Conductor {
       // Append remediation tasks to the plan
       if (planPath) {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
-          ...(prdAuditRemediation ? { criterionBoundGaps, gateSource: 'prd-audit' } : {}),
+          ...(prdAuditRemediation
+            ? { criterionBoundGaps, gateSource: 'prd-audit' }
+            : asBuiltRemediation && asBuiltValidated
+              ? { criterionBoundGaps: clauseBoundGaps, gateSource: 'as-built' }
+              : {}),
         });
         if (appendResult.success) {
           appendAttempted = true;

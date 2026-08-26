@@ -29,7 +29,8 @@ import type { RemediationGap } from './artifacts.js';
 /** A PRD-audit FIXABLE gap retains the criterion ownership the planner found. */
 export type CriterionBoundRemediationGap = RemediationGap & {
   criterion?: string;
-  parentTask?: number;
+  parentTask?: number | string;
+  governingClause?: string;
 };
 
 /** H9 id grammar — must stay in lockstep with autoheal.ts TASK_ID_PATTERN. */
@@ -73,7 +74,7 @@ function renderTaskBlock(
   gateSource: string,
   rationale: string,
   criterion?: string,
-  parentTask?: number,
+  parentTask?: number | string,
 ): string {
   return [
     `### Task ${id}: ${title}`,

@@ -7,6 +7,7 @@ import { execa } from 'execa';
 import {
   Conductor,
   remediationLapCapForGate,
+  resolveAsBuiltGoverningClause,
   routePrdAuditPlanGaps,
   routePrdAuditOverScope,
   recordedPrdAuditFindingsBlock,
@@ -668,6 +669,83 @@ describe('prd_audit kickback', () => {
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
     expect(await readFile(planPath, 'utf8')).toContain('### Task rem-arch: Repair approved architecture drift');
+  });
+
+  it('constructs one clause-bound as-built gap per finding from approved ADR and plan-task clauses', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-clause-bound-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const adrStem = 'adr-2026-08-25-example-architecture';
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.docs', 'decisions'), { recursive: true }),
+      mkdir(join(root, '.pipeline'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 7: Existing approved work\n');
+    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
+      '# ADR: Example architecture',
+      '**Status:** APPROVED',
+      '',
+      '## Decision',
+      '',
+      '1. **Guard the architecture boundary.**',
+    ].join('\n'));
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      `| AB-ADR | REMEDIABLE | ${adrStem} decision 1 | Add the approved architecture guard |`,
+      '| AB-TASK | REMEDIABLE | Task 7 | Complete the existing approved work |',
+    ].join('\n'));
+
+    await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), `${adrStem} decision 1`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 1` });
+    await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), 'Task 7'))
+      .resolves.toEqual({ kind: 'plan-task', clause: 'Task 7', parentTask: '7' });
+
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+          dispositions: [
+            {
+              id: 'AB-ADR', disposition: 'build', category: null,
+              rationale: 'Conform to the approved ADR.',
+              tasks: [{ id: 'adr-guard', title: 'Add the approved architecture guard' }],
+            },
+            {
+              id: 'AB-TASK', disposition: 'build', category: null,
+              rationale: 'Conform to the active plan task.',
+              tasks: [{ id: 'task-guard', title: 'Complete the existing approved work' }],
+            },
+          ],
+        }));
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: {
+        architecture_review_as_built: { remediation: { enabled: true } },
+      } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    const appended = await readFile(planPath, 'utf8');
+    expect(appended.match(/^### Task rem-as-built-/gm)).toHaveLength(2);
   });
 
   it('uses gate-specific configured lap caps without changing the generic cap', () => {
