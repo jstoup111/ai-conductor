@@ -4091,6 +4091,7 @@ export function parseAsBuiltBlockedFindings(content: string): AsBuiltBlockedFind
   const clauseIndex = header.indexOf('governing clause');
   const summaryIndex = header.indexOf('summary');
   const findings: AsBuiltBlockedFinding[] = [];
+  const findingIds = new Set<string>();
   let readingTable = false;
 
   for (const line of section.slice(headerIndex + 1)) {
@@ -4106,6 +4107,10 @@ export function parseAsBuiltBlockedFindings(content: string): AsBuiltBlockedFind
     if (id === '') {
       return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings row has an empty Finding.');
     }
+    if (findingIds.has(id)) {
+      return asBuiltBlockedFindingsMechanicalFault(`As-built Blocking Findings table has duplicate Finding id "${id}".`);
+    }
+    findingIds.add(id);
     const classValue = cells[classIndex]?.trim() ?? '';
     const rawClass = classValue.toUpperCase();
     if (!AS_BUILT_BLOCKED_FINDING_CLASSES.has(rawClass as AsBuiltBlockedFindingClass)) {

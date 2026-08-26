@@ -179,6 +179,25 @@ describe('as-built verdict gate', () => {
     expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
   });
 
+  it('returns a typed fault naming a duplicate Finding id within one table', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-1 | REMEDIABLE | Task 2 | Add the missing guard |',
+      '| ARCH-1 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
+    ].join('\n');
+
+    expect(parseAsBuiltBlockedFindings(report)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'As-built Blocking Findings table has duplicate Finding id "ARCH-1".',
+    });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+  });
+
   it('classifies an all-REMEDIABLE BLOCKED findings table as blocked-remediable', () => {
     const report = [
       'Verdict: BLOCKED',
