@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -401,6 +401,47 @@ describe('as-built verdict gate', () => {
       cause: 'unparseable-blocked-findings',
       detail: 'missing findings table',
     })).toEqual(expect.stringMatching(/(?=.*BLOCKED findings block)(?=.*missing findings table)/));
+  });
+
+  it.each([
+    ['a delivered PLAN_GAP', 'Verdict: PLAN_GAP\nOutcome delivered: yes', { kind: 'plan-gap-delivered' }],
+    ['an undelivered PLAN_GAP', 'Verdict: PLAN_GAP\nOutcome delivered: no', { kind: 'plan-gap-undelivered' }],
+    [
+      'a remediable BLOCKED report',
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | REMEDIABLE | Task 2 | Add the missing guard |',
+      ].join('\n'),
+      { kind: 'blocked-remediable' },
+    ],
+    [
+      'a design BLOCKED report',
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
+      ].join('\n'),
+      { kind: 'blocked-design' },
+    ],
+  ])('keeps %s classified through the invalid-cause split', (_description, report, expected) => {
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual(expected);
+  });
+
+  it('keeps a marker-only Verdict invalid without PLAN_GAP guidance', () => {
+    const outcome = classifyAsBuiltReviewOutcome('Verdict: **');
+    if (outcome.kind !== 'invalid') throw new Error('expected an invalid as-built outcome');
+
+    expect({ outcome, reason: renderAsBuiltInvalidReason(outcome) }).toEqual({
+      outcome: { kind: 'invalid', cause: 'no-verdict-line' },
+      reason: expect.not.stringContaining('PLAN_GAP'),
+    });
   });
 
   it('keeps non-BLOCKED outcomes unchanged without a findings table', () => {
