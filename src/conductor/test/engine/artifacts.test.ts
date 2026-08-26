@@ -79,6 +79,7 @@ import {
   validateBuildReviewVerdict,
   isSkipAttempt,
   MANUAL_TEST_SKIP_SENTINEL,
+  MANUAL_TEST_WARN_SENTINEL,
   readManualTestFailRows,
   stampCode,
   BUILD_REVIEW_VERDICT,
@@ -3210,6 +3211,32 @@ describe('engine/artifacts', () => {
       expect(result).toEqual({ done: true });
     });
 
+    it('passes a fresh attempt whose browser criteria are WARN and records no FAIL evidence', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-08-25T00:00:00Z\n${MANUAL_TEST_WARN_SENTINEL}\n` +
+          '| Story | Criterion | Result | Notes |\n|---|---|---|---|\n' +
+          '| Browser smoke | UI loads | WARN | Playwright browser is unavailable |\n' +
+          '| API smoke | Health endpoint responds | PASS | curl returned 200 |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+      expect(await readManualTestFailRows(dir)).toEqual([]);
+    });
+
+    it('fails when a warning attempt also contains an observed application FAIL', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-08-25T00:00:00Z\n${MANUAL_TEST_WARN_SENTINEL}\n` +
+          '| Story | Criterion | Result | Notes |\n|---|---|---|---|\n' +
+          '| Browser smoke | UI loads | WARN | Playwright browser is unavailable |\n' +
+          '| API smoke | Invalid input returns 422 | FAIL | curl returned 500 |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAIL/);
+    });
+
     it('passes when the latest attempt is a fresh SKIP sentinel (auto mode, no stories to exercise)', async () => {
       await createFile(
         RESULTS,
@@ -3282,6 +3309,28 @@ describe('engine/artifacts', () => {
       // manual_test→build kickback path still has concrete bug evidence.
       const failRows = await readManualTestFailRows(dir);
       expect(failRows.join('\n')).toMatch(/Bar.*FAIL/);
+    });
+
+    it('a later WARN attempt cannot launder a FAIL recorded earlier at the same HEAD sha', async () => {
+      await createFile(RESULTS, FAIL_FILE);
+      await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      await createFile(
+        RESULTS,
+        FAIL_FILE +
+          `\n## Attempt 2 — 2026-08-25T00:01:00Z\n${MANUAL_TEST_WARN_SENTINEL}\n` +
+          '| Story | Criterion | Result | Notes |\n|---|---|---|---|\n' +
+          '| Browser smoke | UI loads | WARN | Playwright browser is unavailable |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/whitewash|no new commits/i);
+      expect((await readManualTestFailRows(dir)).join('\n')).toMatch(/Bar.*FAIL/);
     });
   });
 
