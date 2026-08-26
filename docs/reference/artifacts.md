@@ -420,7 +420,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
 | `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
 | `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |
-| `manual-test-results.md` | Per-story PASS/FAIL rows. The gate fails on any FAIL row in the latest attempt, and on an mtime older than session start | `manual-test` skill |
+| `manual-test-results.md` | Per-story PASS/WARN/FAIL rows. The recorder stamps attempts containing exact `WARN` cells with `<!-- manual-test:warning -->`; WARN is visible but non-blocking. The gate fails on any FAIL row in the latest attempt, and on an mtime older than session start | `manual-test` skill |
 | `manual-test-fail-evidence.json` | Failure detail for the above | engine |
 | `per-task-floor.json` | Per-task commit-floor telemetry | `step-runners.ts` |
 | `prd-audit.md` | A `## Verdict Table` with one graded row per story acceptance criterion: `Criterion`, `Grade` (`PASS`\|`FIXABLE`\|`PLAN_GAP`\|`OVER_SCOPE`), `Plan task` (required for `FIXABLE`), `FR`, `Intent relation` (required for `OVER_SCOPE`: `within`\|`outside-harmless`\|`outside-visible`), `Evidence`. The grade is read from the verdict **cell**, not from anywhere else in the row. Every `Criterion` key must be an active story criterion id, each on exactly one row — an invented or unresolvable key fails the whole report as a mechanical fault. A finding that owns no criterion (typically an unplanned change) is reported below the table instead | `prd-audit` skill |

@@ -583,10 +583,14 @@ joins before `build_review`.
 - **Inputs** — story acceptance criteria; the running application; the absolute worktree `.pipeline`
   path supplied in the step's system prompt.
 - **Outputs** — `.pipeline/manual-test-results.md`, written solely by `conduct-ts manual-test-record`,
-  append-only as numbered attempt sections; `.pipeline/manual-test-fail-evidence.json`.
+  append-only as numbered attempt sections with per-criterion `PASS`, `WARN`, or `FAIL` results;
+  `.pipeline/manual-test-fail-evidence.json`.
 - **Gate role** — blocking. Only the latest attempt is evaluated. The skill must never hand-write or
   fabricate the results file — an absent marker is the correct refusal signal. A whitewash guard
-  requires new commits after a recorded FAIL before an all-PASS attempt is accepted.
+  requires new commits after a recorded FAIL before a later FAIL-free attempt is accepted. Missing
+  or unlaunchable browser automation dependencies are recorded as non-blocking `WARN` without
+  installing them during SHIP; available API criteria continue through `curl`. An application
+  mismatch observed after the browser launches remains a blocking `FAIL`.
 - **This repository** — `manual_test` is disabled in `.ai-conductor/config.yml`. See
   [self-hosting](../guides/self-hosting.md).
 

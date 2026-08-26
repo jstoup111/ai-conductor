@@ -58,6 +58,11 @@ build gates (deprecated `wiring_check` + test_suite → build_review), fan-out c
 with a single-writer join; interactive runs keep the serial sequence and checkpoints
 shown above.
 
+During `manual-test`, an unavailable or unlaunchable browser automation dependency is recorded as a
+non-blocking `WARN`; SHIP does not install browser packages, binaries, or system dependencies. API
+criteria continue through `curl` when possible. Once the browser launches, any observed application
+behavior that violates a story remains a blocking `FAIL` and follows the normal BUILD kickback.
+
 | Phase | Skills | Artifacts |
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement, checkpoints |

@@ -5,7 +5,11 @@
 
 import { isAbsolute, join } from 'node:path';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { MANUAL_TEST_SKIP_SENTINEL } from './artifacts.js';
+import {
+  hasManualTestWarnRows,
+  MANUAL_TEST_SKIP_SENTINEL,
+  MANUAL_TEST_WARN_SENTINEL,
+} from './artifacts.js';
 
 export type ManualTestRecordDispatch =
   | { kind: 'skip'; reason: string; pipelineDir: string }
@@ -171,7 +175,9 @@ async function appendAttemptSection(
  * MANUAL_TEST_SKIP_SENTINEL and a human-readable `**Result:** SKIPPED —
  * <reason>` line. `{kind:'results'}` reads results content from
  * `cmd.resultsPath` (or stdin, when `resultsPath === '-'`) and appends it
- * verbatim under a new `## Attempt N` heading. Both write to
+ * under a new `## Attempt N` heading. Attempts containing exact WARN result
+ * cells receive MANUAL_TEST_WARN_SENTINEL so non-blocking capability gaps are
+ * machine-visible. Both write to
  * `<pipelineDir>/manual-test-results.md`, creating the file (and pipeline
  * dir) if absent. The write is atomic — temp file in the same directory,
  * then rename(2) over the target — and fail-closed: any read/write error
@@ -214,7 +220,12 @@ export async function dispatchManualTestRecord(
     return appendAttemptSection(
       cmd.pipelineDir,
       resultsPath,
-      (attemptNumber) => `## Attempt ${attemptNumber}\n\n${content}`,
+      (attemptNumber) => {
+        const warningMarker = hasManualTestWarnRows(content)
+          ? `${MANUAL_TEST_WARN_SENTINEL}\n`
+          : '';
+        return `## Attempt ${attemptNumber}\n\n${warningMarker}${content}`;
+      },
       runners,
     );
   }

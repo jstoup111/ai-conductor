@@ -1252,7 +1252,7 @@ export function latestAttemptRegion(content: string): string {
 
 /**
  * The FAIL rows of the manual-test results file's current verdict region, or
- * [] when the file is missing/unreadable or clean. Used by the daemon's
+ * [] when the file is missing/unreadable or FAIL-free (PASS/WARN). Used by the daemon's
  * manual_test→build kickback (#367) to decide whether there is concrete bug
  * evidence to hand BUILD (no evidence → no kickback, the gate's own reason
  * halts the run instead).
@@ -1292,11 +1292,15 @@ export async function readManualTestFailRows(dir: string): Promise<string[]> {
  * evidence", "fail-closed verdict predicate") must never be mistaken for a failing
  * result.
  */
-function isManualTestFailRow(line: string): boolean {
+function isManualTestVerdictRow(line: string, verdict: 'FAIL' | 'WARN'): boolean {
   return line
     .split('|')
     .map((cell) => cell.trim())
-    .some((cell) => /^FAIL$/i.test(cell));
+    .some((cell) => cell.toUpperCase() === verdict);
+}
+
+function isManualTestFailRow(line: string): boolean {
+  return isManualTestVerdictRow(line, 'FAIL');
 }
 
 /**
@@ -1306,6 +1310,21 @@ function isManualTestFailRow(line: string): boolean {
  * section so `isSkipAttempt` can detect it without parsing table rows.
  */
 export const MANUAL_TEST_SKIP_SENTINEL = '<!-- manual-test:skipped -->';
+
+/**
+ * Fixed, greppable sentinel marking a manual-test attempt that contains one
+ * or more non-blocking WARN verdicts. The results recorder derives this from
+ * exact WARN table cells so dependency/capability gaps remain visible without
+ * being mistaken for application failures.
+ */
+export const MANUAL_TEST_WARN_SENTINEL = '<!-- manual-test:warning -->';
+
+/** True when results content contains at least one exact WARN table cell. */
+export function hasManualTestWarnRows(content: string): boolean {
+  return latestAttemptRegion(content)
+    .split('\n')
+    .some((line) => isManualTestVerdictRow(line, 'WARN'));
+}
 
 /**
  * True when a manual-test attempt section was deliberately skipped (auto
@@ -2566,7 +2585,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   },
 
   // Manual-test passes only when .pipeline/manual-test-results.md exists, has
-  // no FAIL rows in its LATEST attempt section, was written this session, and —
+  // no FAIL rows in its LATEST attempt section (PASS and WARN are accepted), was written this session, and —
   // when a FAIL was previously recorded — HEAD has moved since (fix commits
   // exist). Previously the step had no gate at all
   // (STEP_ARTIFACT_GLOBS['manual_test'] = []) — any clean REPL exit marked it
@@ -2579,10 +2598,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const markerPath = join(dir, MANUAL_TEST_FAIL_EVIDENCE);
 
     // gate-code-validity-on-redispatch (#817, Task 6): before falling into
-    // the mtime-freshness check below, see if a stamped clean-PASS marker
+    // the mtime-freshness check below, see if a stamped FAIL-free marker
     // can be trusted as-is because the code hasn't changed in manual_test's
     // (all-runtime) surface since it was formed. Only a marker that is
-    // UNAMBIGUOUSLY a clean prior PASS may preserve — one carrying
+    // UNAMBIGUOUSLY a clean prior PASS/WARN verdict may preserve — one carrying
     // failRows/headSha (the whitewash-guard's own unresolved-FAIL shape,
     // #367) must never be short-circuited here, or a laundering marker
     // could bypass the guard below. Missing marker, parse failure, no
@@ -2618,7 +2637,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     } catch {
       return {
         done: false,
-        reason: '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
+        reason: '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/WARN/FAIL results before exiting',
       };
     }
     const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
@@ -2633,8 +2652,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
     // Auto-mode SKIP sentinel (#748): the latest attempt was deliberately
     // skipped (no endpoint/UI stories to exercise) rather than carrying a
-    // PASS/FAIL table. Treat it as done once it's fresh for this session —
-    // same freshness bar as a real PASS/FAIL attempt — so auto mode does not
+    // PASS/WARN/FAIL table. Treat it as done once it's fresh for this session —
+    // same freshness bar as a real PASS/WARN/FAIL attempt — so auto mode does not
     // hang the gate forever waiting for a results table that will never be
     // written. Only applies when there are no FAIL rows in this attempt.
     //
@@ -2718,8 +2737,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         }
       }
     }
-    // Additive PASS-path telemetry (gate-code-validity-on-redispatch, #817):
-    // record the HEAD sha the current PASS verdict was formed against, in
+    // Additive FAIL-free-path telemetry (gate-code-validity-on-redispatch, #817):
+    // record the HEAD sha the current PASS/WARN verdict was formed against, in
     // the same marker file used by the FAIL-path whitewash guard above.
     // Merge onto any existing marker content (there should be none at this
     // point on the fresh-flip path, but merging is defensive) rather than
