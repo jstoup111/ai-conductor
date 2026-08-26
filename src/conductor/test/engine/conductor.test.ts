@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readdir, unlink, utimes } from 'fs/promises';
+import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { basename, join } from 'path';
 import { tmpdir } from 'os';
 
@@ -2519,6 +2519,28 @@ describe('engine/conductor', () => {
       await expect(readFile(sidecar, 'utf8')).resolves.toBe(
         '{\n  "codeStamp": "head-before-settle",\n  "runId": "attempt-owned-by-engine"\n}\n',
       );
+    });
+
+    it('leaves a verdict sidecar byte-for-byte and mtime unchanged when gate validity is disabled', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const sidecar = join(dir, PRD_AUDIT_CODE_STAMP);
+      const before = '{"codeStamp":"head-before-settle"}\n';
+      await writeFile(sidecar, before);
+      const beforeStat = await stat(sidecar);
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        config: { gate_code_validity: { enabled: false } },
+      });
+
+      await (conductor as unknown as {
+        stampVerdictRunIdentity: (step: StepName, runId: string | undefined) => Promise<void>;
+      }).stampVerdictRunIdentity('prd_audit', 'attempt-owned-by-engine');
+
+      expect(await readFile(sidecar, 'utf8')).toBe(before);
+      expect((await stat(sidecar)).mtimeMs).toBe(beforeStat.mtimeMs);
     });
 
     it('treats a corrupt verdict sidecar as empty when stamping the engine run id', async () => {

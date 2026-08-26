@@ -87,6 +87,7 @@ import { BuildProgressWatcher } from './build-progress-watcher.js';
 import { CloseoutEventTail } from './closeout-tail.js';
 import {
   resolveBuildProgressConfig,
+  resolveGateCodeValidityConfig,
   BUILD_PROGRESS_HALT_DEFAULTS,
   resolveValidationConcurrency,
   RETRY_ROUTING_DEFAULTS,
@@ -2497,6 +2498,8 @@ export class Conductor {
     step: StepName,
     runId: string | undefined,
   ): Promise<void> {
+    if (!resolveGateCodeValidityConfig(this.config).enabled) return;
+
     const sidecarPath: Partial<Record<StepName, string>> = {
       manual_test: MANUAL_TEST_CODE_STAMP,
       prd_audit: PRD_AUDIT_CODE_STAMP,
