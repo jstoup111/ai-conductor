@@ -448,9 +448,10 @@ with no `Done when:` blocks — closes tasks on the prior evidence rule instead 
 ### Bounded plan growth
 
 The total number of tasks a plan can accumulate after approval is bounded by the authored count plus the
-capped `prd_audit` additions; no other gate appends tasks (FR-18). `conduct daemon status` prints a
-`PLAN GROWTH [<slug>]:` line per in-progress feature — authored count, added count broken down by gate,
-and tasks remaining under the cap (FR-19; see [`daemon status`](../reference/cli.md#daemon-status)).
+capped remediation additions from `prd_audit` and enabled as-built review remediation (FR-18). Each
+gate has its own remediation-lap cap, but both draw from the same plan-growth allowance. `conduct daemon
+status` prints a `PLAN GROWTH [<slug>]:` line per in-progress feature — authored count, added count
+broken down by gate, and tasks remaining under the cap (FR-19; see [`daemon status`](../reference/cli.md#daemon-status)).
 
 The `build` rework hint for a `testQuality` FAIL carries best-effort `plan contract:` and
 `prior attempts:` pointer lines derived from the raw rubric aggregate — a `plan contract:` pointer names the
