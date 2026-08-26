@@ -8,10 +8,11 @@ import {
   parseAsBuiltBlockedFindings,
 } from '../src/engine/artifacts.js';
 import { Conductor, type StepRunner } from '../src/engine/conductor.js';
-import { readKickbackLedger } from '../src/engine/kickback-ledger.js';
+import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import { writeState } from '../src/engine/state.js';
 import type { ConductState, StepName } from '../src/types/index.js';
+import type { ConductorEvent } from '../src/types/events.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 
 const dirs: string[] = [];
@@ -259,6 +260,307 @@ describe('as-built verdict gate', () => {
 });
 
 describe('as-built SHIP routing', () => {
+  async function seedSerialAsBuilt(dir: string, statePath: string): Promise<void> {
+    const state: Record<string, unknown> = {
+      feature_desc: 'as-built-lifecycle',
+      complexity_tier: 'L',
+      track: 'technical',
+    };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'architecture_review_as_built') break;
+      state[step.name] = 'done';
+    }
+    Object.assign(state, {
+      manual_test: 'skipped',
+      prd_audit: 'skipped',
+      architecture_review_as_built: 'pending',
+      retro: 'skipped',
+      rebase: 'skipped',
+      finish: 'done',
+    });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await Promise.all([
+      writeState(statePath, state as ConductState),
+      writeFile(
+        join(dir, '.docs', 'plans', 'as-built-lifecycle.md'),
+        [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n'),
+      ),
+      writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+      ),
+    ]);
+  }
+
+  const REMEDIABLE_REPORT = [
+    'Verdict: BLOCKED',
+    '',
+    '## Blocking Findings',
+    '| Finding | Class | Governing clause | Summary |',
+    '| --- | --- | --- | --- |',
+    '| ARCH-1 | REMEDIABLE | Task 1 | Add the approved guard |',
+  ].join('\n');
+
+  async function runSerialAsBuiltExit(input: {
+    report: string;
+    remediationEnabled?: boolean;
+    priorLap?: boolean;
+  }): Promise<ConductorEvent[]> {
+    const dir = await fixture();
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await seedSerialAsBuilt(dir, statePath);
+    if (input.priorLap) {
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          architecture_review_as_built: {
+            count: 0,
+            cumulative: 0,
+            treeHash: null,
+            lastReason: '',
+            priorVerdict: true,
+            resolvedBefore: 0,
+            laps: 1,
+          },
+        },
+      } as never);
+    }
+    const events = new ConductorEventEmitter();
+    const observed: ConductorEvent[] = [];
+    for (const type of ['step_started', 'step_completed', 'step_failed', 'kickback', 'loop_halt'] as const) {
+      events.on(type, (event) => { observed.push(event); });
+    }
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'architecture_review_as_built') {
+          await writeAsBuilt(dir, input.report);
+        } else if (step === 'remediate') {
+          await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+            dispositions: [{
+              id: 'ARCH-1',
+              disposition: 'build',
+              category: null,
+              rationale: 'Add the approved guard.',
+              tasks: [{ id: 'approved-guard', title: 'Add the approved guard' }],
+            }],
+          }));
+        } else if (step === 'build') {
+          return { success: false, error: 'stop after lifecycle route' };
+        }
+        return { success: true };
+      }),
+    };
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'architecture_review_as_built',
+      maxRetries: 1,
+      config: {
+        architecture_review_as_built: {
+          remediation: { enabled: input.remediationEnabled ?? true },
+          max_remediation_laps: 2,
+        },
+      } as never,
+    }).run();
+    return observed;
+  }
+
+  function expectOneAsBuiltTerminalBefore(
+    observed: readonly ConductorEvent[],
+    nextType: 'kickback' | 'loop_halt',
+  ): void {
+    const started = observed.filter(
+      (event) => event.type === 'step_started' && event.step === 'architecture_review_as_built',
+    );
+    const terminals = observed.filter(
+      (event) =>
+        (event.type === 'step_completed' || event.type === 'step_failed') &&
+        event.step === 'architecture_review_as_built',
+    );
+    const terminalIndex = observed.findIndex(
+      (event) =>
+        (event.type === 'step_completed' || event.type === 'step_failed') &&
+        event.step === 'architecture_review_as_built',
+    );
+    const nextIndex = observed.findIndex((event) => event.type === nextType);
+    expect({ starts: started.length, terminals: terminals.length, terminalBeforeExit: terminalIndex < nextIndex })
+      .toEqual({ starts: 1, terminals: 1, terminalBeforeExit: true });
+  }
+
+  it('emits one terminal before each remediable route, cap halt, design halt, and invalid halt', async () => {
+    const remediable = await runSerialAsBuiltExit({ report: REMEDIABLE_REPORT });
+    expectOneAsBuiltTerminalBefore(remediable, 'kickback');
+
+    const cap = await runSerialAsBuiltExit({ report: REMEDIABLE_REPORT, priorLap: true });
+    expectOneAsBuiltTerminalBefore(cap, 'loop_halt');
+
+    const design = await runSerialAsBuiltExit({
+      report: REMEDIABLE_REPORT.replace('REMEDIABLE', 'DESIGN'),
+    });
+    expectOneAsBuiltTerminalBefore(design, 'loop_halt');
+
+    const invalid = await runSerialAsBuiltExit({ report: 'Verdict: BLOCKED\n' });
+    expectOneAsBuiltTerminalBefore(invalid, 'loop_halt');
+  });
+
+  it('keeps a kill-switch-disabled remediable report as a needs-human halt with one terminal', async () => {
+    const observed = await runSerialAsBuiltExit({
+      report: REMEDIABLE_REPORT,
+      remediationEnabled: false,
+    });
+
+    expectOneAsBuiltTerminalBefore(observed, 'loop_halt');
+    const halt = observed.find((event) => event.type === 'loop_halt');
+    expect(halt).toMatchObject({
+      reason: expect.stringContaining('as-built review verdict is BLOCKED'),
+    });
+    expect(observed.some((event) => event.type === 'kickback')).toBe(false);
+  });
+
+  async function runGroupedAsBuiltExit(input: {
+    report: string;
+    priorLap?: boolean;
+  }): Promise<ConductorEvent[]> {
+    const dir = await fixture();
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    const slug = 'as-built-group-lifecycle';
+    const state: Record<string, unknown> = {
+      feature_desc: slug,
+      complexity_tier: 'L',
+      track: 'product',
+    };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'manual_test') break;
+      state[step.name] = 'done';
+    }
+    Object.assign(state, {
+      manual_test: 'pending',
+      prd_audit: 'pending',
+      architecture_review_as_built: 'pending',
+      retro: 'skipped',
+      rebase: 'skipped',
+      finish: 'done',
+    });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await Promise.all([
+      writeState(statePath, state as ConductState),
+      writeFile(
+        join(dir, '.docs', 'plans', `${slug}.md`),
+        [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n'),
+      ),
+      writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+      ),
+    ]);
+    if (input.priorLap) {
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          architecture_review_as_built: {
+            count: 0,
+            cumulative: 0,
+            treeHash: null,
+            lastReason: '',
+            priorVerdict: true,
+            resolvedBefore: 0,
+            laps: 1,
+          },
+        },
+      } as never);
+    }
+    const events = new ConductorEventEmitter();
+    const observed: ConductorEvent[] = [];
+    for (const type of ['parallel_started', 'parallel_completed', 'parallel_failure', 'kickback', 'loop_halt'] as const) {
+      events.on(type, (event) => { observed.push(event); });
+    }
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'manual_test') {
+          await writeFile(join(dir, '.pipeline', 'manual-test-results.md'), '| Story | Result |\n| --- | --- |\n| S1 | PASS |\n');
+        } else if (step === 'prd_audit') {
+          await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
+            '**PRD:** none',
+            '',
+            '## Verdict Table',
+            '| Criterion | Grade | Plan task | PRD: | Evidence |',
+            '| --- | --- | --- | --- | --- |',
+            '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
+          ].join('\n'));
+        } else if (step === 'architecture_review_as_built') {
+          await writeAsBuilt(dir, input.report);
+        } else if (step === 'remediate') {
+          await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+            dispositions: [{
+              id: 'ARCH-1', disposition: 'build', category: null,
+              rationale: 'Add the approved guard.',
+              tasks: [{ id: 'approved-guard', title: 'Add the approved guard' }],
+            }],
+          }));
+        } else if (step === 'build') {
+          return { success: false, error: 'stop after lifecycle route' };
+        }
+        return { success: true };
+      }),
+    };
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      maxRetries: 1,
+      config: { architecture_review_as_built: { remediation: { enabled: true }, max_remediation_laps: 2 } } as never,
+    }).run();
+    return observed;
+  }
+
+  function expectOneGroupTerminalBefore(
+    observed: readonly ConductorEvent[],
+    nextType: 'kickback' | 'loop_halt',
+  ): void {
+    const started = observed.filter(
+      (event) => event.type === 'parallel_started' && event.step === 'manual_test',
+    );
+    const terminals = observed.filter(
+      (event) =>
+        (event.type === 'parallel_completed' || event.type === 'parallel_failure') &&
+        event.step === 'manual_test',
+    );
+    const terminalIndex = observed.findIndex(
+      (event) =>
+        (event.type === 'parallel_completed' || event.type === 'parallel_failure') &&
+        event.step === 'manual_test',
+    );
+    const nextIndex = observed.findIndex((event) => event.type === nextType);
+    expect({ starts: started.length, terminals: terminals.length, terminalBeforeExit: terminalIndex < nextIndex })
+      .toEqual({ starts: 1, terminals: 1, terminalBeforeExit: true });
+  }
+
+  it('closes the validation-group lifecycle exactly once for each as-built route and halt', async () => {
+    const remediable = await runGroupedAsBuiltExit({ report: REMEDIABLE_REPORT });
+    expectOneGroupTerminalBefore(remediable, 'kickback');
+
+    const cap = await runGroupedAsBuiltExit({ report: REMEDIABLE_REPORT, priorLap: true });
+    expectOneGroupTerminalBefore(cap, 'loop_halt');
+
+    const design = await runGroupedAsBuiltExit({
+      report: REMEDIABLE_REPORT.replace('REMEDIABLE', 'DESIGN'),
+    });
+    expectOneGroupTerminalBefore(design, 'loop_halt');
+
+    const invalid = await runGroupedAsBuiltExit({ report: 'Verdict: BLOCKED\n' });
+    expectOneGroupTerminalBefore(invalid, 'loop_halt');
+  });
+
   it('records only the capped prd_audit addition from a validation group with prd and as-built evidence, then halts on as-built BLOCKED', async () => {
     const dir = await fixture();
     const pipeline = join(dir, '.pipeline');

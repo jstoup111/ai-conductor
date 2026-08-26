@@ -3494,32 +3494,40 @@ export class Conductor {
         asBuiltReport = await readFile(join(this.projectRoot, asBuiltEvidenceFile), 'utf8');
         const parsed = parseAsBuiltBlockedFindings(asBuiltReport);
         if (!parsed.ok) {
-          const detail = `As-built review report mechanical fault: ${parsed.error}`;
-          await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
-          return { kind: 'halt', haltClass: 'mechanical', detail };
-        }
-        for (const finding of parsed.value.findings) {
-          if (finding.class !== 'REMEDIABLE') continue;
-          const resolution = await resolveAsBuiltGoverningClause(
-            this.projectRoot,
-            asBuiltPlanText,
-            finding.clause,
-          );
-          if (resolution !== null) {
-            asBuiltFindings.set(finding.id, resolution);
-            asBuiltRecordedFindings.set(finding.id, {
-              gate: 'architecture_review_as_built',
-              finding: finding.id,
-              class: 'REMEDIABLE',
-              governingClause: finding.clause,
-              summary: finding.summary,
-              outcome: 'remediated',
-            });
-          } else {
-            asBuiltUnresolvableClauses.push({ id: finding.id, clause: finding.clause });
+          // In a mixed validation group, a malformed/terminal as-built
+          // report must not withdraw independently-authorized PRD-audit
+          // repair work. The join will still fail-closed on that as-built
+          // verdict after the PRD append attempt. Pure as-built remediation
+          // remains a mechanical halt because no other gate owns the work.
+          if (!prdAuditRemediation) {
+            const detail = `As-built review report mechanical fault: ${parsed.error}`;
+            await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
+            return { kind: 'halt', haltClass: 'mechanical', detail };
           }
+        } else {
+          for (const finding of parsed.value.findings) {
+            if (finding.class !== 'REMEDIABLE') continue;
+            const resolution = await resolveAsBuiltGoverningClause(
+              this.projectRoot,
+              asBuiltPlanText,
+              finding.clause,
+            );
+            if (resolution !== null) {
+              asBuiltFindings.set(finding.id, resolution);
+              asBuiltRecordedFindings.set(finding.id, {
+                gate: 'architecture_review_as_built',
+                finding: finding.id,
+                class: 'REMEDIABLE',
+                governingClause: finding.clause,
+                summary: finding.summary,
+                outcome: 'remediated',
+              });
+            } else {
+              asBuiltUnresolvableClauses.push({ id: finding.id, clause: finding.clause });
+            }
+          }
+          asBuiltValidated = true;
         }
-        asBuiltValidated = true;
       } catch (error) {
         const detail = `As-built review report could not be read for remediation authorization: ${error instanceof Error ? error.message : String(error)}`;
         await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
@@ -6591,6 +6599,12 @@ export class Conductor {
                 if (escalation.halt) {
                   const reason =
                     `as-built architecture review kickback-to-build no-op: ${escalation.reason}`;
+                  await emitTracked({
+                    type: 'parallel_failure',
+                    step: step.name,
+                    branch: 'architecture_review_as_built',
+                    error: reason,
+                  });
                   await this.writeHaltMarker(reason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
@@ -6622,6 +6636,13 @@ export class Conductor {
                   },
                 );
                 if (remediationOutcome.kind === 'route') {
+                  await emitTracked({
+                    type: 'parallel_failure',
+                    step: step.name,
+                    branch: 'architecture_review_as_built',
+                    error:
+                      'as-built architecture review BLOCKED: remediable findings routed to remediation',
+                  });
                   await emitTracked({
                     type: 'kickback',
                     from: step.name,
@@ -6659,6 +6680,12 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
+                  await emitTracked({
+                    type: 'parallel_failure',
+                    step: step.name,
+                    branch: 'architecture_review_as_built',
+                    error: reason,
+                  });
                   await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
