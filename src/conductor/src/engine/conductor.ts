@@ -151,6 +151,7 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
   parsePrdAuditReport,
+  isNoOwnerKey,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   readRemediationPlan,
@@ -858,7 +859,7 @@ export function routePrdAuditOverScope(
   decisions: readonly OverScopeDecision[],
 ): PrdAuditOverScopeRoute {
   const parsed = parsePrdAuditReport(reportText);
-  if (!parsed.ok) return { kind: 'none' };
+  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
   const relations = overScopeRelations(reportText);
   const overScopeFindings = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
   if (overScopeFindings.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
@@ -3794,7 +3795,7 @@ export class Conductor {
         }));
         const unresolvedCriteria = parsed.value.findings
           .map((finding) => finding.criterion)
-          .filter((criterion) => !criteria.has(criterion));
+          .filter((criterion) => !isNoOwnerKey(criterion) && !criteria.has(criterion));
         if (criteria.size === 0 || unresolvedCriteria.length > 0) {
           const detail = criteria.size === 0
             ? 'PRD audit remediation cannot resolve the active story criteria.'
@@ -8992,8 +8993,7 @@ export class Conductor {
               if (prdAuditRoute.kind === 'record') {
                 // Recorded negative-path PLAN_GAP and harmless/within-intent
                 // OVER_SCOPE findings are explicit accepted risk, not repair
-                // requests. Preserve fresh-verdict metadata while allowing
-                // the SHIP tail to settle this gate as satisfied.
+                // requests. A rejected report never reaches this route.
                 completion = { ...completion, done: true, reason: undefined, missing: undefined };
               }
             }

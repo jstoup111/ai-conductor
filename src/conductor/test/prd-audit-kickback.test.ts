@@ -1,5 +1,5 @@
 // Covers: task:9, task:17
-// Covers: S5.1, S5.2, S5.3, S5.4
+// Covers: S5.1, S5.2, S5.3, S5.4, task:10
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -1578,6 +1578,49 @@ describe('prd_audit kickback', () => {
       reason: 'PRD audit report rejected rows: S2.1 (PRD audit finding S2.1 has an invalid Grade.)',
     }]);
     expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
+  });
+
+  it('does not record a within-intent NC finding when the report also has a rejected row', () => {
+    const report = [
+      '**PRD:** none',
+      '',
+      '## Verdict Table',
+      '| Criterion | Grade | Plan task | Evidence | Intent relation |',
+      '| --- | --- | --- | --- | --- |',
+      '| S3.1 | PASS | | Covered behavior | within |',
+      '| S3.2 | MAYBE | | Invalid grade | within |',
+      '',
+      '## Findings without an owning criterion',
+      '| Finding | Grade | Intent relation | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| NC.1 | OVER_SCOPE | within | Internal implementation detail |',
+    ].join('\n');
+
+    expect(routePrdAuditOverScope(report, [])).toEqual({ kind: 'none' });
+  });
+
+  it('authorizes FIXABLE remediation alongside a within-intent NC finding without a mechanical unknown-criteria halt', async () => {
+    const fixture = await createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.1'],
+      report: [
+        '**PRD:** present',
+        '',
+        '## Verdict Table',
+        '| Criterion | Grade | Plan task | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| S2.1 | FIXABLE | 1 | Missing S2.1 behavior |',
+        '',
+        '## Findings without an owning criterion',
+        '| Finding | Grade | Intent relation | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| NC.1 | OVER_SCOPE | within | Internal implementation detail |',
+      ].join('\n'),
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(fixture.gateBlocks).toEqual([]);
+    expect(await readFile(fixture.planPath, 'utf8')).toContain('**Criterion:** S2.1');
   });
 
   it('halts without appending when FIXABLE work exceeds the growth cap, listing every finding', async () => {

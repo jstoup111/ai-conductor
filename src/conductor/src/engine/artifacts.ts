@@ -4672,7 +4672,11 @@ async function prdAuditStoryCoverageGap(
   const parsed = parsePrdAuditReport(reportContent);
   if (!parsed.ok) return parsed.error;
   const expectedCriteria = new Set(criterionIds);
-  const reportedCriteria = new Set(parsed.value.findings.map((finding) => finding.criterion));
+  const reportedCriteria = new Set(
+    parsed.value.findings
+      .map((finding) => finding.criterion)
+      .filter((criterion) => !isNoOwnerKey(criterion)),
+  );
   const unknownCriteria = [...reportedCriteria].filter((criterion) => !expectedCriteria.has(criterion));
   if (unknownCriteria.length > 0) {
     return `PRD audit report names criteria absent from the active stories: ${unknownCriteria.join(', ')}.`;

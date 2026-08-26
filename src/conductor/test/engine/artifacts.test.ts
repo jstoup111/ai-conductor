@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, task:1
+// Covers: S1.1, S1.2, S1.3, task:1, task:10
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
@@ -3883,6 +3883,43 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toContain('S4.2 (OVER_SCOPE)');
       expect(result.reason).not.toContain('S3.1');
+    });
+
+    it('completes an all-PASS report with a within-intent NC finding without treating it as an unknown story criterion', async () => {
+      await createFile(
+        '.docs/stories/feature.md',
+        [
+          '# Stories',
+          '',
+          '## Story 1: audited behavior',
+          '',
+          '#### Happy Path',
+          '- Given input, when exercised, then the expected behavior occurs.',
+        ].join('\n'),
+      );
+      await createFile(
+        '.pipeline/prd-audit.md',
+        [
+          '# PRD Audit',
+          '',
+          '**PRD:** none',
+          '',
+          table.trimEnd(),
+          '| S1.1 | PASS | — | none | within | Covered behavior |',
+          '',
+          '## Findings without an owning criterion',
+          '| Finding | Grade | Intent relation | Evidence |',
+          '| --- | --- | --- |',
+          '| NC.1 | OVER_SCOPE | within | Internal implementation detail |',
+        ].join('\n'),
+      );
+
+      const result = await checkStepCompletion(dir, 'prd_audit', {
+        featureDesc: 'feature',
+        sessionStartedAt: 0,
+      });
+
+      expect(result).toEqual({ done: true, verdictFreshness: expect.any(Object) });
     });
   });
 
