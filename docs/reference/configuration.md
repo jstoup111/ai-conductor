@@ -1005,6 +1005,8 @@ one of `APPROVED`, `PLAN_GAP`, or `BLOCKED`.
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `architecture_review_as_built.checks.<name>.tiers` | array of `S`\|`M`\|`L` | see below | Restricts the named check to the listed complexity tiers; an explicit list always overrides the artifact-presence default |
+| `architecture_review_as_built.remediation.enabled` | boolean | `true` | Enables daemon-mode bounded remediation for an all-`REMEDIABLE` `BLOCKED` report; `false` keeps that report on the needs-human halt path |
+| `architecture_review_as_built.max_remediation_laps` | positive integer | `1` | Caps as-built remediation laps for the feature; exhaustion halts before another plan append |
 
 `<name>` is one of `reachability`, `planGap`, `adrCompliance`, `diagramDrift`. Without an explicit
 `tiers` override:
@@ -1019,6 +1021,9 @@ one of `APPROVED`, `PLAN_GAP`, or `BLOCKED`.
 `PLAN_GAP` means the code faithfully implements the approved design and the design itself is the limit;
 it is recorded in the verdict and the shipped record and ships when acceptance criteria still pass, and
 halts when a stated outcome is not delivered.
+
+`remediation` accepts only the `enabled` boolean. `max_remediation_laps` must be an integer greater
+than zero; unknown keys and invalid values are configuration errors.
 
 ## ci_watch
 

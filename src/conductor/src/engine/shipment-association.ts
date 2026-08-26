@@ -48,6 +48,14 @@ export type RecordedShipmentFinding =
     grade: 'PLAN_GAP';
     outcome: string;
     summary: string;
+  }
+  | {
+    gate: 'architecture_review_as_built';
+    finding: string;
+    class: 'REMEDIABLE';
+    governingClause: string;
+    summary: string;
+    outcome: 'remediated';
   };
 
 /**
@@ -75,10 +83,16 @@ export function appendRecordedShipmentFindings(
   if (frontmatterEnd === -1) return record;
   const rendered = findings.map((finding) => [
     `  - gate: ${finding.gate}`,
-    `    grade: ${finding.grade}`,
     'criterion' in finding
-      ? `    criterion: ${yamlScalar(finding.criterion)}`
-      : `    outcome: ${yamlScalar(finding.outcome)}`,
+      ? `    grade: ${finding.grade}\n    criterion: ${yamlScalar(finding.criterion)}`
+      : 'finding' in finding
+        ? [
+            `    finding: ${yamlScalar(finding.finding)}`,
+            `    class: ${finding.class}`,
+            `    governing_clause: ${yamlScalar(finding.governingClause)}`,
+            `    outcome: ${finding.outcome}`,
+          ].join('\n')
+        : `    grade: ${finding.grade}\n    outcome: ${yamlScalar(finding.outcome)}`,
     `    summary: ${yamlScalar(finding.summary)}`,
     ...('accepted' in finding ? [`    accepted: ${finding.accepted}`] : []),
     ...('decision' in finding && finding.decision ? [`    decision: ${finding.decision}`] : []),
@@ -153,15 +167,42 @@ function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentF
 }
 
 function recordedAsBuiltFindings(report: string | undefined): RecordedShipmentFinding[] {
+  // AB-R9 / adr-2026-08-22-as-built-review-runs-always-with-plan-gap D2: the two
+  // record kinds are ADDITIVE, not alternatives. A lap can both remediate
+  // REMEDIABLE findings and deliver a PLAN_GAP, and the shipped record owes the
+  // reader both. Returning early on the projected findings dropped the
+  // delivered PLAN_GAP whenever remediation had also run.
+  const projected = recordedAsBuiltRemediationFindings(report);
+  return [...projected, ...deliveredPlanGapFinding(report)];
+}
+
+/**
+ * The narrative `## Recorded Findings` section of a delivered-PLAN_GAP report.
+ * Order-independent: the remediation JSON block may precede or follow it, and
+ * a fenced section is never narrative. Returns undefined when none qualifies.
+ */
+function deliveredPlanGapSection(report: string): string | undefined {
+  const headingRe = /^## Recorded Findings(?:\s*\(if PLAN_GAP\s*[\u2014-][^)]*\))?\s*$/gim;
+  for (let match = headingRe.exec(report); match !== null; match = headingRe.exec(report)) {
+    const afterHeading = report.slice(match.index + match[0].length);
+    const nextHeading = afterHeading.search(/^#{1,6}\s/m);
+    const section = (nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading)).trim();
+    if (!section || section.startsWith('```')) continue;
+    return section;
+  }
+  return undefined;
+}
+
+function deliveredPlanGapFinding(report: string | undefined): RecordedShipmentFinding[] {
   if (!report || !/^\s*Verdict\s*:\s*PLAN_GAP\s*$/im.test(report) || !/^\s*Outcome delivered\s*:\s*yes\s*$/im.test(report)) return [];
-  // Keep the shipped reader compatible with the writer's annotated heading,
-  // while rejecting arbitrary prose sections that only share a prefix.
-  const heading = /^## Recorded Findings(?:\s*\(if PLAN_GAP\s*[—-][^)]*\))?\s*$/im.exec(report);
-  if (!heading || heading.index === undefined) return [];
-  const afterHeading = report.slice(heading.index + heading[0].length);
-  const nextHeading = afterHeading.search(/^#{1,6}\s/m);
-  const section = (nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading)).trim();
-  if (!section) return [];
+  // AB-R10: a lap that BOTH remediated findings and delivered a PLAN_GAP
+  // carries two `## Recorded Findings` sections — the remediation JSON block
+  // this engine projects, and the reviewer's PLAN_GAP narrative. Taking the
+  // first heading read the JSON as prose and recorded `outcome: "```json"`
+  // with the whole block as the summary. Scan every candidate section in
+  // either order and take the first that is narrative, never a fenced block.
+  const section = deliveredPlanGapSection(report);
+  if (section === undefined) return [];
   const entries = section.split('\n').map((line) => line.trim()).filter(Boolean);
   const labeled = (name: string): string | undefined => entries
     .map((line) => line.match(new RegExp(`^(?:[-*]\\s*)?${name}:\\s*(.+)$`, 'i'))?.[1]?.trim())
@@ -171,6 +212,40 @@ function recordedAsBuiltFindings(report: string | undefined): RecordedShipmentFi
   return outcome && summary
     ? [{ gate: 'architecture_review_as_built', grade: 'PLAN_GAP', outcome, summary }]
     : [];
+}
+
+function recordedAsBuiltRemediationFindings(report: string | undefined): RecordedShipmentFinding[] {
+  const block = report?.match(/^## Recorded Findings\s*\n+```json\s*\n([\s\S]*?)\n```\s*$/im)?.[1];
+  if (!block) return [];
+  try {
+    const parsed: unknown = JSON.parse(block);
+    const findings = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)
+      ? (parsed as { findings: unknown[] }).findings
+      : [];
+    return findings.flatMap<RecordedShipmentFinding>((finding) => {
+      if (!isObject(finding) || finding.gate !== 'architecture_review_as_built') return [];
+      const id = nonEmptyString(finding.finding);
+      const governingClause = nonEmptyString(finding.governingClause);
+      const summary = nonEmptyString(finding.summary);
+      if (
+        !id ||
+        !governingClause ||
+        !summary ||
+        finding.class !== 'REMEDIABLE' ||
+        finding.outcome !== 'remediated'
+      ) return [];
+      return [{
+        gate: 'architecture_review_as_built',
+        finding: id,
+        class: 'REMEDIABLE',
+        governingClause,
+        summary,
+        outcome: 'remediated',
+      }];
+    });
+  } catch {
+    return [];
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -203,7 +203,12 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
   });
 
   it('fails on a BLOCKED verdict', async () => {
-    await report(`${header}**Verdict:** BLOCKED\n## Blocking Violations\n- violates adr-x\n`);
+    await report(
+      `${header}**Verdict:** BLOCKED\n\n## Blocking Findings\n\n` +
+        '| Finding | Class | Governing clause | Summary |\n' +
+        '|---|---|---|---|\n' +
+        '| ARCH-1 | DESIGN | Task 1 | A decision is required. |\n',
+    );
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/BLOCKED/);

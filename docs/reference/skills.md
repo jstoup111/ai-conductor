@@ -291,18 +291,23 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — two: `architecture_review` (index 6, DECIDE, engine enforcement `advisory`) and
   `architecture_review_as_built` (index 18, SHIP, engine enforcement `gating`), the latter invoked as
-  `/architecture-review --as-built`. Both skip at tier S.
+  `/architecture-review --as-built`. The DECIDE-time step skips at tier S; the as-built step runs at
+  every tier.
 - **Inputs** — `.docs/decisions/`, `.docs/architecture/`, `CLAUDE.md`, `.memory/decisions/`, existing
   code, and the PRD's FRs or the explore output. As-built mode reads only `Status: APPROVED` ADRs plus
   the feature diff.
 - **Outputs** — `.docs/decisions/architecture-review-<date>-<feature>.md`; ADRs under
   `.docs/decisions/`; `.pipeline/architecture-review-as-built.md`, which must be rewritten on every
   invocation or the engine reads it as stale and halts the SHIP tail.
-- **Gate role** — the as-built half is blocking and fail-closed: only `APPROVED` or `APPROVED WITH
-  DRIFT NOTES` passes. The DECIDE half is advisory at the step level; its DRAFT-ADR hard gate is
-  enforced by the `conduct` state machine and by the land-time spec gate instead. The as-built
-  half's production reachability sweep derives root-to-caller-to-export chains from current shipped
-  source, never from plan-declared callers.
+- **Gate role** — the as-built half is blocking and fail-closed: `APPROVED`, `APPROVED WITH DRIFT
+  NOTES`, and `PLAN_GAP` with `Outcome delivered: yes` satisfy it. A `BLOCKED` artifact contains exactly
+  one `## Blocking Findings` table with `Finding`, `Class`, `Governing clause`, and `Summary` columns.
+  `Class` is `REMEDIABLE` or `DESIGN`; every `REMEDIABLE` row cites an approved ADR decision or an active
+  plan task. An all-`REMEDIABLE` report can use the enabled, bounded remediation route; `DESIGN`, invalid,
+  disabled, or exhausted reports halt needs-human. The DECIDE half is advisory at the step level; its
+  DRAFT-ADR hard gate is enforced by the `conduct` state machine and by the land-time spec gate instead.
+  The as-built half's production reachability sweep derives root-to-caller-to-export chains from current
+  shipped source, never from plan-declared callers.
 
 ### stories
 
@@ -637,7 +642,7 @@ joins before `build_review`.
 
 ### remediate
 
-> Use when a SHIP gate blocks — a prd-audit FIXABLE finding, the as-built architecture review's BLOCKED verdict, or finish verification — or on a build stall. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
+> Use when a SHIP gate blocks — a prd-audit FIXABLE finding, an all-`REMEDIABLE` as-built architecture-review BLOCKED verdict, or finish verification — or on a build stall. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.

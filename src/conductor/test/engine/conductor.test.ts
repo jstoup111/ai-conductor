@@ -5061,27 +5061,40 @@ describe('engine/conductor', () => {
       expect(haltClass).toBe('needs-human');
     });
 
-    it('as-built review failure is terminal and does not route through remediation', async () => {
+    it('routes a serial remediable as-built BLOCKED verdict back to build and restages the gate', async () => {
       await seedShipTail({ architecture_review_as_built: 'pending' });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'feat.md');
+      await writeFile(
+        planPath,
+        [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n'),
+      );
+      let asBuiltRestagedBeforeBuild = false;
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
           if (step === 'architecture_review_as_built') {
-            return { success: false, error: 'as-built review BLOCKED: ADR violated' };
+            await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+              'Verdict: BLOCKED',
+              '',
+              '## Blocking Findings',
+              '| Finding | Class | Governing clause | Summary |',
+              '| --- | --- | --- | --- |',
+              '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
+            ].join('\n'));
           }
           if (step === 'build') {
-            await writeFile(
-              join(dir, '.pipeline/task-status.json'),
-              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
-            );
+            const current = await readState(statePath);
+            asBuiltRestagedBeforeBuild = current.ok && current.value.architecture_review_as_built === 'stale';
+            return { success: false, error: 'stop after observing serial reroute' };
           } else if (step === 'remediate') {
             await remediationPlanFile({
               dispositions: [
                 {
-                  id: 'adr-2026-07-03-example',
+                  id: 'ARCH-1',
                   disposition: 'build',
                   category: null,
-                  rationale: 'record written to the wrong branch',
-                  tasks: [{ id: 'rem-1', title: 'move the write into the finish flow' }],
+                  rationale: 'Add the missing approved guard.',
+                  tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
                 },
               ],
             });
@@ -5107,15 +5120,100 @@ describe('engine/conductor', () => {
         verifyArtifacts: true,
         fromStep: 'architecture_review_as_built',
         maxRetries: 1,
+        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
         escalateBuildFailure: async () => ({}),
       });
 
       await conductor.run();
 
-      expect(kickbacks).toHaveLength(0);
-      expect(halted).toBe(true);
-      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/as-built architecture review halted/);
+      expect(kickbacks).toContainEqual({ from: 'architecture_review_as_built', to: 'build' });
+      expect(vi.mocked(runner.run).mock.calls.map(([step]) => step)).toContain('remediate');
+      expect(asBuiltRestagedBeforeBuild).toBe(true);
+      await expect(readFile(planPath, 'utf8')).resolves.toContain('### Task rem-as-built-missing-guard: Add the missing guard');
+      expect(halted).toBe(true); // the test stops the rerouted build deliberately
+    });
+
+    it('halts a mixed serial as-built report with every finding listed and re-dispatches it freshly after clearing HALT', async () => {
+      await seedShipTail({ architecture_review_as_built: 'pending' });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'feat.md');
+      const originalPlan = [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n');
+      await writeFile(planPath, originalPlan);
+      let asBuiltCalls = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'architecture_review_as_built') {
+            asBuiltCalls++;
+            await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+              'Verdict: BLOCKED',
+              '',
+              '## Blocking Findings',
+              '| Finding | Class | Governing clause | Summary |',
+              '| --- | --- | --- | --- |',
+              '| ARCH-REMEDIABLE | REMEDIABLE | Task 1 | Add the missing guard |',
+              '| ARCH-DESIGN | DESIGN | ADR-auth decision 2 | Choose the incompatible boundary |',
+            ].join('\n'));
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+        mode: 'auto', daemon: true, verifyArtifacts: true,
+        fromStep: 'architecture_review_as_built', maxRetries: 1,
+        escalateBuildFailure: async () => ({}),
+      });
+
+      await conductor.run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      const firstHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; Task 1): Add the missing guard');
+      expect(firstHalt).toContain(
+        'ARCH-DESIGN (DESIGN; ADR-auth decision 2): Choose the incompatible boundary',
+      );
+      expect(vi.mocked(runner.run).mock.calls.map(([step]) => step)).not.toContain('remediate');
+      await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
+
+      await rm(join(dir, '.pipeline/HALT'), { force: true });
+      await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+      const redispatchedConductor = new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+        mode: 'auto', daemon: true, verifyArtifacts: true,
+        fromStep: 'architecture_review_as_built', maxRetries: 1,
+        escalateBuildFailure: async () => ({}),
+      });
+
+      await redispatchedConductor.run();
+
+      expect(asBuiltCalls).toBe(2);
+      expect(vi.mocked(runner.run).mock.calls.map(([step]) => step)).not.toContain('remediate');
+      await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
+    });
+
+    it('keeps a malformed serial as-built BLOCKED report needs-human with its parse fault', async () => {
+      await seedShipTail({ architecture_review_as_built: 'pending' });
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'architecture_review_as_built') {
+            await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), 'Verdict: BLOCKED\n');
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+        mode: 'auto', daemon: true, verifyArtifacts: true,
+        fromStep: 'architecture_review_as_built', maxRetries: 1,
+        escalateBuildFailure: async () => ({}),
+      });
+
+      await conductor.run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        'As-built BLOCKED report is missing its Blocking Findings table.',
+      );
     });
 
     it('non-daemon auto mode does NOT dispatch /remediate on a finish failure', async () => {
@@ -7629,6 +7727,85 @@ describe('engine/conductor', () => {
 
       expect(kickbacks.some((k) => k.to === 'build')).toBe(false);
     });
+
+    it('halts a mixed as-built group report with every finding listed and re-runs the refused gate after HALT clears', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'mixed-as-built.md');
+      const originalPlan = [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n');
+      await writeFile(planPath, originalPlan);
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const mixedReport = [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-REMEDIABLE | REMEDIABLE | Task 1 | Add the missing guard |',
+        '| ARCH-DESIGN | DESIGN | ADR-auth decision 2 | Choose the incompatible boundary |',
+      ].join('\n');
+      let asBuiltCalls = 0;
+      let remediateCalls = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
+              '**PRD:** none',
+              '',
+              '## Verdict Table',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '| --- | --- | --- | --- | --- |',
+              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
+            ].join('\n'));
+          } else if (step === 'architecture_review_as_built') {
+            asBuiltCalls++;
+            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), mixedReport);
+          } else if (step === 'remediate') {
+            remediateCalls++;
+          }
+          return { success: true };
+        }),
+      };
+      const options = {
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test' as StepName,
+        mode: 'auto' as const,
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      };
+
+      await new Conductor(options).run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      const firstHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; Task 1): Add the missing guard');
+      expect(firstHalt).toContain(
+        'ARCH-DESIGN (DESIGN; ADR-auth decision 2): Choose the incompatible boundary',
+      );
+      expect(remediateCalls).toBe(0);
+      await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
+      const refused = await readState(statePath);
+      expect(refused.ok && refused.value.architecture_review_as_built).toBe('refused');
+
+      await rm(join(dir, '.pipeline/HALT'), { force: true });
+      await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+      await new Conductor(options).run();
+
+      expect(asBuiltCalls).toBe(2);
+      expect(remediateCalls).toBe(0);
+      await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
+    });
   });
 
   describe('Merged work order — earliest target + both evidence streams (Task 22)', () => {
@@ -7656,7 +7833,16 @@ describe('engine/conductor', () => {
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
     const PRD_AUDIT_PASS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
-    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+    const AS_BUILT_BLOCKED = [
+      '# As-Built Architecture Review',
+      '',
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ADR-1 | DESIGN | ADR-auth decision 1 | ADR-1 violated. |',
+    ].join('\n');
 
     // manual_test FAILs deterministically AND architecture_review_as_built
     // is BLOCKED (its own gate unsatisfied) in the SAME join round — the
@@ -7797,7 +7983,16 @@ describe('engine/conductor', () => {
     const PRD_AUDIT_GAPS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
       '| FR-1 | GAP | missing | evidence.ts:1 | no |\n';
-    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+    const AS_BUILT_BLOCKED = [
+      '# As-Built Architecture Review',
+      '',
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ADR-1 | DESIGN | ADR-auth decision 1 | ADR-1 violated. |',
+    ].join('\n');
 
     it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
@@ -8005,7 +8200,16 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+    const AS_BUILT_BLOCKED = [
+      '# As-Built Architecture Review',
+      '',
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ADR-1 | DESIGN | ADR-auth decision 1 | ADR-1 violated. |',
+    ].join('\n');
     const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
     it('readRemediationPlan → null (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {

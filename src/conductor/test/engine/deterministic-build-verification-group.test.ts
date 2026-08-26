@@ -304,7 +304,12 @@ describe('deterministic BUILD verification group', () => {
 
     let sighupHandler: (() => Promise<void>) | undefined;
     vi.spyOn(process, 'on').mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
-      if (event === 'SIGHUP') sighupHandler = handler as () => Promise<void>;
+      // Vitest may register its own SIGHUP listener after the conductor starts.
+      // Retain the conductor's first registration rather than invoking Vitest's
+      // real signal handler at the assertion boundary.
+      if (event === 'SIGHUP' && sighupHandler === undefined) {
+        sighupHandler = handler as () => Promise<void>;
+      }
       return process;
     }) as typeof process.on);
     const exitProcess = vi.fn();
@@ -344,6 +349,8 @@ describe('deterministic BUILD verification group', () => {
     await sighupHandler!();
     const persisted = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
     await run;
+
+    expect(exitProcess).toHaveBeenCalledWith(129);
 
     expect({
       beforeSignalSyntheticDone: beforeSignal.build_verification__test_suite === 'done',

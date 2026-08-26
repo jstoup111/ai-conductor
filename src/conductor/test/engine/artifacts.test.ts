@@ -4809,7 +4809,13 @@ Task 1 → Task 2
       it('a fresh-mtime BLOCKED report still blocks regardless of the sidecar codeStamp', async () => {
         gdir = await makeGitDir();
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeFile(join(gdir, PATH), '# As-Built Review\n\nVerdict: BLOCKED\n');
+        await writeFile(
+          join(gdir, PATH),
+          '# As-Built Review\n\nVerdict: BLOCKED\n\n## Blocking Findings\n\n' +
+            '| Finding | Class | Governing clause | Summary |\n' +
+            '|---|---|---|---|\n' +
+            '| ARCH-1 | DESIGN | Task 1 | A decision is required. |\n',
+        );
         await writeSidecar(gdir, baseline);
 
         const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));

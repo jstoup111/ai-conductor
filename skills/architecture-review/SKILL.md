@@ -491,9 +491,20 @@ same-file exceptions independently cite root → caller → export at the review
 UNEXERCISED entries carry their observation signature)
 ## Drift Notes (if any)
 ## Recorded Findings (if PLAN_GAP — affected outcome and why the approved design is the limit)
+## Blocking Findings (required exactly when Verdict is BLOCKED)
+| Finding | Class | Governing clause | Summary |
+|---|---|---|---|
+| AB-1 | REMEDIABLE | <ADR filename stem> + <decision number>, or <task id from this feature's plan> | <one-line finding summary> |
 ## Blocking Violations (if BLOCKED — which APPROVED ADR or unreachable rung, file:line)
 ## Resolution (if BLOCKED — code fix OR superseding ADR; human-approved)
 ```
+
+For a `BLOCKED` verdict, `## Blocking Findings` is required exactly once and contains one row per
+finding. `Class` is a closed set: exactly `REMEDIABLE` or `DESIGN`. A `REMEDIABLE` row's
+`Governing clause` must name either an ADR filename stem plus its decision number, or a task id from
+this feature's own plan; a REMEDIABLE row without a governing clause is malformed. `DESIGN` is for a
+finding that requires a human architectural decision rather than work already required by an approved
+artifact.
 
 The conductor's objective gate reads the `Verdict:` line and is **fail-closed**: only an explicit
 `APPROVED` or `APPROVED WITH DRIFT NOTES` passes. A `PLAN_GAP` passes only with
@@ -546,5 +557,10 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
       no as-built finding sends unplanned work back to BUILD
 - [ ] **As-built mode:** BLOCKED on any enabled APPROVED-ADR violation; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
+- [ ] **As-built mode:** every BLOCKED verdict contains exactly one `## Blocking Findings` table,
+      with `Finding`, `Class`, `Governing clause`, and `Summary` columns; Class is exactly
+      `REMEDIABLE` or `DESIGN`
+- [ ] **As-built mode:** every REMEDIABLE blocking finding cites its governing ADR filename stem
+      plus decision number, or its task id from this feature's plan; a missing clause is malformed
 - [ ] **As-built mode:** `.pipeline/review-required-architecture-as-built` marker written when the
       verdict is not a clean APPROVED

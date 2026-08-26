@@ -1,3 +1,5 @@
+// Covers: task:9, task:17
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,8 +9,10 @@ import { execa } from 'execa';
 import {
   Conductor,
   remediationLapCapForGate,
+  resolveAsBuiltGoverningClause,
   routePrdAuditPlanGaps,
   routePrdAuditOverScope,
+  recordedFindingsBlock,
   recordedPrdAuditFindingsBlock,
   type StepRunner,
 } from '../src/engine/conductor.js';
@@ -23,9 +27,14 @@ import { readGrowth, readKickbackLedger, writeKickbackLedger } from '../src/engi
 import { ALL_STEPS } from '../src/engine/steps.js';
 import { readState, writeState } from '../src/engine/state.js';
 import type { ConductState, StepName } from '../src/types/index.js';
+import type { ConductorEvent } from '../src/types/events.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { DefaultStepRunner } from '../src/engine/step-runners.js';
 import { PROTECTED_ARTIFACT_SEAL_PATH } from '../src/engine/protected-artifact-seal.js';
+import {
+  appendRecordedShipmentFindings,
+  recordedShipmentFindings,
+} from '../src/engine/shipment-association.js';
 
 const dirs: string[] = [];
 
@@ -195,6 +204,149 @@ async function createPrdAuditRemediationFixture(input: {
   return { outcome, plan, planPath, root, gateBlocks };
 }
 
+async function createAsBuiltRemediationCapFixture(input: {
+  priorLaps?: number;
+  priorGrowthAdded?: number;
+  appendCap?: number;
+  plannerFindingIds?: string[];
+  /** Decision 6 kill switch. Default true, matching production. */
+  remediationEnabled?: boolean;
+  /** Add a validated prd_audit FIXABLE finding + its evidence, for mixed rounds. */
+  withPrdEvidence?: boolean;
+}) {
+  const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-cap-'));
+  dirs.push(root);
+  const planPath = join(root, '.docs', 'plans', 'feature.md');
+  const plan = [1, 2, 3, 4].map((id) => `### Task ${id}: Authored work`).join('\n');
+  const findings = [
+    { id: 'AB-1', clause: 'Task 1', summary: 'Add the approved guard' },
+    { id: 'AB-2', clause: 'Task 2', summary: 'Restore the approved boundary' },
+  ];
+  await Promise.all([
+    mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+    mkdir(join(root, '.pipeline'), { recursive: true }),
+  ]);
+  await writeFile(planPath, plan);
+  await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+  await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+    'Verdict: BLOCKED',
+    '',
+    '## Blocking Findings',
+    '| Finding | Class | Governing clause | Summary |',
+    '| --- | --- | --- | --- |',
+    ...findings.map((finding) =>
+      `| ${finding.id} | REMEDIABLE | ${finding.clause} | ${finding.summary} |`,
+    ),
+  ].join('\n'));
+  if (input.withPrdEvidence) {
+    await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(root, '.docs', 'stories', 'feature.md'), [
+      '# Stories', '', '## Story 1: the criterion', '', '### Acceptance Criteria', '',
+      '#### Happy Path',
+      '- Given a request, when handled, then the criterion holds.',
+    ].join('\n'));
+    await writeFile(join(root, '.pipeline', 'prd-audit.md'), [
+      '# PRD Audit', '', '**PRD:** none', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      '| S1.1 | FIXABLE | 1 | FR-1 | not implemented |',
+    ].join('\n'));
+  }
+  if (input.priorLaps !== undefined || input.priorGrowthAdded !== undefined) {
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: input.priorLaps === undefined
+        ? {}
+        : {
+            architecture_review_as_built: {
+              count: 0,
+              cumulative: 0,
+              treeHash: null,
+              lastReason: '',
+              priorVerdict: true,
+              resolvedBefore: 0,
+              laps: input.priorLaps,
+            },
+          },
+      ...(input.priorGrowthAdded === undefined
+        ? {}
+        : {
+            growth: {
+              authored: 4,
+              added: input.priorGrowthAdded,
+              byGate: { prd_audit: input.priorGrowthAdded },
+            },
+          }),
+    } as never);
+  }
+  const runner: StepRunner = {
+    run: async () => {
+      await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+        dispositions: [
+          ...(input.withPrdEvidence
+            ? [{
+                id: 'FR-1',
+                disposition: 'build',
+                category: null,
+                rationale: 'Satisfy the criterion.',
+                tasks: [{ id: 'prd-fix', title: 'Satisfy S1.1' }],
+              }]
+            : []),
+          ...(input.plannerFindingIds ?? findings.map((finding) => finding.id)).map((id) => ({
+          id,
+          disposition: 'build',
+          category: null,
+          rationale: `Repair ${id}.`,
+          tasks: [{ id: `fix-${id.toLowerCase()}`, title: `Repair ${id}.` }],
+          })),
+        ],
+      }));
+      return { success: true };
+    },
+  };
+  const conductor = new Conductor({
+    stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+    stepRunner: runner,
+    events: new ConductorEventEmitter(),
+    projectRoot: root,
+    mode: 'auto',
+    daemon: true,
+    verifyArtifacts: false,
+    maxRetries: 1,
+    config: {
+      ...(input.appendCap === undefined
+        ? {}
+        : { prd_audit: { max_appended_tasks: input.appendCap, max_appended_ratio: 1 } }),
+      architecture_review_as_built: {
+        remediation: { enabled: input.remediationEnabled ?? true },
+      },
+    } as never,
+  });
+  const outcome = await (conductor as unknown as {
+    planRemediation: (
+      state: ConductState,
+      steps: typeof ALL_STEPS,
+      dispatchContext: string,
+      hintSource: unknown,
+    ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
+  }).planRemediation(
+    { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+    ALL_STEPS,
+    'as-built blocked',
+    {
+      source: input.withPrdEvidence ? 'validation-group' : 'architecture-review-as-built',
+      evidence: [
+        ...(input.withPrdEvidence
+          ? [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }]
+          : []),
+        { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
+      ],
+    },
+  );
+
+  return { outcome, plan, planPath, findings, root };
+}
+
 describe('prd_audit kickback', () => {
   afterEach(async () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -336,6 +488,20 @@ describe('prd_audit kickback', () => {
     expect(recordedPrdAuditFindingsBlock([unrenderableDecision] as never)).toMatchObject({
       ok: false,
       message: expect.stringContaining('recorded findings are not serializable'),
+    });
+  });
+
+  it('refuses a partial remediated as-built finding by naming its missing render field', () => {
+    expect(recordedFindingsBlock([{
+      gate: 'architecture_review_as_built',
+      finding: 'AB-1',
+      class: 'REMEDIABLE',
+      governingClause: '   ',
+      summary: 'Add the approved guard.',
+      outcome: 'remediated',
+    }] as never)).toEqual({
+      ok: false,
+      message: 'recorded as-built finding AB-1 carries no governingClause',
     });
   });
 
@@ -575,7 +741,7 @@ describe('prd_audit kickback', () => {
     expect(ledger.growth).toMatchObject({ added: 3, byGate: { prd_audit: 3 } });
   });
 
-  it('halts a non-prd_audit task append without consuming prd_audit allowance', async () => {
+  it('keeps as-built task append rejection unchanged when remediation is disabled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-cross-gate-'));
     dirs.push(root);
     const planPath = join(root, '.docs', 'plans', 'feature.md');
@@ -605,6 +771,9 @@ describe('prd_audit kickback', () => {
       stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
       events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
       verifyArtifacts: false, maxRetries: 1,
+      config: {
+        architecture_review_as_built: { remediation: { enabled: false } },
+      } as never,
     });
 
     const outcome = await (conductor as unknown as {
@@ -626,10 +795,590 @@ describe('prd_audit kickback', () => {
     });
   });
 
-  it('uses its configured lap cap even when the generic cap is unavailable', () => {
+  it('admits validated as-built REMEDIABLE evidence when remediation is enabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-enabled-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(planPath, [
+      '### Task 1: authored',
+      '### Task 2: authored',
+      '### Task 3: authored',
+      '### Task 4: authored',
+    ].join('\n'));
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| arch-gap | REMEDIABLE | Task 1 | Repair approved architecture drift. |',
+    ].join('\n'));
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'arch-gap', disposition: 'build', category: null, rationale: 'Repair approved architecture drift.',
+            tasks: [{ id: 'rem-arch', title: 'Repair approved architecture drift' }],
+          }],
+        }));
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: {
+        architecture_review_as_built: { remediation: { enabled: true } },
+      } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    const appendedPlan = await readFile(planPath, 'utf8');
+    expect(appendedPlan).toContain('### Task rem-as-built-rem-arch: Repair approved architecture drift');
+    expect(appendedPlan).toContain('**Governing clause:** Task 1');
+  });
+
+  it('constructs clause-bound as-built gaps and projects every remediated lap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-clause-bound-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const adrStem = 'adr-2026-08-25-example-architecture';
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.docs', 'decisions'), { recursive: true }),
+      mkdir(join(root, '.pipeline'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 7: Existing approved work\n');
+    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
+      '# ADR: Example architecture',
+      '**Status:** APPROVED',
+      '',
+      '## Decision',
+      '',
+      '1. **Guard the architecture boundary.**',
+    ].join('\n'));
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      `| AB-ADR | REMEDIABLE | ${adrStem} decision 1 | Add the approved architecture guard |`,
+      '| AB-TASK | REMEDIABLE | Task 7 | Complete the existing approved work |',
+    ].join('\n'));
+
+    await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), `${adrStem} decision 1`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 1` });
+    await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), 'Task 7'))
+      .resolves.toEqual({ kind: 'plan-task', clause: 'Task 7', parentTask: '7' });
+
+    let remediationRound = 0;
+    const runner: StepRunner = {
+      run: async () => {
+        remediationRound++;
+        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+          dispositions: remediationRound === 1
+            ? [
+                {
+                  id: 'AB-ADR', disposition: 'build', category: null,
+                  rationale: 'Conform to the approved ADR.',
+                  tasks: [{ id: 'adr-guard', title: 'Add the approved architecture guard' }],
+                },
+                {
+                  id: 'AB-TASK', disposition: 'build', category: null,
+                  rationale: 'Conform to the active plan task.',
+                  tasks: [{ id: 'task-guard', title: 'Complete the existing approved work' }],
+                },
+              ]
+            : [{
+                id: 'AB-LATER', disposition: 'build', category: null,
+                rationale: 'Complete the later as-built finding.',
+                tasks: [{ id: 'later-guard', title: 'Complete the later approved work' }],
+              }],
+        }));
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: {
+        prd_audit: { max_appended_tasks: 3, max_appended_ratio: 3 },
+        architecture_review_as_built: {
+          remediation: { enabled: true },
+          max_remediation_laps: 2,
+        },
+      } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    const appended = await readFile(planPath, 'utf8');
+    expect(appended.match(/^### Task rem-as-built-/gm)).toHaveLength(2);
+
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-LATER | REMEDIABLE | Task 7 | Complete the later approved work |',
+    ].join('\n'));
+    await expect((conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked again',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    )).resolves.toMatchObject({ kind: 'route', target: 'build' });
+
+    // A rebuilt gate replaces its BLOCKED report with its converged verdict.
+    // The conductor carries the authorized rows through that replacement and
+    // projects every lap only once the re-evaluation is green.
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), 'Verdict: APPROVED\n');
+    await expect((conductor as unknown as {
+      projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+    }).projectPendingAsBuiltRemediationFindings()).resolves.toBeUndefined();
+    const projected = await readFile(join(root, '.pipeline', 'architecture-review-as-built.md'), 'utf8');
+    expect(projected).toContain('## Recorded Findings');
+    expect(projected).toContain('"finding": "AB-ADR"');
+    expect(projected).toContain(`"governingClause": "${adrStem} decision 1"`);
+    expect(projected).toContain('"finding": "AB-TASK"');
+    expect(projected).toContain('"governingClause": "Task 7"');
+    expect(projected).toContain('"finding": "AB-LATER"');
+  });
+
+  it('reloads appended as-built findings into the successful verdict and shipment handoff after restart', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({ appendCap: 3 });
+    expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    const pendingAfterFirstLap = (await readKickbackLedger(fixture.root) as {
+      pendingAsBuiltRemediationFindings?: unknown;
+    }).pendingAsBuiltRemediationFindings;
+    await writeFile(join(fixture.root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-3 | REMEDIABLE | Task 3 | Complete the next approved task |',
+    ].join('\n'));
+    const secondLap = new Conductor({
+      stateFilePath: join(fixture.root, '.pipeline', 'conduct-state.json'),
+      stepRunner: {
+        run: async () => {
+          await writeFile(join(fixture.root, '.pipeline', 'remediation.json'), JSON.stringify({
+            dispositions: [{
+              id: 'AB-3', disposition: 'build', category: null,
+              rationale: 'Complete the next approved task.',
+              tasks: [{ id: 'fix-ab-3', title: 'Complete the next approved task' }],
+            }],
+          }));
+          return { success: true };
+        },
+      },
+      events: new ConductorEventEmitter(),
+      projectRoot: fixture.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+      config: {
+        prd_audit: { max_appended_tasks: 3, max_appended_ratio: 1 },
+        architecture_review_as_built: {
+          remediation: { enabled: true },
+          max_remediation_laps: 2,
+        },
+      } as never,
+    });
+    await expect((secondLap as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: unknown,
+      ) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked after restart',
+      {
+        source: 'architecture-review-as-built',
+        evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }],
+      },
+    )).resolves.toMatchObject({ kind: 'route', target: 'build' });
+    const pendingBeforeSuccess = (await readKickbackLedger(fixture.root) as {
+      pendingAsBuiltRemediationFindings?: unknown;
+    }).pendingAsBuiltRemediationFindings;
+    const restartState: Record<string, unknown> = {
+      feature_desc: 'as-built-restart',
+      complexity_tier: 'L',
+      track: 'technical',
+      run_started_at: Date.now() - 1_000,
+    };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'architecture_review_as_built') break;
+      restartState[step.name] = 'done';
+    }
+    Object.assign(restartState, {
+      manual_test: 'skipped',
+      prd_audit: 'skipped',
+      architecture_review_as_built: 'pending',
+      retro: 'skipped',
+      rebase: 'skipped',
+      finish: 'done',
+    });
+    await writeState(join(fixture.root, '.pipeline', 'conduct-state.json'), restartState as ConductState);
+    const restarted = new Conductor({
+      stateFilePath: join(fixture.root, '.pipeline', 'conduct-state.json'),
+      stepRunner: {
+        run: async (step) => {
+          if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(fixture.root, '.pipeline', 'architecture-review-as-built.md'),
+              'Verdict: APPROVED\n',
+            );
+          }
+          return { success: true };
+        },
+      },
+      events: new ConductorEventEmitter(),
+      projectRoot: fixture.root,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'architecture_review_as_built',
+      verifyArtifacts: true,
+      maxRetries: 1,
+      config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+    });
+    await restarted.run();
+    const finalVerdict = await readFile(join(fixture.root, '.pipeline', 'architecture-review-as-built.md'), 'utf8');
+    const shipmentFindings = recordedShipmentFindings({ asBuilt: finalVerdict });
+    const pendingAfterSuccess = (await readKickbackLedger(fixture.root) as {
+      pendingAsBuiltRemediationFindings?: unknown;
+    }).pendingAsBuiltRemediationFindings;
+
+    expect({
+      pendingAfterFirstLap,
+      pendingBeforeSuccess,
+      shipmentFindings,
+      pendingAfterSuccess,
+    }).toEqual({
+      pendingAfterFirstLap: [
+        {
+          gate: 'architecture_review_as_built',
+          finding: 'AB-1',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 1',
+          summary: 'Add the approved guard',
+          outcome: 'remediated',
+        },
+        {
+          gate: 'architecture_review_as_built',
+          finding: 'AB-2',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 2',
+          summary: 'Restore the approved boundary',
+          outcome: 'remediated',
+        },
+      ],
+      pendingBeforeSuccess: [
+        {
+          gate: 'architecture_review_as_built',
+          finding: 'AB-1',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 1',
+          summary: 'Add the approved guard',
+          outcome: 'remediated',
+        },
+        {
+          gate: 'architecture_review_as_built',
+          finding: 'AB-2',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 2',
+          summary: 'Restore the approved boundary',
+          outcome: 'remediated',
+        },
+        {
+          gate: 'architecture_review_as_built',
+          finding: 'AB-3',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 3',
+          summary: 'Complete the next approved task',
+          outcome: 'remediated',
+        },
+      ],
+      shipmentFindings: [
+        {
+          gate: 'architecture_review_as_built',
+          finding: 'AB-1',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 1',
+          summary: 'Add the approved guard',
+          outcome: 'remediated',
+        },
+        {
+          gate: 'architecture_review_as_built',
+          finding: 'AB-2',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 2',
+          summary: 'Restore the approved boundary',
+          outcome: 'remediated',
+        },
+        {
+          gate: 'architecture_review_as_built',
+          finding: 'AB-3',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 3',
+          summary: 'Complete the next approved task',
+          outcome: 'remediated',
+        },
+      ],
+      pendingAfterSuccess: undefined,
+    });
+    const shippedRecord = appendRecordedShipmentFindings([
+      '---',
+      'slug: as-built-restart',
+      'spec_hash: digest',
+      '---',
+      '',
+      '## Cost',
+    ].join('\n'), shipmentFindings);
+    expect(shippedRecord).toContain('findings:');
+    expect(shippedRecord).toContain('    finding: AB-1');
+    expect(shippedRecord).toContain('    finding: AB-2');
+    expect(shippedRecord).toContain('    finding: AB-3');
+  });
+
+  it('records as-built plan growth and an isolated remediation lap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-ledger-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.pipeline'), { recursive: true }),
+    ]);
+    await writeFile(planPath, [1, 2, 3, 4].map((id) => `### Task ${id}: Authored work`).join('\n'));
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-1 | REMEDIABLE | Task 1 | Add the approved guard |',
+    ].join('\n'));
+    const buildReview = {
+      count: 2, cumulative: 4, treeHash: 'build-tree', lastReason: 'prior build review',
+      priorVerdict: true, resolvedBefore: 3,
+    };
+    const prdAudit = {
+      count: 1, cumulative: 1, treeHash: 'prd-tree', lastReason: 'prior prd audit',
+      priorVerdict: true, resolvedBefore: 1, laps: 1,
+    };
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: { build_review: buildReview, prd_audit: prdAudit },
+      growth: { authored: 4, added: 0, byGate: {} },
+    });
+    const initialLedger = await readKickbackLedger(root);
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'AB-1', disposition: 'build', category: null, rationale: 'Add the approved guard.',
+            tasks: [{ id: 'approved-guard', title: 'Add the approved guard' }],
+          }],
+        }));
+        return { success: true };
+      },
+    };
+    const events = new ConductorEventEmitter();
+    const growthEvents: Array<Extract<ConductorEvent, { type: 'plan_growth' }>> = [];
+    events.on('plan_growth', (event) => {
+      if (event.type === 'plan_growth') growthEvents.push(event);
+    });
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+      events, projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    const ledger = await readKickbackLedger(root);
+    expect((ledger.gates.architecture_review_as_built as { laps?: number } | undefined)?.laps).toBe(1);
+    expect(ledger.growth).toMatchObject({
+      authored: 4,
+      added: 1,
+      byGate: { architecture_review_as_built: 1 },
+    });
+    expect(ledger.gates.build_review).toEqual(initialLedger.gates.build_review);
+    expect(ledger.gates.prd_audit).toEqual(initialLedger.gates.prd_audit);
+    expect(growthEvents).toEqual([expect.objectContaining({
+      type: 'plan_growth', added: 1, byGate: { architecture_review_as_built: 1 },
+    })]);
+  });
+
+  it('halts a second as-built remediation lap before appending and lists every finding', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({ priorLaps: 1 });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    expect(fixture.outcome.detail).toContain('lap cap reached (1/1)');
+    for (const finding of fixture.findings) {
+      expect(fixture.outcome.detail).toContain(
+        `${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`,
+      );
+    }
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
+  it('halts an as-built request beyond the remaining shared growth allowance before appending', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({ priorGrowthAdded: 1 });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    expect(fixture.outcome.detail).toContain('shared plan-growth allowance');
+    expect(fixture.outcome.detail).toContain('0 remaining');
+    for (const finding of fixture.findings) {
+      expect(fixture.outcome.detail).toContain(
+        `${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`,
+      );
+    }
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
+  it('halts before appending when planner gaps omit or add parsed as-built findings', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({
+      plannerFindingIds: ['AB-1', 'AB-EXTRA'],
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+    expect(fixture.outcome.detail).toContain('Missing: AB-2');
+    expect(fixture.outcome.detail).toContain('Unexpected: AB-EXTRA');
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+    await expect(readKickbackLedger(fixture.root)).resolves.toMatchObject({ gates: {} });
+  });
+
+  it.each([
+    { id: 'AB-MISSING-ADR', clause: 'adr-2099-01-01-missing decision 1' },
+    { id: 'AB-MISSING-TASK', clause: 'Task 404' },
+  ])('halts without appending when $id has an unresolvable governing clause', async ({ id, clause }) => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-unresolvable-clause-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.pipeline'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 1: Existing approved work\n');
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-RESOLVED | REMEDIABLE | Task 1 | Complete the existing approved work |',
+      `| ${id} | REMEDIABLE | ${clause} | Resolve the missing authority |`,
+    ].join('\n'));
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+          dispositions: [
+            {
+              id: 'AB-RESOLVED', disposition: 'build', category: null,
+              rationale: 'Conform to the active plan task.',
+              tasks: [{ id: 'resolved-task', title: 'Complete the existing approved work' }],
+            },
+            {
+              id, disposition: 'build', category: null,
+              rationale: 'Resolve the missing authority.',
+              tasks: [{ id: 'unresolved-task', title: 'Do not append this task' }],
+            },
+          ],
+        }));
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string; haltClass?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      {
+        source: 'as-built',
+        evidence: [{
+          gate: 'architecture_review_as_built',
+          evidenceFile: '.pipeline/architecture-review-as-built.md',
+        }],
+      },
+    );
+
+    expect({
+      outcome,
+      appended: (await readFile(planPath, 'utf8')).includes('### Task rem-as-built-'),
+    }).toMatchObject({
+      outcome: {
+        kind: 'halt',
+        haltClass: 'needs-human',
+        detail: expect.stringContaining(`${id}: ${clause}`),
+      },
+      appended: false,
+    });
+  });
+
+  it('uses gate-specific configured lap caps without changing the generic cap', () => {
     expect(
       remediationLapCapForGate('prd_audit', { prd_audit: { max_remediation_laps: 1 } } as never, 0),
     ).toBe(1);
+    expect(remediationLapCapForGate('architecture_review_as_built', {} as never, 0)).toBe(1);
+    expect(
+      remediationLapCapForGate(
+        'architecture_review_as_built',
+        { architecture_review_as_built: { max_remediation_laps: 2 } } as never,
+        0,
+      ),
+    ).toBe(2);
     expect(remediationLapCapForGate('manual_test', {} as never, 0)).toBe(0);
   });
 
@@ -925,5 +1674,105 @@ describe('prd_audit kickback', () => {
     expect(prompt).toContain('corrected plan');
     expect(prompt).toContain('optional.ts');
     expect(prompt).toContain('supports the optional behavior');
+  });
+
+  /**
+   * AB-R12: 11 of this repo's APPROVED ADRs write their decisions as `**D<n>`
+   * headings rather than a numbered list. Clause resolution only accepted the
+   * numbered form, so a REMEDIABLE finding citing a D-heading decision could
+   * never enter the bounded remediation path decision 1 promises.
+   */
+  it('resolves a governing clause against a D-heading ADR decision', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-clause-d-heading-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const adrStem = 'adr-2026-08-25-d-heading-architecture';
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.docs', 'decisions'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 1: Existing approved work\n');
+    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
+      '# ADR: D-heading architecture',
+      '**Status:** APPROVED',
+      '',
+      '## Decision',
+      '',
+      '**D1 — Engine-minted run identity.** The engine binds an identity per dispatch.',
+      '',
+      '**D2 — Engine-stamped, never provider-echoed.** Skills write only content.',
+      '',
+      '## Consequences',
+      '',
+      '- Something else entirely.',
+    ].join('\n'));
+
+    const plan = await readFile(planPath, 'utf8');
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 1`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 1` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 2`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 2` });
+    // Fail closed on a decision the ADR does not carry, and never let D1 match D10.
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 3`))
+      .resolves.toBeNull();
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 10`))
+      .resolves.toBeNull();
+  });
+
+  /**
+   * AB-R15/AB-R16 matrix (issue #1912). APPROVED decision 6 requires
+   * `architecture_review_as_built.remediation.enabled: false` to revert EXACTLY
+   * to halt-always-on-BLOCKED. The kill switch had been enforced per call site,
+   * so each new site reopened it. These cells pin the seam where as-built
+   * evidence becomes authority, across the round shapes that reach it.
+   *
+   * The join-level dimension (a manual_test FAIL deferring to the consolidated
+   * kickback) is covered by the parallel-validation acceptance suite; this
+   * matrix owns the planRemediation-level inputs.
+   */
+  describe('as-built remediation kill switch (decision 6)', () => {
+    for (const withPrdEvidence of [false, true]) {
+      const round = withPrdEvidence ? 'mixed PRD/as-built' : 'as-built-only';
+
+      it(`grants no as-built authority in a ${round} round when disabled`, async () => {
+        const fixture = await createAsBuiltRemediationCapFixture({
+          remediationEnabled: false,
+          withPrdEvidence,
+          appendCap: 4,
+        });
+
+        const ledger = await readKickbackLedger(fixture.root);
+        const plan = await readFile(fixture.planPath, 'utf8');
+
+        // No as-built lap, no as-built growth attribution, no appended
+        // as-built task — the switch removes the authority, not just the route.
+        expect(ledger.gates?.architecture_review_as_built).toBeUndefined();
+        expect(ledger.growth?.byGate?.architecture_review_as_built).toBeUndefined();
+        expect(plan).not.toContain('rem-as-built-');
+        expect(
+          (ledger as { pendingAsBuiltRemediationFindings?: unknown[] })
+            .pendingAsBuiltRemediationFindings ?? [],
+        ).toHaveLength(0);
+      });
+
+      it(`keeps as-built authority in a ${round} round when enabled`, async () => {
+        const fixture = await createAsBuiltRemediationCapFixture({
+          withPrdEvidence,
+          appendCap: 4,
+        });
+
+        // The switch is the ONLY difference from the cell above: enabling it
+        // admits the as-built findings through the appender and charges their
+        // gate-local budget. These effects distinguish as-built authority
+        // from the PRD-only route that still exists in a mixed round.
+        expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
+        const ledger = await readKickbackLedger(fixture.root);
+        const plan = await readFile(fixture.planPath, 'utf8');
+        expect(plan).toContain('rem-as-built-');
+        expect((ledger.gates?.architecture_review_as_built as { laps?: number } | undefined)?.laps)
+          .toBe(1);
+        expect(ledger.growth?.byGate?.architecture_review_as_built).toBe(2);
+      });
+    }
   });
 });

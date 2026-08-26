@@ -158,6 +158,7 @@ import {
   remediationDispositionStep,
   sweepStaleReviewArtifacts,
   classifyAsBuiltReviewOutcome,
+  parseAsBuiltBlockedFindings,
   parseTrack,
   parseIntakeSourceRef,
   planStem,
@@ -171,6 +172,7 @@ import {
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
 } from './artifacts.js';
+import { parsePlanTaskBodies } from './plan-task-parse.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
   type CriterionBoundRemediationGap,
@@ -228,6 +230,9 @@ import {
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
+  type PendingAsBuiltRemediationFinding,
+  type PlanGrowth,
+  type PlanGrowthEventSink,
 } from './kickback-ledger.js';
 import {
   consumeOperatorGrant,
@@ -528,16 +533,109 @@ interface RemediationHintSource {
   evidence: readonly RemediationGateProvenance[];
 }
 
-/** PRD-audit owns its configured remediation allowance; other gates share the generic cap. */
+/** PRD-audit and as-built review own configured remediation allowances; other gates share the generic cap. */
 export function remediationLapCapForGate(
   gate: string,
   config: HarnessConfig,
   genericCap = MAX_KICKBACKS_PER_GATE,
 ): number {
-  if (gate !== 'prd_audit') return genericCap;
-  return (config as HarnessConfig & {
+  const remediationConfig = config as HarnessConfig & {
     prd_audit?: { max_remediation_laps?: number };
-  }).prd_audit?.max_remediation_laps ?? 1;
+    architecture_review_as_built?: { max_remediation_laps?: number };
+  };
+  if (gate === 'prd_audit') {
+    return remediationConfig.prd_audit?.max_remediation_laps ?? 1;
+  }
+  if (gate === 'architecture_review_as_built') {
+    return remediationConfig.architecture_review_as_built?.max_remediation_laps ?? 1;
+  }
+  return genericCap;
+}
+
+export type AsBuiltGoverningClauseResolution =
+  | { kind: 'adr'; clause: string }
+  | { kind: 'plan-task'; clause: string; parentTask: string };
+
+/** Resolve a remediable as-built finding's approved ADR decision or active-plan task. */
+export async function resolveAsBuiltGoverningClause(
+  projectRoot: string,
+  activePlan: string,
+  clause: string,
+): Promise<AsBuiltGoverningClauseResolution | null> {
+  const normalizedClause = clause.trim();
+  const taskReference = normalizedClause.match(/^task\s+([A-Za-z0-9._-]+)$/i)?.[1] ??
+    (/^[A-Za-z0-9._-]+$/.test(normalizedClause) ? normalizedClause : undefined);
+  if (taskReference !== undefined) {
+    const parentTask = [...parsePlanTaskBodies(activePlan).keys()].find(
+      (taskId) => taskId.toLowerCase() === taskReference.toLowerCase(),
+    );
+    if (parentTask !== undefined) {
+      return { kind: 'plan-task', clause: normalizedClause, parentTask };
+    }
+  }
+
+  const adrReference = normalizedClause.match(
+    /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+(?:\+\s*)?decision\s+(\d+)$/i,
+  );
+  if (!adrReference) return null;
+  const [, stem, decisionNumber] = adrReference;
+  let decisionFiles: string[];
+  try {
+    decisionFiles = await readdir(join(projectRoot, '.docs', 'decisions'));
+  } catch {
+    return null;
+  }
+  const decisionFile = decisionFiles.find(
+    (file) => file.toLowerCase() === `${stem}.md`.toLowerCase(),
+  );
+  if (decisionFile === undefined) return null;
+
+  let decisionText: string;
+  try {
+    decisionText = await readFile(join(projectRoot, '.docs', 'decisions', decisionFile), 'utf8');
+  } catch {
+    return null;
+  }
+  const approved =
+    /^(?:\*\*)?status(?:\*\*)?\s*:(?:\*\*)?\s*approved\b/im.test(decisionText) ||
+    /^status\s*:\s*approved\b/im.test(decisionText);
+  if (!approved) return null;
+
+  const decisionHeading = decisionText.match(/^##\s+Decision\s*$/im);
+  if (!decisionHeading || decisionHeading.index === undefined) return null;
+  const decisionBody = decisionText.slice(decisionHeading.index + decisionHeading[0].length);
+  const nextHeading = decisionBody.search(/^##\s+/m);
+  const section = nextHeading === -1 ? decisionBody : decisionBody.slice(0, nextHeading);
+  // AB-R12: APPROVED ADRs in this repo write decisions two ways — a numbered
+  // list (`4. **Termination.**`) and a bolded D-heading (`**D4 — Termination.**`).
+  // Accepting only the first made every D-heading decision uncitable as a
+  // governing clause, so those findings could never enter the bounded
+  // remediation path. `D${n}` is word-bounded so D1 never matches D10.
+  const decisionPresent = new RegExp(
+    `^\\s*(?:${decisionNumber}\\.\\s+\\S|\\*{0,2}D${decisionNumber}\\b)`,
+    'm',
+  );
+  if (!decisionPresent.test(section)) return null;
+
+  return { kind: 'adr', clause: normalizedClause };
+}
+
+/** Render parser-validated BLOCKED findings into an operator-facing halt body. */
+function renderAsBuiltBlockedFindingDetail(report: string | undefined): string {
+  if (
+    report === undefined ||
+    !/^\s*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*BLOCKED\b/im.test(report)
+  ) {
+    return '';
+  }
+  const parsed = parseAsBuiltBlockedFindings(report);
+  return parsed.ok
+    ? '\n\nBlocking findings:\n' + parsed.value.findings
+      .map((finding) =>
+        `${finding.id} (${finding.class}; ${finding.clause || 'no governing clause'}): ${finding.summary}`,
+      )
+      .join('\n')
+    : `\n\nBlocking Findings parse fault: ${parsed.error}`;
 }
 
 /** The prd-audit cap is both an absolute count and a fraction of authored plan work. */
@@ -550,6 +648,91 @@ export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: numb
   return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
 }
 
+type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
+
+interface RemediationGateAppendBudget {
+  gate: RemediationLedgerGate;
+  priorLaps: number;
+  lapCap: number;
+  /** Tasks authorized by this gate; any non-empty set consumes one lap. */
+  taskCount: number;
+  /** Tasks whose plan-growth attribution belongs to this gate. */
+  growthTaskCount: number;
+  growthCap: number;
+  growth: PlanGrowth;
+}
+
+/** Read the shared append allowance for a remediation gate without choosing its halt wording. */
+async function readRemediationGateAppendBudget(
+  projectRoot: string,
+  config: HarnessConfig,
+  gate: RemediationLedgerGate,
+  lapCap: number,
+  taskCount: number,
+  growthTaskCount: number,
+  authoredTaskCount: number,
+): Promise<RemediationGateAppendBudget> {
+  const growthCap = prdAuditAppendCap(config, authoredTaskCount);
+  const [ledger, growth] = await Promise.all([
+    readKickbackLedger(projectRoot),
+    readGrowth(projectRoot, growthCap),
+  ]);
+  const priorLaps = (
+    ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
+  )?.laps ?? 0;
+  return { gate, priorLaps, lapCap, taskCount, growthTaskCount, growthCap, growth };
+}
+
+function remediationGateAppendBudgetExhausted(
+  budget: RemediationGateAppendBudget,
+): 'laps' | 'growth' | undefined {
+  if (budget.priorLaps >= budget.lapCap) return 'laps';
+  return budget.taskCount > budget.growth.remaining ? 'growth' : undefined;
+}
+
+/** Persist one successful remediation append while keeping each gate's ledger and growth isolated. */
+async function recordRemediationGateAppend(
+  projectRoot: string,
+  budget: RemediationGateAppendBudget,
+  events: PlanGrowthEventSink,
+): Promise<void> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const existing = ledger.gates[budget.gate];
+  const next: KickbackGateEntry & { laps: number } = {
+    ...(existing ?? {
+      count: 0,
+      cumulative: 0,
+      treeHash: null,
+      lastReason: '',
+      priorVerdict: true,
+      resolvedBefore: 0,
+    }),
+    laps: budget.priorLaps + (budget.taskCount > 0 ? 1 : 0),
+  };
+  await writeKickbackLedger(projectRoot, {
+    ...ledger,
+    gates: { ...ledger.gates, [budget.gate]: next },
+  });
+  if (budget.growthTaskCount === 0) return;
+  // Earlier gate updates in a consolidated validation group are now durable;
+  // merge them before recording this gate rather than replacing their growth
+  // snapshot captured before the shared append.
+  const growth = ledger.growth ?? budget.growth;
+  const priorGateGrowth = growth.byGate[budget.gate] ?? 0;
+  await recordGrowth(
+    projectRoot,
+    {
+      authored: growth.authored,
+      added: growth.added + budget.growthTaskCount,
+      byGate: {
+        ...growth.byGate,
+        [budget.gate]: priorGateGrowth + budget.growthTaskCount,
+      },
+    },
+    { cap: budget.growthCap, events },
+  );
+}
+
 export interface RecordedPrdAuditFinding {
   gate: 'prd_audit';
   grade: 'PLAN_GAP' | 'OVER_SCOPE';
@@ -559,6 +742,11 @@ export interface RecordedPrdAuditFinding {
   decision?: 'accept' | 'refuse';
   rationale?: string;
 }
+
+/** A remediated as-built BLOCKED row retained after the rebuilt gate converges. */
+export type RecordedAsBuiltRemediationFinding = PendingAsBuiltRemediationFinding;
+
+export type RecordedReviewFinding = RecordedPrdAuditFinding | RecordedAsBuiltRemediationFinding;
 
 export type PrdAuditPlanGapRoute =
   | { kind: 'none' }
@@ -733,10 +921,29 @@ export type RecordedFindingsProjection =
   | { ok: true; block: string }
   | { ok: false; message: string };
 
-export function recordedPrdAuditFindingsBlock(
-  findings: readonly RecordedPrdAuditFinding[],
+export function recordedFindingsBlock(
+  findings: readonly RecordedReviewFinding[],
 ): RecordedFindingsProjection {
   for (const finding of findings) {
+    if (finding.gate === 'architecture_review_as_built') {
+      const where = finding.finding?.trim() || '<finding missing>';
+      if (!finding.finding?.trim()) {
+        return { ok: false, message: 'a recorded as-built finding carries no finding id' };
+      }
+      if (finding.class !== 'REMEDIABLE') {
+        return { ok: false, message: `recorded as-built finding ${where} carries no REMEDIABLE class` };
+      }
+      if (!finding.governingClause?.trim()) {
+        return { ok: false, message: `recorded as-built finding ${where} carries no governingClause` };
+      }
+      if (!finding.summary?.trim()) {
+        return { ok: false, message: `recorded as-built finding ${where} carries no summary` };
+      }
+      if (finding.outcome !== 'remediated') {
+        return { ok: false, message: `recorded as-built finding ${where} carries no remediated outcome` };
+      }
+      continue;
+    }
     const where = finding.criterion?.trim() || '<criterion missing>';
     if (!finding.criterion?.trim()) {
       return { ok: false, message: 'a recorded finding carries no criterion id' };
@@ -766,12 +973,18 @@ export function recordedPrdAuditFindingsBlock(
   return { ok: true, block: `## Recorded Findings\n\n\`\`\`json\n${json}\n\`\`\`` };
 }
 
-async function persistPrdAuditRecordedFindings(
+export function recordedPrdAuditFindingsBlock(
+  findings: readonly RecordedPrdAuditFinding[],
+): RecordedFindingsProjection {
+  return recordedFindingsBlock(findings);
+}
+
+async function persistRecordedFindings(
   reportPath: string,
   reportText: string,
-  findings: readonly RecordedPrdAuditFinding[],
+  findings: readonly RecordedReviewFinding[],
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const rendered = recordedPrdAuditFindingsBlock(findings);
+  const rendered = recordedFindingsBlock(findings);
   // Fail closed: write nothing rather than a verdict artifact that omits a
   // decision the operator authored.
   if (!rendered.ok) return rendered;
@@ -1945,6 +2158,62 @@ export class Conductor {
   private prdAuditProjectionRefusal: string | undefined;
 
   /**
+   * BLOCKED rows that authorized as-built remediation laps. They become
+   * durable only after the rebuilt as-built gate returns a successful verdict,
+   * so the record never calls an unverified planned repair completed.
+   */
+  private readonly pendingAsBuiltRemediationFindings = new Map<
+    string,
+    RecordedAsBuiltRemediationFinding
+  >();
+
+  private async reloadPendingAsBuiltRemediationFindings(): Promise<void> {
+    const ledger = await readKickbackLedger(this.projectRoot);
+    for (const finding of ledger.pendingAsBuiltRemediationFindings ?? []) {
+      this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
+    }
+  }
+
+  private async persistPendingAsBuiltRemediationFindings(): Promise<void> {
+    const ledger = await readKickbackLedger(this.projectRoot);
+    await writeKickbackLedger(this.projectRoot, {
+      ...ledger,
+      pendingAsBuiltRemediationFindings: [...this.pendingAsBuiltRemediationFindings.values()],
+    });
+  }
+
+  private async clearPendingAsBuiltRemediationFindings(): Promise<void> {
+    const ledger = await readKickbackLedger(this.projectRoot);
+    const { pendingAsBuiltRemediationFindings: _pending, ...cleared } = ledger;
+    await writeKickbackLedger(this.projectRoot, cleared);
+  }
+
+  private async projectPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
+    await this.reloadPendingAsBuiltRemediationFindings();
+    if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
+    const [reportPath] = await findArtifactFilesForStep(
+      this.projectRoot,
+      'architecture_review_as_built',
+    );
+    if (!reportPath) return 'as-built verdict artifact is unavailable for recorded-findings projection';
+    let reportText: string;
+    try {
+      reportText = await readFile(reportPath, 'utf8');
+    } catch (error) {
+      return `as-built verdict artifact could not be read for recorded-findings projection: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    const projected = await persistRecordedFindings(
+      reportPath,
+      reportText,
+      [...this.pendingAsBuiltRemediationFindings.values()],
+    );
+    if (!projected.ok) return projected.message;
+    await this.clearPendingAsBuiltRemediationFindings();
+    this.pendingAsBuiltRemediationFindings.clear();
+    return undefined;
+  }
+
+  /**
    * Optional rate-limit episode coordinator (Task 10). When active, coordinates
    * deadline-aware backoff during rate-limit waits. May be undefined (graceful
    * fallback to bare sleep).
@@ -3074,7 +3343,7 @@ export class Conductor {
     const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
     const route = routePrdAuditPlanGaps(reportText, storiesText, this.config);
     if (route.kind === 'record') {
-      const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+      const projected = await persistRecordedFindings(reportPath, reportText, route.findings);
       if (!projected.ok) this.prdAuditProjectionRefusal = projected.message;
     }
     return route;
@@ -3115,7 +3384,7 @@ export class Conductor {
     // the route went. A halted route carries the same findings — including the
     // refusal that caused the halt — and previously persisted none of them.
     if (route.kind === 'record' || route.kind === 'halt') {
-      const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+      const projected = await persistRecordedFindings(reportPath, reportText, route.findings);
       if (!projected.ok) {
         // D8's projection refusal is an evidentiary defect on the same
         // operator-facing over-scope route, never a generic side channel.
@@ -3183,7 +3452,12 @@ export class Conductor {
     hintSource: RemediationHintSource,
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
-    | { kind: 'halt'; detail: string; haltClass?: KickbackCapHaltClass | 'mechanical'; kickbackOutcome?: string }
+    | {
+      kind: 'halt';
+      detail: string;
+      haltClass?: KickbackCapHaltClass | 'mechanical' | 'needs-human';
+      kickbackOutcome?: string;
+    }
     | { kind: 'none' }
   > {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
@@ -3212,10 +3486,12 @@ export class Conductor {
     // resolveFeaturePlanPath also returns an absolute path, which
     // appendRemediationTasks reads directly (the raw engine-state string was
     // cwd-relative and only worked when cwd happened to be the project root).
-    const planPath =
-      (await this.getActivePlanPath()) ??
-      (await resolveFeaturePlanPath(this.projectRoot, state.feature_desc)) ??
-      null;
+    const activePlanPath = await this.getActivePlanPath();
+    const planPath = activePlanPath === null
+      ? (await resolveFeaturePlanPath(this.projectRoot, state.feature_desc))
+      : isAbsolute(activePlanPath)
+        ? activePlanPath
+        : join(this.projectRoot, activePlanPath);
     const sealedArtifactsByGapId = new Map<string, string>();
     if (planPath) {
       for (const gap of plan.gaps) {
@@ -3251,10 +3527,35 @@ export class Conductor {
       (provenance) => provenance.gate === 'prd_audit',
     )?.evidenceFile;
     const prdAuditRemediation = prdAuditEvidenceFile !== undefined;
+    const asBuiltEvidenceFile = remediationEvidenceSources.find(
+      (provenance) => provenance.gate === 'architecture_review_as_built',
+    )?.evidenceFile;
+    // AB-R15/AB-R16, decision 6: the kill switch is enforced HERE, at the one
+    // point where as-built evidence becomes authority, rather than at each
+    // consumer. Everything downstream descends from these two constants —
+    // validation, recorded findings, `asBuiltCapEnforced`, the gate budget that
+    // charges laps and growth, and plan-growth admission. Enforcing it per call
+    // site meant every new site reopened the switch: AB-R15 was the deferral,
+    // AB-R16 the mixed PRD round. With it off, as-built evidence is simply
+    // invisible to remediation, which is what "revert exactly to
+    // halt-always-on-BLOCKED" requires. Issue #1912 tracks the matrix coverage.
+    const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
+      architecture_review_as_built?: { remediation?: { enabled?: boolean } };
+    }).architecture_review_as_built?.remediation?.enabled ?? true;
+    const asBuiltRemediation = asBuiltRemediationEnabled && asBuiltEvidenceFile !== undefined;
+    const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined && await accessFile(
+      join(this.projectRoot, asBuiltEvidenceFile),
+    ).then(() => true).catch(() => false);
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
+    const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
+    const asBuiltFindings = new Map<string, AsBuiltGoverningClauseResolution>();
+    const asBuiltRecordedFindings = new Map<string, RecordedAsBuiltRemediationFinding>();
+    const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];
     let prdAuditValidated = false;
+    let asBuiltValidated = false;
     let activePlanText = '';
+    let asBuiltReport: string | undefined;
     if (planPath && prdAuditRemediation) {
       try {
         activePlanText = await readFile(
@@ -3309,6 +3610,67 @@ export class Conductor {
       }
     }
 
+    if (planPath && asBuiltEvidenceExists) {
+      try {
+        const asBuiltPlanText = activePlanText || await readFile(
+          isAbsolute(planPath) ? planPath : join(this.projectRoot, planPath),
+          'utf8',
+        );
+        activePlanText = asBuiltPlanText;
+        asBuiltReport = await readFile(join(this.projectRoot, asBuiltEvidenceFile), 'utf8');
+        const parsed = parseAsBuiltBlockedFindings(asBuiltReport);
+        if (!parsed.ok) {
+          // In a mixed validation group, a malformed/terminal as-built
+          // report must not withdraw independently-authorized PRD-audit
+          // repair work. The join will still fail-closed on that as-built
+          // verdict after the PRD append attempt. Pure as-built remediation
+          // remains a mechanical halt because no other gate owns the work.
+          if (!prdAuditRemediation) {
+            const detail = `As-built review report mechanical fault: ${parsed.error}`;
+            await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
+            return { kind: 'halt', haltClass: 'mechanical', detail };
+          }
+        } else {
+          for (const finding of parsed.value.findings) {
+            if (finding.class !== 'REMEDIABLE') continue;
+            const resolution = await resolveAsBuiltGoverningClause(
+              this.projectRoot,
+              asBuiltPlanText,
+              finding.clause,
+            );
+            if (resolution !== null) {
+              asBuiltFindings.set(finding.id, resolution);
+              asBuiltRecordedFindings.set(finding.id, {
+                gate: 'architecture_review_as_built',
+                finding: finding.id,
+                class: 'REMEDIABLE',
+                governingClause: finding.clause,
+                summary: finding.summary,
+                outcome: 'remediated',
+              });
+            } else {
+              asBuiltUnresolvableClauses.push({ id: finding.id, clause: finding.clause });
+            }
+          }
+          asBuiltValidated = true;
+        }
+      } catch (error) {
+        const detail = `As-built review report could not be read for remediation authorization: ${error instanceof Error ? error.message : String(error)}`;
+        await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
+        return { kind: 'halt', haltClass: 'mechanical', detail };
+      }
+    }
+
+    if (asBuiltUnresolvableClauses.length > 0) {
+      return {
+        kind: 'halt',
+        haltClass: 'needs-human',
+        detail:
+          'As-built review remediation cannot resolve governing clause(s): ' +
+          asBuiltUnresolvableClauses.map(({ id, clause }) => `${id}: ${clause}`).join('; ') + '.',
+      };
+    }
+
     const appendGaps: CriterionBoundRemediationGap[] = [];
     // This is the complete set a bounded remediation route may act on. A
     // criterion-bound append is admitted by the validated PRD-audit finding;
@@ -3322,6 +3684,13 @@ export class Conductor {
     // gate's bounded append allowance.
     const prdAuditCapEnforced = prdAuditRemediation && prdAuditValidated;
     const prdAuditTasks: Array<{ id: string; title: string }> = [];
+    const asBuiltCapEnforced = asBuiltRemediation && asBuiltValidated;
+    // A shared PRD/as-built task consumes the as-built lap, but remains
+    // attributed to prd_audit for the single shared plan-growth record.
+    const asBuiltTasks: Array<{ id: string; title: string }> = [];
+    const asBuiltGrowthTasks: Array<{ id: string; title: string }> = [];
+    const admittedAsBuiltFindingCounts = new Map<string, number>();
+    const unexpectedAsBuiltGapIds = new Set<string>();
     for (const gap of gaps) {
       if (
         sealedArtifactGapIds.has(gap.id) ||
@@ -3337,16 +3706,65 @@ export class Conductor {
         gap.tasks &&
         gap.tasks.length > 0
       ) {
-        const finding = prdAuditFindings.get(gap.id.toUpperCase());
+        const prdAuditFinding = prdAuditFindings.get(gap.id.toUpperCase());
+        const asBuiltFinding = asBuiltFindings.get(gap.id);
         // A prd_audit repair may append only work owned by a parsed FIXABLE
         // finding and its existing parent plan task.  The planner's FR-N id
-        // is associated above through the report's PRD: column.
-        if (prdAuditRemediation && (!finding || !prdAuditValidated)) continue;
-        const admittedGap = { ...gap, ...(finding === undefined ? {} : finding) };
+        // is associated above through the report's PRD: column. In a mixed
+        // validation group either validated gate may admit its own gap.
+        const prdAuditAdmits = prdAuditValidated && prdAuditFinding !== undefined;
+        const asBuiltAdmits = asBuiltValidated && asBuiltFinding !== undefined;
+        if ((prdAuditValidated || asBuiltValidated) && !prdAuditAdmits && !asBuiltAdmits) {
+          if (asBuiltCapEnforced) unexpectedAsBuiltGapIds.add(gap.id);
+          continue;
+        }
+        if (asBuiltAdmits) {
+          admittedAsBuiltFindingCounts.set(
+            gap.id,
+            (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1,
+          );
+        }
+        const admittedGap = {
+          ...gap,
+          ...(asBuiltFinding === undefined
+            ? {}
+            : {
+                governingClause: asBuiltFinding.clause,
+                ...(asBuiltFinding.kind === 'plan-task'
+                  ? { parentTask: asBuiltFinding.parentTask }
+                  : {}),
+              }),
+          ...(prdAuditFinding === undefined ? {} : prdAuditFinding),
+          // A single planner gap can name both findings. Preserve both
+          // rendered bindings, but charge its one appended task to the PRD
+          // source that owns mixed-source plan growth.
+          gateSource: prdAuditAdmits ? 'prd-audit' : 'as-built',
+        };
         appendGaps.push(admittedGap);
         admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
-        if (finding !== undefined) prdAuditTasks.push(...gap.tasks);
+        if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
+        if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
+        else if (asBuiltAdmits) asBuiltGrowthTasks.push(...gap.tasks);
+      }
+    }
+
+    if (asBuiltCapEnforced) {
+      const missing = [...asBuiltFindings.keys()]
+        .filter((id) => !admittedAsBuiltFindingCounts.has(id));
+      const duplicate = [...admittedAsBuiltFindingCounts]
+        .filter(([, count]) => count !== 1)
+        .map(([id]) => id);
+      if (missing.length > 0 || duplicate.length > 0 || unexpectedAsBuiltGapIds.size > 0) {
+        const detail = [
+          'As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings.',
+          ...(missing.length > 0 ? [`Missing: ${missing.join(', ')}.`] : []),
+          ...(duplicate.length > 0 ? [`Duplicate: ${duplicate.join(', ')}.`] : []),
+          ...(unexpectedAsBuiltGapIds.size > 0
+            ? [`Unexpected: ${[...unexpectedAsBuiltGapIds].join(', ')}.`]
+            : []),
+        ].join(' ');
+        return { kind: 'halt', haltClass: 'needs-human', detail };
       }
     }
 
@@ -3355,16 +3773,25 @@ export class Conductor {
     // establish their parent-task and criterion bounds. Production callers
     // identify their gate provenance structurally; older direct callers have
     // no such provenance and retain their compatibility behavior. The
-    // canonical as-built source is likewise unadmitted even for direct calls.
+    // canonical as-built source may grow the plan only after its current
+    // BLOCKED report has been parsed and every remediable finding has been
+    // bound to an approved clause. Mixed provenance retains prd_audit's
+    // criterion-bound authority, so enabling as-built remediation cannot
+    // bypass that gate.
+    // `asBuiltRemediation` already carries the kill switch (see its derivation).
+    const asBuiltPlanGrowthAdmitted = asBuiltRemediation && asBuiltValidated;
     const requiresPlanGrowthAllowance =
-      remediationEvidenceSources.length > 0 || hintSource.source === 'architecture-review-as-built';
+      remediationEvidenceSources.length > 0
+        ? !asBuiltPlanGrowthAdmitted
+        : hintSource.source === 'architecture-review-as-built';
     if (allTasks.length > 0 && requiresPlanGrowthAllowance && !prdAuditCapEnforced) {
       return {
         kind: 'halt',
         haltClass: KICKBACK_CAP_HALT_CLASS,
         detail:
           `${hintSource.source} remediation requested ${allTasks.length} plan task${allTasks.length === 1 ? '' : 's'} ` +
-          'with no plan-growth allowance; only validated prd_audit FIXABLE findings may append remediation work.',
+          'with no plan-growth allowance; only validated prd_audit FIXABLE or as-built REMEDIABLE findings may append remediation work.' +
+          renderAsBuiltBlockedFindingDetail(asBuiltReport),
       };
     }
 
@@ -3379,33 +3806,39 @@ export class Conductor {
     let appendAttempted = allTasks.length === 0;
 
     if (allTasks.length > 0) {
-      let priorPrdAuditLaps = 0;
-      let prdAuditGrowth: Awaited<ReturnType<typeof readGrowth>> | undefined;
-      let prdAuditGrowthCap = 0;
-      const criterionBoundGaps = appendGaps.filter(
-        (gap) => gap.criterion !== undefined && gap.parentTask !== undefined,
-      );
-      if (prdAuditCapEnforced) {
-        const ledger = await readKickbackLedger(this.projectRoot);
-        priorPrdAuditLaps = (
-          ledger.gates.prd_audit as (KickbackGateEntry & { laps?: number }) | undefined
-        )?.laps ?? 0;
-        prdAuditGrowthCap = prdAuditAppendCap(
+      const authoredTaskCount = activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
+      const prdAuditBudget = prdAuditCapEnforced
+        ? await readRemediationGateAppendBudget(
+          this.projectRoot,
           this.config,
-          activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0,
-        );
-        prdAuditGrowth = await readGrowth(this.projectRoot, prdAuditGrowthCap);
+          'prd_audit',
+          prdAuditLapCap,
+          prdAuditTasks.length,
+          prdAuditTasks.length,
+          authoredTaskCount,
+        )
+        : undefined;
+      const asBuiltBudget = asBuiltCapEnforced
+        ? await readRemediationGateAppendBudget(
+          this.projectRoot,
+          this.config,
+          'architecture_review_as_built',
+          asBuiltLapCap,
+          asBuiltTasks.length,
+          asBuiltGrowthTasks.length,
+          authoredTaskCount,
+        )
+        : undefined;
+      if (prdAuditBudget) {
         const findings = [...new Set([...prdAuditFindings.values()].map((finding) => finding.criterion))];
         const findingList = findings.length > 0 ? findings.join(', ') : 'unattributed FIXABLE findings';
-        if (
-          priorPrdAuditLaps >= prdAuditLapCap ||
-          prdAuditTasks.length > prdAuditGrowth.remaining
-        ) {
-          const capReason = priorPrdAuditLaps >= prdAuditLapCap
-            ? `lap cap reached (${priorPrdAuditLaps}/${prdAuditLapCap})`
+        const exhausted = remediationGateAppendBudgetExhausted(prdAuditBudget);
+        if (exhausted) {
+          const capReason = exhausted === 'laps'
+            ? `lap cap reached (${prdAuditBudget.priorLaps}/${prdAuditBudget.lapCap})`
             :
-              `growth cap reached (${prdAuditGrowth.added}/${prdAuditGrowthCap} appended; ` +
-              `${prdAuditTasks.length} requested, ${prdAuditGrowth.remaining} remaining)`;
+              `growth cap reached (${prdAuditBudget.growth.added}/${prdAuditBudget.growthCap} appended; ` +
+              `${prdAuditBudget.taskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
@@ -3413,47 +3846,76 @@ export class Conductor {
           };
         }
       }
+      if (asBuiltBudget) {
+        const exhausted = remediationGateAppendBudgetExhausted(asBuiltBudget);
+        if (exhausted) {
+          const capReason = exhausted === 'laps'
+            ? `lap cap reached (${asBuiltBudget.priorLaps}/${asBuiltBudget.lapCap})`
+            :
+              `shared plan-growth allowance exhausted (${asBuiltBudget.growth.added}/${asBuiltBudget.growthCap} appended; ` +
+              `${asBuiltBudget.taskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
+          return {
+            kind: 'halt',
+            haltClass: KICKBACK_CAP_HALT_CLASS,
+            detail:
+              `architecture_review_as_built remediation ${capReason} before appending fix tasks. Findings:` +
+              renderAsBuiltBlockedFindingDetail(asBuiltReport),
+          };
+        }
+      }
+      // Each gate has its own lap allowance, but both draw from the same
+      // bounded plan-growth record. Check the consolidated append before
+      // either ledger update so two individually valid gap sets cannot spend
+      // more than the shared remaining allowance together.
+      const sharedGrowthBudget = prdAuditBudget ?? asBuiltBudget;
+      if (sharedGrowthBudget && allTasks.length > sharedGrowthBudget.growth.remaining) {
+        return {
+          kind: 'halt',
+          haltClass: KICKBACK_CAP_HALT_CLASS,
+          detail:
+            `remediation shared plan-growth allowance exhausted (${sharedGrowthBudget.growth.added}/` +
+            `${sharedGrowthBudget.growthCap} appended; ${allTasks.length} requested, ` +
+            `${sharedGrowthBudget.growth.remaining} remaining) before appending fix tasks.` +
+            // AB-R8 / APPROVED decision 4 + Story 4: a cap terminal names the
+            // allowance AND every finding. This exit is shared with prd_audit,
+            // so it renders unconditionally — the helper yields '' unless an
+            // as-built BLOCKED report actually participates.
+            renderAsBuiltBlockedFindingDetail(asBuiltReport),
+        };
+      }
       // Append remediation tasks to the plan
       if (planPath) {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
-          ...(prdAuditRemediation ? { criterionBoundGaps, gateSource: 'prd-audit' } : {}),
+          ...(prdAuditRemediation || (asBuiltRemediation && asBuiltValidated)
+            ? {
+                criterionBoundGaps: appendGaps,
+                gateSource: prdAuditRemediation ? 'prd-audit' : 'as-built',
+              }
+            : {}),
         });
         if (appendResult.success) {
           appendAttempted = true;
-          if (prdAuditCapEnforced) {
-            const ledger = await readKickbackLedger(this.projectRoot);
-            const existing = ledger.gates.prd_audit;
-            const next: KickbackGateEntry & { laps: number } = {
-              ...(existing ?? {
-                count: 0,
-                cumulative: 0,
-                treeHash: null,
-                lastReason: '',
-                priorVerdict: true,
-                resolvedBefore: 0,
-              }),
-              laps: priorPrdAuditLaps + (prdAuditTasks.length > 0 ? 1 : 0),
-            };
-            await writeKickbackLedger(this.projectRoot, {
-              ...ledger,
-              gates: { ...ledger.gates, prd_audit: next },
-            });
-            if (prdAuditGrowth) {
-              const priorGateGrowth = prdAuditGrowth.byGate.prd_audit ?? 0;
-              await recordGrowth(
-                this.projectRoot,
-                {
-                  authored: prdAuditGrowth.authored,
-                  added: prdAuditGrowth.added + prdAuditTasks.length,
-                  byGate: {
-                    ...prdAuditGrowth.byGate,
-                    prd_audit: priorGateGrowth + prdAuditTasks.length,
-                  },
-                },
-                { cap: prdAuditGrowthCap, events: this.events },
-              );
+          await this.reloadPendingAsBuiltRemediationFindings();
+          let appendedAsBuiltFinding = false;
+          for (const gap of appendGaps) {
+            if (!gap.tasks?.length) continue;
+            const finding = asBuiltRecordedFindings.get(gap.id);
+            if (finding) {
+              this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
+              appendedAsBuiltFinding = true;
             }
           }
+          if (appendedAsBuiltFinding) await this.persistPendingAsBuiltRemediationFindings();
+          if (prdAuditBudget) await recordRemediationGateAppend(
+            this.projectRoot,
+            prdAuditBudget,
+            this.events,
+          );
+          if (asBuiltBudget) await recordRemediationGateAppend(
+            this.projectRoot,
+            asBuiltBudget,
+            this.events,
+          );
           // Record the appended ids so the build completion predicate can
           // reject a later removal of their headings from the plan.
           try {
@@ -3551,7 +4013,8 @@ export class Conductor {
         haltClass: KICKBACK_CAP_HALT_CLASS,
         detail:
           `${hintSource.source} remediation requested no admitted remediation gap; ` +
-          'only criterion-bound appends and non-appending publication or halt gaps may route.',
+          'only criterion-bound appends and non-appending publication or halt gaps may route.' +
+          renderAsBuiltBlockedFindingDetail(asBuiltReport),
       };
     }
     if (routedFixes.length > 0) {
@@ -4976,6 +5439,7 @@ export class Conductor {
         gates: {
           ...ledger.gates,
           [sourceGate]: {
+            ...existing,
             count: existing?.count ?? 0,
             cumulative: existing?.cumulative ?? 0,
             treeHash: treeBefore,
@@ -6168,6 +6632,20 @@ export class Conductor {
             }
 
             if (allGreen) {
+              const projectionRefusal = await this.projectPendingAsBuiltRemediationFindings();
+              if (projectionRefusal !== undefined) {
+                const reason =
+                  `Validation group "${step.name}" halted: remediated as-built findings could not be ` +
+                  `projected into the verdict artifact — ${projectionRefusal}`;
+                await this.closeOpenExecutions();
+                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               // JOIN — single writer: one consistent state snapshot,
               // regardless of the order branches actually completed in.
               const joinChanges: Record<string, unknown> = {};
@@ -6195,13 +6673,9 @@ export class Conductor {
               continue;
             }
 
-            // The as-built review owns architecture/plan-limit judgement. It
-            // never re-opens BUILD: a BLOCKED report halts directly, while an
-            // undelivered PLAN_GAP is a classified plan-gap halt. If prd_audit
-            // independently found a FIXABLE issue in this same validation
-            // round, let its planner append that authorized task first, but
-            // deliberately ignore the planner's route — the as-built halt is
-            // still terminal for this run.
+            // A remediable as-built finding joins the other group-owned
+            // remediation evidence. DESIGN, malformed, and undelivered-plan
+            // verdicts remain terminal and retain their refusal stamping.
             const asBuiltMember = membership.dispatchable.find(
               (member) => member.name === 'architecture_review_as_built',
             );
@@ -6210,14 +6684,198 @@ export class Conductor {
               this.verifyArtifacts &&
               gateVerdicts.get('architecture_review_as_built')?.satisfied !== true;
             if (asBuiltUnsatisfied) {
+              const asBuiltGroupRefusedSteps = (): StepName[] =>
+                membership.dispatchable
+                  .filter((member, idx) =>
+                    outcomes[idx]?.kind !== 'verdict' ||
+                    outcomes[idx]?.verdict !== 'pass' ||
+                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
+                  .map((member) => member.name as StepName);
               const prdAuditUnsatisfied = membership.dispatchable.some((member, idx) =>
                 member.name === 'prd_audit' &&
                 outcomes[idx]?.kind === 'verdict' &&
                 outcomes[idx]?.verdict === 'pass' &&
                 gateVerdicts.get('prd_audit')?.satisfied !== true,
               );
-              if (this.daemon && prdAuditUnsatisfied && remediationRounds < prdAuditRemediationLapCap) {
+              const asBuiltFiles = await findArtifactFilesForStep(
+                this.projectRoot,
+                'architecture_review_as_built',
+              );
+              const asBuiltReport = asBuiltFiles[0]
+                ? await readFile(asBuiltFiles[0], 'utf8')
+                : undefined;
+              const asBuiltOutcome = asBuiltReport !== undefined
+                ? classifyAsBuiltReviewOutcome(asBuiltReport)
+                : { kind: 'invalid' as const };
+              const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
+                architecture_review_as_built?: { remediation?: { enabled?: boolean } };
+              }).architecture_review_as_built?.remediation?.enabled ?? true;
+              // AB-R13 / APPROVED decision 4: the as-built gate's lap budget is
+              // the configured, durable `gates.architecture_review_as_built`
+              // record that `planRemediation` enforces. `remediationRounds` is a
+              // process-local counter shared across gates, so gating here could
+              // suppress a lap the gate-local budget still allows — and it reset
+              // to zero on every dispatch, so it bounded nothing durably either.
+              // The authority is planRemediation's budget, not this counter.
+              // AB-R14 / decision 8: this route is a FALLBACK for the coverage
+              // gap the consolidated kickback leaves — an as-built
+              // blocked-remediable verdict with nothing else failing. It must
+              // never preempt `adr-2026-07-10-validation-group-join` decision 3,
+              // which merges a manual_test FAIL and review gaps into ONE work
+              // order with a single rewind (that merge already admits as-built
+              // gaps). Authored as the `if` arm ahead of the consolidated path,
+              // it rewound before the merge could attach the FAIL rows. The
+              // condition is the guard, not the ordering.
+              // Scoped to exactly what decision 3's merge clause covers: a
+              // manual_test FAIL in the same round. A mixed PRD/as-built round
+              // with no FAIL still belongs to this route — that shared repair,
+              // with its single-counted plan growth, is what decision 4 and
+              // finding AB-R6 established.
+              //
+              // AB-R15: the kill switch is part of this condition, not just of
+              // the route below. Decision 6 requires
+              // `architecture_review_as_built.remediation.enabled: false` to
+              // revert EXACTLY to halt-always-on-BLOCKED. Deferring on the FAIL
+              // rows alone suppressed the terminal halt even with remediation
+              // disabled, so the report fell through to the merge and was
+              // remediated anyway — the one behaviour the switch must rule out.
+              const consolidatedKickbackOwnsThisRound =
+                asBuiltRemediationEnabled && manualTestFailRows.length > 0;
+              const remediableAsBuiltRoute =
+                this.daemon &&
+                asBuiltRemediationEnabled &&
+                asBuiltOutcome.kind === 'blocked-remediable' &&
+                !consolidatedKickbackOwnsThisRound;
+              if (remediableAsBuiltRoute) {
+                // The join bypasses the serial as-built halt site, so it
+                // must consume the same single-use gate-scoped no-op
+                // baseline before it asks /remediate to route BUILD again.
+                const escalation = await checkKickbackToBuildEscalation(
+                  'architecture_review_as_built',
+                );
+                if (escalation.halt) {
+                  // AB-R7 / APPROVED decision 4: a no-op escalation is a
+                  // termination-bound exit for THIS gate, so it takes the
+                  // existing `kickback-cap` class and lists every finding —
+                  // the same terminal shape as an exceeded lap cap. Writing
+                  // `needs-human` with no listing hid both which bound was
+                  // reached and what remained unrepaired.
+                  const reason =
+                    `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
+                    renderAsBuiltBlockedFindingDetail(asBuiltReport);
+                  await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await this.recordGroupRefusal({
+                    state,
+                    groupStep: step.name,
+                    judgingStep: 'architecture_review_as_built',
+                    refusedSteps: asBuiltGroupRefusedSteps(),
+                    reason,
+                  });
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+                const evidence: RemediationGateProvenance[] = [];
+                if (prdAuditUnsatisfied) {
+                  evidence.push({ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' });
+                }
+                evidence.push({
+                  gate: 'architecture_review_as_built',
+                  evidenceFile: '.pipeline/architecture-review-as-built.md',
+                });
+                const dispatchContext =
+                  `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
+                  'Plan remediation per the /remediate skill and write ' +
+                  '.pipeline/remediation.json.';
                 remediationRounds++;
+                const remediationOutcome = await this.planRemediation(
+                  state,
+                  steps,
+                  dispatchContext,
+                  {
+                    source: 'validation-group',
+                    evidence,
+                  },
+                );
+                if (remediationOutcome.kind === 'route') {
+                  await emitTracked({
+                    type: 'parallel_failure',
+                    step: step.name,
+                    branch: 'architecture_review_as_built',
+                    error:
+                      'as-built architecture review BLOCKED: remediable findings routed to remediation',
+                  });
+                  await emitTracked({
+                    type: 'kickback',
+                    from: step.name,
+                    to: remediationOutcome.target,
+                    evidence: remediationOutcome.evidence,
+                    count: remediationRounds,
+                  });
+                  pendingRetryHints.set(remediationOutcome.target, remediationOutcome.hint);
+
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+
+                  if (remediationOutcome.target === 'build') {
+                    for (const provenance of evidence) {
+                      await captureKickbackToBuildContext(provenance.gate);
+                    }
+                  }
+                  const navigationIndex = await this.navigateStateBack(
+                    state, remediationOutcome.target, steps,
+                  );
+                  const staleChanges: Record<string, unknown> = {};
+                  for (const provenance of evidence) {
+                    staleChanges[provenance.gate] = 'stale';
+                  }
+                  await this.commitStateChanges(
+                    state,
+                    'restage validation gaps after as-built remediation kickback',
+                    staleChanges,
+                  );
+                  i = navigationIndex - 1;
+                  continue;
+                }
+                if (remediationOutcome.kind === 'halt') {
+                  const reason =
+                    `Validation group "${step.name}" halted: needs human DECIDE — ` +
+                    remediationOutcome.detail;
+                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  await this.recordGroupRefusal({
+                    state,
+                    groupStep: step.name,
+                    judgingStep: 'architecture_review_as_built',
+                    refusedSteps: asBuiltGroupRefusedSteps(),
+                    reason,
+                  });
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+              } else if (
+                this.daemon &&
+                prdAuditUnsatisfied &&
+                remediationRounds < prdAuditRemediationLapCap
+              ) {
+                // Preserve the pre-existing PRD-audit append attempt before
+                // the terminal design/invalid as-built refusal. Its planner
+                // route remains deliberately ignored here.
+                remediationRounds++;
+                // AB-R11 / APPROVED decision 3: a DESIGN row makes the WHOLE
+                // report halt needs-human, so terminal as-built evidence must
+                // never carry remediation authority. Admitting it here let a
+                // sibling REMEDIABLE row append plan work before the mandatory
+                // whole-report halt. PRD-owned work still proceeds on its own
+                // evidence; only the as-built entry is withheld.
+                const asBuiltEvidenceIsTerminal =
+                  asBuiltOutcome.kind === 'blocked-design' || asBuiltOutcome.kind === 'invalid';
                 await this.planRemediation(
                   state,
                   steps,
@@ -6228,46 +6886,55 @@ export class Conductor {
                     source: 'validation-group',
                     evidence: [
                       { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
-                      {
-                        gate: 'architecture_review_as_built',
-                        evidenceFile: '.pipeline/architecture-review-as-built.md',
-                      },
+                      ...(asBuiltEvidenceIsTerminal
+                        ? []
+                        : [{
+                            gate: 'architecture_review_as_built' as const,
+                            evidenceFile: '.pipeline/architecture-review-as-built.md',
+                          }]),
                     ],
                   },
                 );
               }
-              const asBuiltFiles = await findArtifactFilesForStep(
-                this.projectRoot,
-                'architecture_review_as_built',
-              );
-              const asBuiltOutcome = asBuiltFiles[0]
-                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
-                : { kind: 'invalid' as const };
-              const asBuiltReason = gateVerdicts.get('architecture_review_as_built')?.reason ??
-                'as-built architecture review gate unsatisfied';
-              const reason = `Validation group "${step.name}" halted: ${asBuiltReason}`;
-              await this.writeHaltMarker(
-                reason + '\n',
-                asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
-              );
-              await this.recordGroupRefusal({
-                state,
-                groupStep: step.name,
-                judgingStep: 'architecture_review_as_built',
-                // Siblings that missed their own gate are ended by this halt
-                // too; leaving them unstamped understated the group's exit.
-                refusedSteps: membership.dispatchable
-                  .filter((member, idx) =>
-                    outcomes[idx]?.kind !== 'verdict' ||
-                    outcomes[idx]?.verdict !== 'pass' ||
-                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
-                  .map((member) => member.name as StepName),
-                reason,
-              });
-              await this.emitLoopHalt(reason);
-              process.off('SIGINT', sigintHandler);
-              if (!this.daemon) process.off('SIGTERM', sigterm);
-              return;
+              // AB-R14 / decision 8: when the consolidated kickback owns this
+              // round, an all-REMEDIABLE as-built verdict must NOT halt here —
+              // it has to reach the manual-test merge below so both streams
+              // become one work order. Every terminal outcome (DESIGN,
+              // invalid, undelivered PLAN_GAP) still halts exactly as before.
+              if (
+                !consolidatedKickbackOwnsThisRound ||
+                asBuiltOutcome.kind !== 'blocked-remediable'
+              ) {
+                const asBuiltReason = gateVerdicts.get('architecture_review_as_built')?.reason ??
+                  'as-built architecture review gate unsatisfied';
+                const reason =
+                  `Validation group "${step.name}" halted: ${asBuiltReason}` +
+                  (asBuiltOutcome.kind === 'blocked-design' || asBuiltOutcome.kind === 'invalid'
+                    ? renderAsBuiltBlockedFindingDetail(asBuiltReport)
+                    : '');
+                await this.writeHaltMarker(
+                  reason + '\n',
+                  asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
+                );
+                await this.recordGroupRefusal({
+                  state,
+                  groupStep: step.name,
+                  judgingStep: 'architecture_review_as_built',
+                  // Siblings that missed their own gate are ended by this halt
+                  // too; leaving them unstamped understated the group's exit.
+                  refusedSteps: membership.dispatchable
+                    .filter((member, idx) =>
+                      outcomes[idx]?.kind !== 'verdict' ||
+                      outcomes[idx]?.verdict !== 'pass' ||
+                      (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
+                    .map((member) => member.name as StepName),
+                  reason,
+                });
+                await this.emitLoopHalt(reason);
+                process.off('SIGINT', sigintHandler);
+                if (!this.daemon) process.off('SIGTERM', sigterm);
+                return;
+              }
             }
 
             // Task 20 (adr-2026-07-10-validation-group-join.md): MT-only
@@ -8757,6 +9424,23 @@ export class Conductor {
           break;
         }
 
+        if (succeeded && step.name === 'architecture_review_as_built') {
+          const projectionRefusal = await this.projectPendingAsBuiltRemediationFindings();
+          if (projectionRefusal !== undefined) {
+            const reason =
+              `as-built architecture review halted: remediated findings could not be projected ` +
+              `into the verdict artifact — ${projectionRefusal}`;
+            await this.closeOpenExecutions();
+            await this.writeHaltMarker(reason + '\n', 'needs-human');
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            const prUrl = await this.surfaceRemediationPr(reason);
+            await this.emitLoopHalt(reason, prUrl);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
+        }
+
         if (!succeeded) {
           if (failedStepResult?.refusal) {
             const { kind, reason } = failedStepResult.refusal;
@@ -9439,17 +10123,101 @@ export class Conductor {
               return;
             }
 
-            // As-built reports never route to BUILD. Their architecture/plan-limit
-            // judgement halts directly: an undelivered PLAN_GAP is classified for
-            // the operator, and BLOCKED/malformed reports remain needs-human.
             if (step.name === 'architecture_review_as_built') {
               const asBuiltFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
-              const asBuiltOutcome = asBuiltFiles[0]
-                ? classifyAsBuiltReviewOutcome(await readFile(asBuiltFiles[0], 'utf8'))
+              const asBuiltReport = asBuiltFiles[0]
+                ? await readFile(asBuiltFiles[0], 'utf8')
+                : undefined;
+              const asBuiltOutcome = asBuiltReport !== undefined
+                ? classifyAsBuiltReviewOutcome(asBuiltReport)
                 : { kind: 'invalid' as const };
+              const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
+                architecture_review_as_built?: { remediation?: { enabled?: boolean } };
+              }).architecture_review_as_built?.remediation?.enabled ?? true;
+              if (
+                this.daemon &&
+                asBuiltRemediationEnabled &&
+                asBuiltOutcome.kind === 'blocked-remediable'
+              ) {
+                const escalation = await checkKickbackToBuildEscalation(step.name);
+                if (escalation.halt) {
+                  // AB-R7 / APPROVED decision 4 — see the validation-group
+                  // exit above; both terminals carry the same class and the
+                  // same per-finding listing.
+                  const reason =
+                    `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
+                    renderAsBuiltBlockedFindingDetail(asBuiltReport);
+                  // AB-R5 class / adr-2026-08-12 D1: this serial exit returns
+                  // between step_started and step_completed, so the open
+                  // execution needs its one terminal before the loop ends. The
+                  // group twin above returns after parallel_completed and does
+                  // not.
+                  await this.closeOpenExecutions();
+                  await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+                const remediation = await this.planRemediation(
+                  state,
+                  steps,
+                  'A blocking as-built architecture review is at ' +
+                    '.pipeline/architecture-review-as-built.md. Plan remediation per the ' +
+                    '/remediate skill and write .pipeline/remediation.json.',
+                  {
+                    source: 'architecture-review-as-built',
+                    evidence: [{
+                      gate: 'architecture_review_as_built',
+                      evidenceFile: '.pipeline/architecture-review-as-built.md',
+                    }],
+                  },
+                );
+                if (remediation.kind === 'route') {
+                  remediationRounds++;
+                  await emitTracked({
+                    type: 'kickback',
+                    from: step.name,
+                    to: remediation.target,
+                    evidence: remediation.evidence,
+                    count: remediationRounds,
+                    ...(escalation.kickbackOutcome
+                      ? { kickback_outcome: escalation.kickbackOutcome }
+                      : {}),
+                  });
+                  pendingRetryHints.set(remediation.target, remediation.hint);
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+                  if (remediation.target === 'build') {
+                    await captureKickbackToBuildContext(step.name);
+                  }
+                  const nav = navigateBack(state, remediation.target, steps);
+                  state = nav.state;
+                  this.haltState = state;
+                  (state as Record<string, unknown>)[step.name] = 'stale';
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  i = nav.index - 1; // for-loop i++ lands on the remediation target
+                  continue;
+                }
+                if (remediation.kind === 'halt') {
+                  const reason = `as-built architecture review halted: needs human DECIDE — ${remediation.detail}`;
+                  await this.closeOpenExecutions();
+                  await this.writeHaltMarker(reason + '\n', remediation.haltClass ?? 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+              }
+              const asBuiltFindingDetail = renderAsBuiltBlockedFindingDetail(asBuiltReport);
               const reason = `as-built architecture review halted: ${lastError}`;
               await this.writeHaltMarker(
-                reason + '\n',
+                reason + asBuiltFindingDetail + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
               );
               await this.persistPendingStateChanges(state, 'persist conductor transition');

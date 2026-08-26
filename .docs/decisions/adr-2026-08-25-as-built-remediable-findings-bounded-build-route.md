@@ -4,6 +4,10 @@
 **Deciders:** operator (James Stoup), engineer session for jstoup111/ai-conductor#1874
 **Supersedes:** adr-2026-08-22-as-built-review-runs-always-with-plan-gap (decision 3 only)
 **Amends:** adr-2026-08-22-one-owner-per-review-question, adr-2026-07-13-kickback-build-no-op-escalation
+**Amended:** 2026-08-26 by operator (James Stoup) — decision 7 added; the "no new ledger
+schema" consequence below is corrected to match it.
+**Amended:** 2026-08-26 by operator (James Stoup) — decision 8 added, subordinating this
+route to `adr-2026-07-10-validation-group-join` decision 3.
 
 ## Context
 
@@ -93,18 +97,66 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    (`architecture_review_as_built.remediation.enabled`, default on) reverts exactly to
    halt-always-on-BLOCKED.
 
+7. **Cross-restart durability of pending remediation findings (added 2026-08-26 by operator
+   amendment; corrects the "no new ledger schema" consequence recorded below).** A finding
+   admitted to a remediation lap is not yet remediated: the per-finding record decision 6
+   promises may only be written once the rebuilt gate returns a successful verdict, and the
+   BUILD traversal between those two moments routinely spans dispatches — separate processes —
+   in daemon mode. The pending set is therefore **durable state**, persisted as an OPTIONAL
+   `pendingAsBuiltRemediationFindings` array on the existing **version-1** kickback ledger,
+   alongside `gates.*.laps` and `growth.byGate`. Binding constraints: the array is validated
+   fail-closed on read, an ill-formed entry invalidating the whole ledger exactly as a
+   malformed `growth` record does; it is absent on ledgers with no pending findings and reads
+   as empty when absent, so the schema stays compatible in both directions with **no version
+   bump**; an entry is written only when the append that authorizes the lap succeeds, so an
+   unauthorized repair is never recorded; and the array is cleared in the same step that
+   projects its findings into the verdict artifact, so a pending entry never outlives its
+   projection. This is the only durable surface the feature adds, and no component outside the
+   remediation seam reads it.
+
+8. **The bounded route is a fallback, never a preemption (added 2026-08-26 by operator
+   amendment).** `adr-2026-07-10-validation-group-join` decision 3 is unchanged and keeps
+   primacy: when a validation-group join carries a `manual_test` FAIL alongside review gaps,
+   the engine merges both classification streams into ONE work order with a single rewind and
+   the FAIL rows attached as evidence. That merge already admits
+   `architecture_review_as_built` gaps. This ADR's route therefore applies **only where the
+   consolidated kickback does not** — an as-built `blocked-remediable` verdict with no
+   `manual_test` FAIL in the same round. Whenever a FAIL is present, as-built gaps ride the
+   consolidated dispatch and this route must not run. A mixed `prd_audit`/as-built round with
+   no FAIL still belongs to this route: that shared repair, with its single-counted plan
+   growth, is what decision 4 establishes.
+
+   The route was authored as the `if` arm ahead of the consolidated path, so a
+   `blocked-remediable` verdict rewound before the merge could attach manual-test FAIL rows
+   (as-built finding AB-R14). Ordering is not the guard; the condition is.
+
+   Budget follows the same split. In the consolidated cases the existing shared accounting
+   applies unchanged, satisfying decision 3's clause that `MAX_KICKBACKS_PER_GATE`,
+   `manualTestSelfHeals`, and `remediationRounds` keep their per-gate accounting. Only on the
+   as-built-only path is decision 4's gate-local durable budget the sole authority — which is
+   why the process-local `remediationRounds` pre-cap was removed from that branch and from
+   that branch alone.
+
 ## Consequences
 
 ### Positive
 - The four-halts-in-a-day class converges without an operator; halts are reserved for genuine
   design decisions, with the reason recorded per finding.
-- No second appender, no new halt class, no new ledger schema — the bounded-kickback machinery
-  is reused under a new gate key.
+- No second appender and no new halt class — the bounded-kickback machinery is reused under a
+  new gate key. The single durable-state addition is the optional
+  `pendingAsBuiltRemediationFindings` array of decision 7; the ledger version is unchanged and
+  older ledgers remain readable.
 
 ### Negative
 - One more BUILD traversal per remediable BLOCKED report before the gate re-runs.
 - A misclassified DESIGN-as-REMEDIABLE finding burns the lap before reaching a human (bounded
   by the cap at one lap).
+- The ledger now carries state whose lifetime spans a BUILD traversal, so a ledger deleted
+  mid-lap (for example with a discarded worktree) loses the per-finding record even though the
+  repair itself is committed on the branch.
+- Two remediation entry points into the validation group now coexist, separated by an explicit
+  condition rather than by ordering. A future edit that widens either one must re-check the
+  other, or the AB-R14 class returns.
 
 ### Follow-up Actions
 - [ ] Parser + outcome widening; both halt writers branch on the widened outcome.
