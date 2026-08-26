@@ -626,10 +626,18 @@ describe('prd_audit kickback', () => {
     });
   });
 
-  it('uses its configured lap cap even when the generic cap is unavailable', () => {
+  it('uses gate-specific configured lap caps without changing the generic cap', () => {
     expect(
       remediationLapCapForGate('prd_audit', { prd_audit: { max_remediation_laps: 1 } } as never, 0),
     ).toBe(1);
+    expect(remediationLapCapForGate('architecture_review_as_built', {} as never, 0)).toBe(1);
+    expect(
+      remediationLapCapForGate(
+        'architecture_review_as_built',
+        { architecture_review_as_built: { max_remediation_laps: 2 } } as never,
+        0,
+      ),
+    ).toBe(2);
     expect(remediationLapCapForGate('manual_test', {} as never, 0)).toBe(0);
   });
 

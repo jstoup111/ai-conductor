@@ -528,16 +528,23 @@ interface RemediationHintSource {
   evidence: readonly RemediationGateProvenance[];
 }
 
-/** PRD-audit owns its configured remediation allowance; other gates share the generic cap. */
+/** PRD-audit and as-built review own configured remediation allowances; other gates share the generic cap. */
 export function remediationLapCapForGate(
   gate: string,
   config: HarnessConfig,
   genericCap = MAX_KICKBACKS_PER_GATE,
 ): number {
-  if (gate !== 'prd_audit') return genericCap;
-  return (config as HarnessConfig & {
+  const remediationConfig = config as HarnessConfig & {
     prd_audit?: { max_remediation_laps?: number };
-  }).prd_audit?.max_remediation_laps ?? 1;
+    architecture_review_as_built?: { max_remediation_laps?: number };
+  };
+  if (gate === 'prd_audit') {
+    return remediationConfig.prd_audit?.max_remediation_laps ?? 1;
+  }
+  if (gate === 'architecture_review_as_built') {
+    return remediationConfig.architecture_review_as_built?.max_remediation_laps ?? 1;
+  }
+  return genericCap;
 }
 
 /** The prd-audit cap is both an absolute count and a fraction of authored plan work. */
