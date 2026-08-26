@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -417,6 +417,19 @@ describe('as-built verdict gate', () => {
     await expect(
       checkStepCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: Date.now() - 1_000 }),
     ).resolves.toMatchObject({ done: true });
+  });
+
+  it('returns the missing-verdict-line reason through the as-built completion predicate', async () => {
+    const dir = await fixture();
+    await writeAsBuilt(dir, '## Verdict\n\n**BLOCKED**\n');
+
+    await expect(
+      checkStepCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: Date.now() - 1_000 }),
+    ).resolves.toMatchObject({
+      done: false,
+      reason: renderAsBuiltInvalidReason({ kind: 'invalid', cause: 'no-verdict-line' }),
+      routeClass: 'absent',
+    });
   });
 
   it('keeps undelivered PLAN_GAP, blocked-design, and missing verdict reports unsatisfied', async () => {

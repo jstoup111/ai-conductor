@@ -3326,7 +3326,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (outcome.kind === 'invalid') {
         return {
           done: false,
-          reason: 'as-built review must record `Verdict:` plus `Outcome delivered: yes|no` for PLAN_GAP; re-run the as-built review',
+          reason: renderAsBuiltInvalidReason(outcome),
           routeClass: 'absent',
         };
       }
