@@ -443,3 +443,10 @@ None — all seams exist on main; the growth ledger is already gate-keyed.
 **Done when:**
 - adr-2026-08-12-execution-lifecycle-completeness-for-timing decision 1 is satisfied by this task.
 
+### Task rem-as-built-AB-R6: Shared PRD/as-built repairs consume the as-built lap
+**Gate:** as-built
+**Rationale:** A planner gap can match a PRD-audit finding and an as-built finding at once (conductor.ts:3680-3687), but its tasks are assigned only to prdAuditTasks (:3709-3718). The as-built budget then receives asBuiltTasks.length === 0 (:3792-3800), and recordRemediationGateAppend increments the gate lap only when taskCount > 0 (:697) — so gates.architecture_review_as_built.laps stays zero even though a validated as-built finding authorized the append (:3863-3883). A later changed-tree as-built BLOCKED can then take another remediation lap instead of hitting the configured cap. Keep shared plan-growth accounting single-counted, but consume the as-built lap whenever at least one validated as-built finding authorized the successful append, including when PRD-audit owns the shared task's growth attribution. Add a mixed-source acceptance case in which EVERY as-built finding shares its task with PRD-audit, assert gates.architecture_review_as_built.laps === 1, then assert that a surviving second as-built BLOCKED report halts kickback-cap. The existing fixture at src/conductor/test/acceptance/parallel-validation-phase-fan-out-manual-test-prd-.acceptance.test.ts:733-775 masks the zero-lap case with an additional as-built-only task.
+**Governing clause:** adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 4
+**Done when:**
+- adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 4 is satisfied by this task.
+
