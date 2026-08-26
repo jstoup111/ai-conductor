@@ -2,8 +2,8 @@
 
 Technical track (no PRD — fr row class omitted). Outcomes from the staged intake outcomes for jstoup111/ai-conductor#1874. Stories 1–7; plan tasks 1–18; change-set ADRs: one new, two amended. Consistency pass (§4d) run over every covered row; no contradiction or oscillation found. Criterion rows quote a cited task's body verbatim; all dispositions are diff-local (each criterion is decided by this feature's own engine/skill diff and its tests).
 
-| Row class | Cited id / criterion | Counterpart id(s) | Verdict | Notes / quote | Disposition |
-|---|---|---|---|---|---|
+| Row class | Cited id / criterion | Counterpart id(s) | Verdict | Notes / quote |
+|---|---|---|---|---|
 | outcome | outcome-1 | story-3, story-6 | covered | Autonomous convergence + after-the-fact visibility of remediation per clause |
 | outcome | outcome-2 | story-5 | covered | Design-decision findings still halt for a human |
 | outcome | outcome-3 | story-5, story-6 | covered | Per-finding classification recorded in halt bodies and durable artifacts |
