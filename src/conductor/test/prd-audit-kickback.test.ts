@@ -1,4 +1,5 @@
 // Covers: task:9, task:17
+// Covers: S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -463,6 +464,76 @@ describe('prd_audit kickback', () => {
     });
     expect(routePrdAuditOverScope(noOwnerOverScopeReport('NC.1', 'Visible addition Y.'), decisions)).toMatchObject({
       kind: 'halt', undecided: [{ criterion: 'NC.1', summary: 'Visible addition Y.' }],
+    });
+  });
+
+  it('routes NC findings only to the recorded-risk or operator-decision outcomes', () => {
+    const summary = 'Visible behavior outside the approved intent.';
+    const refused = {
+      criterion: 'NC.1',
+      summary,
+      decision: 'refuse' as const,
+      rationale: 'Rework it inside the approved scope.',
+      operator: 'operator',
+      decidedAt: '2026-08-26T00:00:00.000Z',
+    };
+    const undecided = routePrdAuditOverScope(
+      noOwnerOverScopeReport('NC.1', summary, 'outside-visible'),
+      [],
+    );
+    const within = routePrdAuditOverScope(noOwnerOverScopeReport('NC.1', summary, 'within'), []);
+    const harmless = routePrdAuditOverScope(
+      noOwnerOverScopeReport('NC.1', summary, 'outside-harmless'),
+      [],
+    );
+    const refusedRoute = routePrdAuditOverScope(
+      noOwnerOverScopeReport('NC.1', summary, 'outside-visible'),
+      [refused],
+    );
+    if (undecided.kind !== 'halt' || refusedRoute.kind !== 'halt') {
+      throw new Error('outside-visible NC findings must halt for an operator decision');
+    }
+
+    const undecidedBlock = renderOverScopeDecisionBlock(undecided.undecided, undecided.refused);
+    const refusedBlock = renderOverScopeDecisionBlock(refusedRoute.undecided, refusedRoute.refused);
+    const routeSource = routePrdAuditOverScope.toString();
+
+    expect({
+      // The route's discriminant is exhaustively limited to non-work outcomes.
+      kinds: [undecided.kind, within.kind, harmless.kind, refusedRoute.kind],
+      undecided: {
+        undecided: undecided.undecided,
+        refused: undecided.refused,
+      },
+      refused: {
+        undecided: refusedRoute.undecided,
+        refused: refusedRoute.refused,
+      },
+      pendingEntryRendered: undecidedBlock.includes(
+        JSON.stringify([{
+          criterion: 'NC.1',
+          summary,
+          relation: 'outside-visible',
+          decision: 'pending',
+        }], null, 2),
+      ),
+      refusedEntryReoffered: refusedBlock.includes('"decision": "pending"'),
+      routeAppendsTasks: /append(?:Remediation)?Tasks|planRemediation/.test(routeSource),
+      routeEmitsKickback: /emit(?:Tracked)?\([^)]*kickback|type:\s*'kickback'/.test(routeSource),
+    }).toMatchObject({
+      kinds: ['halt', 'record', 'record', 'halt'],
+      undecided: {
+        undecided: [{ criterion: 'NC.1', summary, relation: 'outside-visible' }],
+        refused: [],
+      },
+      refused: {
+        undecided: [],
+        refused: [{ criterion: 'NC.1', summary, relation: 'outside-visible', decision: 'refuse' }],
+      },
+      pendingEntryRendered: true,
+      refusedEntryReoffered: false,
+      routeAppendsTasks: false,
+      routeEmitsKickback: false,
     });
   });
 
