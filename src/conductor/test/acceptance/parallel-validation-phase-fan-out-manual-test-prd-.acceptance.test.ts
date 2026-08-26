@@ -673,7 +673,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     }
   });
 
-  it('routes valid PRD criterion-bound and as-built clause-bound gaps through one append while preserving each gate ledger and growth entry', async () => {
+  it('consumes the as-built lap for a shared PRD/as-built repair without double-counting plan growth', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'parvalid-mixed-remediation-'));
     const statePath = join(dir, 'conduct-state.json');
     const slug = 'parallel-validation-phase-fan-out-manual-test-prd-';
@@ -751,7 +751,6 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '| Finding | Class | Governing clause | Summary |',
               '| --- | --- | --- | --- |',
               '| FR-1 | REMEDIABLE | Task 1 | Repair the same approved behavior |',
-              '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
             ].join('\n'));
           } else if (step === 'remediate') {
             remediationReasons.push(opts?.retryReason ?? '');
@@ -762,14 +761,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
                   disposition: 'build',
                   category: null,
                   rationale: 'Implement the existing PRD criterion.',
-                  tasks: [{ id: 'prd-fix', title: 'Implement S1.1' }],
-                },
-                {
-                  id: 'ARCH-1',
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'Add the approved architecture guard.',
-                  tasks: [{ id: 'as-built-fix', title: 'Add the missing guard' }],
+                  tasks: [{ id: 'shared-fix', title: 'Implement S1.1' }],
                 },
               ],
             }));
@@ -782,7 +774,14 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const conductor = makeConductor(dir, statePath, runner, events, {
         config: {
-          prd_audit: { max_appended_tasks: 5, max_appended_ratio: 1 },
+          // This case isolates the independent as-built lap cap; the no-op
+          // kickback guard has its own acceptance coverage below.
+          kickback_escalation: { enabled: false },
+          prd_audit: {
+            max_appended_tasks: 5,
+            max_appended_ratio: 1,
+            max_remediation_laps: 2,
+          },
           architecture_review_as_built: { remediation: { enabled: true } },
         } as never,
       });
@@ -793,9 +792,8 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       expect(remediationReasons[0]).toContain('.pipeline/architecture-review-as-built.md');
 
       const plan = await readFile(planPath, 'utf8');
-      expect(plan).toContain('### Task rem-prd-audit-prd-fix: Implement S1.1');
+      expect(plan).toContain('### Task rem-prd-audit-shared-fix: Implement S1.1');
       expect(plan).toContain('**Criterion:** S1.1');
-      expect(plan).toContain('### Task rem-as-built-as-built-fix: Add the missing guard');
       expect(plan).toContain('**Governing clause:** Task 1');
 
       const ledger = JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'));
@@ -803,10 +801,9 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       expect(ledger.gates.architecture_review_as_built.laps).toBe(1);
       expect(ledger.growth).toEqual({
         authored: 8,
-        added: 2,
+        added: 1,
         byGate: {
           prd_audit: 1,
-          architecture_review_as_built: 1,
         },
       });
       expect(growthEvents).toEqual([
@@ -815,12 +812,33 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
           added: 1,
           byGate: { prd_audit: 1 },
         }),
-        expect.objectContaining({
-          type: 'plan_growth',
-          added: 2,
-          byGate: { prd_audit: 1, architecture_review_as_built: 1 },
-        }),
       ]);
+
+      await rm(join(dir, '.pipeline', 'HALT'), { force: true });
+      await rm(join(dir, '.pipeline', 'HALT.class'), { force: true });
+      await seedToValidators(dir, statePath);
+      await makeConductor(dir, statePath, runner, events, {
+        config: {
+          kickback_escalation: { enabled: false },
+          prd_audit: {
+            max_appended_tasks: 5,
+            max_appended_ratio: 1,
+            max_remediation_laps: 2,
+          },
+          architecture_review_as_built: { remediation: { enabled: true } },
+        } as never,
+      }).run();
+
+      expect(remediationReasons).toHaveLength(2);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+        'architecture_review_as_built remediation lap cap reached (1/1)',
+      );
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
+      const afterSecondBlocked = JSON.parse(
+        await readFile(join(dir, '.pipeline', 'kickback-ledger.json'), 'utf8'),
+      );
+      expect(afterSecondBlocked.gates.architecture_review_as_built.laps).toBe(1);
+      expect(afterSecondBlocked.growth).toEqual(ledger.growth);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

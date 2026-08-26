@@ -645,7 +645,10 @@ interface RemediationGateAppendBudget {
   gate: RemediationLedgerGate;
   priorLaps: number;
   lapCap: number;
+  /** Tasks authorized by this gate; any non-empty set consumes one lap. */
   taskCount: number;
+  /** Tasks whose plan-growth attribution belongs to this gate. */
+  growthTaskCount: number;
   growthCap: number;
   growth: PlanGrowth;
 }
@@ -657,6 +660,7 @@ async function readRemediationGateAppendBudget(
   gate: RemediationLedgerGate,
   lapCap: number,
   taskCount: number,
+  growthTaskCount: number,
   authoredTaskCount: number,
 ): Promise<RemediationGateAppendBudget> {
   const growthCap = prdAuditAppendCap(config, authoredTaskCount);
@@ -667,7 +671,7 @@ async function readRemediationGateAppendBudget(
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
   )?.laps ?? 0;
-  return { gate, priorLaps, lapCap, taskCount, growthCap, growth };
+  return { gate, priorLaps, lapCap, taskCount, growthTaskCount, growthCap, growth };
 }
 
 function remediationGateAppendBudgetExhausted(
@@ -700,6 +704,7 @@ async function recordRemediationGateAppend(
     ...ledger,
     gates: { ...ledger.gates, [budget.gate]: next },
   });
+  if (budget.growthTaskCount === 0) return;
   // Earlier gate updates in a consolidated validation group are now durable;
   // merge them before recording this gate rather than replacing their growth
   // snapshot captured before the shared append.
@@ -709,10 +714,10 @@ async function recordRemediationGateAppend(
     projectRoot,
     {
       authored: growth.authored,
-      added: growth.added + budget.taskCount,
+      added: growth.added + budget.growthTaskCount,
       byGate: {
         ...growth.byGate,
-        [budget.gate]: priorGateGrowth + budget.taskCount,
+        [budget.gate]: priorGateGrowth + budget.growthTaskCount,
       },
     },
     { cap: budget.growthCap, events },
@@ -3659,7 +3664,10 @@ export class Conductor {
     const prdAuditCapEnforced = prdAuditRemediation && prdAuditValidated;
     const prdAuditTasks: Array<{ id: string; title: string }> = [];
     const asBuiltCapEnforced = asBuiltRemediation && asBuiltValidated;
+    // A shared PRD/as-built task consumes the as-built lap, but remains
+    // attributed to prd_audit for the single shared plan-growth record.
     const asBuiltTasks: Array<{ id: string; title: string }> = [];
+    const asBuiltGrowthTasks: Array<{ id: string; title: string }> = [];
     const admittedAsBuiltFindingCounts = new Map<string, number>();
     const unexpectedAsBuiltGapIds = new Set<string>();
     for (const gap of gaps) {
@@ -3714,8 +3722,9 @@ export class Conductor {
         appendGaps.push(admittedGap);
         admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
+        if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
         if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
-        else if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
+        else if (asBuiltAdmits) asBuiltGrowthTasks.push(...gap.tasks);
       }
     }
 
@@ -3786,6 +3795,7 @@ export class Conductor {
           'prd_audit',
           prdAuditLapCap,
           prdAuditTasks.length,
+          prdAuditTasks.length,
           authoredTaskCount,
         )
         : undefined;
@@ -3796,6 +3806,7 @@ export class Conductor {
           'architecture_review_as_built',
           asBuiltLapCap,
           asBuiltTasks.length,
+          asBuiltGrowthTasks.length,
           authoredTaskCount,
         )
         : undefined;
