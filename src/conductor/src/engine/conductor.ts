@@ -8608,6 +8608,20 @@ export class Conductor {
           }
 
           if (!result.success) {
+            // D3: a verdict dispatch that returns a non-success outcome still
+            // needs its post-settle write observation before this serial loop
+            // retries, exhausts, or honors a step-authored HALT. Keep the
+            // structured diagnostic for the existing exhaustion-halt seam;
+            // do not clear a prior observation when this dispatch is outside
+            // the three SHIP-tail verdict gates.
+            const handshake = await this.verdictDispatchHandshake(
+              step.name,
+              this.currentRunId,
+              this.currentAttemptStartedAt,
+            );
+            if (handshake?.routeClass === 'absent' && handshake.reason) {
+              lastVerdictHandshakeFailure = handshake.reason;
+            }
             failedStepResult = result;
             // Task 10: the mechanical lane publishes a terminal aggregate
             // only after consuming its separate allowance. That aggregate is

@@ -2798,6 +2798,124 @@ describe('engine/conductor', () => {
       }
     });
 
+    // Covers: rem-prd-audit-rem-fr-s2.2-1
+    it.each([
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ] as const)(
+      'records the %s handshake on failed dispatch retries and preserves its final diagnostic',
+      async (step) => {
+        const seedResult = await readState(statePath);
+        const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+        for (const candidate of ALL_STEPS) {
+          state[candidate.name] = candidate.name === step ? 'pending' : 'skipped';
+          if (candidate.name === step) break;
+          state[candidate.name] = 'done';
+        }
+        state[step] = 'pending';
+        state.retro = 'skipped';
+        state.rebase = 'skipped';
+        state.finish = 'done';
+        await writeState(statePath, state as ConductState);
+
+        const conductor = new Conductor({
+          projectRoot: dir,
+          stateFilePath: statePath,
+          stepRunner: createMockStepRunner({ success: false, output: 'dispatch failed' }),
+          events,
+          fromStep: step,
+          verifyArtifacts: true,
+          mode: 'default',
+          maxRetries: 2,
+          config: { steps: { [step]: { max_retries: 2 } } },
+          onRecovery: async () => 'skip',
+        });
+        const handshakes: Array<{ runId?: string; startedAt?: number }> = [];
+        (conductor as unknown as {
+          verdictDispatchHandshake: (
+            name: StepName,
+            runId: string | undefined,
+            startedAt: number | undefined,
+          ) => Promise<{ done: false; routeClass: 'absent'; reason: string } | undefined>;
+        }).verdictDispatchHandshake = async (name, runId, startedAt) => {
+          expect(name).toBe(step);
+          handshakes.push({ runId, startedAt });
+          return { done: false, routeClass: 'absent', reason: `stale ${step} verdict` };
+        };
+
+        await conductor.run();
+
+        expect(handshakes).toHaveLength(2);
+        for (const handshake of handshakes) {
+          expect(handshake.runId).toMatch(/\S/);
+          expect(handshake.startedAt).toEqual(expect.any(Number));
+        }
+        expect(handshakes[0].runId).not.toBe(handshakes[1].runId);
+      },
+    );
+
+    // Covers: rem-prd-audit-rem-fr-s2.2-1
+    it.each([
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ] as const)(
+      'records the %s handshake before honoring a step-written halt verbatim',
+      async (step) => {
+        const seedResult = await readState(statePath);
+        const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+        for (const candidate of ALL_STEPS) {
+          state[candidate.name] = candidate.name === step ? 'pending' : 'skipped';
+          if (candidate.name === step) break;
+          state[candidate.name] = 'done';
+        }
+        state[step] = 'pending';
+        state.retro = 'skipped';
+        state.rebase = 'skipped';
+        state.finish = 'done';
+        await writeState(statePath, state as ConductState);
+
+        const haltReason = `step-authored ${step} halt`;
+        const conductor = new Conductor({
+          projectRoot: dir,
+          stateFilePath: statePath,
+          stepRunner: {
+            run: async () => {
+              await mkdir(join(dir, '.pipeline'), { recursive: true });
+              await writeFile(join(dir, '.pipeline/HALT'), haltReason + '\n');
+              await writeFile(join(dir, '.pipeline/HALT.class'), 'needs-human\n');
+              return { success: false, output: 'dispatch failed' };
+            },
+          },
+          events,
+          fromStep: step,
+          verifyArtifacts: true,
+          mode: 'default',
+          maxRetries: 2,
+        });
+        const handshakes: Array<{ runId?: string; startedAt?: number }> = [];
+        (conductor as unknown as {
+          verdictDispatchHandshake: (
+            name: StepName,
+            runId: string | undefined,
+            startedAt: number | undefined,
+          ) => Promise<{ done: false; routeClass: 'absent'; reason: string } | undefined>;
+        }).verdictDispatchHandshake = async (name, runId, startedAt) => {
+          expect(name).toBe(step);
+          handshakes.push({ runId, startedAt });
+          return { done: false, routeClass: 'absent', reason: `stale ${step} verdict` };
+        };
+
+        await conductor.run();
+
+        expect(handshakes).toHaveLength(1);
+        expect(handshakes[0].runId).toMatch(/\S/);
+        expect(handshakes[0].startedAt).toEqual(expect.any(Number));
+        await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(haltReason + '\n');
+      },
+    );
+
     // Covers: task:11
     it('halts with the stale prd-audit handshake identity after its retry budget is exhausted', async () => {
       const seedResult = await readState(statePath);
