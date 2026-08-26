@@ -905,6 +905,13 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       expect(await readFile(planPath, 'utf8')).not.toContain('rem-prd-audit-prd-fix');
       expect(await readFile(planPath, 'utf8')).not.toContain('rem-as-built-as-built-fix');
       await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
+      // AB-R8 / APPROVED decision 4 + Story 4: this consolidated exit names the
+      // allowance AND every as-built finding. Asserting only the class let the
+      // finding-less halt body pass unnoticed.
+      const mixedHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+      expect(mixedHalt).toContain('shared plan-growth allowance exhausted');
+      expect(mixedHalt).toContain('Blocking findings:');
+      expect(mixedHalt).toContain('ARCH-1 (REMEDIABLE; Task 1): Add the missing guard');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

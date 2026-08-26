@@ -3772,7 +3772,8 @@ export class Conductor {
         haltClass: KICKBACK_CAP_HALT_CLASS,
         detail:
           `${hintSource.source} remediation requested ${allTasks.length} plan task${allTasks.length === 1 ? '' : 's'} ` +
-          'with no plan-growth allowance; only validated prd_audit FIXABLE or as-built REMEDIABLE findings may append remediation work.',
+          'with no plan-growth allowance; only validated prd_audit FIXABLE or as-built REMEDIABLE findings may append remediation work.' +
+          renderAsBuiltBlockedFindingDetail(asBuiltReport),
       };
     }
 
@@ -3856,7 +3857,12 @@ export class Conductor {
           detail:
             `remediation shared plan-growth allowance exhausted (${sharedGrowthBudget.growth.added}/` +
             `${sharedGrowthBudget.growthCap} appended; ${allTasks.length} requested, ` +
-            `${sharedGrowthBudget.growth.remaining} remaining) before appending fix tasks.`,
+            `${sharedGrowthBudget.growth.remaining} remaining) before appending fix tasks.` +
+            // AB-R8 / APPROVED decision 4 + Story 4: a cap terminal names the
+            // allowance AND every finding. This exit is shared with prd_audit,
+            // so it renders unconditionally — the helper yields '' unless an
+            // as-built BLOCKED report actually participates.
+            renderAsBuiltBlockedFindingDetail(asBuiltReport),
         };
       }
       // Append remediation tasks to the plan
@@ -3989,7 +3995,8 @@ export class Conductor {
         haltClass: KICKBACK_CAP_HALT_CLASS,
         detail:
           `${hintSource.source} remediation requested no admitted remediation gap; ` +
-          'only criterion-bound appends and non-appending publication or halt gaps may route.',
+          'only criterion-bound appends and non-appending publication or halt gaps may route.' +
+          renderAsBuiltBlockedFindingDetail(asBuiltReport),
       };
     }
     if (routedFixes.length > 0) {

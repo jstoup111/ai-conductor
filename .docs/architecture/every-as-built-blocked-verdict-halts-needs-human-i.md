@@ -3,8 +3,9 @@
 **Last updated:** 2026-08-26
 **Scope:** issue #1874 — classify each as-built BLOCKED finding (REMEDIABLE vs DESIGN) and
 route REMEDIABLE findings through the existing single-appender remediation seam under a new
-`architecture_review_as_built` gate key; DESIGN, ambiguity, and cap exhaustion all halt
-`needs-human`.
+`architecture_review_as_built` gate key. DESIGN findings and an ambiguous or malformed
+report halt `needs-human`; cap exhaustion, a second lap, and a no-op escalation halt
+`kickback-cap` with every finding listed.
 
 ## Diagram
 
@@ -18,7 +19,7 @@ graph TD
 
     subgraph Parser["Engine parsers (mechanical, fail-closed)"]
         PV["parseAsBuiltVerdict<br/>artifacts.ts"]
-        PF["parseAsBuiltBlockedFindings (NEW)<br/>mirrors parsePrdAuditReport:<br/>closed class set, plan-task binding,<br/>malformed row => whole report invalid"]
+        PF["parseAsBuiltBlockedFindings (NEW)<br/>mirrors parsePrdAuditReport:<br/>closed class set, clause cell required<br/>for REMEDIABLE (presence only),<br/>malformed row => whole report invalid"]
         CLS["classifyAsBuiltReviewOutcome<br/>widened: blocked-remediable vs blocked-design"]
     end
 
@@ -39,7 +40,8 @@ graph TD
 
     subgraph Terminals["Terminals"]
         BUILD["navigateBack => BUILD<br/>(revived, bounded route)"]
-        HALT["writeHaltMarker needs-human<br/>DESIGN finding, ambiguous/malformed report,<br/>cap exhausted, second lap"]
+        HALT["writeHaltMarker needs-human<br/>DESIGN finding,<br/>ambiguous/malformed report"]
+        CAPHALT["writeHaltMarker kickback-cap<br/>cap exhausted, second lap,<br/>no-op escalation<br/>body lists every finding:<br/>id, class, governing clause, summary"]
         SHIP["gate satisfied => SHIP tail continues<br/>remediation recorded per finding<br/>in verdict artifact + shipped record"]
     end
 
@@ -52,11 +54,11 @@ graph TD
     GROUP -->|all findings REMEDIABLE| PR
     SERIAL -->|any DESIGN / invalid| HALT
     GROUP -->|any DESIGN / invalid| HALT
-    PR --> ALLOW --> CAPS
+    PR -->|"resolveAsBuiltGoverningClause<br/>binds each clause to a plan task here"| ALLOW --> CAPS
     CAPS -->|within allowance| APPEND --> LEDGER
     APPEND -->|append succeeded: record the findings it authorized| PENDING
     APPEND --> BUILD
-    CAPS -->|exhausted| HALT
+    CAPS -->|exhausted| CAPHALT
     BUILD -.->|rerun gate after rebuild| REPORT
     CLS -->|clean APPROVED after lap| SHIP
     PENDING -->|projected into the verdict artifact, then cleared| SHIP
@@ -82,3 +84,4 @@ graph TD
 |------|--------|--------|
 | 2026-08-25 | Initial generation | DECIDE for issue #1874 |
 | 2026-08-26 | Added the `pendingAsBuiltRemediationFindings` ledger node and its projection edge | Operator amendment approving ADR decision 7 (as-built finding AB-D1) |
+| 2026-08-26 | Split the halt terminal into needs-human vs kickback-cap; moved clause binding off the parser | As-built drift notes: cap exhaustion is kickback-cap, and clause resolution happens in planRemediation |

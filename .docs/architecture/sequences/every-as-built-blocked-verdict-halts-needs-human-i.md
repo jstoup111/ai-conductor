@@ -14,9 +14,11 @@ sequenceDiagram
     participant L as kickback ledger
     participant B as BUILD
     participant H as HALT (needs-human)
+    participant K as HALT (kickback-cap)
 
     AR->>P: report with Verdict BLOCKED + Blocking Findings table
-    P->>P: parse rows (closed class set, clause + plan-task binding)
+    P->>P: parse rows (closed class set; clause cell required for REMEDIABLE)
+    Note over P: shape and class only — planRemediation resolves each<br/>clause to a plan task via resolveAsBuiltGoverningClause
     alt any row malformed or unclassified
         P->>C: outcome invalid (fail toward human)
         C->>H: writeHaltMarker naming the defect
@@ -33,7 +35,7 @@ sequenceDiagram
             P->>C: APPROVED — gate satisfied
             C->>L: reload pending findings, project into verdict artifact, clear
         else lap or growth cap exhausted
-            C->>H: halt listing every finding + exhausted allowance
+            C->>K: kickback-cap halt: exhausted allowance + every finding
         end
     else any finding DESIGN
         P->>C: outcome blocked-design
@@ -44,6 +46,9 @@ sequenceDiagram
 ## Legend
 
 - «architecture_review_as_built» — the new gate key in the existing gate-keyed ledger.
+- Two terminal classes, not one: DESIGN findings and an invalid report halt `needs-human`;
+  cap exhaustion, a second lap, and a no-op escalation halt `kickback-cap`. Every
+  `kickback-cap` body lists each finding with its class and governing clause.
 - A surviving finding never loops: the second lap is a halt, not another remediation.
 - The operator can read afterward which findings were remediated and against which approved
   clause (verdict artifact + shipped record projection).
@@ -56,3 +61,4 @@ sequenceDiagram
 |------|--------|--------|
 | 2026-08-25 | Initial generation | DECIDE for issue #1874 |
 | 2026-08-26 | Added the pending-findings persist and project-then-clear steps | Operator amendment approving ADR decision 7 (as-built finding AB-D1) |
+| 2026-08-26 | Added the kickback-cap terminal; corrected where clause binding happens | As-built drift notes: exhaustion is kickback-cap, and the parser validates shape only |
