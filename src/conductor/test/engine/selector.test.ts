@@ -289,7 +289,7 @@ describe('engine/selector — gateSatisfied', () => {
     expect(gateSatisfied('build', { build: 'stale' }, { build: VSAT })).toBe(false);
   });
 
-  it('and the resume clamp select solely from supplied state and verdicts', () => {
+  it('and the selector helpers select solely from supplied state and verdicts', () => {
     const state: ConductState = {
       ...frontDone(),
       build: 'done',
@@ -308,7 +308,6 @@ describe('engine/selector — gateSatisfied', () => {
       state,
       verdicts,
       regionStart: 'build',
-      loopGatesOnly: true,
     })).toBe(ALL_STEPS.findIndex((step) => step.name === 'test_suite'));
     expect(readFile).not.toHaveBeenCalled();
   });
