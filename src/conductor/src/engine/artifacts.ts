@@ -4224,6 +4224,12 @@ export interface PrdAuditReport {
   rejectedRows: PrdAuditRejectedRow[];
 }
 
+interface ParsedPrdAuditFinding {
+  finding: PrdAuditFinding;
+  rowText: string;
+  section: 'verdict-table' | 'no-owner';
+}
+
 export type PrdAuditReportParseResult =
   | { ok: true; value: PrdAuditReport }
   | { ok: false; class: 'mechanical-fault'; error: string };
@@ -4433,7 +4439,7 @@ export function parsePrdAuditReport(
   const activePlanTaskIds = activePlan === undefined
     ? undefined
     : new Set(parsePlanTaskPaths(activePlan).keys());
-  const findings: PrdAuditFinding[] = [];
+  const parsedFindings: ParsedPrdAuditFinding[] = [];
   const rejectedRows: PrdAuditRejectedRow[] = [];
 
   let readingCriterionTable = false;
@@ -4490,12 +4496,16 @@ export function parsePrdAuditReport(
       continue;
     }
 
-    findings.push({
-      criterion,
-      grade: rawGrade as PrdAuditGrade,
-      ...(planTask === undefined ? {} : { planTask }),
-      prdIds: Object.freeze([...(prdIndex === -1 ? '' : cells[prdIndex] ?? '').matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((match) => match[0].toUpperCase())),
-      evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
+    parsedFindings.push({
+      finding: {
+        criterion,
+        grade: rawGrade as PrdAuditGrade,
+        ...(planTask === undefined ? {} : { planTask }),
+        prdIds: Object.freeze([...(prdIndex === -1 ? '' : cells[prdIndex] ?? '').matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((match) => match[0].toUpperCase())),
+        evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
+      },
+      rowText: line,
+      section: 'verdict-table',
     });
   }
 
@@ -4542,12 +4552,42 @@ export function parsePrdAuditReport(
         continue;
       }
 
-      findings.push({
-        criterion,
-        grade: rawGrade as PrdAuditGrade,
-        prdIds: Object.freeze([]),
-        evidence: noOwnerEvidenceIndex === -1 ? '' : cells[noOwnerEvidenceIndex] ?? '',
+      parsedFindings.push({
+        finding: {
+          criterion,
+          grade: rawGrade as PrdAuditGrade,
+          prdIds: Object.freeze([]),
+          evidence: noOwnerEvidenceIndex === -1 ? '' : cells[noOwnerEvidenceIndex] ?? '',
+        },
+        rowText: line,
+        section: 'no-owner',
       });
+    }
+  }
+
+  const findingsBySectionAndKey = new Map<string, ParsedPrdAuditFinding[]>();
+  for (const parsedFinding of parsedFindings) {
+    const normalizedKey = parsedFinding.finding.criterion.toUpperCase();
+    const groupKey = `${parsedFinding.section}:${normalizedKey}`;
+    const group = findingsBySectionAndKey.get(groupKey) ?? [];
+    group.push(parsedFinding);
+    findingsBySectionAndKey.set(groupKey, group);
+  }
+
+  const findings: PrdAuditFinding[] = [];
+  for (const duplicateGroup of findingsBySectionAndKey.values()) {
+    if (duplicateGroup.length === 1) {
+      findings.push(duplicateGroup[0].finding);
+      continue;
+    }
+    const normalizedKey = duplicateGroup[0].finding.criterion.toUpperCase();
+    for (const duplicate of duplicateGroup) {
+      rejectedPrdAuditRow(
+        rejectedRows,
+        duplicate.rowText,
+        duplicate.finding.criterion,
+        `PRD audit finding ${duplicate.finding.criterion} duplicates normalized key ${normalizedKey}; every carrier of a duplicate key is rejected.`,
+      );
     }
   }
 

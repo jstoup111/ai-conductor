@@ -286,6 +286,131 @@ describe('engine/artifacts', () => {
       });
     });
 
+    it('rejects every duplicate Verdict Table finding while retaining unique siblings', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | FR-1 | Unique sibling |
+| S1.3 | PASS | — | FR-1 | First S1.3 carrier |
+| S1.3 | OVER_SCOPE | — | FR-1 | Second S1.3 carrier |
+| S4.1 | PASS | — | FR-4 | First S4.1 carrier |
+| S4.1 | OVER_SCOPE | — | FR-4 | Second S4.1 carrier |
+| S4.2 | PASS | — | FR-4 | Other unique sibling |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'S4.2', grade: 'PASS' },
+          ],
+          rejectedRows: [
+            { key: 'S1.3', reason: expect.stringContaining('duplicate') },
+            { key: 'S1.3', reason: expect.stringContaining('duplicate') },
+            { key: 'S4.1', reason: expect.stringContaining('duplicate') },
+            { key: 'S4.1', reason: expect.stringContaining('duplicate') },
+          ],
+        },
+      });
+      if (parsed.ok) {
+        expect(parsed.value.rejectedRows.map(({ key }) => key)).toEqual([
+          'S1.3', 'S1.3', 'S4.1', 'S4.1',
+        ]);
+        expect(parsed.value.rejectedRows.map(({ reason }) => reason).join(' ')).toContain('S1.3');
+        expect(parsed.value.rejectedRows.map(({ reason }) => reason).join(' ')).toContain('S4.1');
+      }
+    });
+
+    it('rejects duplicate no-owner findings but does not diagnose unique keys', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | none | Unique criterion sibling |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Evidence |
+| --- | --- | --- |
+| NC.1 | OVER_SCOPE | First NC.1 carrier |
+| NC.1 | OVER_SCOPE | Second NC.1 carrier |
+| NC.2 | OVER_SCOPE | Unique no-owner sibling |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'NC.2', grade: 'OVER_SCOPE' },
+          ],
+          rejectedRows: [
+            { key: 'NC.1', reason: expect.stringContaining('duplicate') },
+            { key: 'NC.1', reason: expect.stringContaining('duplicate') },
+          ],
+        },
+      });
+    });
+
+    it('never returns two findings with the same normalized key', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| s1.1 | PASS | — | FR-1 | First carrier |
+| S1.1 | OVER_SCOPE | — | FR-1 | Second carrier |
+| S1.2 | PASS | — | FR-1 | Unique sibling |
+`);
+
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        const normalizedKeys = parsed.value.findings.map(({ criterion }) => criterion.toUpperCase());
+        expect(new Set(normalizedKeys).size).toBe(normalizedKeys.length);
+      }
+    });
+
+    it('leaves all-unique keys free of duplicate diagnostics', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | none | First unique criterion |
+| S1.2 | OVER_SCOPE | — | none | Second unique criterion |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Evidence |
+| --- | --- | --- |
+| NC.1 | OVER_SCOPE | Unique no-owner finding |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1' },
+            { criterion: 'S1.2' },
+            { criterion: 'NC.1' },
+          ],
+          rejectedRows: [],
+        },
+      });
+    });
+
     it('keeps the sectionless report result shape unchanged', () => {
       expect(parsePrdAuditReport(`
 **PRD:** none
