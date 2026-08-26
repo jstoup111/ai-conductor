@@ -43,6 +43,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - TDD-authored tests now declare Covers markers, so the build_review test-quality rubric reviews them instead of passing vacuously on an empty scope. ([implementation PR #1877](https://github.com/jstoup111/ai-conductor/pull/1877)).
 - Daemon help now lists every supported dispatcher command, including pause and resume. ([implementation PR #1878](https://github.com/jstoup111/ai-conductor/pull/1878)).
 - Validates feature-scoped artifact stems before landing a spec. ([implementation PR #1893](https://github.com/jstoup111/ai-conductor/pull/1893)).
+- Manual testing now warns instead of blocking when browser automation dependencies are unavailable, while continuing curl checks and preserving real application failures. ([implementation PR #1902](https://github.com/jstoup111/ai-conductor/pull/1902)).
 
 ## Migration
 
