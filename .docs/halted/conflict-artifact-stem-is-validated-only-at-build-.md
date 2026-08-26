@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-26T02:26:02.174Z
 Slug: conflict-artifact-stem-is-validated-only-at-build-
 Class: plan-gap
 Halting step: prd_audit
