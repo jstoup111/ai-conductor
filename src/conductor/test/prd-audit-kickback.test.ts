@@ -1,3 +1,5 @@
+// Covers: task:9
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -746,6 +748,82 @@ describe('prd_audit kickback', () => {
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
     const appended = await readFile(planPath, 'utf8');
     expect(appended.match(/^### Task rem-as-built-/gm)).toHaveLength(2);
+  });
+
+  it.each([
+    { id: 'AB-MISSING-ADR', clause: 'adr-2099-01-01-missing decision 1' },
+    { id: 'AB-MISSING-TASK', clause: 'Task 404' },
+  ])('halts without appending when $id has an unresolvable governing clause', async ({ id, clause }) => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-unresolvable-clause-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.pipeline'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 1: Existing approved work\n');
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-RESOLVED | REMEDIABLE | Task 1 | Complete the existing approved work |',
+      `| ${id} | REMEDIABLE | ${clause} | Resolve the missing authority |`,
+    ].join('\n'));
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+          dispositions: [
+            {
+              id: 'AB-RESOLVED', disposition: 'build', category: null,
+              rationale: 'Conform to the active plan task.',
+              tasks: [{ id: 'resolved-task', title: 'Complete the existing approved work' }],
+            },
+            {
+              id, disposition: 'build', category: null,
+              rationale: 'Resolve the missing authority.',
+              tasks: [{ id: 'unresolved-task', title: 'Do not append this task' }],
+            },
+          ],
+        }));
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string; haltClass?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      {
+        source: 'as-built',
+        evidence: [{
+          gate: 'architecture_review_as_built',
+          evidenceFile: '.pipeline/architecture-review-as-built.md',
+        }],
+      },
+    );
+
+    expect({
+      outcome,
+      appended: (await readFile(planPath, 'utf8')).includes('### Task rem-as-built-'),
+    }).toMatchObject({
+      outcome: {
+        kind: 'halt',
+        haltClass: 'needs-human',
+        detail: expect.stringContaining(`${id}: ${clause}`),
+      },
+      appended: false,
+    });
   });
 
   it('uses gate-specific configured lap caps without changing the generic cap', () => {

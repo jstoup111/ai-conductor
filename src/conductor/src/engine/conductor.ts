@@ -3251,7 +3251,12 @@ export class Conductor {
     hintSource: RemediationHintSource,
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
-    | { kind: 'halt'; detail: string; haltClass?: KickbackCapHaltClass | 'mechanical'; kickbackOutcome?: string }
+    | {
+      kind: 'halt';
+      detail: string;
+      haltClass?: KickbackCapHaltClass | 'mechanical' | 'needs-human';
+      kickbackOutcome?: string;
+    }
     | { kind: 'none' }
   > {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
@@ -3329,6 +3334,7 @@ export class Conductor {
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
     const asBuiltFindings = new Map<string, AsBuiltGoverningClauseResolution>();
+    const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];
     let prdAuditValidated = false;
     let asBuiltValidated = false;
     let activePlanText = '';
@@ -3406,7 +3412,11 @@ export class Conductor {
             asBuiltPlanText,
             finding.clause,
           );
-          if (resolution !== null) asBuiltFindings.set(finding.id, resolution);
+          if (resolution !== null) {
+            asBuiltFindings.set(finding.id, resolution);
+          } else {
+            asBuiltUnresolvableClauses.push({ id: finding.id, clause: finding.clause });
+          }
         }
         asBuiltValidated = true;
       } catch (error) {
@@ -3414,6 +3424,16 @@ export class Conductor {
         await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
         return { kind: 'halt', haltClass: 'mechanical', detail };
       }
+    }
+
+    if (asBuiltUnresolvableClauses.length > 0) {
+      return {
+        kind: 'halt',
+        haltClass: 'needs-human',
+        detail:
+          'As-built review remediation cannot resolve governing clause(s): ' +
+          asBuiltUnresolvableClauses.map(({ id, clause }) => `${id}: ${clause}`).join('; ') + '.',
+      };
     }
 
     const appendGaps: CriterionBoundRemediationGap[] = [];
