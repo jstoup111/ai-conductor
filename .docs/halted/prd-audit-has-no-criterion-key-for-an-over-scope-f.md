@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-26T10:33:42.142Z
 Slug: prd-audit-has-no-criterion-key-for-an-over-scope-f
 Class: plan-gap
 Halting step: prd_audit
