@@ -332,12 +332,21 @@ export async function landSpec(
     }
   }
 
+  // The coherence gate below reads `.docs/coherence/<plan-stem>.md` BY NAME, so
+  // a coherence artifact this idea authored under another feature's stem is
+  // invisible to it — it can only report the expected file as missing, never
+  // the misnamed one it is looking straight past. Validate it here, through the
+  // same feature-stem contract as every other feature-scoped family, so no
+  // artifact family keeps a private naming path.
+  const coherenceFile = await pickIdeaFile(join(worktreePath, '.docs', 'coherence'), ideaFiles);
+
   const artifactStemViolations = validateFeatureArtifactStems(
     [
       { step: 'prd', paths: specFile ? [relative(worktreePath, specFile)] : [] },
       { step: 'stories', paths: [relative(worktreePath, storiesFile)] },
       { step: 'plan', paths: [relative(worktreePath, planFile)] },
       { step: 'conflict_check', paths: conflictsFile ? [relative(worktreePath, conflictsFile)] : [] },
+      { step: 'coherence_check', paths: coherenceFile ? [relative(worktreePath, coherenceFile)] : [] },
     ],
     featureSlug,
   );

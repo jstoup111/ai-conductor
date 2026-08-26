@@ -92,7 +92,7 @@ async function seedNamedTierMWorktree(
   idea: string,
   conflictStem: string,
   datePrefix = '',
-  options: { storiesStem?: string; planFileStem?: string } = {},
+  options: { storiesStem?: string; planFileStem?: string; coherenceStem?: string } = {},
 ): Promise<string> {
   const slug = 'clean-rubric-judgements-rejected-as-invalid-provid';
   const storiesStem = options.storiesStem ?? `${datePrefix}${slug}`;
@@ -121,6 +121,13 @@ async function seedNamedTierMWorktree(
   await writeFile(join(dir, '.docs', 'conflicts', `${datePrefix}${conflictStem}.md`), '# Conflicts\n\nNone.\n');
   await writeFile(join(dir, '.docs', 'architecture', `${slug}.md`), '# Architecture\n\nApproved.\n');
   await writeFile(join(dir, '.docs', 'decisions', `${slug}.md`), '# Review\n\nApproved.\n');
+  if (options.coherenceStem !== undefined) {
+    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'coherence', `${options.coherenceStem}.md`),
+      '# Coherence\n\n| Outcome | FR | Story | Task | Verdict |\n|---|---|---|---|---|\n| outcome-1 | FR-1 | S1 | 1 | OK |\n',
+    );
+  }
   return dir;
 }
 
@@ -916,6 +923,22 @@ describe('Task 3: negative feature-scoped artifact stems at land (#1743)', () =>
     ).rejects.toThrow(
       new RegExp(`${planPath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(plan-stem\\)`),
     );
+  });
+
+  it('rejects a coherence artifact named for another feature through the shared contract matcher', async () => {
+    // The coherence gate reads `.docs/coherence/<plan-stem>.md` by name, so a
+    // file named for a different feature is invisible to it — only the shared
+    // feature-stem contract can reject it at land.
+    const coherencePath = '.docs/coherence/unrelated-feature.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '', { coherenceStem: 'unrelated-feature' });
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      new RegExp(`${coherencePath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(plan-stem\\)`),
+    );
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
   });
 
   it('reports mismatched conflict and stories stems together instead of accepting their loose idea association', async () => {
