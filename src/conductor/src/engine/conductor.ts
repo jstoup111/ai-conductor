@@ -6722,7 +6722,16 @@ export class Conductor {
               // with no FAIL still belongs to this route — that shared repair,
               // with its single-counted plan growth, is what decision 4 and
               // finding AB-R6 established.
-              const consolidatedKickbackOwnsThisRound = manualTestFailRows.length > 0;
+              //
+              // AB-R15: the kill switch is part of this condition, not just of
+              // the route below. Decision 6 requires
+              // `architecture_review_as_built.remediation.enabled: false` to
+              // revert EXACTLY to halt-always-on-BLOCKED. Deferring on the FAIL
+              // rows alone suppressed the terminal halt even with remediation
+              // disabled, so the report fell through to the merge and was
+              // remediated anyway — the one behaviour the switch must rule out.
+              const consolidatedKickbackOwnsThisRound =
+                asBuiltRemediationEnabled && manualTestFailRows.length > 0;
               const remediableAsBuiltRoute =
                 this.daemon &&
                 asBuiltRemediationEnabled &&

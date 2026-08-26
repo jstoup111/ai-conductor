@@ -1301,6 +1301,73 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
   });
 
   /**
+   * AB-R15 / adr-2026-08-25 decision 6: the kill switch must revert EXACTLY to
+   * halt-always-on-BLOCKED. With remediation disabled, an all-REMEDIABLE
+   * as-built verdict halts needs-human immediately — even when a manual-test
+   * FAIL in the same round would otherwise hand the round to the consolidated
+   * kickback. No /remediate dispatch may be spent.
+   */
+  it('halts immediately on a BLOCKED as-built verdict when remediation is disabled, even with a manual-test FAIL', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-killswitch-mt-fail-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath);
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'parallel-validation-phase-fan-out-manual-test-prd-.md'),
+        [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n'),
+      );
+
+      let remediateDispatches = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
+              '# PRD Audit',
+              '',
+              '**PRD:** none',
+              '',
+              '## Verdict Table',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '| --- | --- | --- | --- | --- |',
+              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
+              '',
+              PRD_PASS,
+            ].join('\n'));
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              [
+                'Verdict: BLOCKED',
+                '',
+                '## Blocking Findings',
+                '| Finding | Class | Governing clause | Summary |',
+                '| --- | --- | --- | --- |',
+                '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
+              ].join('\n'),
+            );
+          } else if (step === 'remediate') {
+            remediateDispatches++;
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter(), {
+        config: { architecture_review_as_built: { remediation: { enabled: false } } } as never,
+      });
+      await conductor.run();
+
+      expect(remediateDispatches).toBe(0);
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
    * AB-R14 / adr-2026-07-10-validation-group-join decision 3, as subordinated by
    * adr-2026-08-25 decision 8: when a join carries a manual_test FAIL AND an
    * all-REMEDIABLE as-built BLOCKED verdict, the bounded as-built route must NOT
