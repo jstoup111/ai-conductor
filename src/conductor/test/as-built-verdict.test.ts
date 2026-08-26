@@ -156,6 +156,29 @@ describe('as-built verdict gate', () => {
     });
   });
 
+  it('returns a typed fault when a second Blocking Findings section disagrees with the first', () => {
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-1 | REMEDIABLE | Task 2 | Add the missing guard |',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| ARCH-2 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
+    ].join('\n');
+
+    expect(parseAsBuiltBlockedFindings(report)).toEqual({
+      ok: false,
+      class: 'mechanical-fault',
+      error: 'As-built BLOCKED report has duplicate Blocking Findings sections.',
+    });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+  });
+
   it('classifies an all-REMEDIABLE BLOCKED findings table as blocked-remediable', () => {
     const report = [
       'Verdict: BLOCKED',

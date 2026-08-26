@@ -4059,10 +4059,15 @@ const AS_BUILT_BLOCKED_FINDING_CLASSES: ReadonlySet<AsBuiltBlockedFindingClass> 
  */
 export function parseAsBuiltBlockedFindings(content: string): AsBuiltBlockedFindingsParseResult {
   const lines = content.split('\n');
-  const sectionStart = lines.findIndex((line) => AS_BUILT_BLOCKING_FINDINGS_HEADING_RE.test(line));
-  if (sectionStart === -1) {
+  const sectionStarts = lines.flatMap((line, index) =>
+    AS_BUILT_BLOCKING_FINDINGS_HEADING_RE.test(line) ? [index] : []);
+  if (sectionStarts.length === 0) {
     return asBuiltBlockedFindingsMechanicalFault('As-built BLOCKED report is missing its Blocking Findings table.');
   }
+  if (sectionStarts.length > 1) {
+    return asBuiltBlockedFindingsMechanicalFault('As-built BLOCKED report has duplicate Blocking Findings sections.');
+  }
+  const [sectionStart] = sectionStarts;
 
   const remainingSection = lines.slice(sectionStart + 1);
   const sectionEnd = remainingSection.findIndex((line) => /^\s{0,3}##\s+/.test(line));
