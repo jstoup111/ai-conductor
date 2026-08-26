@@ -122,7 +122,7 @@ key. Explicit project values remain authoritative, including their existing reje
 clamping, and warning behavior. Step 4 materializes runtime defaults once for values absent from both
 scopes. This applies uniformly to every defaulted key, including `attribution_audit_sample_pct`,
 `auto_restart_on_stale_engine`, `engine_refresh_min_interval_seconds`, `build_review`, `ci_watch`,
-`build_progress_halt`, `kickback_escalation`, and `retry_routing`.
+`build_progress_halt`, `kickback_escalation`, `gate_code_validity`, and `retry_routing`.
 
 > **Known limitation.** `loadMergedConfig`'s own docstring says "User-config parse errors become warnings,
 > not hard failures" (`config.ts:1700-1705`), but the code returns a hard `parse_error`
@@ -154,7 +154,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-41 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
+42 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
 [build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
@@ -196,6 +196,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
+| `gate_code_validity` | object | `{ enabled: true }` | [gate_code_validity](#gate_code_validity) |
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
 | `reconcile_parked_auto_cleanup` | boolean | `true` | [reconcile_parked_auto_cleanup](#reconcile_parked_auto_cleanup) |
 | `provider_preparation_timeout_minutes` | number | `5` | [provider_preparation_timeout_minutes](#provider_preparation_timeout_minutes) |
@@ -774,6 +775,22 @@ Kill-switch for classifying a retry as a rerun versus a route to another step. V
 
 Consumed at `src/conductor/src/engine/conductor.ts:4149`.
 
+## gate_code_validity
+
+Kill-switch for reusing a previously passing gate verdict when its stamped code surface is unchanged,
+even if the verdict artifact's modification time is stale.
+
+| Key | Type | Validation | Default |
+| --- | --- | --- | --- |
+| `gate_code_validity.enabled` | boolean | Boolean, else hard error | `true` |
+
+`enabled` is the only allowed key; a non-object block or an unknown inner key is a hard error. Setting
+`enabled: false` restores pure modification-time freshness and prevents reuse through code stamps.
+
+The resolved value is consumed by the `build_review`, `prd_audit`,
+`architecture_review_as_built`, and `manual_test` completion predicates, by stale-review-artifact
+sweeping, and by step-runner gate preservation.
+
 ## harness_self_host
 
 Guardrails that apply when the build target is the harness checkout itself. Validated by
@@ -1265,17 +1282,9 @@ fails the load.
 
 | Key | Declared at | Rejected with |
 | --- | --- | --- |
-| `gate_code_validity` | `types/config.ts:322-325, 466-468` | `Unknown top-level key: "gate_code_validity"` |
 | `auth_park_timeout_minutes` (top level) | `types/config.ts:546-553` | `Unknown top-level key: "auth_park_timeout_minutes"` |
 | `steps.<custom>.gate` | `types/config.ts:134-140` | `Unknown key in steps.<n>: "gate"` |
 | `steps.<custom>.kickback_target` | `types/config.ts:141-146` | `Unknown key in steps.<n>: "kickback_target"` |
-
-> **Known limitation.** `gate_code_validity` is a fully wired kill-switch: `resolveGateCodeValidityConfig`
-> (`config.ts:1911-1919`) is called from six sites — `src/conductor/src/engine/artifacts.ts:365, 1587,
-> 1753, 1847, 1955` and `src/conductor/src/engine/step-runners.ts:1687` — and the absent block resolves
-> to `{ enabled: true }`. Because the key is not in `knownTopLevelKeys` (`config.ts:213-269`), it can
-> never be set from a config file, so the gate is permanently on. There is no workaround.
-> Tracked in [#1001](https://github.com/jstoup111/ai-conductor/issues/1001).
 
 > **Known limitation.** Top-level `auth_park_timeout_minutes` is declared and has a resolver,
 > `resolveAuthParkTimeoutMinutes` (`resolved-config.ts:463-480`), which throws on non-numeric or

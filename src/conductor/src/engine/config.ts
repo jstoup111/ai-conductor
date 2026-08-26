@@ -463,6 +463,8 @@ export function validateConfig(
     'kickback_escalation',
     // Cumulative build-review convergence-bound kill-switch.
     'cumulative_kickback_bound',
+    // Gate-verdict code-validity preservation kill-switch.
+    'gate_code_validity',
     // Default-off verbose skip logging in gate-writeback (daemon-suppress-other-owner-log-noise).
     'daemon_verbose',
     // Removes parked feature worktrees after reconciliation by default.
@@ -1312,6 +1314,15 @@ export function validateConfig(
     obj.cumulative_kickback_bound = { enabled: true };
   }
 
+  // gate_code_validity — gate-verdict code-validity preservation kill-switch.
+  {
+    const err = validateGateCodeValidityBlock(obj.gate_code_validity);
+    if (err) return { ok: false, error: err };
+    if (obj.gate_code_validity !== undefined || materializeDefaults) {
+      obj.gate_code_validity = resolveGateCodeValidityBlock(obj.gate_code_validity);
+    }
+  }
+
   // retry_routing — retry classify rerun-vs-route kill-switch.
   {
     const err = validateRetryRoutingBlock(obj.retry_routing);
@@ -1973,6 +1984,35 @@ export const RETRY_ROUTING_DEFAULTS = {
   enabled: true,
 } as const;
 
+function validateGateCodeValidityBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'gate_code_validity must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['enabled']);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in gate_code_validity: "${key}"`,
+      };
+    }
+  }
+  if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
+    return {
+      type: 'validation_error',
+      message: 'gate_code_validity.enabled must be a boolean',
+    };
+  }
+  return null;
+}
+
+function resolveGateCodeValidityBlock(raw: unknown): { enabled: boolean } {
+  const obj = isPlainObject(raw) ? (raw as Record<string, unknown>) : {};
+  return { enabled: typeof obj.enabled === 'boolean' ? obj.enabled : true };
+}
+
 /**
  * Validate the `retry_routing:` block (retry classify rerun-vs-route
  * kill-switch). Object-only; `enabled` must be a boolean if present; unknown
@@ -2605,11 +2645,7 @@ export function resolveValidationConcurrency(config: Pick<HarnessConfig, 'valida
 export function resolveGateCodeValidityConfig(
   config: Pick<HarnessConfig, 'gate_code_validity'> | undefined,
 ): { enabled: boolean } {
-  const block = config?.gate_code_validity;
-  if (!block || typeof block.enabled !== 'boolean') {
-    return { enabled: true };
-  }
-  return { enabled: block.enabled };
+  return resolveGateCodeValidityBlock(config?.gate_code_validity);
 }
 
 export function resolveBuildProgressConfig(
