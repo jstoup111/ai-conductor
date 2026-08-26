@@ -75,6 +75,7 @@ function renderTaskBlock(
   rationale: string,
   criterion?: string,
   parentTask?: number | string,
+  governingClause?: string,
 ): string {
   return [
     `### Task ${id}: ${title}`,
@@ -87,6 +88,14 @@ function renderTaskBlock(
           `**Parent task:** ${parentTask}`,
           '**Done when:**',
           `- ${criterion} is satisfied by this task.`,
+        ]),
+    ...(governingClause === undefined
+      ? []
+      : [
+          `**Governing clause:** ${governingClause}`,
+          ...(parentTask === undefined ? [] : [`**Parent task:** ${parentTask}`]),
+          '**Done when:**',
+          `- ${governingClause} is satisfied by this task.`,
         ]),
     '',
   ].join('\n');
@@ -150,6 +159,7 @@ export function appendRemediationTasks(
         gap.rationale,
         gap.criterion,
         gap.parentTask,
+        gap.governingClause,
       ));
       existing.set(id, title);
       ids.push(id);
