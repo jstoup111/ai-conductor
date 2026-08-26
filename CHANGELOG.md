@@ -19,6 +19,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Codex dispatches are now priced from a committed per-model rate card (`.ai-conductor/rate-card.json`, maintained by `conduct rate-card refresh`), so a mixed-provider feature reports its real cost instead of a Claude-only figure; dispatches whose cost cannot be established are named explicitly on the finish usage line. ([implementation PR #1858](https://github.com/jstoup111/ai-conductor/pull/1858)).
 - Plan specifications now require every task to declare two to five nonblank completion checks before landing. ([implementation PR #1866](https://github.com/jstoup111/ai-conductor/pull/1866)).
 - Adds a guided workflow for safely removing obsolete code and verifying remaining references. ([implementation PR #1899](https://github.com/jstoup111/ai-conductor/pull/1899)).
+- Daemon runs now route wholly remediable as-built architecture-review findings through one bounded build remediation lap, while design findings halt for human input. ([implementation PR #1908](https://github.com/jstoup111/ai-conductor/pull/1908)).
 
 ### Changed
 
