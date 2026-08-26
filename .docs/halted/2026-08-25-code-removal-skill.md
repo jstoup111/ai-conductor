@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-26T02:04:22.439Z
+Status: halted
 Slug: 2026-08-25-code-removal-skill
-Class: plan-gap
+Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-2026-08-25-code-removal-skill
-Head SHA: 00f2f0efd36b8c147b64130cc9a2f622a1379473
-Halted at: 2026-08-26T01:55:52.344Z
+Head SHA: e87e7f44f543c9a5c49d49d70af6c7402ae4c89a
+Halted at: 2026-08-26T02:37:59.695Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-prd-audit halted: needs human DECIDE — PLAN_GAP on S2.4.
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED — shipped code violates an approved architecture decision
 ```
