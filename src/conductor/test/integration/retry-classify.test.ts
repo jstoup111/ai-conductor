@@ -44,6 +44,18 @@ import type { StepName } from '../../src/types/index.js';
 // ── shared fixtures ───────────────────────────────────────────────────────
 
 const AUDIT_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';
+const AS_BUILT_DESIGN = [
+  '# As-Built Review',
+  '',
+  'Verdict: BLOCKED',
+  '',
+  '## Blocking Findings',
+  '',
+  '| Finding | Class | Governing clause | Summary |',
+  '|---|---|---|---|',
+  '| ARCH-1 | DESIGN | Task 1 | A new architectural decision is required. |',
+  '',
+].join('\n');
 
 /** All steps before `target` marked 'done'; tail starts exactly at `target`. */
 async function seedTailAt(
@@ -142,14 +154,14 @@ describe('integration/retry-classify (#646)', () => {
 
   // ── Story 1: as-built BLOCKED stops on try 1 ────────────────────────────
 
-  it('Story 1: fresh as-built BLOCKED verdict halts on try 1 and never sends work back to build', async () => {
+  it('Story 1: fresh DESIGN as-built BLOCKED verdict halts on try 1 and never sends work back to build', async () => {
     await seedTailAt(statePath, 'architecture_review_as_built');
     const runner = withRemediation(dir, {
       architecture_review_as_built: async () => {
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         await writeFile(
           join(dir, '.pipeline/architecture-review-as-built.md'),
-          '# As-Built Review\n\nVerdict: BLOCKED\n',
+          AS_BUILT_DESIGN,
         );
       },
       build: async () => {},
@@ -174,8 +186,8 @@ describe('integration/retry-classify (#646)', () => {
     expect(calls.filter((s) => s === 'architecture_review_as_built')).toHaveLength(1);
     expect(stepRetries.filter((r) => r.step === 'architecture_review_as_built')).toHaveLength(0);
 
-    // #1805 makes as-built a SHIP-only decision: a BLOCKED verdict stops for
-    // a human and must never route unplanned work back to BUILD.
+    // A DESIGN finding remains a human decision and must never route work
+    // back to BUILD.
     expect(kickbacks).not.toContainEqual({ from: 'architecture_review_as_built', to: 'build' });
 
     expect(retryDecisions).toContainEqual(
@@ -305,7 +317,7 @@ describe('integration/retry-classify (#646)', () => {
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         await writeFile(
           join(dir, '.pipeline/architecture-review-as-built.md'),
-          '# As-Built Review\n\nVerdict: BLOCKED\n',
+          AS_BUILT_DESIGN,
         );
       },
       build: async () => {},
@@ -342,7 +354,7 @@ describe('integration/retry-classify (#646)', () => {
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         await writeFile(
           join(dir, '.pipeline/architecture-review-as-built.md'),
-          '# As-Built Review\n\nVerdict: BLOCKED\n',
+          AS_BUILT_DESIGN,
         );
       },
       build: async () => {},
@@ -473,7 +485,7 @@ describe('integration/retry-classify (#646)', () => {
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         await writeFile(
           join(dir, '.pipeline/architecture-review-as-built.md'),
-          '# As-Built Review\n\nVerdict: BLOCKED\n',
+          AS_BUILT_DESIGN,
         );
       },
     });
@@ -505,9 +517,9 @@ describe('integration/retry-classify (#646)', () => {
     expect(halt).toMatch(/as-built architecture review halted/);
   });
 
-  it('Regression: a perpetually-BLOCKED as-built verdict halts without a kickback loop', async () => {
-    // #1805 removes the as-built → build route, so this fixture must halt on
-    // its first BLOCKED verdict rather than consuming the generic kickback cap.
+  it('Regression: a perpetually DESIGN-BLOCKED as-built verdict halts without a kickback loop', async () => {
+    // DESIGN stays terminal, so it halts on its first BLOCKED verdict rather
+    // than consuming the generic kickback cap.
     await seedTailAt(statePath, 'architecture_review_as_built', {
       build_review: 'skipped',
       wiring_check: 'skipped',
@@ -522,7 +534,7 @@ describe('integration/retry-classify (#646)', () => {
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         await writeFile(
           join(dir, '.pipeline/architecture-review-as-built.md'),
-          '# As-Built Review\n\nVerdict: BLOCKED\n',
+          AS_BUILT_DESIGN,
         );
       },
       build: async () => {

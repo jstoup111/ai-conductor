@@ -3472,10 +3472,12 @@ export class Conductor {
     // resolveFeaturePlanPath also returns an absolute path, which
     // appendRemediationTasks reads directly (the raw engine-state string was
     // cwd-relative and only worked when cwd happened to be the project root).
-    const planPath =
-      (await this.getActivePlanPath()) ??
-      (await resolveFeaturePlanPath(this.projectRoot, state.feature_desc)) ??
-      null;
+    const activePlanPath = await this.getActivePlanPath();
+    const planPath = activePlanPath === null
+      ? (await resolveFeaturePlanPath(this.projectRoot, state.feature_desc))
+      : isAbsolute(activePlanPath)
+        ? activePlanPath
+        : join(this.projectRoot, activePlanPath);
     const sealedArtifactsByGapId = new Map<string, string>();
     if (planPath) {
       for (const gap of plan.gaps) {
@@ -3711,30 +3713,27 @@ export class Conductor {
     // establish their parent-task and criterion bounds. Production callers
     // identify their gate provenance structurally; older direct callers have
     // no such provenance and retain their compatibility behavior. The
-    // canonical as-built source may grow the plan only while its remediation
-    // switch is enabled. Mixed provenance retains prd_audit's criterion-bound
-    // authority, so enabling as-built remediation cannot bypass that gate.
+    // canonical as-built source may grow the plan only after its current
+    // BLOCKED report has been parsed and every remediable finding has been
+    // bound to an approved clause. Mixed provenance retains prd_audit's
+    // criterion-bound authority, so enabling as-built remediation cannot
+    // bypass that gate.
     const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
       architecture_review_as_built?: { remediation?: { enabled?: boolean } };
     }).architecture_review_as_built?.remediation?.enabled ?? true;
-    const hasOnlyAsBuiltEvidence =
-      remediationEvidenceSources.length > 0 &&
-      remediationEvidenceSources.every(
-        (provenance) => provenance.gate === 'architecture_review_as_built',
-      );
-    const isCanonicalAsBuiltSource = hintSource.source === 'architecture-review-as-built';
     const asBuiltPlanGrowthAdmitted =
-      asBuiltRemediationEnabled && (hasOnlyAsBuiltEvidence || isCanonicalAsBuiltSource);
+      asBuiltRemediationEnabled && asBuiltRemediation && asBuiltValidated;
     const requiresPlanGrowthAllowance =
-      (remediationEvidenceSources.length > 0 && !asBuiltPlanGrowthAdmitted) ||
-      (isCanonicalAsBuiltSource && !asBuiltPlanGrowthAdmitted);
+      remediationEvidenceSources.length > 0
+        ? !asBuiltPlanGrowthAdmitted
+        : hintSource.source === 'architecture-review-as-built';
     if (allTasks.length > 0 && requiresPlanGrowthAllowance && !prdAuditCapEnforced) {
       return {
         kind: 'halt',
         haltClass: KICKBACK_CAP_HALT_CLASS,
         detail:
           `${hintSource.source} remediation requested ${allTasks.length} plan task${allTasks.length === 1 ? '' : 's'} ` +
-          'with no plan-growth allowance; only validated prd_audit FIXABLE findings may append remediation work.',
+          'with no plan-growth allowance; only validated prd_audit FIXABLE or as-built REMEDIABLE findings may append remediation work.',
       };
     }
 

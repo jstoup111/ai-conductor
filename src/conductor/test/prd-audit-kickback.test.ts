@@ -758,14 +758,27 @@ describe('prd_audit kickback', () => {
     });
   });
 
-  it('admits as-built task append evidence when remediation is enabled', async () => {
+  it('admits validated as-built REMEDIABLE evidence when remediation is enabled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-enabled-'));
     dirs.push(root);
     const planPath = join(root, '.docs', 'plans', 'feature.md');
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await mkdir(join(root, '.pipeline'), { recursive: true });
-    await writeFile(planPath, '### Task 1: authored\n');
+    await writeFile(planPath, [
+      '### Task 1: authored',
+      '### Task 2: authored',
+      '### Task 3: authored',
+      '### Task 4: authored',
+    ].join('\n'));
     await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| arch-gap | REMEDIABLE | Task 1 | Repair approved architecture drift. |',
+    ].join('\n'));
     const runner: StepRunner = {
       run: async () => {
         await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
@@ -796,7 +809,9 @@ describe('prd_audit kickback', () => {
     );
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
-    expect(await readFile(planPath, 'utf8')).toContain('### Task rem-arch: Repair approved architecture drift');
+    const appendedPlan = await readFile(planPath, 'utf8');
+    expect(appendedPlan).toContain('### Task rem-as-built-rem-arch: Repair approved architecture drift');
+    expect(appendedPlan).toContain('**Governing clause:** Task 1');
   });
 
   it('constructs clause-bound as-built gaps and projects every remediated lap', async () => {

@@ -94,6 +94,12 @@ async function seedFixture(): Promise<{ root: string; statePath: string }> {
       '',
       '**Files:** src/feature.ts',
       '',
+      '### Task 2: retain approved behavior',
+      '',
+      '### Task 3: verify approved behavior',
+      '',
+      '### Task 4: document approved behavior',
+      '',
     ].join('\n'),
   );
   await writeFile(
@@ -207,7 +213,7 @@ describe('acceptance: an all-REMEDIABLE as-built verdict returns the daemon to B
       remediateDispatches: calls.filter((step) => step === 'remediate').length,
       buildDispatched: calls.includes('build'),
       appendedTask: /### Task rem-as-built-/.test(plan),
-      governingClause: plan.includes('Governing clause: 1'),
+      governingClause: plan.includes('**Governing clause:** 1'),
       asBuiltStatus: state?.architecture_review_as_built,
       sentinelReached: existsSync(join(root, '.pipeline', 'HALT')) &&
         (await readFile(join(root, '.pipeline', 'HALT'), 'utf8')).includes('sentinel:'),
