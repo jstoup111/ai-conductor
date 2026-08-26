@@ -87,13 +87,6 @@ coverage, and need no RED of their own.
 **Agent:** Generator (test-files-only context).
 **Goal:** Write exactly one failing test that captures the next behavior.
 
-**Advisory model selection:** Before dispatching RED or GREEN, read
-`.ai-conductor/config.yml`. If `steps.build.tdd.red.model` or
-`steps.build.tdd.green.model` is configured, dispatch that phase's generator with the
-configured `model`. The config validator guarantees the model belongs to the selected
-`llm_provider`'s native family. If a phase is not configured, retain the build session's
-normal model. This is an orchestration instruction, not a separate conductor step.
-
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
 2. Write one test with one assertion
 3. The agent derives selectors, retains the test under change as an expected failing member,
@@ -144,8 +137,7 @@ production call site of any security/correctness derivation, with real adversari
 
 ### Phase 3: GREEN
 
-**Agent:** Generator (source-files-only context) — use
-`steps.build.tdd.green.model` when configured (see RED's advisory model selection rule).
+**Agent:** Generator (source-files-only context).
 **Goal:** Write the smallest behavior-complete code change that makes the failing test pass and
 conforms to the applicable recorded basis.
 

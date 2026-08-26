@@ -499,9 +499,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Frontmatter** — `enforcement: structural`, `phase: build`, `standalone: true`, `requires: []`, no
   model pin.
 - **Engine step** — none. It is the per-task cycle every `pipeline` implementer runs.
-- **Inputs** — one acceptance criterion from the plan; test and source directory paths; the
-  `steps.build.tdd.red.model` and `.green.model` config keys; tech-context lint and typecheck commands;
-  `.memory/decisions/`.
+- **Inputs** — one acceptance criterion from the plan; test and source directory paths; tech-context
+  lint and typecheck commands; `.memory/decisions/`.
 - **Outputs** — git commits carrying `Task: <id>` trailers, including empty evidence commits;
   conditional `.memory/gotchas/` and `.memory/patterns/` entries. No `.docs/` artifact.
 - **Gate role** — neither in flow terms, but COMMIT is a hard in-cycle gate: scoped tests green, linter

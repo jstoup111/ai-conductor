@@ -26,7 +26,6 @@ import { VALID_MERMAID_RENDERER_MODES } from './mermaid-renderer-presets.js';
 import { validateWhenSyntax } from './when-expression.js';
 import type { PluginRegistry } from './plugin-registry.js';
 import { FALLBACK_RETRIES } from './resolved-config.js';
-import { resolveProviderModelPolicy } from './provider-model-policy.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
 export type ConfigError = {
@@ -70,7 +69,6 @@ export async function emitDeprecatedConfigKeyEvents(
 const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP']);
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
-const BUILT_IN_MODEL_PROVIDERS = new Set(['claude', 'codex']);
 const VALID_ADR_CORPORA = new Set(['change_set', 'repo_wide']);
 const VALID_COMPLEXITY_TIERS = new Set(['S', 'M', 'L']);
 const AS_BUILT_CHECK_NAMES = new Set([
@@ -217,53 +215,6 @@ function validateBuildReviewRubrics(
     }
   }
   return null;
-}
-
-function validateTddModelConfig(
-  value: unknown,
-  path: string,
-  providerKey: string,
-): ConfigError | undefined {
-  if (!isPlainObject(value)) return { type: 'validation_error', message: `${path} must be an object` };
-  if (!BUILT_IN_MODEL_PROVIDERS.has(providerKey)) {
-    return {
-      type: 'validation_error',
-      message: `${path} requires llm_provider to be one of: claude, codex; provider "${providerKey}" has no native TDD model policy.`,
-    };
-  }
-
-  const config = value as Record<string, unknown>;
-  for (const phase of Object.keys(config)) {
-    if (phase !== 'red' && phase !== 'green') {
-      return { type: 'validation_error', message: `Unknown key in ${path}: "${phase}"` };
-    }
-  }
-
-  const nativeModels = new Set(resolveProviderModelPolicy(providerKey).modelEscalationOrder);
-  for (const phase of ['red', 'green']) {
-    const phaseValue = config[phase];
-    if (phaseValue === undefined) continue;
-    const phasePath = `${path}.${phase}`;
-    if (!isPlainObject(phaseValue)) {
-      return { type: 'validation_error', message: `${phasePath} must be an object` };
-    }
-    const phaseConfig = phaseValue as Record<string, unknown>;
-    for (const key of Object.keys(phaseConfig)) {
-      if (key !== 'model') {
-        return { type: 'validation_error', message: `Unknown key in ${phasePath}: "${key}"` };
-      }
-    }
-    if (typeof phaseConfig.model !== 'string' || phaseConfig.model.trim() === '') {
-      return { type: 'validation_error', message: `${phasePath}.model must be a non-empty string` };
-    }
-    if (!nativeModels.has(phaseConfig.model)) {
-      return {
-        type: 'validation_error',
-        message: `${phasePath}.model must be a native ${providerKey} model (${[...nativeModels].join(', ')}).`,
-      };
-    }
-  }
-  return undefined;
 }
 
 export const PROJECT_CONFIG_DIR = '.ai-conductor';
@@ -568,7 +519,6 @@ export function validateConfig(
         'completion_artifact',
         'when',
         'parallel',
-        'tdd',
       ]);
       for (const k of Object.keys(cfg)) {
         if (!knownStepKeys.has(k)) {
@@ -605,17 +555,6 @@ export function validateConfig(
       }
       if (cfg.skill !== undefined && typeof cfg.skill !== 'string') {
         return errVal(`steps.${name}.skill must be a string path`);
-      }
-      if (cfg.tdd !== undefined) {
-        if (name !== 'build') {
-          return errVal(`steps.${name}.tdd is only valid for the build step`);
-        }
-        if (obj.llm_provider !== undefined && typeof obj.llm_provider !== 'string') {
-          return errVal('steps.build.tdd requires llm_provider to be a string');
-        }
-        const providerKey = typeof obj.llm_provider === 'string' ? obj.llm_provider : 'claude';
-        const tddErr = validateTddModelConfig(cfg.tdd, `steps.${name}.tdd`, providerKey);
-        if (tddErr) return { ok: false, error: tddErr };
       }
       if (cfg.hooks !== undefined) {
         if (!isPlainObject(cfg.hooks)) {
