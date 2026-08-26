@@ -1,3 +1,4 @@
+// Covers: task:1
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import {
   checkStepCompletion,
   classifyAsBuiltReviewOutcome,
   parseAsBuiltBlockedFindings,
+  readAsBuiltVerdictLine,
 } from '../src/engine/artifacts.js';
 import { Conductor, type StepRunner } from '../src/engine/conductor.js';
 import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
@@ -33,6 +35,30 @@ afterEach(async () => {
 });
 
 describe('as-built verdict gate', () => {
+  it('does not treat a Verdict heading and body as a verdict line', () => {
+    expect(readAsBuiltVerdictLine('## Verdict\n\n**BLOCKED**')).toEqual({ found: false });
+  });
+
+  it('does not find a verdict in empty content', () => {
+    expect(readAsBuiltVerdictLine('')).toEqual({ found: false });
+  });
+
+  it('retains an unrecognized verdict line for diagnosis', () => {
+    expect(readAsBuiltVerdictLine('Verdict: REJECTED')).toEqual({
+      found: true,
+      raw: 'REJECTED',
+      recognized: null,
+    });
+  });
+
+  it('recognizes a bold, lower-case approved-with-drift-notes verdict line', () => {
+    expect(readAsBuiltVerdictLine('**Verdict:** approved with drift notes')).toEqual({
+      found: true,
+      raw: 'APPROVED WITH DRIFT NOTES',
+      recognized: 'APPROVED WITH DRIFT NOTES',
+    });
+  });
+
   it('parses an all-remediable BLOCKED findings table', () => {
     const report = [
       'Verdict: BLOCKED',

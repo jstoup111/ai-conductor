@@ -1464,21 +1464,33 @@ export function isSkipAttempt(section: string): boolean {
 }
 
 /**
- * Pull the value off the `Verdict:` line of an as-built review report, e.g.
- * `**Verdict:** APPROVED WITH DRIFT NOTES` → `APPROVED WITH DRIFT NOTES`.
- * Tolerates optional bold markers and an accidental double colon. Returns null
- * when there is no Verdict line (fail-closed: the gate treats that as not-done).
+ * Read the `Verdict:` line of an as-built review report, retaining an
+ * unrecognized value for diagnostics while keeping the recognized vocabulary
+ * closed.
+ */
+export function readAsBuiltVerdictLine(content: string):
+  | { found: false }
+  | { found: true; raw: string; recognized: string | null } {
+  const m = content.match(
+    /^[^\S\n]*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*(.*?)\s*\*{0,2}\s*$/im,
+  );
+  if (!m) return { found: false };
+  const raw = m[1].replace(/\*+/g, '').trim().toUpperCase();
+  if (!raw) return { found: false };
+  const recognized = raw === 'APPROVED' || raw === 'APPROVED WITH DRIFT NOTES' ||
+      raw === 'PLAN_GAP' || raw === 'BLOCKED'
+    ? raw
+    : null;
+  return { found: true, raw, recognized };
+}
+
+/**
+ * Pull the recognized value off the `Verdict:` line of an as-built review
+ * report. Returns null when the line is absent or uses an unknown verdict.
  */
 export function parseAsBuiltVerdict(content: string): string | null {
-  const m = content.match(
-    /^[^\S\n]*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*(.+?)\s*\*{0,2}\s*$/im,
-  );
-  if (!m) return null;
-  const value = m[1].replace(/\*+/g, '').trim().toUpperCase();
-  return value === 'APPROVED' || value === 'APPROVED WITH DRIFT NOTES' ||
-    value === 'PLAN_GAP' || value === 'BLOCKED'
-    ? value
-    : null;
+  const verdict = readAsBuiltVerdictLine(content);
+  return verdict.found ? verdict.recognized : null;
 }
 
 /** The terminal interpretation of a fresh as-built review report. */
