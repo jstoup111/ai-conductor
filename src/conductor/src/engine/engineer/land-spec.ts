@@ -340,13 +340,23 @@ export async function landSpec(
   // artifact family keeps a private naming path.
   const coherenceFile = await pickIdeaFile(join(worktreePath, '.docs', 'coherence'), ideaFiles);
 
+  // Validate EVERY idea-attributable file in each feature-scoped family, not the
+  // single `pickIdeaFile` pick. The picks above deliberately reduce a family to
+  // its newest file so the gates have one artifact to read, but land stages every
+  // `.docs/` file the idea authored (see the `git add` below). Validating only the
+  // pick lets a stale mismatched sibling ride along beside a conforming newest
+  // file and land unvalidated — exactly the ambiguity forward-walk resolution
+  // fails on later (#1743).
+  const familyPaths = async (dir: string): Promise<string[]> =>
+    (await listIdeaFiles(dir, ideaFiles)).map((file) => relative(worktreePath, file));
+
   const artifactStemViolations = validateFeatureArtifactStems(
     [
-      { step: 'prd', paths: specFile ? [relative(worktreePath, specFile)] : [] },
-      { step: 'stories', paths: [relative(worktreePath, storiesFile)] },
-      { step: 'plan', paths: [relative(worktreePath, planFile)] },
-      { step: 'conflict_check', paths: conflictsFile ? [relative(worktreePath, conflictsFile)] : [] },
-      { step: 'coherence_check', paths: coherenceFile ? [relative(worktreePath, coherenceFile)] : [] },
+      { step: 'prd', paths: await familyPaths(specsDir) },
+      { step: 'stories', paths: await familyPaths(storiesDir) },
+      { step: 'plan', paths: await familyPaths(plansDir) },
+      { step: 'conflict_check', paths: await familyPaths(join(worktreePath, '.docs', 'conflicts')) },
+      { step: 'coherence_check', paths: await familyPaths(join(worktreePath, '.docs', 'coherence')) },
     ],
     featureSlug,
   );
@@ -531,24 +541,24 @@ export async function resolveIdeaFiles(
 }
 
 /**
- * Pick the artifact `.md` file in `dir` to use, restricted to files ALSO present
- * in `ideaFiles` (the attribution universe from `resolveIdeaFiles`). Zero matching
- * candidates → `null` (missing-artifact semantics, unchanged from `findNewestFile`).
- * Multiple candidates → newest mtime, but ONLY among the idea's own candidates —
- * mtime is never used to compare against a legacy file outside the attribution set.
+ * List EVERY artifact `.md` file in `dir` attributable to this idea — the files
+ * ALSO present in `ideaFiles` (the attribution universe from `resolveIdeaFiles`),
+ * sorted for deterministic reporting. `pickIdeaFile` reduces this set to one file
+ * for the gates that need a single artifact; stem validation needs the whole set,
+ * because land stages every `.docs/` file the idea authored, not just the pick.
  */
-export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise<string | null> {
+export async function listIdeaFiles(dir: string, ideaFiles: Set<string>): Promise<string[]> {
   try {
     await access(dir);
   } catch {
-    return null;
+    return [];
   }
 
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
-    return null;
+    return [];
   }
 
   // ideaFiles paths are `.docs/...`-relative to the worktree root. `dir` is an
@@ -571,6 +581,18 @@ export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise
     }
   }
 
+  return matches.sort();
+}
+
+/**
+ * Pick the artifact `.md` file in `dir` to use, restricted to files ALSO present
+ * in `ideaFiles` (the attribution universe from `resolveIdeaFiles`). Zero matching
+ * candidates → `null` (missing-artifact semantics, unchanged from `findNewestFile`).
+ * Multiple candidates → newest mtime, but ONLY among the idea's own candidates —
+ * mtime is never used to compare against a legacy file outside the attribution set.
+ */
+export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise<string | null> {
+  const matches = await listIdeaFiles(dir, ideaFiles);
   if (matches.length === 0) return null;
   if (matches.length === 1) return matches[0];
 

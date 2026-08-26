@@ -451,12 +451,20 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
   });
 
   it('Task 7 (negative): multi-plan worktree keys the marker to the NEWEST resolved plan only', async () => {
-    // Two plans exist under .docs/plans/: an older one that must NOT win, and
-    // a newer one (backdated the older, not the newer) that findNewestFile()
-    // must select. planStem(planFile) then keys the marker to that newest
-    // plan's stem — proving the newest-plan resolution composes correctly
-    // even when another plan is present to create ambiguity.
+    // Two plans exist under .docs/plans/: a legacy one committed on `main` that
+    // must NOT win, and the idea's own plan that resolution must select.
+    // planStem(planFile) then keys the marker to that plan's stem — proving the
+    // resolution composes correctly even when another plan is present to create
+    // ambiguity. The legacy plan is committed BEFORE the worktree exists on
+    // purpose: since #1743, a second idea-authored plan under a foreign stem is
+    // itself a land failure, so the ambiguity has to come from outside the
+    // idea's attribution universe.
     const idea = 'this idea';
+    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'plans', 'other-idea.md'), PLAN_WITH_DEPS);
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy plan on main']);
+
     const worktree = await seedValidWorktree(idea);
 
     // Replace the default artifacts with feature-named files. A second plan
@@ -467,15 +475,16 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     await writeFile(join(worktree, '.docs', 'specs', 'this-idea.md'), '# PRD: this idea\n\nApproved.\n');
     await writeFile(join(worktree, '.docs', 'stories', 'this-idea.md'), ACCEPTED_STORIES.replaceAll('dep bump', idea));
 
-    const olderPlanPath = join(worktree, '.docs', 'plans', 'other-idea.md');
-    await writeFile(olderPlanPath, PLAN_WITH_DEPS);
-    const oldDate = new Date('2020-01-01T00:00:00Z');
-    await utimes(olderPlanPath, oldDate, oldDate);
-
-    const newerPlanPath = join(worktree, '.docs', 'plans', 'this-idea.md');
-    await writeFile(newerPlanPath, PLAN_WITH_DEPS.replaceAll('dep-bump', 'this-idea'));
+    // The legacy plan rides along in the worktree checkout with the NEWEST
+    // mtime, so only attribution — not mtime — can keep it from winning.
+    const legacyPlanPath = join(worktree, '.docs', 'plans', 'other-idea.md');
     const newDate = new Date();
-    await utimes(newerPlanPath, newDate, newDate);
+    await utimes(legacyPlanPath, newDate, newDate);
+
+    const planPath = join(worktree, '.docs', 'plans', 'this-idea.md');
+    await writeFile(planPath, PLAN_WITH_DEPS.replaceAll('dep-bump', 'this-idea'));
+    const oldDate = new Date('2020-01-01T00:00:00Z');
+    await utimes(planPath, oldDate, oldDate);
 
     const gh: GhRunner = async () => ({ stdout: 'dana\n' });
 
@@ -939,6 +948,54 @@ describe('Task 3: negative feature-scoped artifact stems at land (#1743)', () =>
       new RegExp(`${coherencePath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(plan-stem\\)`),
     );
     expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('rejects a stale mismatched sibling in a family whose newest pick conforms', async () => {
+    // `pickIdeaFile` reduces each family to its newest idea-authored file, but
+    // land stages EVERY `.docs/` file the idea wrote. A stale mismatched
+    // sibling must fail the land rather than ride along uninspected and break
+    // forward-walk resolution after the merge.
+    const stalePath = '.docs/conflicts/2026-08-19-clean-rubric-judgements.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
+    const stale = join(dir, '.docs', 'conflicts', '2026-08-19-clean-rubric-judgements.md');
+    await writeFile(stale, '# Conflicts\n\nStale.\n');
+    const older = new Date(Date.now() - 60_000);
+    await utimes(stale, older, older);
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      new RegExp(`${stalePath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(normalized-stem\\)`),
+    );
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('enumerates stale mismatched siblings from every family in one message', async () => {
+    const staleConflict = '.docs/conflicts/2026-08-19-clean-rubric-judgements.md';
+    const stalePlan = '.docs/plans/superseded-plan.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
+    const older = new Date(Date.now() - 60_000);
+    for (const [rel, body] of [
+      [staleConflict, '# Conflicts\n\nStale.\n'],
+      [stalePlan, `# Implementation Plan: ${idea}\n\n**Stories:** .docs/stories/2026-08-19-${slug}.md\n`],
+    ] as const) {
+      const abs = join(dir, ...rel.split('/'));
+      await writeFile(abs, body);
+      await utimes(abs, older, older);
+    }
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toMatch(/^landSpec:/);
+    expect(caught!.message).toContain(staleConflict);
+    expect(caught!.message).toContain(stalePlan);
   });
 
   it('reports mismatched conflict and stories stems together instead of accepting their loose idea association', async () => {
