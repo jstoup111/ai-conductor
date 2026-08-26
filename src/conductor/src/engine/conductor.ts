@@ -6701,11 +6701,17 @@ export class Conductor {
               const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
                 architecture_review_as_built?: { remediation?: { enabled?: boolean } };
               }).architecture_review_as_built?.remediation?.enabled ?? true;
+              // AB-R13 / APPROVED decision 4: the as-built gate's lap budget is
+              // the configured, durable `gates.architecture_review_as_built`
+              // record that `planRemediation` enforces. `remediationRounds` is a
+              // process-local counter shared across gates, so gating here could
+              // suppress a lap the gate-local budget still allows — and it reset
+              // to zero on every dispatch, so it bounded nothing durably either.
+              // The authority is planRemediation's budget, not this counter.
               const remediableAsBuiltRoute =
                 this.daemon &&
                 asBuiltRemediationEnabled &&
-                asBuiltOutcome.kind === 'blocked-remediable' &&
-                remediationRounds < MAX_KICKBACKS_PER_GATE;
+                asBuiltOutcome.kind === 'blocked-remediable';
               if (remediableAsBuiltRoute) {
                 // The join bypasses the serial as-built halt site, so it
                 // must consume the same single-use gate-scoped no-op
@@ -6828,6 +6834,14 @@ export class Conductor {
                 // the terminal design/invalid as-built refusal. Its planner
                 // route remains deliberately ignored here.
                 remediationRounds++;
+                // AB-R11 / APPROVED decision 3: a DESIGN row makes the WHOLE
+                // report halt needs-human, so terminal as-built evidence must
+                // never carry remediation authority. Admitting it here let a
+                // sibling REMEDIABLE row append plan work before the mandatory
+                // whole-report halt. PRD-owned work still proceeds on its own
+                // evidence; only the as-built entry is withheld.
+                const asBuiltEvidenceIsTerminal =
+                  asBuiltOutcome.kind === 'blocked-design' || asBuiltOutcome.kind === 'invalid';
                 await this.planRemediation(
                   state,
                   steps,
@@ -6838,10 +6852,12 @@ export class Conductor {
                     source: 'validation-group',
                     evidence: [
                       { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
-                      {
-                        gate: 'architecture_review_as_built',
-                        evidenceFile: '.pipeline/architecture-review-as-built.md',
-                      },
+                      ...(asBuiltEvidenceIsTerminal
+                        ? []
+                        : [{
+                            gate: 'architecture_review_as_built' as const,
+                            evidenceFile: '.pipeline/architecture-review-as-built.md',
+                          }]),
                     ],
                   },
                 );

@@ -70,6 +70,37 @@ const AS_BUILT_REMEDIABLE = [
   '',
 ].join('\n');
 
+const AS_BUILT_MIXED_DESIGN = [
+  '# As-Built Architecture Review',
+  '',
+  'Verdict: BLOCKED',
+  '',
+  '## Blocking Findings',
+  '',
+  '| Finding | Class | Governing clause | Summary |',
+  '|---|---|---|---|',
+  '| AB-D | DESIGN | Open question: durable state shape | Needs a human architectural decision. |',
+  '| AB-1 | REMEDIABLE | 1 | The approved task is not wired into the live gate. |',
+  '',
+  '## Blocking Violations',
+  '',
+  '- AB-D needs a decision; AB-1 is code conformance.',
+  '',
+].join('\n');
+
+const PRD_AUDIT_FIXABLE = [
+  '# PRD Audit',
+  '',
+  '**PRD:** none',
+  '',
+  '## Verdict Table',
+  '',
+  '| Criterion | Grade | Plan task | Evidence |',
+  '|---|---|---|---|',
+  '| S3.1 | FIXABLE | 1 | src/feature.ts:1 — the criterion is not satisfied |',
+  '',
+].join('\n');
+
 async function seedFixture(): Promise<{ root: string; statePath: string }> {
   const root = await mkdtemp(join(tmpdir(), 'as-built-remediable-'));
   roots.push(root);
@@ -306,5 +337,83 @@ describe('acceptance: a serial as-built kickback-to-build no-op is a capped term
     expect(haltClass.trim()).toBe('kickback-cap');
     expect(halt).toContain('Blocking findings:');
     expect(halt).toContain('AB-1 (REMEDIABLE; 1): The approved task is not wired into the live gate.');
+  });
+});
+
+/**
+ * AB-R11 / APPROVED decision 3: one DESIGN row makes the WHOLE report halt
+ * needs-human. Terminal as-built evidence therefore carries no remediation
+ * authority, and no as-built plan work may be appended before that halt — even
+ * when a REMEDIABLE sibling sits in the same table and PRD-owned work is also
+ * being remediated in the same group.
+ */
+describe('acceptance: a mixed DESIGN as-built report appends no as-built work', () => {
+  it('halts without appending a rem-as-built task for the REMEDIABLE sibling', async () => {
+    const { root, statePath } = await seedFixture();
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'manual_test') {
+          await writeFile(join(root, '.pipeline', 'manual-test-results.md'), MANUAL_TEST_PASS);
+        } else if (step === 'prd_audit') {
+          await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_FIXABLE);
+        } else if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(root, '.pipeline', 'architecture-review-as-built.md'),
+            AS_BUILT_MIXED_DESIGN,
+          );
+        } else if (step === 'remediate') {
+          await writeFile(
+            join(root, '.pipeline', 'remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'S3.1',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Satisfy the criterion.',
+                  tasks: [{ id: 'prd-fix', title: 'Satisfy S3.1' }],
+                },
+                {
+                  id: 'AB-1',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Implement the behavior already required by Task 1.',
+                  tasks: [{ id: 'wire-live-gate', title: 'Wire the approved behavior' }],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true };
+      }),
+      resetSession: async () => {},
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'manual_test',
+      verifyArtifacts: true,
+      maxRetries: 1,
+      escalateBuildFailure: async () => ({}),
+      git: async () => ({ stdout: '' }),
+    });
+    await conductor.run();
+
+    const plan = await readFile(join(root, '.docs', 'plans', `${SLUG}.md`), 'utf8');
+    // The DESIGN row withholds as-built remediation authority entirely, so no
+    // as-built gap is admitted and no rem-as-built task is appended...
+    expect(plan).not.toContain('rem-as-built-');
+    // ...while PRD-owned work, which has its own evidence and authority, still
+    // proceeds. Before this fix the terminal as-built evidence poisoned the
+    // whole mixed admission and NEITHER gate's work was appended.
+    expect(plan).toContain('rem-prd-audit-');
+    // The whole report still halts needs-human for the DESIGN row.
+    const haltClass = await readFile(join(root, '.pipeline', 'HALT.class'), 'utf8').catch(() => '');
+    expect(haltClass.trim()).toBe('needs-human');
   });
 });
