@@ -45,3 +45,25 @@ Follow this order:
 5. Run the full suite and leave it green.
 
 Hard stop: do not proceed with deletion until each uncovered survivor has a characterization test.
+
+## Test Triage
+
+Classify every test that touches removed code before changing it:
+
+- **DIRECT** — its sole subject is the removed behavior. Delete it in the same change.
+- **INCIDENTAL** — it touches the removed code through shared fixtures, an integration flow, or an
+  acceptance test for a surviving feature. Mutate it to exercise the surviving behavior; never
+  delete it for the removal.
+
+Acceptance tests are deleted only when they are DIRECT. An acceptance test that covers a surviving
+feature is INCIDENTAL even if the removal requires changing its setup or assertions.
+
+## Completeness Sweep
+
+Before closing a removal task, sweep source, tests, config, and docs for literal removed symbol and
+path names. Cover imports and other references, file paths, config keys, and documentation mentions.
+Review every hit: remove it or explicitly justify it in the commit. An unresolved hit means the
+removal task cannot close.
+
+Grep variants can silently skip binary or NUL-bearing files, yielding empty output. Sweep literal
+symbol and path names and review the hit list; empty output alone is not proof of absence.
