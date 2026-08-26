@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-26T02:50:53.486Z
 Slug: 2026-08-25-code-removal-skill
 Class: needs-human
 Halting step: prd_audit
