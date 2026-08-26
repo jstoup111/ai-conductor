@@ -21,13 +21,19 @@ grouped by step and the feature identity (slug), returns the list of violations,
 (`src/conductor/src/engine/engineer/land-spec.ts`) locates a single artifact per family via
 `pickIdeaFile` (land-spec.ts:205-312) for the gates that need one file to read, but land STAGES
 every `.docs/` file the idea authored. Stem validation therefore runs over the full candidate set,
-not the picks: `pickIdeaFile`'s enumeration half is split out as `listIdeaFiles(dir, ideaFiles)` —
-every idea-attributable `.md` in the directory, sorted — and `landSpec` feeds each feature-scoped
-family's whole list (specs → `prd`, stories → `stories`, conflicts → `conflict_check`, plans →
+not the picks: `pickIdeaFile`'s enumeration half is split out as `listIdeaFiles(dir, ideaFiles,
+{ recursive })` — every idea-attributable `.md` under the directory, sorted — and `landSpec` feeds
+each feature-scoped family's whole list (specs → `prd`, stories → `stories`, conflicts → `conflict_check`, plans →
 `plan`, coherence → `coherence_check`) through the helper, then throws a single aggregated error
 enumerating every violation with its expected stem. Validating only the pick would let a stale
 mismatched sibling land beside a conforming newest file and reintroduce the very forward-walk
-ambiguity this feature exists to prevent. The resolver's `diagnosticFor` (artifacts.ts:474-484) is
+ambiguity this feature exists to prevent. Enumeration DEPTH comes from the contract, not from a
+hand-kept list: `featureArtifactPatternsAreRecursive(step)` (artifacts.ts) reports whether any
+feature-scoped pattern for that step carries a `**/` segment — today only `stories`
+(`.docs/stories/**/*.md`) — and `landSpec` walks descendants for exactly those families. Attribution
+already spans nested paths and land stages the whole `.docs` tree, so a one-level walk would leave a
+nested artifact committed unvalidated; deriving depth from the pattern means widening a contract to
+`**/` widens enumeration with it. The resolver's `diagnosticFor` (artifacts.ts:474-484) is
 extended so the `ambiguous` case for feature-scoped contracts appends the identity strategy, the
 expected stem, and an example expected filename derived from the contract's pattern directory;
 `missing` and repository-scoped diagnostics are untouched.
@@ -72,7 +78,7 @@ None — all changes live in `src/conductor`.
 **Steps:**
 1. Write failing test: a fixture worktree whose `.docs/conflicts/` file stem is a truncation of the slug fails `landSpec` with a `landSpec:`-prefixed error whose message contains the offending path, the strategy name, and the expected stem; a fully slug-named fixture worktree (date prefixes included) lands as before.
 2. Verify test fails (RED).
-3. Implement: in `land-spec.ts`, split `listIdeaFiles(dir, ideaFiles)` out of `pickIdeaFile` (it returns every idea-attributable `.md` in the directory, sorted; `pickIdeaFile` keeps its newest-mtime reduction on top of it), build the `{step, paths}` entries from each feature-scoped family's FULL candidate list — specs/stories/plans/conflicts/coherence, independent of which file the picks selected — and call `validateFeatureArtifactStems` with the feature slug; on any violation throw one aggregated `landSpec:` error listing every violation as `<path>: expected stem "<expectedStem>" (<strategy>)`. Follow the existing tier-mismatch throw pattern at land-spec.ts:319. Worktree keep-on-failure behavior is untouched (the throw propagates like existing gate failures).
+3. Implement: in `land-spec.ts`, split `listIdeaFiles(dir, ideaFiles, { recursive })` out of `pickIdeaFile` (it returns every idea-attributable `.md` under the directory, sorted, walking descendants when `recursive` is set; `pickIdeaFile` keeps its newest-mtime reduction over the non-recursive result), export `featureArtifactPatternsAreRecursive(step)` from `artifacts.ts` and use it to set `recursive` per family, build the `{step, paths}` entries from each feature-scoped family's FULL candidate list — specs/stories/plans/conflicts/coherence, independent of which file the picks selected — and call `validateFeatureArtifactStems` with the feature slug; on any violation throw one aggregated `landSpec:` error listing every violation as `<path>: expected stem "<expectedStem>" (<strategy>)`. Follow the existing tier-mismatch throw pattern at land-spec.ts:319. Worktree keep-on-failure behavior is untouched (the throw propagates like existing gate failures).
 4. Verify test passes (GREEN).
 5. Commit: "fix(engineer): validate feature-scoped artifact stems at land (#1743)".
 
@@ -80,6 +86,7 @@ None — all changes live in `src/conductor`.
 - The #1743 truncated-conflicts fixture fails `landSpec` and the error text contains the expected stem verbatim.
 - Slug-named fixtures with and without date prefixes on normalized-stem artifacts land successfully (existing land tests stay green).
 - A family holding a stale mismatched file ALONGSIDE a conforming newest file fails the land, naming the stale path — validation is over every candidate, not the pick.
+- A mismatched story nested under `.docs/stories/<sub>/` fails the land, and a nested story carrying the feature stem still lands — enumeration depth follows the `stories` contract's `**/` pattern.
 - The validation runs through Task 1's helper — `land-spec.ts` contains no stem-normalization logic of its own.
 
 **Files likely touched:**
@@ -93,7 +100,7 @@ None — all changes live in `src/conductor`.
 **Type:** negative-path
 
 **Steps:**
-1. Write failing tests: (a) a fixture worktree whose plans-directory artifact stem differs from the slug fails `landSpec` naming the expected plan stem under the `plan-stem` strategy; (b) a fixture with BOTH a mismatched conflicts stem and a mismatched stories stem fails with one error message enumerating both paths, each with its own expected stem; (c) a fixture whose conflicts family holds a stale mismatched file under a newer conforming one fails naming the stale path, and a fixture with stale mismatched siblings in two families enumerates both.
+1. Write failing tests: (a) a fixture worktree whose plans-directory artifact stem differs from the slug fails `landSpec` naming the expected plan stem under the `plan-stem` strategy; (b) a fixture with BOTH a mismatched conflicts stem and a mismatched stories stem fails with one error message enumerating both paths, each with its own expected stem; (c) a fixture whose conflicts family holds a stale mismatched file under a newer conforming one fails naming the stale path, and a fixture with stale mismatched siblings in two families enumerates both; (d) a fixture with a mismatched story under `.docs/stories/archive/` fails naming the nested path, while the same fixture with a slug-named nested story lands.
 2. Verify tests fail (RED) — (b) must fail specifically because only the first violation is reported if the implementation short-circuits.
 3. Implement: adjust the Task 2 aggregation if needed so all violations across all steps are collected before the single throw.
 4. Verify tests pass (GREEN).
@@ -103,6 +110,7 @@ None — all changes live in `src/conductor`.
 - The plan-stem mismatch fixture fails with the `plan` step's expected stem in the message.
 - The two-violation fixture's error message contains both offending paths and both expected stems.
 - Stale mismatched siblings fail the land even when the family's newest file conforms.
+- A nested mismatched story fails the land; a nested slug-named story does not.
 - No fixture passes on the loose `pickIdeaFile` association alone.
 
 **Files likely touched:**

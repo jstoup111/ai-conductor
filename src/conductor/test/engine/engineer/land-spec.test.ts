@@ -971,6 +971,40 @@ describe('Task 3: negative feature-scoped artifact stems at land (#1743)', () =>
     expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
   });
 
+  it('rejects a nested stories artifact whose stem does not match the feature', async () => {
+    // The stories contract is recursive (`.docs/stories/**/*.md`) and land stages
+    // the whole `.docs` tree, so enumerating one directory level would leave a
+    // nested mismatched story committed but unvalidated.
+    const nestedPath = '.docs/stories/archive/renamed-stories.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
+    await mkdir(join(dir, '.docs', 'stories', 'archive'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'stories', 'archive', 'renamed-stories.md'),
+      `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: validate\n### Acceptance Criteria\n- Given X, when Y, then Z.\n`,
+    );
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      new RegExp(`${nestedPath.replaceAll('.', '\\.')}.*expected stem "${slug}"`),
+    );
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('lands a nested stories artifact that carries the feature stem', async () => {
+    const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
+    await mkdir(join(dir, '.docs', 'stories', 'archive'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'stories', 'archive', `${slug}.md`),
+      `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: validate\n### Acceptance Criteria\n- Given X, when Y, then Z.\n`,
+    );
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+
   it('enumerates stale mismatched siblings from every family in one message', async () => {
     const staleConflict = '.docs/conflicts/2026-08-19-clean-rubric-judgements.md';
     const stalePlan = '.docs/plans/superseded-plan.md';

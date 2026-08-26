@@ -351,6 +351,23 @@ function exampleArtifactPath(pattern: string, featureIdentity: string): string {
 }
 
 /**
+ * True when any feature-scoped contract for `step` matches descendants rather
+ * than only immediate children — i.e. its glob carries a `**\/` segment. The
+ * `stories` family is the current case (`.docs/stories/**\/*.md`).
+ *
+ * Callers enumerating candidates for `validateFeatureArtifactStems` must walk a
+ * family this returns `true` for; enumerating one directory level would leave a
+ * nested artifact staged but unvalidated. Deriving the answer from the contract
+ * keeps the two in step: widening a pattern to `**\/` widens enumeration with it,
+ * with no second list to update.
+ */
+export function featureArtifactPatternsAreRecursive(step: StepName): boolean {
+  return STEP_ARTIFACT_CONTRACTS[step].some(
+    (contract) => contract.scope === 'feature' && contract.pattern.includes('**/'),
+  );
+}
+
+/**
  * Validates that candidate artifacts for feature-scoped contracts retain the
  * active feature identity in their filename stem. Repository- and run-scoped
  * contracts deliberately have no feature identity requirement.

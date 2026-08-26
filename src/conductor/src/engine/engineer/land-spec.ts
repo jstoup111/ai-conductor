@@ -42,11 +42,13 @@ import { slugify } from './authoring.js';
 import {
   adrApprovalStatus,
   isStoriesApproved,
+  featureArtifactPatternsAreRecursive,
   parseComplexityTier,
   parseTrack,
   planStem,
   validateFeatureArtifactStems,
 } from '../artifacts.js';
+import type { StepName } from '../../types/index.js';
 import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
@@ -347,16 +349,27 @@ export async function landSpec(
   // pick lets a stale mismatched sibling ride along beside a conforming newest
   // file and land unvalidated — exactly the ambiguity forward-walk resolution
   // fails on later (#1743).
-  const familyPaths = async (dir: string): Promise<string[]> =>
-    (await listIdeaFiles(dir, ideaFiles)).map((file) => relative(worktreePath, file));
+  // Enumeration depth comes from each family's own artifact contract: a family
+  // whose pattern matches descendants (`stories` is `.docs/stories/**\/*.md`) is
+  // walked recursively, so a nested artifact cannot be staged unvalidated.
+  const familyPaths = async (step: StepName, dir: string): Promise<string[]> =>
+    (await listIdeaFiles(dir, ideaFiles, {
+      recursive: featureArtifactPatternsAreRecursive(step),
+    })).map((file) => relative(worktreePath, file));
 
   const artifactStemViolations = validateFeatureArtifactStems(
     [
-      { step: 'prd', paths: await familyPaths(specsDir) },
-      { step: 'stories', paths: await familyPaths(storiesDir) },
-      { step: 'plan', paths: await familyPaths(plansDir) },
-      { step: 'conflict_check', paths: await familyPaths(join(worktreePath, '.docs', 'conflicts')) },
-      { step: 'coherence_check', paths: await familyPaths(join(worktreePath, '.docs', 'coherence')) },
+      { step: 'prd', paths: await familyPaths('prd', specsDir) },
+      { step: 'stories', paths: await familyPaths('stories', storiesDir) },
+      { step: 'plan', paths: await familyPaths('plan', plansDir) },
+      {
+        step: 'conflict_check',
+        paths: await familyPaths('conflict_check', join(worktreePath, '.docs', 'conflicts')),
+      },
+      {
+        step: 'coherence_check',
+        paths: await familyPaths('coherence_check', join(worktreePath, '.docs', 'coherence')),
+      },
     ],
     featureSlug,
   );
@@ -546,8 +559,20 @@ export async function resolveIdeaFiles(
  * sorted for deterministic reporting. `pickIdeaFile` reduces this set to one file
  * for the gates that need a single artifact; stem validation needs the whole set,
  * because land stages every `.docs/` file the idea authored, not just the pick.
+ *
+ * `recursive` walks descendant directories too. It is off by default because
+ * `pickIdeaFile`'s consumers resolve one artifact per family from that family's
+ * own directory. Stem validation turns it on for exactly the families whose
+ * artifact contract is itself recursive — see
+ * `featureArtifactPatternsAreRecursive`. Attribution already spans nested paths
+ * (`resolveIdeaFiles` admits any `.docs/` path), so a one-level walk would leave a
+ * nested artifact staged but unvalidated.
  */
-export async function listIdeaFiles(dir: string, ideaFiles: Set<string>): Promise<string[]> {
+export async function listIdeaFiles(
+  dir: string,
+  ideaFiles: Set<string>,
+  options: { recursive?: boolean } = {},
+): Promise<string[]> {
   try {
     await access(dir);
   } catch {
@@ -573,8 +598,12 @@ export async function listIdeaFiles(dir: string, ideaFiles: Set<string>): Promis
 
   const matches: string[] = [];
   for (const e of entries) {
-    if (!e.isFile() || !String(e.name).endsWith('.md')) continue;
     const abs = join(dir, String(e.name));
+    if (e.isDirectory()) {
+      if (options.recursive) matches.push(...(await listIdeaFiles(abs, ideaFiles, options)));
+      continue;
+    }
+    if (!e.isFile() || !String(e.name).endsWith('.md')) continue;
     const rel = docsRel(abs);
     if (rel !== null && ideaFiles.has(rel)) {
       matches.push(abs);
