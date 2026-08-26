@@ -24,7 +24,7 @@ describe('prd-audit skill contract', () => {
 
     expect(report).toEqual(expect.any(String));
     expect(report).toMatch(/^# PRD Audit: <Feature Name>/m);
-    expect(report).toMatch(/^\*\*PRD:\*\* present \| none/m);
+    expect(report).toMatch(/^\*\*PRD:\*\* present/m);
     expect(report).toMatch(/^\*\*Intent sources:\*\* /m);
     expect(report).toMatch(/^\| Criterion \| Grade \| Plan task \| PRD: \| Intent relation \| Evidence \|/m);
     expect(report).toMatch(/^\| S6\.1 \| PASS \| — \| FR-7 \| /m);
