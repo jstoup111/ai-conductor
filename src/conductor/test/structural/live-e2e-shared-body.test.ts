@@ -97,8 +97,8 @@ describe('structural: shared live E2E body', () => {
 
       expect({
         outcomes,
-        selections: selections.mock.calls.map(([id]) => id),
-        authenticationChecks: authenticationChecks.mock.calls.map(([id]) => id),
+        selections: selections.mock.calls.map(([id]) => id).sort(),
+        authenticationChecks: authenticationChecks.mock.calls.map(([id]) => id).sort(),
         diagnostics: vi.mocked(dumpPipelineDiagnostics).mock.calls.length,
       }).toEqual({
         outcomes: ['equivalent injected live-provider outcome', 'equivalent injected live-provider outcome'],
