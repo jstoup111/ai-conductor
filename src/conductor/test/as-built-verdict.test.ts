@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2, task:3
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import {
   classifyAsBuiltReviewOutcome,
   parseAsBuiltBlockedFindings,
   readAsBuiltVerdictLine,
+  renderAsBuiltInvalidReason,
 } from '../src/engine/artifacts.js';
 import { Conductor, type StepRunner } from '../src/engine/conductor.js';
 import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
@@ -372,6 +373,34 @@ describe('as-built verdict gate', () => {
       cause: 'unparseable-blocked-findings',
       detail: 'As-built BLOCKED report is missing its Blocking Findings table.',
     });
+  });
+
+  it('renders a missing verdict line without PLAN_GAP-specific guidance', () => {
+    expect(renderAsBuiltInvalidReason({ kind: 'invalid', cause: 'no-verdict-line' })).toEqual(
+      expect.stringMatching(/^(?=.*no parseable `Verdict:` line was found)(?=.*`Verdict: <value>`)(?!.*PLAN_GAP)(?!.*Outcome delivered).+$/),
+    );
+  });
+
+  it('renders an unrecognized verdict with its value and the closed vocabulary', () => {
+    expect(renderAsBuiltInvalidReason({
+      kind: 'invalid',
+      cause: 'unrecognized-verdict',
+      value: 'REJECTED',
+    })).toEqual(expect.stringMatching(/(?=.*REJECTED)(?=.*APPROVED)(?=.*APPROVED WITH DRIFT NOTES)(?=.*PLAN_GAP)(?=.*BLOCKED)/));
+  });
+
+  it('renders PLAN_GAP guidance when its outcome is missing', () => {
+    expect(renderAsBuiltInvalidReason({ kind: 'invalid', cause: 'plan-gap-missing-outcome' })).toEqual(
+      expect.stringMatching(/(?=.*PLAN_GAP)(?=.*Outcome delivered: yes\|no)(?=.*re-run the as-built review)/),
+    );
+  });
+
+  it('renders the BLOCKED findings parser detail', () => {
+    expect(renderAsBuiltInvalidReason({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'missing findings table',
+    })).toEqual(expect.stringMatching(/(?=.*BLOCKED findings block)(?=.*missing findings table)/));
   });
 
   it('keeps non-BLOCKED outcomes unchanged without a findings table', () => {

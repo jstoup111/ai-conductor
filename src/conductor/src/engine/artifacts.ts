@@ -1537,6 +1537,24 @@ export function classifyAsBuiltReviewOutcome(content: string): AsBuiltReviewOutc
   return { kind: 'invalid', cause: 'plan-gap-missing-outcome' };
 }
 
+/** Render the operator-facing reason for an invalid as-built review outcome. */
+export function renderAsBuiltInvalidReason(
+  outcome: Extract<AsBuiltReviewOutcome, { kind: 'invalid' }>,
+): string {
+  switch (outcome.cause) {
+    case 'no-verdict-line':
+      return 'no parseable `Verdict:` line was found in the as-built review; record one `Verdict: <value>` line and re-run the as-built review';
+    case 'unrecognized-verdict':
+      return `as-built review verdict ${outcome.value} is unrecognized; use one of APPROVED, APPROVED WITH DRIFT NOTES, PLAN_GAP, or BLOCKED and re-run the as-built review`;
+    case 'plan-gap-missing-outcome':
+      return 'as-built review must record `Outcome delivered: yes|no` for PLAN_GAP; re-run the as-built review';
+    case 'unparseable-blocked-findings':
+      return `as-built BLOCKED findings block is unparseable: ${outcome.detail}; re-run the as-built review`;
+  }
+  const exhaustive: never = outcome;
+  return exhaustive;
+}
+
 /**
  * Run-evidence file written by the writing-system-tests skill after the RED
  * run. It records the REAL result of executing the feature's freshly-generated
