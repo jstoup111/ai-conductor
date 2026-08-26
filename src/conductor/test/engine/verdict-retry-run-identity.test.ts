@@ -1,3 +1,4 @@
+// Covers: task:rem-prd-audit-rem-fr-s6.2-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -90,5 +91,61 @@ describe('verdict retry-input identity reader', () => {
     // retry-input classifier — see the stamped dispatch identity.
     expect(expectedRunIds.length).toBeGreaterThanOrEqual(2);
     expect(new Set(expectedRunIds)).toEqual(new Set([stamped.runId]));
+  });
+
+  it('completes a serial prd-audit dispatch from a fresh report when gate validity is disabled', async () => {
+    const seedResult = await readState(statePath);
+    const seed = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+    for (const step of ALL_STEPS) {
+      seed[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+      if (step.name === 'prd_audit') break;
+      seed[step.name] = 'done';
+    }
+    seed.prd_audit = 'pending';
+    seed.architecture_review_as_built = 'skipped';
+    seed.retro = 'skipped';
+    seed.rebase = 'skipped';
+    seed.finish = 'done';
+    await writeState(statePath, seed as ConductState);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+
+    const runner: StepRunner = {
+      run: vi.fn(async () => {
+        await writeFile(
+          join(dir, '.pipeline/prd-audit.md'),
+          [
+            '# PRD Audit',
+            '',
+            '**PRD:** none',
+            '',
+            '## Verdict Table',
+            '',
+            '| Criterion | Grade | Plan task | PRD: | Evidence |',
+            '|---|---|---|---|---|',
+            '| S1.1 | PASS | — | — | fixture.ts:1 |',
+            '',
+          ].join('\n'),
+        );
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'prd_audit',
+      verifyArtifacts: true,
+      mode: 'auto',
+      maxRetries: 1,
+      config: { gate_code_validity: { enabled: false } },
+    });
+
+    await conductor.run();
+
+    await expect(readState(statePath)).resolves.toMatchObject({
+      ok: true,
+      value: { prd_audit: 'done' },
+    });
   });
 });

@@ -2598,7 +2598,10 @@ export class Conductor {
         }
       }
 
-      if (identities.state !== 'match') {
+      if (
+        resolveGateCodeValidityConfig(this.config).enabled &&
+        identities.state !== 'match'
+      ) {
         const identityState = identities.state === 'stale-run-identity' ? 'stale' : 'unstamped';
         failures.push(
           `${marker} is ${identityState} ` +
