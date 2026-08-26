@@ -82,6 +82,7 @@ This is a skill-text feature: no engine code changes except the model-table meta
 - Both files contain a `/code-removal` reference (integrity check 4 passes — the referenced skill directory exists from Task 1)
 - The plan skill's line covers both the absence-test spec bar and the verify-only misuse
 - The stories skill's line bars absence criteria
+- The negative direction is Task 7's: check 4 must FAIL when the referenced directory is absent
 
 **Files likely touched:**
 - skills/plan/SKILL.md — routing paragraph
@@ -127,17 +128,42 @@ This is a skill-text feature: no engine code changes except the model-table meta
 
 **Dependencies:** 1
 
+### Task 7: Make integrity check 4 fail-closed on a dangling skill reference
+
+**Story:** 1
+**Type:** negative-path
+
+**Steps:**
+1. Verify the gap: check 4 (`test/test_harness_integrity.sh`) calls `warn_check` when a backticked `/name` reference resolves to no `skills/<name>/` directory, so the suite still exits 0. The three pointer edits from Tasks 4-5 would dangle silently if `skills/code-removal/` were renamed or deleted.
+2. Add a `KNOWN_NON_SKILL_REFS` allowlist naming the two references that deliberately are not skills — `quit` (a Claude Code CLI command, `skills/engineer/SKILL.md`) and `skill-name` (an invocation-syntax placeholder, `skills/bootstrap/SKILL.md`) — each with an inline comment naming where it is used.
+3. Replace the `warn_check` fallback with `assert`: an allowlisted reference passes, any other unresolved reference fails as a dangling pointer naming the missing directory.
+4. Verify both directions from this worktree: the suite exits 0 with `skills/code-removal/` present, and exits 1 with `FAIL /code-removal — dangling reference: no skills/code-removal/ directory` when the directory is temporarily moved away.
+5. Update `docs/contributing/validation.md` — check 4's row (it is no longer "Never — this is a `warn_check`") and the "Checks that cannot fail" limitation note, which must now name check 5 only.
+
+**Done when:**
+- Check 4 uses `assert`, not `warn_check`, for an unresolved reference.
+- The full suite exits 0 at HEAD with the two allowlisted references passing.
+- Moving `skills/code-removal/` aside makes the suite exit 1 with the dangling-reference diagnostic.
+- `docs/contributing/validation.md` no longer describes check 4 as advisory.
+
+**Files likely touched:**
+- test/test_harness_integrity.sh — allowlist + fail-closed branch
+- docs/contributing/validation.md — check 4 row and known-limitation note
+
+**Dependencies:** 4
+
 ## Task Dependency Graph
 ```
 Task 1 ─┬─ Task 2
         ├─ Task 3
-        ├─ Task 4
+        ├─ Task 4 ── Task 7
         ├─ Task 5
         └─ Task 6
 ```
 
 ## Integration Points
 - After Task 6: full integrity suite green over the complete skill + routing + registration set
+- After Task 7: the same suite goes red when the referenced skill directory is removed — the pointers are guarded, not merely present
 
 ## Verification
 - [ ] All happy path criteria covered by at least one task

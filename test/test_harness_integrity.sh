@@ -291,6 +291,18 @@ done
 skill_refs=$(grep -rohE '`/[a-z][-a-z]*`' "${HARNESS_DIR}"/skills/*/SKILL.md 2>/dev/null \
   | sed 's/`//g; s/^\///' | sort -u || true)
 
+# Backticked `/name` references that deliberately name something OTHER than a
+# skill. Each entry is a host command or a syntax placeholder, so it can never
+# dangle. Every other reference that resolves to no skill directory is a broken
+# pointer and hard-fails below: renaming or deleting a skill silently orphans
+# every cross-skill reference to it, and a warn-only check cannot block that.
+KNOWN_NON_SKILL_REFS=(
+  # Claude Code CLI command — skills/engineer/SKILL.md
+  quit
+  # Invocation-syntax placeholder — skills/bootstrap/SKILL.md
+  skill-name
+)
+
 for ref in $skill_refs; do
   found=false
   for known in "${known_skills[@]}"; do
@@ -301,9 +313,20 @@ for ref in $skill_refs; do
   done
   if [ "$found" = true ]; then
     assert "/${ref} → skills/${ref}/" 0
+    continue
+  fi
+
+  allowlisted=false
+  for allowed in "${KNOWN_NON_SKILL_REFS[@]}"; do
+    if [ "$ref" = "$allowed" ]; then
+      allowlisted=true
+      break
+    fi
+  done
+  if [ "$allowlisted" = true ]; then
+    assert "/${ref} — allowlisted non-skill reference" 0
   else
-    # Some refs are commands not skills (e.g., /quit) — warn, don't fail
-    warn_check "/${ref} — not a skill directory (may be a command)" 1
+    assert "/${ref} — dangling reference: no skills/${ref}/ directory" 1
   fi
 done
 
