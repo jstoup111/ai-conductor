@@ -3530,8 +3530,20 @@ export class Conductor {
     const asBuiltEvidenceFile = remediationEvidenceSources.find(
       (provenance) => provenance.gate === 'architecture_review_as_built',
     )?.evidenceFile;
-    const asBuiltRemediation = asBuiltEvidenceFile !== undefined;
-    const asBuiltEvidenceExists = asBuiltEvidenceFile !== undefined && await accessFile(
+    // AB-R15/AB-R16, decision 6: the kill switch is enforced HERE, at the one
+    // point where as-built evidence becomes authority, rather than at each
+    // consumer. Everything downstream descends from these two constants —
+    // validation, recorded findings, `asBuiltCapEnforced`, the gate budget that
+    // charges laps and growth, and plan-growth admission. Enforcing it per call
+    // site meant every new site reopened the switch: AB-R15 was the deferral,
+    // AB-R16 the mixed PRD round. With it off, as-built evidence is simply
+    // invisible to remediation, which is what "revert exactly to
+    // halt-always-on-BLOCKED" requires. Issue #1912 tracks the matrix coverage.
+    const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
+      architecture_review_as_built?: { remediation?: { enabled?: boolean } };
+    }).architecture_review_as_built?.remediation?.enabled ?? true;
+    const asBuiltRemediation = asBuiltRemediationEnabled && asBuiltEvidenceFile !== undefined;
+    const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined && await accessFile(
       join(this.projectRoot, asBuiltEvidenceFile),
     ).then(() => true).catch(() => false);
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
@@ -3766,11 +3778,8 @@ export class Conductor {
     // bound to an approved clause. Mixed provenance retains prd_audit's
     // criterion-bound authority, so enabling as-built remediation cannot
     // bypass that gate.
-    const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
-      architecture_review_as_built?: { remediation?: { enabled?: boolean } };
-    }).architecture_review_as_built?.remediation?.enabled ?? true;
-    const asBuiltPlanGrowthAdmitted =
-      asBuiltRemediationEnabled && asBuiltRemediation && asBuiltValidated;
+    // `asBuiltRemediation` already carries the kill switch (see its derivation).
+    const asBuiltPlanGrowthAdmitted = asBuiltRemediation && asBuiltValidated;
     const requiresPlanGrowthAllowance =
       remediationEvidenceSources.length > 0
         ? !asBuiltPlanGrowthAdmitted

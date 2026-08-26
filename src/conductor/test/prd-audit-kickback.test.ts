@@ -209,6 +209,10 @@ async function createAsBuiltRemediationCapFixture(input: {
   priorGrowthAdded?: number;
   appendCap?: number;
   plannerFindingIds?: string[];
+  /** Decision 6 kill switch. Default true, matching production. */
+  remediationEnabled?: boolean;
+  /** Add a validated prd_audit FIXABLE finding + its evidence, for mixed rounds. */
+  withPrdEvidence?: boolean;
 }) {
   const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-cap-'));
   dirs.push(root);
@@ -234,6 +238,20 @@ async function createAsBuiltRemediationCapFixture(input: {
       `| ${finding.id} | REMEDIABLE | ${finding.clause} | ${finding.summary} |`,
     ),
   ].join('\n'));
+  if (input.withPrdEvidence) {
+    await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(root, '.docs', 'stories', 'feature.md'), [
+      '# Stories', '', '## Story 1: the criterion', '', '### Acceptance Criteria', '',
+      '#### Happy Path',
+      '- Given a request, when handled, then the criterion holds.',
+    ].join('\n'));
+    await writeFile(join(root, '.pipeline', 'prd-audit.md'), [
+      '# PRD Audit', '', '**PRD:** none', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      '| S1.1 | FIXABLE | 1 | FR-1 | not implemented |',
+    ].join('\n'));
+  }
   if (input.priorLaps !== undefined || input.priorGrowthAdded !== undefined) {
     await writeKickbackLedger(root, {
       version: 1,
@@ -264,13 +282,24 @@ async function createAsBuiltRemediationCapFixture(input: {
   const runner: StepRunner = {
     run: async () => {
       await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-        dispositions: (input.plannerFindingIds ?? findings.map((finding) => finding.id)).map((id) => ({
+        dispositions: [
+          ...(input.withPrdEvidence
+            ? [{
+                id: 'FR-1',
+                disposition: 'build',
+                category: null,
+                rationale: 'Satisfy the criterion.',
+                tasks: [{ id: 'prd-fix', title: 'Satisfy S1.1' }],
+              }]
+            : []),
+          ...(input.plannerFindingIds ?? findings.map((finding) => finding.id)).map((id) => ({
           id,
           disposition: 'build',
           category: null,
           rationale: `Repair ${id}.`,
           tasks: [{ id: `fix-${id.toLowerCase()}`, title: `Repair ${id}.` }],
-        })),
+          })),
+        ],
       }));
       return { success: true };
     },
@@ -288,7 +317,9 @@ async function createAsBuiltRemediationCapFixture(input: {
       ...(input.appendCap === undefined
         ? {}
         : { prd_audit: { max_appended_tasks: input.appendCap, max_appended_ratio: 1 } }),
-      architecture_review_as_built: { remediation: { enabled: true } },
+      architecture_review_as_built: {
+        remediation: { enabled: input.remediationEnabled ?? true },
+      },
     } as never,
   });
   const outcome = await (conductor as unknown as {
@@ -303,8 +334,13 @@ async function createAsBuiltRemediationCapFixture(input: {
     ALL_STEPS,
     'as-built blocked',
     {
-      source: 'architecture-review-as-built',
-      evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }],
+      source: input.withPrdEvidence ? 'validation-group' : 'architecture-review-as-built',
+      evidence: [
+        ...(input.withPrdEvidence
+          ? [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }]
+          : []),
+        { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
+      ],
     },
   );
 
@@ -1681,5 +1717,64 @@ describe('prd_audit kickback', () => {
       .resolves.toBeNull();
     await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 10`))
       .resolves.toBeNull();
+  });
+
+  /**
+   * AB-R15/AB-R16 matrix (issue #1912). APPROVED decision 6 requires
+   * `architecture_review_as_built.remediation.enabled: false` to revert EXACTLY
+   * to halt-always-on-BLOCKED. The kill switch had been enforced per call site,
+   * so each new site reopened it. These cells pin the seam where as-built
+   * evidence becomes authority, across the round shapes that reach it.
+   *
+   * The join-level dimension (a manual_test FAIL deferring to the consolidated
+   * kickback) is covered by the parallel-validation acceptance suite; this
+   * matrix owns the planRemediation-level inputs.
+   */
+  describe('as-built remediation kill switch (decision 6)', () => {
+    for (const withPrdEvidence of [false, true]) {
+      const round = withPrdEvidence ? 'mixed PRD/as-built' : 'as-built-only';
+
+      it(`grants no as-built authority in a ${round} round when disabled`, async () => {
+        const fixture = await createAsBuiltRemediationCapFixture({
+          remediationEnabled: false,
+          withPrdEvidence,
+          appendCap: 4,
+        });
+
+        const ledger = await readKickbackLedger(fixture.root);
+        const plan = await readFile(fixture.planPath, 'utf8');
+        require('node:fs').appendFileSync('/tmp/claude-1000/-home-james-stoup-code-ai-conductor/1a13e694-818d-4cd1-b92b-9336b35c191f/scratchpad/m2.txt', JSON.stringify({
+          prd: withPrdEvidence, outcome: fixture.outcome,
+          gates: Object.keys(ledger.gates ?? {}), growth: ledger.growth,
+          asBuilt: plan.includes('rem-as-built-'), prdTask: plan.includes('rem-prd-audit-'),
+        }) + '\n');
+        require('node:fs').appendFileSync('/tmp/claude-1000/-home-james-stoup-code-ai-conductor/1a13e694-818d-4cd1-b92b-9336b35c191f/scratchpad/matrix.txt', JSON.stringify({
+          round: '${round}', outcome: fixture.outcome,
+          gates: Object.keys(ledger.gates ?? {}), growth: ledger.growth,
+          planHasAsBuilt: plan.includes('rem-as-built-'), planHasPrd: plan.includes('rem-prd-audit-'),
+        }) + '\n');
+
+        // No as-built lap, no as-built growth attribution, no appended
+        // as-built task — the switch removes the authority, not just the route.
+        expect(ledger.gates?.architecture_review_as_built).toBeUndefined();
+        expect(ledger.growth?.byGate?.architecture_review_as_built).toBeUndefined();
+        expect(plan).not.toContain('rem-as-built-');
+        expect(
+          (ledger as { pendingAsBuiltRemediationFindings?: unknown[] })
+            .pendingAsBuiltRemediationFindings ?? [],
+        ).toHaveLength(0);
+      });
+
+      it(`keeps as-built authority in a ${round} round when enabled`, async () => {
+        const fixture = await createAsBuiltRemediationCapFixture({
+          withPrdEvidence,
+          appendCap: 4,
+        });
+
+        // The switch is the ONLY difference from the cell above: with it on,
+        // the round still reaches a real as-built outcome rather than nothing.
+        expect(fixture.outcome.kind).not.toBe('none');
+      });
+    }
   });
 });
