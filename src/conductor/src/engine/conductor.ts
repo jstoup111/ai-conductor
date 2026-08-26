@@ -646,6 +646,18 @@ export interface RecordedPrdAuditFinding {
   rationale?: string;
 }
 
+/** A remediated as-built BLOCKED row retained after the rebuilt gate converges. */
+export interface RecordedAsBuiltRemediationFinding {
+  gate: 'architecture_review_as_built';
+  finding: string;
+  class: 'REMEDIABLE';
+  governingClause: string;
+  summary: string;
+  outcome: 'remediated';
+}
+
+export type RecordedReviewFinding = RecordedPrdAuditFinding | RecordedAsBuiltRemediationFinding;
+
 export type PrdAuditPlanGapRoute =
   | { kind: 'none' }
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
@@ -819,10 +831,29 @@ export type RecordedFindingsProjection =
   | { ok: true; block: string }
   | { ok: false; message: string };
 
-export function recordedPrdAuditFindingsBlock(
-  findings: readonly RecordedPrdAuditFinding[],
+export function recordedFindingsBlock(
+  findings: readonly RecordedReviewFinding[],
 ): RecordedFindingsProjection {
   for (const finding of findings) {
+    if (finding.gate === 'architecture_review_as_built') {
+      const where = finding.finding?.trim() || '<finding missing>';
+      if (!finding.finding?.trim()) {
+        return { ok: false, message: 'a recorded as-built finding carries no finding id' };
+      }
+      if (finding.class !== 'REMEDIABLE') {
+        return { ok: false, message: `recorded as-built finding ${where} carries no REMEDIABLE class` };
+      }
+      if (!finding.governingClause?.trim()) {
+        return { ok: false, message: `recorded as-built finding ${where} carries no governingClause` };
+      }
+      if (!finding.summary?.trim()) {
+        return { ok: false, message: `recorded as-built finding ${where} carries no summary` };
+      }
+      if (finding.outcome !== 'remediated') {
+        return { ok: false, message: `recorded as-built finding ${where} carries no remediated outcome` };
+      }
+      continue;
+    }
     const where = finding.criterion?.trim() || '<criterion missing>';
     if (!finding.criterion?.trim()) {
       return { ok: false, message: 'a recorded finding carries no criterion id' };
@@ -852,12 +883,18 @@ export function recordedPrdAuditFindingsBlock(
   return { ok: true, block: `## Recorded Findings\n\n\`\`\`json\n${json}\n\`\`\`` };
 }
 
-async function persistPrdAuditRecordedFindings(
+export function recordedPrdAuditFindingsBlock(
+  findings: readonly RecordedPrdAuditFinding[],
+): RecordedFindingsProjection {
+  return recordedFindingsBlock(findings);
+}
+
+async function persistRecordedFindings(
   reportPath: string,
   reportText: string,
-  findings: readonly RecordedPrdAuditFinding[],
+  findings: readonly RecordedReviewFinding[],
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const rendered = recordedPrdAuditFindingsBlock(findings);
+  const rendered = recordedFindingsBlock(findings);
   // Fail closed: write nothing rather than a verdict artifact that omits a
   // decision the operator authored.
   if (!rendered.ok) return rendered;
@@ -2031,6 +2068,39 @@ export class Conductor {
   private prdAuditProjectionRefusal: string | undefined;
 
   /**
+   * BLOCKED rows that authorized the current as-built remediation lap. They
+   * become durable only after the rebuilt as-built gate returns a successful
+   * verdict, so the record never calls an unverified planned repair completed.
+   */
+  private readonly pendingAsBuiltRemediationFindings = new Map<
+    string,
+    RecordedAsBuiltRemediationFinding
+  >();
+
+  private async projectPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
+    if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
+    const [reportPath] = await findArtifactFilesForStep(
+      this.projectRoot,
+      'architecture_review_as_built',
+    );
+    if (!reportPath) return 'as-built verdict artifact is unavailable for recorded-findings projection';
+    let reportText: string;
+    try {
+      reportText = await readFile(reportPath, 'utf8');
+    } catch (error) {
+      return `as-built verdict artifact could not be read for recorded-findings projection: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    const projected = await persistRecordedFindings(
+      reportPath,
+      reportText,
+      [...this.pendingAsBuiltRemediationFindings.values()],
+    );
+    if (!projected.ok) return projected.message;
+    this.pendingAsBuiltRemediationFindings.clear();
+    return undefined;
+  }
+
+  /**
    * Optional rate-limit episode coordinator (Task 10). When active, coordinates
    * deadline-aware backoff during rate-limit waits. May be undefined (graceful
    * fallback to bare sleep).
@@ -3160,7 +3230,7 @@ export class Conductor {
     const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
     const route = routePrdAuditPlanGaps(reportText, storiesText, this.config);
     if (route.kind === 'record') {
-      const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+      const projected = await persistRecordedFindings(reportPath, reportText, route.findings);
       if (!projected.ok) this.prdAuditProjectionRefusal = projected.message;
     }
     return route;
@@ -3201,7 +3271,7 @@ export class Conductor {
     // the route went. A halted route carries the same findings — including the
     // refusal that caused the halt — and previously persisted none of them.
     if (route.kind === 'record' || route.kind === 'halt') {
-      const projected = await persistPrdAuditRecordedFindings(reportPath, reportText, route.findings);
+      const projected = await persistRecordedFindings(reportPath, reportText, route.findings);
       if (!projected.ok) {
         // D8's projection refusal is an evidentiary defect on the same
         // operator-facing over-scope route, never a generic side channel.
@@ -3346,6 +3416,7 @@ export class Conductor {
       (provenance) => provenance.gate === 'architecture_review_as_built',
     )?.evidenceFile;
     const asBuiltRemediation = asBuiltEvidenceFile !== undefined;
+    if (asBuiltRemediation) this.pendingAsBuiltRemediationFindings.clear();
     const asBuiltEvidenceExists = asBuiltEvidenceFile !== undefined && await accessFile(
       join(this.projectRoot, asBuiltEvidenceFile),
     ).then(() => true).catch(() => false);
@@ -3353,6 +3424,7 @@ export class Conductor {
     const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
     const asBuiltFindings = new Map<string, AsBuiltGoverningClauseResolution>();
+    const asBuiltRecordedFindings = new Map<string, RecordedAsBuiltRemediationFinding>();
     const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];
     let prdAuditValidated = false;
     let asBuiltValidated = false;
@@ -3435,6 +3507,14 @@ export class Conductor {
           );
           if (resolution !== null) {
             asBuiltFindings.set(finding.id, resolution);
+            asBuiltRecordedFindings.set(finding.id, {
+              gate: 'architecture_review_as_built',
+              finding: finding.id,
+              class: 'REMEDIABLE',
+              governingClause: finding.clause,
+              summary: finding.summary,
+              outcome: 'remediated',
+            });
           } else {
             asBuiltUnresolvableClauses.push({ id: finding.id, clause: finding.clause });
           }
@@ -3638,6 +3718,11 @@ export class Conductor {
         });
         if (appendResult.success) {
           appendAttempted = true;
+          for (const gap of appendGaps) {
+            if (!gap.tasks?.length) continue;
+            const finding = asBuiltRecordedFindings.get(gap.id);
+            if (finding) this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
+          }
           if (prdAuditCapEnforced) {
             const ledger = await readKickbackLedger(this.projectRoot);
             const existing = ledger.gates.prd_audit;
@@ -6421,6 +6506,19 @@ export class Conductor {
             }
 
             if (allGreen) {
+              const projectionRefusal = await this.projectPendingAsBuiltRemediationFindings();
+              if (projectionRefusal !== undefined) {
+                const reason =
+                  `Validation group "${step.name}" halted: remediated as-built findings could not be ` +
+                  `projected into the verdict artifact — ${projectionRefusal}`;
+                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               // JOIN — single writer: one consistent state snapshot,
               // regardless of the order branches actually completed in.
               const joinChanges: Record<string, unknown> = {};
@@ -9111,6 +9209,22 @@ export class Conductor {
           successOutput = result.output;
           stepResult = result;
           break;
+        }
+
+        if (succeeded && step.name === 'architecture_review_as_built') {
+          const projectionRefusal = await this.projectPendingAsBuiltRemediationFindings();
+          if (projectionRefusal !== undefined) {
+            const reason =
+              `as-built architecture review halted: remediated findings could not be projected ` +
+              `into the verdict artifact — ${projectionRefusal}`;
+            await this.writeHaltMarker(reason + '\n', 'needs-human');
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            const prUrl = await this.surfaceRemediationPr(reason);
+            await this.emitLoopHalt(reason, prUrl);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
         }
 
         if (!succeeded) {

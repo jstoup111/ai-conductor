@@ -12,6 +12,7 @@ import {
   resolveAsBuiltGoverningClause,
   routePrdAuditPlanGaps,
   routePrdAuditOverScope,
+  recordedFindingsBlock,
   recordedPrdAuditFindingsBlock,
   type StepRunner,
 } from '../src/engine/conductor.js';
@@ -443,6 +444,20 @@ describe('prd_audit kickback', () => {
     });
   });
 
+  it('refuses a partial remediated as-built finding by naming its missing render field', () => {
+    expect(recordedFindingsBlock([{
+      gate: 'architecture_review_as_built',
+      finding: 'AB-1',
+      class: 'REMEDIABLE',
+      governingClause: '   ',
+      summary: 'Add the approved guard.',
+      outcome: 'remediated',
+    }] as never)).toEqual({
+      ok: false,
+      message: 'recorded as-built finding AB-1 carries no governingClause',
+    });
+  });
+
   it('halts with the named serialization refusal and leaves the verdict unwritten', async () => {
     // D8 fail-closed: exercise the renderer's own unrenderable-decision path,
     // not filesystem permissions (which a privileged test process can bypass).
@@ -850,6 +865,20 @@ describe('prd_audit kickback', () => {
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
     const appended = await readFile(planPath, 'utf8');
     expect(appended.match(/^### Task rem-as-built-/gm)).toHaveLength(2);
+
+    // A rebuilt gate replaces its BLOCKED report with its converged verdict.
+    // The conductor carries the authorized rows through that replacement and
+    // projects them only once the re-evaluation is green.
+    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), 'Verdict: APPROVED\n');
+    await expect((conductor as unknown as {
+      projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+    }).projectPendingAsBuiltRemediationFindings()).resolves.toBeUndefined();
+    const projected = await readFile(join(root, '.pipeline', 'architecture-review-as-built.md'), 'utf8');
+    expect(projected).toContain('## Recorded Findings');
+    expect(projected).toContain('"finding": "AB-ADR"');
+    expect(projected).toContain(`"governingClause": "${adrStem} decision 1"`);
+    expect(projected).toContain('"finding": "AB-TASK"');
+    expect(projected).toContain('"governingClause": "Task 7"');
   });
 
   it('records as-built plan growth and an isolated remediation lap', async () => {

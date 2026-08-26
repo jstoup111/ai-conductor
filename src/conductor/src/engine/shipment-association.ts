@@ -48,6 +48,14 @@ export type RecordedShipmentFinding =
     grade: 'PLAN_GAP';
     outcome: string;
     summary: string;
+  }
+  | {
+    gate: 'architecture_review_as_built';
+    finding: string;
+    class: 'REMEDIABLE';
+    governingClause: string;
+    summary: string;
+    outcome: 'remediated';
   };
 
 /**
@@ -75,10 +83,16 @@ export function appendRecordedShipmentFindings(
   if (frontmatterEnd === -1) return record;
   const rendered = findings.map((finding) => [
     `  - gate: ${finding.gate}`,
-    `    grade: ${finding.grade}`,
     'criterion' in finding
-      ? `    criterion: ${yamlScalar(finding.criterion)}`
-      : `    outcome: ${yamlScalar(finding.outcome)}`,
+      ? `    grade: ${finding.grade}\n    criterion: ${yamlScalar(finding.criterion)}`
+      : 'finding' in finding
+        ? [
+            `    finding: ${yamlScalar(finding.finding)}`,
+            `    class: ${finding.class}`,
+            `    governing_clause: ${yamlScalar(finding.governingClause)}`,
+            `    outcome: ${finding.outcome}`,
+          ].join('\n')
+        : `    grade: ${finding.grade}\n    outcome: ${yamlScalar(finding.outcome)}`,
     `    summary: ${yamlScalar(finding.summary)}`,
     ...('accepted' in finding ? [`    accepted: ${finding.accepted}`] : []),
     ...('decision' in finding && finding.decision ? [`    decision: ${finding.decision}`] : []),
@@ -153,6 +167,8 @@ function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentF
 }
 
 function recordedAsBuiltFindings(report: string | undefined): RecordedShipmentFinding[] {
+  const projected = recordedAsBuiltRemediationFindings(report);
+  if (projected.length > 0) return projected;
   if (!report || !/^\s*Verdict\s*:\s*PLAN_GAP\s*$/im.test(report) || !/^\s*Outcome delivered\s*:\s*yes\s*$/im.test(report)) return [];
   // Keep the shipped reader compatible with the writer's annotated heading,
   // while rejecting arbitrary prose sections that only share a prefix.
@@ -171,6 +187,40 @@ function recordedAsBuiltFindings(report: string | undefined): RecordedShipmentFi
   return outcome && summary
     ? [{ gate: 'architecture_review_as_built', grade: 'PLAN_GAP', outcome, summary }]
     : [];
+}
+
+function recordedAsBuiltRemediationFindings(report: string | undefined): RecordedShipmentFinding[] {
+  const block = report?.match(/^## Recorded Findings\s*\n+```json\s*\n([\s\S]*?)\n```\s*$/im)?.[1];
+  if (!block) return [];
+  try {
+    const parsed: unknown = JSON.parse(block);
+    const findings = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)
+      ? (parsed as { findings: unknown[] }).findings
+      : [];
+    return findings.flatMap<RecordedShipmentFinding>((finding) => {
+      if (!isObject(finding) || finding.gate !== 'architecture_review_as_built') return [];
+      const id = nonEmptyString(finding.finding);
+      const governingClause = nonEmptyString(finding.governingClause);
+      const summary = nonEmptyString(finding.summary);
+      if (
+        !id ||
+        !governingClause ||
+        !summary ||
+        finding.class !== 'REMEDIABLE' ||
+        finding.outcome !== 'remediated'
+      ) return [];
+      return [{
+        gate: 'architecture_review_as_built',
+        finding: id,
+        class: 'REMEDIABLE',
+        governingClause,
+        summary,
+        outcome: 'remediated',
+      }];
+    });
+  } catch {
+    return [];
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

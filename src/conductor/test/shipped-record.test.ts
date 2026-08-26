@@ -167,6 +167,88 @@ describe('shipped-record recorded review findings', () => {
     ].join('\n'));
   });
 
+  it('round-trips remediated as-built findings with their class and governing clause', () => {
+    const findings = recordedShipmentFindings({
+      prdAudit: [
+        '**PRD:** present',
+        '',
+        '## Recorded Findings',
+        '',
+        '```json',
+        JSON.stringify({ findings: [{
+          gate: 'prd_audit',
+          grade: 'PLAN_GAP',
+          criterion: 'S2.2',
+          summary: 'Existing recorded findings remain readable.',
+        }] }),
+        '```',
+      ].join('\n'),
+      asBuilt: [
+        'Verdict: APPROVED',
+        '',
+        '## Recorded Findings',
+        '',
+        '```json',
+        JSON.stringify({ findings: [{
+          gate: 'architecture_review_as_built',
+          finding: 'AB-1',
+          class: 'REMEDIABLE',
+          governingClause: 'Task 1',
+          summary: 'Add the approved guard.',
+          outcome: 'remediated',
+        }, {
+          gate: 'architecture_review_as_built',
+          finding: 'AB-2',
+          class: 'REMEDIABLE',
+          governingClause: 'adr-boundary decision 2',
+          summary: 'Restore the approved boundary.',
+          outcome: 'remediated',
+        }] }),
+        '```',
+      ].join('\n'),
+    });
+
+    expect(findings).toEqual([
+      {
+        gate: 'prd_audit',
+        grade: 'PLAN_GAP',
+        criterion: 'S2.2',
+        summary: 'Existing recorded findings remain readable.',
+      },
+      {
+        gate: 'architecture_review_as_built',
+        finding: 'AB-1',
+        class: 'REMEDIABLE',
+        governingClause: 'Task 1',
+        summary: 'Add the approved guard.',
+        outcome: 'remediated',
+      },
+      {
+        gate: 'architecture_review_as_built',
+        finding: 'AB-2',
+        class: 'REMEDIABLE',
+        governingClause: 'adr-boundary decision 2',
+        summary: 'Restore the approved boundary.',
+        outcome: 'remediated',
+      },
+    ]);
+
+    expect(appendRecordedShipmentFindings([
+      '---',
+      'slug: remediated-as-built',
+      'spec_hash: digest',
+      '---',
+      '',
+      '## Cost',
+    ].join('\n'), findings)).toContain([
+      '  - gate: architecture_review_as_built',
+      '    finding: AB-1',
+      '    class: REMEDIABLE',
+      '    governing_clause: "Task 1"',
+      '    outcome: remediated',
+    ].join('\n'));
+  });
+
   it('omits findings when neither report contains a recorded non-blocking finding', () => {
     const record = '---\nslug: clean\n---\n';
     const findings = recordedShipmentFindings({
