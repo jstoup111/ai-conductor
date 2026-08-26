@@ -33,13 +33,16 @@ As an operator, I want plans and stories to never spec absence tests so that tdd
 - Given a removal-shaped feature, when `skills/plan/SKILL.md` guides task authoring, then a removal-routing line directs removal tasks to `/code-removal` and forbids specifying tasks whose test subject is the removed code's absence
 - Given a removal-shaped feature, when `skills/stories/SKILL.md` guides criteria authoring, then a removal-routing line forbids acceptance criteria asserting that code, files, or symbols no longer exist
 - Given `skills/tdd/SKILL.md`, when its Removal Boundary section is read, then it defers to `/code-removal` for doctrine while keeping its local no-RED-for-deletion rule intact
+- Given a removal-shaped plan task, when `/pipeline` reaches DISPATCH, then it dispatches the implementer to `/code-removal` for that task in place of opening a RED cycle
 
 #### Negative Paths
 - Given the three pointer edits, when `test/test_harness_integrity.sh` checks cross-skill references, then a `/code-removal` reference to a missing skill directory fails check 4
 
 ### Done When
 - [ ] `skills/plan/SKILL.md` and `skills/stories/SKILL.md` each carry a removal-routing line referencing `/code-removal`
-- [ ] `skills/tdd/SKILL.md` Removal Boundary references `/code-removal` and retains the ADR citation (`adr-2026-08-12-removal-anchored-tautology-exemption.md`)
+- [ ] `skills/pipeline/SKILL.md` DISPATCH routes a removal-shaped task to `/code-removal`, so the doctrine reaches the build session that executes the work
+- [ ] `code-removal` is implicit-required (`implicit_invocation: required`, no host disable, listed in `EXPECTED_IMPLICIT_REQUIRED`), because `/pipeline` activates it in the same session
+- [ ] `skills/tdd/SKILL.md` Removal Boundary references `/code-removal` and cites review ownership from an APPROVED ADR, never a superseded one
 - [ ] No skill text instructs writing a test that asserts code absence
 
 ## Story 3: Survivor behavior is protected before deletion

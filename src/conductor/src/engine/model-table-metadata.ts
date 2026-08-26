@@ -183,6 +183,13 @@ const EXTRA_MODEL_TABLE_ROW_INPUTS: Array<
       'Cross-cutting correctness protocol applied within the invoking skill\'s context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller\'s model.',
   },
   {
+    name: 'code-removal',
+    claudeModel: 'inherits caller',
+    claudeEffort: '',
+    why:
+      'Cross-cutting removal discipline applied in the invoking session: preserves survivors while removing obsolete code, without a separately dispatched agent.',
+  },
+  {
     name: 'domain-reviewer',
     claudeModel: 'sonnet (<50-line diff), opus (≥50-line diff)',
     claudeEffort: '',

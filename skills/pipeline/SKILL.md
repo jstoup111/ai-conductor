@@ -92,6 +92,11 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
                   Implementer includes it as a trailer in all commits (including refactors); implementer amends before PASS
                   if the trailer is malformed. Implementer runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
+                  Removal-shaped task (the task deletes a file, seam, flag, symbol, or code path)? The
+                  implementer runs `/code-removal` for that task instead of opening a RED cycle — a
+                  deletion has no failing test to write, and an absence assertion is never the subject.
+                  `/code-removal` carries the survivor method, test triage, and completeness sweep; the
+                  evidence is the deletion diff plus the full surviving suite green.
 3. VERIFY       — Run `conduct-ts scoped-run <selectors...>` for the scoped affected-test set (see Scoped VERIFY below) to confirm the implementer's work
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch implementer with error context
 5. COMMIT       — Verify the implementer's commit carries the `Task: <id>` trailer with <id> as the bare plan id

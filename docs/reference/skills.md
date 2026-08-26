@@ -6,7 +6,7 @@ nav_order: 7
 
 # Skills
 
-The catalog of all 38 skills: 33 under `skills/` and 5 repository-local ones under `.agents/skills/`.
+The catalog of all 36 skills: 31 under `skills/` and 5 repository-local ones under `.agents/skills/`.
 For each, the frontmatter, the engine step that invokes it, what it reads, what it writes, and whether
 it blocks.
 
@@ -46,12 +46,12 @@ Discovery is not activation. Every catalog entry is classified exhaustively by i
   host disable is present. This exception is reserved for a verified model-initiated caller inside an
   already active skill.
 
-The 12 implicit-required shipped skills are:
+The 13 implicit-required shipped skills are:
 
 | Skill group | Skills | Why they cannot be explicit-only in the distributed catalog |
 | --- | --- | --- |
 | `/engineer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/engineer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
-| Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims` | Called from an active skill: issue authoring, fresh debugging, batch simplification, or load-bearing claim verification |
+| Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims`, `code-removal` | Called from an active skill: issue authoring, fresh debugging, batch simplification, load-bearing claim verification, or removal-shaped build work — `/pipeline` dispatches `/code-removal` in place of a RED cycle |
 
 The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `conduct`,
 `daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
@@ -94,6 +94,7 @@ policy across both catalogs and both host metadata formats.
 | `assess` | gating | understand | sonnet | `assess` (out-of-band) | Advisory |
 | `conduct` | gating | all | — | `worktree` (0), `complexity` (3) | Blocking via `worktree` (structural) |
 | `verify-claims` | gating | all | — | none | Blocking, inside the calling skill |
+| `code-removal` | advisory | all | — | none | Advisory |
 | `daemon-triage` | advisory | all | — | none (operator-only) | None — read-only diagnosis; recovery only on per-action operator approval |
 | `architecture-diagram` | gating | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
@@ -509,6 +510,23 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   delta task does not permit skipping to implementation.
 - **Dispatches** — `agents/generator.md` (RED and GREEN), `agents/domain-reviewer.md` (both DOMAIN
   phases).
+
+### code-removal
+
+> Use when removing a file, seam, flag, symbol, or code path. Defines the evidence and test discipline for deletion-shaped work.
+
+- **Frontmatter** — `enforcement: advisory`, `phase: all`, no model pin. It is implicit-required:
+  `/pipeline` activates it inside an already-running build session.
+- **Engine step** — none. `plan` and `stories` route removal-shaped authoring to it, `tdd` defers
+  its removal doctrine to it, and `/pipeline`'s DISPATCH step sends a removal-shaped task to it in
+  place of opening a RED cycle.
+- **Inputs** — the obsolete file, seam, flag, symbol, or code path; the behavior that must survive;
+  and the source, test, configuration, and documentation references that mention it.
+- **Outputs** — the deletion diff, any pre-deletion characterization tests needed to cover a
+  non-obvious survivor, and a green full surviving suite.
+- **Gate role** — advisory. It forbids absence tests: deletion evidence is the diff plus the green
+  suite. It requires a survivor inventory for non-obvious survivors, triages touching tests as
+  DIRECT or INCIDENTAL, and finishes with a literal reference sweep.
 
 ### code-review
 

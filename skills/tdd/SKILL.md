@@ -75,13 +75,12 @@ authored during this lap, do not amend the sealed plan, and close the task with 
 
 ### Removal Boundary
 
-Deleting code is not new behavior and starts no RED cycle. When a task's subject is a removal —
-a file, a seam, a flag, a code path going away — do not author a test whose subject is the code
-being deleted, and do not restate coverage the deleted code used to carry. The deletion itself,
-plus the survival of the existing suite, is the evidence. Removal-anchored review treatment is
-defined by `adr-2026-08-12-removal-anchored-tautology-exemption.md`; maintenance edits that keep
-existing tests compiling after a removal (updating imports, dropping dead selectors) are ordinary
-edits, not new coverage, and need no RED of their own.
+Deleting code starts no RED cycle. For removal-shaped work, follow `/code-removal` for the
+absence-test prohibition, survivor method, test triage, and completeness sweep. Review ownership is
+defined by APPROVED `adr-2026-08-22-one-owner-per-review-question.md`, which retires the rubric
+exemptions the earlier removal-anchored ADR carried; maintenance edits that keep existing tests
+compiling after a removal (updating imports, dropping dead selectors) are ordinary edits, not new
+coverage, and need no RED of their own.
 
 ### Phase 1: RED
 

@@ -172,6 +172,7 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
 
 const EXPECTED_EXTRA_ROW_NAMES = [
   'verify-claims',
+  'code-removal',
   'domain-reviewer',
   'evaluator',
   'code-review',
