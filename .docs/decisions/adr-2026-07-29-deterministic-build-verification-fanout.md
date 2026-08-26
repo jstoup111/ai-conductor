@@ -45,6 +45,18 @@ Choose **Option B**.
 9. Treat installed `test-suite` skill links as a real consumer migration. The release migration removes the obsolete Claude and Codex catalog links without touching unrelated skills.
 10. Engine-native execution must remain provider-agnostic. Any exhaustive provider-policy metadata retained for step configuration is bookkeeping only and must never cause an LLM dispatch for `wiring_check` or `test_suite`.
 
+> **Amended 2026-08-26 by #1896:** `wiring_check` is hard-deleted (phase 2 of
+> `adr-2026-08-11-deprecated-no-op-step-retirement`), leaving `test_suite` as the sole
+> deterministic BUILD verification. `BUILD_VERIFICATION_GROUP` is dissolved rather than kept as a
+> one-member group — the executor's width-1 guard already skips the parallel lane for a single
+> dispatchable member, so a one-member group is unreachable dead structure. The semantics this
+> decision established survive on the serial dispatch path and remain binding: deterministic
+> failure classification and per-gate kickback budgeting for `test_suite` (point 4), and
+> `build_review` dispatching only on a green deterministic result (point 6). Post-repair
+> re-verification of `test_suite` (`adr-2026-08-03-build-repair-member-reuse-validity`) must
+> likewise be preserved on the serial path. Points 1–3 and 5 are inapplicable at width 1; points
+> 7–10 are unaffected.
+
 ## Verify-Claims Ledger
 
 ### Claims

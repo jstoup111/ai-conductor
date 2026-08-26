@@ -54,6 +54,14 @@ Root cause, Completeness — under the same all-or-FAIL rule.
 `wiring_check` remains a deprecated no-op. Nothing here changes it: removing the name would
 reintroduce the `Unknown step` hazard that ADR exists to prevent.
 
+> **Amended 2026-08-26 by #1896:** the prohibition above is lifted. The hazard it cites is
+> verified spent at current HEAD: the resume path is registry-driven (`conductor.ts:5144`,
+> `findResumeIndex`), `readState` performs no schema validation, and stale state keys naming a
+> removed step are inert orphans — no `getStepDefinition` call site receives a state-derived
+> name. The hard deletion of `wiring_check` is the phase-2 change
+> `adr-2026-08-11-deprecated-no-op-step-retirement` always contemplated, and proceeds under the
+> conditions of `architecture-review-2026-08-26-hard-delete-the-retired-wiring-check-step-name-fro`.
+
 ## Consequences
 
 - A production surface no configured entry point reaches now passes `build_review`. That is the
