@@ -1,6 +1,6 @@
 // Covers: task:rem-prd-audit-rem-fr-s6.2-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -155,5 +155,73 @@ describe('verdict retry-input identity reader', () => {
       ok: true,
       value: { prd_audit: 'done' },
     });
+  });
+
+  /**
+   * D4/D3: the post-dispatch handshake is the shared identity seam, and it
+   * runs BEFORE any routing reader may inspect report text. A dispatch that
+   * settles without writing its verdict is scored `absent`; the PLAN_GAP and
+   * OVER_SCOPE routers must not then parse the PRIOR lap's report and halt on
+   * its findings. That is the forbidden class this ADR exists to remove: an
+   * earlier lap's verdict driving a current halt.
+   */
+  it('never routes a prior lap PLAN_GAP when this dispatch failed the handshake', async () => {
+    const seedResult = await readState(statePath);
+    const seed = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+    for (const step of ALL_STEPS) {
+      seed[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+      if (step.name === 'prd_audit') break;
+      seed[step.name] = 'done';
+    }
+    seed.prd_audit = 'pending';
+    seed.architecture_review_as_built = 'skipped';
+    seed.retro = 'skipped';
+    seed.rebase = 'skipped';
+    seed.finish = 'done';
+    await writeState(statePath, seed as ConductState);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+
+    // A PRIOR lap's blocking report, already on disk before this dispatch.
+    const reportPath = join(dir, '.pipeline/prd-audit.md');
+    await writeFile(
+      reportPath,
+      [
+        '# PRD Audit',
+        '',
+        '**PRD:** none',
+        '',
+        '## Verdict Table',
+        '',
+        '| Criterion | Grade | Plan task | PRD: | Evidence |',
+        '|---|---|---|---|---|',
+        '| S1.1 | PLAN_GAP | — | — | no plan task covers this |',
+        '',
+      ].join('\n'),
+    );
+    const priorLap = Date.now() - 10 * 60 * 1000;
+    await utimes(reportPath, new Date(priorLap), new Date(priorLap));
+
+    // This dispatch settles successfully but writes no verdict of its own.
+    const runner: StepRunner = { run: async () => ({ success: true }) };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'prd_audit',
+      verifyArtifacts: true,
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    // The PLAN_GAP router never acted: its halt detail is absent. (The halt
+    // that does land comes from the separate exhaustion-path classifier,
+    // which carries its own run-identity argument and is not this reader.)
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8').catch(() => '');
+    expect(halt).not.toContain('PLAN_GAP on S1.1');
+    expect(halt).not.toContain('needs human DECIDE — PLAN_GAP');
   });
 });

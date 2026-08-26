@@ -6758,10 +6758,17 @@ export class Conductor {
               (member) => member.name === 'prd_audit',
             );
             const prdAuditOutcome = prdAuditIdx === -1 ? undefined : outcomes[prdAuditIdx];
+            // D3/D4, group path: the branch's own handshake result is the
+            // same shared identity seam the serial walk consults above. A
+            // recorded failure means this round did not produce prd_audit's
+            // verdict, so the routers must not read the prior lap's report —
+            // the provider branch's pass outcome alone is not evidence that
+            // the artifact on disk belongs to this dispatch.
             if (
               this.verifyArtifacts &&
               prdAuditOutcome?.kind === 'verdict' &&
-              prdAuditOutcome.verdict === 'pass'
+              prdAuditOutcome.verdict === 'pass' &&
+              !branchHandshakeFailures.get('prd_audit')
             ) {
               prdAuditRoute = await this.routeCurrentPrdAudit(state);
               if (prdAuditRoute.kind === 'record') {
@@ -8914,7 +8921,16 @@ export class Conductor {
             this.currentAttemptStartedAt = undefined;
             this.currentRunId = undefined;
 
-            if (step.name === 'prd_audit') {
+            // D3/D4: the post-dispatch handshake is the shared identity
+            // seam, and it runs before any routing reader may inspect report
+            // text. A non-undefined handshake means THIS dispatch did not
+            // produce the verdict on disk (missing, prior-identity, or
+            // pre-dispatch mtime), so its findings are not current: they are
+            // scored `absent` => rerun (D5) and never read as a route.
+            // Without this guard the PLAN_GAP and OVER_SCOPE readers below
+            // parse the PRIOR lap's report and can halt on it — the exact
+            // forbidden class this ADR removes.
+            if (step.name === 'prd_audit' && !handshake) {
               const prdAuditRoute = await this.routeCurrentPrdAudit(state);
               if (prdAuditRoute.kind === 'projection-halt') {
                 const reason =
