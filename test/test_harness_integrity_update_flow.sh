@@ -96,7 +96,7 @@ OUT=$(run_checker "$LEGACY_BIN" "$REAL_SCHEMA")
 CODE=$?
 assert "legacy config path outside bin/lib/harness-common.sh fails" "$([ "$CODE" -ne 0 ] && echo 0 || echo 1)"
 assert "legacy config path failure names the offending file:line" \
-  "$(case "$OUT" in *"rogue-update:"*) echo 0;; *) echo 1;; esac)"
+  "$(grep -Fq 'rogue-update:' <<<"$OUT"; echo $?)"
 
 # ── Case 3: a conductor key the schema does not admit fails ─────────────────
 UNKNOWN_KEY_BIN=$(make_bin_fixture unknown-key)
@@ -109,7 +109,7 @@ OUT=$(run_checker "$UNKNOWN_KEY_BIN" "$REAL_SCHEMA")
 CODE=$?
 assert "conductor key absent from the schema allowlist fails" "$([ "$CODE" -ne 0 ] && echo 0 || echo 1)"
 assert "unknown conductor key failure names the offending file:line" \
-  "$(case "$OUT" in *"rogue-key:"*) echo 0;; *) echo 1;; esac)"
+  "$(grep -Fq 'rogue-key:' <<<"$OUT"; echo $?)"
 
 # ── Case 4: an undeterminable allowlist fails closed ────────────────────────
 # A validator this guard cannot parse must stop the check, never widen it.
@@ -122,7 +122,7 @@ OUT=$(run_checker "$CURRENT_BIN" "$STUB_SCHEMA")
 CODE=$?
 assert "undeterminable schema allowlist fails closed" "$([ "$CODE" -ne 0 ] && echo 0 || echo 1)"
 assert "undeterminable allowlist failure names validateConductorBlock" \
-  "$(case "$OUT" in *"validateConductorBlock"*) echo 0;; *) echo 1;; esac)"
+  "$(grep -Fq 'validateConductorBlock' <<<"$OUT"; echo $?)"
 
 echo ""
 echo "  ${PASS} passed, ${FAIL} failed"

@@ -1,5 +1,6 @@
 ---
 name: conduct
+disable-model-invocation: true
 description: "Use to guide a feature through the full SDLC. Checks artifact state, determines current phase, tells you what to run next, and blocks progression when gates aren't met."
 enforcement: gating
 phase: all
@@ -76,7 +77,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | Step | Check | How to Verify |
 |------|-------|---------------|
 | 1. bootstrap | Project CLAUDE.md exists AND `.memory/` directory exists AND `.docs/` subdirectories exist | Glob for `CLAUDE.md` in project root, check `.memory/index.md`, check `.docs/specs/` exists |
-| 2. memory | `.memory/index.md` has been read this session | Memory recall happens automatically — if bootstrap is done, mark this as done |
+| 2. memory | `.memory/index.md` has been read this session | The engine or operator explicitly invokes `/memory` (Claude) or `$memory` (Codex); mark done only after the index is read |
 | 2.5. assess | Assessment report exists OR skipped (new project) | Glob `.docs/decisions/technical-assessment-*.md` or check state is "skipped" |
 | 3. explore | Track decided — `.docs/track/*.md` exists (or `state.track` set) | Glob `.docs/track/*.md` / check `state.track`. `explore` is advisory and always runs; it classifies the work product/technical. |
 | 3b. prd | PRODUCT track: a spec exists in `.docs/specs/` (not SUPERSEDED). TECHNICAL track: skipped. | If `track == product`: glob `.docs/specs/*.md` (exclude `SUPERSEDED-`). If `track == technical`: step is skipped. |

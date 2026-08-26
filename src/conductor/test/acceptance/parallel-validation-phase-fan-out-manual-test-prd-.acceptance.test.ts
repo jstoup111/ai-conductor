@@ -162,6 +162,10 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 1,
+      // This fixture observes the SHIP validation join. Start at its first
+      // member so the test does not re-verify the unrelated tree-attesting
+      // BUILD test_suite proof that precedes it.
+      fromStep: 'manual_test',
       ...extra,
     });
   }
@@ -614,6 +618,11 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
           } else if (step === 'prd_audit') {
             prdAuditCalls++;
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_GAP);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
+            );
           } else if (step === 'remediate') {
             await writeFile(
               join(dir, '.pipeline/remediation.json'),

@@ -1,5 +1,6 @@
 ---
 name: daemon-triage
+disable-model-invocation: true
 description: "Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why. Diagnoses the failure and routes it to the right runbook. Operator-invoked only; never auto-dispatched, and never mutates anything without explicit per-action approval."
 enforcement: advisory
 phase: all
@@ -81,13 +82,12 @@ explicitly continue read-only triage and treat the marker as crash residue
 evidence. If status does not corroborate the recorded step for any other reason,
 treat the marker as uncorroborated evidence, not execution authority.
 
-> The harness also suppresses this skill mechanically for step sessions, but
-> coverage differs by provider: Claude gets a `skillOverrides` entry in the
-> worktree's session settings, and on a self-host build Codex has the skill
-> pruned from its throwaway home entirely. Codex in any other repo has **no**
-> mechanical suppression — it lists a user-space skills directory and honors no
-> per-session override. That cell is exactly why this marker-plus-liveness
-> warning exists: it surfaces the unsupported invocation context without
+> The catalog marks this skill explicit-only for both providers: Claude reads
+> `disable-model-invocation: true`, while Codex reads
+> `policy.allow_implicit_invocation: false`. Step-session `skillOverrides` on
+> Claude and pruning from the self-host Codex home remain defense in depth. The
+> marker-plus-liveness warning is still required because an operator may invoke
+> triage explicitly while a step appears active; it surfaces that context without
 > blocking read-only diagnosis.
 
 ### Confirm you have a slug and a repo root
@@ -167,6 +167,7 @@ take the first that matches.
 | `.daemon/parked/<slug>` exists | Operator-parked — not a failure; nothing dispatches until unparked | `runbooks/emergency-stop-a-running-feature.md` |
 | `.worktrees/<slug>` missing, or state says past `worktree` with no directory | Worktree / evidence loss | `runbooks/worktree-and-evidence-recovery.md` |
 | `HALT.class` is `needs-human` | Needs-human halt — an operator decision is required; clearing it without deciding just re-halts | `runbooks/stalled-or-stuck-feature.md` |
+| `HALT.class` is `over-scope` | Edit every desired entry in the fenced `over-scope-decisions` block to `accept` or `refuse` and add a rationale before clearing; pending entries are inert | `runbooks/stalled-or-stuck-feature.md` |
 | `HALT` body reads `heartbeat stalled: no provider activity in …` | Watchdog kill (already handled; `mechanical`) | `runbooks/stalled-or-stuck-feature.md` |
 | `HALT.class` is `mechanical`, or absent/unrecognized | Mechanical halt — daemon may retry; clears on base-branch advance | `runbooks/stalled-or-stuck-feature.md` |
 | `credentials_park` event, or `build-auth-status` exits non-zero | Auth park — waiting on a credential, not on your code | `runbooks/stalled-or-stuck-feature.md` |

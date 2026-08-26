@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execFile as execFileCb } from 'node:child_process';
-import { readdir, readFile, readlink } from 'node:fs/promises';
+import { type Dirent } from 'node:fs';
+import { lstat, readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { redactSafetyText } from '../safety-diagnostics.js';
@@ -16,6 +17,9 @@ interface Surface {
   manifest: readonly Entry[];
 }
 interface Entry { path: string; digest: string; }
+interface ManifestCandidate { file: string; specialType?: string; }
+type ManifestNodeType = 'directory' | 'file' | 'symlink' | 'socket' | 'fifo'
+  | 'character-device' | 'block-device' | 'other';
 export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
 
 /**
@@ -234,28 +238,59 @@ async function manifest(
 ): Promise<Entry[]> {
   // Filter DURING the walk: an excluded subtree is never descended into, so
   // `.git` is neither hashed nor a source of transient mid-run read errors.
-  const walk = async (dir: string): Promise<string[]> => {
+  const direntType = (entry: Dirent<string>): ManifestNodeType | undefined => {
+    if (entry.isDirectory()) return 'directory';
+    if (entry.isFile()) return 'file';
+    if (entry.isSymbolicLink()) return 'symlink';
+    if (entry.isSocket()) return 'socket';
+    if (entry.isFIFO()) return 'fifo';
+    if (entry.isCharacterDevice()) return 'character-device';
+    if (entry.isBlockDevice()) return 'block-device';
+    return undefined;
+  };
+  const resolvedType = async (entry: Dirent<string>, file: string): Promise<ManifestNodeType> => {
+    const known = direntType(entry);
+    if (known !== undefined) return known;
+    const stats = await lstat(file);
+    if (stats.isDirectory()) return 'directory';
+    if (stats.isFile()) return 'file';
+    if (stats.isSymbolicLink()) return 'symlink';
+    if (stats.isSocket()) return 'socket';
+    if (stats.isFIFO()) return 'fifo';
+    if (stats.isCharacterDevice()) return 'character-device';
+    if (stats.isBlockDevice()) return 'block-device';
+    return 'other';
+  };
+  const walk = async (dir: string): Promise<ManifestCandidate[]> => {
     const entries = (await readdir(dir, { withFileTypes: true }))
-      .filter(entry => !(entry.isDirectory() && excludeDirectoryBasenames.includes(entry.name)))
       .filter(entry => !isExcluded(relative(root, join(dir, entry.name)), exclude));
     // `async` on the callback is load-bearing for lint, not for behaviour: it makes
     // every element a promise so `Promise.all` is not handed a mixed array.
-    return (await Promise.all(entries.sort((a, b) => a.name.localeCompare(b.name)).map(async entry =>
-      entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)]))).flat();
+    return (await Promise.all(entries.sort((a, b) => a.name.localeCompare(b.name)).map(async entry => {
+      const file = join(dir, entry.name);
+      const nodeType = await resolvedType(entry, file);
+      if (nodeType === 'directory') {
+        return excludeDirectoryBasenames.includes(entry.name) ? [] : walk(file);
+      }
+      if (nodeType === 'file' || nodeType === 'symlink') return [{ file }];
+      return [{ file, specialType: nodeType }];
+    }))).flat();
   };
-  let files: string[];
+  let files: ManifestCandidate[];
   try {
     files = await walk(root);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [{ path: '<absent>', digest: '' }];
     throw error;
   }
-  return Promise.all(files.map(async file => {
+  return Promise.all(files.map(async ({ file, specialType: nodeType }) => {
     const path = relative(root, file);
-    const bytes = await readFile(file).catch(async (error: NodeJS.ErrnoException) => {
-      if (error.code === 'EISDIR' || error.code === 'ENOENT') return readlink(file);
-      throw error;
-    });
+    const bytes = nodeType === undefined
+      ? await readFile(file).catch(async (error: NodeJS.ErrnoException) => {
+          if (error.code === 'EISDIR' || error.code === 'ENOENT') return readlink(file);
+          throw error;
+        })
+      : `special:${nodeType}:${path}`;
     return { path, digest: createHash('sha256').update(bytes).digest('hex') };
   })).then(entries => entries.filter(entry => !exclude.includes(entry.path)).sort((a, b) => a.path.localeCompare(b.path)));
 }

@@ -192,6 +192,21 @@ export class AuditTrailWriter {
           path: event.path,
           reason: event.reason,
         };
+      case 'halt_record_written':
+        return {
+          origin: 'build',
+          event: event.type,
+          path: event.path,
+          reason: `halt record written for ${event.slug} (${event.haltClass})`,
+        };
+      case 'halt_record_write_failed':
+      case 'halt_record_push_failed':
+        return {
+          origin: 'build',
+          event: event.type,
+          path: event.path,
+          reason: event.reason,
+        };
       case 'halt_cleared':
         return {
           origin: event.step ?? 'build',
@@ -221,6 +236,25 @@ export class AuditTrailWriter {
           reason: event.reason,
           condition: event.condition,
           ...(event.path ? { path: event.path } : {}),
+        };
+      case 'operator_rewind':
+        return {
+          origin: 'operator',
+          event: 'operator_rewind',
+          reason: `rewound to ${event.target}`,
+          cause: event.demoted.join(', '),
+        };
+      case 'step_refused':
+        // adr-2026-08-24 D3 declares this event audited at introduction, and
+        // the sink registry's `audit: true` means exactly "recorded to
+        // .pipeline/audit-trail/events.jsonl" (adr-2026-07-26). A refusal is
+        // the friction record for an attempt that ended on an entry
+        // condition or a human-judgement boundary rather than its own work.
+        return {
+          origin: event.step,
+          event: 'step_refused',
+          reason: event.reason,
+          cause: event.kind,
         };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict

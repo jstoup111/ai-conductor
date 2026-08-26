@@ -95,6 +95,14 @@ stale reuse can false-GREEN a ship): `architecture_review_as_built`, `prd_audit`
   change; the engine-owned mtime floor suffices.
 - **No verdict-artifact sweep** — a per-attempt sweep would destroy the file needed for diffing and is
   racier than the mtime comparison.
+
+> **Amended 2026-08-25 by #1838:** Superseded in part by
+> adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity — an ENGINE-stamped run
+> identity (never a provider echo) is now written beside the gate-code-validity stamp for
+> prd_audit, architecture_review_as_built, and manual_test, and identity-aware readers
+> take precedence over the mtime floor where a stamp exists. The mtime floor survives as
+> the fallback for unstamped artifacts; the manual_test deferral is lifted (run identity
+> composes with the #367 whitewash guard, which is unchanged).
 - **No change to completion derivation** (`autoheal.ts` `deriveCompletion`, the `build` predicate) —
   which keeps this orthogonal to the unmerged #642.
 - **No retry-budget change** — #280 owns progress-aware budgets.

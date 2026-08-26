@@ -53,7 +53,32 @@ review the plan before starting the daemon if those older specs are not ready to
 **Verification:** Run `conduct-ts daemon status` after the next pass. A repaired spec disappears
 from `BLOCKED` and is eligible for dispatch; a remaining entry includes its current remedy.
 
-### 1. Read the halt marker first
+### First, read the committed halt record
+
+For an operator-actionable halt, read `.docs/halted/<slug>.md` from the feature branch before
+consulting worktree-local state. The committed record survives a recreated worktree and can be
+read from any clone that has the feature branch:
+
+```bash
+git show <feature-branch>:.docs/halted/<slug>.md
+```
+
+It gives the halt class, step, phase, branch, HEAD SHA, timestamp, and complete HALT body. A
+`Status: resolved` record preserves those original details and also records how and when it was
+cleared. `mechanical` halts deliberately create no record, so begin with the live marker when this
+file is absent for that class.
+
+The push is best-effort. If the daemon reports `halt_record_push_failed`, the record was still
+committed locally on the daemon host but may not be visible from the remote branch. Read it from
+that feature worktree instead:
+
+```bash
+git -C .worktrees/<slug> show HEAD:.docs/halted/<slug>.md
+```
+
+Repair the push failure separately; do not treat a missing remote copy as a missing halt record.
+
+### 1. Read the halt marker
 
 ```bash
 head -1 .worktrees/<slug>/.pipeline/HALT
@@ -93,6 +118,26 @@ can be handled with `conduct daemon reclaim-worktree <slug>` when reclaim is app
 grep -E 'build_stall|build_no_progress|zero_work_product|rate_limit|credentials_park' \
   .worktrees/<slug>/.pipeline/events.jsonl | tail -20
 ```
+
+### A later step is blocked by an unsatisfied prerequisite
+
+**Symptom:** `.pipeline/HALT` says `Step '<step>' is blocked by unsatisfied prerequisite` and
+lists one or more prerequisite names with their recorded statuses. The HALT class is
+`needs-human`.
+
+**Diagnosis:** The listed prerequisite cannot run again automatically: it is no longer `pending`.
+Read that prerequisite's halt record or its earlier events before changing anything. A `refused`
+status means the prerequisite's own work was not judged failed; its original HALT explains the
+operator action required.
+
+**Recovery:** Resolve the prerequisite's stated cause, then clear `HALT` and `HALT.class` using
+[the resume procedure](#clear-a-halt-and-let-the-feature-resume). Do not hand-edit
+`conduct-state.json` to mark the prerequisite done or failed. The resumed conductor admits the
+unsatisfied prerequisite again and preserves already completed steps.
+
+**Verification:** Run `conduct-ts daemon status` after the next dispatch. The prerequisite runs
+again; the blocked later step does not remain the terminal step unless the underlying condition is
+still unresolved.
 
 #### `no_task_progress`
 
@@ -458,11 +503,22 @@ A prior passing suite result on disk is not a reason to skip the member, and the
 satisfaction.
 
 **Recovery:** do not create an operator park for the historical terminal-less stale-verdict path;
-it is retired. Let the re-verification round settle. If it halts, use the marker's explicit reason
-and [clear a halt and let the feature resume](#clear-a-halt-and-let-the-feature-resume).
+it is retired. The common stale-proof case re-dispatches `test_suite` automatically, so let the
+re-verification round settle. If `build_review` instead HALTs `needs-human` because its inputs cannot
+change, rewind from the feature worktree rather than editing pipeline state:
+
+```bash
+cd .worktrees/<slug>
+conduct-ts rewind --to test_suite
+```
+
+`rewind` clears the affected gate verdicts and both halt markers only after it has atomically demoted
+the feature to `test_suite`. It refuses a target that is not earlier than the recorded step. Do not
+hand-edit `conduct-state.json`, gate files, `HALT`, or `HALT.class`.
 
 **Verification:** the log contains the `wiring_check` deprecation notice and one `test_suite` settle
-line, followed by the normal group join or an explicit HALT.
+line, followed by the normal group join or an explicit HALT. After a rewind, confirm it also prints
+`Rewound to test_suite.` and that the next dispatch starts at `test_suite`.
 
 #### Setup failures
 
@@ -700,20 +756,19 @@ The note is additive: retain the original text and create no separate record. St
 
 **Annotate history-shaped artifacts; rewrite state-shaped ones.** The additive-note rule above is
 for artifacts that downstream machinery reads as *history* — a plan's executed tasks are the ledger
-the completeness grader matches landed commits against, so deleting one orphans its diff. But
-`prd_audit` and the as-built architecture review re-judge the PRD's functional requirements,
-stories' scenarios, and the component diagram as *current state*, comparing what the artifact
-states verbatim against the shipped implementation. An amendment note asking the reader to
+`prd_audit`'s `FIXABLE` findings match against, so deleting one orphans its diff. But
+`prd_audit` and the as-built architecture review re-judge the stories' acceptance criteria, the PRD's
+functional requirements when one exists, and the component diagram as *current state*, comparing what
+the artifact states verbatim against the shipped implementation. An amendment note asking the reader to
 substitute new meaning leaves the stated requirement contradicting the code, and every downstream
 re-judgement risks a finding. For state-shaped artifacts, rewrite the statement outright and keep a
 one-line dated provenance marker. (Precedent: the 2026-08-14 wiring-rubric retirement — the
-rewritten FR-1 and diagram passed `prd_audit` all-ALIGNED on the first pass; the earlier
+rewritten FR-1 and diagram passed `prd_audit` all-`PASS` on the first pass; the earlier
 annotation-only draft would have shipped an FR still claiming five rubrics.) Re-author the plan
 without a task targeting the other feature's sealed artifact, then run
 `conduct-ts plan-protected-targets .docs/plans/<feature>.md` before landing. A clean result is
 `No protected-target violations found.`; each violation is reported as `Task <id>: <path> —
-ambiguous protected reference without a **Files:** declaration; add **Files:** to declare the
-task's targets.`
+return this amendment to DECIDE; BUILD tasks must not target protected artifacts.`
 
 1. Read the refusal in `.daemon/daemon.log`:
    ```bash
@@ -760,9 +815,8 @@ unrelated changes into the seal. On success it writes a new baseline at the curr
 `rebaselines` entry recording the trigger (`operator-reseal`) and rationale, and writes a
 `protected_artifact_reseal` audit record with an `operator` origin — so the override is auditable
 rather than silent. `--clear-halt` also clears the worktree's HALT in the same step, once its class is
-the protected-artifact class. The rationale is not only an audit record: the next `build_review` on
-this feature also renders it, alongside the resealed paths and commit range, in the grader's prompt —
-see [operator-authorized protected-artifact reseals](../explanation/gates.md#operator-authorized-protected-artifact-reseals).
+the protected-artifact class — see
+[operator-authorized protected-artifact reseals](../explanation/gates.md#operator-authorized-protected-artifact-reseals).
 
 The reseal survives later rebaselines. When the base branch subsequently moves and the seal rebaselines
 onto the feature's new merge base, a resealed path is no longer refused as a feature-authored DECIDE
@@ -851,8 +905,22 @@ PARKED or HALTED. The daemon log should show `↻ resume <slug>` after dispatch.
 **Blast radius:** clearing the halt makes the feature eligible for dispatch again on the next
 poll. Fix the cause first, or it halts again immediately.
 
+#### OVER_SCOPE decision halt
+
+If `HALT.class` is `over-scope`, do not clear the body unchanged. Edit the fenced
+`over-scope-decisions` JSON array in `.pipeline/HALT`: for each decision you are making, set
+`decision` to `accept` or `refuse` and add a non-empty `rationale`. Leave entries you are not
+deciding as `pending`. An accept clears that criterion; a refusal records the decision but keeps
+the halt active as “refused — rework required.”
+
+Then clear by **renaming** the edited body to `.pipeline/HALT.cleared` — never `rm -f` it. The
+next prd_audit lap harvests your decisions from `HALT.cleared` and from nowhere else, so deleting
+the body silently discards every decision you just authored and the feature re-halts with the
+same blocking set:
+
 ```bash
-rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
+mv .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.cleared
+rm -f .worktrees/<slug>/.pipeline/HALT.class
 ```
 
 **What it changes:** the daemon registers a filesystem watcher on each halted feature's marker
@@ -899,6 +967,140 @@ Do nothing. The wait is deliberate and does not consume the retry budget. If you
 daemon during an episode, see
 [emergency stop a running feature](emergency-stop-a-running-feature.md) — and note that halts
 raised during the episode will not be auto-recovered by the replacement process.
+
+### Codex could not create a process for its shell tool calls
+
+The dispatch output names the failure directly:
+
+```text
+Codex could not create a process for 4 shell tool calls (its tool router reported
+`exec_command failed ... CreateProcess`).
+```
+
+Codex sandboxes each shell tool call inside its own bubblewrap namespace. When the host denies
+that namespace, every `exec_command` is rejected while Codex itself still exits 0 and still
+answers. The engine now classifies such a dispatch as a failure rather than a result, so a
+`build_review` rubric that could not run `git diff` reports an infrastructure failure instead of a
+hollow PASS.
+
+**Diagnose the host, not the feature.** Confirm the sandbox can create a namespace:
+
+```bash
+bwrap --unshare-user --ro-bind / / /bin/true; echo "exit=$?"
+sysctl kernel.apparmor_restrict_unprivileged_userns
+```
+
+A non-zero exit, or the restriction enabled while the daemon already runs inside a namespace,
+means Codex has no way to spawn a shell there. Until the host grants it, route the affected steps
+to another provider; clearing the halt alone re-runs into the same denial.
+
+### build_review halted on an exhausted mechanical fault allowance
+
+**Symptom:** `.pipeline/HALT` reads:
+
+```text
+build_review mechanical fault allowance exhausted: <consumed> of 3 shared faults consumed.
+Current lap <lap>: <rubric> closed cause <reason> (<detail>).
+1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale "<rationale>".
+2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
+```
+
+When the current lap has no readable aggregate (for example, its verdict came from an earlier
+lap and the completion guard scored it `absent`), the halt instead reads:
+
+```text
+build_review mechanical fault allowance exhausted: <consumed> of 3 shared faults consumed; current-lap diagnostic is unavailable; Last recorded fault: <rubric> closed cause <reason> on lap <lap> (<detail>).
+```
+
+naming the ledger's `lastMechanicalFault` record — the most recent rubric/reason/lap the
+allowance was actually charged against — instead of the numbered recovery steps. Recovery is the
+same: record reduced coverage for the named rubric and lap, then clear the halt.
+
+Both forms carry class `needs-human` — deliberately, so the daemon's automatic re-kick sweep does
+not clear it on its own.
+
+**Diagnosis:** a `build_review` rubric kept reporting an infrastructure failure (a tool crash,
+a `git diff` that could not run, a provider outage — never a genuine semantic FAIL) across
+repeated laps. Mechanical faults draw from a bounded allowance shared across `build_review`
+kickbacks (3 faults), tracked separately from the ordinary semantic kickback budget so an
+infrastructure blip never burns it. The allowance resets only on demonstrated progress (a
+rebase or base-branch advance), not on a bare retry — once it is exhausted the run halts
+instead of laundering the same infrastructure failure into a hollow PASS or an endless kickback
+loop.
+
+**Recovery:** the halt body names both required steps.
+
+1. Record the decision — this requires an interactive terminal and a resolvable local operator
+   identity; it derives the closed infrastructure cause itself, so it refuses if the rubric is
+   not currently an exhausted infrastructure failure (already judged, unknown rubric, allowance
+   not actually exhausted, a duplicate reduced-coverage record, or the lap/review has since gone
+   stale):
+   ```bash
+   conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> \
+     --rubric <rubric> --rationale "<why this rubric's coverage is being reduced>"
+   ```
+   This only writes the decision — it does not touch the halt marker.
+2. Clear the halt using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** the next `build_review` run treats the rubric as reduced coverage rather than
+halting on the same infrastructure failure, the feature reaches PASS, and the shipped record at
+`.docs/shipped/<slug>.md` carries a reduced-coverage section for that rubric. A genuine semantic
+FAIL on the same rubric still blocks exactly as before — recording reduced coverage does not
+suppress a real finding.
+
+**The record stops the halt, not the dispatch.** An excused rubric is still dispatched on every
+later lap and still reports the same infrastructure failure each time; what changes is that the
+failure no longer halts the run. Expect to keep seeing
+`build_review_rubric_infrastructure_failure` events for it in `.pipeline/events.jsonl` — on
+2026-08-23 a `completeness` record accepted at 12:16:42Z was followed by three more identical
+dispatches at 12:20:39Z, 13:07:12Z and 16:46:00Z. That is the documented behavior, not a sign the
+record failed to take; confirm the record itself in `.pipeline/build-review-dispositions.json`.
+Issue #1832 tracks suppressing the redundant dispatches.
+
+### Remediation routed the work but the engine found nothing to dispatch
+
+**Symptom:** `.pipeline/HALT` ends with this clause, and `.pipeline/HALT.class` reads `needs-human`:
+
+```text
+— remediation produced no dispatchable build work; the implicated task(s) are already
+evidence-complete — human needed
+```
+
+**Diagnosis:** this is not a remediation failure, and reading it as one wastes time. Check
+`.pipeline/remediation.json` first: in this class every disposition is `build`, each names an
+existing plan task that admits the finding, and none asks for a plan widening or a HALT.
+Remediation did its job. The engine then declined to dispatch, because the plan tasks named as
+owners already carry completion evidence, so it had no open task to attach the work to.
+
+```bash
+python3 -c "
+import json
+d = json.load(open('.worktrees/<slug>/.pipeline/remediation.json'))
+for x in d['dispositions']:
+    print(x['id'], x['disposition'], '|', x['rationale'][:120])
+"
+```
+
+Distinguish it from the superficially similar case where remediation genuinely emitted nothing —
+there the dispositions are absent, empty, or all `halt`, and the fix is a remediation problem
+rather than a dispatch one.
+
+**Recovery:** the owning tasks named in the rationales still need the work, and clearing the halt
+alone will reproduce it on the next lap if the same gate re-raises the same findings. Either:
+
+1. Address the named findings directly, commit, then clear the halt using
+   [the resume procedure](#clear-a-halt-and-let-the-feature-resume); or
+2. If the gate that raised them should not be running for this feature at all — for example a
+   rubric this branch is itself retiring — disable it in the feature worktree's
+   `.ai-conductor/config.yml`, commit that as an operator decision with its rationale, and clear
+   the halt. Disabling every registered rubric is not sufficient on its own: the coordinator
+   returns `refused: no-enabled-rubrics` when the enabled set is empty
+   (`build-review-coordinator.ts:443`), so set `build_review.enabled: false` to take the
+   `gate-disabled` path (`:440`).
+
+**Verification:** the feature re-dispatches and advances past the gate that halted it. Issue #1831
+tracks the durable fix — re-opening an evidence-complete task with the new finding attached instead
+of halting.
 
 ### The feature must stop being dispatched entirely
 

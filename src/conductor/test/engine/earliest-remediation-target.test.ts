@@ -17,6 +17,14 @@ const originalPlanGlobs = STEP_ARTIFACT_GLOBS.plan;
 beforeEach(async () => {
   projectRoot = await mkdtemp(join(tmpdir(), 'earliest-remediation-target-'));
   await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+  await mkdir(join(projectRoot, '.docs', 'plans'), { recursive: true });
+  const planPath = join(projectRoot, '.docs', 'plans', 'feature.md');
+  await writeFile(planPath, '# Implementation plan\n', 'utf8');
+  await writeFile(
+    join(projectRoot, '.pipeline', 'engine-state.json'),
+    JSON.stringify({ activePlanPath: planPath }),
+    'utf8',
+  );
 });
 
 afterEach(async () => {
@@ -81,10 +89,16 @@ const buildGap = {
 
 const planGap = {
   id: 'plan-gap',
-  disposition: 'plan',
+  // A foreign sealed DECIDE artifact is the authorized non-appending route
+  // into `plan`. An ordinary taskless plan disposition is intentionally
+  // unadmitted by the remediation-authority rule.
+  disposition: 'build',
   category: null,
-  rationale: 'Correct the remediation plan.',
-  tasks: [],
+  rationale: 'Correct the accepted artifact.',
+  tasks: [{
+    id: 'rem-plan',
+    title: 'Amend .docs/stories/another-feature.md with the corrected assertion.',
+  }],
 };
 
 const unresolvableDisposition = 'acceptance_specs';

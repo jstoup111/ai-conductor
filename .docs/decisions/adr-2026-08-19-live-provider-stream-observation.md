@@ -153,6 +153,22 @@ Leave the dispatch untouched; watch Claude Code's per-session JSONL under the pr
 8. **Scope is autonomous `invoke()` only.** `invokeInteractive` inherits stdio so a human is
    already watching; its format is unchanged.
 
+   > **Amended 2026-08-24 by #1857:** this scope clause no longer holds, because the population it
+   > named changed underneath it. Its ground — "a human is already watching" — was true when
+   > `invokeInteractive` was the interactive path. `streamingProviderRuntimes`
+   > (`step-runners.ts:1234-1258`) routes every streaming step through it, and those steps run
+   > unattended under the daemon with nobody watching; on the feature measured in #1857 that was 26
+   > of 30 claude dispatches. The format boundary therefore now falls at the **REPL**, not at
+   > `invokeInteractive`: every non-REPL dispatch requests the machine envelope, and only an
+   > operator-typed REPL keeps plain text and inherited stdio. The original clause is preserved
+   > above as written. **Everything else in this ADR stands unchanged** — in particular D1-D7, the
+   > verified finding that the stream's terminal result line is a superset of the single-object
+   > envelope, and the observation-only boundary on `onProviderStream`, which #1857 explicitly does
+   > not widen. See
+   > [`adr-2026-08-24-streaming-dispatch-requests-the-machine-envelope`](adr-2026-08-24-streaming-dispatch-requests-the-machine-envelope.md)
+   > and
+   > [`adr-2026-08-24-one-dispatch-member-on-the-provider-contract`](adr-2026-08-24-one-dispatch-member-on-the-provider-contract.md).
+
 ## Consequences
 
 ### Positive

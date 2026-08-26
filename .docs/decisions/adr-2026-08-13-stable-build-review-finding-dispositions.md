@@ -132,6 +132,14 @@ so maker, remediation, grader, and daemon-spawned agent subprocesses cannot pass
 threat boundary is unattended harness activity, not a malicious local account capable of creating a
 pseudo-terminal.
 
+> **Amended 2026-08-24 by #1846:** prd_audit OVER_SCOPE acceptance uses a second, deliberately
+> weaker operator channel: per-entry edits to the fenced decision block in the halt body,
+> harvested from `HALT.cleared`. Compensating controls: entries default `pending` (a machine
+> clear — rekick, rewind, reseal — records nothing), and only explicit accept/refuse entries
+> with a non-empty rationale and machine-resolved operator identity are recorded. The TTY-gated
+> CLI verb remains the standard for build_review dispositions.
+> See adr-2026-08-24-over-scope-decision-block-and-durable-refusals.
+
 Under the state lock, `accept` refuses missing rationale, feature mismatch, stale lap, unknown or
 already accepted finding, disabled/skipped rubric, and infrastructure failures. Every refusal leaves
 the disposition store unchanged. One action accepts exactly one finding; there is no rubric-wide,
@@ -214,3 +222,5 @@ PR/shipped visibility. No unconfirmed load-bearing assumption remains.
 - [ ] Add disposition/effective-verdict event rendering and report/KPI metrics.
 - [ ] Add deterministic PR/shipped accepted-risk projection.
 - [ ] Document CLI, configuration, rubric skills, gate semantics, recovery, and publication evidence.
+
+> **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).

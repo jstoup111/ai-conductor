@@ -8,6 +8,7 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import {
   BuildReviewDispositionStore,
   matchesBuildReviewDisposition,
+  type BuildReviewReducedCoverageDispositionRecord,
   type BuildReviewDispositionFilesystem,
   type BuildReviewDispositionRecord,
 } from '../../src/engine/build-review-dispositions.js';
@@ -45,9 +46,10 @@ function lock(result: Awaited<ReturnType<ConductStateLease['acquire']>>): Conduc
 
 const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
 const otherFeature = { ...feature, feature: 'other-feature' };
+const testContentHash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const finding = canonicalizeBuildReviewFindingIdentity({
-  rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
-  anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
+  rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+  anchor: { rubric: 'testQuality', locus: { path: 'test/engine/build-review-dispositions.test.ts', contentHash: testContentHash, display: 'fixture test' } },
 })!;
 
 describe('build-review dispositions', () => {
@@ -92,6 +94,169 @@ describe('build-review dispositions', () => {
       ok: true,
       records: [expect.objectContaining({ finding, summary: 'stored before contract v2' })],
     });
+  });
+
+  it('reloads restored legacy state after a linked worktree is recreated without creating coverage', async () => {
+    const main = await mkdtemp(join(tmpdir(), 'build-review-dispositions-main-'));
+    const recreatedWorktree = join(main, '.worktrees', 'feature');
+    const legacyState = JSON.stringify({
+      version: 'v1',
+      records: [{
+        version: 'v1', feature, finding, sourceLapId: 'lap-7', summary: 'legacy finding',
+        rationale: 'accepted migration risk', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+      }],
+    });
+    try {
+      await mkdir(join(recreatedWorktree, '.pipeline'), { recursive: true });
+      await writeFile(join(recreatedWorktree, '.pipeline', 'build-review-dispositions.json'), legacyState);
+      await expect(new BuildReviewDispositionStore(recreatedWorktree).list(feature)).resolves.toMatchObject({
+        ok: true, records: [expect.objectContaining({ finding })],
+      });
+
+      await rm(recreatedWorktree, { recursive: true, force: true });
+      await mkdir(join(recreatedWorktree, '.pipeline'), { recursive: true });
+      await writeFile(join(recreatedWorktree, '.pipeline', 'build-review-dispositions.json'), legacyState);
+      const reloaded = await new BuildReviewDispositionStore(recreatedWorktree).listReducedCoverage(feature);
+      expect(reloaded).toEqual({ ok: true, records: [] });
+    } finally {
+      await rm(main, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a retired reduced-coverage record before strict decoding current records', async () => {
+    const filesystem = new MemoryFilesystem();
+    filesystem.files.set('/repo/.pipeline/build-review-dispositions.json', JSON.stringify({
+      version: 'v1',
+      records: [{
+        kind: 'reduced-coverage', version: 'v1', feature,
+        identity: { rubric: 'scope', reason: 'provider-error' },
+        rationale: 'accepted before rubric retirement', operator: 'james',
+        acceptedAt: '2026-08-21T12:00:00.000Z',
+      }],
+    }));
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(store.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
+  });
+
+  it('ignores a persisted tautology disposition from before the rubric retirement', async () => {
+    const filesystem = new MemoryFilesystem();
+    filesystem.files.set('/repo/.pipeline/build-review-dispositions.json', JSON.stringify({
+      version: 'v1',
+      records: [{
+        kind: 'reduced-coverage', version: 'v1', feature,
+        identity: { rubric: 'tautology', reason: 'provider-error' },
+        rationale: 'accepted before rubric retirement', operator: 'james',
+        acceptedAt: '2026-08-21T12:00:00.000Z',
+      }],
+    }));
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(store.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
+  });
+
+  it('durably stores a reduced-coverage decision by its closed rubric-and-cause identity independent of the aggregate', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, clock: () => Date.parse('2026-08-19T12:00:00.000Z'),
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    const appended = await store.appendReducedCoverageIfCurrent({
+      feature, rubric: 'testQuality', reason: 'preflight-failed',
+      rationale: 'The merge-base fixture is unavailable in this worktree.', operator: 'james',
+    }, async () => true);
+
+    expect(appended).toEqual({
+      ok: true,
+      record: expect.objectContaining({
+        kind: 'reduced-coverage', version: 'v1', feature,
+        identity: { rubric: 'testQuality', reason: 'preflight-failed' },
+        rationale: 'The merge-base fixture is unavailable in this worktree.',
+        operator: 'james', acceptedAt: '2026-08-19T12:00:00.000Z',
+      }),
+    });
+    expect((appended as { record: BuildReviewReducedCoverageDispositionRecord }).record.identity)
+      .toEqual({ rubric: 'testQuality', reason: 'preflight-failed' });
+
+    filesystem.files.set('/repo/.pipeline/build-review.json', '{"stale":true}');
+    filesystem.files.delete('/repo/.pipeline/build-review.json');
+    const freshProcessStore = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(freshProcessStore.listReducedCoverage(feature)).resolves.toEqual({
+      ok: true,
+      records: [expect.objectContaining({
+        kind: 'reduced-coverage', identity: { rubric: 'testQuality', reason: 'preflight-failed' },
+      })],
+    });
+  });
+
+  it('refuses blank rationales without writing a reduced-coverage decision', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(store.appendReducedCoverageIfCurrent({
+      feature, rubric: 'testQuality', reason: 'preflight-failed', rationale: '   ', operator: 'james',
+    }, async () => true)).resolves.toMatchObject({ ok: false, kind: 'invalid' });
+
+    expect(filesystem.writes).toEqual([]);
+    await expect(store.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
+  });
+
+  it('keeps reduced-coverage state unchanged when current-state validation or duplicate protection refuses it', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    const input = {
+      feature, rubric: 'testQuality' as const, reason: 'preflight-failed' as const, rationale: 'reason', operator: 'james',
+    };
+
+    await expect(store.appendReducedCoverageIfCurrent(input, async () => false)).resolves.toMatchObject({ ok: false, kind: 'invalid' });
+    expect(filesystem.writes).toEqual([]);
+
+    await expect(store.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: true });
+    const writesBeforeDuplicate = filesystem.writes.length;
+    await expect(store.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: false, kind: 'invalid' });
+    expect(filesystem.writes).toHaveLength(writesBeforeDuplicate);
+  });
+
+  it('refuses unreadable or unwritable reduced-coverage state so the review remains blocking', async () => {
+    const filesystem = new MemoryFilesystem();
+    filesystem.files.set('/repo/.pipeline/build-review-dispositions.json', '{broken');
+    const unreadable = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    const input = {
+      feature, rubric: 'testQuality' as const, reason: 'preflight-failed' as const, rationale: 'reason', operator: 'james',
+    };
+
+    await expect(unreadable.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: false, kind: 'unreadable' });
+    expect(filesystem.writes).toEqual([]);
+
+    const unwritableFilesystem = new MemoryFilesystem();
+    unwritableFilesystem.writeFile = async () => { throw new Error('read-only filesystem'); };
+    const unwritable = new BuildReviewDispositionStore('/repo', {
+      filesystem: unwritableFilesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(unwritable.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: false, kind: 'filesystem' });
+    await expect(unwritable.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
   });
 
   it('uses same-directory temporary replacement only after acquiring the shared lock', async () => {
@@ -152,8 +317,8 @@ describe('build-review dispositions', () => {
       summary: 'Earlier wording at src/a.ts:8', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
     };
     const changed = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
-      anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'out-of-plan-change' },
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: { rubric: 'testQuality', locus: { path: 'test/engine/other.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'other test' } },
     })!;
 
     expect(matchesBuildReviewDisposition(feature, finding, [accepted])).toBe(true);
@@ -194,5 +359,81 @@ describe('build-review dispositions', () => {
     await expect(publication).resolves.toMatchObject({ ok: true });
     await expect(acceptance).resolves.toMatchObject({ ok: true });
     expect(validate).toHaveBeenCalledOnce();
+  });
+
+  const currentContractFindings = [
+    ['testQuality', {
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: {
+        rubric: 'testQuality',
+        locus: {
+          path: 'test/widget.test.ts',
+          contentHash: testContentHash,
+          display: 'widget persists state',
+        },
+      },
+    }],
+  ] as const;
+
+  // Regression for #1769: the store validated an engine-produced canonical
+  // payload with the grader-facing anchor parser.  The store must instead
+  // validate the engine-produced canonical anchor on its own schema.
+  it.each(currentContractFindings)('accepts, persists, and re-matches an engine-produced %s identity', async (_rubric, input) => {
+    const engineIdentity = canonicalizeBuildReviewFindingIdentity(input)!;
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, clock: () => Date.parse('2026-08-21T12:00:00.000Z'),
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    const appended = await store.appendIfCurrent({
+      feature, finding: engineIdentity, sourceLapId: parseBuildReviewLapId('lap-7')!,
+      summary: 'summary', rationale: 'accepted risk', operator: 'james',
+    }, async () => true);
+    const listed = await store.list(feature);
+
+    expect(appended).toMatchObject({ ok: true, record: { finding: engineIdentity } });
+    expect(listed).toMatchObject({ ok: true, records: [{ finding: engineIdentity }] });
+    expect(matchesBuildReviewDisposition(feature, engineIdentity, listed.ok ? listed.records : [])).toBe(true);
+  });
+
+  it('still refuses an identity whose id or canonical JSON disagrees with its payload', async () => {
+    const engineIdentity = canonicalizeBuildReviewFindingIdentity(currentContractFindings[0][1])!;
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    const input = {
+      feature, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james',
+    };
+
+    const forgedId = await store.append({ ...input, finding: { ...engineIdentity, id: 'sha256:0000000000000000000000000000000000000000000000000000000000000000' } });
+    const forgedJson = await store.append({ ...input, finding: { ...engineIdentity, canonicalJson: '{}' } });
+    const forgedPayload = await store.append({
+      ...input,
+      finding: { ...engineIdentity, canonicalPayload: { ...engineIdentity.canonicalPayload, anchor: { rubric: 'testQuality', locus: { path: 'test/widget.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' } } } as never },
+    });
+
+    expect(forgedId).toEqual({ ok: false, kind: 'invalid', message: 'build-review disposition input is invalid' });
+    expect(forgedJson).toEqual({ ok: false, kind: 'invalid', message: 'build-review disposition input is invalid' });
+    expect(forgedPayload).toEqual({ ok: false, kind: 'invalid', message: 'build-review disposition input is invalid' });
+    expect(filesystem.writes).toEqual([]);
+  });
+
+  it('keeps a stored disposition matched when the same finding is re-reported with drifted prose', () => {
+    const original = canonicalizeBuildReviewFindingIdentity(currentContractFindings[0][1])!;
+    const reReported = canonicalizeBuildReviewFindingIdentity({
+      ...currentContractFindings[0][1],
+      anchor: {
+        ...currentContractFindings[0][1].anchor,
+        locus: { ...currentContractFindings[0][1].anchor.locus, display: 'widget persists state after rebase' },
+      },
+    })!;
+    const accepted: BuildReviewDispositionRecord = {
+      version: 'v1', feature, finding: original, sourceLapId: parseBuildReviewLapId('lap-7')!,
+      summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-21T12:00:00.000Z',
+    };
+
+    expect(matchesBuildReviewDisposition(feature, reReported, [accepted])).toBe(true);
   });
 });

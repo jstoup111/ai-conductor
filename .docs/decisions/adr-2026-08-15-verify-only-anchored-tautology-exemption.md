@@ -1,7 +1,7 @@
 # ADR: the Tautology rubric exempts verify-only maintenance, anchored to engine-parsed plan markers
 
 **Date:** 2026-08-15
-**Status:** APPROVED
+**Status:** SUPERSEDED by adr-2026-08-22-one-owner-per-review-question
 **Deciders:** Engineer (DECIDE phase, #1579, absorbs #1529), operator-confirmed
 **Relates to:** `adr-2026-08-12-removal-anchored-tautology-exemption.md` (the structural model —
 a closed, evidence-anchored exception), `adr-2026-07-07-build-review-judgement-gate.md` (the rubric
@@ -239,3 +239,5 @@ The two amendments above are structural; when #1622 is taken up, its plan must l
 - The exemption decision is auditable per test from an engine-parsed block, not grader free
   judgement.
 - The closed list is now four; any fifth exception requires its own ADR.
+
+> **Amended 2026-08-22 by #1805:** superseded by adr-2026-08-22-one-owner-per-review-question — the rubric this ADR governs is retired; prd_audit is the completion authority.

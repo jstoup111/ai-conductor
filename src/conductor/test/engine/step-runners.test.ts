@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { execa } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
-import type { ConductState, StepName } from '../../src/types/index.js';
+import type { ConductState, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
@@ -24,12 +25,13 @@ import {
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { scanInheritedState } from '../../src/engine/daemon-dashboard.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
-import { makeGitRunner } from '../../src/engine/rebase.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
-import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
 import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -39,13 +41,12 @@ function createMockProvider(): LLMProvider {
       output: 'done',
       exitCode: 0,
     }),
-    invokeInteractive: vi.fn().mockResolvedValue(undefined),
   };
 }
 
 function interactiveRuntime(
   key: 'claude' | 'codex',
-  invokeInteractive: LLMProvider['invokeInteractive'],
+  invokeResponse: LLMProvider['invoke'],
 ) {
   const policy =
     key === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
@@ -55,12 +56,8 @@ function interactiveRuntime(
     provider: {
       supportsSessionResume: key === 'claude',
       lifecycleCapability,
-      invoke: vi.fn(async (): Promise<InvokeResult> => ({
-        success: true,
-        output: 'wrong captured path',
-        exitCode: 0,
-      })),
-      invokeInteractive,
+      invoke: async (options: InvokeOptions): Promise<InvokeResult> =>
+        (await invokeResponse(options)) ?? { success: true, output: '', exitCode: 0 },
     },
     lifecycleCapability,
     policy,
@@ -159,7 +156,6 @@ describe('DefaultStepRunner', () => {
             exitCode: 0,
             observedIntervals,
           })),
-          invokeInteractive: vi.fn(async () => undefined),
         };
         const runner = new DefaultStepRunner(provider, 'session', '/tmp/project');
 
@@ -183,7 +179,7 @@ describe('DefaultStepRunner', () => {
           providerExecution: {
             configuredProviders: ['codex'],
             runtimes: new ProviderRuntimeSet([
-              interactiveRuntime('codex', vi.fn(async () => undefined)),
+              interactiveRuntime('codex', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }))),
             ]),
             sessions: new ProviderSessionStore(),
             executor: providerExecutor,
@@ -209,7 +205,7 @@ describe('DefaultStepRunner', () => {
           providerExecution: {
             configuredProviders: ['claude'],
             runtimes: new ProviderRuntimeSet([
-              interactiveRuntime('claude', vi.fn(async () => undefined)),
+              interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }))),
             ]),
             sessions: new ProviderSessionStore(),
             executor: providerExecutor,
@@ -262,7 +258,7 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
       providerExecution: {
         configuredProviders: ['codex'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn(async () => undefined))]),
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
         taskAttribution: {
@@ -298,7 +294,7 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
       providerExecution: {
         configuredProviders: ['claude'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
       },
@@ -330,7 +326,7 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
       providerExecution: {
         configuredProviders: ['claude'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
         diagnosticLog: featureLog,
@@ -363,7 +359,6 @@ describe('DefaultStepRunner', () => {
             provider: {
               lifecycleCapability: { synchronousSpawnPermit: true },
               invoke,
-              invokeInteractive: vi.fn(async () => undefined),
             },
             policy,
             builtIn: true,
@@ -417,7 +412,7 @@ describe('DefaultStepRunner', () => {
       const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
         providerExecution: {
           configuredProviders: ['claude'],
-          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
           sessions: new ProviderSessionStore(),
           executor: providerExecutor,
         },
@@ -462,7 +457,7 @@ describe('DefaultStepRunner', () => {
         },
         providerExecution: {
           configuredProviders: ['claude'],
-          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
           sessions: new ProviderSessionStore(),
           executor: providerExecutor as unknown as typeof executeProviderCandidates,
         },
@@ -517,7 +512,7 @@ describe('DefaultStepRunner', () => {
         heartbeatWatchdog: { pollIntervalMs: 5, now: () => Date.now() + 60 * 60_000 },
         providerExecution: {
           configuredProviders: ['claude'],
-          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
           sessions: new ProviderSessionStore(),
           executor: providerExecutor as unknown as typeof executeProviderCandidates,
         },
@@ -544,7 +539,7 @@ describe('DefaultStepRunner', () => {
         config,
         providerExecution: {
           configuredProviders: ['claude'],
-          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
           sessions: new ProviderSessionStore(),
           executor: providerExecutor,
         },
@@ -571,7 +566,6 @@ describe('DefaultStepRunner', () => {
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke,
-      invokeInteractive: invoke,
     };
     const sessions = new ProviderSessionStore();
     const runner = new DefaultStepRunner(provider, 'session', projectDir, {
@@ -616,11 +610,11 @@ describe('DefaultStepRunner', () => {
     });
     const context: any = {
       configuredProviders: ['codex'],
-      runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn(async () => undefined))]),
+      runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
       sessions: new ProviderSessionStore(), executor,
     };
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
-    const prepared = vi.fn(async () => undefined);
+    const prepared = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }));
     const safety = vi.fn(async (_candidate, invoke) => invoke());
     context.prepareCandidateSelfHost = prepared;
     context.withCandidateSafety = safety;
@@ -642,7 +636,7 @@ describe('DefaultStepRunner', () => {
     const prepared = vi.fn(async () => ({ executable: 'claude', env: {}, args: [], teardown }));
     const context: any = {
       configuredProviders: ['claude'],
-      runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+      runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
       sessions: new ProviderSessionStore(), executor, prepareCandidateSelfHost: prepared,
       withCandidateSafety: async (_candidate: unknown, invoke: () => Promise<InvokeResult>) => invoke(),
     };
@@ -688,12 +682,11 @@ describe('DefaultStepRunner', () => {
     );
     const provider = (
       invoke: LLMProvider['invoke'],
-      invokeInteractive: LLMProvider['invokeInteractive'] =
+      invokeInteractive: LLMProvider['invoke'] =
         vi.fn().mockResolvedValue(undefined),
     ): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke,
-      invokeInteractive,
     });
     const runtimes = new ProviderRuntimeSet([
       {
@@ -1000,18 +993,253 @@ describe('DefaultStepRunner', () => {
     });
   });
 
-  it('dispatches consecutive normal steps through their preferred provider with fresh provider sessions', async () => {
+  it.each([
+    {
+      provider: 'claude' as const,
+      tokenUsage: { input: 17, output: 5, cacheRead: 11, cacheCreation: 3 },
+    },
+    {
+      provider: 'codex' as const,
+      tokenUsage: { input: 13, output: 7, cacheRead: 9, cacheCreation: 2 },
+    },
+  ])('records $provider streaming-envelope usage in its provider_attempt event', async ({
+    provider,
+    tokenUsage,
+  }) => {
+    const emitted: ProviderAttemptEvent[] = [];
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      // Faithful provider fake: REPL output is plaintext and has no machine
+      // envelope, while the non-REPL stream carries the parsed token totals.
+      if (options.interactive !== false) {
+        return { success: true, output: 'repl output', exitCode: 0 };
+      }
+      return { success: true, output: 'machine envelope output', exitCode: 0, tokenUsage };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      mode: 'auto',
+      config: {
+        llm_provider: [provider],
+        steps: { explore: { llm_provider: provider } },
+      },
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(provider, invoke)]),
+      configuredProviders: [provider],
+      sessionStore: new ProviderSessionStore(),
+      providerAttempt: (step, attempt) => {
+        emitted.push({ type: 'provider_attempt', step, ...attempt });
+      },
+    });
+
+    const result = await runner.run('explore', emptyState);
+    const event = emitted.find((candidate) => candidate.provider === provider);
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ interactive: false }));
+    expect(result.tokenUsage).toEqual(tokenUsage);
+    expect(event).toMatchObject({
+      type: 'provider_attempt',
+      step: 'explore',
+      provider,
+      outcome: 'success',
+      invoked: true,
+      tokenUsage,
+    });
+  });
+
+  it.each([
+    {
+      provider: 'claude' as const,
+      observation: {
+        childObservability: 'observed' as const,
+        activeChildren: 2,
+        uncachedInputTokens: 76,
+        outputTokens: 12,
+      },
+    },
+    {
+      provider: 'codex' as const,
+      observation: {
+        childObservability: 'unsupported' as const,
+        uncachedInputTokens: 43,
+        outputTokens: 9,
+      },
+    },
+  ])('reports $provider live streaming burn before the provider invocation finishes', async ({
+    provider,
+    observation,
+  }) => {
+    const root = await mkdtemp(join(tmpdir(), 'streaming-live-status-'));
+    const worktreeBase = join(root, '.worktrees');
+    const projectDir = join(worktreeBase, 'streaming-feature');
+    const pipelineDir = join(projectDir, '.pipeline');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(pipelineDir, 'events.jsonl'), events);
+    persister.start();
+    let invocationFinished = false;
+    let liveStatusWasReadWhileInvocationOpen = false;
+    let resolveLiveStatus!: () => void;
+    const liveStatusRead = new Promise<void>((resolve) => {
+      resolveLiveStatus = resolve;
+    });
+    let liveStatus: Awaited<ReturnType<typeof scanInheritedState>> | undefined;
+    events.once('provider_stream_progress', async () => {
+      liveStatus = await scanInheritedState({
+        worktreeBase,
+        processedDir: join(root, '.daemon/processed'),
+        discover: async () => [],
+      });
+      liveStatusWasReadWhileInvocationOpen = !invocationFinished;
+      resolveLiveStatus();
+    });
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      if (!options.onProviderStream) {
+        return { success: false, output: 'stream observer missing', exitCode: 1 };
+      }
+      options.onProviderStream(observation);
+      await liveStatusRead;
+      invocationFinished = true;
+      return { success: true, output: 'stream complete', exitCode: 0 };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+      mode: 'auto',
+      config: {
+        llm_provider: [provider],
+        steps: { explore: { llm_provider: provider } },
+      },
+      events,
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(provider, invoke)]),
+      configuredProviders: [provider],
+      sessionStore: new ProviderSessionStore(),
+    });
+
+    try {
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(join(pipelineDir, 'conduct-state.json'), JSON.stringify({ explore: 'in_progress' }));
+      await events.emit({ type: 'step_started', step: 'explore', index: 1 });
+
+      const result = await runner.run('explore', emptyState);
+      const progress = liveStatus?.inProgress.find((entry) => entry.slug === 'streaming-feature')
+        ?.providerStreamProgress;
+
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+        interactive: false,
+        onProviderStream: expect.any(Function),
+      }));
+      expect(liveStatusWasReadWhileInvocationOpen).toBe(true);
+      expect(invocationFinished).toBe(true);
+      expect(progress).toMatchObject(observation);
+      expect(progress?.uncachedInputTokens).toBeGreaterThan(0);
+      expect(progress?.outputTokens).toBeGreaterThan(0);
+      if (observation.childObservability === 'unsupported') {
+        expect(progress).toMatchObject({ childObservability: 'unsupported' });
+        expect(progress).not.toHaveProperty('activeChildren');
+      } else {
+        expect(progress).toMatchObject({ childObservability: 'observed', activeChildren: 2 });
+      }
+      expect(result).toMatchObject({ success: true, output: 'stream complete' });
+    } finally {
+      persister.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a quiet streaming step working from its activity heartbeat, not stream observations', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'quiet-stream-status-'));
+    const worktreeBase = join(root, '.worktrees');
+    const projectDir = join(worktreeBase, 'quiet-stream-feature');
+    const pipelineDir = join(projectDir, '.pipeline');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(pipelineDir, 'events.jsonl'), events);
+    persister.start();
+    const progressEvents = vi.fn();
+    events.on('provider_stream_progress', progressEvents);
+    let pulseWasSupplied = false;
+    let enteredInvocation!: () => void;
+    const invocationEntered = new Promise<void>((resolve) => {
+      enteredInvocation = resolve;
+    });
+    let releaseProvider!: () => void;
+    const providerMayFinish = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      pulseWasSupplied = typeof options.onActivity === 'function';
+      options.onActivity?.();
+      enteredInvocation();
+      await providerMayFinish;
+      return { success: true, output: 'quiet stream complete', exitCode: 0 };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+      mode: 'auto',
+      config: {
+        llm_provider: ['claude'],
+        step_heartbeat_stall_minutes: 1,
+        steps: { explore: { llm_provider: 'claude' } },
+      },
+      events,
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
+      configuredProviders: ['claude'],
+      sessionStore: new ProviderSessionStore(),
+      heartbeatWatchdog: {
+        pollIntervalMs: 1,
+        now: () => Date.now() + 60 * 60_000,
+      },
+    });
+
+    try {
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(join(pipelineDir, 'conduct-state.json'), JSON.stringify({ explore: 'in_progress' }));
+      await events.emit({ type: 'step_started', step: 'explore', index: 1 });
+
+      const run = runner.run('explore', emptyState);
+      await invocationEntered;
+      // The provider is silent after its initial activity boundary. This is
+      // the existing heartbeat's persisted shape, not a stream observation.
+      await writeFile(
+        join(pipelineDir, 'step-heartbeat'),
+        JSON.stringify({ step: 'explore', ts: new Date().toISOString() }),
+      );
+      const liveStatus = await scanInheritedState({
+        worktreeBase,
+        processedDir: join(root, '.daemon/processed'),
+        discover: async () => [],
+      });
+      const entry = liveStatus.inProgress.find((candidate) => candidate.slug === 'quiet-stream-feature');
+
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+        interactive: false,
+        onActivity: expect.any(Function),
+      }));
+      expect(pulseWasSupplied).toBe(true);
+      expect(progressEvents).not.toHaveBeenCalled();
+      expect(entry).toMatchObject({ step: 'explore', activityState: 'working' });
+      expect(entry?.heartbeatAgeMs).toEqual(expect.any(Number));
+      expect(entry?.providerStreamProgress).toBeUndefined();
+
+      releaseProvider();
+      await expect(run).resolves.toMatchObject({ success: true, output: 'quiet stream complete' });
+    } finally {
+      releaseProvider();
+      persister.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('dispatches a streaming step through its adapter invoke entry with fresh provider sessions', async () => {
     const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
       output: 'codex built',
       exitCode: 0,
       tokenUsage: { input: 11, output: 4 },
     }));
-    const claudeInteractive = vi.fn(async (): Promise<InvokeResult> => ({
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
       output: 'claude explored',
       exitCode: 0,
       tokenUsage: { input: 7, output: 3 },
+    }));
+    const claudeInteractive = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'legacy interactive path must not run',
+      exitCode: 0,
     }));
     const legacyInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
@@ -1025,21 +1253,16 @@ describe('DefaultStepRunner', () => {
     }));
     const provider = (
       invoke: LLMProvider['invoke'],
-      invokeInteractive: LLMProvider['invokeInteractive'],
+      invokeInteractive: LLMProvider['invoke'],
     ): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke,
-      invokeInteractive,
     });
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'claude',
         provider: provider(
-          vi.fn(async (): Promise<InvokeResult> => ({
-            success: true,
-            output: 'wrong Claude path',
-            exitCode: 0,
-          })),
+          claudeInvoke,
           claudeInteractive,
         ),
         policy: CLAUDE_POLICY,
@@ -1104,7 +1327,7 @@ describe('DefaultStepRunner', () => {
       codexInvoke.mock.calls as unknown as Array<[InvokeOptions]>
     )[0]?.[0]?.sessionId;
     const exploreSessionId = (
-      claudeInteractive.mock.calls as unknown as Array<[InvokeOptions]>
+      claudeInvoke.mock.calls as unknown as Array<[InvokeOptions]>
     )[0]?.[0]?.sessionId;
     expectUniqueFreshSessionIds([buildSessionId, exploreSessionId]);
 
@@ -1114,6 +1337,7 @@ describe('DefaultStepRunner', () => {
         interactive: legacyInteractive.mock.calls,
       },
       codexCalls: codexInvoke.mock.calls,
+      claudeCalls: claudeInvoke.mock.calls,
       claudeInteractiveCalls: claudeInteractive.mock.calls,
       beginStepCalls: beginStep.mock.calls,
       buildSession,
@@ -1135,7 +1359,7 @@ describe('DefaultStepRunner', () => {
           }),
         ],
       ],
-      claudeInteractiveCalls: [
+      claudeCalls: [
         [
           expect.objectContaining({
             cwd: '/tmp/project',
@@ -1148,6 +1372,7 @@ describe('DefaultStepRunner', () => {
           }),
         ],
       ],
+      claudeInteractiveCalls: [],
       buildSession: undefined,
       exploreSession: undefined,
       build: {
@@ -1257,7 +1482,7 @@ describe('DefaultStepRunner', () => {
 
   it('cold-starts after a rejected interactive attempt without created bookkeeping', async () => {
     const throwingInteractive = vi
-      .fn<LLMProvider['invokeInteractive']>()
+      .fn<LLMProvider['invoke']>()
       .mockRejectedValueOnce(new Error('interactive process rejected'))
       .mockResolvedValueOnce({
         success: true,
@@ -1339,7 +1564,6 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(
       {
         invoke: vi.fn(),
-        invokeInteractive: capturedInteractive,
       },
       'captured-session',
       '/tmp/project',
@@ -1427,7 +1651,7 @@ describe('DefaultStepRunner', () => {
     });
   });
 
-  it('cold-starts legacy interactive recovery with the failed step and reason', async () => {
+  it('cold-starts a free-form recovery REPL through invoke without a stream consumer', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'legacy-session', '/tmp/project');
     const failureReason = 'manual test returned a failing acceptance scenario';
@@ -1439,13 +1663,24 @@ describe('DefaultStepRunner', () => {
       ) => Promise<void>
     )('manual_test', { step: 'manual_test', reason: failureReason });
 
-    const options = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const options = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(options).not.toHaveProperty('streamConsumer');
     expect({
       prompt: options.prompt,
       resume: options.resume,
+      interactive: options.interactive,
+      dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+      model: options.model,
+      effort: options.effort,
+      cwd: options.cwd,
     }).toEqual({
       prompt: expect.stringMatching(new RegExp(`manual_test.*${failureReason}`, 's')),
       resume: false,
+      interactive: true,
+      dangerouslySkipPermissions: false,
+      model: 'sonnet',
+      effort: 'medium',
+      cwd: '/tmp/project',
     });
   });
 
@@ -1460,7 +1695,7 @@ describe('DefaultStepRunner', () => {
       ) => Promise<void>
     )('build', { step: 'build', reason: '  ' });
 
-    const options = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const options = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect({
       prompt: options.prompt,
       resume: options.resume,
@@ -1483,14 +1718,53 @@ describe('DefaultStepRunner', () => {
     expect(opts).toMatchObject({ model: 'gpt-5.6-luna', effort: 'low' });
   });
 
-  it('all steps use invokeInteractive (stdio: inherit)', async () => {
+  it('dispatches collaborative and branch-session steps through invoke with their existing options', async () => {
     const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { mode: 'auto' });
 
     await runner.run('explore', emptyState);
+    await runner.run('explore', emptyState, { sessionId: 'branch-session', resume: true });
 
-    expect(provider.invokeInteractive).toHaveBeenCalledOnce();
-    expect(provider.invoke).not.toHaveBeenCalled();
+    expect(provider.invoke).toHaveBeenCalledTimes(2);
+
+    const [serial, branch] = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls
+      .map(([options]) => options as InvokeOptions);
+    expect(serial).toMatchObject({
+      prompt: '/explore',
+      resume: false,
+      interactive: false,
+      cwd: '/tmp/project',
+      dangerouslySkipPermissions: true,
+      systemPrompt: expect.any(String),
+      model: expect.any(String),
+      effort: expect.any(String),
+    });
+    expect(branch).toMatchObject({
+      prompt: serial.prompt,
+      sessionId: 'branch-session',
+      resume: true,
+      interactive: serial.interactive,
+      cwd: serial.cwd,
+      dangerouslySkipPermissions: serial.dangerouslySkipPermissions,
+      systemPrompt: serial.systemPrompt,
+      model: serial.model,
+      effort: serial.effort,
+    });
+    expect(serial.streamConsumer).toEqual(expect.objectContaining({
+      onProviderStream: expect.any(Function),
+      close: expect.any(Function),
+    }));
+    expect(branch.streamConsumer).toEqual(expect.objectContaining({
+      onProviderStream: expect.any(Function),
+      close: expect.any(Function),
+    }));
+
+    const replProvider = createMockProvider();
+    const replRunner = new DefaultStepRunner(replProvider, 'session-2', '/tmp/project');
+    await replRunner.run('explore', emptyState);
+    const repl = (replProvider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(repl).toMatchObject({ interactive: true });
+    expect(repl).not.toHaveProperty('streamConsumer');
   });
 
   it('passes correct prompt for explore', async () => {
@@ -1499,7 +1773,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.prompt).toContain('/explore');
   });
 
@@ -1507,7 +1781,6 @@ describe('DefaultStepRunner', () => {
     const invocations = [] as Array<{
       providerKey: 'claude' | 'codex';
       invokeCalls: number;
-      interactiveCalls: number;
       options: InvokeOptions;
     }>;
 
@@ -1531,8 +1804,7 @@ describe('DefaultStepRunner', () => {
       invocations.push({
         providerKey,
         invokeCalls: (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.length,
-        interactiveCalls: (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls.length,
-        options: (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions,
+        options: (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions,
       });
     }
 
@@ -1561,10 +1833,9 @@ describe('DefaultStepRunner', () => {
 
     expect({
       prompts: invocations.map(({ providerKey, options }) => ({ providerKey, prompt: options.prompt })),
-      routes: invocations.map(({ providerKey, invokeCalls, interactiveCalls }) => ({
+      routes: invocations.map(({ providerKey, invokeCalls }) => ({
         providerKey,
         invokeCalls,
-        interactiveCalls,
       })),
       claudeInvocation,
       differingInvocationFields: Object.entries(claudeInvocation)
@@ -1576,8 +1847,8 @@ describe('DefaultStepRunner', () => {
         { providerKey: 'codex', prompt: '$stories' },
       ],
       routes: [
-        { providerKey: 'claude', invokeCalls: 0, interactiveCalls: 1 },
-        { providerKey: 'codex', invokeCalls: 0, interactiveCalls: 1 },
+        { providerKey: 'claude', invokeCalls: 1 },
+        { providerKey: 'codex', invokeCalls: 1 },
       ],
       claudeInvocation: {
         systemPrompt: expect.stringContaining('Stories'),
@@ -1625,7 +1896,6 @@ describe('DefaultStepRunner', () => {
     const codexProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: codexBoundary,
-      invokeInteractive: codexBoundary,
     };
     const claudeProvider = createMockProvider();
     const runtimes = new ProviderRuntimeSet([
@@ -1683,7 +1953,7 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
     await runner.run('explore', emptyState);
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.cwd).toBe('/wt/feature-x');
   });
 
@@ -1713,7 +1983,6 @@ describe('DefaultStepRunner', () => {
         exitCode: 0,
         tokenUsage,
       } satisfies InvokeResult),
-      invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -1772,7 +2041,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('maintain-documentation' as StepName, emptyState);
 
-    expect(provider.invokeInteractive).toHaveBeenCalledWith(
+    expect(provider.invoke).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: '/maintain-documentation' }),
     );
   });
@@ -1794,7 +2063,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('constructor' as StepName, emptyState);
 
-    expect(provider.invokeInteractive).toHaveBeenCalledWith(
+    expect(provider.invoke).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: '/constructor' }),
     );
   });
@@ -1815,7 +2084,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.dangerouslySkipPermissions).toBe(false);
   });
 
@@ -1825,7 +2094,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     // Otherwise the spawned claude launches in the user's default permission
     // mode (possibly `plan`), blocking the PRD write and looping the step.
     expect(opts.dangerouslySkipPermissions).toBe(true);
@@ -1843,7 +2112,7 @@ describe('DefaultStepRunner', () => {
       delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
       const provider = createMockProvider();
       let seenDuringDispatch: string | undefined;
-      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         seenDuringDispatch = process.env.CONDUCT_DAEMON_AUTO_FINISH;
         return { success: true, output: '', exitCode: 0 };
       });
@@ -1859,7 +2128,7 @@ describe('DefaultStepRunner', () => {
       delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
       const provider = createMockProvider();
       let seenDuringDispatch: string | undefined;
-      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         seenDuringDispatch = process.env.CONDUCT_DAEMON_AUTO_FINISH;
         return { success: true, output: '', exitCode: 0 };
       });
@@ -1874,7 +2143,7 @@ describe('DefaultStepRunner', () => {
       delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
       const provider = createMockProvider();
       let seenDuringDispatch: string | undefined;
-      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         seenDuringDispatch = process.env.CONDUCT_DAEMON_AUTO_FINISH;
         return { success: true, output: '', exitCode: 0 };
       });
@@ -1913,7 +2182,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('stories', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.dangerouslySkipPermissions).toBe(false);
   });
 
@@ -1928,7 +2197,7 @@ describe('DefaultStepRunner', () => {
 
   it('returns failure when session throws', async () => {
     const provider = createMockProvider();
-    (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('crash'));
+    (provider.invoke as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('crash'));
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
     const result = await runner.run('explore', emptyState);
@@ -1938,7 +2207,7 @@ describe('DefaultStepRunner', () => {
 
   it('logs and surfaces the real thrown error instead of swallowing it (interactive dispatch)', async () => {
     const provider = createMockProvider();
-    (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockRejectedValue(
+    (provider.invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('ECONNRESET: provider process died'),
     );
     const log = vi.fn();
@@ -1964,7 +2233,7 @@ describe('DefaultStepRunner', () => {
       log,
       providerExecution: {
         configuredProviders: ['claude'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
       },
@@ -2005,7 +2274,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('[Conduct step 3/14]');
     expect(opts.systemPrompt).toContain('Feature: Add user auth');
   });
@@ -2020,7 +2289,7 @@ describe('DefaultStepRunner', () => {
     // explore is collaborative (not autonomous)
     await runner.run('explore', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('Complete ONLY this step');
     expect(opts.systemPrompt).toContain('Explore');
   });
@@ -2052,7 +2321,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('PR title and body');
     expect(opts.systemPrompt).not.toContain('finish-record');
     expect(opts.systemPrompt).not.toContain('gh pr create');
@@ -2071,7 +2340,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState, { finishProsePass: 'author' });
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('FINISH PR PROSE AUTHORING');
     expect(opts.systemPrompt).toContain('full diff');
     expect(opts.systemPrompt).toContain('base branch');
@@ -2093,7 +2362,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState, { finishProsePass: 'judge' });
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).not.toContain('FINISH PR PROSE AUTHORING');
     expect(opts.systemPrompt).toContain('revision_required');
     expect(opts.systemPrompt).toContain('separate authoring pass');
@@ -2107,7 +2376,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('PR title and body');
     expect(opts.systemPrompt).not.toContain('--pipeline-dir');
   });
@@ -2121,7 +2390,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).not.toContain('conduct-ts finish-record');
   });
 
@@ -2134,7 +2403,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).not.toContain('write the single word');
   });
 
@@ -2146,7 +2415,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).not.toContain('finish-record');
     expect(opts.systemPrompt).not.toContain('--pipeline-dir');
   });
@@ -2160,7 +2429,7 @@ describe('DefaultStepRunner', () => {
 
     // finish, but not auto mode (collaborative path)
     await runner.run('finish', emptyState);
-    const finishOpts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const finishOpts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(finishOpts.systemPrompt).toContain('operator publication intent');
     expect(finishOpts.systemPrompt).not.toContain('finish-record');
     expect(finishOpts.systemPrompt).not.toContain('gh pr create');
@@ -2184,7 +2453,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('finish', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('may repair only that title/body');
     expect(opts.systemPrompt).toContain('"revision_required"');
     expect(opts.systemPrompt).toContain('Do not create, push, merge, or ready a PR');
@@ -2249,7 +2518,7 @@ describe('DefaultStepRunner', () => {
 
       await runner.run('explore', emptyState);
 
-      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.resume).toBe(false);
     });
 
@@ -2532,7 +2801,6 @@ describe('DefaultStepRunner', () => {
       const tier = await runner.assessComplexity();
 
       expect(provider.invoke).toHaveBeenCalledOnce();
-      expect(provider.invokeInteractive).not.toHaveBeenCalled();
       expect(tier).toBe('M');
     });
 
@@ -2994,7 +3262,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(true);
       });
 
@@ -3006,7 +3274,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(false);
       });
 
@@ -3018,7 +3286,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(true);
       });
     }
@@ -3034,7 +3302,7 @@ TIER: M`,
 
       await runner.run('prd_audit', emptyState);
 
-      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.interactive).toBe(false);
     });
 
@@ -3046,7 +3314,7 @@ TIER: M`,
 
       await runner.run('prd_audit', emptyState);
 
-      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.interactive).toBe(true);
     });
 
@@ -3064,8 +3332,8 @@ TIER: M`,
       expect(result1.success).toBe(true);
       expect(result2.success).toBe(true);
       // Both should have been dispatched with interactive: true
-      const opts1 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-      const opts2 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
+      const opts1 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts2 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
       expect(opts1.interactive).toBe(true);
       expect(opts2.interactive).toBe(true);
     });
@@ -3084,7 +3352,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(false);
       }
     });
@@ -3104,7 +3372,7 @@ TIER: M`,
 
         await runner.run(step, emptyState);
 
-        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(false);
       }
     });
@@ -3116,7 +3384,7 @@ TIER: M`,
 
       await runner.run('explore', emptyState);
 
-      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.interactive).toBe(true);
     });
   });
@@ -3130,7 +3398,6 @@ TIER: M`,
       });
       const provider: LLMProvider = {
         invoke,
-        invokeInteractive: vi.fn().mockResolvedValue(undefined),
       };
       // Force the step's configured model to 'fable' so we can exercise the
       // ladder's fallback-to-opus path deterministically.
@@ -3158,7 +3425,6 @@ TIER: M`,
       });
       const provider: LLMProvider = {
         invoke,
-        invokeInteractive: vi.fn().mockResolvedValue(undefined),
       };
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         modelOverride: 'fable',
@@ -3176,10 +3442,9 @@ TIER: M`,
     });
 
     it('interactive dispatch substitutes a live model when the configured one is dead', async () => {
-      const invokeInteractive = vi.fn().mockResolvedValue(undefined);
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 });
       const provider: LLMProvider = {
-        invoke: vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 }),
-        invokeInteractive,
+        invoke,
       };
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         modelOverride: 'fable',
@@ -3189,16 +3454,38 @@ TIER: M`,
         .modelAvailability.markDead('fable');
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      // explore is collaborative (not in AUTONOMOUS_STEPS) → invokeInteractive()
+      // explore is collaborative (not in AUTONOMOUS_STEPS) → invoke()
       await runner.run('explore', emptyState);
 
-      expect(invokeInteractive).toHaveBeenCalledOnce();
-      const opts = invokeInteractive.mock.calls[0][0] as InvokeOptions;
+      expect(invoke).toHaveBeenCalledOnce();
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
       expect(opts.model).toBe('opus');
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('Downgraded from fable to opus'),
       );
       warnSpy.mockRestore();
+    });
+
+    it('does not dispatch a collaborative step when its dead model has no live fallback', async () => {
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 });
+      const provider: LLMProvider = {
+        invoke,
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        modelOverride: 'fable',
+        mode: 'auto',
+      });
+      const availability = (runner as unknown as {
+        modelAvailability: { markDead: (model: string) => void };
+      }).modelAvailability;
+      availability.markDead('fable');
+      availability.markDead('opus');
+      availability.markDead('sonnet');
+
+      const result = await runner.run('explore', emptyState);
+
+      expect(result.success).toBe(false);
+      expect(invoke).not.toHaveBeenCalled();
     });
   });
 
@@ -3227,7 +3514,6 @@ TIER: M`,
 
       expect(result.success).toBe(false);
       expect(provider.invoke).not.toHaveBeenCalled();
-      expect(provider.invokeInteractive).not.toHaveBeenCalled();
     });
 
     it('retains one public build_review step while delegating fan-out orchestration without a legacy provider call', async () => {
@@ -3250,6 +3536,23 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
+    it('empty-passes opted-in test quality when no feature plan resolves', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        ...testQualityOptIn(),
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: expect.stringContaining('test_quality_empty_scope'),
+      });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).resolves.toContain(
+        '"reason": "test_quality_empty_scope"',
+      );
+    });
+
     it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
       const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
       const featureRoot = join(repository, '.worktrees', 'feature');
@@ -3259,7 +3562,7 @@ TIER: M`,
       const selectorMarkerEnv = 'BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER';
       const priorSelectorMarker = process.env[selectorMarkerEnv];
       let checkoutRoot: string | undefined;
-      const observedProjections: Array<{ preflightEvidence: { scopedRun?: { failureExcerpt?: string } } }> = [];
+      const observedProjections: Array<{ preflight: { classification: string; excerpt: string } }> = [];
       try {
         await execa('git', ['init', '-q', '-b', 'main'], { cwd: repository });
         await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repository });
@@ -3280,7 +3583,7 @@ TIER: M`,
         await mkdir(join(repository, '.worktrees'), { recursive: true });
         await execa('git', ['worktree', 'add', '-q', '-b', 'feature/proof', featureRoot], { cwd: repository });
         await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
-        await writeFile(join(featureRoot, selector), "import { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || !execa || answer !== 2) { await writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies'); process.exit(1); }\n");
+        await writeFile(join(featureRoot, selector), "// Covers: task:1\nimport { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || !execa || answer !== 2) { await writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies'); process.exit(1); }\n");
         await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
         await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
         await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
@@ -3295,11 +3598,10 @@ TIER: M`,
             const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as typeof observedProjections[number];
             observedProjections.push(projection);
             return { success: true, exitCode: 0, output: JSON.stringify({
-              kind: 'judged', rubric: 'tautology', lapId: (projection as any).lapId,
+              kind: 'judged', rubric: 'testQuality', lapId: (projection as any).lapId,
               snapshotDigest: (projection as any).snapshotDigest, contractVersion: (projection as any).contractVersion, findings: [],
             }) };
           }),
-          invokeInteractive: vi.fn().mockResolvedValue(undefined),
         };
         const gitRunner = async (args: string[]) => {
           if (args[0] === 'worktree' && args[1] === 'add') checkoutRoot = args[3];
@@ -3314,8 +3616,8 @@ TIER: M`,
           planPath: join(featureRoot, '.docs/plans/feature.md'),
           pipelineDir: join(featureRoot, '.pipeline'),
           config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
-            enabled: true, perTaskFloor: false,
-            rubrics: { tautology: { enabled: true }, scope: { enabled: false }, rootCause: { enabled: false }, completeness: { enabled: false } },
+            enabled: true,
+            rubrics: { testQuality: { enabled: true } },
           } } as HarnessConfig,
           buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' } } as never) },
         });
@@ -3329,15 +3631,10 @@ TIER: M`,
         expect((await lstat(checkoutCommandDependencies)).isSymbolicLink()).toBe(true);
         expect(await realpath(checkoutCommandDependencies)).toBe(await realpath(sourceDependencies));
         expect(await readFile(selectorMarker, 'utf8')).toBe('selector-loaded-checkout-dependencies');
-        expect(observedProjections[0]).toMatchObject({
-          preflightEvidence: {
-            classification: 'red',
-            scopedRun: {
-              exitCode: 1,
-              runKind: 'nonzero-exit',
-            },
-          },
-        });
+        // The preflight reaches the grader as typed evidence only: its
+        // classification plus a bounded excerpt, never a verdict.
+        expect(observedProjections[0]).toMatchObject({ preflight: { classification: 'red' } });
+        expect(typeof observedProjections[0].preflight.excerpt).toBe('string');
       } finally {
         if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
         else process.env[selectorMarkerEnv] = priorSelectorMarker;
@@ -3346,11 +3643,32 @@ TIER: M`,
     });
 
     it('writes the raw aggregate but returns and emits the shared effective verdict', async () => {
+      await scopedPlan();
       const provider = createMockProvider();
-      const events = { emit: vi.fn(async () => undefined) } as any;
+      const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
       let rawAggregate: unknown;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(), planPath, events,
+        gitRunner: scopedTestGit(), planPath, events,
+        buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest, _fs) => ({
+          version: 1,
+          rubric,
+          lapId,
+          snapshotDigest,
+          provenance: { kind: 'fresh' as const },
+          result: {
+            kind: 'judged' as const,
+            rubric,
+            lapId,
+            snapshotDigest,
+            contractVersion: 'v3' as never,
+            findings: [{
+              concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
+              evidenceLocations: ['x:1'],
+              anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
+            }],
+            verdict: 'FAIL' as const,
+          },
+        }),
         buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
           rawAggregate = aggregate;
           return {
@@ -3362,16 +3680,18 @@ TIER: M`,
             },
           };
         }),
+        ...scopedTestQualityOptIn(),
         ...currentBuildReviewProof(),
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
         contractVersion: 'v3',
-        findings: branch.rubric === 'scope' ? [{
-          concernKind: 'out-of-plan-change', summary: 'The changed path is outside the approved plan.',
-          evidenceLocations: ['src/example.ts:1'],
-          anchor: { rubric: 'scope', path: 'src/example.ts', relation: 'out-of-plan-change' },
-        }] : [],
+        findings: [{
+          concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
+          evidenceLocations: ['x:1'],
+          anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
+        }],
+        verdict: 'FAIL',
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
@@ -3381,12 +3701,45 @@ TIER: M`,
       }));
     });
 
-    it('settles missing current-lap branch artifacts as a blocking infrastructure failure', async () => {
+    it('publishes an empty registered-rubric set as a reasoned PASS without dispatch', async () => {
       const provider = createMockProvider();
-      const events = { emit: vi.fn(async () => undefined) } as any;
+      const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(), planPath, events,
+        gitRunner: scriptedGit(),
+        planPath,
+        events,
+        ...currentBuildReviewProof(),
+      });
+      const dispatch = vi.spyOn(runner as any, 'dispatchBuildReviewRubric');
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: expect.stringContaining('build_review_no_rubrics'),
+      });
+
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject({
+        verdict: 'PASS',
+        reason: 'build_review_no_rubrics',
+        rubric: { testQuality: false },
+      });
+      expect(events.emit).toHaveBeenCalledWith({
+        type: 'build_review_outer_verdict',
+        lapId: 'lap-head',
+        rawVerdict: 'PASS',
+        effectiveVerdict: 'PASS',
+        reason: 'build_review_no_rubrics',
+      });
+    });
+
+    it('leaves a missing current-lap branch artifact absent until the mechanical allowance is exhausted', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scopedGit(), planPath, events,
         buildReviewArtifactReader: async () => undefined,
+        ...testQualityOptIn(),
         ...currentBuildReviewProof(),
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
@@ -3395,37 +3748,68 @@ TIER: M`,
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: false });
-      expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'build_review_outer_verdict', rawVerdict: 'FAIL', effectiveVerdict: 'FAIL',
+      expect(events.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'build_review_outer_verdict' }));
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'))).toMatchObject({
+        gates: { build_review: { mechanicalFaults: 1, cumulative: 0 } },
+      });
+    });
+
+    it('withholds an aggregate for an all-infrastructure below-cap lap and reports its first closed failure', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scopedGit(), planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+      const dispatch = vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any) => ({
+        kind: 'dispatch-failure', detail: `${branch.rubric} omitted the required verdict`,
       }));
-      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject({
-        results: { scope: { kind: 'infrastructure-failure', reason: 'artifact-read-failed' } },
+
+      const result = await runner.run('build_review', emptyState);
+      expect(result).toMatchObject({
+        success: false,
+        currentLapMechanicalFault: true,
+        output: 'build_review mechanical fault in testQuality (malformed-artifact): invalid-provider-result: testQuality omitted the required verdict',
+      });
+      expect(dispatch.mock.calls.map(([branch]) => (branch as { rubric: string }).rubric)).toEqual([
+        'testQuality',
+      ]);
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await readKickbackLedger(dir)).gates.build_review).toMatchObject({
+        mechanicalFaults: 1,
+        lastMechanicalFault: {
+          rubric: 'testQuality',
+          reason: 'malformed-artifact',
+          detail: 'invalid-provider-result: testQuality omitted the required verdict',
+          lapId: 'lap-head',
+        },
       });
     });
 
     it.each([
       {
-        // #1682: tautology defaults to disabled; only the other three rubrics dispatch.
-        name: 'build_review is absent and defaults to the three enabled rubrics (tautology off, #1682)',
-        config: { wiring: { entry_points: ['src/index.ts'] } } as HarnessConfig,
-        expectedInvokeCalls: 6, // 3 rubrics x (1 dispatch + 1 bounded shape-repair)
-        expectTautology: false,
+        name: 'test-quality is enabled explicitly',
+        config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
+        expectedInvokeCalls: 2,
       },
       {
-        name: 'a partial rubric override inherits the remaining enabled rubrics',
+        name: 'test-quality uses its configured policy',
         config: {
           build_review: {
-            rubrics: { scope: { model: 'opus' }, tautology: { enabled: true } },
+            enabled: true,
+            rubrics: { testQuality: { enabled: true, model: 'opus' } },
           },
           wiring: { entry_points: ['src/index.ts'] },
         } as HarnessConfig,
-        expectedInvokeCalls: 8, // 4 rubrics x (1 dispatch + 1 bounded shape-repair)
-        expectTautology: true,
+        expectedInvokeCalls: 2,
       },
-    ])('uses the production rubric coordinator when $name', async ({ config, expectedInvokeCalls, expectTautology }) => {
+    ])('uses the production rubric coordinator when $name', async ({ config, expectedInvokeCalls }) => {
+      await scopedPlan();
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
         config,
         buildReviewInputOptions: {
@@ -3441,16 +3825,10 @@ TIER: M`,
       const prompts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(([options]) => options.prompt);
       expect(prompts).toEqual(
         expect.arrayContaining([
-          expect.stringContaining('Build Review Scope rubric'),
-          expect.stringContaining('Build Review Root Cause rubric'),
-          expect.stringContaining('Build Review Completeness rubric'),
+          expect.stringContaining('Build Review Test Quality rubric'),
         ]),
       );
-      if (expectTautology) {
-        expect(prompts).toEqual(expect.arrayContaining([expect.stringContaining('Build Review Tautology rubric')]));
-      } else {
-        expect(prompts.join('\n')).not.toContain('Build Review Tautology rubric');
-      }
+      expect(prompts.join('\n')).not.toContain('Build Review Scope rubric');
     });
 
     it('does not dispatch the coordinator or legacy scalar grader when the whole gate is disabled', async () => {
@@ -3486,10 +3864,9 @@ TIER: M`,
       return git;
     }
 
-    // #1682: tautology defaults off; these tests exercise four-rubric fan-out mechanics.
-    function tautologyOptIn() {
+    function testQualityOptIn() {
       return {
-        config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+        config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
       };
     }
 
@@ -3503,226 +3880,120 @@ TIER: M`,
       };
     }
 
-    async function prepareContainmentRepo(
-      changedPaths: string[],
-      commitMessage: string,
-      declaredPath = 'config.ts',
-    ): Promise<string> {
-      await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
-      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
-      await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
-      writeFileSync(planPath, `### Task 3: Config only\n**Files:** ${declaredPath}\n`);
-      const declaredDirectory = declaredPath.slice(0, declaredPath.lastIndexOf('/'));
-      if (declaredDirectory !== '') await mkdir(join(dir, declaredDirectory), { recursive: true });
-      writeFileSync(join(dir, declaredPath), 'base\n');
-      await execa('git', ['add', declaredPath], { cwd: dir });
-      await execa('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
-      await execa('git', ['remote', 'add', 'origin', dir], { cwd: dir });
-      await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: dir });
-      await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: dir });
-      await execa('git', ['checkout', '-q', '-b', 'feature/containment'], { cwd: dir });
-      for (const path of changedPaths) {
-        const directory = path.slice(0, path.lastIndexOf('/'));
-        if (directory !== '') await mkdir(join(dir, directory), { recursive: true });
-        writeFileSync(join(dir, path), `${path}\n`);
-      }
-      await execa('git', ['add', '--', ...changedPaths], { cwd: dir });
-      await execa('git', ['commit', '-q', '-m', commitMessage], { cwd: dir });
-      return (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+    // A non-empty test-quality scope: one changed non-test source path whose
+    // `Covers:` marker binds to the plan's Task 1. A non-test path keeps the
+    // revert-and-rerun preflight on its engine-authored empty-test-set
+    // exception, so the grader dispatch is reached without a git checkout.
+    const SCOPED_SELECTOR = 'src/covered.ts';
+    function scopedGit() {
+      const git = async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+        if (args[0] === 'diff') return { exitCode: 0, stdout: `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}\n`, stderr: '' };
+        if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
+          return { exitCode: 0, stdout: '// Covers: task:1\nexport const covered = true;\n', stderr: '' };
+        }
+        return { exitCode: 1, stdout: '', stderr: '' };
+      };
+      return git;
+    }
+    async function scopedPlan(path = planPath) {
+      await writeFile(path, `# Plan\n\n### Task 1: Cover the thing\n**Files:** ${SCOPED_SELECTOR}\n`, 'utf-8');
     }
 
-    it('passes accepted scope-widening evidence into the isolated grader prompt', async () => {
-      const sha = await prepareContainmentRepo(
-        ['shared.ts'],
-        'widen shared parser\n\nTask: 3\nScope: shared.ts — shared parser changes atomically',
-        'engine/config.ts',
-      );
-      const invoke = vi.fn().mockResolvedValue({
-        success: true,
-        output: '{"verdict":"PASS"}',
-        exitCode: 0,
-      });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        {
-          gitRunner: makeGitRunner(dir),
-          planPath,
-          pipelineDir: join(dir, '.pipeline'),
-          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
-          ...currentBuildReviewProof(),
-        },
-      );
+    // A scoped changed TEST (title `covered`) beside a production change. The
+    // fake git materializes the preflight checkout so the runner's own
+    // revert-and-rerun reaches the grader; the finding anchor must then name
+    // the changed test's content region exactly.
+    const SCOPED_TEST = 'test/covered.test.ts';
+    const SCOPED_TEST_REGION = {
+      path: SCOPED_TEST,
+      contentHash: `sha256:${createHash('sha256').update('covered').digest('hex')}`,
+      display: 'covered',
+    };
+    function scopedTestGit() {
+      const git = async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+        if (args[0] === 'diff') {
+          return { exitCode: 0, stdout: [
+            `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}`,
+            `diff --git a/${SCOPED_TEST} b/${SCOPED_TEST}`,
+          ].join('\n') + '\n', stderr: '' };
+        }
+        if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_TEST}`)) {
+          return { exitCode: 0, stdout: "// Covers: task:1\nit('covered', () => {});\n", stderr: '' };
+        }
+        if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
+          return { exitCode: 0, stdout: 'export const covered = false;\n', stderr: '' };
+        }
+        if (args[0] === 'worktree' && args[1] === 'add') {
+          const checkout = args[3]!;
+          await mkdir(join(checkout, 'src'), { recursive: true });
+          await mkdir(join(checkout, 'test'), { recursive: true });
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (args[0] === 'worktree' && args[1] === 'remove') return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: '' };
+      };
+      return git;
+    }
+    function scopedTestQualityOptIn() {
+      return {
+        config: {
+          test_suite: { scoped_command: 'exit 1' },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+        } as HarnessConfig,
+      };
+    }
 
-      await runner.run('build_review', emptyState);
-
-      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
-      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
-      expect(invoke).toHaveBeenCalledTimes(8);
-      expect(prompts).toContain('shared.ts');
-      expect(prompts).toContain('shared parser changes atomically');
-      expect(prompts).toContain('Task 3');
-      expect(prompts).toContain(sha);
-      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
-        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
-      expect(scopePrompt).toContain('shared parser changes atomically');
-      expect(invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
-        .filter((prompt) => !prompt.includes('"rubric":"scope"')).join('\n'))
-        .not.toContain('shared parser changes atomically');
-    });
-
-    it('passes derived scope-widening evidence into the isolated grader prompt with provenance', async () => {
-      const sha = await prepareContainmentRepo(
-        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
-        'out of scope\n\nTask: 3',
-      );
-      const invoke = vi.fn().mockResolvedValue({
-        success: true,
-        output: '{"verdict":"PASS"}',
-        exitCode: 0,
-      });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        {
-          gitRunner: makeGitRunner(dir),
-          planPath,
-          pipelineDir: join(dir, '.pipeline'),
-          log: (message) => console.warn(message),
-          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
-          ...currentBuildReviewProof(),
-        },
-      );
-
-      await runner.run('build_review', emptyState);
-
-      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
-        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
-      expect(scopePrompt).toContain('other/artifacts.ts');
-      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
-      expect(scopePrompt).toContain('out of scope');
-      expect(scopePrompt).toContain('"taskId":"3"');
-      expect(scopePrompt).toContain(sha);
-      // Commit-message-derived widenings must carry their derived provenance
-      // flag into the grader prompt, not just path/rationale/task/sha.
-      expect(scopePrompt).toContain('"derived":true');
-    });
-
-    it('keeps grader failure output separate from derived scope-widening evidence', async () => {
-      const sha = await prepareContainmentRepo(
-        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
-        'out of scope\n\nTask: 3',
-      );
-      const invoke = vi.fn().mockResolvedValue({
-        success: false,
-        output: 'grader exited before writing a verdict',
-        exitCode: 1,
-      });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        {
-          gitRunner: makeGitRunner(dir),
-          planPath,
-          pipelineDir: join(dir, '.pipeline'),
-          ...currentBuildReviewProof(),
-          config: { build_review: { scopeContainmentEnforced: true } },
-        },
-      );
-
-      const result = await runner.run('build_review', emptyState);
-      const output = result.output ?? '';
-      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
-        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
-
-      expect(result.success).toBe(false);
-      expect(output).not.toContain('out of scope');
-      expect(output).toContain('containment-floor: hook-events ledger is unrecorded');
-      expect(scopePrompt).toContain('other/artifacts.ts');
-      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
-      expect(scopePrompt).toContain('out of scope');
-      expect(scopePrompt).toContain('"taskId":"3"');
-      expect(scopePrompt).toContain(sha);
-    });
-
-    it('keeps the widened floor active while containment evidence is disabled', async () => {
-      await prepareContainmentRepo(['src/engine/config.test.ts'], 'test sibling\n\nTask: 3', 'src/engine/config.ts');
-      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        {
-          gitRunner: makeGitRunner(dir),
-          planPath,
-          pipelineDir: join(dir, '.pipeline'),
-          ...currentBuildReviewProof(),
-          config: { build_review: { scopeContainmentEnforced: false } },
-        },
-      );
-
-      await runner.run('build_review', emptyState);
-
-      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
-      const floor = JSON.parse(await readFile(join(dir, '.pipeline', 'containment-floor.json'), 'utf8'));
-      expect(floor.acceptedWidenings).toEqual([]);
-      expect(floor.skipNotes).toEqual([]);
-      expect(prompts).not.toContain('test sibling');
-      expect(evaluateScopeContainment({
-        stagedPaths: ['src/engine/config.test.ts'],
-        task: { id: '3', status: 'in_progress', files: ['src/engine/config.ts'] },
-      })).toEqual({ allowed: true });
-    });
-
-    it('leaves no verdict artifact after a vocabulary rejection survives its repair turn', async () => {
+    it('leaves no verdict artifact after a byte-identical vocabulary repair is rejected', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({
         success: true,
         output: JSON.stringify({
-          kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId: 'lap-head',
+          kind: 'judged', rubric: 'testQuality', contractVersion: 'v3', lapId: 'lap-head',
           snapshotDigest: 'sha256:source', findings: [{
-            concernKind: 'other', summary: 'A rejected catch-all.',
+            concernKind: 'not-test-insensitive', summary: 'A rejected catch-all.',
             evidenceLocations: ['src/example.ts:1'],
-            anchor: { rubric: 'scope', path: 'src/example.ts', relation: 'other' },
+            anchor: { rubric: 'testQuality' },
           }],
         }),
         exitCode: 0,
       });
       const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        { invoke },
         'session-1',
         dir,
-        { gitRunner: scriptedGit(), planPath, ...tautologyOptIn(), ...currentBuildReviewProof() },
+        { gitRunner: scopedGit(), planPath, ...testQualityOptIn(), ...currentBuildReviewProof() },
       );
 
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
       await expect(access(join(dir, '.pipeline/build-review.json'))).rejects.toThrow();
-      expect(invoke).toHaveBeenCalledTimes(8);
+      expect(invoke).toHaveBeenCalledTimes(2);
       const ledger = await readKickbackLedger(dir);
       expect(ledger.gates.build_review?.count ?? 0).toBe(0);
       expect(ledger.gates.build_review?.cumulative ?? 0).toBe(0);
     });
 
-    it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
+    it('dispatches test-quality with a fresh uuid and resume:false, never the constructor session', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
-      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const provider: LLMProvider = { invoke };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
-        ...tautologyOptIn(),
+        ...testQualityOptIn(),
         ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
-      expect(invoke).toHaveBeenCalledTimes(8);
+      // One test-quality branch gets one dispatch plus one bounded repair turn.
+      expect(invoke).toHaveBeenCalledTimes(2);
       for (const [options] of invoke.mock.calls) {
         const opts = options as InvokeOptions;
         expect(opts.resume).toBe(false);
@@ -3736,34 +4007,33 @@ TIER: M`,
       const plansDir = join(dir, '.docs', 'plans');
       await mkdir(plansDir, { recursive: true });
       // Unrelated plan that sorts AFTER the feature's own plan alphabetically.
+      // Its only task cannot bind the changed file's `Covers: task:1` marker,
+      // so grading against it would empty-pass without a dispatch.
       await writeFile(
         join(plansDir, 'writing-system-tests-red-exit-gate.md'),
-        '# Unrelated Plan\n\nWrong plan.\n',
+        '# Unrelated Plan\n\n### Task 9: Wrong plan\n**Files:** src/other.ts\n',
         'utf-8',
       );
-      await writeFile(
-        join(plansDir, 'block-edits-to-docs-spec-artifacts-during-build-an.md'),
-        '# Correct Plan\n\nGrade against this one.\n',
-        'utf-8',
-      );
+      await scopedPlan(join(plansDir, 'block-edits-to-docs-spec-artifacts-during-build-an.md'));
 
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
-      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const provider: LLMProvider = { invoke };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         featureDesc: 'block-edits-to-docs-spec-artifacts-during-build-an',
-        ...tautologyOptIn(),
+        ...testQualityOptIn(),
         ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
 
+      // The feature's own plan binds the scope: one test-quality dispatch plus
+      // one bounded repair turn. The wrong plan would have empty-passed.
       expect(result.success).toBe(false);
+      expect(result.output).not.toContain('test_quality_empty_scope');
+      expect(invoke).toHaveBeenCalledTimes(2);
       const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
-      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
-      expect(invoke).toHaveBeenCalledTimes(8);
-      expect(prompts).toContain('Grade against this one.');
-      expect(prompts).not.toContain('Wrong plan.');
+      expect(prompts).toContain(SCOPED_SELECTOR);
     });
 
     // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o): base-
@@ -3771,20 +4041,21 @@ TIER: M`,
     // emit a `build_review_base` event without step-runners.ts owning event
     // emission itself.
     it('attaches baseFreshness from assembleBuildReviewInputs when the verdict is invalid', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
-      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const provider: LLMProvider = { invoke };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
-        ...tautologyOptIn(),
+        ...testQualityOptIn(),
         ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
-      expect(invoke).toHaveBeenCalledTimes(8);
+      // One test-quality branch gets one dispatch plus one bounded repair turn.
+      expect(invoke).toHaveBeenCalledTimes(2);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,
@@ -3797,41 +4068,43 @@ TIER: M`,
     // middle leg of grading provenance — whatever assembly classified must
     // reach the conductor on StepRunResult, or the event is never emitted.
     it('carries the assembled grading provenance through to the conductor', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
-      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const provider: LLMProvider = { invoke };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
-        ...tautologyOptIn(),
+        ...testQualityOptIn(),
         ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
 
       expect(result.repairProvenance).toEqual({ disposition: 'none_warranted' });
-      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
-      expect(invoke).toHaveBeenCalledTimes(8);
+      // One test-quality branch gets one dispatch plus one bounded repair turn.
+      expect(invoke).toHaveBeenCalledTimes(2);
     });
 
     it('attaches baseFreshness even on a ladder-exhausted failure (fire-and-forget telemetry)', async () => {
+      await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({
         success: false,
         output: 'no models available',
         exitCode: 1,
         modelUnavailable: true,
       });
-      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const provider: LLMProvider = { invoke };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
+        gitRunner: scopedGit(),
         planPath,
-        ...tautologyOptIn(),
+        ...testQualityOptIn(),
         ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      expect(invoke).toHaveBeenCalledTimes(4);
+      expect(invoke).toHaveBeenCalledTimes(1);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,
@@ -3842,7 +4115,7 @@ TIER: M`,
 
     it('does not set baseFreshness when input assembly itself fails', async () => {
       const invoke = vi.fn();
-      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const provider: LLMProvider = { invoke };
       const failingGit = async () => ({ exitCode: 1, stdout: '', stderr: 'no merge base' });
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: failingGit,
@@ -3856,6 +4129,30 @@ TIER: M`,
       expect(invoke).not.toHaveBeenCalled();
     });
 
+    it('marks only a typed suite-proof assembly failure as waiting for test_suite', async () => {
+      const provider: LLMProvider = {
+        invoke: vi.fn(),
+      };
+      const suiteProofRunner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({ status: 'STALE' } as never),
+        },
+      });
+      const mergeBaseRunner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: 'no merge base' }),
+        planPath,
+        ...currentBuildReviewProof(),
+      });
+
+      const suiteProofFailure = await suiteProofRunner.run('build_review', emptyState);
+      const mergeBaseFailure = await mergeBaseRunner.run('build_review', emptyState);
+
+      expect(suiteProofFailure.unretryableInputs).toEqual({ retryAfterStep: 'test_suite' });
+      expect(mergeBaseFailure.unretryableInputs).toBeUndefined();
+    });
+
     it('ladder-exhausted (all retries fail) reports step failure, never PASS', async () => {
       const invoke = vi.fn().mockResolvedValue({
         success: false,
@@ -3863,7 +4160,7 @@ TIER: M`,
         exitCode: 1,
         modelUnavailable: true,
       });
-      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const provider: LLMProvider = { invoke };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
@@ -3885,7 +4182,6 @@ TIER: M`,
       });
       const provider: LLMProvider = {
         invoke,
-        invokeInteractive: vi.fn().mockResolvedValue(undefined),
       };
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -3923,7 +4219,6 @@ TIER: M`,
         });
         const provider: LLMProvider = {
           invoke,
-          invokeInteractive: vi.fn().mockResolvedValue(undefined),
         };
         const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -3951,7 +4246,6 @@ TIER: M`,
       });
       const provider: LLMProvider = {
         invoke,
-        invokeInteractive: vi.fn().mockResolvedValue(undefined),
       };
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -3973,7 +4267,6 @@ TIER: M`,
       });
       const provider: LLMProvider = {
         invoke,
-        invokeInteractive: vi.fn().mockResolvedValue(undefined),
       };
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -3997,7 +4290,6 @@ TIER: M`,
       });
       const provider: LLMProvider = {
         invoke,
-        invokeInteractive: vi.fn().mockResolvedValue(undefined),
       };
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -4020,7 +4312,7 @@ TIER: M`,
 });
 
 describe('extractJudgedResultCandidate', () => {
-  const judged = { kind: 'judged', rubric: 'scope', contractVersion: 'v1', findings: [] };
+  const judged = { kind: 'judged', rubric: 'testQuality', contractVersion: 'v3', findings: [] };
 
   it('parses raw JSON output', () => {
     expect(extractJudgedResultCandidate(JSON.stringify(judged))).toEqual(judged);
@@ -4043,16 +4335,16 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
   const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
   const snapshotDigest = 'sha256:434fa33612c7d7188d5ba5398a748b54a28400bcb534988863610f64a70896f8';
   const projection = {
-    rubric: 'tautology', contractVersion: 'v3', projectionVersion: 'v2',
+    rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2',
     lapId, snapshotDigest, digest: 'sha256:projection',
     mergeBase: 'base', headSha: 'head', changedFiles: [{ path: 'test/engine/event-sinks.test.ts', changeKind: 'modified', hunks: [] }], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
-    changedTestSelectors: ['test/engine/event-sinks.test.ts'], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
+    changedTestSelectors: ['test/engine/event-sinks.test.ts'], testSuiteProof: {}, revertedProductionManifest: [], preflight: {}, repairContext: [],
   } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
   const policy = {
     enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,
     model_fallback_ladder: ['opus'], max_retries: 1, escalate: false,
   };
-  const branch = { rubric: 'tautology' as const, skillName: 'build-review-tautology', policy };
+  const branch = { rubric: 'testQuality' as const, skillName: 'build-review-test-quality', policy };
 
   // The 2026-08-15 lap-a237011e failure verbatim in miniature: a semantically
   // complete judgement whose finding flattens the anchor into structured
@@ -4061,35 +4353,18 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     'I read the referenced diff and measured each changed test.',
     '```json',
     JSON.stringify({
-      kind: 'judged', rubric: 'tautology', contractVersion: 'v3', lapId, snapshotDigest,
+      kind: 'judged', rubric: 'testQuality', contractVersion: 'v3', lapId, snapshotDigest,
       findings: [{
-        concernKind: 'assertion-insensitive-to-production',
-        changedTest: { path: 'test/engine/event-sinks.test.ts', suite: 'event sink subscriptions', name: 'rejects an unrelated sink' },
-        exercisedBehavior: { productionSymbol: 'EVENT_SINKS', productionPath: 'src/engine/event-sinks.ts' },
-        violationKind: 'assertion-insensitive-to-production',
+        concernKind: 'test-insensitive',
         summary: 'The assertion compares a test-local mutated copy and can never fail.',
         evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
+        anchor: { rubric: 'testQuality' },
       }],
     }),
     '```',
   ].join('\n');
   const validOutput = JSON.stringify({
-    kind: 'judged', rubric: 'tautology', contractVersion: 'v3', lapId, snapshotDigest,
-    findings: [{
-      concernKind: 'assertion-insensitive-to-production',
-      summary: 'The assertion compares a test-local mutated copy and can never fail.',
-      evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
-      anchor: {
-        rubric: 'tautology',
-        changedTest: {
-          path: 'test/engine/event-sinks.test.ts',
-          contentHash: 'sha256:7849045d0fc1c72a360be630bf414918ecda92a8f0fcd56b79ec0a1bd93c92ca',
-          display: 'test/engine/event-sinks.test.ts changed test',
-        },
-        exercisedBehavior: 'EVENT_SINKS persisted routing',
-        violationKind: 'assertion-insensitive-to-production',
-      },
-    }],
+    findings: [],
   });
 
   function dispatch(runner: DefaultStepRunner) {
@@ -4098,46 +4373,72 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     }).dispatchBuildReviewRubric(branch, projection);
   }
 
-  it('repairs an unparseable-then-valid sequence within the same dispatch (legacy provider path)', async () => {
+  it('repairs an unparseable-then-valid sequence within the same dispatch', async () => {
     const invoke = vi.fn()
       .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
       .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
 
     const result = await dispatch(runner);
 
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest, verdict: 'FAIL' });
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, verdict: 'PASS' });
     const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
     expect(repairPrompt).toContain('ONLY one JSON object');
     expect(repairPrompt).toContain('did not satisfy the judged-result contract');
     expect(repairPrompt).toContain('anchor');
-    expect(repairPrompt).toContain(`"lapId": "<echo the projection lapId verbatim>"`);
+    expect(repairPrompt).toContain('findings: [{');
     expect(repairPrompt).toContain(
       'Your previous response (bounded excerpt):\nI read the referenced diff and measured each changed test.',
     );
   });
 
+  it('diagnoses findings-only output through the same v3-stamped candidate it validates', async () => {
+    const findingsOnlyOutput = JSON.stringify({
+      findings: [{
+        concernKind: 'test-insensitive',
+        summary: 'The assertion mirrors source text.',
+        evidenceLocations: ['test/engine/event-sinks.test.ts:519'],
+        anchor: {
+          rubric: 'testQuality',
+        },
+      }],
+    });
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: findingsOnlyOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest });
+    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
+    expect(repairPrompt).toContain('findings');
+    expect(repairPrompt).not.toMatch(/top-level "kind"|"rubric" must be|"contractVersion" must be|"lapId" must echo|"snapshotDigest" must echo/);
+  });
+
   it('embeds the exact per-rubric anchor schema in the initial dispatch prompt', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
 
     await dispatch(runner);
 
     expect(invoke).toHaveBeenCalledTimes(1);
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
+    expect(prompt).toContain('rubric: "testQuality"');
+    expect(prompt).toContain('locus: { path: string, contentHash: string, display: string }');
     expect(prompt).toContain('never flattened');
   });
 
-  it('instructs graders with the current v3 structured-anchor contract, not the retired v2 plain-string one', async () => {
+  it('instructs graders with a findings-only structured-anchor payload', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
 
     await dispatch(runner);
 
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('`contractVersion` is "v3"');
+    expect(prompt).toContain('only top-level field is `findings`');
+    expect(prompt).not.toContain('`contractVersion` is "v3"');
     expect(prompt).not.toContain('`contractVersion` is "v2"');
     expect(prompt).not.toContain('every anchor value is a plain string');
     expect(prompt).toContain('content-region');
@@ -4147,7 +4448,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     const invoke = vi.fn()
       .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
       .mockResolvedValueOnce({ success: true, output: `still prose ${'x'.repeat(10_000)} tail-marker`, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
 
     const result = await dispatch(runner);
 
@@ -4160,9 +4461,57 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(detail).toContain('[...truncated');
   });
 
+  it.each([
+    incidentShapedOutput,
+    '```json\n{"findings":[{}]}\n```',
+    'The anchor remains flattened after the repair instruction.',
+  ])('settles a byte-identical repair without another rubric dispatch', async (replayedOutput) => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: replayedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: replayedOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ kind: 'dispatch-failure', detail: expect.stringContaining('byte-identical') });
+  });
+
+  it('records the changed repair payload diagnosis rather than the initial diagnosis', async () => {
+    const initialOutput = '{"findings":[{}]}';
+    const repairedOutput = incidentShapedOutput;
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: initialOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: repairedOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(result).toMatchObject({
+      kind: 'dispatch-failure',
+      detail: expect.stringContaining('judged-result contract'),
+    });
+    expect((result as { detail: string }).detail).not.toContain('findings[0].anchor is required');
+  });
+
+  it('keeps the initial diagnosis when the repair invocation returns no output', async () => {
+    const initialOutput = '{"findings":[{}]}';
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: initialOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(result).toMatchObject({
+      kind: 'dispatch-failure',
+      detail: expect.stringContaining('judged-result contract'),
+    });
+  });
+
   it('returns undefined (not a failure report) when the provider invocation itself fails', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: false, output: 'crashed', exitCode: 1 });
-    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
 
     await expect(dispatch(runner)).resolves.toBeUndefined();
     expect(invoke).toHaveBeenCalledTimes(1);
@@ -4179,7 +4528,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     const policyForKey = providerKey === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
     const runtime = {
       key: providerKey,
-      provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke, invokeInteractive: vi.fn() },
+      provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke },
       policy: policyForKey,
       builtIn: true,
       availability: new ModelAvailability(policyForKey.modelFallbackLadder),
@@ -4196,7 +4545,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     }).dispatchBuildReviewRubric({ ...branch, policy: { ...policy, llm_provider: providerKey } }, projection);
 
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest });
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest });
     const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
     expect(repairPrompt).toContain('ONLY one JSON object');
     expect(repairPrompt).toContain(

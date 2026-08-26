@@ -46,6 +46,7 @@ const PLAN = [
   '### Task 1: honor the decision',
   '**Story:** Story 1',
   '**Type:** happy-path',
+  'Honor the governing decision and refuse contradictions.',
   '',
   '## Coverage Check',
   '',
@@ -60,6 +61,8 @@ const BASE_ROWS = [
   '| --- | --- | --- | --- | --- |',
   '| story | story-1 | task-1 | covered | "honor the governing decision" |',
   '| task | task-1 | story-1 | covered | "honor the decision" |',
+  '| criterion | Story 1 happy: Given an approved decision, when the story is implemented, then the decision is honored. | task-1 | covered | "Honor the governing decision" | diff-local |',
+  '| criterion | Story 1 negative: Given a contradiction, when land validates it, then the spec is refused. | task-1 | covered | "refuse contradictions" | diff-local |',
 ];
 
 const APPROVED_ADR = [

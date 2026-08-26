@@ -58,6 +58,11 @@ build gates (deprecated `wiring_check` + test_suite → build_review), fan-out c
 with a single-writer join; interactive runs keep the serial sequence and checkpoints
 shown above.
 
+During `manual-test`, an unavailable or unlaunchable browser automation dependency is recorded as a
+non-blocking `WARN`; SHIP does not install browser packages, binaries, or system dependencies. API
+criteria continue through `curl` when possible. Once the browser launches, any observed application
+behavior that violates a story remains a blocking `FAIL` and follows the normal BUILD kickback.
+
 | Phase | Skills | Artifacts |
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement, checkpoints |
@@ -121,7 +126,7 @@ or delete the original text and never create a separate amendment record:
 ```
 
 BUILD never receives that mutation as a task. A plan task must not name another feature's artifact
-under `.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`; authoring checks
+under `.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`; authoring checks
 the plan with `conduct-ts plan-protected-targets <plan-path>`, and the spec land gate independently
 refuses a violating plan. A BUILD-discovered need for such an amendment returns to its owning DECIDE
 step through remediation rather than routing to BUILD or acceptance-spec work. Because DECIDE runs
@@ -146,6 +151,16 @@ Native wording may differ, but it cannot weaken, bypass, or replace the required
 artifact, or lifecycle gate. Do not weaken or bypass the shared artifact or gate. The shared
 required outcome, artifact, and lifecycle gate remain the same for direct invocation and
 daemon-managed workflows; missing artifact or gate evidence leaves the workflow incomplete.
+
+Installed skills are **explicit-only by default**. Claude skills declare
+`disable-model-invocation: true`; Codex skills declare
+`policy.allow_implicit_invocation: false` in `agents/openai.yaml`. The engine's rendered `/skill-name`
+or `$skill-name` prompt is an explicit invocation, so lifecycle dispatch still works. Only these
+same-session dependencies remain model-invocable because another skill must be able to activate them:
+`architecture-diagram`, `architecture-review`, `coherence-check`, `conflict-check`, `debugging`,
+`explore`, `intake`, `plan`, `prd`, `simplify`, `stories`, and `verify-claims`. Do not add an
+exception merely because a skill is useful or broadly applicable; it must have a verified
+model-initiated caller whose workflow would otherwise break.
 
 If a required capability is unavailable for the selected provider, stop before incompatible work
 begins. Report an unsupported-capability diagnostic that names the selected provider, the missing
@@ -222,7 +237,7 @@ this section. CI enforces both content drift (the table matches the source) and 
 | worktree-manager | autonomous engine | haiku | low | gpt-5.6-luna | low | Git operations — mechanical branch/worktree management. |
 | writing-system-tests | autonomous engine | opus | medium (S/M), high (L) | gpt-5.6-sol | medium (S/M), high (L) | Translating acceptance criteria into executable boundary-level specs requires strong reasoning to preserve behavioral intent and negative paths, using MEDIUM effort for S/M and HIGH effort for Large work. |
 | pipeline | autonomous engine | sonnet | medium (S/M), high (L) | gpt-5.6-terra | medium (S/M), high (L) | Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass. |
-| build-review | autonomous engine | opus | high | gpt-5.6-sol | high | Fresh-session grader judging a maker's diff for test tautology, scope creep, root-cause fixes, and plan completeness — adversarial code review demands a high-capability model, same class of judgement as prd_audit/code-review. |
+| build-review | autonomous engine | opus | high | gpt-5.6-sol | high | Fresh-session grader for explicitly enabled, criterion-bound test-quality concerns — adversarial evidence judgement demands a high-capability model, same class as prd_audit/code-review. |
 | wiring-check | engine machinery | — | — | — | — | Deprecated compatibility no-op; reachability is no longer judged anywhere in BUILD. |
 | test-suite | engine machinery | — | — | — | — | Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required. |
 | manual-test | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Structured validation against stories — pattern-following. |
@@ -233,11 +248,9 @@ this section. CI enforces both content drift (the table matches the source) and 
 | finish | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Coordinates final test, status, and coverage evidence with MEDIUM effort so completion claims remain grounded. |
 | remediate | autonomous engine | opus | medium | gpt-5.6-sol | medium | A high-capability model from the selected provider policy guards failure disposition; a false HALT wastes context and wrong routing misroutes rework. MEDIUM effort balances concrete gap routing with the strength of the selected model. |
 | attribution-verify | autonomous engine | opus | high | gpt-5.6-sol | high | Semantic attribution verification of commits against task metadata — validating work ownership, evidence marshalling, and provenance consistency demands deep reasoning about task-to-commit linkages. |
-| build-review-tautology | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges mutation sensitivity from the engine-owned green proof and reverted-production preflight. |
-| build-review-scope | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges changed paths and surfaces against the approved plan and accepted widening context. |
-| build-review-root-cause | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges whether the implementation addresses the stated defect rather than only a symptom. |
-| build-review-completeness | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges the approved plan holistically against the full implementation diff. |
+| build-review-test-quality | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges whether criterion-bound changed tests are insensitive to the behavior they claim to cover; preflight is evidence, never a verdict. |
 | verify-claims | supported-host interactive | inherits caller |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Cross-cutting correctness protocol applied within the invoking skill's context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller's model. |
+| code-removal | supported-host interactive | inherits caller |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Cross-cutting removal discipline applied in the invoking session: preserves survivors while removing obsolete code, without a separately dispatched agent. |
 | domain-reviewer | supported-host interactive | sonnet (<50-line diff), opus (≥50-line diff) |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment. |
 | evaluator | supported-host interactive | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Right-sized by batch content. |
 | code-review | supported-host interactive | opus |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Multi-dimensional analysis (spec, quality, domain). |
@@ -462,7 +475,11 @@ Each skill declares its enforcement level honestly:
 ## Memory
 
 Project-level memory lives in `.memory/` with categories: decisions, patterns, gotchas, context.
-Every session starts with recall. Significant decisions are persisted during work.
+Every explicit memory invocation and harness-managed memory step starts with recall. Significant
+decisions are persisted when an active harness workflow requires a memory checkpoint. Ordinary host
+chat does not invoke memory automatically; use `/memory` in Claude or `$memory` in Codex when recall
+is wanted outside the lifecycle. Claude session hooks may still surface a bounded memory index or a
+persistence reminder; that context injection is not an invocation of the memory skill.
 Skills with Memory Checkpoint sections define when writes are expected — check skill verification lists.
 
 ## Push Policy
@@ -672,3 +689,6 @@ tmux sessions; the next `daemon start` (or engineer nudge) respawns.
   `docs/` directory), update the relevant guide too, not just the README. A
   feature is not done while its docs are stale; the `finish` step verifies the
   README/docs reflect what shipped before opening the PR.
+- **Operator-actionable halts are branch-visible.** An operator-actionable halt
+  on a feature branch lands a committed `.docs/halted/<slug>.md` record; a
+  `mechanical` halt does not.

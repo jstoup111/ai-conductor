@@ -59,6 +59,15 @@ function baseOpts(projectRoot: string, dispatched: string[], discoverItems: Back
 }
 
 describe('Task 14: runDaemonMode boot honors pause + logs it (FR-4/FR-7)', () => {
+  it('removes its process-level SIGTERM handler when a finite daemon run completes', async () => {
+    const repo = await freshDir();
+    const before = process.listenerCount('SIGTERM');
+
+    await runDaemonMode(baseOpts(repo, [], items(1)));
+
+    expect(process.listenerCount('SIGTERM')).toBe(before);
+  });
+
   it('boots with the pause marker already set: logs a paused startup line and dispatches zero items', async () => {
     const repo = await freshDir();
     await writePauseMarker(repo, { pausedBy: 'test-operator' });

@@ -49,11 +49,12 @@ Twenty entries. Alphabetized; the five with no code reference are marked.
 | `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, engineer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line. Missing ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
 | `conflicts/` | `YYYY-MM-DD-<slug>.md` | `conflict-check` skill | `conflict_check` completion glob |
 | `decisions/` | `adr-<topic>.md`, `adr-YYYY-MM-DD-<topic>.md`, `NNN-<topic>.md`, `architecture-review-*.md`, `technical-assessment-*.md` | `architecture-review`, `assess`, `bootstrap`, `prd`, `simplify`, `debugging`, `finish` | `architecture_review` and `assess` completion globs; the land gate and daemon discovery both scan every `adr-*.md` and reject one whose first declared status is not `APPROVED` or `SUPERSEDED` |
+| `halted/` | `<slug>.md` | the halt-marker writer | An operator-readable halt record on the feature branch. It records status, slug, halt class, halting step, phase, branch, HEAD SHA, UTC halt time, the full HALT body, and whether the record may be ahead of the remote. It is written and committed for an operator-actionable (`needs-human`, `plan-gap`, or `protected-artifact`) halt off the default branch, then pushed best-effort; `mechanical` halts produce no record. Clearing the halt changes the record's status to resolved while retaining its original details. |
 | `intake/` | `<plan-stem>.md` | `intake` skill | `parseIntakeSourceRef` reads `Source-Ref: owner/repo#N`; `Owner: <id>` drives the daemon owner gate |
 | `manual-test-results.md` | loose file | legacy | **no code reference** — superseded by `.pipeline/manual-test-results.md` |
 | `observation/` | free-form | manual | **no code reference** |
 | `phase7-daemon-validation.md` | loose file | manual | **no code reference** |
-| `plans/` | `YYYY-MM-DD-<slug>.md` — the stem is the canonical feature key | `plan` skill; the engineer loop writes `.docs/plans/<slug>.md` at land | `plan` completion glob; seeds `.pipeline/task-status.json`; the build predicate parses `### Task <id>` headings; protected-artifact seal |
+| `plans/` | `YYYY-MM-DD-<slug>.md` — the stem is the canonical feature key | `plan` skill; the engineer loop writes `.docs/plans/<slug>.md` at land | `plan` completion glob; land requires every parsed task to have a `Done when:` block with 2–5 nonblank list checks; seeds `.pipeline/task-status.json`; the build predicate parses `### Task <id>` headings; protected-artifact seal |
 | `release-waivers/` | `<plan-stem>.md` | operator, hand-authored in the same diff | the self-host release gate. Also the only `.docs` prefix always writable during BUILD |
 | `retired/` | `<plan-stem>.md`, plus `README.md` registering each retirement as delivered or abandoned | operator, hand-authored | **no code reference** — a plan moved here leaves the backlog scan's non-recursive `.docs/plans` listing, retiring work that another feature already delivered or the operator abandoned. See [`.docs/retired/README.md`](../../.docs/retired/README.md) |
 | `retros/` | `YYYY-MM-DD-<feature-name>.md` | `retro` skill | `retro` completion glob, resolved by slug or by mtime at or after session start |
@@ -106,6 +107,30 @@ ids the validator reported for *this* change set. Both are fail-closed on freshn
 appear as an added or modified file in the `base...HEAD` diff, so a waiver merged by a prior feature can
 never satisfy a later one. See [releases](../contributing/releases.md) and
 [gates](../explanation/gates.md).
+
+### Coherence mapping shape
+
+The five legacy row classes — `outcome`, `fr`, `story`, `task`, and `adr` — use five cells:
+
+```markdown
+| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
+```
+
+The `criterion` row class uses six cells because its subject is the exact criterion text and its coverage
+claim needs grounded task evidence plus a locality decision:
+
+```markdown
+| Row class | Criterion | Cited task id(s) | Verdict | Quote | Disposition |
+| criterion | <exact extracted criterion> | task-<id>[, ...] | covered | <verbatim task-body span> | diff-local |
+```
+
+Criterion text must match one extracted happy- or negative-path story criterion exactly. The verdict is
+one of `covered`, `gap`, or `fail`; the disposition is `diff-local` or `outside-diff`. Unknown values,
+missing cells, an empty criterion, and an empty cited-task list make the row unparseable. The quote may
+span lines because comparison normalizes whitespace, but it must otherwise be an exact substring of at
+least one cited task's body. The land gate requires a one-to-one criterion set and accepts only `covered`
+plus `diff-local` without a waiver. Already-landed coherence artifacts with no criterion rows remain valid
+for daemon discovery and BUILD.
 
 ### Write guards
 
@@ -192,8 +217,8 @@ Verification also tolerates these cases without halting:
 
 - **Own-feature amendment** — a changed artifact whose filename stem names the current feature
   (a date prefix on either side is ignored). The engine logs a warning naming each amended path;
-  the mutation is not blocked, but `build_review`'s Scope rubric item judges the diff and fails
-  it unless the approved plan justifies the change.
+  the mutation is not blocked, but `prd_audit`'s scope-as-intent judgement grades it `OVER_SCOPE`
+  unless the change stays within the PRD's or stories' stated intent.
 - **Base-branch inheritance** — a changed or newly appeared artifact whose current workspace content
   is byte-identical to that path as committed at the base branch tip (`origin/<base>`, falling back
   to the local `<base>`). This is the content the feature's own rebase brought in, and the base
@@ -311,7 +336,7 @@ worktree removal.
 | `task-evidence.json` | `{ evidenceStamps: Record<string, EvidenceStamp>, noEvidenceAttempts, noEvidenceReasons?, migrationGrandfather, lastResolvedCount? }`; each stamp is `{ sha, form, citedShas?, verdictAnchor?, testEvidence? }` with `form` ∈ `commit`, `trailer`, `evidence:satisfied-by`, `semantic-verified` | `task-evidence.ts` | Read-modify-write per gate evaluation, written atomically via a same-directory temp file plus `rename(2)`. Missing or corrupt ⇒ empty state, logged, never throws | `lastResolvedCount` reads 0, so the progress delta degrades to "no progress" rather than crashing the tick; the no-evidence retry budget resets; completed tasks may be re-attempted |
 | `task-status.json` | `{ plan_ref?, tasks: [{ id, name?, status?, … }] }`. Duplicate rows merge by status rank: `completed`/`skipped` 3, `in_progress` 2, `pending` 1. A row restored from git evidence also carries `commit` and `restored_from: "task-trailer"` | `task-seed.ts::seedTaskStatus` | Re-seeded from the plan on **every** build-gate evaluation and at the build preflight. Written atomically (same-directory temp plus `rename(2)`) and re-read afterwards — a reconstruction that does not land throws rather than reporting success | Self-heals from the plan on the next evaluation, **with completions intact**: see reconstruction below |
 | `engine-state.json` | `{ activePlanPath?: string, … }` | `task-seed.ts`, `conductor.ts` (atomic) | Written when the active plan is resolved | Resolution falls back to stem match, then to a single plan on disk. With several plans and no match it returns nothing and the build gate **fails closed** rather than guessing |
-| `kickback-ledger.json` | `{ version: 1, gates: Record<gate, { count, treeHash, lastReason, priorVerdict, resolvedBefore }> }` | `kickback-ledger.ts` | Read-modify-write atomically (temp file + `rename(2)`) on every kickback-consuming gate check. A gate's `count` resets to 1 only when its tree hash or resolved-task count moved since the last entry; otherwise it survives daemon re-dispatch and increments toward `MAX_KICKBACKS_PER_GATE` (2). Cleared entirely on a fresh feature session | Missing, malformed, or version-mismatched ledgers fail open to an empty budget (never throw); a gate's cross-dispatch kickback count resets, so a HALT that should already have fired may take one more lap to trigger |
+| `kickback-ledger.json` | `{ version: 1, gates: Record<gate, { count, treeHash, lastReason, priorVerdict, resolvedBefore, mechanicalFaults?, lastMechanicalFault?: { rubric, reason, detail, lapId } }> }`. `build_review`'s `mechanicalFaults` counts consumed infrastructure-failure allowance (cap `MAX_MECHANICAL_FAULTS_BUILD_REVIEW`, 3); `lastMechanicalFault` names the rubric/reason/lap the allowance was most recently charged against, bounded to `RUBRIC_FAILURE_DETAIL_CAP_BYTES` and dropped on lap credit alongside the other lap-counting fields | `kickback-ledger.ts` | Read-modify-write atomically (temp file + `rename(2)`) on every kickback-consuming gate check. A gate's `count` resets to 1 only when its tree hash or resolved-task count moved since the last entry; otherwise it survives daemon re-dispatch and increments toward `MAX_KICKBACKS_PER_GATE` (2). Cleared entirely on a fresh feature session | Missing, malformed, or version-mismatched ledgers fail open to an empty budget (never throw); a gate's cross-dispatch kickback count resets, so a HALT that should already have fired may take one more lap to trigger |
 | `build-outcome.json` | `{ version: 1, records: BuildOutcomeRecord[] }`. Each record carries `outcome` (`moved`/`no-movement`), `terminalOutcome` (`done`/`failed`/`no-verdict`), the kicking-back `gate` (or `null`), the gate `verdict` at entry, the `rung` (`model`, `effort`) dispatched at, both movement witnesses (`treeBefore`/`treeAfter`, `headBefore`/`headAfter`), and an optional bounded `note` (the same last-200-lines tail `step_completed` carries) plus an inferred or agent-declared `category` (`disputes-gate`/`belongs-to-decide`/`silent-no-movement`) | `build-outcome.ts`, appended to at every build-step terminal outcome from `conductor.ts` | Read when the conductor handles an active gate's kickback to `build`: an identical no-movement cycle can halt instead of paying for a repeat dispatch (`sameNoOpCycle`) | Missing, corrupt, or version-mismatched sidecars fail open to an empty record set (never throw, never block dispatch); a lost sidecar just means one already-observed no-op cycle may be repeated once before the guard has evidence again |
 | `build-dispute.json` | `{ category: 'disputes-gate' \| 'belongs-to-decide' \| 'silent-no-movement' }` | optional, hand- or agent-authored during a build step | `resolveBuildOutcomeCategory`, preferred over the note-text inference when present and well-formed | Absent, malformed, or shape-invalid content is ignored outright and the category is inferred from the build's note text instead — this artifact is never required for any behavior in the feature |
 
@@ -337,8 +362,9 @@ reconstruction and restores every plan task carrying a `Task: <id>` trailer on a
 branch as `status: "completed"`, stamped with that `commit` and `restored_from: "task-trailer"`.
 Tasks with no such trailer stay `pending`. This grants no new authority — `resolveTaskIds` already
 resolves those exact task ids from the same trailers for build-step routing
-(adr-2026-07-23-trailer-union-build-step-routing), and `build_review`'s completeness rubric still
-re-judges the real diff — it only stops a row-only reader from redoing finished, committed work. An
+(adr-2026-07-23-trailer-union-build-step-routing), and the per-task `Done when:` evidence check at task
+close and `prd_audit`'s criterion-level grading still re-judge the real work — it only stops a row-only
+reader from redoing finished, committed work. An
 **existing** file with rows is never trailer-backfilled, so a row deliberately reverted to `pending`
 stays that way.
 
@@ -388,16 +414,16 @@ Agent-authored, engine-validated. Alphabetized.
 | `attribution-verdict.json` | `{ schema?, anchor?: { head?, residue?[] }, results? }` | `attribution-verdict.ts` |
 | `audit-trail/` | Per-task `review.json`, `rework-N.json`, `commit.txt`, `summary.json`, plus `events.jsonl` and a `WRITE-FAILED` marker | `audit-trail.ts`, `pipeline` skill |
 | `bootstrap-detection.json`, `bootstrap-inventory.md` | Stack detection output | `bootstrap` skill |
-| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { tautology, scope, rootCause, completeness }, codeStamp? }`. A `rubric.<item>: true` means that item failed. A missing or malformed item fails closed; an unknown item (such as the retired `wiring`) is ignored, so a verdict written before the rubric changed still parses. | `build_review` step |
+| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { testQuality }, codeStamp? }`. A `rubric.<item>: true` means that item failed. A missing or malformed item fails closed; an unknown item (such as a retired rubric — `tautology`, `scope`, `rootCause`, `completeness`, `wiring`) is ignored, so a verdict written before the rubric consolidation still parses. | `build_review` step |
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
 | `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
 | `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |
-| `manual-test-results.md` | Per-story PASS/FAIL rows. The gate fails on any FAIL row in the latest attempt, and on an mtime older than session start | `manual-test` skill |
+| `manual-test-results.md` | Per-story PASS/WARN/FAIL rows. The recorder stamps attempts containing exact `WARN` cells with `<!-- manual-test:warning -->`; WARN is visible but non-blocking. The gate fails on any FAIL row in the latest attempt, and on an mtime older than session start | `manual-test` skill |
 | `manual-test-fail-evidence.json` | Failure detail for the above | engine |
 | `per-task-floor.json` | Per-task commit-floor telemetry | `step-runners.ts` |
-| `prd-audit.md` | Markdown table `\| FR \| Verdict \| Gap-class \| Evidence \| Accepted? \|`. Verdicts `ALIGNED`, `MISSING`, `PARTIAL`, `DIVERGED`; gap classes `impl-gap`, `intended-drift`, `plan-gap`, `unknown`. The verdict is read from the verdict **cell**, not from anywhere else in the row | `prd-audit` skill |
+| `prd-audit.md` | A `## Verdict Table` with one graded row per story acceptance criterion: `Criterion`, `Grade` (`PASS`\|`FIXABLE`\|`PLAN_GAP`\|`OVER_SCOPE`), `Plan task` (required for `FIXABLE`), `FR`, `Intent relation` (required for `OVER_SCOPE`: `within`\|`outside-harmless`\|`outside-visible`), `Evidence`. The grade is read from the verdict **cell**, not from anywhere else in the row. Every `Criterion` key must be an active story criterion id, each on exactly one row — an invented or unresolvable key fails the whole report as a mechanical fault. A finding that owns no criterion (typically an unplanned change) is reported below the table instead | `prd-audit` skill |
 | `prd-audit-code-stamp.json` | The HEAD sha the audit was formed against | engine |
 | `protected-artifact-seal.json` | See above | `protected-artifact-seal.ts` |
 | `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
@@ -424,8 +450,9 @@ Existence is the signal. Alphabetized.
 | `.task-status.lock` | `pre-dispatch.sh` (mkdir lock) | Serializes concurrent `task-status.json` row flips |
 | `DONE` | conductor on convergence | Paired with the `loop_converged` event |
 | `HALT` | `halt-marker.ts::writeHaltMarker`, best-effort — write failures are swallowed | The daemon treats it as a full stop: it never advances, opens a PR, or merges past it. The first non-empty body line is the reason the dashboard shows |
-| `HALT.class` | the same writer, always, plus the daemon's startup migration for halts predating it | `needs-human`, `mechanical`, `legacy`, or `protected-artifact`. `protected-artifact` identifies a genuine protected DECIDE-artifact violation; `legacy` is stamped once by the daemon's startup migration for a HALT it finds still unclassified; missing or unrecognized content reads as `unclassified` and never throws. Written atomically (temp file plus rename) after removing any stale sidecar, so a reader never observes a class from a prior HALT paired with a newer body |
+| `HALT.class` | the same writer, always, plus the daemon's startup migration for halts predating it | `needs-human`, `mechanical`, `legacy`, `protected-artifact`, or `over-scope`. An `over-scope` halt contains an operator-authored fenced `over-scope-decisions` block; its `pending` entries are inert until explicitly changed to `accept` or `refuse` with a rationale. `protected-artifact` identifies a genuine protected DECIDE-artifact violation; `legacy` is stamped once by the daemon's startup migration for a HALT it finds still unclassified; missing or unrecognized content reads as `unclassified` and never throws. Written atomically (temp file plus rename) after removing any stale sidecar, so a reader never observes a class from a prior HALT paired with a newer body |
 | `HALT.cleared` | the re-kick sweep | Records halt lifecycle closure; pairs with the `halt_cleared` event |
+| `accepted-widenings.json` | conductor | Version-one durable OVER_SCOPE decisions: `{ decisions: [{ criterion, summary, decision, rationale, operator, decidedAt }] }`. Old shapes read as absent. |
 | `QUARANTINE` | setup triage | The feature is quarantined from dispatch |
 | `REKICK` | the re-kick sweep | Body is literally `rekick` |
 | `conduct-session-id` | step runners | Durable conductor run identity. It survives daemon restart and redispatch; provider attempts use separate fresh IDs and do not rewrite it |
@@ -541,8 +568,9 @@ are the same id.
 
 A task evidenced **only** by a `Task:` trailer, whose `task-status.json` row was never flipped,
 therefore satisfies the build gate. That union is deliberate — it fixed a false halt at 100% real
-completion. Final completion authority still rests with `build_review`'s completeness rubric, which
-compares the plan against the diff rather than trusting any self-report.
+completion. Final completion authority rests with each task's `Done when:` evidence, shown true before
+the task counts as complete, and — once behavior ships — `prd_audit`'s criterion-level grading against
+the stories' acceptance criteria, rather than trusting any self-report.
 
 **`Evidence: satisfied-by <sha>` / `Evidence: skipped <reason>`** is telemetry only. The values are
 extracted by `commit-msg` and never acted on. This is distinct from the `EvidenceStamp` records in
@@ -619,15 +647,19 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **91 variants** across **90** event types (`self_host_containment_verdict`
+`ConductorEvent` defines **96 variants** across **95** event types (`self_host_containment_verdict`
 declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
-subscribes to the **63** event types marked `persist: true` in `event-sinks.ts` and writes only
+subscribes to the **68** event types marked `persist: true` in `event-sinks.ts` and writes only
 those:
 
-`contained_live_checkout_drift`, `self_host_containment_verdict`,
+`contained_live_checkout_drift`, `self_host_containment_verdict`, `containment_check_unresolved`,
+`operator_rewind`,
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
 `build_review_cache_hit`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
-`step_started`, `deprecated_step`, `step_completed`, `step_failed`, `provider_attempt`,
+`build_review_stale_aggregate`,
+`build_review_disposition_version_invalidated`,
+`step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_attempt`,
+`provider_stream_progress`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
@@ -730,12 +762,14 @@ type AuditRecord = {
 
 `at` is epoch milliseconds, not the ISO `ts` used by `events.jsonl`, and `event` is a derived string,
 not a raw event type. `phase` is omitted for an `operator`-origin record — an interactive reseal runs
-outside any step's phase. It subscribes to eleven source events (`gate_verdict`, `step_retry`,
+outside any step's phase. It subscribes to fourteen source events (`gate_verdict`, `step_retry`,
 `kickback`, `loop_halt`, `step_completed`, `halt_cleared`, `protected_artifact_reseal`,
-`protected_artifact_reseal_refused`, `halt_marker_write_failed`,
-`remediation_sealed_artifact_redirect`, `verdict_freshness`) and emits ten strings (`gate_pass`,
+`protected_artifact_reseal_refused`, `halt_marker_write_failed`, `halt_record_written`,
+`halt_record_write_failed`, `halt_record_push_failed`,
+`remediation_sealed_artifact_redirect`, `verdict_freshness`) and emits thirteen strings (`gate_pass`,
 `gate_fail`, `retry`, `kickback`, `intervention`, `halt_cleared`, `reseal`, `reseal_refused`,
-`halt_marker_write_failed`, `verdict_freshness`). `remediation_sealed_artifact_redirect` is
+`halt_marker_write_failed`, `halt_record_written`, `halt_record_write_failed`,
+`halt_record_push_failed`, `verdict_freshness`). `remediation_sealed_artifact_redirect` is
 subscribed but intentionally emits no audit record. A write failure drops a
 `WRITE-FAILED` marker beside it and, for
 [`conduct-ts reseal`](cli.md#conduct-ts-reseal) specifically, fails the reseal itself — its writer is

@@ -1,5 +1,6 @@
 ---
 name: release-disposition
+disable-model-invocation: true
 description: Judge this repository's implementation diff and write its authoritative structured release disposition to the retained SHIP draft PR before finish.
 ---
 

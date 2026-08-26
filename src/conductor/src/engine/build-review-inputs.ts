@@ -1,20 +1,23 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
 import {
   readBaseAdvanceHistory,
   readTestSuiteRemediations,
   type TestSuiteRemediationRecord,
 } from './test-suite-remediation.js';
-import type { AcceptedScopeWidening } from './per-task-commit-floor.js';
 import { deriveBuildReviewRemovals, type BuildReviewRemovalContext } from './build-review-removals.js';
-import { readOperatorReseals, type OperatorReseal } from './protected-artifact-seal.js';
+import {
+  isEngineAppendedRemediationAmendment,
+  readRecordedAppendedRemediationTaskIds,
+} from './protected-artifact-seal.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
-import { parsePlanTaskVerifyOnly } from './autoheal.js';
-import { parsePlanTaskPaths, parsePlanTaskPreserves } from './plan-task-parse.js';
-import { classifyTautologyPaths } from './build-review-tautology-preflight.js';
+import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { classifyTautologyPaths } from './build-review-test-quality-preflight.js';
+import { parseCoversMarkers } from './covers-marker.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -52,14 +55,8 @@ export interface BuildReviewInputs {
   /** Engine-recorded aggregate failures exposed after base advances. The
    * grader judges whether diff hunks implement them; they are not exemptions. */
   repairContext?: TestSuiteRemediationRecord[];
-  /** Commit-local scope widenings accepted by the containment evaluator. */
-  acceptedWidenings?: AcceptedScopeWidening[];
   /** Diff-derived removal evidence for the grader, never an exemption. */
   removalContext?: BuildReviewRemovalContext;
-  /** Engine-parsed verify-only plan task evidence for the grader, never an exemption. */
-  verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
-  /** Operator-authorized protected-artifact reseals from the feature seal. */
-  operatorReseals?: OperatorReseal[];
   /**
    * Grading provenance: which of the three repair-context cases this grading
    * ran under. Returned rather than emitted here so assembly stays strictly
@@ -74,18 +71,6 @@ export interface BuildReviewInputs {
   testSuiteProof?: FullSuitePassEvidence;
   /** Immutable identity of every source value shared by the rubric fan-out. */
   sourceSnapshot?: BuildReviewSourceSnapshot;
-}
-
-/** One plan task declared as verify-only, with compact parser-derived review anchors. */
-export interface BuildReviewVerifyOnlyContext {
-  readonly taskId: string;
-  readonly paths: readonly string[];
-}
-
-/** One behavior a plan task declares must retain equivalent coverage. */
-export interface BuildReviewPreservationContext {
-  readonly taskId: string;
-  readonly behavior: string;
 }
 
 /** Inputs returned after the proof gate has frozen a source snapshot. */
@@ -105,22 +90,16 @@ export interface BuildReviewSourceSnapshot {
   readonly diff: string;
   readonly planBody: string;
   readonly repairContext: readonly TestSuiteRemediationRecord[];
-  /** Accepted containment widenings sealed with the source read for Scope alone. */
-  readonly acceptedWidenings: readonly AcceptedScopeWidening[];
-  /** Operator-authorized reseals frozen with the source read for Scope alone; excluded from shared identity. */
-  readonly operatorReseals?: readonly BuildReviewOperatorResealSnapshot[];
   readonly removalContext: {
     readonly deletedFiles: readonly string[];
     readonly removedDeclarations: readonly string[];
     readonly removedMembers: readonly { readonly declaration: string; readonly member: string }[];
     readonly removedTestAssertions?: readonly { readonly path: string; readonly line: string }[];
   };
-  /** Engine-parsed verify-only plan task evidence frozen with the source read. */
-  readonly verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
-  /** Engine-parsed preserved-behavior plan evidence frozen with the source read. */
-  readonly preservationContext?: readonly BuildReviewPreservationContext[];
   /** Static title evidence read from the graded HEAD, never the live worktree. */
   readonly changedTestTitles?: readonly BuildReviewChangedTestTitle[];
+  /** Test-quality's closed, feature-local selector set. */
+  readonly testQuality?: BuildReviewTestQualityScope;
 }
 
 /** One executable changed-test selector's declared title evidence. */
@@ -131,18 +110,23 @@ export interface BuildReviewChangedTestTitle {
   readonly staticExtractionFallback: boolean;
 }
 
-/** Immutable operator reseal record captured in a source snapshot. */
-export interface BuildReviewOperatorResealSnapshot {
-  readonly fromCommit: string;
-  readonly toCommit: string;
-  readonly paths: readonly string[];
-  readonly reason: string;
+/** A changed test whose declared Covers reference does not bind to this feature. */
+export interface BuildReviewUnresolvedMarker {
+  readonly selector: string;
+  readonly reference: string;
+}
+
+/** Closed test-quality scope derived from the feature's active artifacts and graded diff. */
+export interface BuildReviewTestQualityScope {
+  /** Changed executable tests with at least one Covers reference bound to this feature. */
+  readonly inScopeTests: readonly string[];
+  /** Changed-test markers that name no criterion, FR, or task in this feature. */
+  readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
 }
 
 /** Process-free proof inspection seam; it must never launch the aggregate suite. */
 export interface BuildReviewInputOptions {
   readonly inspectTestSuite?: () => Promise<FullSuiteInspectionResult>;
-  readonly acceptedWidenings?: readonly AcceptedScopeWidening[];
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -188,6 +172,52 @@ export class TestSuiteProofError extends Error {
   }
 }
 
+/**
+ * The graded-diff pathspec exclusion for the feature's own plan, present only
+ * when the plan's divergence from the graded base is EXACTLY the engine's own
+ * recorded remediation-task append.
+ *
+ * The engine appends `### Task rem-*` blocks to the approved plan during
+ * remediation and commits them as feature commits, so the graded diff showed
+ * them as an amendment to an approved DECIDE artifact and Scope failed them as
+ * an out-of-plan change — a finding no authority can grant and the feature
+ * cannot remove, because the engine requires the blocks. The protected-artifact
+ * seal already tolerates exactly this case; this reuses that same rule
+ * (`isEngineAppendedRemediationAmendment` over the same recorded ids) rather
+ * than inventing a second, drift-prone notion of "the engine wrote it".
+ *
+ * When the rule holds, the plan diff is by construction nothing but those
+ * recorded blocks, so excluding the path removes engine bookkeeping and no
+ * reviewable work. Any other amendment — an edited earlier line, an
+ * unrecorded task id, prose — fails the rule and stays fully graded.
+ * Fail-closed everywhere else: no recorded ids, or either side unreadable at
+ * its commit, means no exclusion.
+ */
+async function engineAppendedPlanExclusion(
+  git: GitRunner,
+  mergeBaseSha: string,
+  projectRoot: string,
+  planPath: string,
+): Promise<readonly string[]> {
+  const recorded = await readRecordedAppendedRemediationTaskIds(projectRoot);
+  if (recorded.length === 0) return [];
+  const pathspec = relative(projectRoot, planPath);
+  if (pathspec === '' || pathspec.startsWith('..')) return [];
+  // Both ends of the graded diff exactly: `<mergeBase>..HEAD`.
+  const [base, head] = await Promise.all([
+    git(['show', `${mergeBaseSha}:${pathspec}`]),
+    git(['show', `HEAD:${pathspec}`]),
+  ]);
+  if (base.exitCode !== 0 || head.exitCode !== 0) return [];
+  return isEngineAppendedRemediationAmendment(
+    Buffer.from(base.stdout, 'utf-8'),
+    Buffer.from(head.stdout, 'utf-8'),
+    recorded,
+  )
+    ? [`:(exclude)${pathspec}`]
+    : [];
+}
+
 function projectRootForPlan(planPath: string): string {
   return basename(dirname(planPath)) === 'plans' && basename(dirname(dirname(planPath))) === '.docs'
     ? dirname(dirname(dirname(planPath)))
@@ -195,22 +225,20 @@ function projectRootForPlan(planPath: string): string {
 }
 
 function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>): string {
-  const { operatorReseals: _scopeOnlyReseals, ...sharedSnapshot } = snapshot;
-  return `sha256:${createHash('sha256').update(JSON.stringify(sharedSnapshot)).digest('hex')}`;
+  return `sha256:${createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')}`;
 }
 
 function contentSnapshotDigest(snapshot: Pick<
   BuildReviewSourceSnapshot,
-  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'verifyOnlyContext' | 'preservationContext'
+  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'testQuality'
 >): string {
-  const { diff, planBody, repairContext, removalContext, verifyOnlyContext, preservationContext } = snapshot;
+  const { diff, planBody, repairContext, removalContext, testQuality } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff: withoutDiffBlobIdentities(diff),
     planBody,
     repairContext: semanticRepairContext(repairContext),
     removalContext,
-    verifyOnlyContext,
-    preservationContext,
+    testQuality,
   })).digest('hex')}`;
 }
 
@@ -229,6 +257,80 @@ function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
 
 function changedPathsFromDiff(diff: string): readonly string[] {
   return [...diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
+}
+
+function activeStoriesPath(projectRoot: string, planPath: string, planBody: string): string | undefined {
+  const planRepoPath = relative(projectRoot, planPath).replaceAll('\\', '/');
+  const storiesRepoPath = resolvePlanStoriesPath(planRepoPath, planBody);
+  return storiesRepoPath === null ? undefined : join(projectRoot, storiesRepoPath);
+}
+
+function markerReference(reference: { readonly kind: string; readonly id: string }): string {
+  return reference.kind === 'task' ? `task:${reference.id}` : reference.id;
+}
+
+/**
+ * Intersect changed executable tests with Covers references bound to the
+ * feature's own active plan and its plan-selected stories artifact. The
+ * artifact lookup is intentionally direct: a docs-directory scan could let
+ * another feature's criterion silently widen this review.
+ */
+async function snapshotTestQualityScope(
+  git: GitRunner,
+  headSha: string,
+  diff: string,
+  projectRoot: string,
+  planPath: string,
+  planBody: string,
+): Promise<BuildReviewTestQualityScope> {
+  const storiesPath = activeStoriesPath(projectRoot, planPath, planBody);
+  const storiesBody = storiesPath === undefined
+    ? ''
+    : await readFile(storiesPath, 'utf-8').catch(() => '');
+  const criterionIds = new Set(
+    [...storiesBody.matchAll(/\bS\d+\.\d+\b/gi)].map((match) => match[0].toUpperCase()),
+  );
+  const frIds = new Set(
+    [...storiesBody.matchAll(/\bFR-\d+\b/gi)].map((match) => match[0].toUpperCase()),
+  );
+  const taskIds = new Set(parsePlanTaskPaths(planBody).keys());
+  // Covers is the authoritative opt-in for test-quality review.  Do not
+  // pre-filter by a conventional test path: technical-track suites are often
+  // deliberately outside it, while a path-only file has no feature binding.
+  const planRelativePath = relative(projectRoot, planPath);
+  const selectors = changedPathsFromDiff(diff).filter(
+    (path) => path !== planRelativePath && !path.startsWith('.docs/'),
+  );
+  const sources = await Promise.all(selectors.map(async (selector) => {
+    const result = await git(['show', `${headSha}:${selector}`]);
+    return { selector, source: result.exitCode === 0 ? result.stdout : undefined };
+  }));
+  const inScopeTests: string[] = [];
+  const unresolvedMarkers: BuildReviewUnresolvedMarker[] = [];
+
+  for (const { selector, source } of sources) {
+    if (source === undefined) continue;
+    let bound = false;
+    for (const reference of parseCoversMarkers(source)) {
+      const resolved = reference.kind === 'criterion'
+        ? criterionIds.has(reference.id.toUpperCase())
+        : reference.kind === 'fr'
+          ? frIds.has(reference.id.toUpperCase())
+          : reference.kind === 'task'
+            ? taskIds.has(reference.id)
+            : false;
+      if (resolved) bound = true;
+      else unresolvedMarkers.push({ selector, reference: markerReference(reference) });
+    }
+    if (bound) inScopeTests.push(selector);
+  }
+
+  return Object.freeze({
+    inScopeTests: Object.freeze(inScopeTests),
+    unresolvedMarkers: Object.freeze(unresolvedMarkers.sort((left, right) =>
+      `${left.selector}\u0000${left.reference}`.localeCompare(`${right.selector}\u0000${right.reference}`),
+    )),
+  });
 }
 
 type StaticTestTitle = Pick<BuildReviewChangedTestTitle, 'titleText' | 'staticExtractionFallback'>;
@@ -402,16 +504,6 @@ async function snapshotChangedTestTitles(
   return Object.freeze(titles.flat());
 }
 
-function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): readonly AcceptedScopeWidening[] {
-  return Object.freeze(widenings.map((widening) => Object.freeze({
-    path: widening.path,
-    rationale: widening.rationale,
-    taskId: widening.taskId,
-    sha: widening.sha,
-    derived: widening.derived,
-  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
-}
-
 /**
  * Assemble the build_review grader's inputs: the diff since the merge-base
  * of a freshly-resolved base ref and HEAD, plus the plan body. Inputs are
@@ -454,12 +546,20 @@ export async function assembleBuildReviewInputs(
     );
   }
 
+  const planExclusion = await engineAppendedPlanExclusion(
+    git,
+    mergeBaseSha,
+    projectRootForPlan(planPath),
+    planPath,
+  );
+
   const diffResult = await git([
     'diff',
     `${mergeBaseSha}..HEAD`,
     '--',
     '.',
     ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
+    ...planExclusion,
   ]);
   if (diffResult.exitCode !== 0) {
     throw new MergeBaseError(
@@ -470,25 +570,12 @@ export async function assembleBuildReviewInputs(
 
   const planBody = await readFile(planPath, 'utf-8');
 
-  const planTaskPaths = parsePlanTaskPaths(planBody);
-  const verifyOnlyContext = [...parsePlanTaskVerifyOnly(planBody)]
-    .filter(([, verifyOnly]) => verifyOnly)
-    .map(([taskId]) => ({
-      taskId,
-      paths: [...(planTaskPaths.get(taskId) ?? [])],
-    }));
-  const preservationContext = [...parsePlanTaskPreserves(planBody)]
-    .flatMap(([taskId, behaviors]) => behaviors.map((behavior) => ({ taskId, behavior })));
-
   const featureRoot = dirname(dirname(dirname(planPath)));
   const planIsInFeatureRoot =
     basename(dirname(planPath)) === 'plans' && basename(dirname(dirname(planPath))) === '.docs';
 
   const repairContext = planIsInFeatureRoot
     ? await readTestSuiteRemediations(featureRoot)
-    : [];
-  const operatorReseals = planIsInFeatureRoot
-    ? await readOperatorReseals(featureRoot)
     : [];
 
   // Provenance is advisory: a failure to classify never fails input assembly,
@@ -506,6 +593,14 @@ export async function assembleBuildReviewInputs(
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
   const changedTestTitles = await snapshotChangedTestTitles(git, inspection.evidence.provenanceHeadSha, diffResult.stdout);
+  const testQuality = await snapshotTestQualityScope(
+    git,
+    inspection.evidence.provenanceHeadSha,
+    diffResult.stdout,
+    projectRootForPlan(planPath),
+    planPath,
+    planBody,
+  );
   const snapshotWithoutDigest = {
     baseRef,
     mergeBase: mergeBaseSha,
@@ -513,13 +608,6 @@ export async function assembleBuildReviewInputs(
     diff: diffResult.stdout,
     planBody,
     repairContext: Object.freeze([...repairContext]),
-    acceptedWidenings: freezeAcceptedWidenings(options.acceptedWidenings ?? []),
-    operatorReseals: Object.freeze(operatorReseals.map((reseal) => Object.freeze({
-      fromCommit: reseal.fromCommit,
-      toCommit: reseal.toCommit,
-      paths: Object.freeze([...reseal.paths]),
-      reason: reseal.reason,
-    }))),
     removalContext: Object.freeze({
       deletedFiles: Object.freeze([...removalContext.deletedFiles]),
       removedDeclarations: Object.freeze([...removalContext.removedDeclarations]),
@@ -529,15 +617,8 @@ export async function assembleBuildReviewInputs(
         line: assertion.line,
       }))),
     }),
-    verifyOnlyContext: Object.freeze(verifyOnlyContext.map((context) => Object.freeze({
-      taskId: context.taskId,
-      paths: Object.freeze([...context.paths]),
-    }))),
-    preservationContext: Object.freeze(preservationContext.map((context) => Object.freeze({
-      taskId: context.taskId,
-      behavior: context.behavior,
-    }))),
     changedTestTitles,
+    testQuality,
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
     ...snapshotWithoutDigest,
@@ -555,10 +636,7 @@ export async function assembleBuildReviewInputs(
     remoteHeadSha: resolution.remoteHeadSha,
     fresh: resolution.fresh,
     removalContext: sourceSnapshot.removalContext,
-    verifyOnlyContext,
     repairContext,
-    acceptedWidenings: [...sourceSnapshot.acceptedWidenings],
-    operatorReseals,
     repairProvenance,
     testSuiteProof: inspection.evidence,
     sourceSnapshot,

@@ -1,5 +1,6 @@
 ---
 name: pr
+disable-model-invocation: true
 description: "Use when creating or updating a pull request. Analyzes the full diff against the base branch, writes a concise title and structured body, and creates or updates the PR via gh."
 enforcement: advisory
 phase: ship

@@ -5,6 +5,7 @@ import type {
   AuthenticationSource,
   CodexProbeFailureKind,
   CodexProbeParserRejection,
+  ProviderStreamObservation,
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
@@ -97,6 +98,26 @@ export type VerdictFreshnessClassification =
       fresh: false;
     };
 
+/** A durable operator decision recorded from an OVER_SCOPE halt clear. */
+export interface OverScopeDecisionEventRecord {
+  criterion: string;
+  decision: 'accept' | 'refuse';
+}
+
+/** Closed, sanitized evidentiary failures observed while harvesting a clear. */
+export type OverScopeDecisionEventDefectKind =
+  | 'malformed-block'
+  | 'unknown-criterion'
+  | 'missing-rationale'
+  | 'invalid-decision'
+  | 'missing-operator'
+  | 'write-failed';
+
+export interface OverScopeDecisionEventDefect {
+  kind: OverScopeDecisionEventDefectKind;
+  criterion?: string;
+}
+
 /**
  * Extra state threaded into onRecovery so the UI can adapt its menu
  * without the engine dictating the layout.
@@ -141,7 +162,33 @@ export interface ProviderAttemptEvent {
   lifecycle?: ProviderLifecycleEventMetadata;
 }
 
+/**
+ * Live intra-step provider signal. An absent `activeChildren` is unobserved,
+ * never zero; this observation carries no terminal usage authority.
+ */
+export type ProviderStreamProgressEvent = ProviderStreamObservation & {
+  type: 'provider_stream_progress';
+  step: StepName;
+  provider: string;
+  ts: string;
+};
+
 export type ConductorEvent =
+  | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
+  | {
+      /** Durable plan-task growth accounting after a remediation append. */
+      type: 'plan_growth';
+      authored: number;
+      added: number;
+      byGate: Record<string, number>;
+      remaining: number;
+    }
+  | {
+      /** A retired configuration key was accepted as a compatibility no-op. */
+      type: 'config_deprecated_key';
+      key: string;
+      adr: string;
+    }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
   | {
       /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */
@@ -168,10 +215,38 @@ export type ConductorEvent =
   | { type: 'build_review_rubric_skipped'; rubric: string; lapId: string; reason: string }
   | { type: 'build_review_cache_hit'; rubric: string; lapId: string }
   | { type: 'build_review_rubric_infrastructure_failure'; rubric: string; lapId: string; reason: string; excerpt?: string }
+  | {
+      /** The shared retry allowance was exhausted for a mechanical rubric failure. */
+      type: 'build_review_mechanical_allowance_exhausted';
+      lapId: string;
+      rubric: string;
+      reason: string;
+      consumed: number;
+      allowance: number;
+    }
   | { type: 'build_review_disposition_accepted'; feature: string; lapId: string; findingId: string; operator: string }
+  | {
+      /** An interactive operator accepted reduced review coverage for one failed rubric. */
+      type: 'build_review_reduced_coverage_accepted';
+      feature: string;
+      lapId: string;
+      rubric: string;
+      reason: string;
+      operator: string;
+    }
   | { type: 'build_review_disposition_refused'; feature: string; reason: string }
   | { type: 'build_review_disposition_version_invalidated'; feature: string; findingId: string; rubric: string; contractVersion: string }
-  | { type: 'build_review_outer_verdict'; lapId: string; rawVerdict: 'PASS' | 'FAIL'; effectiveVerdict: 'PASS' | 'FAIL' }
+  | {
+      type: 'build_review_outer_verdict';
+      lapId: string;
+      rawVerdict: 'PASS' | 'FAIL';
+      effectiveVerdict: 'PASS' | 'FAIL';
+      /** Deterministic container-level PASS cause, when no rubric ran. */
+      reason?: string;
+      /** Unbound Covers declarations seen in the frozen test-quality scope. */
+      unresolvedMarkers?: readonly { selector: string; reference: string }[];
+    }
+  | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | { type: 'step_started'; step: StepName; index: number }
   | {
       /** A hook-owned containment check could not reach a verdict. */
@@ -219,7 +294,15 @@ export type ConductorEvent =
       retryCount: number;
       observedIntervals?: readonly ObservedInterval[];
     }
+  | {
+      /** The step was stopped before its own work could be judged a failure. */
+      type: 'step_refused';
+      step: StepName;
+      kind: 'seal' | 'needs-human' | 'validation-verdict';
+      reason: string;
+    }
   | ProviderAttemptEvent
+  | ProviderStreamProgressEvent
   | {
       /** A provider scratch home was removed during a daemon sweep or legacy collection. */
       type: 'scratch_cleanup_reclaimed';
@@ -271,6 +354,13 @@ export type ConductorEvent =
       outputTokens: number;
       /** Cached prompt volume (cache reads + creation), when tracked. */
       cachedInputTokens?: number;
+      /**
+       * Dispatches whose tokens are counted above but whose cost is not —
+       * a provider that reports usage without money, or one whose model has no
+       * entry in the committed rate card. Non-zero means `costUsd` is a PARTIAL
+       * figure, not the feature total.
+       */
+      costUnmeteredDispatches?: number;
     }
   | {
       /** A visible transition from an unavailable provider to the next candidate. */
@@ -313,14 +403,14 @@ export type ConductorEvent =
       step: StepName;
       attempt: number;
       decision: 'rerun' | 'route';
-      signal?: 'named-route' | 'identical-repeat';
+      signal?: 'named-route' | 'identical-repeat' | 'unretryable-inputs';
       unchangedInput?: string;
     }
   | { type: 'checkpoint_reached'; step: StepName }
   | { type: 'recovery_needed'; step: StepName; options: RecoveryOption[] }
   | { type: 'gate_blocked'; step: StepName; reason: string }
   | { type: 'tier_skip'; step: StepName; tier: ComplexityTier }
-  | { type: 'config_skip'; step: StepName }
+  | { type: 'config_skip'; step: StepName; reason?: string }
   | { type: 'navigation_back'; from: StepName; to: StepName }
   | { type: 'rate_limit'; waitSeconds: number; reason?: 'usage-exhausted' }
   | { type: 'session_reset'; reason: string }
@@ -639,6 +729,8 @@ export type ConductorEvent =
       type: 'loop_halt';
       step?: StepName;
       reason: string;
+      /** Present when an external BUILD action classifies its own terminal halt. */
+      haltClass?: 'plan-gap';
       /**
        * URL of the auto-opened needs-remediation draft PR, when the conductor
        * irrecoverably HALTs in auto mode and escalation succeeded. Absent when
@@ -648,8 +740,37 @@ export type ConductorEvent =
       prUrl?: string;
     }
   | {
+      /** Recorded OVER_SCOPE decisions and any evidentiary defects from one clear. */
+      type: 'over_scope_decision';
+      /** Blocking criteria considered while harvesting this clear. */
+      criteria: string[];
+      /** Decisions durably recorded by this occurrence. */
+      decisions: OverScopeDecisionEventRecord[];
+      /** Named evidentiary defects; defective entries are never recorded. */
+      defects: OverScopeDecisionEventDefect[];
+    }
+  | {
       /** Writing the durable HALT marker failed, so the feature may not be parked. */
       type: 'halt_marker_write_failed';
+      path: string;
+      reason: string;
+    }
+  | {
+      /** A durable halt record was written and committed for the feature. */
+      type: 'halt_record_written';
+      path: string;
+      slug: string;
+      haltClass: 'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap';
+    }
+  | {
+      /** Writing or committing a durable halt record failed. */
+      type: 'halt_record_write_failed';
+      path: string;
+      reason: string;
+    }
+  | {
+      /** Pushing a committed durable halt record failed. */
+      type: 'halt_record_push_failed';
       path: string;
       reason: string;
     }

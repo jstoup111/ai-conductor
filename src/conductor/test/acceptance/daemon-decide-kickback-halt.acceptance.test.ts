@@ -165,7 +165,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+          rubric: { testQuality: false },
         }),
       );
     } else if (step === 'manual_test') {

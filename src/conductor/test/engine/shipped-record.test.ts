@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { promisify } from 'node:util';
 import {
   appendBuildReviewAcceptedRisk,
+  appendBuildReviewReducedCoverageEvidence,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
@@ -17,10 +20,15 @@ import {
 import { parseCostBlock } from '../../src/engine/kpi-report.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { upsertBuildReviewAcceptedRisk } from '../../src/engine/build-review-accepted-risk.js';
 import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import type { CostRollup } from '../../src/engine/cost-rollup.js';
 import type { TimingRollup } from '../../src/engine/timing-rollup.js';
+import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+
+const execFile = promisify(execFileCallback);
 
 /** Minimal fake tree source for exercising listShippedRecords in isolation. */
 function fakeTreeSource(files: Record<string, string>): BacklogTreeSource & {
@@ -431,19 +439,82 @@ describe('appendTimingSection', () => {
 
 describe('accepted build-review risk shipped projection', () => {
   it('reuses the deterministic accepted-risk section without changing frontmatter or cost blocks', () => {
-    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } })!;
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } })!;
     const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
     const body = '---\nslug: feature\n---\n\n## Cost\ninput: 1\n\n## Time\nstate: measured\n';
 
     const appended = appendBuildReviewAcceptedRisk(body, [accepted]);
     expect(appended).toContain('## Accepted build-review risk');
-    expect(appended).toContain(`- Finding: \`${finding.id}\` — rubric: scope`);
+    expect(appended).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
     expect(appended).not.toContain('summary');
     expect(appended).not.toContain('reason');
     expect(appended).not.toContain('james');
     expect(appended).not.toContain('2026-08-14T12:00:00.000Z');
     expect(appendBuildReviewAcceptedRisk(body, [])).toBe(body);
     expect(() => appendBuildReviewAcceptedRisk(body, [{ ...accepted, rationale: '' }])).toThrow(/unrenderable/);
+  });
+
+  it('upserts the accepted-risk section idempotently: a repeat with the same records changes nothing', () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } })!;
+    const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
+    // No trailing newline: the upsert joins with exactly one blank line, so a
+    // body already in that normalized form is the fixed point under repetition.
+    const body = '---\nslug: feature\n---\n\n## Cost\ninput: 1';
+
+    const first = upsertBuildReviewAcceptedRisk(body, [accepted]);
+    expect(first).toMatchObject({ ok: true, changed: true });
+    if (!first.ok) return;
+
+    const second = upsertBuildReviewAcceptedRisk(first.body, [accepted]);
+    expect(second).toEqual({ ok: true, body: first.body, changed: false });
+    if (!second.ok) return;
+    expect(Buffer.from(second.body).equals(Buffer.from(first.body))).toBe(true);
+    expect(second.body.split('## Accepted build-review risk')).toHaveLength(2);
+  });
+});
+
+describe('reduced build-review coverage shipped projection', () => {
+  it('carries the engine-stamped shared lap section into the shipped record unchanged', () => {
+    const section = [
+      '## Reduced build-review coverage', '', '- Rubric: `testQuality`', '  Cause: `provider-error`',
+      '  Current diagnostic: provider unavailable', '  Operator: operator', '  Rationale: approved',
+      '  Decision time: 2026-08-20T00:00:00.000Z',
+    ].join('\n');
+    const body = appendBuildReviewReducedCoverageEvidence('---\nslug: feature\n---\n', section);
+    expect(body).toContain(section);
+    expect(appendBuildReviewReducedCoverageEvidence(body, undefined)).toBe(body);
+  });
+});
+
+describe('shipped-record reduced-coverage dispatch', () => {
+  it('writes rendered current-lap coverage and blocks known-but-unrenderable evidence before writing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'shipped-record-reduced-coverage-'));
+    const lapId = parseBuildReviewLapId('lap-current')!;
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:current', results: {
+      testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'provider unavailable' },
+    } });
+    const record = { kind: 'reduced-coverage', version: 'v1', feature: { version: 'v1', repository: root, feature: 'feature' }, identity: { rubric: 'testQuality', reason: 'provider-error' }, rationale: 'approved', operator: 'operator', acceptedAt: '2026-08-20T00:00:00.000Z' };
+    try {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.docs', 'plans', 'feature.md'), '# Plan\n');
+      await writeFile(join(root, '.pipeline', 'build-review.json'), JSON.stringify(aggregate));
+      await writeFile(join(root, '.pipeline', 'build-review-dispositions.json'), JSON.stringify({ version: 'v1', records: [record] }));
+      await execFile('git', ['init', '-b', 'main', root]);
+      await execFile('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
+      await execFile('git', ['-C', root, 'config', 'user.name', 'Test']);
+      await execFile('git', ['-C', root, 'add', '.']);
+      await execFile('git', ['-C', root, 'commit', '-m', 'fixture']);
+
+      await expect(dispatchShippedRecord({ kind: 'write', slug: 'feature', pr: 'local' }, root)).resolves.toBe(0);
+      await expect(readFile(join(root, '.docs', 'shipped', 'feature.md'), 'utf8')).resolves.toContain('## Reduced build-review coverage');
+
+      await writeFile(join(root, '.pipeline', 'build-review.json'), JSON.stringify({ ...aggregate, results: { ...aggregate.results, testQuality: { ...aggregate.results.testQuality, detail: '' } } }));
+      await expect(dispatchShippedRecord({ kind: 'write', slug: 'feature', pr: 'local' }, root)).resolves.toBe(1);
+      await expect(readFile(join(root, '.docs', 'shipped', 'feature.md'), 'utf8')).resolves.toContain('provider unavailable');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

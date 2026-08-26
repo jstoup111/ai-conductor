@@ -66,4 +66,6 @@ This requires an ADR (see architecture-review Infrastructure trigger).
 
 ## Memory
 
-Project memory is stored in `.memory/`. Every session starts with recall.
+Project memory is stored in `.memory/`. The memory skill does not activate itself in ordinary Claude
+chats; the harness-managed memory step and an explicit `/memory` invocation start with recall. Claude
+session hooks may still surface a bounded memory index and a persistence reminder as context.

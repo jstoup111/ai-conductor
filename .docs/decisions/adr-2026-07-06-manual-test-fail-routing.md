@@ -44,6 +44,13 @@ Approach B (operator-selected over A "keep advisory" and C "gate-hardening only"
    (impl vs product-scope) has exactly one answer here, so the deterministic route is
    strictly simpler and cheaper. Product-scope problems still surface at prd_audit, which
    retains its agentic routing.
+
+   > **Amended 2026-08-25 by #1875:** A missing or unlaunchable browser automation dependency
+   > is capability evidence, not an observed application defect, and is therefore recorded as
+   > non-blocking `WARN` rather than `FAIL`. SHIP does not install the missing dependency and
+   > continues available `curl` criteria. Once a browser launches, observed story mismatches
+   > remain `FAIL` and retain this ADR's BUILD routing and anti-whitewash behavior.
+
 3. **Fix-evidence (anti-whitewash) gate.** The manual_test completion gate records
    `.pipeline/manual-test-fail-evidence.json` (`headSha`, `observedAt`, fail excerpt) when it
    observes FAIL rows. A subsequent FAIL-free results file is accepted only when `HEAD` has

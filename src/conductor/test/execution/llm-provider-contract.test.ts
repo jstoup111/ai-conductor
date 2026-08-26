@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type {
   AuthenticationReadiness,
   AuthenticationSource,
   InvokeOptions,
   InvokeResult,
   LLMProvider,
+  ProviderStreamCandidateObserver,
 } from '../../src/execution/llm-provider.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -65,6 +66,36 @@ async function executeCodexCandidate(
 }
 
 describe('InvokeResult provider-unavailable contract', () => {
+  it('exposes invoke as the sole built-in provider dispatch member', () => {
+    type RemovedInteractiveMember = Extract<keyof LLMProvider, 'invokeInteractive'>;
+
+    expectTypeOf<RemovedInteractiveMember>().toEqualTypeOf<never>();
+    expect(ClaudeProvider.prototype).not.toHaveProperty('invokeInteractive');
+    expect(CodexProvider.prototype).not.toHaveProperty('invokeInteractive');
+  });
+
+  it('accepts InvokeOptions with and without an optional stream consumer', () => {
+    const optionsWithoutStreamConsumer: InvokeOptions = {
+      prompt: 'contract check',
+      sessionId: 'streamless-session',
+      resume: false,
+    };
+    const streamConsumer: ProviderStreamCandidateObserver = {
+      onProviderStream: () => {},
+      close: () => {},
+    };
+    const optionsWithStreamConsumer: InvokeOptions = {
+      prompt: 'contract check',
+      sessionId: 'streaming-session',
+      resume: false,
+      streamConsumer,
+    };
+
+    expectTypeOf<InvokeOptions['streamConsumer']>().toEqualTypeOf<
+      ProviderStreamCandidateObserver | undefined
+    >();
+  });
+
   it('exposes the #1069 fail-closed Codex session-resume capability seam', () => {
     const provider: LLMProvider = new CodexProvider();
     const buildArgs = (
@@ -97,7 +128,6 @@ describe('InvokeResult provider-unavailable contract', () => {
         calls.push(options);
         return { success: true, output: 'ok', exitCode: 0 };
       }),
-      async invokeInteractive(): Promise<void> {},
     };
     const sessions = new ProviderSessionScope(() => 'harness-session');
     await executeCodexCandidate(provider, sessions);
@@ -113,7 +143,6 @@ describe('InvokeResult provider-unavailable contract', () => {
         calls.push(options);
         return { success: true, output: 'ok', exitCode: 0 };
       }),
-      async invokeInteractive(): Promise<void> {},
     };
     const sessions = new ProviderSessionScope(() => 'legacy-session');
 
@@ -133,7 +162,6 @@ describe('InvokeResult provider-unavailable contract', () => {
         calls.push(options);
         return { success: true, output: 'ok', exitCode: 0 };
       }),
-      async invokeInteractive(): Promise<void> {},
     };
     const sessions = new ProviderSessionScope(() => 'claude-session');
 
@@ -155,7 +183,6 @@ describe('InvokeResult provider-unavailable contract', () => {
         calls.push(options);
         return { success: true, output: 'ok', exitCode: 0 };
       }),
-      async invokeInteractive(): Promise<void> {},
     };
     const transitions: Array<Record<string, unknown>> = [];
     const sessions = {
@@ -210,7 +237,6 @@ describe('InvokeResult provider-unavailable contract', () => {
           authentication: readiness,
         };
       },
-      async invokeInteractive(): Promise<void> {},
       async readiness(): Promise<AuthenticationReadiness> {
         return readiness;
       },
@@ -223,23 +249,6 @@ describe('InvokeResult provider-unavailable contract', () => {
       readiness,
       result: { success: true, output: 'ok', exitCode: 0, authentication: readiness },
     });
-  });
-
-  it('keeps void-returning custom interactive providers valid and non-classifying', async () => {
-    const legacyProvider: LLMProvider = {
-      async invoke(): Promise<InvokeResult> {
-        return { success: true, output: 'ok', exitCode: 0 };
-      },
-      async invokeInteractive(_options: InvokeOptions): Promise<void> {},
-    };
-
-    const completion = await legacyProvider.invokeInteractive({
-      prompt: 'legacy custom provider',
-      sessionId: 'legacy-session',
-      resume: false,
-    });
-
-    expect(completion).toBeUndefined();
   });
 
   it('classifies only explicit run-wide provider unavailability and preserves every existing failure class', async () => {

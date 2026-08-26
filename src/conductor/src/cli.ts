@@ -151,6 +151,14 @@ export type BuildReviewAcceptDispatch = {
   readonly rationale: string;
 };
 
+export type BuildReviewRecordReducedCoverageDispatch = {
+  readonly kind: 'record-reduced-coverage';
+  readonly feature: string;
+  readonly lapId: string;
+  readonly rubric: string;
+  readonly rationale: string;
+};
+
 /** Detect the read-only `build-review findings --feature <slug> [--json]` command. */
 export function detectBuildReviewFindingsCommand(argv: string[]): BuildReviewFindingsDispatch | null {
   if (argv[2] !== 'build-review' || argv[3] !== 'findings') return null;
@@ -178,6 +186,24 @@ export function detectBuildReviewAcceptCommand(argv: string[]): BuildReviewAccep
   if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !findingId || !rationale ||
     !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
   return { kind: 'accept', feature, lapId, findingId, rationale };
+}
+
+/** Detect only the fully bound, operator-only reduced-coverage grammar. */
+export function detectBuildReviewRecordReducedCoverageCommand(argv: string[]): BuildReviewRecordReducedCoverageDispatch | null {
+  if (argv[2] !== 'build-review' || argv[3] !== 'record-reduced-coverage') return null;
+  const args = argv.slice(4);
+  const read = (flag: string): string | undefined => {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+  };
+  const feature = read('--feature');
+  const lapId = read('--lap');
+  const rubric = read('--rubric');
+  const rationale = read('--rationale');
+  const expected = ['--feature', feature, '--lap', lapId, '--rubric', rubric, '--rationale', rationale];
+  if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !rubric || !rationale ||
+    !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
+  return { kind: 'record-reduced-coverage', feature, lapId, rubric, rationale };
 }
 
 /** Detect `conduct config read <dotted.path>` without starting the pipeline. */
@@ -423,7 +449,7 @@ export async function planProtectedTargetsCommand(
   cmd: PlanProtectedTargetsDispatch,
   deps: {
     print?: (message: string) => void;
-    readFile?: typeof readFile;
+    readFile?: (path: string, encoding: BufferEncoding) => Promise<string>;
   } = {},
 ): Promise<number> {
   const print = deps.print ?? console.log;
@@ -439,7 +465,7 @@ export async function planProtectedTargetsCommand(
 
   for (const { taskId, path } of violations) {
     print(
-      `Task ${taskId}: ${path} — ambiguous protected reference without a **Files:** declaration; add **Files:** to declare the task's targets.`,
+      `Task ${taskId}: ${path} — return this amendment to DECIDE; BUILD tasks must not target protected artifacts.`,
     );
   }
   return 1;
@@ -481,6 +507,16 @@ export function createProgram(): Command {
     .command('create <name>')
     .description('Scaffold a new project (git init + skeleton CLAUDE.md + .gitignore) and register it')
     .option('--remote <url>', 'Add an origin remote (add-only, no push)');
+  const rateCard = program
+    .command('rate-card')
+    .description('Maintain the committed per-model token price card (.ai-conductor/rate-card.json)');
+  rateCard
+    .command('refresh')
+    .description('Fetch upstream model prices, prune to the models this project routes to, and rewrite the card with a fresh as_of')
+    .option('--model <id>', 'Also price this model id (repeatable)');
+  rateCard
+    .command('show')
+    .description('Print the committed rate card: as_of, source, and each model rate');
   const config = program
     .command('config')
     .description('Manage project- and user-scoped harness configuration');
@@ -595,6 +631,13 @@ export function createProgram(): Command {
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--finding <id>', 'Exact canonical finding identifier')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');
+  buildReview
+    .command('record-reduced-coverage')
+    .description('Record an operator reduced-coverage decision from an interactive terminal')
+    .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .requiredOption('--lap <lap>', 'Current inspected lap identity')
+    .requiredOption('--rubric <rubric>', 'Mechanically failed rubric')
+    .requiredOption('--rationale <text>', 'Non-empty operator rationale');
 
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. Orchestrates the sweep
@@ -642,6 +685,11 @@ export function createProgram(): Command {
     .requiredOption('--reason <reason>', 'Operator rationale for the reseal')
     .option('--clear-halt', 'Clear a resolved protected-artifact halt after resealing');
 
+  program
+    .command('rewind')
+    .description('Return a halted feature to an earlier step')
+    .requiredOption('--to <step>', 'Earlier step to resume from');
+
   registerCommands(program);
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
@@ -682,9 +730,10 @@ export function createProgram(): Command {
   daemon
     .command('reclaim-worktree <slug>')
     .description('Remove exactly one named, quiescent retained feature worktree');
-  // Management verbs — route to the tmux Supervisor port (detectDaemonSupervisorCommand),
-  // dispatched in index.ts before the pipeline boots. Declared here ONLY so `--help`
-  // documents them; commander never actually dispatches them.
+  // Management verbs — including the pre-boot-dispatched pause/resume controls — route
+  // to the tmux Supervisor port (detectDaemonSupervisorCommand), dispatched in index.ts
+  // before the pipeline boots. Declared here ONLY so `--help` documents them;
+  // commander never actually dispatches them.
   daemon
     .command('start')
     .description('Start the tmux-supervised daemon for this repo; auto-attaches read-only unless -D')
@@ -696,6 +745,12 @@ export function createProgram(): Command {
   daemon
     .command('restart')
     .description('Restart this repo\'s tmux-supervised daemon');
+  daemon
+    .command('pause')
+    .description('Pause dispatch by writing the pause marker; running work finishes');
+  daemon
+    .command('resume')
+    .description('Resume dispatch by clearing the pause marker');
   daemon
     .command('connect')
     .description('Attach READ-ONLY to this repo\'s daemon tmux session (Ctrl-b d to detach)')

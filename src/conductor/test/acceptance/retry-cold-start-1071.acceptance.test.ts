@@ -56,7 +56,6 @@ describe('ST-1071-5 — cold retry reconstructs context from durable artifacts',
     const provider: LLMProvider = {
       supportsSessionResume: false,
       invoke,
-      invokeInteractive: invoke,
     };
     const runner = new DefaultStepRunner(
       provider,

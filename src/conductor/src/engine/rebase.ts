@@ -16,6 +16,7 @@ import {
   isRuntimeSourcePath,
   isTestPath,
 } from './gate-invalidation.js';
+import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
 import {
   PROTECTED_ARTIFACT_SEAL_PATH,
@@ -1290,28 +1291,27 @@ export async function applyRebaseVerdicts(
   const kickedBack: StepName[] = [];
   const reverified: StepName[] = [];
 
-  // Task 3: Pre-verify pass confirms build with a fresh objective verdict.
-  // When preVerify('build') returns { done: true }, the build gate is confirmed
-  // to be still satisfied (evidence-intact after file-changing rebase), so write
-  // a fresh objective verdict and add it to reverified instead of kickedBack.
-  let buildReVerified = false;
+  // Pre-verify every gate whose registry declaration says its completion
+  // predicate mechanically attests the current tree/history. A successful
+  // check refreshes its objective verdict; a false result, unavailable
+  // capability, or thrown check falls through to the normal fail-closed
+  // kickback below.
+  const reverifiedGates = new Set<StepName>();
   if (preVerify) {
-    try {
-      const buildPreVerify = await preVerify('build');
-      if (buildPreVerify.done) {
-        // Pre-verify succeeded — build is evidence-intact, write fresh verdict.
-        await writeVerdict(projectRoot, 'build', {
+    for (const gate of ALL_STEPS.filter((step) => step.treeAttestingCompletion)) {
+      try {
+        const verification = await preVerify(gate.name);
+        if (!verification.done) continue;
+        await writeVerdict(projectRoot, gate.name, {
           satisfied: true,
           reason: 're-verified mechanically after file-changing rebase — evidence remains intact',
           checkedAt: Date.now(),
         });
-        reverified.push('build');
-        buildReVerified = true;
+        reverified.push(gate.name);
+        reverifiedGates.add(gate.name);
+      } catch {
+        // Any pre-verify error fails closed through the kickback below.
       }
-    } catch {
-      // Task 5: preVerify throw → fail-closed, no error escapes.
-      // Error is caught here; buildReVerified stays false, allowing normal
-      // kickback verdict write (lines below) to handle build as invalidated.
     }
   }
 
@@ -1333,13 +1333,12 @@ export async function applyRebaseVerdicts(
   // — or a gate whose surface can't be proven to miss the delta would be
   // silently left un-re-verified (prd_audit/architecture_review_as_built
   // included).
+  const partition = outcome.featureSurface !== undefined
+    ? classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, ranManualTest)
+    : undefined;
   const targets: StepName[] =
-    outcome.featureSurface !== undefined
-      ? ([
-          'build',
-          ...classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, ranManualTest)
-            .invalidated,
-        ] as StepName[])
+    partition !== undefined
+      ? (['build', ...partition.invalidated] as StepName[])
       : ranManualTest
         ? ([
             'build',
@@ -1357,8 +1356,9 @@ export async function applyRebaseVerdicts(
             'architecture_review_as_built',
           ] as StepName[]);
   for (const target of targets) {
-    // Skip build if it was pre-verified (already wrote verdict above).
-    if (target === 'build' && buildReVerified) {
+    // A successful tree-attesting pre-verify has already written this gate's
+    // fresh satisfied verdict, so it is not kicked back.
+    if (reverifiedGates.has(target)) {
       continue;
     }
     await writeVerdict(projectRoot, target, {

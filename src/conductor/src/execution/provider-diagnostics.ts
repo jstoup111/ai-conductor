@@ -80,6 +80,15 @@ export interface FeatureUsageTotals {
   outputTokens: number;
   /** Cached prompt volume (cache reads + cache creation), when tracked. */
   cachedInputTokens?: number;
+  /**
+   * Dispatches that reported token usage but NO cost — their tokens are in the
+   * figures above while their dollars are not. Rendered explicitly so a reader
+   * can never mistake a partial cost for a total: a mixed-provider build whose
+   * unpriced provider carried most of the volume once printed a Claude-only
+   * dollar figure beside all-provider tokens, understating real spend 4.4x with
+   * nothing on the line to say so.
+   */
+  costUnmeteredDispatches?: number;
 }
 
 /**
@@ -109,6 +118,10 @@ export function formatFeatureUsageTotal(totals: FeatureUsageTotals): string {
         ? `${formatTokens(totals.inputTokens)} fresh + ${formatTokens(cached)} cached`
         : formatTokens(totals.inputTokens);
     parts.push(`${inputPart}→${formatTokens(totals.outputTokens)} tok`);
+  }
+  const costUnmetered = totals.costUnmeteredDispatches ?? 0;
+  if (costUnmetered > 0) {
+    parts.push(`${costUnmetered} cost-unmetered (tokens counted, cost not)`);
   }
   if (totals.unmeteredDispatches > 0) parts.push(`${totals.unmeteredDispatches} unmetered`);
   return `finish: total usage — ${parts.join(', ')}`;

@@ -271,6 +271,42 @@ describe('engine/manual-test-record-cli', () => {
       expect(written).toContain('| S2 | FAIL |');
     });
 
+    it('machine-marks an attempt when an exact Result cell is WARN', async () => {
+      const { runners, files } = makeFakeFs(undefined, {
+        '/abs/results-input.md':
+          '| Story | Criterion | Result | Notes |\n' +
+          '| --- | --- | --- | --- |\n' +
+          '| Browser smoke | UI loads | WARN | Playwright browser is unavailable |\n',
+      });
+      const code = await dispatchManualTestRecord(
+        { kind: 'results', resultsPath: '/abs/results-input.md', pipelineDir: '/abs/pipeline' },
+        '/abs',
+        runners,
+      );
+      expect(code).toBe(0);
+      expect(files.get('/abs/pipeline/manual-test-results.md')).toContain(
+        '<!-- manual-test:warning -->',
+      );
+    });
+
+    it('does not machine-mark WARN mentioned only in descriptive text', async () => {
+      const { runners, files } = makeFakeFs(undefined, {
+        '/abs/results-input.md':
+          '| Story | Criterion | Result | Notes |\n' +
+          '| --- | --- | --- | --- |\n' +
+          '| WARN handling | API remains testable | PASS | Notes explain WARN behavior |\n',
+      });
+      const code = await dispatchManualTestRecord(
+        { kind: 'results', resultsPath: '/abs/results-input.md', pipelineDir: '/abs/pipeline' },
+        '/abs',
+        runners,
+      );
+      expect(code).toBe(0);
+      expect(files.get('/abs/pipeline/manual-test-results.md')).not.toContain(
+        '<!-- manual-test:warning -->',
+      );
+    });
+
     it('appends an Attempt 2 section after an existing Attempt 1, preserving prior content', async () => {
       const priorContent = '## Attempt 1\n\n**Result:** SKIPPED — auto mode\n';
       const { runners, files } = makeFakeFs(priorContent, {

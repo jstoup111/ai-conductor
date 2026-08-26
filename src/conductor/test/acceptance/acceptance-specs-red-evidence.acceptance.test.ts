@@ -112,6 +112,11 @@ async function seedThrough(statePath: string, upToButExcluding: StepName): Promi
     if (s.name === upToButExcluding) continue;
     state[s.name] = 'done';
   }
+  // This fixture owns only the acceptance_specs call site. A persisted
+  // `done` status for a tree-attesting BUILD gate is deliberately revalidated
+  // by the conductor, so declare those unrelated gates skipped instead.
+  state.build = 'skipped';
+  state.test_suite = 'skipped';
   state.complexity_tier = 'M';
   state.feature_desc = 'feat-741';
   state.track = 'technical';

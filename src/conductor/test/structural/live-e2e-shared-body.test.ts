@@ -6,11 +6,11 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
-import { dumpPipelineDiagnostics } from '../engine/daemon-e2e-fixture.test.js';
+import { dumpPipelineDiagnostics } from '../fixtures/daemon-e2e-diagnostics.js';
 import { LIVE_E2E_PROVIDERS, type LiveE2EProviderDescriptor } from '../fixtures/live-e2e-providers.js';
 import { runLiveE2ERunBody } from '../fixtures/live-e2e-run-body.js';
 
-vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
+vi.mock('../fixtures/daemon-e2e-diagnostics.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 
@@ -69,7 +69,6 @@ describe('structural: shared live E2E body', () => {
         process.env[registeredDescriptor.credentialEnvVar] = `${registeredDescriptor.id}-credential`;
         const provider: LLMProvider = {
           invoke: vi.fn(),
-          invokeInteractive: vi.fn(),
           readiness: vi.fn(async (): Promise<never> => {
             throw new Error('equivalent injected live-provider outcome');
           }),

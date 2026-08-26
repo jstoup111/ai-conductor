@@ -103,9 +103,23 @@ depends on.
   non-interactive caller, an automated process, or the build loop itself is refused, and the
   refusal is observable.
 
-- **FR-7** A decision that accepts reduced coverage names the rubric it covers, and covers only
-  that rubric on the review it was recorded against. A different rubric failing mechanically,
-  or the same rubric failing on a materially different review, still blocks.
+- **FR-7** A decision that accepts reduced coverage names the rubric it covers and the closed
+  reason it covers, and covers that `{rubric, closed reason}` pair for the feature — independently
+  of which review it was recorded against. A different rubric failing mechanically, or the same
+  rubric failing for a different closed reason, still blocks.
+
+  > **Amended 2026-08-21 by operator decision.** The original text required identity bound to the
+  > review the decision was recorded against ("covers only that rubric on the review it was
+  > recorded against … the same rubric failing on a materially different review still blocks").
+  > That contradicted `adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane` D7, which is
+  > APPROVED and operator-confirmed, scopes identity to `{rubric, closed reason}` feature-wide, and
+  > explicitly lists and rejects "identity including the lap or snapshot digest" under Alternatives
+  > because a review-pinned identity re-creates the very livelock this document's Incident 1
+  > describes. The ADR is authoritative; this requirement is restated to match it and the
+  > implementation at `src/conductor/src/engine/build-review-dispositions.ts`. Story 7's negative
+  > paths already enumerate only cross-rubric, cross-class and cross-feature isolation — the
+  > "materially different review" clause was dropped at decomposition and never carried into any
+  > story, task, or test.
 
 - **FR-8** Once reduced coverage is accepted for every mechanically-failed rubric and every
   graded finding is resolved or accepted, the review's effective verdict is PASS and the build
@@ -132,7 +146,16 @@ depends on.
   as already recorded, and changes nothing.
 
 - **FR-15** Existing recorded state written before this change continues to be read
-  successfully, and reviews with no mechanical faults behave identically to today.
+  successfully, and reviews with no mechanical faults reach the same OUTCOME as today — a
+  fault-free judged FAIL still blocks the build and no reduced-coverage decision can clear it.
+
+  **Amended 2026-08-21 (operator).** This parity is on outcome, not on the step-result
+  routing contract. A grader that RAN and returned a not-PASS verdict returns
+  `success: true` (`src/conductor/src/engine/step-runners.ts:1962`), which is the contract
+  documented at `src/conductor/src/engine/conductor.ts:609`: the completion predicate catches
+  the FAIL and the #646 retry-routing kickback fires in one lap. Scoping that override to
+  mechanical laps would restore the pre-change retry-ladder burn on every judged FAIL — the
+  cost NFR-4 exists to bound — so it is explicitly out of scope for FR-15 and FR-12.
 
 ## Non-Functional Requirements
 

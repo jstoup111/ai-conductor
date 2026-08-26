@@ -61,8 +61,15 @@ function collectExecutionEvidence(
   const startKind = event.type === 'step_started'
     ? 'step'
     : event.type === 'parallel_started' ? 'parallel' : undefined;
+  // A refusal is terminal only for a step window it actually opened. A
+  // validation-group member is dispatched inside the group's fan-out and never
+  // opens `step:<member>`, so its refusal closes nothing and must not be read
+  // as a terminal whose active interval went missing.
+  const refusalClosesStep = event.type === 'step_refused'
+    && step !== undefined
+    && (evidence.openExecutions.has(`step:${step}`) || 'activeInterval' in event);
   const terminalKind =
-    event.type === 'step_completed' || event.type === 'step_failed'
+    event.type === 'step_completed' || event.type === 'step_failed' || refusalClosesStep
       ? 'step'
       : event.type === 'parallel_completed'
         || (event.type === 'parallel_failure' && event.terminal !== false)

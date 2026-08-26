@@ -1,28 +1,152 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep the provider-facing closed vocabularies in the four rubric SKILL.md
-# contracts equal to the engine's single source of truth. Each comparison is
-# set equality: the unified diff exposes both an undocumented engine member
-# and a documented member no longer accepted at the trust boundary.
+# Keep the provider-facing closed vocabulary and anchor reference grammar in
+# the active rubric SKILL.md contract equal to the engine's single source of
+# truth — by EXECUTING that source, never by reading it.
+#
+# The engine side of every comparison comes from a probe that imports the
+# domain module and observes `parseBuildReviewFindingAnchor` accepting and
+# rejecting discriminating specimens. Enforcement truth is behavior: a grammar
+# change anywhere in the implementation — helper body, regex constant, imported
+# pattern, or call-site routing — either changes what the parser accepts (drift
+# is reported against the SKILL.md contract) or leaves acceptance intact (no
+# drift exists to report). There is no textual extraction to fool one
+# indirection deeper.
+#
+# Fail-closed properties, each pinned by a fixture below:
+# - a field whose parser accepts garbage is UNENFORCED (stale contract, or a
+#   passthrough parser) and fails the guard;
+# - a field whose acceptance matches no known grammar is UNCLASSIFIABLE and
+#   fails the guard;
+# - a parser that rejects the fully-documented specimen anchor (renamed field,
+#   new required field, rerouted read) fails the guard as BASELINE-REJECTED;
+# - an unreadable or unimportable domain source fails the guard.
+#
+# The probe's specimen anchors are test INPUT, not a parallel declaration of
+# enforcement: when the engine grows a new required anchor field, the baseline
+# is rejected and this guard fails until the specimen table and the SKILL.md
+# contract are updated together.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-DOMAIN_FILE="$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts"
-
 failures=0
 
-extract_current_engine_vocabulary() {
-  local rubric=$1
-  awk -v rubric="$rubric" '
-    /^export const BUILD_REVIEW_FINDING_VOCABULARIES = Object\.freeze\(\{$/ { in_vocabularies = 1; next }
-    in_vocabularies && $0 ~ "^  " rubric ": Object\\.freeze\\(\\{" { in_rubric = 1; next }
-    in_rubric && /^  \}\),$/ { exit }
-    in_rubric { print }
-  ' "$DOMAIN_FILE" \
-    | grep -oE "'[^']+'" \
-    | sed "s/^'//; s/'$//" \
-    | sort -u
+probe_script_base=$(mktemp "${TMPDIR:-/tmp}/build-review-probe.XXXXXX")
+probe_script="${probe_script_base}.mts"
+mv "$probe_script_base" "$probe_script"
+trap 'rm -rf "$probe_script" "${fixture_dir:-}"' EXIT
+cat >"$probe_script" <<'PROBE'
+/* Behavioral reference-grammar probe. argv[2] = domain module path.
+ * Emits, per rubric:
+ *   "<rubric> vocab <member>"        — every string leaf of the exported
+ *                                      BUILD_REVIEW_FINDING_VOCABULARIES entry
+ *   "<rubric> <field>=<grammar>"     — enforced grammar, classified by behavior
+ *   "<rubric> !baseline-rejected"    — no specimen anchor is accepted at all
+ *   "<rubric> <field>!unenforced"    — the field accepts garbage
+ *   "<rubric> <field>!unclassifiable" — acceptance matches no known grammar
+ */
+const domainPath = process.argv[2];
+const mod = await import(domainPath);
+const parseAnchor = mod.parseBuildReviewFindingAnchor as (
+  value: unknown, references?: unknown, contractVersion?: string,
+) => unknown;
+if (typeof parseAnchor !== 'function') {
+  console.error(`probe: ${domainPath} does not export parseBuildReviewFindingAnchor`);
+  process.exit(1);
+}
+const vocabularies = (mod.BUILD_REVIEW_FINDING_VOCABULARIES ?? {}) as Record<string, unknown>;
+
+const OBJ = Object.freeze({
+  path: 'src/probe.ts',
+  contentHash: `sha256:${'a'.repeat(64)}`,
+  display: 'probe region',
+});
+const PATH = 'src/probe.ts';
+const GARBAGE = '::: not a reference :::';
+
+const RUBRICS: Record<string, { referenceFields: string[]; fixed: Record<string, string> }> = {
+  testQuality: {
+    referenceFields: ['locus'],
+    fixed: {},
+  },
+};
+const SPECIMENS: Record<string, unknown> = { OBJ, PATH, GARBAGE };
+const BASELINE_CANDIDATES = ['OBJ', 'PATH', 'TASK'];
+
+function vocabLeaves(value: unknown, out: Set<string>): void {
+  if (typeof value === 'string') out.add(value);
+  else if (Array.isArray(value)) for (const entry of value) vocabLeaves(entry, out);
+  else if (value && typeof value === 'object') for (const entry of Object.values(value)) vocabLeaves(entry, out);
+}
+
+for (const [rubric, shape] of Object.entries(RUBRICS)) {
+  const leaves = new Set<string>();
+  vocabLeaves(vocabularies[rubric], leaves);
+  for (const leaf of [...leaves].sort()) console.log(`${rubric} vocab ${leaf}`);
+
+  const accepts = (assignment: Record<string, unknown>): boolean => {
+    const anchor: Record<string, unknown> = { rubric, ...shape.fixed, ...assignment };
+    try {
+      return Boolean(parseAnchor(anchor, undefined, 'v3'));
+    } catch {
+      return false;
+    }
+  };
+
+  // Find an accepted baseline assignment for every reference field.
+  let baseline: Record<string, unknown> | undefined;
+  const search = (fields: string[], acc: Record<string, unknown>): void => {
+    if (baseline) return;
+    if (fields.length === 0) {
+      if (accepts(acc)) baseline = { ...acc };
+      return;
+    }
+    const [head, ...rest] = fields;
+    for (const name of BASELINE_CANDIDATES) search(rest, { ...acc, [head]: SPECIMENS[name] });
+  };
+  search(shape.referenceFields, {});
+  if (!baseline) {
+    console.log(`${rubric} !baseline-rejected`);
+    continue;
+  }
+
+  for (const field of shape.referenceFields) {
+    const test = (name: string): boolean => accepts({ ...baseline, [field]: SPECIMENS[name] });
+    if (test('GARBAGE')) {
+      console.log(`${rubric} ${field}!unenforced`);
+      continue;
+    }
+    if (test('OBJ')) console.log(`${rubric} ${field}=content-region`);
+    else if (test('PATH')) console.log(`${rubric} ${field}=path`);
+    else if (test('TASK') && test('TASK_WORDY') && test('TITLED')) console.log(`${rubric} ${field}=plan-task`);
+    else console.log(`${rubric} ${field}!unclassifiable`);
+  }
+}
+PROBE
+
+# One probe execution per domain file, cached; tsx resolves the real domain's
+# imports from src/conductor, and the self-contained fixtures import nothing.
+probe_cache_files=()
+probe_cache_outputs=()
+PROBE_OUTPUT=''
+probe_domain() {
+  local domain_file=$1
+  local index output
+  for index in "${!probe_cache_files[@]}"; do
+    if [ "${probe_cache_files[$index]}" = "$domain_file" ]; then
+      PROBE_OUTPUT=${probe_cache_outputs[$index]}
+      return 0
+    fi
+  done
+
+  if ! output=$( (cd "$HARNESS_DIR/src/conductor" && node --import tsx "$probe_script" "$domain_file") 2>/dev/null ); then
+    return 1
+  fi
+  index=${#probe_cache_files[@]}
+  probe_cache_files[$index]=$domain_file
+  probe_cache_outputs[$index]=$output
+  PROBE_OUTPUT=$output
 }
 
 extract_documented_vocabulary() {
@@ -33,26 +157,217 @@ extract_documented_vocabulary() {
     | sort -u
 }
 
-for rubric in tautology scope rootCause completeness; do
-  skill_file="$HARNESS_DIR/skills/build-review-${rubric//rootCause/root-cause}/SKILL.md"
-  if [ ! -f "$DOMAIN_FILE" ] || [ ! -f "$skill_file" ]; then
-    echo "missing vocabulary source for ${rubric}: ${DOMAIN_FILE} or ${skill_file}" >&2
-    failures=1
-    continue
-  fi
+extract_documented_reference_grammars() {
+  local skill_file=$1
 
-  engine_vocabulary=$(extract_current_engine_vocabulary "$rubric")
-  documented_vocabulary=$(extract_documented_vocabulary "$skill_file")
-  if [ -z "$engine_vocabulary" ] || [ -z "$documented_vocabulary" ]; then
-    echo "could not extract closed vocabulary for ${rubric}" >&2
-    failures=1
-    continue
-  fi
+  grep '^\*\*Reference grammar:\*\*' "$skill_file" \
+    | grep -oE '`anchor\.[A-Za-z][A-Za-z0-9]*` is a `[a-z-]+` reference' \
+    | sed -E 's/`anchor\.([A-Za-z][A-Za-z0-9]*)` is a `([a-z-]+)` reference/\1=\2/' \
+    | sort -u
+}
 
-  if ! diff -u <(printf '%s\n' "$engine_vocabulary") <(printf '%s\n' "$documented_vocabulary"); then
-    echo "build-review ${rubric} vocabulary drift: update the engine and SKILL.md together" >&2
-    failures=1
+check_vocabulary_drift() {
+  local domain_file=$1
+  local harness_dir=$2
+  local rubric skill_file engine_vocabulary documented_vocabulary probe_output
+
+  if [ ! -r "$domain_file" ]; then
+    echo "could not read build-review reference grammar source: ${domain_file}" >&2
+    return 1
   fi
+  if ! probe_domain "$domain_file"; then
+    echo "could not execute build-review anchor parser from ${domain_file}" >&2
+    return 1
+  fi
+  probe_output=$PROBE_OUTPUT
+
+  for rubric in testQuality; do
+    skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md"
+    if [ ! -f "$skill_file" ]; then
+      echo "missing vocabulary source for ${rubric}: ${skill_file}" >&2
+      return 1
+    fi
+
+    engine_vocabulary=$(awk -v rubric="$rubric" '$1 == rubric && $2 == "vocab" { print $3 }' <<<"$probe_output" | sort -u)
+    documented_vocabulary=$(extract_documented_vocabulary "$skill_file")
+    if [ -z "$engine_vocabulary" ] || [ -z "$documented_vocabulary" ]; then
+      echo "could not extract closed vocabulary for ${rubric}" >&2
+      return 1
+    fi
+
+    if ! diff -u <(printf '%s\n' "$engine_vocabulary") <(printf '%s\n' "$documented_vocabulary"); then
+      echo "build-review ${rubric} vocabulary drift: update the engine and SKILL.md together" >&2
+      return 1
+    fi
+  done
+}
+
+check_reference_grammar_drift() {
+  local domain_file=$1
+  local harness_dir=$2
+  local rubric skill_file engine_grammars documented_grammars field grammar probe_output failure_lines
+
+  if [ ! -r "$domain_file" ]; then
+    echo "could not read build-review reference grammar source: ${domain_file}" >&2
+    return 1
+  fi
+  if ! probe_domain "$domain_file"; then
+    echo "could not execute build-review anchor parser from ${domain_file}" >&2
+    return 1
+  fi
+  probe_output=$PROBE_OUTPUT
+
+  for rubric in testQuality; do
+    skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md"
+    if [ ! -r "$skill_file" ]; then
+      echo "could not read build-review ${rubric} reference grammar contract: ${skill_file}" >&2
+      return 1
+    fi
+
+    if grep -qE "^${rubric} !baseline-rejected$" <<<"$probe_output"; then
+      echo "build-review ${rubric} reference grammar drift: the parser rejected the fully-documented specimen anchor — update the anchor contract and the probe specimens together" >&2
+      return 1
+    fi
+    failure_lines=$(awk -v rubric="$rubric" '$1 == rubric && $2 ~ /!/ { print $2 }' <<<"$probe_output")
+    if [ -n "$failure_lines" ]; then
+      while IFS='!' read -r field reason; do
+        [ -n "$field" ] || continue
+        if [ "$reason" = 'unenforced' ]; then
+          echo "build-review ${rubric} reference grammar drift: anchor.${field} accepts arbitrary input — the parser no longer enforces a reference grammar for it" >&2
+        else
+          echo "build-review ${rubric} reference grammar drift: anchor.${field} acceptance matches no known reference grammar" >&2
+        fi
+      done <<<"$failure_lines"
+      return 1
+    fi
+
+    engine_grammars=$(awk -v rubric="$rubric" '$1 == rubric && $2 ~ /=/ { print $2 }' <<<"$probe_output" | sort -u)
+    if [ -z "$engine_grammars" ]; then
+      echo "could not extract build-review ${rubric} reference grammar bindings from ${domain_file}" >&2
+      return 1
+    fi
+
+    documented_grammars=$(extract_documented_reference_grammars "$skill_file")
+    while IFS='=' read -r field grammar; do
+      [ -n "$field" ] || continue
+      if ! grep -Fxq "${field}=${grammar}" <<<"$documented_grammars"; then
+        echo "build-review ${rubric} reference grammar drift: anchor.${field} requires ${grammar}, but SKILL.md does not state that grammar" >&2
+        return 1
+      fi
+    done <<<"$engine_grammars"
+
+    while IFS='=' read -r field grammar; do
+      [ -n "$field" ] || continue
+      if ! grep -Fxq "${field}=${grammar}" <<<"$engine_grammars"; then
+        echo "build-review ${rubric} reference grammar drift: anchor.${field} states stale ${grammar}, which the engine no longer enforces" >&2
+        return 1
+      fi
+    done <<<"$documented_grammars"
+  done
+}
+
+fixture_dir=$(mktemp -d)
+fixture_domain="$fixture_dir/build-review-domain.ts"
+fixture_harness="$fixture_dir/harness"
+mkdir -p "$fixture_harness/skills"
+
+# Self-contained executable fixture: the REAL grammar regexes and titled
+# normalization, with none of the engine's imports, so every scenario below
+# exercises the probe against genuine accept/reject behavior.
+cat >"$fixture_domain" <<'EOF'
+export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
+  testQuality: Object.freeze({
+    concernKinds: Object.freeze(['test-insensitive']),
+  }),
+});
+
+const CANONICAL_PATH_REFERENCE = /^(?!\/)(?!.*(?:^|\/)\.?(?:\/|$))(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9.][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9.][A-Za-z0-9._/@+-]*)*$/;
+
+function parseContentRegionReference(value: unknown): unknown {
+  const source = value as Record<string, unknown> | null;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
+  return typeof source.path === 'string' && CANONICAL_PATH_REFERENCE.test(source.path) &&
+    typeof source.contentHash === 'string' && /^sha256:[a-f0-9]{64}$/.test(source.contentHash) &&
+    typeof source.display === 'string' && source.display.length > 0
+    ? source
+    : undefined;
+}
+export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): unknown {
+  const source = value;
+  return source.rubric === 'testQuality'
+    ? parseContentRegionReference(source.locus)
+    : undefined;
+}
+EOF
+
+for rubric in test-quality; do
+  mkdir -p "$fixture_harness/skills/build-review-$rubric"
 done
+
+printf '%s\n' '**Closed vocabulary:** `test-insensitive`' \
+  >"$fixture_harness/skills/build-review-test-quality/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
+  >>"$fixture_harness/skills/build-review-test-quality/SKILL.md"
+
+# The aligned fixture must pass both checks before any drift scenario runs.
+if ! check_vocabulary_drift "$fixture_domain" "$fixture_harness" >/dev/null; then
+  echo 'rubric vocabulary guard unexpectedly rejected the aligned executable fixture' >&2
+  failures=1
+elif ! check_reference_grammar_drift "$fixture_domain" "$fixture_harness"; then
+  echo 'rubric reference-grammar guard unexpectedly rejected the aligned executable fixture' >&2
+  failures=1
+else
+  echo 'rubric guards accept the aligned executable fixture'
+fi
+
+run_drift_fixture() {
+  local label=$1 domain=$2 harness=$3 expected=$4
+  local fixture_output
+  if fixture_output=$(check_reference_grammar_drift "$domain" "$harness" 2>&1); then
+    echo "known gap: reference-grammar guard accepts ${label}" >&2
+    failures=1
+  elif grep -Fq "$expected" <<<"$fixture_output"; then
+    echo "rubric reference-grammar guard rejects ${label}"
+  else
+    echo "rubric reference-grammar guard rejected ${label} without the required diagnostic" >&2
+    echo "$fixture_output" >&2
+    failures=1
+  fi
+}
+
+fixture_missing_domain="$fixture_dir/missing-build-review-domain.ts"
+if fixture_output=$(check_reference_grammar_drift "$fixture_missing_domain" "$fixture_harness" 2>&1); then
+  echo 'known gap: reference-grammar guard accepts an unreadable parser source' >&2
+  failures=1
+elif grep -Fq "could not read build-review reference grammar source: $fixture_missing_domain" <<<"$fixture_output"; then
+  echo 'rubric reference-grammar guard fails closed on an unreadable parser source'
+else
+  echo 'rubric reference-grammar guard rejected unreadable parser source without the required diagnostic' >&2
+  echo "$fixture_output" >&2
+  failures=1
+fi
+
+# A domain source that cannot be executed must fail closed, never pass on an
+# empty probe result.
+fixture_broken="$fixture_dir/build-review-domain-broken.ts"
+printf '%s\n' 'export const BUILD_REVIEW_FINDING_VOCABULARIES = {' >"$fixture_broken"
+if fixture_output=$(check_reference_grammar_drift "$fixture_broken" "$fixture_harness" 2>&1); then
+  echo 'known gap: reference-grammar guard accepts an unexecutable parser source' >&2
+  failures=1
+elif grep -Fq "could not execute build-review anchor parser from $fixture_broken" <<<"$fixture_output"; then
+  echo 'rubric reference-grammar guard fails closed on an unexecutable parser source'
+else
+  echo 'rubric reference-grammar guard rejected unexecutable parser source without the required diagnostic' >&2
+  echo "$fixture_output" >&2
+  failures=1
+fi
+
+if ! check_vocabulary_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
+  failures=1
+fi
+
+if ! check_reference_grammar_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
+  failures=1
+fi
 
 exit "$failures"

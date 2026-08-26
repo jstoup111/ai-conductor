@@ -104,7 +104,7 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
     const dispatches: StepName[] = [];
     const runtimes = new ProviderRuntimeSet([{
       key: 'claude',
-      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}) },
+      provider: { invoke: vi.fn(), },
       policy: CLAUDE_MODEL_POLICY,
       builtIn: true,
       availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),

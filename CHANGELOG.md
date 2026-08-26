@@ -11,6 +11,53 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.104.0] - 2026-08-22
+
+### Added
+
+- Task-attributed commits are checked against the active task's declared files at commit time, with violations and accepted scope widenings carried into build_review evidence. ([implementation PR #1534](https://github.com/jstoup111/ai-conductor/pull/1534)).
+- Self-host dispatches now prove the live checkout is read-only with a two-sided bwrap probe, so concurrent operator edits during a contained build no longer halt the run; unproven or opted-out dispatches keep the prior fail-closed behavior. ([implementation PR #1698](https://github.com/jstoup111/ai-conductor/pull/1698)).
+- Build-review configuration accepts causalIntegrity as an input alias for rootCause. ([implementation PR #1766](https://github.com/jstoup111/ai-conductor/pull/1766)).
+- Adds `conduct-ts rewind --to <step>` to return a halted feature to an earlier pipeline step, and rebase- or resume-invalidated test-suite and build-review proofs are now mechanically re-verified instead of halting the pipeline on a stale proof. ([implementation PR #1741](https://github.com/jstoup111/ai-conductor/pull/1741)).
+- `bin/install` gains a `--channel` flag and `AI_CONDUCTOR_CHANNEL` environment variable to explicitly select the first-run update channel, with clear guidance when it silently falls back to stable. ([implementation PR #1720](https://github.com/jstoup111/ai-conductor/pull/1720)).
+- build_review now treats infrastructure failures (mechanical rubric faults) as their own recoverable lane, with a bounded automatic retry and a new `conduct-ts build-review record-reduced-coverage` action for operators to record a reduced-coverage decision when retries are exhausted. ([implementation PR #1734](https://github.com/jstoup111/ai-conductor/pull/1734)).
+- The daemon's IN-PROGRESS dashboard now shows live active-subagent counts and running input/output token totals for in-flight steps, sourced from a new throttled provider-stream observation and configurable via the new `provider_stream.min_interval_ms` setting. ([implementation PR #1742](https://github.com/jstoup111/ai-conductor/pull/1742)).
+
+### Changed
+
+- Story artifacts under `.docs/stories/` are now corrected in place during DECIDE instead of accumulating additive amendment blocks; all other accepted DECIDE artifacts keep the additive-amendment rule. ([implementation PR #1539](https://github.com/jstoup111/ai-conductor/pull/1539)).
+- Acceptance-spec authoring is disposition-driven — criteria proven at a lower layer complete the acceptance_specs gate with grounded disposition records instead of fabricated specs, and BUILD prefers applicable local patterns. ([implementation PR #1678](https://github.com/jstoup111/ai-conductor/pull/1678)).
+- The plan skill requires every task to carry a "Done when:" block of falsifiable completion checks, closing unbounded outcome language at DECIDE so completion review has a definite stopping point. ([implementation PR #1764](https://github.com/jstoup111/ai-conductor/pull/1764)).
+- build_review rubric results are engine-stamped from findings-only provider payloads, with honest per-field rejection diagnosis and a behavioral (execute-the-parser) contract drift guard, ending the invalid-provider-result rejection loop. ([implementation PR #1748](https://github.com/jstoup111/ai-conductor/pull/1748)).
+- The `rootCause` build-review rubric now ships disabled by default; enable it explicitly with `build_review.rubrics.rootCause.enabled: true`. ([implementation PR #1816](https://github.com/jstoup111/ai-conductor/pull/1816)).
+
+### Fixed
+
+- The FINISH publication retry budget no longer exhausts on verified transitions, and new halt reasons name a stuck PR-state check or an unmoved publication transition. ([implementation PR #1565](https://github.com/jstoup111/ai-conductor/pull/1565)).
+- The tautology rubric's counterfactual checkout now resolves the conductor's dependency installation, so changed suites execute instead of aborting at import. ([implementation PR #1699](https://github.com/jstoup111/ai-conductor/pull/1699)).
+- The opt-in Tautology build-review rubric now classifies counterfactual test runs by process exit code instead of parsing Vitest/pytest-shaped output, so it returns a real verdict on RSpec and other frameworks instead of always reporting an infrastructure failure. ([implementation PR #1705](https://github.com/jstoup111/ai-conductor/pull/1705)).
+- `conduct --update`/`bin/update` now detect the real installed release from the checkout instead of misreporting an off-tag tagged-channel install as permanently up to date. ([implementation PR #1578](https://github.com/jstoup111/ai-conductor/pull/1578)).
+- Fixed a stale manual-test verdict discovered at FINISH becoming unroutable, so the daemon no longer stalls on that SHIP validator instead of routing it back for retry. ([implementation PR #1673](https://github.com/jstoup111/ai-conductor/pull/1673)).
+- Provider token telemetry now reports fresh input consistently across Claude and Codex, with cached prompt volume shown separately in daemon logs and feature usage totals. ([implementation PR #1689](https://github.com/jstoup111/ai-conductor/pull/1689)).
+- Codex usage-cap exhaustion is now reported as usage exhaustion with an hour-scale wait instead of a misleading 300-second rate-limit retry loop. ([implementation PR #1704](https://github.com/jstoup111/ai-conductor/pull/1704)).
+- build_review finding identities are content-anchored, so re-worded findings can no longer escape their accepted dispositions across review laps. ([implementation PR #1696](https://github.com/jstoup111/ai-conductor/pull/1696)).
+- Self-host containment refuses itself on hosts where the wrap would deny a provider its own nested sandbox, instead of wrapping a dispatch that cannot write any file. ([implementation PR #1719](https://github.com/jstoup111/ai-conductor/pull/1719)).
+- A concurrent provider process's plugin lock markers no longer halt a self-host build. ([implementation PR #1722](https://github.com/jstoup111/ai-conductor/pull/1722)).
+- Shipped-record timing now reaches the `measured` state instead of getting stuck at `partial`/`unavailable`, and a `partial` state's `## Time` block now names its downgrade reason. ([implementation PR #1727](https://github.com/jstoup111/ai-conductor/pull/1727)).
+- A build_review pass no longer resets the cumulative kickback convergence cap by itself; the cap is credited back only when a rebase actually invalidates a judged build_review, closing a loophole that let build_review cycle indefinitely across passes. ([implementation PR #1728](https://github.com/jstoup111/ai-conductor/pull/1728)).
+- build_review findings anchored to dot-leading repository paths such as `.docs/plans/` are accepted, so a scope violation in a plan file can be reported instead of looping until retries are exhausted. ([implementation PR #1756](https://github.com/jstoup111/ai-conductor/pull/1756)).
+- build_review Scope no longer flags the engine's own appended remediation plan tasks as an unauthorized out-of-plan change. ([implementation PR #1757](https://github.com/jstoup111/ai-conductor/pull/1757)).
+- A Codex dispatch whose shell tool calls could not be spawned is now reported as a failed dispatch instead of a success, so a build_review rubric that could not read the diff raises an infrastructure failure rather than a hollow PASS. ([implementation PR #1758](https://github.com/jstoup111/ai-conductor/pull/1758)).
+- build_review rubrics no longer treat engine-appended remediation tasks as findings or as authority, so remediation laps converge instead of expanding their own judgement surface each round. ([implementation PR #1761](https://github.com/jstoup111/ai-conductor/pull/1761)).
+- Installed harness skills now stay explicit-only unless same-session workflow composition requires implicit invocation. ([implementation PR #1762](https://github.com/jstoup111/ai-conductor/pull/1762)).
+- Operators can accept build_review findings on every rubric; identity round-trip no longer rejects the engine's own output. ([implementation PR #1770](https://github.com/jstoup111/ai-conductor/pull/1770)).
+- FINISH no longer halts on genuine PR prose when the authoring pass leaves the engine's body-floor marker in place; a floored body is now recognized by its content, not by marker presence alone. ([implementation PR #1773](https://github.com/jstoup111/ai-conductor/pull/1773)).
+- prd-audit reads FR verdicts only from the report's Verdict Table section, so a prior-cycle history table can no longer block an all-ALIGNED audit. ([implementation PR #1780](https://github.com/jstoup111/ai-conductor/pull/1780)).
+- `conduct-ts plan-protected-targets` now catches a protected-artifact reference named in a task's prose even when that task declares a `**Files:**` set, and `.docs/decisions/` is now a protected directory alongside architecture, plans, specs, and stories. ([implementation PR #1750](https://github.com/jstoup111/ai-conductor/pull/1750)).
+- A conductor run no longer halts with a phantom "Expected <field> to match before persist conductor transition" conflict after the engine skips a track- or tier-skipped gate mid-run. ([implementation PR #1793](https://github.com/jstoup111/ai-conductor/pull/1793)).
+- build_review no longer reuses a stale prior-lap FAIL verdict as the current lap's outcome, and mechanical-fault HALTs and `build-review findings` output now name the last recorded infrastructure fault. ([implementation PR #1801](https://github.com/jstoup111/ai-conductor/pull/1801)).
+- `conduct` now works when invoked through the `~/.local/bin` symlink created by `bin/install`, instead of failing to locate its own harness directory. ([implementation PR #1814](https://github.com/jstoup111/ai-conductor/pull/1814)).
+
 ## [0.103.0] - 2026-08-17
 
 ### Added

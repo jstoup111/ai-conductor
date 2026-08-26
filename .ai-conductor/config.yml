@@ -52,23 +52,19 @@ build_review:
   # default remains false, so consumer repositories must opt in explicitly.
   scopeContainmentEnforced: true
   rubrics:
-    # tautology is opt-in engine-wide (#1682: its scoped-run preflight only
-    # recognizes Vitest/pytest output); this repo runs Vitest, so enable it.
-    tautology:
+    # test-quality is the only rubric this container dispatches. The rubrics it
+    # replaced — scope, completeness, rootCause, tautology — are retired and
+    # unregistered: prd_audit now owns scope-as-intent grading with bounded
+    # remediation, and the as-built architecture review owns design conformance,
+    # both running on every feature regardless of tier or track.
+    #
+    # No retired key is declared here. A consumer config that still names one
+    # loads as a no-op with a one-time notice (FR-20) rather than failing.
+    testQuality:
       enabled: true
       llm_provider: claude
       model: opus
       effort: high
-    completeness:
-      llm_provider: claude
-      model: opus
-      effort: high
-    scope:
-      llm_provider: codex
-      model: gpt-5.6-sol
-    rootCause:
-      llm_provider: codex
-      model: gpt-5.6-sol
 
 # Native pre-SHIP aggregate verification. The project-owned npm script runs
 # Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
@@ -113,8 +109,16 @@ steps:
     llm_provider: codex
   prd_audit:
     llm_provider: claude
+  # Routed to codex 2026-08-24. Of the two as-built judgement gates this is
+  # the safer one to move: it emits a single verdict plus rationale, so it
+  # cannot produce the malformed-table "mechanical fault" halt that
+  # prd_audit's 40-row Verdict Table already caused twice; and its contract
+  # surface is narrower — approved ADRs against the diff, rather than plan
+  # tasks + story criteria + scope trailers + intent relations. A wrong
+  # BLOCKED is loud and lands in front of the operator. `prd_audit`
+  # deliberately stays on claude.
   architecture_review_as_built:
-    llm_provider: claude
+    llm_provider: codex
   # Pinned to claude (operator order, 2026-08-10), reverting #1471. Conflict
   # resolution was rerouted to codex on the theory that it is mechanical
   # pattern-matching; in practice codex does not resolve rebases acceptably, so
@@ -122,23 +126,53 @@ steps:
   # seal remain true but catch only the resolutions that fail loudly.
   rebase:
     llm_provider: claude
+  # Routed to codex 2026-08-23, after PR #1828 granted the codex sandbox
+  # network egress. The claude pin existed because `gh pr create` had to escape
+  # the sandbox and lost the auto_review approval — a permissions limit, not a
+  # capability one. Revert this pin if publication quality regresses.
+  # Back on codex 2026-08-24 with `release-disposition`, same root cause and
+  # same fix. `gh` egress under the workspace-write sandbox was granted by
+  # PR #1828, so the original reason for the claude pin is also gone.
   finish:
-    llm_provider: claude
+    llm_provider: codex
   manual_test:
     disable: true
-#  build:
-#    model: gpt-5.6-sol
-#    effort: low
-  maintain-documentation:
+  # build stays on the codex `terra` default at medium effort. A bump to `sol`
+  # was considered and dropped 2026-08-23: there is no control group showing
+  # the builder is the limiter (codex built 28/28 corpus features), the
+  # findings-per-lap rate is flat, and `escalate` already climbs build to
+  # sol/high on retry when a task actually needs it (18 such escalations in
+  # the corpus). Revisit alongside #1805 rather than as a blind bump.
+  # Remediate decides what work a failing lap actually gets, across laps. That
+  # is a judgement call over plan contract + prior-lap findings, so pin it to
+  # claude rather than letting the run-level codex entry resolve first.
+  remediate:
     llm_provider: claude
+  # Routed to codex 2026-08-24. The claude pin carried no recorded rationale;
+  # this is a bounded docs-conformance pass with a completion artifact, and a
+  # wrong answer costs a stale docs page rather than a bad gate verdict.
+  maintain-documentation:
+    llm_provider: codex
+    model: gpt-5.6-terra
     after: rebase
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
-  # Provider pinned so `claude` resolves ahead of the run-level codex entry (#1285).
+  # Routed to codex 2026-08-23 (was pinned to claude ahead of the run-level
+  # codex entry, #1285). Same rationale as `finish`: the failure was `gh`
+  # egress under the workspace-write sandbox, fixed by PR #1828. The output is
+  # a fixed-grammar Release-* block validated by a required CI check that fails
+  # closed, so a wrong answer is caught rather than shipped.
+  # Back on codex 2026-08-24 once the root cause shipped: the streaming
+  # dispatch path rebuilt each ProviderRuntime with a hand-listed `provider`
+  # literal, dropping `resolveSelfHostExecutable`, so every codex-routed
+  # streaming step threw at conductor.ts:3961 before the provider existed.
+  # step-runners.ts now delegates to the real adapter. Original rationale
+  # stands: the output is a fixed-grammar Release-* block validated by a
+  # required CI check that fails closed, so a wrong answer is caught.
   release-disposition:
-    llm_provider: claude
-    model: sonnet
+    llm_provider: codex
+    model: gpt-5.6-terra
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating

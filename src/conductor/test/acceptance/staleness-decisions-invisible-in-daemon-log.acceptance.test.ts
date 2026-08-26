@@ -235,12 +235,7 @@ async function writeBuildReviewVerdict(
   legacyRubric = false,
 ): Promise<string> {
   const path = join(repo, '.pipeline/build-review.json');
-  const rubric = {
-    tautology: false,
-    scope: false,
-    rootCause: false,
-    ...(legacyRubric ? {} : { completeness: false }),
-  };
+  const rubric = legacyRubric ? {} : { testQuality: false };
   const body: Record<string, unknown> = { verdict, rubric };
   if (codeStamp) body.codeStamp = codeStamp;
   await writeFile(path, JSON.stringify(body, null, 2));
@@ -289,7 +284,7 @@ const MANUAL_TEST_PASS =
 // ---------------------------------------------------------------------------
 
 describe('Story 1: a preserve is reported as preserved_surface_miss, never as a plain pass', () => {
-  it('does not preserve a code-stamped legacy verdict without rubric.completeness', async () => {
+  it('does not preserve a code-stamped legacy verdict without rubric.testQuality', async () => {
     const s = await makeRepo();
     const baseline = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
     await writeBuildReviewVerdict(s.repo, 'PASS', baseline, OLD_MTIME, true);
@@ -297,7 +292,7 @@ describe('Story 1: a preserve is reported as preserved_surface_miss, never as a 
     const result = await checkStepCompletion(s.repo, 'build_review', ctxFor(s.repo));
 
     expect(result.done).toBe(false);
-    expect(result.reason).toMatch(/rubric\.completeness/);
+    expect(result.reason).toMatch(/rubric\.testQuality/);
   });
 
   it('build_review preserve reports preserved_surface_miss, not rewritten', async () => {

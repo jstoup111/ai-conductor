@@ -25,6 +25,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
 
   it('parses tokenUsage from a claude --output-format json result payload', async () => {
     const jsonResult = JSON.stringify({
+      type: 'result',
       result: 'Done!',
       usage: {
         input_tokens: 100,
@@ -52,6 +53,9 @@ describe('ClaudeProvider tokenUsage parsing', () => {
     expect(result.tokenUsage?.cacheCreation).toBe(10);
     expect(result.tokenUsage?.cacheRead).toBe(5);
     expect(result.tokenUsage?.costUsd).toBe(0.05);
+    // Claude reports its own money, so the cost is provider truth — not the
+    // harness rate-card estimate other providers' dispatches carry.
+    expect(result.tokenUsage?.costSource).toBe('provider');
     expect(result.tokenUsage?.numTurns).toBe(3);
     expect(result.tokenUsage?.durationMs).toBe(1200);
   });
@@ -64,7 +68,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
       failed: false,
     } as any);
 
-    const result = await provider.invoke(baseOptions);
+    const result = await provider.invoke({ ...baseOptions, interactive: true });
     expect(result.tokenUsage).toBeUndefined();
     expect(result.output).toBe('plain text output');
   });
@@ -77,13 +81,14 @@ describe('ClaudeProvider tokenUsage parsing', () => {
       failed: false,
     } as any);
 
-    const result = await provider.invoke(baseOptions);
+    const result = await provider.invoke({ ...baseOptions, interactive: true });
     expect(result.tokenUsage).toBeUndefined();
     expect(result.output).toBe('not valid json {{{');
   });
 
   it('parses tokenUsage with zero cache values', async () => {
     const jsonResult = JSON.stringify({
+      type: 'result',
       result: 'Done!',
       usage: {
         input_tokens: 200,
@@ -107,9 +112,9 @@ describe('ClaudeProvider tokenUsage parsing', () => {
     expect(result.tokenUsage?.cacheRead).toBe(0);
   });
 
-  it('invokes claude with --output-format json (not text)', async () => {
+  it('invokes claude with verbose stream-json output (not text)', async () => {
     mockExeca.mockResolvedValue({
-      stdout: JSON.stringify({ result: 'ok' }),
+      stdout: JSON.stringify({ type: 'result', result: 'ok' }),
       stderr: '',
       exitCode: 0,
       failed: false,
@@ -119,7 +124,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
 
     expect(mockExeca).toHaveBeenCalledWith(
       'claude',
-      expect.arrayContaining(['--print', '--output-format', 'json']),
+      expect.arrayContaining(['--print', '--output-format', 'stream-json', '--verbose']),
       expect.anything()
     );
     const [, args] = mockExeca.mock.calls[0];

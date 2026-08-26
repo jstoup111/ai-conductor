@@ -74,26 +74,14 @@ const passVerdict = JSON.stringify({
   verdict: 'PASS',
   reasons: [],
   findings: {},
-  rubric: {
-    tautology: false,
-    scope: false,
-    rootCause: false,
-    completeness: false,
-    wiring: false,
-  },
+  rubric: { testQuality: false },
 });
 
 const failVerdict = JSON.stringify({
   verdict: 'FAIL',
   reasons: ['completeness: the approved convergence repair is incomplete'],
-  findings: { completeness: ['the approved convergence repair is incomplete'] },
-  rubric: {
-    tautology: false,
-    scope: false,
-    rootCause: false,
-    completeness: true,
-    wiring: false,
-  },
+  findings: { testQuality: ['the approved convergence repair is incomplete'] },
+  rubric: { testQuality: true },
 });
 
 afterEach(async () => {
@@ -153,6 +141,17 @@ describe('acceptance: a build_review PASS does not clear convergence (#1694 Stor
           await writeFile(
             join(pipelineDir, 'manual-test-results.md'),
             '# Results\n\n| Story | Result |\n|---|---|\n| downstream regression | FAIL |\n',
+          );
+          return { success: true };
+        }
+        if (step === 'prd_audit') {
+          await writeFile(join(pipelineDir, 'prd-audit.md'), '# PRD Audit\n');
+          return { success: true };
+        }
+        if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(pipelineDir, 'architecture-review-as-built.md'),
+            '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
           );
           return { success: true };
         }

@@ -4,6 +4,28 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
+const { watcherHandlers, watcher } = vi.hoisted(() => {
+  const handlers = new Map<string, (...args: never[]) => unknown>();
+  const fakeWatcher = {
+    on: vi.fn((event: string, handler: (...args: never[]) => unknown) => {
+      handlers.set(event, handler);
+      return fakeWatcher;
+    }),
+    close: vi.fn(async () => {}),
+  };
+  return { watcherHandlers: handlers, watcher: fakeWatcher };
+});
+// chokidar 5 is pure ESM and its package exports no CJS entry, so vitest no
+// longer synthesizes a default export from a factory mock the way it did for
+// chokidar 4. daemon-deps.ts imports the DEFAULT (`import chokidar from
+// 'chokidar'`), so the factory has to provide it explicitly — otherwise
+// `chokidar.watch` is undefined, watchHaltCleared's try/catch swallows the
+// TypeError, no handler is ever registered, and the test fails downstream on
+// an empty handler map rather than at the mock.
+vi.mock('chokidar', () => {
+  const watch = vi.fn(() => watcher);
+  return { default: { watch }, watch };
+});
 const { runProjectTeardown } = vi.hoisted(() => ({
   runProjectTeardown: vi.fn<
     (worktreePath: string, log?: (message: string) => void, opts?: { verbose?: boolean; timeoutSeconds?: number }) => Promise<void>
@@ -19,16 +41,77 @@ import {
   readWorktreeOutcome,
   makeFeatureRunnerDeps,
   repairProcessed,
+  watchHaltCleared,
 } from '../../src/engine/daemon-deps.js';
 
 describe('engine/daemon-deps', () => {
   let dir: string;
   beforeEach(async () => {
+    vi.mocked(execa).mockReset();
     dir = await mkdtemp(join(tmpdir(), 'daemon-deps-'));
     await mkdir(join(dir, '.pipeline'), { recursive: true });
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+    watcherHandlers.clear();
+    watcher.on.mockClear();
+  });
+
+  describe('watchHaltCleared halt record supersession', () => {
+    const slug = 'halted-feature';
+
+    async function clearHalt(cause: 'operator' | 'rekick'): Promise<void> {
+      const worktree = join(dir, slug);
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      if (cause === 'rekick') {
+        await writeFile(join(worktree, '.pipeline', 'HALT.cleared'), 'cleared\n');
+      }
+      await mkdir(join(worktree, '.docs', 'halted'), { recursive: true });
+      await writeFile(join(worktree, '.docs', 'halted', `${slug}.md`), 'Status: halted\n');
+
+      watchHaltCleared(dir, slug, () => {});
+      await (watcherHandlers.get('unlink') as () => Promise<void>)();
+    }
+
+    it('resolves a halt record with the operator cause before notifying the daemon', async () => {
+      await clearHalt('operator');
+
+      await expect(readFile(join(dir, slug, '.docs', 'halted', `${slug}.md`), 'utf8')).resolves.toContain(
+        'Status: resolved\nResolution cause: operator\n',
+      );
+    });
+
+    it('preserves the rekick cause verbatim when clearing a halt record', async () => {
+      await clearHalt('rekick');
+
+      await expect(readFile(join(dir, slug, '.docs', 'halted', `${slug}.md`), 'utf8')).resolves.toContain(
+        'Resolution cause: rekick\n',
+      );
+    });
+
+    it('does not create a halt record or commit when no record exists', async () => {
+      const worktree = join(dir, slug);
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      watchHaltCleared(dir, slug, () => {});
+
+      await (watcherHandlers.get('unlink') as () => Promise<void>)();
+
+      expect(execa).not.toHaveBeenCalled();
+      await expect(readFile(join(worktree, '.docs', 'halted', `${slug}.md`), 'utf8')).rejects.toThrow();
+    });
+
+    it('still appends halt_cleared when superseding the record fails', async () => {
+      const worktree = join(dir, slug);
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await mkdir(join(worktree, '.docs', 'halted', `${slug}.md`), { recursive: true });
+      watchHaltCleared(dir, slug, () => {});
+
+      await (watcherHandlers.get('unlink') as () => Promise<void>)();
+
+      await expect(readFile(join(worktree, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8')).resolves.toContain(
+        '"event":"halt_cleared"',
+      );
+    });
   });
 
   describe('readWorktreeOutcome', () => {

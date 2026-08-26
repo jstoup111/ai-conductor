@@ -25,6 +25,7 @@ function codexBinaryAvailable(): boolean {
 const shouldRun = codexBinaryAvailable();
 const policyArgs = [
   '--config', 'sandbox_mode="workspace-write"',
+  '--config', 'sandbox_workspace_write.network_access=true',
   '--config', 'approval_policy="on-request"',
   '--config', 'approvals_reviewer="auto_review"',
   '--config', 'shell_environment_policy.ignore_default_excludes=false',

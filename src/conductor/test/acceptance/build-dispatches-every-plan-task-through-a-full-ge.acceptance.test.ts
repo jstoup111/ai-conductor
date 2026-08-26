@@ -58,7 +58,6 @@ function passingProvider(): { provider: LLMProvider; calls: InvokeOptions[] } {
       calls.push(options);
       return { success: true, output: 'PASS', exitCode: 0 };
     }),
-    invokeInteractive: vi.fn(async (): Promise<void> => {}),
   };
   return { provider, calls };
 }

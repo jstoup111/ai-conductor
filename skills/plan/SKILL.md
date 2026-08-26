@@ -1,5 +1,6 @@
 ---
 name: plan
+implicit_invocation: required
 description: "Use after stories are written and conflict-check has passed clean. Converts user stories into a step-by-step implementation plan with 2-5 minute task granularity."
 enforcement: gating
 phase: decide
@@ -93,6 +94,15 @@ Load every story for the feature from `.docs/stories/`. For each story, extract:
 
 Break stories into tasks at **2-5 minute granularity**. Each task follows the TDD cycle:
 
+For every story criterion, answer: “Can a commit outside this feature's diff
+change whether this criterion is true?” Record `diff-local` only when the
+answer is no; `outside-diff` requires a documented coherence waiver rather
+than silently becoming a BUILD assertion.
+
+Removal-shaped tasks follow `/code-removal`: specify the deletion, including what dies and which
+observable behavior survives. Do not specify a test whose subject is the removed code's absence, or
+mark a removal task `Verify-only:` merely to document that absence.
+
 ```markdown
 ### Task [N]: [Descriptive title]
 **Story:** [Reference to story and specific acceptance criterion]
@@ -105,6 +115,11 @@ Break stories into tasks at **2-5 minute granularity**. Each task follows the TD
 4. Verify test passes (GREEN)
 5. Commit with message: "[descriptive message]"
 
+**Done when:**
+- [2-5 enumerated, falsifiable checks — see 3d. Each is a definite yes/no a
+  zero-context reviewer can evaluate: a named test that passes, a command and
+  its expected output, a concrete property of the diff.]
+
 **Files likely touched:**
 - [file path] — [what changes]
 
@@ -114,8 +129,6 @@ paths. Basename/suffix forms are tolerated (matched at `/` boundaries, #425), bu
 repo-relative paths corroborate precisely and never collide.
 
 **Verify-only:** [yes, or omit — see 3b below]
-
-**Preserves:** [optional behavior or contract whose coverage must not regress — see 3c below]
 
 **Dependencies:** [Task N that must complete first, or "none"]
 ```
@@ -141,8 +154,8 @@ per criterion, or a production-file change merely to create one. The task must s
 which criterion each disposition covers, including negative paths.
 
 **Sealed-artifact prohibition:** A task MUST NOT name another feature's artifact under
-`.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/` in its `**Files:**`
-set (including an inherited `same` set). DECIDE performs any required amendment before this plan is
+`.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/` in
+any reference that directs an amendment. DECIDE performs any required amendment before this plan is
 authored; BUILD must never receive that mutation as a task. A path naming this plan's own feature is
 not prohibited.
 
@@ -189,19 +202,34 @@ work-happened floor that flags any plan task with no `Task:`-trailered commit as
 no commit of its own, mark it `**Verify-only:** yes` here so the floor recognizes it and
 doesn't flag it.
 
-### 3c. `Preserves:` Marker
+### 3c. `Done when:` — Falsifiable Completion Criteria (REQUIRED)
 
-A task block MAY include an optional, non-empty `**Preserves:** <behavior>` line to name a
-behavior or contract whose coverage must not regress. State the behavior-level boundary, not its
-current carrier: never name a test case, file, or `it(...)` title.
+Every task carries a `**Done when:**` block of 2-5 enumerated checks. Together they are the task's
+complete definition of done: when every check passes, the task is finished — full stop.
 
-For example, `**Preserves:** the TokenMeter wrapper reports its metric transparently` names a
-behavior. Reject `confirm the file's existing ungated self-check cases pass unchanged`: it names
-file-local test cases rather than a behavior or contract, so it is not a valid preservation
-declaration.
+Each check must be **falsifiable**: a zero-context reviewer evaluates it to a definite yes or no
+without appealing to an ideal. Name the test and what it asserts, the command and its expected
+output, or the concrete diff property. "The guard is robust" is not a check; "the guard rejects the
+three drift fixtures listed in Steps and exits non-zero" is.
 
-An absent or empty `**Preserves:**` value grants no preservation; ordinary holistic judgment
-applies unchanged.
+**Unbounded quality words are banned unless immediately closed.** An outcome stated as
+"fail-closed", "comprehensive", "robust", "hardened", "both directions", or any similar unbounded
+property MUST be followed in the same block by either the closed enumeration of cases it means, or
+the named mechanism that makes deeper failure impossible. An enforcement property is a mechanism
+decision, and the mechanism is decided HERE, in DECIDE — never left for the builder to pick or a
+reviewer to litigate. (Precedent: a task saying "extend the guard … both directions, fail-closed"
+with no mechanism let the builder choose textual source extraction; review then correctly found a
+deeper hole in it every lap until the cumulative cap halted the feature. The fix was a mechanism —
+execute the parser instead of reading it — that DECIDE could have named up front. See #1763.)
+
+**Review is bound by this block.** A completion judgement measures the task against its `Done
+when:` checks. A genuine concern beyond them is new work: it is filed as intake, never raised as a
+finding that blocks this task. Criteria that turn out to be wrong are amended in DECIDE, not
+stretched in review.
+
+Do not restate Steps or duplicate story acceptance criteria; the block states the observable end
+state, not the route there. For a `Verify-only:` task the block names what the verification must
+observe.
 
 ### 4. Task Ordering Rules
 
@@ -239,9 +267,9 @@ The Pattern-source accepts the same plain, inline-code, and Markdown link refere
 pairs:
 
 ```markdown
-**Pattern-source:** src/conductor/src/engine/source-pattern.ts
-**Pattern-source:** `src/conductor/src/engine/source-pattern.ts` (source pattern)
-**Pattern-source:** [source pattern](../../src/conductor/src/engine/source-pattern.ts) — reviewed
+**Pattern-source:** src/engine/source-pattern.ts
+**Pattern-source:** `src/engine/source-pattern.ts` (source pattern)
+**Pattern-source:** [source pattern](../../src/engine/source-pattern.ts) — reviewed
 
 **Rename-map:** source-pattern -> plan-pattern-source
 **Rename-map:** source-pattern -> plan-pattern-source, SourcePattern -> PlanPatternSource
@@ -290,6 +318,8 @@ the shape of the work before reading individual tasks.]
 - [ ] All happy path criteria covered by at least one task
 - [ ] All negative path criteria covered by at least one task
 - [ ] No task exceeds 5 minutes of work
+- [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left
+      without its closed enumeration or named mechanism (3d)
 - [ ] Dependencies are explicit and acyclic
 ```
 
@@ -364,7 +394,8 @@ conduct-ts plan-protected-targets .docs/plans/<feature>.md
 
 This check is **blocking**. It must report no task/path violations before the plan is saved or
 committed. If it reports another feature's sealed artifact, perform the needed amendment in DECIDE
-and rewrite the task; do not waive the result or defer the mutation to BUILD.
+and rewrite the task; a `**Files:**` line does not resolve the violation. Do not waive the result or
+defer the mutation to BUILD.
 
 ### 8b. Update Architecture Diagrams
 

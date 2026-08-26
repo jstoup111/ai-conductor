@@ -1,5 +1,6 @@
 ---
 name: bootstrap
+disable-model-invocation: true
 description: "Use when starting a new project, onboarding to an existing project, or setting up the harness for the first time. Detects project type, tech stack, and generates project-specific configuration."
 enforcement: advisory
 phase: understand

@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { selfHealAcceptanceRed } from "../../src/engine/acceptance-red-runner";
 
 const RED_PROVENANCE = {
@@ -21,6 +22,16 @@ describe("selfHealAcceptanceRed", () => {
   afterEach(() => {
     if (worktreeRoot) {
       rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps every retained acceptance red-runner pointed at an existing suite", () => {
+    const acceptanceDir = fileURLToPath(new URL("../acceptance", import.meta.url));
+    for (const runner of readdirSync(acceptanceDir).filter((name) => name.endsWith(".red-runner.mjs"))) {
+      const source = readFileSync(join(acceptanceDir, runner), "utf8");
+      const target = source.match(/[A-Za-z0-9._-]+\.acceptance\.test\.ts/)?.[0];
+      expect(target, `${runner} must name its acceptance suite`).toBeTruthy();
+      expect(existsSync(join(acceptanceDir, target!)), `${runner} targets ${target}`).toBe(true);
     }
   });
 

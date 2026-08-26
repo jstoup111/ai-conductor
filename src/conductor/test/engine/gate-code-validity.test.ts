@@ -125,9 +125,9 @@ describe('gateVerdictStillValid', () => {
     scratches.push(s.repo);
     const baseline = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
     const lapId = parseBuildReviewLapId('lap-preserved')!;
-    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness') => ({
+    const judged = () => ({
       kind: 'judged' as const,
-      rubric,
+      rubric: 'testQuality' as const,
       lapId,
       snapshotDigest: 'sha256:snapshot',
       contractVersion: 'v1' as never,
@@ -139,10 +139,7 @@ describe('gateVerdictStillValid', () => {
       snapshotDigest: 'sha256:snapshot',
       codeStamp: baseline,
       results: {
-        tautology: judged('tautology'),
-        scope: judged('scope'),
-        rootCause: judged('rootCause'),
-        completeness: judged('completeness'),
+        testQuality: judged(),
       },
     });
     const artifact = join(s.repo, BUILD_REVIEW_VERDICT);
@@ -248,7 +245,7 @@ describe('gateVerdictStillValid', () => {
     expect(result).toBe('rerun');
   });
 
-  it('feature-runtime (prd_audit): returns preserve when the delta since baseline is docs-only (surface miss)', async () => {
+  it('feature-runtime-or-prd-inputs (prd_audit): returns preserve when the delta is unrelated docs-only (surface miss)', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
     await commit(s, { 'src/feature.ts': 'f\n' }, 'init');
@@ -263,6 +260,25 @@ describe('gateVerdictStillValid', () => {
     );
     expect(result).toBe('preserve');
   });
+
+  it.each(['.docs/stories/happy-path.md', '.docs/specs/feature-prd.md'])(
+    'feature-runtime-or-prd-inputs (prd_audit): returns rerun when a declared document input changes (%s)',
+    async (documentInput) => {
+      const s = await makeRepo();
+      scratches.push(s.repo);
+      await commit(s, { 'src/feature.ts': 'f\n' }, 'init');
+      await addOriginRemote(s);
+      const baseline = await commit(s, { 'src/feature.ts': 'f2\n' }, 'feature work');
+      await commit(s, { [documentInput]: 'changed\n' }, 'update prd audit input');
+
+      const result = await gateVerdictStillValid(
+        { projectRoot: s.repo, git: s.git },
+        'prd_audit',
+        baseline,
+      );
+      expect(result).toBe('rerun');
+    },
+  );
 
   it('feature-codetest (build_review): returns preserve when the delta touches only a FOREIGN runtime path', async () => {
     const s = await makeRepo();

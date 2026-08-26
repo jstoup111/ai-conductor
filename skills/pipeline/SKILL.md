@@ -1,5 +1,6 @@
 ---
 name: pipeline
+disable-model-invocation: true
 description: "Use when executing an implementation plan with multiple tasks. Factory orchestration with three autonomy levels, quality gates, rework budgets, and audit trails."
 enforcement: structural
 phase: build
@@ -91,6 +92,11 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
                   Implementer includes it as a trailer in all commits (including refactors); implementer amends before PASS
                   if the trailer is malformed. Implementer runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
+                  Removal-shaped task (the task deletes a file, seam, flag, symbol, or code path)? The
+                  implementer runs `/code-removal` for that task instead of opening a RED cycle — a
+                  deletion has no failing test to write, and an absence assertion is never the subject.
+                  `/code-removal` carries the survivor method, test triage, and completeness sweep; the
+                  evidence is the deletion diff plus the full surviving suite green.
 3. VERIFY       — Run `conduct-ts scoped-run <selectors...>` for the scoped affected-test set (see Scoped VERIFY below) to confirm the implementer's work
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch implementer with error context
 5. COMMIT       — Verify the implementer's commit carries the `Task: <id>` trailer with <id> as the bare plan id
@@ -99,14 +105,16 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   judges/derives actual completion from a plan-vs-diff comparison (union of
                   trailer-tagged and diff-resolved tasks); the orchestrator never writes
                   `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
-6. DONE         — After the implementer's commit lands on the branch, the host-native attribution mechanism
-                  (the Claude Code PostToolUse hook uses the same matcher as step 0/2) removes `.pipeline/current-task` once the implementer
-                  returns, iff its content still matches this dispatch's id — no CLI invocation
-                  needed. It never writes `completed`; the `Task: <id>` trailer verified in step 5
-                  only routes the handoff to `build_review`, which is the actual completion
-                  authority. If state ever needs manual correction (e.g. after a crash),
-                  `conduct-ts task start/done` remain available as operator/recovery commands,
-                  but are not part of the normal per-task flow.
+6. DONE         — Before reporting PASS, use the normal BUILD task-close path. For a task with a
+                  declared `Done when:` block, close it with `conduct task done <id> --done-when <n>=<evidence>`
+                  once for every declared check; the engine records the evidence through
+                  `completeTaskDoneWhen` before it clears `.pipeline/current-task`. If a declared
+                  check cannot be satisfied within the approved plan, use `conduct task done <id> --plan-gap <n> --reason <text>`
+                  instead and report the resulting HALT — do not clear the task or append off-plan work.
+                  For a legacy task with no `Done when:` block, close with `conduct task done <id>`.
+                  The host-native attribution mechanism (the Claude Code PostToolUse hook uses the same matcher as
+                  step 0/2) remains the idempotent cleanup fallback after the implementer returns.
+                  Task close records task-level proof only; `build_review` remains the BUILD completion authority.
 7. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 
@@ -216,13 +224,14 @@ longer accepted — a config file still setting either fails to load with an unk
 top-level key error.
 
 **Task status tracking:** `.pipeline/task-status.json` is owned entirely by the engine and its
-session hooks — you (the orchestrator) do NOT hand-edit this file, and you do NOT run
-`conduct-ts task start/done` as part of normal per-task flow. The PreToolUse session
-hook stamps `in_progress` on dispatch, keyed off the dispatch prompt's line-1
-`Task: <id>` / `Task: none` marker (see Per-Task Execution above). The
-CLI verbs still exist for operator/recovery use (e.g. resetting a task after a crash), never as a
-step you invoke mid-pipeline. You report the subagent's result (PASS/FAIL) to inform the
-conductor's logging and audit trail.
+session hooks — you (the orchestrator) do NOT hand-edit this file. The PreToolUse session hook
+stamps `in_progress` on dispatch, keyed off the dispatch prompt's line-1 `Task: <id>` /
+`Task: none` marker (see Per-Task Execution above). At ordinary BUILD closure, use
+`conduct task done <id> --done-when <n>=<evidence>` for every declared check so the engine-owned
+`completeTaskDoneWhen` writer records the task-level proof; use `conduct task done <id> --plan-gap <n> --reason <text>`
+when an approved-plan check is unsatisfiable. The CLI still supports operator recovery (for example,
+resetting a task after a crash), but the evidence and plan-gap forms are the normal per-task flow.
+You report the subagent's result (PASS/FAIL) to inform the conductor's logging and audit trail.
 
 **Subagent context scoping:** The implementer receives ONLY:
 - The task description and acceptance criteria (from the plan)

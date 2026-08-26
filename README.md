@@ -12,7 +12,7 @@ Markdown skills directly.
 
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) v2.0+ and/or [Codex](https://github.com/openai/codex)
 - Git, and [GitHub CLI](https://cli.github.com/) authenticated (`gh auth login`)
-- Node 20.19.2 (the engine pins this via `asdf`), npm, tmux, and `python3` with PyYAML
+- Node.js 26.7.0 (minimum Node 26; the engine pins 26.7.0 via `asdf`), npm, tmux, and `python3` with PyYAML
 - A project to work on — Rails + PostgreSQL has full tech-context support; other stacks work with the
   generic skills
 
@@ -41,7 +41,10 @@ bin/migrate
 
 This symlinks every skill and `HARNESS.md` into the user-scoped `~/.claude/skills/` and `~/.agents/skills/`
 directories and installs the conductor CLI to `~/.local/bin/`. The installer never places harness skills in
-a project directory; project-local skills are optional explicit overrides.
+a project directory; project-local skills are optional explicit overrides. Most installed skills are
+explicit-only, so discovery alone does not activate them in unrelated chats. Twelve verified
+same-session dependencies remain model-invocable so composed harness workflows continue to work; see
+[Skills](docs/reference/skills.md#invocation-policy).
 
 Full walkthrough, prerequisites, and first-run blockers: **[Quickstart](docs/quickstart.md)**.
 
@@ -130,6 +133,7 @@ owns that call.
 - [Corrupt intake ledger or stuck ledger lease](docs/runbooks/corrupt-intake-ledger.md)
 - [Daemon recovery](docs/runbooks/daemon-recovery.md)
 - [Shipped-record reconciliation](docs/runbooks/shipped-record-reconciliation.md)
+- [Protected-artifact plan deadlock](docs/runbooks/protected-artifact-plan-deadlock.md)
 
 **Contributing** — modifying the harness itself
 
@@ -165,3 +169,9 @@ bash test/test_harness_integrity.sh
 All work happens on a feature branch; never commit directly to `main`. File bugs, ideas, and observations as
 [GitHub issues](https://github.com/jstoup111/ai-conductor/issues) — see [Intake](docs/guides/intake.md) for
 the structure that turns an issue into buildable work.
+
+## License
+
+Unless otherwise noted, the code, skills, templates, and documentation in this repository are
+licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for attribution
+information.

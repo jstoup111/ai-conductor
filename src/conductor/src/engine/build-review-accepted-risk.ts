@@ -1,4 +1,4 @@
-import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import { rehydrateBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
 
 const START = '<!-- build-review-accepted-risk:start -->';
@@ -15,7 +15,7 @@ export type BuildReviewAcceptedRiskUpsertResult =
   | { readonly ok: false; readonly message: string };
 
 function validRecord(value: BuildReviewDispositionRecord): boolean {
-  const identity = canonicalizeBuildReviewFindingIdentity(value.finding.canonicalPayload);
+  const identity = rehydrateBuildReviewFindingIdentity(value.finding.canonicalPayload);
   return identity !== undefined && identity.id === value.finding.id && identity.canonicalJson === value.finding.canonicalJson &&
     value.feature.version === 'v1' && value.feature.repository.trim().length > 0 && value.feature.feature.trim().length > 0 &&
     value.sourceLapId.length > 0 && value.summary.trim().length > 0 && value.rationale.trim().length > 0 &&

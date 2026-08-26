@@ -3,12 +3,41 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
+import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
 
 const execFileAsync = promisify(execFile);
 
 describe('live self-host boundary', () => {
+  it('fingerprints a Unix socket by type and detects when it disappears', async () => {
+    // macOS limits Unix-domain socket paths to 103 bytes, so keep every
+    // component below the run-scoped temp root deliberately short.
+    const root = await mkdtemp(join(tmpdir(), 's-'));
+    const live = join(root, 'l'); const provider = root;
+    const socketPath = join(provider, 's');
+    await mkdir(live);
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, resolve);
+    });
+    try {
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      expect(baseline.surfaces[1].manifest).toEqual([
+        { path: 's', digest: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      ]);
+      expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false });
+    } finally {
+      if (server.listening) {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('accepts a non-contained verdict when the live boundary has not changed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-non-contained-clean-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');

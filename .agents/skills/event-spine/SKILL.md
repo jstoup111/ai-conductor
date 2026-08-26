@@ -1,5 +1,6 @@
 ---
 name: event-spine
+disable-model-invocation: true
 description: "Use BEFORE designing any new way to observe, report, or coordinate something in the ai-conductor repository — a watcher, a poller, a sidecar file, an ad-hoc log, a second telemetry path, or a timestamp stamped into an artifact to be read back later. Also use when adding a member to the `ConductorEvent` union, introducing a new `.pipeline/*.jsonl` ledger, deciding whether something 'should be an event', or reaching for a channel outside the bus because the bus looks inconvenient. Decides whether the existing spine (`ConductorEventEmitter` → `ConductorEvent` → `EventPersister` → `.pipeline/events.jsonl`) already carries the concern, applies the schema-not-file test, and names the only three exceptions that justify a separate write. Invoke it even when the new mechanism looks small, obviously correct, or too minor to count as telemetry — a parallel channel is cheap to prevent at design time and near-impossible to remove once consumers depend on it."
 ---
 

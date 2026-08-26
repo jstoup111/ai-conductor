@@ -88,7 +88,7 @@ export interface DaemonSupervisorCommand {
   attachInto?: string;
 }
 
-const MANAGEMENT_VERBS = new Set([
+export const MANAGEMENT_VERBS = new Set([
   'start',
   'stop',
   'restart',
@@ -145,7 +145,7 @@ export function detectDaemonSupervisorCommand(argv: string[]): DaemonSupervisorC
  * tmux management verbs. A bare `daemon` (no sub-verb) RUNS the daemon; these are
  * the only non-flag tokens that legitimately follow `daemon`.
  */
-const DAEMON_SUBVERBS = new Set(['status', 'logs', 'park', 'unpark', ...MANAGEMENT_VERBS]);
+export const DAEMON_SUBVERBS = new Set(['status', 'logs', 'park', 'unpark', ...MANAGEMENT_VERBS]);
 
 /**
  * Detect a typo'd / unknown `daemon` sub-verb so the CLI can surface help instead

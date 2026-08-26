@@ -81,7 +81,6 @@ function provider(
   const llmProvider: LLMProvider = {
     lifecycleCapability: { synchronousSpawnPermit: true },
     invoke,
-    invokeInteractive: vi.fn(async () => undefined),
   };
   return { provider: llmProvider, calls };
 }

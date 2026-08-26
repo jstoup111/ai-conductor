@@ -22,17 +22,13 @@ export function scanPlanProtectedTargets(
 
   const parsed = parsePlanTaskPaths(planText, planStem);
   for (const [taskId, paths] of parsed) {
-    if (parsed.hasFilesLineByTaskId.get(taskId)) {
-      for (const path of paths) {
-        if (isProtectedArtifactPath(path) && !namesOwnFeature(path, planStem)) {
-          report(taskId, path);
-        }
+    for (const path of paths) {
+      if (isProtectedArtifactPath(path) && !namesOwnFeature(path, planStem)) {
+        report(taskId, path);
       }
     }
-    if (!parsed.hasFilesLineByTaskId.get(taskId)) {
-      for (const path of parsed.foreignProtectedReferencesByTaskId.get(taskId) ?? []) {
-        if (!namesOwnFeature(path, planStem)) report(taskId, path);
-      }
+    for (const path of parsed.foreignProtectedReferencesByTaskId.get(taskId) ?? []) {
+      if (!namesOwnFeature(path, planStem)) report(taskId, path);
     }
   }
 

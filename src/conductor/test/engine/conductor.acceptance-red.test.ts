@@ -61,16 +61,18 @@ function trackingRunner(): { runner: StepRunner; log: string[] } {
   return { runner, log };
 }
 
-// Seeds every step 'done' EXCEPT `target`, so `Conductor.run()` starting
-// from `target` (via `fromStep`) settles the moment `target` itself
-// resolves, rather than continuing on into later steps (build, etc.) whose
-// own gates/halts are irrelevant to this call-site test.
+// Seeds every step 'done' EXCEPT `target`. The tree-attesting BUILD gates are
+// explicitly skipped because this fixture targets the acceptance_specs call
+// site; persisted `done` statuses would correctly be revalidated after the
+// target resolves.
 async function seedAllDoneExcept(statePath: string, target: StepName): Promise<void> {
   const res = await readState(statePath);
   const state = (res.ok ? res.value : {}) as Record<string, unknown>;
   for (const s of ALL_STEPS) {
     if (s.name !== target) state[s.name] = 'done';
   }
+  state.build = 'skipped';
+  state.test_suite = 'skipped';
   state.complexity_tier = 'M';
   state.feature_desc = 'feat-741-t9';
   state.track = 'technical';

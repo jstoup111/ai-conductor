@@ -195,7 +195,6 @@ function scriptedProvider(
       if (typeof script === 'function') return script(options, calls.length);
       return script[Math.min(calls.length - 1, script.length - 1)];
     }),
-    invokeInteractive: vi.fn(async () => {}),
   };
   return { provider, calls };
 }

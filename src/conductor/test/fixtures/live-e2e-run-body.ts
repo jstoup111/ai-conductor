@@ -20,7 +20,7 @@ import { DefaultStepRunner, type StepRunnerOptions } from '../../src/engine/step
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
 import type { StepName } from '../../src/types/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { dumpPipelineDiagnostics } from '../engine/daemon-e2e-fixture.test.js';
+import { dumpPipelineDiagnostics } from './daemon-e2e-diagnostics.js';
 import { initTestRepo } from './git-repo.js';
 import type { LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import { provisionLiveProviderHome } from './live-provider-home.js';
@@ -51,12 +51,6 @@ export class TokenMeter implements LLMProvider {
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     const result = await this.provider.invoke(options);
     this.record(result);
-    return result;
-  }
-
-  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void> {
-    const result = await this.provider.invokeInteractive(options);
-    if (result) this.record(result);
     return result;
   }
 
@@ -94,11 +88,6 @@ export class ProvisionedHome implements LLMProvider {
   invoke(options: InvokeOptions): Promise<InvokeResult> {
     this.dispatches += 1;
     return this.provider.invoke({ ...options, selfHost: this.selfHost });
-  }
-
-  invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void> {
-    this.dispatches += 1;
-    return this.provider.invokeInteractive({ ...options, selfHost: this.selfHost });
   }
 }
 
@@ -460,10 +449,9 @@ export async function runLiveE2ERunBody(
           }));
           const runner = createLiveE2EStepRunner(meter!, descriptor, 'daemon-e2e-live-session', liveWorktreeDir, {
             featureDesc: slug, pipelineDir, planPath, mode: 'auto',
-            // The tautology preflight (#1618) fails instantly in a standalone
-            // temp repository with missing-scoped-configuration; disable only
-            // that branch — the other three fan-out branches still run live.
-            config: { build_review: { maxParallel: 4, rubrics: { tautology: { enabled: false } } } },
+            // The test-quality preflight cannot run in this standalone temp
+            // repository, so disable the sole optional rubric.
+            config: { build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: false } } } },
             buildReviewInputOptions: {
               inspectTestSuite: async () => ({
                 status: 'CURRENT',

@@ -88,6 +88,49 @@ async function seedValidWorktree(idea = 'dep bump'): Promise<string> {
   return dir;
 }
 
+async function seedNamedTierMWorktree(
+  idea: string,
+  conflictStem: string,
+  datePrefix = '',
+  options: { storiesStem?: string; planFileStem?: string; coherenceStem?: string } = {},
+): Promise<string> {
+  const slug = 'clean-rubric-judgements-rejected-as-invalid-provid';
+  const storiesStem = options.storiesStem ?? `${datePrefix}${slug}`;
+  const planFileStem = options.planFileStem ?? slug;
+  const dir = await createEngineerWorktree(repoPath, idea).then((worktree) => worktree.worktreePath);
+  await rm(join(dir, '.docs', 'coherence'), { recursive: true, force: true });
+  await Promise.all([
+    mkdir(join(dir, '.docs', 'specs'), { recursive: true }),
+    mkdir(join(dir, '.docs', 'stories'), { recursive: true }),
+    mkdir(join(dir, '.docs', 'plans'), { recursive: true }),
+    mkdir(join(dir, '.docs', 'complexity'), { recursive: true }),
+    mkdir(join(dir, '.docs', 'conflicts'), { recursive: true }),
+    mkdir(join(dir, '.docs', 'architecture'), { recursive: true }),
+    mkdir(join(dir, '.docs', 'decisions'), { recursive: true }),
+  ]);
+  await writeFile(join(dir, '.docs', 'specs', `${slug}.md`), `# PRD: ${idea}\n\nApproved.\n`);
+  await writeFile(
+    join(dir, '.docs', 'stories', `${storiesStem}.md`),
+    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: validate\n### Acceptance Criteria\n- Given X, when Y, then Z.\n`,
+  );
+  await writeFile(
+    join(dir, '.docs', 'plans', `${planFileStem}.md`),
+    `# Implementation Plan: ${idea}\n\n**Stories:** .docs/stories/${storiesStem}.md\n\n## Task Dependency Graph\n\`\`\`\n1 → 2\n\`\`\`\n`,
+  );
+  await writeFile(join(dir, '.docs', 'complexity', `${slug}.md`), '# Complexity\n\nTier: M\n');
+  await writeFile(join(dir, '.docs', 'conflicts', `${datePrefix}${conflictStem}.md`), '# Conflicts\n\nNone.\n');
+  await writeFile(join(dir, '.docs', 'architecture', `${slug}.md`), '# Architecture\n\nApproved.\n');
+  await writeFile(join(dir, '.docs', 'decisions', `${slug}.md`), '# Review\n\nApproved.\n');
+  if (options.coherenceStem !== undefined) {
+    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'coherence', `${options.coherenceStem}.md`),
+      '# Coherence\n\n| Outcome | FR | Story | Task | Verdict |\n|---|---|---|---|---|\n| outcome-1 | FR-1 | S1 | 1 | OK |\n',
+    );
+  }
+  return dir;
+}
+
 /** Same as above, but also seeds an invalid (DRAFT) ADR under .docs/decisions/. */
 async function seedWorktreeWithDraftAdr(idea = 'dep bump'): Promise<string> {
   const dir = await seedValidWorktree(idea);
@@ -355,15 +398,18 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     await rm(hooksDir, { recursive: true, force: true });
   });
 
-  it('Task 4: no-source-ref variant still owner-stamps the marker under the plan stem (not the idea slug)', async () => {
-    // Idea text slugifies to "dep-bump", but the plan artifact's filename stem
-    // is "2026-07-03-feature" — a chat/CLI idea whose slug diverges from the
-    // plan file name. planStem(planFile) must win regardless.
-    const idea = 'dep bump';
+  it('Task 4: no-source-ref variant owner-stamps the marker under the feature plan stem', async () => {
+    const idea = 'feature';
     const worktree = await seedValidWorktree(idea);
-    await writeFile(join(worktree, '.docs', 'plans', 'dep-bump.md'), '');
+    await rm(join(worktree, '.docs', 'specs', 'dep-bump.md'), { force: true });
+    await rm(join(worktree, '.docs', 'stories', 'dep-bump.md'), { force: true });
     await rm(join(worktree, '.docs', 'plans', 'dep-bump.md'), { force: true });
-    await writeFile(join(worktree, '.docs', 'plans', '2026-07-03-feature.md'), PLAN_WITH_DEPS);
+    await writeFile(join(worktree, '.docs', 'specs', 'feature.md'), '# PRD: feature\n\nApproved.\n');
+    await writeFile(join(worktree, '.docs', 'stories', 'feature.md'), ACCEPTED_STORIES.replaceAll('dep bump', idea));
+    await writeFile(
+      join(worktree, '.docs', 'plans', 'feature.md'),
+      PLAN_WITH_DEPS.replaceAll('dep-bump', idea),
+    );
 
     const gh: GhRunner = async () => ({ stdout: 'carol\n' });
 
@@ -372,7 +418,7 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
 
     const { stdout: marker } = await execFile(
       'git',
-      ['show', `${result.branch}:.docs/intake/2026-07-03-feature.md`],
+      ['show', `${result.branch}:.docs/intake/feature.md`],
       { cwd: worktree },
     );
     expect(marker).toContain('Owner: carol');
@@ -405,28 +451,40 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
   });
 
   it('Task 7 (negative): multi-plan worktree keys the marker to the NEWEST resolved plan only', async () => {
-    // Two plans exist under .docs/plans/: an older one that must NOT win, and
-    // a newer one (backdated the older, not the newer) that findNewestFile()
-    // must select. planStem(planFile) then keys the marker to that newest
-    // plan's stem — proving the newest-plan resolution composes correctly
-    // even when another plan is present to create ambiguity.
+    // Two plans exist under .docs/plans/: a legacy one committed on `main` that
+    // must NOT win, and the idea's own plan that resolution must select.
+    // planStem(planFile) then keys the marker to that plan's stem — proving the
+    // resolution composes correctly even when another plan is present to create
+    // ambiguity. The legacy plan is committed BEFORE the worktree exists on
+    // purpose: since #1743, a second idea-authored plan under a foreign stem is
+    // itself a land failure, so the ambiguity has to come from outside the
+    // idea's attribution universe.
     const idea = 'this idea';
+    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'plans', 'other-idea.md'), PLAN_WITH_DEPS);
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy plan on main']);
+
     const worktree = await seedValidWorktree(idea);
 
-    // Replace the default same-named plan with two explicitly-dated plans.
-    // (seedValidWorktree always seeds specs/stories/plans under a fixed
-    // "dep-bump" filename regardless of the idea text.)
+    // Replace the default artifacts with feature-named files. A second plan
+    // remains to prove the newest eligible plan is selected.
+    await rm(join(worktree, '.docs', 'specs', 'dep-bump.md'), { force: true });
+    await rm(join(worktree, '.docs', 'stories', 'dep-bump.md'), { force: true });
     await rm(join(worktree, '.docs', 'plans', 'dep-bump.md'), { force: true });
+    await writeFile(join(worktree, '.docs', 'specs', 'this-idea.md'), '# PRD: this idea\n\nApproved.\n');
+    await writeFile(join(worktree, '.docs', 'stories', 'this-idea.md'), ACCEPTED_STORIES.replaceAll('dep bump', idea));
 
-    const olderPlanPath = join(worktree, '.docs', 'plans', 'other-idea.md');
-    await writeFile(olderPlanPath, PLAN_WITH_DEPS);
-    const oldDate = new Date('2020-01-01T00:00:00Z');
-    await utimes(olderPlanPath, oldDate, oldDate);
-
-    const newerPlanPath = join(worktree, '.docs', 'plans', '2026-07-03-this-idea.md');
-    await writeFile(newerPlanPath, PLAN_WITH_DEPS);
+    // The legacy plan rides along in the worktree checkout with the NEWEST
+    // mtime, so only attribution — not mtime — can keep it from winning.
+    const legacyPlanPath = join(worktree, '.docs', 'plans', 'other-idea.md');
     const newDate = new Date();
-    await utimes(newerPlanPath, newDate, newDate);
+    await utimes(legacyPlanPath, newDate, newDate);
+
+    const planPath = join(worktree, '.docs', 'plans', 'this-idea.md');
+    await writeFile(planPath, PLAN_WITH_DEPS.replaceAll('dep-bump', 'this-idea'));
+    const oldDate = new Date('2020-01-01T00:00:00Z');
+    await utimes(planPath, oldDate, oldDate);
 
     const gh: GhRunner = async () => ({ stdout: 'dana\n' });
 
@@ -435,7 +493,7 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     // Marker lands ONLY at the newest plan's stem.
     const { stdout: marker } = await execFile(
       'git',
-      ['show', `${result.branch}:.docs/intake/2026-07-03-this-idea.md`],
+      ['show', `${result.branch}:.docs/intake/this-idea.md`],
       { cwd: worktree },
     );
     expect(marker).toContain('Owner: dana');
@@ -826,6 +884,179 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
   });
 });
 
+describe('Task 2: feature-scoped artifact stems at land (#1743)', () => {
+  const idea = 'clean rubric judgements rejected as invalid provid';
+  const slug = 'clean-rubric-judgements-rejected-as-invalid-provid';
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  it('rejects a truncated conflict artifact stem and retains the worktree', async () => {
+    const conflictPath = '.docs/conflicts/2026-08-19-clean-rubric-judgements.md';
+    const dir = await seedNamedTierMWorktree(idea, 'clean-rubric-judgements', '2026-08-19-');
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toMatch(/^landSpec:/);
+    expect(caught!.message).toContain(conflictPath);
+    expect(caught!.message).toContain('normalized-stem');
+    expect(caught!.message).toContain(`expected stem "${slug}"`);
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('lands slug-named normalized artifacts with date prefixes', async () => {
+    const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+});
+
+describe('Task 3: negative feature-scoped artifact stems at land (#1743)', () => {
+  const idea = 'clean rubric judgements rejected as invalid provid';
+  const slug = 'clean-rubric-judgements-rejected-as-invalid-provid';
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  it('rejects a plan whose filename stem differs from the feature under the plan-stem strategy', async () => {
+    const planPath = '.docs/plans/unrelated-plan.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '', { planFileStem: 'unrelated-plan' });
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      new RegExp(`${planPath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(plan-stem\\)`),
+    );
+  });
+
+  it('rejects a coherence artifact named for another feature through the shared contract matcher', async () => {
+    // The coherence gate reads `.docs/coherence/<plan-stem>.md` by name, so a
+    // file named for a different feature is invisible to it — only the shared
+    // feature-stem contract can reject it at land.
+    const coherencePath = '.docs/coherence/unrelated-feature.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '', { coherenceStem: 'unrelated-feature' });
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      new RegExp(`${coherencePath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(plan-stem\\)`),
+    );
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('rejects a stale mismatched sibling in a family whose newest pick conforms', async () => {
+    // `pickIdeaFile` reduces each family to its newest idea-authored file, but
+    // land stages EVERY `.docs/` file the idea wrote. A stale mismatched
+    // sibling must fail the land rather than ride along uninspected and break
+    // forward-walk resolution after the merge.
+    const stalePath = '.docs/conflicts/2026-08-19-clean-rubric-judgements.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
+    const stale = join(dir, '.docs', 'conflicts', '2026-08-19-clean-rubric-judgements.md');
+    await writeFile(stale, '# Conflicts\n\nStale.\n');
+    const older = new Date(Date.now() - 60_000);
+    await utimes(stale, older, older);
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      new RegExp(`${stalePath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(normalized-stem\\)`),
+    );
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('rejects a nested stories artifact whose stem does not match the feature', async () => {
+    // The stories contract is recursive (`.docs/stories/**/*.md`) and land stages
+    // the whole `.docs` tree, so enumerating one directory level would leave a
+    // nested mismatched story committed but unvalidated.
+    const nestedPath = '.docs/stories/archive/renamed-stories.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
+    await mkdir(join(dir, '.docs', 'stories', 'archive'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'stories', 'archive', 'renamed-stories.md'),
+      `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: validate\n### Acceptance Criteria\n- Given X, when Y, then Z.\n`,
+    );
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      new RegExp(`${nestedPath.replaceAll('.', '\\.')}.*expected stem "${slug}"`),
+    );
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('lands a nested stories artifact that carries the feature stem', async () => {
+    const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
+    await mkdir(join(dir, '.docs', 'stories', 'archive'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'stories', 'archive', `${slug}.md`),
+      `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: validate\n### Acceptance Criteria\n- Given X, when Y, then Z.\n`,
+    );
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+
+  it('enumerates stale mismatched siblings from every family in one message', async () => {
+    const staleConflict = '.docs/conflicts/2026-08-19-clean-rubric-judgements.md';
+    const stalePlan = '.docs/plans/superseded-plan.md';
+    const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
+    const older = new Date(Date.now() - 60_000);
+    for (const [rel, body] of [
+      [staleConflict, '# Conflicts\n\nStale.\n'],
+      [stalePlan, `# Implementation Plan: ${idea}\n\n**Stories:** .docs/stories/2026-08-19-${slug}.md\n`],
+    ] as const) {
+      const abs = join(dir, ...rel.split('/'));
+      await writeFile(abs, body);
+      await utimes(abs, older, older);
+    }
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toMatch(/^landSpec:/);
+    expect(caught!.message).toContain(staleConflict);
+    expect(caught!.message).toContain(stalePlan);
+  });
+
+  it('reports mismatched conflict and stories stems together instead of accepting their loose idea association', async () => {
+    const conflictPath = '.docs/conflicts/2026-08-19-truncated-conflict.md';
+    const storiesPath = '.docs/stories/truncated-stories.md';
+    const dir = await seedNamedTierMWorktree(idea, 'truncated-conflict', '2026-08-19-', {
+      storiesStem: 'truncated-stories',
+    });
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toMatch(/^landSpec:/);
+    expect(caught!.message).toMatch(
+      new RegExp(`${conflictPath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(normalized-stem\\)`),
+    );
+    expect(caught!.message).toMatch(
+      new RegExp(`${storiesPath.replaceAll('.', '\\.')}.*expected stem "${slug}" \\(normalized-stem\\)`),
+    );
+  });
+});
+
 describe('Task 6: legacy-only plans dir yields missing-plan rejection (#488)', () => {
   it('rejects a worktree whose .docs/plans/ holds only a legacy plan committed on main', async () => {
     // Legacy plan committed on `main` BEFORE the worktree is created — not
@@ -952,6 +1183,60 @@ describe('Task 8: protected-target land gate blast radius', () => {
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
     ).rejects.toThrow(/dirty|uncommitted/i);
+  });
+});
+
+describe('landSpec Done-when validation', () => {
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  it('rejects every malformed task before committing and retains the worktree', async () => {
+    const dir = await seedValidWorktree();
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), [
+      '# Implementation Plan: dep bump',
+      '',
+      '**Stories:** .docs/stories/dep-bump.md',
+      '',
+      '### Task missing: No completion criteria',
+      '',
+      '### Task too-few: One completion criterion',
+      '**Done when:**',
+      '- This is the only criterion.',
+      '',
+    ].join('\n'));
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      /landSpec:.*plan task missing has no Done when: block.*plan task too-few has an invalid Done when: block \(too-few\)/i,
+    );
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  it('lands a plan whose tasks have two well-formed Done-when criteria', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), [
+      '# Implementation Plan: dep bump',
+      '',
+      '**Stories:** .docs/stories/dep-bump.md',
+      '',
+      '### Task one: First valid task',
+      '**Done when:**',
+      '- The first observable result exists.',
+      '- The second observable result exists.',
+      '',
+      '### Task two: Second valid task',
+      '**Done when:**',
+      '- The first observable result exists.',
+      '- The second observable result exists.',
+      '',
+    ].join('\n'));
+
+    const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
   });
 });
 

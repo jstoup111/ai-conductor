@@ -17,7 +17,8 @@ The legacy bash `bin/conduct` is deprecated and is not documented here — use `
 bundled engine at `src/conductor/dist/index.js`, resolving the `dist` symlink to a concrete
 `dist-versions/<id>/index.js` so a running process is pinned to one engine version. It exports
 `ASDF_NODEJS_VERSION` from `src/conductor/.tool-versions` when `asdf` is on `PATH`, then `exec`s node,
-so the engine's exit code is the shim's.
+so the engine's exit code is the shim's. The current pin is Node.js `26.7.0`, and the engine requires
+Node `>=26.0.0` when the asdf override is unavailable.
 
 | Condition | Message | Exit |
 | --- | --- | --- |
@@ -27,6 +28,18 @@ so the engine's exit code is the shim's.
 
 `bin/intake-file`, `bin/intake-backfill`, and `bin/quarantine-engineer-signals` are separate entry
 points, not `conduct-ts` subcommands.
+
+## `bin/install`
+
+```bash
+bin/install --channel <stable|tagged|main>
+```
+
+On a first install, `--channel` records the selected update channel without prompting. It takes
+precedence over `AI_CONDUCTOR_CHANNEL`; with neither explicit value, an interactive installer prompts
+and a non-interactive installer falls back to `stable`. Empty environment values are treated as unset;
+an invalid explicit value exits before installation writes global state. The option is first-run only:
+change an existing selection with `bin/update --set-channel`.
 
 ## `bin/update`
 
@@ -104,14 +117,23 @@ enforcement lives in `src/conductor/src/execution/daemon-session.ts`.
 ```bash
 conduct-ts build-review findings --feature <slug> [--json]
 conduct-ts build-review accept --feature <slug> --lap <lap> --finding <id> --rationale <text>
+conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
 ```
 
 `findings` is read-only and renders the current feature's raw and effective build-review findings;
 `--json` selects machine-readable output. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
-and a non-empty rationale. Stale, unknown, unauthorized, or non-interactive requests are refused
-without changing artifacts and exit 1; successful findings inspection and accepted exact-current
-findings exit 0.
+and a non-empty rationale. Acceptance works on every registered rubric — currently only `testQuality` —
+because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
+artifacts and exit 1; successful findings inspection and accepted exact-current findings exit 0.
+A refusal names the check that failed — unreadable aggregate, non-current lap, unknown finding, or a
+disposition-store rejection — and records the same reason on the feature's
+`build_review_disposition_refused` event. `record-reduced-coverage` also requires an interactive
+terminal, resolved local operator identity, exact current lap, named rubric, and non-empty rationale.
+It derives the closed infrastructure cause from the current review state; callers cannot supply one.
+It records a decision only when that rubric currently has an exhausted mechanical infrastructure
+fault. Judged, skipped, duplicate, unknown-rubric, allowance-remaining, and stale-review requests
+are refused without changing the decision state.
 
 ## `conduct-ts scope-check`
 
@@ -285,6 +307,10 @@ state unknown rather than implying an all-clear. This is a read-only local-file 
 invoke Git, GitHub, or the network. The daemon startup dashboard does not yet render this section;
 that UI work is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
 
+For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line reading the feature's
+kickback ledger and resolved `prd_audit` cap: the plan's authored task count, the number of tasks added
+so far (broken down by the gate that added them, when any), and how many remain under the cap.
+
 Nine rendered states. `restart-pending` and `dead-pane` are overlays: they take precedence in the
 badge, but the underlying liveness and pause facts stay on the row.
 
@@ -446,8 +472,8 @@ under the root `.daemon/` directory even when invoked from a nested package or l
 | `restart` | A paused daemon counts as idle. Busy: writes `.daemon/RESTART-PENDING` and returns `restart queued: daemon is busy on <slug>; it will restart automatically once idle.` Idle: clears a stale lock, reconciles an orphaned process (SIGTERM, 100 ms, SIGKILL, reclaim), relinks skills, and recreates the session. The outcome message always prints, so a degraded restart is visible. |
 | `connect` | Attaches read-only. Detach with `Ctrl-b d`. Pass `--write` to attach read-write instead — the same subcommand you already reached for to look, now with input, no need to already know about `debug`. |
 | `debug` | Attaches read-write. Unchanged; kept as a discoverable alias alongside `connect --write`. |
-| `pause` | Writes the durable pause marker; an already-paused daemon reports `already paused`. Not listed in `--help`. |
-| `resume` | Removes the pause marker; a daemon that is not paused reports `not paused`. Not listed in `--help`. |
+| `pause` | Writes the durable pause marker; an already-paused daemon reports `already paused`. Listed in `--help`. |
+| `resume` | Removes the pause marker; a daemon that is not paused reports `not paused`. Listed in `--help`. |
 
 | Flag | Applies to | Effect |
 | --- | --- | --- |
@@ -828,14 +854,15 @@ Blocking plan-authoring check for tasks that name another feature's artifact und
 the named plan, resolves each task's `**Files:**` set (including `same` inheritance), and writes
 nothing. Own-feature paths and unsealed `.docs/` paths pass.
 
-A task with no `**Files:**` line is also scanned: a protected artifact cited in its prose (a backtick
-path, e.g. `` `.docs/specs/other-feature.md` ``) is reported too, since there is no declared scope to
-prove the reference is context rather than a target.
+Every task's prose is also scanned, whether or not it has a `**Files:**` line: a protected artifact
+cited in a backtick path (e.g. `` `.docs/specs/other-feature.md` ``) is reported alongside any
+declared `**Files:**` violation, since a `**Files:**` declaration does not resolve a foreign
+protected reference elsewhere in the task.
 
 | Outcome | Output | Exit |
 | --- | --- | --- |
 | No violations | `No protected-target violations found.` | 0 |
-| Violation | One line per offending path: `Task <id>: <path> — ambiguous protected reference without a **Files:** declaration; add **Files:** to declare the task's targets.` | 1 |
+| Violation | One line per offending path: `Task <id>: <path> — return this amendment to DECIDE; BUILD tasks must not target protected artifacts.` | 1 |
 
 Run it before committing a plan. Correct the accepted artifact during DECIDE and re-author the task;
 do not hand the amendment to BUILD. The land gate repeats this check when a spec is landed.
@@ -872,6 +899,24 @@ The matching grant is consumed immediately before the provider dispatches the na
 malformed, mismatched, or already-consumed grant authorizes nothing and the run remains fail-closed.
 Clearing `.pipeline/HALT` or `.pipeline/HALT.class` is not an authorization; use the
 [DECIDE-entry recovery procedure](../runbooks/stalled-or-stuck-feature.md#the-halt-refused-a-decide-entry).
+
+## `conduct-ts rewind`
+
+```bash
+conduct-ts rewind --to <step>
+```
+
+Returns a halted feature to an earlier pipeline step. Run it from that feature's worktree, for example
+`cd .worktrees/<slug>`, after identifying the step that must run again.
+
+`--to` is required and must name a step in the resolved registry that is strictly earlier than the
+feature's recorded `last_step`. The command refuses an unknown, current, or later target without
+mutating state. It also refuses if the state changed while the rewind was being applied.
+
+On success, it marks the target and every later non-skipped step `stale`, clears their gate verdicts,
+then clears both `.pipeline/HALT` and `.pipeline/HALT.class` atomically. It emits an `operator_rewind`
+event and prints `Rewound to <step>.` The next daemon dispatch begins at the rewound step. Do not edit
+`conduct-state.json`, gate files, or halt markers by hand; use this command instead.
 
 ## `conduct-ts reseal`
 
@@ -986,8 +1031,9 @@ These are dispatched by skills, hooks, and the daemon rather than typed by an op
 | `intake-loop` | `conduct-ts intake-loop --continuous \| --once [--interval-ms <n>]` | Polls registered repos into the durable inbox, notifies through the status surface, and reconciles closed GitHub issues each tick so a closed issue cannot be re-claimed. Never spawns a provider session and never opens a PR. `--interval-ms` defaults to 300000. Exactly one of `--continuous` and `--once` is required. | 0 on completion; 1 for the usage guide |
 | `brain start\|stop\|status` | `conduct-ts brain <verb>` | Host-wide singleton that hosts `conduct-ts intake-loop --continuous` in the tmux session `cc-brain-conductor`. `start` is idempotent; `status` prints `brain loop: running\|stopped` and a queued count. | 0; 1 on a tmux error |
 | `render-diagrams` | `conduct-ts render-diagrams <file.md>… [--check]` | Renders the Mermaid blocks in each file using the configured `mermaid_renderer` preset. `--check` parse-checks blocks without opening them. | Default mode always 0. `--check`: 1 when any block fails to parse or a file is unreadable; 0 when everything parses, there are no diagrams, or `mmdc` is unavailable. Zero files: 1 |
+| `rate-card` | `conduct-ts rate-card refresh [--model <id>]…` · `conduct-ts rate-card show` | Maintains `<project>/.ai-conductor/rate-card.json`, the committed per-model token price card the harness prices dispatches from for providers that report token counts but no cost (codex). `refresh` fetches LiteLLM's public `model_prices_and_context_window.json`, prunes it to the models the provider model policies route to (plus any `--model`), and rewrites the card with a fresh `as_of`; commit the result. `--model` is repeatable. `show` prints the committed card. The fetch lives here, never on the dispatch path. `.github/workflows/rate-card-refresh.yml` runs `refresh` daily and opens a bot PR on the `automation/rate-card` branch when the published rates actually change — a run that finds identical rates discards its own `as_of`-only diff and opens nothing. A failed fetch, an unparseable payload, or a payload pricing none of the routed models leaves the committed card byte-for-byte unchanged. | 0 on success; 1 for the usage guide, a failed refresh, or a missing/unreadable card under `show` |
 | `shipment-evidence` | `conduct-ts shipment-evidence --pr <url> [--event <path>]` · `shipment-evidence reconcile --pr <url> --shipped <YYYY-MM-DD>` · `shipment-evidence audit [--report <path>]` | Classifies, repairs, or audits the association between a PR and its shipped record. `audit` is report-only and never writes records. `reconcile` requires `GITHUB_REPOSITORY`. | check: 0 valid or not-applicable association, 1 otherwise. reconcile: 0 unless unresolved. audit: 0. Malformed: 1 |
 | `finish-record` | `conduct-ts finish-record --choice <pr\|keep> [--pr-url <url>] --pipeline-dir <dir>` | Records the finish choice. `--choice pr` requires `--pr-url`; `--choice keep` must not carry one; `discard` is not accepted. `--pipeline-dir` must be an absolute path to an existing directory, checked before any spawn or write. The `pr` path is fail-closed across seven checks — PR binding, upstream push, state readability, branch shape (`spec/<slug>`, `feature/<slug>`, or the daemon's `feat/daemon-<slug>` — a bare `feat/<name>` is refused), slug derivability, `git rev-parse HEAD`, and a valid shipment-evidence verdict. | 0; 1 on any guide or failed check |
-| `manual-test-record` | `conduct-ts manual-test-record --skip --reason <r> --pipeline-dir <dir>` · `conduct-ts manual-test-record --results <path\|-> --pipeline-dir <dir>` | Appends a `## Attempt N` section to `<pipelineDir>/manual-test-results.md`, atomically. `--results -` reads stdin. `--skip` and `--results` are mutually exclusive and one is required. `--pipeline-dir` must be absolute. | 0; 1 on a usage error, an empty results payload, or any read/write error |
+| `manual-test-record` | `conduct-ts manual-test-record --skip --reason <r> --pipeline-dir <dir>` · `conduct-ts manual-test-record --results <path\|-> --pipeline-dir <dir>` | Appends a `## Attempt N` section to `<pipelineDir>/manual-test-results.md`, atomically. `--results -` reads stdin; an exact `WARN` result cell stamps the attempt with `<!-- manual-test:warning -->`. `--skip` and `--results` are mutually exclusive and one is required. `--pipeline-dir` must be absolute. | 0; 1 on a usage error, an empty results payload, or any read/write error |
 | `derive-feedback` | `conduct-ts derive-feedback --sha <sha> [--plan <path>]` | Read-only advisory check for whether commit `<sha>` carries `Task: <id>` evidence, or touches files declared under a task in the given plan. Prints one JSON line. Never writes task status or the evidence sidecar. | **0 evidenced, 1 not evidenced, 2 usage.** Informational only — the calling hook must not propagate them |
 | `build-auth-status` | `conduct-ts build-auth-status` | Reports the self-host build auth mode and token state as `build-auth-status: mode=<mode> state=<state>[ path=<path>][ (<detail>)]`. Probes the real dispatch auth path when a token is present. | 0 when the mode is not `daemon-token` (`state=api-key`) or the token is `valid`; 1 for `missing`, `unreadable`, `invalid`, or `unverifiable`, each with a remediation message |

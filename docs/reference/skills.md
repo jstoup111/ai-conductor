@@ -6,7 +6,7 @@ nav_order: 7
 
 # Skills
 
-The catalog of all 34 skills: 29 under `skills/` and 5 repository-local ones under `.agents/skills/`.
+The catalog of all 36 skills: 31 under `skills/` and 5 repository-local ones under `.agents/skills/`.
 For each, the frontmatter, the engine step that invokes it, what it reads, what it writes, and whether
 it blocks.
 
@@ -30,31 +30,60 @@ matches on when deciding to invoke the skill.
 | `standalone` | no | Whether an operator can run the skill on its own. Absent means non-standalone |
 | `operator_only` | no | `true` marks a skill an operator invokes from *outside* a run. `bin/install` still symlinks it into both user-space catalogs (`~/.claude/skills`, `~/.agents/skills`), so the operator has it on either provider; the engine suppresses it per dispatch instead. Enforced — integrity check 5d fails on drift between this flag and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts`. See [operator-only suppression coverage](#operator-only-suppression-coverage) for what each provider actually enforces |
 | `phase_active_policy` | no | Operator-skill policy for `.pipeline/phase-active`. `daemon-triage` declares `advisory`: marker and daemon-status evidence may warn but never block read-only diagnosis |
+| `disable-model-invocation` | invocation-dependent | Claude control. `true` keeps the skill operator/engine-invocable but removes it from model-initiated selection |
+| `implicit_invocation` | invocation-dependent | Harness audit marker. `required` is allowed only for a verified same-session dependency that must remain model-invocable; it is not a host setting |
 | `requires` | no | Prerequisite skills or artifact paths |
 | `model` | no | Hand-authored model pin. Seven skills carry one; the rest inherit. See [models](models.md) |
+
+## Invocation policy
+
+Discovery is not activation. Every catalog entry is classified exhaustively by integrity check 2a:
+
+- **Explicit-only:** Claude declares `disable-model-invocation: true`; Codex declares
+  `policy.allow_implicit_invocation: false` in `agents/openai.yaml`. An operator or engine-rendered
+  `/skill-name` or `$skill-name` prompt still works.
+- **Implicit-required:** the shared frontmatter carries `implicit_invocation: required`, and neither
+  host disable is present. This exception is reserved for a verified model-initiated caller inside an
+  already active skill.
+
+The 13 implicit-required shipped skills are:
+
+| Skill group | Skills | Why they cannot be explicit-only in the distributed catalog |
+| --- | --- | --- |
+| `/engineer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/engineer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
+| Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims`, `code-removal` | Called from an active skill: issue authoring, fresh debugging, batch simplification, load-bearing claim verification, or removal-shaped build work — `/pipeline` dispatches `/code-removal` in place of a RED cycle |
+
+The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `conduct`,
+`daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
+`remediate`, `retro`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
+explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
+`write-tests`.
+
+`code-review` is intentionally explicit-only: pipeline embeds its three-stage evaluator contract and
+states that no separate `code-review` dispatch is needed. `pr` is likewise explicit-only because
+FINISH inlines its authoring contract and explicitly forbids delegating to `/pr`. Engine registry
+invocations are explicit prompts, including conditional `remediate` and `rebase` steps, so those
+skills do not need model discovery. A user may locally force any implicit-required skill to
+explicit-only, but composed callers that depend on it will no longer complete automatically.
 
 ### Operator-only suppression coverage
 
 `operator_only: true` is enforced per dispatch, not at install time — the operator keeps the skill on
-both providers. Coverage is not uniform, and the gap is load-bearing enough to state plainly:
+both providers. Catalog invocation policy now provides the same baseline on both hosts:
 
 | | Claude | Codex |
 | --- | --- | --- |
-| **Self-host build** | `skillOverrides` in the worktree's `.claude/settings.local.json` | the skill is pruned from the throwaway `CODEX_HOME` skills copy — no artifact to load |
-| **Any other repo** | `skillOverrides`, same as above | **not mechanically suppressed** |
+| **Self-host build** | Catalog `disable-model-invocation`, plus `skillOverrides` defense in depth | Catalog `allow_implicit_invocation: false`, plus pruning from the throwaway `CODEX_HOME` defense in depth |
+| **Any other repo** | Catalog `disable-model-invocation` | Catalog `allow_implicit_invocation: false` |
 
-The bottom-right cell is a real gap. Codex discovers skills by listing `~/.agents/skills` and honors
-no per-session override, and the isolated-home path that would let the engine prune that view is
-gated to self-host builds (`isSelfBuild()`, `conductor.ts`) precisely so other repos stay
-byte-for-byte unchanged. In that cell `daemon-triage` warns when phase-marker and daemon-status
-evidence looks live but still continues read-only diagnosis; its mutation approval contract prevents
-unprompted recovery actions. Closing the invocation gap properly means the engine owning the entry
-point rather than shipping a loadable skill at all; that is
-[#1098](https://github.com/jstoup111/ai-conductor/issues/1098).
+`daemon-triage` therefore remains available when an operator explicitly asks for it without being a
+model-selected response to an unrelated failure. Its phase-marker/liveness warning and per-mutation
+approval contract remain necessary for explicitly initiated triage.
 
 The repository integrity suite checks that every `skills/*/SKILL.md` has `name`, `description`,
-`enforcement`, and `phase`. The four `.agents/skills/` entries are outside that check and declare only
-`name` and `description`.
+`enforcement`, and `phase`. The five `.agents/skills/` entries are outside that required-field check;
+they declare `name`, `description`, and the Claude invocation control. Check 2a covers invocation
+policy across both catalogs and both host metadata formats.
 
 ## Index
 
@@ -65,6 +94,7 @@ The repository integrity suite checks that every `skills/*/SKILL.md` has `name`,
 | `assess` | gating | understand | sonnet | `assess` (out-of-band) | Advisory |
 | `conduct` | gating | all | — | `worktree` (0), `complexity` (3) | Blocking via `worktree` (structural) |
 | `verify-claims` | gating | all | — | none | Blocking, inside the calling skill |
+| `code-removal` | advisory | all | — | none | Advisory |
 | `daemon-triage` | advisory | all | — | none (operator-only) | None — read-only diagnosis; recovery only on per-action operator approval |
 | `architecture-diagram` | gating | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
@@ -189,7 +219,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### memory
 
-> Use at the start of every session for recall, during work when significant decisions are made, and when context seems missing. Recall-before-act protocol with categorized persistence and staleness detection.
+> Use when the operator requests project recall, when the harness dispatches its memory step, or when an active harness workflow requires a memory checkpoint. Recall-before-act protocol with categorized persistence and staleness detection.
 
 - **Frontmatter** — `enforcement: gating`, `phase: understand`, `standalone: true`, `requires: []`, no model pin.
 - **Engine step** — `memory` (index 1, UNDERSTAND). Engine enforcement is `advisory`.
@@ -197,8 +227,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `context/`, read in full; referenced file paths, checked for drift.
 - **Outputs** — kebab-case Markdown entries under `.memory/`, each with `created`, `category`, and
   `related` frontmatter; an updated `.memory/index.md`. No `.docs/` or `.pipeline/` artifact.
-- **Gate role** — advisory. Its two in-skill rules (recall before acting, persist decisions
-  immediately) produce no verdict, no marker file, and block nothing downstream.
+- **Gate role** — advisory. Its two in-skill rules (recall at invocation start, persist decisions at
+  declared checkpoints) produce no verdict, no marker file, and block nothing downstream.
 
 ### assess
 
@@ -322,7 +352,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Outputs** — `.docs/plans/<date>-<feature>.md`.
 - **Gate role** — blocking. It refuses to produce a plan without stories, dependency lines, both paths,
   and a clean conflict-check; every acceptance criterion must map to at least one task; 41 or more tasks
-  is a hard stop. Each `Story:`
+  is a hard stop. Every task carries a `Done when:` block with two to five nonblank, falsifiable
+  completion checks. At land time, a missing, empty, underspecified, or oversized block rejects the
+  whole spec; Markdown fenced-code examples do not count as task structure or checks. An unbounded
+  quality word ("fail-closed", "robust", "comprehensive") must be closed by an enumeration or a named
+  mechanism in the same block, and completion review is bound by these checks (deeper concerns are
+  filed as intake, not raised as blocking findings). Each `Story:`
   line takes one id — a comma-separated list silently registers only the first. Plans must not append
   a terminal catch-all task that re-proves the completed feature; scoped tests stay with their
   behavior-owning implementation task, while writing-system-tests and later BUILD/SHIP gates own
@@ -346,7 +381,9 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   and accepted ADRs that constrain the stories.
 - **Outputs** — `.docs/coherence/<plan-stem>.md`. The stem must match the plan filename stem exactly or
   the land validator rejects it as a missing coherence artifact. Applicable `adr` rows trace each
-  accepted decision to the stories that implement or must honor it.
+  accepted decision to the stories that implement or must honor it. The sixth row class, `criterion`,
+  maps each exact extracted happy- or negative-path criterion to cited plan tasks in a six-cell row:
+  criterion text, task ids, verdict, a verbatim task-body quote, and `diff-local` or `outside-diff`.
 - **PRD ↔ stories tie-out** — the `fr` and `story` row classes are checked in both directions (SKILL.md
   §4e). Forward: no PRD `FR-N` without a citing story that a task covers. Reverse: no story citing an
   `FR-N` the PRD never declares, and no story citing no FR at all. Both directions are re-derived
@@ -356,9 +393,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `conflict-check`; this skill compares each story against the PRD.
 - **Gate role** — blocking. It authors the artifact the land-time coherence gate validates. Verdicts are
   exactly `covered`, `gap`, or `fail` — `fail` marks a row whose counterpart exists but contradicts it,
-  which coverage alone cannot express. Any other string is treated as affirmative by the validator and
-  silently passes, so the vocabulary is closed deliberately. In an autonomous run an ambiguous row is marked `gap` and left for the
-  fail-closed land gate — never silently passed. At tier S it does not run and must not author a stub.
+  which coverage alone cannot express. Criterion rows enforce that vocabulary mechanically; unknown
+  values are malformed. The five legacy row classes retain affirmative-by-default parsing for backward
+  compatibility. In an autonomous run an ambiguous row is marked `gap` and left for the fail-closed land
+  gate — never silently passed. At tier S it does not run and must not author a stub.
 
 ### intake
 
@@ -473,6 +511,23 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Dispatches** — `agents/generator.md` (RED and GREEN), `agents/domain-reviewer.md` (both DOMAIN
   phases).
 
+### code-removal
+
+> Use when removing a file, seam, flag, symbol, or code path. Defines the evidence and test discipline for deletion-shaped work.
+
+- **Frontmatter** — `enforcement: advisory`, `phase: all`, no model pin. It is implicit-required:
+  `/pipeline` activates it inside an already-running build session.
+- **Engine step** — none. `plan` and `stories` route removal-shaped authoring to it, `tdd` defers
+  its removal doctrine to it, and `/pipeline`'s DISPATCH step sends a removal-shaped task to it in
+  place of opening a RED cycle.
+- **Inputs** — the obsolete file, seam, flag, symbol, or code path; the behavior that must survive;
+  and the source, test, configuration, and documentation references that mention it.
+- **Outputs** — the deletion diff, any pre-deletion characterization tests needed to cover a
+  non-obvious survivor, and a green full surviving suite.
+- **Gate role** — advisory. It forbids absence tests: deletion evidence is the diff plus the green
+  suite. It requires a survivor inventory for non-obvious survivors, triages touching tests as
+  DIRECT or INCIDENTAL, and finishes with a literal reference sweep.
+
 ### code-review
 
 > Use after implementing a task, before merging, or when requesting quality verification. Dispatches an evaluator agent with fresh context for calibrated, skeptical review.
@@ -528,7 +583,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 `test-suite` and `wiring-check` have no `SKILL.md` — both `test_suite` (index 14) and `wiring_check`
 (index 13) are **engine-native** BUILD steps. `test_suite` obtains a current result from the
 repository-configured aggregate verifier. `wiring_check` is a deprecated no-op retained for compatibility.
-`build_review` fans out to the engine-managed Tautology, Scope, Root Cause, and Completeness rubric
+`build_review` dispatches the engine-managed test-quality rubric
 skills; their raw verdicts are joined before effective dispositions are applied. The two names remain in `build_verification` (see
 [The build verification group](steps.md#the-build-verification-group)); it fans out after `build` and
 joins before `build_review`.
@@ -546,44 +601,53 @@ joins before `build_review`.
 - **Inputs** — story acceptance criteria; the running application; the absolute worktree `.pipeline`
   path supplied in the step's system prompt.
 - **Outputs** — `.pipeline/manual-test-results.md`, written solely by `conduct-ts manual-test-record`,
-  append-only as numbered attempt sections; `.pipeline/manual-test-fail-evidence.json`.
+  append-only as numbered attempt sections with per-criterion `PASS`, `WARN`, or `FAIL` results;
+  `.pipeline/manual-test-fail-evidence.json`.
 - **Gate role** — blocking. Only the latest attempt is evaluated. The skill must never hand-write or
   fabricate the results file — an absent marker is the correct refusal signal. A whitewash guard
-  requires new commits after a recorded FAIL before an all-PASS attempt is accepted.
+  requires new commits after a recorded FAIL before a later FAIL-free attempt is accepted. Missing
+  or unlaunchable browser automation dependencies are recorded as non-blocking `WARN` without
+  installing them during SHIP; available API criteria continue through `curl`. An application
+  mismatch observed after the browser launches remains a blocking `FAIL`.
 - **This repository** — `manual_test` is disabled in `.ai-conductor/config.yml`. See
   [self-hosting](../guides/self-hosting.md).
 
 ### prd-audit
 
-> Use at SHIP, after manual-test and before retro/finish. Audits shipped implementation against the PRD's functional requirements (FR-N); gates on gaps and kicks back to BUILD or DECIDE.
+> Use at SHIP, after manual-test and before retro/finish. Audits the shipped implementation against the feature stories' acceptance criteria, using PRD functional requirements as intent context when a PRD exists; produces graded, criterion-level findings and never implements or routes work itself.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, `model: opus`.
-- **Engine step** — `prd_audit` (index 17, SHIP, prerequisite `manual_test`). Loop gate; skipped on the
-  technical track; no tier skip.
-- **Inputs** — approved PRDs under `.docs/specs/`, excluding superseded ones; `.docs/stories/` for
-  FR-to-story traceability; the codebase and diff per FR.
+- **Engine step** — `prd_audit` (index 17, SHIP, prerequisite `manual_test`). Loop gate; runs on every
+  feature, at every tier and on both tracks — the skill does not infer a skip from tier, track, or the
+  absence of a PRD.
+- **Inputs** — the feature's committed stories (the audit key) via the active plan's `**Stories:**`
+  reference; the active plan and any coherence mapping; the matching non-`SUPERSEDED-` PRD when present
+  (context, not the key); the implementation, changed tests, and BUILD `Scope:` trailers; operator
+  reseal and `Scope:` trailer rationales as immutable `OVER_SCOPE` intent evidence.
 - **Outputs** — `.pipeline/prd-audit.md`, overwritten each run; a code-stamp sidecar on the pass path.
-- **Gate role** — blocking. It loops until every FR is `ALIGNED` or explicitly accepted by a human; a
-  missing approved PRD blocks. Under the daemon, an all-implementation-gap result self-heals back to
-  BUILD within a bounded budget; any non-implementation blocking row HALTs for a human. It never
-  self-accepts a divergence.
-- **Dispatches** — `agents/prd-auditor.md`, one dispatch per FR.
+- **Gate role** — blocking. Each finding carries exactly one grade — `PASS`, `FIXABLE`, `PLAN_GAP`, or
+  `OVER_SCOPE` — and the report needs exactly one graded verdict row per acceptance criterion. A
+  `FIXABLE` row must name its owning plan task. `FIXABLE` findings appends a bounded remediation lap
+  (capped tasks, see [configuration](configuration.md#prd_audit)); exceeding the cap, needing a second
+  lap, a happy-path `PLAN_GAP`, or a user-visible out-of-intent `OVER_SCOPE` halts for the operator.
+  A negative-path or edge-scenario `PLAN_GAP`, and an `OVER_SCOPE` widening within intent or with no
+  user-visible effect, are recorded in the verdict and the shipped record and the feature ships.
+- **Dispatches** — `agents/prd-auditor.md`, one dispatch for the whole audit.
 
 ### remediate
 
-> Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
+> Use when a SHIP gate blocks — a prd-audit FIXABLE finding, the as-built architecture review's BLOCKED verdict, or finish verification — or on a build stall. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `remediate` (out-of-band, SHIP, prerequisite `prd_audit`). Engine enforcement is
   `advisory`. Deliberately outside the sequential list so the loop never dispatches it unconditionally.
-- **Inputs** — `.pipeline/build-review.json` (present when a `build_review` FAIL dispatches
-  remediation), `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
-  `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`. A `build_review`-sourced
-  dispatch also carries best-effort `plan contract:` and `prior attempts:` pointer lines (see
-  [gates](../explanation/gates.md#where-a-build_review-fail-goes)); the skill treats a referenced plan
-  task's Steps as the governing repair contract and prior-attempt artifacts as context only.
+- **Inputs** — `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
+  `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`. A `build_review` FAIL no
+  longer dispatches `/remediate`: it routes straight back to `build` with its own best-effort
+  `plan contract:` and `prior attempts:` pointer lines (see
+  [gates](../explanation/gates.md#where-a-build_review-fail-goes)).
 - **Outputs** — `.pipeline/remediation.json`, overwritten each run. The engine then appends each task
   into the feature's plan. No completion glob — the engine reads the JSON directly to route.
 - **Gate role** — advisory; it is the unblocker rather than a blocker. HALT is reserved for exactly
@@ -724,10 +788,9 @@ apply to this repository. See [self-hosting](../guides/self-hosting.md).
   or `model`.
 - **Engine step** — a custom step wired in `.ai-conductor/config.yml` with `after: maintain-documentation`,
   `enforcement: gating`, and `completion_artifact: .pipeline/release-disposition-pass`. It lands before
-  `finish` and inherits the SHIP loop-gate behavior. It also pins `llm_provider: claude` and
-  `model: sonnet`: the step judges a diff and writes a short structured disposition, so it needs a
-  cheap tier rather than a frontier model, and pinning the provider keeps `claude` first in the
-  candidate order instead of resolving this repository's run-level `codex` entry first.
+  `finish` and inherits the SHIP loop-gate behavior. It pins `llm_provider: codex` and
+  `model: gpt-5.6-terra`: the step judges a diff and writes a short structured disposition, so the
+  standard Codex tier is sufficient; its structured output is validated by the required CI check.
 - **Inputs** — the implementation diff, the retained SHIP draft PR, and the migration-surface classifier.
   The diff decides the disposition; the PR body is the authority once written.
 - **Outputs** — structured metadata written directly to the PR body plus

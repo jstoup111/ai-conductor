@@ -49,10 +49,13 @@ const base: InvokeOptions = {
 
 function successfulCodexResult(output = 'completed') {
   return {
-    stdout: JSON.stringify({
-      type: 'item.completed',
-      item: { type: 'agent_message', text: output },
-    }),
+    stdout: [
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: output },
+      }),
+      JSON.stringify({ type: 'turn.completed' }),
+    ].join('\n'),
     stderr: '',
     exitCode: 0,
   };
@@ -84,7 +87,6 @@ function recoveryConductor(
     key: 'codex',
     provider: {
       invoke: vi.fn(),
-      invokeInteractive: vi.fn(),
       readiness,
     } as never,
     policy: CODEX_MODEL_POLICY,
@@ -349,7 +351,7 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
           transport: { authenticated: true },
         })) as never)
         .mockResolvedValueOnce(successfulCodexResult('configured CLI invocation') as never)
-        .mockResolvedValueOnce({ stdout: JSON.stringify({ result: 'configured Claude invocation' }), stderr: '', exitCode: 0 } as never);
+        .mockResolvedValueOnce({ stdout: JSON.stringify({ type: 'result', result: 'configured Claude invocation' }), stderr: '', exitCode: 0 } as never);
 
       await codex.invoke(base);
       await claude.invoke(base);

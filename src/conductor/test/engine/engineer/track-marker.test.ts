@@ -20,6 +20,8 @@ import { parseTrack } from '../../../src/engine/artifacts.js';
 
 const execFile = promisify(execFileCb);
 
+const IDEA = 'idea t';
+const STEM = 'idea-t';
 const ACCEPTED_STORIES = ['# Stories: t', '', '**Status:** Accepted', '', '## S', '### Acceptance Criteria', '- G/W/T.', ''].join('\n');
 const PLAN = ['# Plan: t', '', '**Stories:** .docs/stories/t.md', '', '## Task Dependency Graph', '```', '1', '```', ''].join('\n');
 
@@ -48,20 +50,20 @@ afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
 // Create the per-idea worktree and seed .docs into IT (the engineer authors in the
 // worktree, not the primary checkout); returns the worktree path for landSpec.
 async function seedWorktree(opts: { spec?: boolean; track?: string }): Promise<string> {
-  const wt = await createEngineerWorktree(repo, 'idea t');
+  const wt = await createEngineerWorktree(repo, IDEA);
   await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
   const dir = wt.worktreePath;
   await mkdir(join(dir, '.docs/stories'), { recursive: true });
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
-  await writeFile(join(dir, '.docs/stories/t.md'), ACCEPTED_STORIES);
-  await writeFile(join(dir, '.docs/plans/t.md'), PLAN);
+  await writeFile(join(dir, '.docs/stories', `${STEM}.md`), ACCEPTED_STORIES);
+  await writeFile(join(dir, '.docs/plans', `${STEM}.md`), PLAN.replace('stories/t.md', `stories/${STEM}.md`));
   if (opts.spec) {
     await mkdir(join(dir, '.docs/specs'), { recursive: true });
-    await writeFile(join(dir, '.docs/specs/t.md'), '# PRD: t\n\nApproved.\n');
+    await writeFile(join(dir, '.docs/specs', `${STEM}.md`), '# PRD: t\n\nApproved.\n');
   }
   if (opts.track) {
     await mkdir(join(dir, '.docs/track'), { recursive: true });
-    await writeFile(join(dir, '.docs/track/t.md'), `# Track\n\nTrack: ${opts.track}\n`);
+    await writeFile(join(dir, '.docs/track', `${STEM}.md`), `# Track\n\nTrack: ${opts.track}\n`);
   }
   return dir;
 }
@@ -94,24 +96,24 @@ describe('writeTrackMarker', () => {
 describe('landSpec — track-aware required artifacts', () => {
   it('product track (default, no marker) REQUIRES a spec', async () => {
     const worktree = await seedWorktree({ spec: false }); // no spec, no track marker → defaults product
-    await expect(landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree, undefined, { ownerConfig: { spec_owner: 'test-owner' } })).rejects.toThrow(/spec \(product track\)/);
+    await expect(landSpec({ name: 'a', canonicalPath: repo }, IDEA, worktree, undefined, { ownerConfig: { spec_owner: 'test-owner' } })).rejects.toThrow(/spec \(product track\)/);
   });
 
   it('product track lands when the spec is present', async () => {
     const worktree = await seedWorktree({ spec: true, track: 'product' });
-    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree, undefined, { ownerConfig: { spec_owner: 'test-owner' } });
+    const r = await landSpec({ name: 'a', canonicalPath: repo }, IDEA, worktree, undefined, { ownerConfig: { spec_owner: 'test-owner' } });
     expect(r.branch).toMatch(/^spec\//);
-    expect(await show(r.branch, '.docs/specs/t.md')).toContain('PRD');
+    expect(await show(r.branch, `.docs/specs/${STEM}.md`)).toContain('PRD');
   });
 
   it('technical track lands WITHOUT a spec (stories carry acceptance criteria)', async () => {
     const worktree = await seedWorktree({ spec: false, track: 'technical' });
-    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree, undefined, { ownerConfig: { spec_owner: 'test-owner' } });
+    const r = await landSpec({ name: 'a', canonicalPath: repo }, IDEA, worktree, undefined, { ownerConfig: { spec_owner: 'test-owner' } });
     expect(r.branch).toMatch(/^spec\//);
     // stories + plan + track marker committed; no spec required.
-    expect(await show(r.branch, '.docs/stories/t.md')).toContain('Accepted');
-    expect(await show(r.branch, '.docs/track/t.md')).toContain('Track: technical');
-    expect(await show(r.branch, '.docs/specs/t.md')).toBeNull();
+    expect(await show(r.branch, `.docs/stories/${STEM}.md`)).toContain('Accepted');
+    expect(await show(r.branch, `.docs/track/${STEM}.md`)).toContain('Track: technical');
+    expect(await show(r.branch, `.docs/specs/${STEM}.md`)).toBeNull();
   });
 });
 

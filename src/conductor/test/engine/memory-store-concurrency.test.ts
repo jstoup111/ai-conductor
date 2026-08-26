@@ -266,12 +266,12 @@ describe('A16-XP: cross-process concurrent index writes — O_APPEND atomicity p
       const testDir = fileURLToPath(new URL('.', import.meta.url));
       const conductorDir = fileURLToPath(new URL('../../', import.meta.url));
       const helperPath = join(testDir, 'memory-writer-helper.ts');
-      const viteNodePath = join(conductorDir, 'node_modules', '.bin', 'vite-node');
+      const tsxPath = join(conductorDir, 'node_modules', '.bin', 'tsx');
 
       const N = 4;
       const children = Array.from({ length: N }, (_, i) =>
         new Promise<void>((resolve, reject) => {
-          const child = spawn(viteNodePath, [helperPath], {
+          const child = spawn(tsxPath, [helperPath], {
             cwd: conductorDir,
             env: {
               ...process.env,
@@ -313,6 +313,6 @@ describe('A16-XP: cross-process concurrent index writes — O_APPEND atomicity p
         expect(index).toContain(`XP-MARKER-${i}`);
       }
     },
-    30_000, // 30 s — allows for vite-node startup overhead across N children
+    30_000, // 30 s — allows for tsx startup overhead across N children
   );
 });

@@ -14,6 +14,7 @@ import {
   SetupFailureError,
   OPERATOR_ONLY_SKILLS,
   runProjectTeardown,
+  extractCommandErrorTail,
 } from '../../src/engine/worktree-prepare.js';
 import {
   PRE_DISPATCH_HOOK,
@@ -48,6 +49,22 @@ describe('engine/worktree-prepare', () => {
   }
 
   describe('runProjectTeardown', () => {
+    it('prefers combined output, falls back to stdout and stderr, and keeps only the requested tail', () => {
+      expect(extractCommandErrorTail(
+        { all: 'combined', stdout: 'stdout', stderr: 'stderr' },
+        'detail',
+        50,
+      )).toBe('combined');
+
+      const stdout = Array.from({ length: 30 }, (_, index) => `stdout-${index + 1}`).join('\n');
+      const stderr = Array.from({ length: 30 }, (_, index) => `stderr-${index + 1}`).join('\n');
+      const tail = extractCommandErrorTail({ all: '', stdout, stderr }, 'detail', 50);
+      expect(tail).toContain('stdout-11');
+      expect(tail).not.toContain('stdout-10\n');
+      expect(tail).toContain('stderr-30');
+      expect(extractCommandErrorTail({}, 'detail', 50)).toBe('detail');
+    });
+
     it.each([undefined, { verbose: true }] as const)(
       'is completely silent when bin/teardown is absent (%o)',
       async (opts) => {
@@ -211,11 +228,11 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
         const lines: string[] = [];
 
         await expect(
-          runProjectTeardown(dir, (message) => lines.push(message), { timeoutSeconds: 0.05 }),
+          runProjectTeardown(dir, (message) => lines.push(message), { timeoutSeconds: 0.5 }),
         ).resolves.toBeUndefined();
 
         expect(lines).toEqual([
-          expect.stringContaining(`teardown: timed out in ${dir} after 0.05 second(s)`),
+          expect.stringContaining(`teardown: timed out in ${dir} after 0.5 second(s)`),
         ]);
         expect(lines[0]).toContain(output.split('\n').slice(-50).join('\n'));
         expect(lines[0]).not.toContain('timeout-line-1\n');

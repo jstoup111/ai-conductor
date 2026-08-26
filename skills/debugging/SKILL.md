@@ -1,5 +1,6 @@
 ---
 name: debugging
+implicit_invocation: required
 description: "Use when encountering any bug, test failure, or unexpected behavior. Four-phase systematic investigation: root cause before fix. No fixes without evidence."
 enforcement: gating
 phase: build

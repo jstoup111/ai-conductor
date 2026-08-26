@@ -605,30 +605,56 @@ export async function executeProviderCandidates({
             : {}),
         }
       : options;
+    let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     const invoke = async (): Promise<InvokeResult> => {
+      // The REPL path supplies no stream consumer
+      // (adr-2026-08-24-one-dispatch-member-on-the-provider-contract, and the
+      // machine-envelope ADR repeats it). An interactive dispatch renders to
+      // the operator's own terminal; an observer there watches a stream that
+      // structurally cannot carry machine envelopes, so it is not merely
+      // inert — it must never be created or attached.
+      candidateObserver = candidateOptions.interactive
+        ? undefined
+        : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
+      const candidateInvocationOptions = candidateObserver
+        ? {
+            ...candidateOptions,
+            streamConsumer: candidateObserver,
+            onProviderStream: candidateObserver.onProviderStream,
+          }
+        : candidateOptions;
       const candidate = {
         step,
         providerKey,
         model: resolved.model,
         effort: resolved.effort,
       };
-      const selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
-        runId,
-        attempt: index,
-      });
+      let selfHost: SelfHostInvocation | undefined;
       try {
+        selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
+          runId,
+          attempt: index,
+        });
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,
           sessions,
           resolved,
-          options: selfHost ? { ...candidateOptions, selfHost } : candidateOptions,
+          options: selfHost ? { ...candidateInvocationOptions, selfHost } : candidateInvocationOptions,
           modelFallbackLadder,
         });
         return invocation.result;
       } finally {
-        await selfHost?.teardown();
+        try {
+          await selfHost?.teardown();
+        } finally {
+          try {
+            candidateObserver?.close();
+          } catch {
+            // Observation close/flush is best effort and cannot affect fallback.
+          }
+        }
       }
     };
     const requiresLifecycleCapability = candidateOptions.spawnPermit !== undefined;

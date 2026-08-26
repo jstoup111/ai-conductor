@@ -2,3 +2,5 @@ interface:
   display_name: "Write Tests"
   short_description: "Design bounded, isolated repository tests"
   default_prompt: "Use $write-tests to add or revise tests for this repository without introducing slow, cyclic, or externally dependent fixtures."
+policy:
+  allow_implicit_invocation: false

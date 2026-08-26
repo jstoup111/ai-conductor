@@ -80,9 +80,6 @@ function makeProvider(
       provider.invocations.push(options);
       return { success: true, output: narrative, exitCode: 0 };
     },
-    async invokeInteractive(): Promise<void> {
-      provider.interactiveCalls += 1;
-    },
   };
   return provider;
 }
@@ -590,7 +587,6 @@ describe('engine/engineer-store', () => {
         async invoke(): Promise<InvokeResult> {
           throw new Error('provider boom');
         },
-        async invokeInteractive(): Promise<void> {},
       };
       await expect(
         emitEngineerSignal(await emitArgs({ engineerDir, provider: throwingProvider })),

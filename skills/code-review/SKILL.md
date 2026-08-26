@@ -1,5 +1,6 @@
 ---
 name: code-review
+disable-model-invocation: true
 description: "Use after implementing a task, before merging, or when requesting quality verification. Dispatches an evaluator agent with fresh context for calibrated, skeptical review."
 enforcement: gating
 phase: build

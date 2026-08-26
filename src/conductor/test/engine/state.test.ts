@@ -142,6 +142,12 @@ describe('engine/state', () => {
       }
     });
 
+    it('round-trips a refused step status', async () => {
+      const state: ConductState = { build: 'refused', last_step: 'build' };
+      await writeState(statePath, state);
+      await expect(readState(statePath)).resolves.toEqual({ ok: true, value: state });
+    });
+
     it('output is readable by standard JSON parsers (backward compat)', async () => {
       const state: ConductState = { worktree: 'done', explore: 'skipped' };
       await writeState(statePath, state);
@@ -373,6 +379,10 @@ describe('engine/state', () => {
 
     it('returns false for failed', () => {
       expect(stepSatisfied({ worktree: 'failed' }, 'worktree')).toBe(false);
+    });
+
+    it('returns false for refused', () => {
+      expect(stepSatisfied({ worktree: 'refused' }, 'worktree')).toBe(false);
     });
 
     it('returns false for in_progress', () => {

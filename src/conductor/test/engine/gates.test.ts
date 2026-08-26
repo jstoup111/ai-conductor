@@ -30,6 +30,7 @@ describe('engine/gates', () => {
       expect(result.passed).toBe(false);
       if (!result.passed) {
         expect(result.reason).toContain('architecture_review');
+        expect(result.unsatisfied).toEqual(['architecture_review']);
       }
     });
 
@@ -37,6 +38,7 @@ describe('engine/gates', () => {
       const state: ConductState = { architecture_review: 'failed' };
       const result = checkGate('stories', state);
       expect(result.passed).toBe(false);
+      if (!result.passed) expect(result.unsatisfied).toEqual(['architecture_review']);
     });
 
     it('fails when prerequisite is in_progress', () => {
@@ -77,6 +79,19 @@ describe('engine/gates', () => {
       if (!result.passed) {
         expect(result.reason).toContain('rebase');
       }
+    });
+
+    it('uses only the Task 2-style state when test_suite is marked done', () => {
+      // The stale proof belongs to the tree-attesting boundary re-check, not
+      // prerequisite evaluation. checkGate must preserve its state-only D4
+      // contract and let build_review's already-done prerequisites pass.
+      const state: ConductState = {
+        wiring_check: 'done',
+        test_suite: 'done',
+        build_review: 'failed',
+      };
+
+      expect(checkGate('build_review', state)).toEqual({ passed: true });
     });
   });
 

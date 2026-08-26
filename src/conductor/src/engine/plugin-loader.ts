@@ -33,11 +33,6 @@ async function loadPluginModule(
           `Plugin ${manifest.name} missing required method: invoke`
         );
       }
-      if (typeof plugin.invokeInteractive !== 'function') {
-        throw new PluginLoadError(
-          `Plugin ${manifest.name} missing required method: invokeInteractive`
-        );
-      }
     }
 
     return plugin;

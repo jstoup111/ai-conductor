@@ -274,12 +274,12 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     it.each([
       {
         name: 'an incomplete PASS',
-        rubric: { tautology: false, scope: false, rootCause: false },
+        rubric: {},
         done: false,
       },
       {
         name: 'a complete current PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        rubric: { testQuality: false },
         done: true,
       },
     ])('clamps $name based on the build_review predicate', async ({ rubric, done }) => {

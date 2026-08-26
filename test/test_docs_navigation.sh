@@ -17,6 +17,32 @@ PASS=0
 FAIL=0
 TOTAL=0
 
+rewrite_with_sed() {
+  local target=$1
+  shift
+  local temp
+  temp=$(mktemp "${target}.XXXXXX")
+  if cp -p "$target" "$temp" && sed "$@" "$target" > "$temp"; then
+    mv "$temp" "$target"
+  else
+    rm -f "$temp"
+    return 1
+  fi
+}
+
+rewrite_with_awk() {
+  local target=$1
+  local program=$2
+  local temp
+  temp=$(mktemp "${target}.XXXXXX")
+  if cp -p "$target" "$temp" && awk "$program" "$target" > "$temp"; then
+    mv "$temp" "$target"
+  else
+    rm -f "$temp"
+    return 1
+  fi
+}
+
 record() {
   local description=$1
   local result=$2
@@ -158,19 +184,21 @@ expect_checker_failure "missing site configuration names its path and key" "$MIS
 
 MISSING_THEME="$FIXTURE_ROOT/missing-theme"
 cp -R "$VALID_ROOT" "$MISSING_THEME"
-sed -i '/^remote_theme:/d' "$MISSING_THEME/docs/_config.yml"
+rewrite_with_sed "$MISSING_THEME/docs/_config.yml" '/^remote_theme:/d'
 expect_checker_failure "a missing theme names its configuration and key" "$MISSING_THEME" \
   "docs/_config.yml" "remote_theme"
 
 MOVING_THEME="$FIXTURE_ROOT/moving-theme"
 cp -R "$VALID_ROOT" "$MOVING_THEME"
-sed -i 's#just-the-docs/just-the-docs@v0.12.0#just-the-docs/just-the-docs#' "$MOVING_THEME/docs/_config.yml"
+rewrite_with_sed "$MOVING_THEME/docs/_config.yml" \
+  's#just-the-docs/just-the-docs@v0.12.0#just-the-docs/just-the-docs#'
 expect_checker_failure "a moving theme reference names its configuration and key" "$MOVING_THEME" \
   "docs/_config.yml" "remote_theme"
 
 WRONG_PIN="$FIXTURE_ROOT/wrong-pin"
 cp -R "$VALID_ROOT" "$WRONG_PIN"
-sed -i 's#just-the-docs/just-the-docs@v0.12.0#just-the-docs/just-the-docs@v0X12Y0#' "$WRONG_PIN/docs/_config.yml"
+rewrite_with_sed "$WRONG_PIN/docs/_config.yml" \
+  's#just-the-docs/just-the-docs@v0.12.0#just-the-docs/just-the-docs@v0X12Y0#'
 expect_checker_failure "a wrong theme pin names its configuration and key" "$WRONG_PIN" \
   "docs/_config.yml" "remote_theme"
 
@@ -354,8 +382,8 @@ expect_checker_failure "a missing required section names its hosted index" "$MIS
 
 BROKEN_TARGET="$FIXTURE_ROOT/broken-target"
 cp -R "$VALID_ROOT" "$BROKEN_TARGET"
-sed -i 's#(guides/)#(https://github.com/jstoup111/ai-conductor/blob/main/docs/guides/index.md)#' \
-  "$BROKEN_TARGET/docs/index.md"
+rewrite_with_sed "$BROKEN_TARGET/docs/index.md" \
+  's#(guides/)#(https://github.com/jstoup111/ai-conductor/blob/main/docs/guides/index.md)#'
 expect_checker_failure "a non-hosted landing target names the landing page" "$BROKEN_TARGET" \
   "docs/index.md"
 
@@ -369,38 +397,43 @@ fi
 
 MISSING_METADATA="$FIXTURE_ROOT/missing-metadata"
 cp -R "$VALID_ROOT" "$MISSING_METADATA"
-sed -i '/^---$/,/^---$/d' "$MISSING_METADATA/docs/guides/first-feature.md"
+rewrite_with_sed "$MISSING_METADATA/docs/guides/first-feature.md" \
+  '/^---$/,/^---$/d'
 expect_checker_failure "missing front matter names the topic" "$MISSING_METADATA" \
   "docs/guides/first-feature.md"
 
 MISSING_TITLE="$FIXTURE_ROOT/missing-title"
 cp -R "$VALID_ROOT" "$MISSING_TITLE"
-sed -i '/^title: First Feature$/d' "$MISSING_TITLE/docs/guides/first-feature.md"
+rewrite_with_sed "$MISSING_TITLE/docs/guides/first-feature.md" \
+  '/^title: First Feature$/d'
 expect_checker_failure "missing title names the topic" "$MISSING_TITLE" \
   "docs/guides/first-feature.md"
 
 EMPTY_TITLE="$FIXTURE_ROOT/empty-title"
 cp -R "$VALID_ROOT" "$EMPTY_TITLE"
-sed -i 's/^title: First Feature$/title:/' "$EMPTY_TITLE/docs/guides/first-feature.md"
+rewrite_with_sed "$EMPTY_TITLE/docs/guides/first-feature.md" \
+  's/^title: First Feature$/title:/'
 expect_checker_failure "an empty title names the topic" "$EMPTY_TITLE" \
   "docs/guides/first-feature.md"
 
 MISSING_NAV_ORDER="$FIXTURE_ROOT/missing-nav-order"
 cp -R "$VALID_ROOT" "$MISSING_NAV_ORDER"
-sed -i '/^nav_order: 1$/d' "$MISSING_NAV_ORDER/docs/guides/first-feature.md"
+rewrite_with_sed "$MISSING_NAV_ORDER/docs/guides/first-feature.md" \
+  '/^nav_order: 1$/d'
 expect_checker_failure "a missing nav_order names the topic" "$MISSING_NAV_ORDER" \
   "docs/guides/first-feature.md" "nav_order"
 
 MISSING_PARENT="$FIXTURE_ROOT/missing-parent"
 cp -R "$VALID_ROOT" "$MISSING_PARENT"
-sed -i '/^parent: Guides$/d' "$MISSING_PARENT/docs/guides/first-feature.md"
+rewrite_with_sed "$MISSING_PARENT/docs/guides/first-feature.md" \
+  '/^parent: Guides$/d'
 expect_checker_failure "a nested topic without a parent names the topic" "$MISSING_PARENT" \
   "docs/guides/first-feature.md"
 
 UNKNOWN_PARENT="$FIXTURE_ROOT/unknown-parent"
 cp -R "$VALID_ROOT" "$UNKNOWN_PARENT"
-sed -i 's/^parent: Guides$/parent: Missing Guide Section/' \
-  "$UNKNOWN_PARENT/docs/guides/first-feature.md"
+rewrite_with_sed "$UNKNOWN_PARENT/docs/guides/first-feature.md" \
+  's/^parent: Guides$/parent: Missing Guide Section/'
 expect_checker_failure "an unknown parent names the topic" "$UNKNOWN_PARENT" \
   "docs/guides/first-feature.md"
 
@@ -431,7 +464,8 @@ expect_checker_failure "duplicate sibling membership is rejected by path" "$AMBI
 
 CYCLE="$FIXTURE_ROOT/cycle"
 cp -R "$VALID_ROOT" "$CYCLE"
-sed -i '/^title: Guides$/a parent: First Feature' "$CYCLE/docs/guides/index.md"
+rewrite_with_awk "$CYCLE/docs/guides/index.md" \
+  '{ print; if ($0 == "title: Guides") print "parent: First Feature" }'
 expect_checker_failure "a cyclic navigation parent graph is rejected" "$CYCLE" \
   "navigation parent graph contains a cycle"
 

@@ -5,7 +5,7 @@ import { stepSatisfied } from './state.js';
 
 export type GateResult =
   | { passed: true }
-  | { passed: false; reason: string };
+  | { passed: false; reason: string; unsatisfied: StepName[] };
 
 /**
  * Check whether a step's gate passes — all prerequisites must be satisfied.
@@ -29,6 +29,7 @@ export function checkGate(
   return {
     passed: false,
     reason: `Prerequisites not satisfied: ${names}`,
+    unsatisfied,
   };
 }
 

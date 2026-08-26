@@ -48,7 +48,7 @@ describe('discoverPlugins', () => {
   });
 
   describe('happy path: global plugin discovery', () => {
-    it('discovers and registers a plugin from globalDir', async () => {
+    it('discovers and registers an llm provider with only invoke from globalDir', async () => {
       const pluginDir = join(globalDir, 'my-provider');
       mkdirSync(pluginDir);
       const manifestPath = join(pluginDir, 'plugin.yml');
@@ -59,14 +59,13 @@ name: my-provider
 entrypoint: index.js`
       );
 
-      // Write a real plugin module with required interface
+      // An LLM provider requires only the single dispatch method.
       writeFileSync(
         join(pluginDir, 'index.js'),
         `export default {
   async invoke(options) {
     return { success: true, output: 'test', exitCode: 0 };
-  },
-  async invokeInteractive(options) {}
+  }
 };`
       );
 
@@ -76,6 +75,77 @@ entrypoint: index.js`
       registry.markInitialized();
       const retrieved = registry.get('llm_provider', 'my-provider');
       expect(retrieved).toBeDefined();
+    });
+
+    it('loads an optional invokeInteractive member without invoking it', async () => {
+      const pluginDir = join(globalDir, 'legacy-provider');
+      mkdirSync(pluginDir);
+      writeFileSync(
+        join(pluginDir, 'plugin.yml'),
+        `kind: llm_provider
+name: legacy-provider
+entrypoint: index.js`
+      );
+      writeFileSync(
+        join(pluginDir, 'index.js'),
+        `const calls = { invoke: 0, invokeInteractive: 0 };
+export default {
+  calls,
+  async invoke() {
+    calls.invoke += 1;
+    return { success: true, output: 'test', exitCode: 0 };
+  },
+  async invokeInteractive() {
+    calls.invokeInteractive += 1;
+  }
+};`
+      );
+
+      await discoverPlugins(globalDir, projectDir, registry);
+      registry.markInitialized();
+      const plugin = registry.get<{
+        calls: { invoke: number; invokeInteractive: number };
+      }>('llm_provider', 'legacy-provider');
+
+      expect(plugin.calls).toEqual({ invoke: 0, invokeInteractive: 0 });
+    });
+  });
+
+  describe('llm provider interface validation', () => {
+    function writeProviderModule(name: string, source: string): void {
+      const pluginDir = join(globalDir, name);
+      mkdirSync(pluginDir);
+      writeFileSync(
+        join(pluginDir, 'plugin.yml'),
+        `kind: llm_provider
+name: ${name}
+entrypoint: index.js`
+      );
+      writeFileSync(join(pluginDir, 'index.js'), source);
+    }
+
+    it('rejects an llm provider with no invoke member', async () => {
+      writeProviderModule('missing-invoke', 'export default {};');
+
+      await expect(discoverPlugins(globalDir, projectDir, registry))
+        .rejects.toThrow('Plugin missing-invoke missing required method: invoke');
+    });
+
+    it('rejects an llm provider whose invoke member is not a function', async () => {
+      writeProviderModule('invalid-invoke', 'export default { invoke: true };');
+
+      await expect(discoverPlugins(globalDir, projectDir, registry))
+        .rejects.toThrow('Plugin invalid-invoke missing required method: invoke');
+    });
+
+    it('rejects an llm provider with only invokeInteractive', async () => {
+      writeProviderModule(
+        'legacy-only-provider',
+        'export default { async invokeInteractive() {} };',
+      );
+
+      await expect(discoverPlugins(globalDir, projectDir, registry))
+        .rejects.toThrow('Plugin legacy-only-provider missing required method: invoke');
     });
   });
 

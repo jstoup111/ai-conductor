@@ -1,5 +1,5 @@
 export * from './types/index.js';
-export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
 export { runReleasePrAction } from './engine/release-pr-action.js';
@@ -47,7 +47,11 @@ import {
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
 import { ConductorEventEmitter } from './ui/events.js';
-import { loadConfig, loadMergedConfig } from './engine/config.js';
+import {
+  emitDeprecatedConfigKeyEvents,
+  loadConfig,
+  loadMergedConfig,
+} from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
 import { readState } from './engine/state.js';
 import {
@@ -57,6 +61,7 @@ import {
   detectInline,
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
+  detectBuildReviewRecordReducedCoverageCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
   detectPlanProtectedTargetsCommand,
@@ -70,7 +75,7 @@ import {
   userConfigSetCommand,
   type CLIOptions,
 } from './cli.js';
-import { dispatchBuildReviewAccept, dispatchBuildReviewFindings } from './engine/build-review-cli.js';
+import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
 import type { ConductState, StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
@@ -113,6 +118,7 @@ import {
   type DaemonCommandOptions,
 } from './engine/daemon-command.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
+import { detectRateCardCommand, dispatchRateCard } from './engine/rate-card-cli.js';
 import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
@@ -161,6 +167,7 @@ import {
   dispatchScopedRunCommand,
 } from './engine/scoped-run-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
+import { detectRewindCommand, dispatchRewindCommand } from './engine/rewind.js';
 import {
   detectMissingResealReasonCommand,
   detectResealCommand,
@@ -467,6 +474,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  const buildReviewRecordReducedCoverageCmd = detectBuildReviewRecordReducedCoverageCommand(process.argv);
+  if (buildReviewRecordReducedCoverageCmd) {
+    process.exitCode = await dispatchBuildReviewRecordReducedCoverage(buildReviewRecordReducedCoverageCmd);
+    return;
+  }
+
   const buildReviewFindingsCmd = detectBuildReviewFindingsCommand(process.argv);
   if (buildReviewFindingsCmd) {
     process.exitCode = await dispatchBuildReviewFindings(buildReviewFindingsCmd);
@@ -497,6 +510,12 @@ async function main(): Promise<void> {
   const decideGrantCmd = detectDecideGrantCommand(process.argv);
   if (decideGrantCmd) {
     process.exitCode = await dispatchDecideGrantCommand(decideGrantCmd);
+    return;
+  }
+
+  const rewindCmd = detectRewindCommand(process.argv);
+  if (rewindCmd) {
+    process.exitCode = await dispatchRewindCommand(rewindCmd);
     return;
   }
 
@@ -604,6 +623,16 @@ async function main(): Promise<void> {
   const renderCmd = detectRenderCommand(process.argv);
   if (renderCmd) {
     const code = await dispatchRender(renderCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Rate-card subcommand (`rate-card refresh|show`) runs NON-INTERACTIVELY and
+  // exits — maintains the committed per-model token price card the codex
+  // adapter prices its dispatches from. Network fetch lives here, never on the
+  // dispatch path.
+  const rateCardCmd = detectRateCardCommand(process.argv);
+  if (rateCardCmd) {
+    const code = await dispatchRateCard(rateCardCmd, process.cwd());
     process.exit(code);
   }
 
@@ -895,6 +924,7 @@ async function main(): Promise<void> {
   // region around each readline prompt so dashboard and prompts don't fight
   // for the terminal.
   const liveRegion = createLiveRegion();
+  const events = new ConductorEventEmitter();
 
   // Load config (optional — conductor works without it)
   const configResult = await loadConfig(projectRoot);
@@ -1162,9 +1192,6 @@ async function main(): Promise<void> {
   } catch {
     sessionId = uuidv4();
   }
-
-
-  const events = new ConductorEventEmitter();
   const mode = deriveMode(opts);
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
@@ -1231,6 +1258,7 @@ async function main(): Promise<void> {
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
+  await emitDeprecatedConfigKeyEvents(configResult, events);
 
   // Wire AuditTrailWriter: appends friction/positive-evidence records to
   // .pipeline/audit-trail/events.jsonl, rooted at the resolved projectRoot

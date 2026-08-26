@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { generateFenceScript, mergeFenceIntoSettings } from '../../../src/engine/self-host/write-fence.js';
 import { execa } from 'execa';
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises';
+import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 
 /**
@@ -262,11 +262,16 @@ describe('write-fence — real-binary smoke tests (block cases)', () => {
   const worktreeRoot = '/tmp/write-fence-smoke-worktree';
   const harnessRoot = '/tmp/write-fence-smoke-harness';
 
-  async function runScript(script: string, payload: unknown): Promise<{ exitCode: number; stderr: string; stdout: string }> {
+  async function runScript(
+    script: string,
+    payload: unknown,
+    cwd?: string,
+  ): Promise<{ exitCode: number; stderr: string; stdout: string }> {
     const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
     // Pass script via -c flag, and payload via stdin
     const result = await execa('bash', ['-c', script], {
       input: payloadStr,
+      cwd,
       reject: false,
     });
     return { exitCode: result.exitCode ?? -1, stderr: result.stderr, stdout: result.stdout };
@@ -289,19 +294,22 @@ describe('write-fence — real-binary smoke tests (block cases)', () => {
     expect(stderr).toContain('rule');
   });
 
-  it('BLOCK: Bash sed redirect to harness checkout → exit 2', async () => {
+  it.each(['>', '>>', '&>'])(
+    'BLOCK: Bash sed redirect %s to harness checkout → exit 2',
+    async (redirect) => {
     const script = generateFenceScript(worktreeRoot, harnessRoot);
     const targetPath = `${harnessRoot}/test/f.ts.new`;
     const payload = {
       tool_name: 'Bash',
       tool_input: {
-        command: `sed 's/x/y/' source.ts > ${targetPath}`,
+        command: `sed 's/x/y/' source.ts ${redirect} ${targetPath}`,
       },
     };
     const { exitCode, stderr } = await runScript(script, payload);
     expect(exitCode).toBe(2);
     expect(stderr).toContain(targetPath);
-  });
+    },
+  );
 
   it('BLOCK: Bash mv to harness checkout → exit 2', async () => {
     const script = generateFenceScript(worktreeRoot, harnessRoot);
@@ -348,34 +356,30 @@ describe('write-fence — real-binary smoke tests (block cases)', () => {
   it('BLOCK: Relative path traversal from inside worktree that escapes to harness → exit 2', async () => {
     // Create actual temp directories to test relative path resolution
     const tempBase = await mkdtemp(join(tmpdir(), 'wf-relative-test-'));
-    const harnessRootActual = join(tempBase, 'harness');
+    const realHarnessRoot = join(tempBase, 'real-harness');
+    const harnessRootActual = join(tempBase, 'harness-alias');
     const worktreeRootActual = join(harnessRootActual, '.worktrees', 'feature');
     const nestedCwd = join(worktreeRootActual, 'src', 'conductor', 'src');
 
     try {
-      // Create the nested directory structure
+      await mkdir(realHarnessRoot);
+      await symlink(realHarnessRoot, harnessRootActual, 'dir');
       await mkdir(nestedCwd, { recursive: true });
 
       const script = generateFenceScript(worktreeRootActual, harnessRootActual);
       const payload = {
         tool_name: 'Edit',
         tool_input: {
-          file_path: '../../../../src/conductor/src/x.ts',
+          file_path: relative(nestedCwd, join(harnessRootActual, 'src', 'conductor', 'src', 'x.ts')),
         },
       };
 
-      // Invoke the script from the nested directory within the worktree
-      // We need to modify the script to use pwd properly with cwd
-      const result = await execa('bash', [], {
-        input: script + '\n' + JSON.stringify(payload),
-        cwd: nestedCwd,
-        reject: false,
-      });
+      const result = await runScript(script, payload, nestedCwd);
 
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain('FENCE BLOCK');
       // The resolved path should escape the worktree and land in the harness
-      expect(result.stderr).toContain(harnessRootActual);
+      expect(result.stderr).toContain(await realpath(realHarnessRoot));
     } finally {
       // Cleanup
       await rm(tempBase, { recursive: true, force: true });

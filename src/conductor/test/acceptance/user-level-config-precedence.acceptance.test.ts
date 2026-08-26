@@ -84,12 +84,12 @@ const AFFECTED_CASES: AffectedCase[] = [
   },
   {
     name: 'build_review',
-    userYaml: 'build_review:\n  rubrics:\n    scope:\n      enabled: false\n      effort: high\n',
-    projectYaml: 'build_review:\n  rubrics:\n    scope:\n      enabled: true\n      effort: low\n',
+    userYaml: 'build_review:\n  rubrics:\n    testQuality:\n      enabled: false\n      effort: high\n',
+    projectYaml: 'build_review:\n  rubrics:\n    testQuality:\n      enabled: true\n      effort: low\n',
     select: (config) => config.build_review,
-    userValue: { enabled: true, maxParallel: 4, rubrics: { tautology: { enabled: true }, scope: { enabled: false, effort: 'high' }, rootCause: { enabled: true }, completeness: { enabled: true } } },
-    projectValue: { enabled: true, maxParallel: 4, rubrics: { tautology: { enabled: true }, scope: { enabled: true, effort: 'low' }, rootCause: { enabled: true }, completeness: { enabled: true } } },
-    defaultValue: { enabled: true, maxParallel: 4, rubrics: { tautology: { enabled: true }, scope: { enabled: true }, rootCause: { enabled: true }, completeness: { enabled: true } } },
+    userValue: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: false, effort: 'high' } } },
+    projectValue: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: true, effort: 'low' } } },
+    defaultValue: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: false } } },
   },
   {
     name: 'auto_restart_on_stale_engine',

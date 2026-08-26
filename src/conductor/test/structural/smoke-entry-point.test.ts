@@ -26,6 +26,7 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/engine/daemon-tmux.smoke.test.ts': 'toolchain',
   'test/execution/claude-provider.smoke.test.ts': 'credentialed:claude',
   'test/execution/codex-provider.smoke.test.ts': 'toolchain',
+  'test/smoke/claude-subagent-stream.smoke.test.ts': 'credentialed:claude',
   'test/smoke/finish-record.smoke.test.ts': 'hermetic',
   'test/smoke/publish-interrupted.smoke.test.ts': 'toolchain',
   'test/smoke/surgical-finish-retry.smoke.test.ts': 'hermetic',
@@ -172,8 +173,6 @@ describe('structural: smoke test entry point', () => {
       const fixtureFiles = ['first.smoke.test.ts', 'second.smoke.test.ts']
         .map((name) => join(fixtureDir, name));
       const config = join(fixtureDir, 'vitest.config.ts');
-      const originalRunTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-      const originalTmpdir = process.env.TMPDIR;
 
       try {
         await Promise.all(fixtureFiles.map((file) => writeFile(file, [
@@ -194,24 +193,15 @@ describe('structural: smoke test entry point', () => {
           `  setupFiles: [${JSON.stringify(join(conductorRoot, 'test/setup.ts'))}],`,
           `  globalSetup: [${JSON.stringify(join(conductorRoot, 'test/global-setup.ts'))}],`,
           "  pool: 'forks',",
-          "  poolOptions: { forks: { maxForks: 1, minForks: 1 } },",
+          '  maxWorkers: 1,',
           '} });',
         ].join('\n'));
 
-        delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-        delete process.env.TMPDIR;
-        try {
-          await runSmokeCli(config, {
-            mode: 'advisory',
-            environment: {},
-            emit: (line) => ledger.push(line),
-          });
-        } finally {
-          if (originalRunTmpRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-          else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = originalRunTmpRoot;
-          if (originalTmpdir === undefined) delete process.env.TMPDIR;
-          else process.env.TMPDIR = originalTmpdir;
-        }
+        await runSmokeCli(config, {
+          mode: 'advisory',
+          environment: {},
+          emit: (line) => ledger.push(line),
+        });
 
         expect(ledger.filter((line) => line.endsWith('[hermetic] ran'))).toEqual(
           fixtureFiles.map((file) => `smoke ledger: ${relative(conductorRoot, file)} [hermetic] ran`),
@@ -247,7 +237,7 @@ describe('structural: smoke test entry point', () => {
           '  exclude: [],',
           "  environment: 'node',",
           "  pool: 'forks',",
-          "  poolOptions: { forks: { maxForks: 1, minForks: 1 } },",
+          '  maxWorkers: 1,',
           '} });',
         ].join('\n'));
 
@@ -280,7 +270,7 @@ describe('structural: smoke test entry point', () => {
     });
 
     try {
-      const discovered = (await vitest.globTestFiles())
+      const discovered = (await vitest.globTestSpecifications())
         .map(({ moduleId }) => relative(conductorRoot, moduleId).replaceAll('\\', '/'))
         .sort();
 
@@ -292,6 +282,7 @@ describe('structural: smoke test entry point', () => {
         'test/engine/daemon-tmux.smoke.test.ts',
         'test/execution/claude-provider.smoke.test.ts',
         'test/execution/codex-provider.smoke.test.ts',
+        'test/smoke/claude-subagent-stream.smoke.test.ts',
         'test/smoke/finish-record.smoke.test.ts',
         'test/smoke/publish-interrupted.smoke.test.ts',
         'test/smoke/surgical-finish-retry.smoke.test.ts',
@@ -308,7 +299,7 @@ describe('structural: smoke test entry point', () => {
     });
 
     try {
-      const discovered = (await vitest.globTestFiles())
+      const discovered = (await vitest.globTestSpecifications())
         .map(({ moduleId }) => relative(conductorRoot, moduleId).replaceAll('\\', '/'))
         .sort();
       const retiredVariables = [

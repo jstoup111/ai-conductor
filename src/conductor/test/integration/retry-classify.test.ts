@@ -140,9 +140,9 @@ describe('integration/retry-classify (#646)', () => {
     return { retryDecisions, stepRetries, kickbacks, halted: () => halted };
   }
 
-  // ── Story 1: as-built BLOCKED routes on try 1 ───────────────────────────
+  // ── Story 1: as-built BLOCKED stops on try 1 ────────────────────────────
 
-  it('Story 1: fresh as-built BLOCKED verdict routes on try 1, no second attempt', async () => {
+  it('Story 1: fresh as-built BLOCKED verdict halts on try 1 and never sends work back to build', async () => {
     await seedTailAt(statePath, 'architecture_review_as_built');
     const runner = withRemediation(dir, {
       architecture_review_as_built: async () => {
@@ -174,8 +174,9 @@ describe('integration/retry-classify (#646)', () => {
     expect(calls.filter((s) => s === 'architecture_review_as_built')).toHaveLength(1);
     expect(stepRetries.filter((r) => r.step === 'architecture_review_as_built')).toHaveLength(0);
 
-    // Control drops into the existing as-built planRemediation routing.
-    expect(kickbacks).toContainEqual({ from: 'architecture_review_as_built', to: 'build' });
+    // #1805 makes as-built a SHIP-only decision: a BLOCKED verdict stops for
+    // a human and must never route unplanned work back to BUILD.
+    expect(kickbacks).not.toContainEqual({ from: 'architecture_review_as_built', to: 'build' });
 
     expect(retryDecisions).toContainEqual(
       expect.objectContaining({ decision: 'route', signal: 'named-route', attempt: 1 }),
@@ -297,7 +298,7 @@ describe('integration/retry-classify (#646)', () => {
 
   // ── Story 5: kill-switch off is an exact revert ─────────────────────────
 
-  it('Story 5: retry_routing.enabled=false burns retries then routes at step_failed, no retry_decision', async () => {
+  it('Story 5: retry_routing.enabled=false burns retries then halts at step_failed, no retry_decision', async () => {
     await seedTailAt(statePath, 'architecture_review_as_built');
     const runner = withRemediation(dir, {
       architecture_review_as_built: async () => {
@@ -327,9 +328,9 @@ describe('integration/retry-classify (#646)', () => {
 
     // Old behaviour: burns the full retry budget on the same fresh verdict.
     expect(stepRetries.filter((r) => r.step === 'architecture_review_as_built').length).toBeGreaterThanOrEqual(1);
-    // Still eventually routes via the pre-existing planRemediation call at
-    // step_failed — exact revert, not a behavioural regression.
-    expect(kickbacks).toContainEqual({ from: 'architecture_review_as_built', to: 'build' });
+    // The legacy retry budget does not revive the retired as-built → build
+    // route: after exhaustion, the verdict still stops for a human.
+    expect(kickbacks).not.toContainEqual({ from: 'architecture_review_as_built', to: 'build' });
     // No retry_decision telemetry when the classifier is bypassed.
     expect(retryDecisions).toHaveLength(0);
   });
@@ -501,16 +502,12 @@ describe('integration/retry-classify (#646)', () => {
     expect(calls.filter((s) => s === 'architecture_review_as_built').length).toBeGreaterThanOrEqual(2);
     expect(stepRetries.filter((r) => r.step === 'architecture_review_as_built').length).toBeGreaterThanOrEqual(1);
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-    expect(halt).toMatch(/failed in auto mode \(retries exhausted\)/);
+    expect(halt).toMatch(/as-built architecture review halted/);
   });
 
-  it('Regression: a perpetually-BLOCKED as-built verdict routed via the classifier still HALTs at MAX_KICKBACKS_PER_GATE (2), never an unbounded loop', async () => {
-    const MAX_KICKBACKS_PER_GATE = 2;
-    // markDownstreamStale only restages steps whose status is 'done', not
-    // 'skipped' — seed the intermediate SHIP-tail steps as 'skipped' so a
-    // kickback to 'build' lands back on architecture_review_as_built
-    // directly, without re-dispatching build_review/wiring_check/
-    // manual_test/prd_audit each cycle.
+  it('Regression: a perpetually-BLOCKED as-built verdict halts without a kickback loop', async () => {
+    // #1805 removes the as-built → build route, so this fixture must halt on
+    // its first BLOCKED verdict rather than consuming the generic kickback cap.
     await seedTailAt(statePath, 'architecture_review_as_built', {
       build_review: 'skipped',
       wiring_check: 'skipped',
@@ -536,39 +533,7 @@ describe('integration/retry-classify (#646)', () => {
         );
       },
     });
-    // The #647 D1 guard halts a remediation route into `build` when the round
-    // carries no new dispatchable work and build is already evidence-complete
-    // ('derived-already-complete') — it would end this loop before the cap.
-    // Emit a fresh rem-N task each round so every route is legitimate rework
-    // and the loop genuinely runs until MAX_KICKBACKS_PER_GATE — the bound
-    // under test here.
-    let remediationRound = 0;
-    const runner: StepRunner = {
-      run: async (step, state, opts) => {
-        if (step === 'remediate') {
-          remediationRound += 1;
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(
-            join(dir, '.pipeline/remediation.json'),
-            JSON.stringify({
-              dispositions: [
-                {
-                  id: `gap-${remediationRound}`,
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'fix the flagged drift',
-                  tasks: [
-                    { id: `rem-${remediationRound}`, title: 'redo the flagged drift fix' },
-                  ],
-                },
-              ],
-            }),
-          );
-          return { success: true };
-        }
-        return base.run(step, state, opts);
-      },
-    };
+    const runner = base;
     const { retryDecisions, stepRetries, kickbacks, halted } = collect();
 
     const conductor = new Conductor({
@@ -582,12 +547,6 @@ describe('integration/retry-classify (#646)', () => {
       maxRetries: 3,
       fromStep: 'architecture_review_as_built',
       escalateBuildFailure: async () => ({}),
-      // The D2 kickback escalation (kickback_escalation, default on) halts a
-      // zero-progress/unchanged-verdict re-entry BEFORE the cap is reached —
-      // disable it here so this test still exercises the
-      // MAX_KICKBACKS_PER_GATE cap path itself (same pattern as the cap tests
-      // in gate-loop.test.ts).
-      config: { kickback_escalation: { enabled: false } },
       fullSuiteVerifier: {
         ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
         inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
@@ -595,19 +554,13 @@ describe('integration/retry-classify (#646)', () => {
     });
     await conductor.run();
 
-    // Routed via the classifier every cycle (named-route, attempt 1) — the
-    // classify path reuses the SAME planRemediation/kickback mechanism that
-    // enforces MAX_KICKBACKS_PER_GATE, so it must still cap at 2 and HALT
-    // rather than loop forever.
     expect(
-      kickbacks.filter((k) => k.from === 'architecture_review_as_built' && k.to === 'build').length,
-    ).toBe(MAX_KICKBACKS_PER_GATE);
+      kickbacks.filter((k) => k.from === 'architecture_review_as_built' && k.to === 'build'),
+    ).toHaveLength(0);
     expect(stepRetries.filter((r) => r.step === 'architecture_review_as_built')).toHaveLength(0);
-    expect(
-      retryDecisions.filter(
-        (d) => d.decision === 'route' && d.signal === 'named-route',
-      ).length,
-    ).toBeGreaterThanOrEqual(MAX_KICKBACKS_PER_GATE);
+    expect(retryDecisions).toContainEqual(
+      expect.objectContaining({ decision: 'route', signal: 'named-route', attempt: 1 }),
+    );
     expect(halted()).toBe(true);
   });
 });

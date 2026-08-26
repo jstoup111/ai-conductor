@@ -92,3 +92,5 @@ consumer**.
 - *Make the gate trust a `skipped` row from task-status.json.* Rejected: breaks #463's
   derive-from-git invariant (a forged/wiped row would resolve tasks). Stamping only
   against the real skip **commit** keeps git as the source of truth.
+
+> **Amended 2026-08-22 by #1805:** task close records Done-when: evidence when the task carries the block; verify-only and Evidence: skipped closures satisfy checks by their existing path (adr-2026-08-22-done-when-evidence-at-task-close).

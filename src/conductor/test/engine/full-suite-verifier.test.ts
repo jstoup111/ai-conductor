@@ -12,7 +12,10 @@ import {
   type FullSuitePassEvidence,
 } from '../../src/engine/full-suite-evidence.js';
 import type { FullSuiteExecutionResult } from '../../src/engine/full-suite-executor.js';
-import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
+import {
+  FullSuiteVerifier,
+  probeProcessStartIdentity,
+} from '../../src/engine/full-suite-verifier.js';
 
 const scratches: string[] = [];
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -31,6 +34,23 @@ const CATEGORY_FINGERPRINTS = {
   test_infrastructure: 'category:test_infrastructure',
   tests: 'category:tests',
 };
+
+describe('process start identity portability', () => {
+  it('distinguishes an unavailable proc filesystem from a missing process', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'full-suite-fake-proc-'));
+    scratches.push(root);
+    const procRoot = join(root, 'proc');
+    await mkdir(procRoot);
+
+    await expect(probeProcessStartIdentity(123, join(root, 'absent-proc')))
+      .resolves.toEqual({ status: 'UNKNOWN' });
+    await expect(probeProcessStartIdentity(123, procRoot))
+      .resolves.toEqual({ status: 'MISSING' });
+    await mkdir(join(procRoot, '123'));
+    await expect(probeProcessStartIdentity(123, procRoot))
+      .resolves.toMatchObject({ status: 'FOUND' });
+  });
+});
 
 async function writeProjectFile(
   projectRoot: string,

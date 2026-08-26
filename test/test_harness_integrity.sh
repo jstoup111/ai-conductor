@@ -24,6 +24,19 @@ FAIL=0
 WARN=0
 TOTAL=0
 
+rewrite_with_sed() {
+  local target=$1
+  shift
+  local temp
+  temp=$(mktemp "${target}.XXXXXX")
+  if cp -p "$target" "$temp" && sed "$@" "$target" > "$temp"; then
+    mv "$temp" "$target"
+  else
+    rm -f "$temp"
+    return 1
+  fi
+}
+
 assert() {
   local desc=$1
   local result=$2  # 0 = pass, non-zero = fail
@@ -219,7 +232,7 @@ for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
   fi
 
   # Extract frontmatter (between first and second ---)
-  frontmatter=$(sed -n '2,/^---$/p' "$skill_file" | head -n -1)
+  frontmatter=$(sed -n '2,/^---$/p' "$skill_file" | sed '$d')
 
   missing=()
   for field in "${REQUIRED_FIELDS[@]}"; do
@@ -234,6 +247,27 @@ for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
     assert "${skill_name} — missing: ${missing[*]}" 1
   fi
 done
+
+# ── 2a. Skill implicit invocation policy ────────────────────────────────────
+# The focused checker validates the live catalogs; its mutation suite proves the
+# checker rejects drift, duplicates, contradictions, and repository-local gaps.
+
+echo ""
+echo -e "${BOLD}2a. Skill implicit invocation policy${NC}"
+
+if invocation_policy_output=$(bash "$SCRIPT_DIR/check_skill_invocation_policy.sh" "$HARNESS_DIR" 2>&1); then
+  assert "shipped and repository-local skills are exhaustively classified for implicit invocation" 0
+else
+  printf '%s\n' "$invocation_policy_output" | sed 's/^/    /'
+  assert "shipped and repository-local skills are exhaustively classified for implicit invocation" 1
+fi
+
+if invocation_policy_fixture_output=$(bash "$SCRIPT_DIR/test_skill_invocation_policy.sh" 2>&1); then
+  assert "invocation policy checker rejects invalid metadata mutations" 0
+else
+  printf '%s\n' "$invocation_policy_fixture_output" | sed 's/^/    /'
+  assert "invocation policy checker rejects invalid metadata mutations" 1
+fi
 
 # ── 3. Agent references ─────────────────────────────────────────────────────
 
@@ -270,6 +304,18 @@ done
 skill_refs=$(grep -rohE '`/[a-z][-a-z]*`' "${HARNESS_DIR}"/skills/*/SKILL.md 2>/dev/null \
   | sed 's/`//g; s/^\///' | sort -u || true)
 
+# Backticked `/name` references that deliberately name something OTHER than a
+# skill. Each entry is a host command or a syntax placeholder, so it can never
+# dangle. Every other reference that resolves to no skill directory is a broken
+# pointer and hard-fails below: renaming or deleting a skill silently orphans
+# every cross-skill reference to it, and a warn-only check cannot block that.
+KNOWN_NON_SKILL_REFS=(
+  # Claude Code CLI command — skills/engineer/SKILL.md
+  quit
+  # Invocation-syntax placeholder — skills/bootstrap/SKILL.md
+  skill-name
+)
+
 for ref in $skill_refs; do
   found=false
   for known in "${known_skills[@]}"; do
@@ -280,9 +326,20 @@ for ref in $skill_refs; do
   done
   if [ "$found" = true ]; then
     assert "/${ref} → skills/${ref}/" 0
+    continue
+  fi
+
+  allowlisted=false
+  for allowed in "${KNOWN_NON_SKILL_REFS[@]}"; do
+    if [ "$ref" = "$allowed" ]; then
+      allowlisted=true
+      break
+    fi
+  done
+  if [ "$allowlisted" = true ]; then
+    assert "/${ref} — allowlisted non-skill reference" 0
   else
-    # Some refs are commands not skills (e.g., /quit) — warn, don't fail
-    warn_check "/${ref} — not a skill directory (may be a command)" 1
+    assert "/${ref} — dangling reference: no skills/${ref}/ directory" 1
   fi
 done
 
@@ -353,7 +410,8 @@ else
   # a useful unified diff naming the changed and canonical labels.
   model_table_fixture="$(mktemp)"
   cp "${HARNESS_DIR}/HARNESS.md" "$model_table_fixture"
-  sed -i '0,/| Codex model |/s//| Codex model-drift |/' "$model_table_fixture"
+  rewrite_with_sed "$model_table_fixture" \
+    '1,/| Codex model |/s/| Codex model |/| Codex model-drift |/'
 
   set +e
   model_table_fixture_output=$(
@@ -409,7 +467,7 @@ else
       [ -f "$skill_file" ] || continue
       skill_name=$(basename "$(dirname "$skill_file")")
 
-      frontmatter=$(sed -n '2,/^---$/p' "$skill_file" | head -n -1)
+      frontmatter=$(sed -n '2,/^---$/p' "$skill_file" | sed '$d')
       pinned=$({ echo "$frontmatter" | grep -E '^model:' || true; } | head -1 | sed -E 's/^model:[[:space:]]*//' | tr -d '[:space:]')
 
       if [ -z "$pinned" ]; then
@@ -466,7 +524,7 @@ else
   fm_operator_only=$(
     for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
       [ -f "$skill_file" ] || continue
-      fm=$(sed -n '2,/^---$/p' "$skill_file" | head -n -1)
+      fm=$(sed -n '2,/^---$/p' "$skill_file" | sed '$d')
       if echo "$fm" | grep -qE '^operator_only:[[:space:]]*true[[:space:]]*$'; then
         basename "$(dirname "$skill_file")"
       fi
@@ -990,7 +1048,8 @@ else
     template_name=$(basename "$template")
 
     # Try python3 first
-    if command -v python3 >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1 \
+      && python3 -c 'import yaml' >/dev/null 2>&1; then
       set +e
       python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$template" 2>/dev/null
       py_exit=$?
@@ -1005,7 +1064,8 @@ else
     # Fall back to node js-yaml
     elif [ -f "${HARNESS_DIR}/src/conductor/node_modules/.bin/ts-node" ] || [ -d "${HARNESS_DIR}/src/conductor/node_modules/js-yaml" ]; then
       set +e
-      node -e "const yaml = require('js-yaml'); yaml.load(require('fs').readFileSync('$template', 'utf8'));" 2>/dev/null
+      (cd "${HARNESS_DIR}/src/conductor" \
+        && node -e "const yaml = require('js-yaml'); yaml.load(require('fs').readFileSync('$template', 'utf8'));") 2>/dev/null
       node_exit=$?
       set -e
 
@@ -1026,7 +1086,8 @@ else
   config_file="${issue_templates_dir}/config.yml"
   if [ -f "$config_file" ]; then
     # Use the same parser priority as above
-    if command -v python3 >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1 \
+      && python3 -c 'import yaml' >/dev/null 2>&1; then
       set +e
       if python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('blank_issues_enabled', True))" "$config_file" 2>/dev/null | grep -q "False"; then
         assert "config.yml — blank_issues_enabled must not be false" 1
@@ -1036,7 +1097,8 @@ else
       set -e
     elif [ -f "${HARNESS_DIR}/src/conductor/node_modules/.bin/ts-node" ] || [ -d "${HARNESS_DIR}/src/conductor/node_modules/js-yaml" ]; then
       set +e
-      if node -e "const yaml = require('js-yaml'); const d = yaml.load(require('fs').readFileSync('$config_file', 'utf8')); process.exit((d.blank_issues_enabled === false) ? 0 : 1);" 2>/dev/null; then
+      if (cd "${HARNESS_DIR}/src/conductor" \
+        && node -e "const yaml = require('js-yaml'); const d = yaml.load(require('fs').readFileSync('$config_file', 'utf8')); process.exit((d.blank_issues_enabled === false) ? 0 : 1);") 2>/dev/null; then
         assert "config.yml — blank_issues_enabled must not be false" 1
       else
         assert "config.yml — blank_issues_enabled is not set to false" 0
@@ -1581,6 +1643,66 @@ if [ -f "$rubric_vocabulary_check" ]; then
 else
   assert "test/check_build_review_rubric_skill_vocabularies.sh exists" 1
 fi
+
+# ── 26. Apache-2.0 licensing surface ────────────────────────────────────────
+# Keep the repository license, package metadata, attribution, and contributor
+# notice aligned. Pinning the complete LICENSE digest prevents a partial or
+# edited license text from looking valid merely because its title survived.
+# Canonical text source: https://www.apache.org/licenses/LICENSE-2.0.txt
+echo ""
+echo -e "${BOLD}26. Apache-2.0 licensing surface${NC}"
+
+expected_license_sha="c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+if [ ! -f "${HARNESS_DIR}/LICENSE" ]; then
+  assert "LICENSE contains the canonical Apache License 2.0 text" 1
+else
+  actual_license_sha=$(node -e '
+    const { createHash } = require("node:crypto");
+    const { readFileSync } = require("node:fs");
+    process.stdout.write(createHash("sha256").update(readFileSync(process.argv[1])).digest("hex"));
+  ' "${HARNESS_DIR}/LICENSE")
+  if [ "$actual_license_sha" = "$expected_license_sha" ]; then
+    assert "LICENSE contains the canonical Apache License 2.0 text" 0
+  else
+    echo "    expected LICENSE sha256: ${expected_license_sha}"
+    echo "    actual LICENSE sha256:   ${actual_license_sha}"
+    assert "LICENSE contains the canonical Apache License 2.0 text" 1
+  fi
+fi
+
+notice_ok=1
+if [ -f "${HARNESS_DIR}/NOTICE" ] &&
+   grep -Fqx "AI Conductor" "${HARNESS_DIR}/NOTICE" &&
+   grep -Fqx "Copyright 2026 James Stoup and contributors" "${HARNESS_DIR}/NOTICE" &&
+   grep -Fq "Apache License, Version 2.0" "${HARNESS_DIR}/NOTICE"; then
+  notice_ok=0
+fi
+assert "NOTICE carries project attribution and the Apache-2.0 reference" "$notice_ok"
+
+package_license_ok=0
+for package_metadata in \
+  "${HARNESS_DIR}/src/conductor/package.json" \
+  "${HARNESS_DIR}/src/conductor/package-lock.json" \
+  "${HARNESS_DIR}/plugins/recorder-provider/package.json" \
+  "${HARNESS_DIR}/plugins/recorder-provider/package-lock.json"; do
+  if ! node -e '
+    const metadata = require(process.argv[1]);
+    const license = metadata.lockfileVersion ? metadata.packages?.[""]?.license : metadata.license;
+    process.exit(license === "Apache-2.0" ? 0 : 1);
+  ' "$package_metadata"; then
+    echo "    missing Apache-2.0 metadata: ${package_metadata#"${HARNESS_DIR}/"}"
+    package_license_ok=1
+  fi
+done
+assert "package and lockfile metadata declare Apache-2.0" "$package_license_ok"
+
+license_docs_ok=1
+if [ -f "${HARNESS_DIR}/CONTRIBUTING.md" ] &&
+   grep -Fq "[Apache License, Version 2.0](LICENSE)" "${HARNESS_DIR}/README.md" &&
+   grep -Fq "[Apache License, Version 2.0](LICENSE)" "${HARNESS_DIR}/CONTRIBUTING.md"; then
+  license_docs_ok=0
+fi
+assert "README and CONTRIBUTING document the Apache-2.0 grant" "$license_docs_ok"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

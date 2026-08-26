@@ -1,5 +1,6 @@
 ---
 name: scope-check
+disable-model-invocation: true
 description: "Use before authoring any change to the ai-conductor harness repository, and before creating any new skill, to decide three things deterministically: whether the change is harness-repo-only or consumer-facing, whether a new skill belongs in the shipped `skills/` catalog or this repository's local `.agents/skills/` catalog, and whether the change is provider-agnostic. Produces a placement verdict and the registration steps that verdict requires."
 ---
 
@@ -141,23 +142,27 @@ A **`skills/` addition** must satisfy all of:
   hostile to Claude-only phrasing (see Decision C).
 - Automatic symlinking into both user-space catalogs on the next `bin/install`, for every consumer.
 
-A **`.agents/skills/` addition** requires none of that. It is outside every one of those checks. Its
-frontmatter is deliberately minimal — `name` and `description` only, no `enforcement`, no `phase`,
-no `model` — and `docs/reference/skills.md` states that exclusion in so many words.
+A **`.agents/skills/` addition** requires none of the shipped catalog's model-table registration.
+Its frontmatter is deliberately minimal — `name`, `description`, and the Claude invocation-policy
+field only; no `enforcement`, no `phase`, no `model` — and `docs/reference/skills.md` states that
+exclusion in so many words. Integrity check 2a still includes the local catalog so invocation policy
+cannot drift between hosts.
 
 Two consequences follow, and both matter:
 
 - The catalog choice is a real fork, not a filing preference. One path drags six gates and a global
   install; the other drags none.
-- Because `.agents/skills/` is outside the provider audit, **provider-agnosticism there is a human
-  obligation, not a machine-enforced one.** Decision C is therefore *more* important for a local
-  skill, not less.
+- The local catalog remains outside the broader provider-language audit, so provider-agnosticism is
+  still a human obligation beyond the mechanically checked invocation policy. Decision C is therefore
+  *more* important for a local skill, not less.
 
 ### What a local skill still owes
 
-1. `.agents/skills/<name>/SKILL.md` — frontmatter of `name` and `description` only.
+1. `.agents/skills/<name>/SKILL.md` — frontmatter of `name`, `description`, and
+   `disable-model-invocation: true`; local skills are explicit-only by default.
 2. `.agents/skills/<name>/agents/openai.yaml` — the Codex-side interface block, matching the existing
-   local skills: `interface:` with `display_name`, `short_description`, and `default_prompt`.
+   local skills: `interface:` with `display_name`, `short_description`, and `default_prompt`, plus
+   `policy.allow_implicit_invocation: false` for parity with Claude.
 3. A symlink `.claude/skills/<name> → ../../.agents/skills/<name>`, committed as a git symlink (mode
    `120000`), so the skill is discoverable from the other supported host too. This is the local
    catalog's provider-parity mechanism — see Decision C.
@@ -250,14 +255,13 @@ Answer each. Any YES in steps 1–3 requires the remedy in step 4 before the cha
 
 These are live in this repository. They are the shape of the trap, not hypotheticals.
 
-- **Skill discovery is a directory listing on both hosts — so there is no per-host "turn this skill
-  off" switch.** `bin/install` enumerates `skills/*/` containing a `SKILL.md` and symlinks the
-  identical set into `~/.claude/skills` and `~/.agents/skills` in one loop, with no per-provider
-  filter, allowlist, or override map. If a skill must be suppressed, it has to be suppressed at the
-  filesystem or engine layer, because neither host offers a settings-level skill override for the
-  other to mirror. The commit history carries the exact instance of this trap being paid for:
-  `b636f3f64`, *"suppress operator-only skills for Codex too"* — a suppression that was built for one
-  host and had to be extended to the other afterwards.
+- **Discovery and invocation are separate host seams.** `bin/install` enumerates `skills/*/`
+  containing a `SKILL.md` and symlinks the identical set into `~/.claude/skills` and
+  `~/.agents/skills`; it has no per-provider catalog filter. Invocation control is paired instead:
+  Claude reads `disable-model-invocation: true` from `SKILL.md`, while Codex reads
+  `policy.allow_implicit_invocation: false` from `agents/openai.yaml`. Adding only one side recreates
+  the exact provider-parity failure Decision C exists to prevent. Engine-rendered `/skill` or `$skill`
+  prompts remain explicit and continue to work.
 - **`.claude/settings.local.json` has no Codex counterpart.** That file carries a `permissions.allow[]`
   array that Claude reads and Codex does not. Anything whose behavior depends on it — an allowed
   command, a suppressed prompt — is Claude-only by construction, and will appear to work because the
@@ -320,9 +324,10 @@ a nuance to reconcile in prose. Re-run A; one of the two answers is wrong.
 - [ ] A `skills/` addition declares `name`, `description`, `enforcement`, `phase`
 - [ ] A `skills/` addition is registered via `src/conductor/src/engine/model-table-metadata.ts` and
       `bin/generate-model-table` — `HARNESS.md`'s generated table is **not** hand-edited
-- [ ] A `.agents/skills/` addition declares `name` and `description` only, and adds no fields the
-      local catalog does not use
-- [ ] A `.agents/skills/` addition ships its `agents/openai.yaml` interface block and a committed
+- [ ] A `.agents/skills/` addition declares `name`, `description`, and
+      `disable-model-invocation: true`, and adds no other fields the local catalog does not use
+- [ ] A `.agents/skills/` addition ships its `agents/openai.yaml` interface block with
+      `policy.allow_implicit_invocation: false` and a committed
       `.claude/skills/<name>` symlink (git mode `120000`)
 - [ ] Decision C run; every provider-specific path, variable, or capability either has its
       counterpart or is scoped to its host on the same line

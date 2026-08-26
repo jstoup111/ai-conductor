@@ -23,6 +23,72 @@ export type ShipmentAssociationClassification =
   | 'zero-match'
   | 'multi-match';
 
+/** A non-blocking review finding retained with the shipped spec for #1810. */
+export type RecordedShipmentFinding =
+  | {
+    gate: 'prd_audit';
+    grade: 'PLAN_GAP';
+    criterion: string;
+    summary: string;
+  }
+  | {
+    gate: 'prd_audit';
+    grade: 'OVER_SCOPE';
+    criterion: string;
+    summary: string;
+    /** False for harmless scope additions; true for an operator-accepted widening. */
+    accepted: boolean;
+    /** The operator's durable decision, when one was recorded (ADR D8). */
+    decision?: 'accept' | 'refuse';
+    /** The rationale the operator wrote beside that decision. */
+    rationale?: string;
+  }
+  | {
+    gate: 'architecture_review_as_built';
+    grade: 'PLAN_GAP';
+    outcome: string;
+    summary: string;
+  };
+
+/**
+ * Reads only findings that the two SHIP review gates explicitly recorded.
+ * A plain verdict is not enough: the record is a durable handoff, so an
+ * absent or malformed finding stays absent rather than being inferred.
+ */
+export function recordedShipmentFindings(input: {
+  prdAudit?: string;
+  asBuilt?: string;
+}): RecordedShipmentFinding[] {
+  return [
+    ...recordedPrdAuditFindings(input.prdAudit),
+    ...recordedAsBuiltFindings(input.asBuilt),
+  ];
+}
+
+/** Adds the structured handoff to shipped-record frontmatter when present. */
+export function appendRecordedShipmentFindings(
+  record: string,
+  findings: readonly RecordedShipmentFinding[],
+): string {
+  if (findings.length === 0) return record;
+  const frontmatterEnd = record.indexOf('\n---\n', 4);
+  if (frontmatterEnd === -1) return record;
+  const rendered = findings.map((finding) => [
+    `  - gate: ${finding.gate}`,
+    `    grade: ${finding.grade}`,
+    'criterion' in finding
+      ? `    criterion: ${yamlScalar(finding.criterion)}`
+      : `    outcome: ${yamlScalar(finding.outcome)}`,
+    `    summary: ${yamlScalar(finding.summary)}`,
+    ...('accepted' in finding ? [`    accepted: ${finding.accepted}`] : []),
+    ...('decision' in finding && finding.decision ? [`    decision: ${finding.decision}`] : []),
+    ...('rationale' in finding && finding.rationale
+      ? [`    rationale: ${yamlScalar(finding.rationale)}`]
+      : []),
+  ].join('\n')).join('\n');
+  return `${record.slice(0, frontmatterEnd)}\nfindings:\n${rendered}${record.slice(frontmatterEnd)}`;
+}
+
 /**
  * Classifies only evidence supplied by the caller. It deliberately performs no
  * GitHub or filesystem I/O, and does not infer an association from fuzzy text.
@@ -45,6 +111,78 @@ export function classifyShipmentAssociation(
 
 function uniqueNonEmpty(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentFinding[] {
+  const block = report?.match(/^## Recorded Findings\s*\n+```json\s*\n([\s\S]*?)\n```\s*$/im)?.[1];
+  if (!block) return [];
+  try {
+    const parsed: unknown = JSON.parse(block);
+    const findings = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)
+      ? (parsed as { findings: unknown[] }).findings
+      : [];
+    return findings.flatMap<RecordedShipmentFinding>((finding) => {
+      if (!isObject(finding) || finding.gate !== 'prd_audit') return [];
+      const criterion = nonEmptyString(finding.criterion);
+      const summary = nonEmptyString(finding.summary);
+      if (!criterion || !summary) return [];
+      if (finding.grade === 'PLAN_GAP') {
+        return [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion, summary }];
+      }
+      if (finding.grade !== 'OVER_SCOPE' || typeof finding.accepted !== 'boolean') return [];
+      // D8: a recorded decision and its rationale ride into the shipped record
+      // with the finding. Dropping them left the record saying a criterion was
+      // accepted with no trace of who decided what, or that it was refused at all.
+      const decision = finding.decision === 'accept' || finding.decision === 'refuse'
+        ? finding.decision
+        : undefined;
+      const rationale = nonEmptyString(finding.rationale);
+      return [{
+        gate: 'prd_audit',
+        grade: 'OVER_SCOPE',
+        criterion,
+        summary,
+        accepted: finding.accepted,
+        ...(decision ? { decision } : {}),
+        ...(decision && rationale ? { rationale } : {}),
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function recordedAsBuiltFindings(report: string | undefined): RecordedShipmentFinding[] {
+  if (!report || !/^\s*Verdict\s*:\s*PLAN_GAP\s*$/im.test(report) || !/^\s*Outcome delivered\s*:\s*yes\s*$/im.test(report)) return [];
+  // Keep the shipped reader compatible with the writer's annotated heading,
+  // while rejecting arbitrary prose sections that only share a prefix.
+  const heading = /^## Recorded Findings(?:\s*\(if PLAN_GAP\s*[—-][^)]*\))?\s*$/im.exec(report);
+  if (!heading || heading.index === undefined) return [];
+  const afterHeading = report.slice(heading.index + heading[0].length);
+  const nextHeading = afterHeading.search(/^#{1,6}\s/m);
+  const section = (nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading)).trim();
+  if (!section) return [];
+  const entries = section.split('\n').map((line) => line.trim()).filter(Boolean);
+  const labeled = (name: string): string | undefined => entries
+    .map((line) => line.match(new RegExp(`^(?:[-*]\\s*)?${name}:\\s*(.+)$`, 'i'))?.[1]?.trim())
+    .find((value): value is string => Boolean(value));
+  const outcome = labeled('outcome') ?? entries[0]!.replace(/^[-*]\s*/, '');
+  const summary = labeled('summary') ?? section.replace(/\s+/g, ' ').trim();
+  return outcome && summary
+    ? [{ gate: 'architecture_review_as_built', grade: 'PLAN_GAP', outcome, summary }]
+    : [];
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function yamlScalar(value: string): string {
+  return /^[A-Za-z0-9._/-]+$/.test(value) ? value : JSON.stringify(value);
 }
 
 function classifyNonImplementationChange(

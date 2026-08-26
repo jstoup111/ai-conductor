@@ -16,6 +16,7 @@ code that consumes it, and what a bad value does. Sections follow the loader's o
 | --- | --- | --- |
 | Project config | `<project>/.ai-conductor/config.yml` | `PROJECT_CONFIG_DIR` / `PROJECT_CONFIG_FILE`, `src/conductor/src/engine/config.ts:94-95` |
 | User config | `~/.ai-conductor/config.yml` | `src/conductor/src/engine/user-config.ts:13-19` |
+| Project rate card | `<project>/.ai-conductor/rate-card.json` | `RATE_CARD_RELATIVE_PATH`, `src/conductor/src/execution/rate-card.ts` |
 | Legacy project dir | `<project>/.harness/config.yml` | `LEGACY_PROJECT_CONFIG_DIR`, `config.ts:96` |
 | Legacy user JSON seed | `~/.claude/ai-conductor.config.json` (flat camelCase) | One-time migration input; after a successful seed it is renamed to `ai-conductor.config.json.migrated` |
 
@@ -35,6 +36,69 @@ already exists, and returns `false` silently on any failure without touching eit
 without changing bytes when the file already exists, and refuses a non-Git directory. The missing-file
 error names this command as its remedy. `bin/install` and `bin/migrate` continue to write only the
 user file.
+
+## Rate card (`.ai-conductor/rate-card.json`)
+
+A committed, project-scoped JSON file of per-model token prices. It is durable state read by name,
+not configuration: it has no keys in `config.yml`, no user-scoped counterpart, and no precedence
+rules. Maintain it with `conduct-ts rate-card refresh` (see the CLI reference) and commit the result.
+`.github/workflows/rate-card-refresh.yml` also runs that refresh daily and opens a bot pull
+request on `automation/rate-card` when the published rates change, so the card does not rot
+between manual refreshes. Review such a PR as a **cost change**: merging it alters every
+subsequent `costUsd` computed for a codex dispatch. Already-recorded costs are unaffected —
+a dispatch is priced at the rate in force when it ran and is never repriced retroactively,
+which is why the card is committed rather than fetched live.
+
+The card's `as_of` therefore tracks when the rates last **changed**, not when they were last
+checked: a refresh that finds identical rates leaves the committed file untouched.
+
+It exists because providers disagree about reporting cost. Claude Code returns `total_cost_usd` on
+every dispatch, so its `TokenUsage.costUsd` is provider truth. Codex returns token counts and no
+money — so without a rate card every codex dispatch classifies as *cost-unmetered*, contributes $0,
+and a mixed-provider feature reports all-provider token volume beside Claude-only dollars.
+
+```json
+{
+  "as_of": "2026-08-24T23:13:15.091Z",
+  "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+  "models": {
+    "gpt-5.6-terra": {
+      "input_cost_per_token": 0.000002,
+      "output_cost_per_token": 0.000012,
+      "cache_read_input_token_cost": 2e-7
+    }
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `as_of` | ISO-8601 instant the card was last pruned from upstream. Rewritten by every successful `refresh` |
+| `source` | Upstream catalog the rates were pruned from |
+| `models.<id>` | Per-**token** prices, LiteLLM field names verbatim, so an entry is a literal subset of the upstream record |
+
+Rules that govern how the card is used:
+
+- **Priced at dispatch time.** The adapter computes `costUsd` from the card as the dispatch
+  completes and sets it on the existing `TokenUsage`, which rides the existing `provider_attempt`
+  event. Every downstream consumer — the cost rollup, the finish usage line, the shipped record,
+  OTel — works unchanged. History is never re-priced: the rate in force when a dispatch ran is
+  what its event carries, so a later refresh cannot drift an old feature's reported cost.
+- **The formula.**
+  `input × input_cost_per_token + cacheRead × (cache_read_input_token_cost ?? input_cost_per_token)
+  + cacheCreation × input_cost_per_token + output × output_cost_per_token`.
+  `TokenUsage.input` is fresh-only by contract (the codex adapter subtracts the cached share at
+  parse time), so cached volume is never charged twice. `reasoningOutput` is **not** priced
+  separately — providers already include it in `output`.
+- **Fail closed.** A missing card, an unparseable card, a dispatch that pinned no model, or a model
+  with no card entry leaves `costUsd` undefined and the dispatch cost-unmetered. Nothing invents a
+  price.
+- **Provenance is recorded.** `TokenUsage.costSource` is `provider` for a provider-reported figure
+  and `rate-card` for a harness estimate. A provider-reported cost is never overwritten.
+- **Cost-unmetered dispatches are visible.** The finish usage line names them explicitly
+  (`N cost-unmetered (tokens counted, cost not)`), so a partial cost can never be read as a total.
+- **Refreshes are picked up live.** The card is re-read when its mtime changes; refreshing it
+  mid-run does not require a daemon restart.
 
 ## Load order and precedence
 
@@ -90,7 +154,8 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-38 top-level keys are allow-listed. Everything else fails the load.
+41 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
+[build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
 | --- | --- | --- | --- |
@@ -110,6 +175,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `memory_provider` | string | `local` | [memory_provider](#memory_provider) |
 | `otel` | object | disabled | [otel](#otel) |
 | `build_progress` | object | see section | [build_progress](#build_progress) |
+| `provider_stream` | object | `{ min_interval_ms: 5000 }` | [provider_stream](#provider_stream) |
 | `spec_owner` | string | none | [spec_owner](#spec_owner) |
 | `owner_gate_cutover` | ISO-8601 string | `null` | [owner_gate_cutover](#owner_gate_cutover) |
 | `attribution_audit_sample_pct` | number | `10` | [attribution telemetry](#attribution-telemetry) |
@@ -123,6 +189,8 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `mergeable_autoresolve` | object | disabled | [mergeable_autoresolve](#mergeable_autoresolve) |
 | `conflict_check` | object | `{ adr_corpus: change_set }` | [conflict_check](#conflict_check) |
 | `build_review` | object | `{ enabled: true }` | [build_review](#build_review) |
+| `prd_audit` | object | see section | [prd_audit](#prd_audit) |
+| `architecture_review_as_built` | object | see section | [architecture_review_as_built](#architecture_review_as_built) |
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
@@ -650,6 +718,20 @@ once.
 Consumed by `src/conductor/src/engine/build-progress-watcher.ts:206`; `.enabled` gates the build step's
 watcher at `src/conductor/src/engine/conductor.ts:3712`.
 
+## provider_stream
+
+Cadence for live `provider_stream_progress` events on the conductor event spine. The engine attaches
+the observer only to non-interactive dispatches that use a machine-readable envelope; an interactive
+operator session emits no provider-stream observations.
+`min_interval_ms` is a finite number; its default is `5000` milliseconds when the block is absent
+or the configured value is zero or negative. It is a hard floor for change-driven emissions, not
+the heartbeat cadence: unchanged observations re-emit every five minutes. Unknown keys and
+non-finite values fail config loading.
+
+| Key | Type | Validation | Default |
+| --- | --- | --- | --- |
+| `provider_stream.min_interval_ms` | number | Finite; zero and negative values select the default | `5000` ms |
+
 ## build_progress_halt
 
 Whether a build that stops making progress halts or parks. Validated at `config.ts:1304-1346`; the
@@ -846,50 +928,97 @@ is excluded; partial or ambiguous supersession remains in scope.
 
 ## build_review
 
-The judgement gate at the `build` → downstream seam. The block is normalized in place; the resolved value
-is written back (`config.ts:898-927`).
+An opt-in judgement gate at the `build` → downstream seam. It no longer judges plan conformance,
+outcome delivery, or mechanism soundness — those questions now belong to [`prd_audit`](#prd_audit) and
+the as-built architecture review ([`architecture_review_as_built`](#architecture_review_as_built)). The
+block is normalized in place; the resolved value is written back (`config.ts:1111-1177`).
 
 | Key | Type | Default | Status |
 | --- | --- | --- | --- |
 | `build_review.enabled` | boolean | `true` | Works |
-| `build_review.perTaskFloor` | boolean | `true` | Works |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
-| `build_review.rubrics` | object | `scope`, `rootCause`, `completeness` enabled; `tautology` off | Closed map: `tautology`, `scope`, `rootCause`, `completeness`. `tautology` is opt-in (`rubrics.tautology.enabled: true`): a zero exit code is green, every nonzero exit is counterfactual RED, and only launch, timeout, and signal outcomes are scoped-run infrastructure failures |
+| `build_review.rubrics` | object | `testQuality` off | Closed canonical map: `testQuality` only. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
 
 Normalization contract:
 
 | Input | Result |
 | --- | --- |
 | Absent or `null` | `{ enabled: true }`, no warning |
-| Valid `enabled`, `perTaskFloor`, and/or `scopeContainmentEnforced` keys | Preserved; omitted `enabled` defaults to `true` |
+| Valid `enabled` and/or `scopeContainmentEnforced` keys | Preserved; omitted `enabled` defaults to `true` |
 | Non-object | `{ enabled: true }` plus one warning |
 | Unknown or invalid inner key | That key is omitted and warned by name; valid sibling keys are preserved |
+| `perTaskFloor` (any value) | Retired and ignored; a `config_deprecated_key` event is emitted naming `build_review.perTaskFloor` |
 
-Malformed input fails **open** to enabled by design — `config.ts:898-927` states the rule as never
-silently opting a project out of the replacement authority.
+Malformed input fails **open** to enabled by design — `config.ts` states the rule as never silently
+opting a project out of the replacement authority.
 
 `build_review` is a gating built-in with no `configDisableAllowed`
 (`src/conductor/src/engine/steps.ts:158-161`), so `steps.build_review.disable: true` is a hard error. The
 config key is the only off switch. When disabled, the step is marked `skipped` and a `config_skip` event
 is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
 
-`perTaskFloor` reaches the build-review resolver (`resolved-config.ts:633-636`) and controls its
-per-task floor telemetry (`step-runners.ts:1569-1584`).
-
-Each retained rubric accepts `enabled`, `llm_provider`, `model`, `effort`,
-`model_fallback_ladder`, `max_retries`, and `escalate`. When neither the rubric nor the
-outer `steps.build_review` block authors an `effort`, per-rubric defaults apply: `tautology` and
-`completeness` default to `high`; `scope` and `rootCause` — the more mechanical judgements —
-default to `medium`. Any authored effort, at either level, overrides the default. Unknown rubric IDs, including the retired
-`wiring` member, are rejected before dispatch. The resolved configuration always contains exactly
-the four retained policies.
+`testQuality` accepts `enabled`, `llm_provider`, `model`, `effort`, `model_fallback_ladder`,
+`max_retries`, and `escalate`. It is off by default; a feature with no acceptance-criteria change has an
+empty judged scope and the rubric passes without judging even when enabled. Any unknown or retired rubric
+id under `build_review.rubrics` — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
+`wiring` — is accepted as a no-op with a one-time notice naming the retired setting; it never fails
+configuration loading or halts a run
+(`adr-2026-08-22-build-review-opt-in-rubric-container`).
 
 `scopeContainmentEnforced` is resolved through the same block and read by the real
 `conduct-ts scope-check` command. It defaults to `false`, so verified violations are reported while
 the commit proceeds. Set it to `true` to make a verified violation return exit `2`; the generated
 `commit-msg` hook converts that result to Git exit `1` and refuses the commit without changing the
 working tree or index.
+
+The `wiring` top-level config key (distinct from `build_review.rubrics.wiring`) is also accepted and
+ignored, retained only so a pre-existing consumer config does not hard-fail on upgrade.
+
+## prd_audit
+
+Bounded remediation policy for the SHIP-phase `prd_audit` gate, which judges the shipped implementation
+against the feature's stories' acceptance criteria (PRD functional requirements are context, not the
+audit key, when a PRD exists). Runs on every feature, regardless of complexity tier or work track — the
+step carries no tier or track skip. A feature whose stories have no acceptance criteria to grade
+trivially passes.
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `prd_audit.max_remediation_laps` | positive integer | `1` | Caps the number of remediation laps a `prd_audit` FAIL can trigger for a feature |
+| `prd_audit.max_appended_tasks` | positive integer | `5` | Fixed cap on tasks appended by a `prd_audit` remediation lap |
+| `prd_audit.max_appended_ratio` | finite number in `(0, 1]` | `0.25` | Cap on appended tasks as a fraction of the authored task count |
+| `prd_audit.halt_on_any_plan_gap` | boolean | `false` | When `true`, every `PLAN_GAP` finding halts for the operator, not only happy-path ones |
+
+The effective append cap for a remediation lap is `min(max_appended_tasks, ceil(authored_count *
+max_appended_ratio))`. `FIXABLE` findings beyond that cap, or a `FIXABLE` finding once
+`max_remediation_laps` is exhausted, halt for the operator listing every finding instead of appending
+tasks. A merged spec whose plan predates `prd_audit`'s remediation caps (pre-existing appended
+remediation tasks) counts those tasks toward the authored baseline rather than the cap, so an old feature
+does not retroactively exceed a cap it was never measured against.
+
+## architecture_review_as_built
+
+Per-check, per-tier policy for the as-built architecture review, which runs on every feature and issues
+one of `APPROVED`, `PLAN_GAP`, or `BLOCKED`.
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `architecture_review_as_built.checks.<name>.tiers` | array of `S`\|`M`\|`L` | see below | Restricts the named check to the listed complexity tiers; an explicit list always overrides the artifact-presence default |
+
+`<name>` is one of `reachability`, `planGap`, `adrCompliance`, `diagramDrift`. Without an explicit
+`tiers` override:
+
+| Check | Runs when |
+| --- | --- |
+| `reachability` | Every tier |
+| `planGap` | Every tier |
+| `adrCompliance` | Approved ADRs exist under `.docs/decisions/` |
+| `diagramDrift` | Architecture diagrams exist |
+
+`PLAN_GAP` means the code faithfully implements the approved design and the design itself is the limit;
+it is recorded in the verdict and the shipped record and ships when acceptance criteria still pass, and
+halts when a stated outcome is not delivered.
 
 ## ci_watch
 

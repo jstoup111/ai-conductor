@@ -76,7 +76,6 @@ describe('engine/build-review-inputs — provenance isolation (Task 25)', () => 
 
   it('a provenance classification failure still produces grader inputs, while classification itself stays live', async () => {
     const { assembleBuildReviewInputs, TestSuiteProofError } = await import('../../src/engine/build-review-inputs.js');
-    const { buildGraderPrompt } = await import('../../src/engine/build-review-prompt.js');
 
     // Proof refusal happens before any provenance fallback, so neither
     // provenance path can accidentally bypass the current-proof gate.
@@ -90,22 +89,13 @@ describe('engine/build-review-inputs — provenance isolation (Task 25)', () => 
     expect(gitCalls).toBe(0);
 
     // Failure half: history read throws mid-classification. Assembly must
-    // resolve anyway, leaving the grading unattributed — and the prompt must
-    // still render the repair block's explicit empty state rather than
-    // borrowing another evidence block.
+    // resolve anyway, leaving the grading unattributed.
     historyImpl = async () => {
       throw new Error('simulated provenance read failure');
     };
     const degraded = await assembleBuildReviewInputs(realGit(), planPath, currentBuildReviewProof);
     expect(degraded.repairProvenance).toBeUndefined();
     expect(degraded.repairContext).toEqual([]);
-    const prompt = buildGraderPrompt(degraded);
-    const repairBlock =
-      prompt.match(
-        /## Engine-recorded rebase repair context\n([\s\S]*?)\n## Engine-accepted scope widenings/,
-      )?.[1] ?? '';
-    expect(repairBlock.trim()).toBe('(none)');
-
     // Live half (discriminates against a build without the provenance field):
     // the same assembly with a readable history and no joined repair classifies
     // as no_join instead of staying silent.

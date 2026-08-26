@@ -1,7 +1,7 @@
 # ADR: the Completeness rubric exempts preservation maintenance, anchored to engine-derived removal evidence and a behavior-level plan clause
 
 **Date:** 2026-08-16
-**Status:** APPROVED
+**Status:** SUPERSEDED by adr-2026-08-22-one-owner-per-review-question
 **Deciders:** Engineer (DECIDE phase, #1580), operator-confirmed
 **Relates to:**
 `adr-2026-07-21-completeness-as-build-review-rubric.md` (the governing ADR for this rubric, whose
@@ -245,3 +245,5 @@ removal evidence only.
 - [ ] Revise `skills/build-review-completeness/SKILL.md`: the D3 predicate and the D4 doctrine change
 - [ ] Acceptance coverage for the negative path: a deleted carrier with no surviving equivalent still FAILs
 - [ ] Acceptance coverage for the positive path: relocated coverage with equivalent assertions produces no finding
+
+> **Amended 2026-08-22 by #1805:** superseded by adr-2026-08-22-one-owner-per-review-question — the rubric this ADR governs is retired; prd_audit is the completion authority.

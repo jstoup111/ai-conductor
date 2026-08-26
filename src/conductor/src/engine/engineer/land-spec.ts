@@ -39,7 +39,16 @@ import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { slugify } from './authoring.js';
-import { adrApprovalStatus, isStoriesApproved, parseComplexityTier, parseTrack, planStem } from '../artifacts.js';
+import {
+  adrApprovalStatus,
+  isStoriesApproved,
+  featureArtifactPatternsAreRecursive,
+  parseComplexityTier,
+  parseTrack,
+  planStem,
+  validateFeatureArtifactStems,
+} from '../artifacts.js';
+import type { StepName } from '../../types/index.js';
 import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
@@ -53,6 +62,7 @@ import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-ga
 import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
 import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
+import { validatePlanDoneWhen } from '../plan-done-when.js';
 
 const execFile = promisify(execFileCb);
 
@@ -211,6 +221,7 @@ export async function landSpec(
   const specFile = await pickIdeaFile(specsDir, ideaFiles);
   const storiesFile = await pickIdeaFile(storiesDir, ideaFiles);
   const planFile = await pickIdeaFile(plansDir, ideaFiles);
+  const featureSlug = slugify(idea);
 
   if ((specRequired && !specFile) || !storiesFile || !planFile) {
     const missing: string[] = [];
@@ -248,6 +259,19 @@ export async function landSpec(
       `landSpec: plan targets sealed artifacts owned by another feature: ${targets}. ` +
         'Amend accepted artifacts during DECIDE, then re-author the plan.',
     );
+  }
+
+  const doneWhenViolations = validatePlanDoneWhen(planContent);
+  if (doneWhenViolations.length > 0) {
+    const violations = doneWhenViolations
+      .map(({ taskId, reason }) => {
+        const description = reason === 'missing'
+          ? 'no Done when: block'
+          : `an invalid Done when: block (${reason})`;
+        return `plan task ${taskId} has ${description}`;
+      })
+      .join('; ');
+    throw new Error(`landSpec: ${violations}`);
   }
 
   // Land and daemon discovery must agree on the exact stories artifact. Resolve
@@ -292,8 +316,9 @@ export async function landSpec(
     ? parseComplexityTier(await readFile(complexityFile, 'utf-8'))
     : undefined;
 
+  let conflictsFile: string | null = null;
   if (tier && tier !== 'S') {
-    const conflictsFile = await pickIdeaFile(join(worktreePath, '.docs', 'conflicts'), ideaFiles);
+    conflictsFile = await pickIdeaFile(join(worktreePath, '.docs', 'conflicts'), ideaFiles);
     const architectureFile = await pickIdeaFile(join(worktreePath, '.docs', 'architecture'), ideaFiles);
     const reviewFile = await pickIdeaFile(decisionsDir, ideaFiles);
     const missing: string[] = [];
@@ -307,6 +332,53 @@ export async function landSpec(
           'Run /conflict-check, /architecture-diagram, and /architecture-review before landing.',
       );
     }
+  }
+
+  // The coherence gate below reads `.docs/coherence/<plan-stem>.md` BY NAME, so
+  // a coherence artifact this idea authored under another feature's stem is
+  // invisible to it — it can only report the expected file as missing, never
+  // the misnamed one it is looking straight past. Validate it here, through the
+  // same feature-stem contract as every other feature-scoped family, so no
+  // artifact family keeps a private naming path.
+  const coherenceFile = await pickIdeaFile(join(worktreePath, '.docs', 'coherence'), ideaFiles);
+
+  // Validate EVERY idea-attributable file in each feature-scoped family, not the
+  // single `pickIdeaFile` pick. The picks above deliberately reduce a family to
+  // its newest file so the gates have one artifact to read, but land stages every
+  // `.docs/` file the idea authored (see the `git add` below). Validating only the
+  // pick lets a stale mismatched sibling ride along beside a conforming newest
+  // file and land unvalidated — exactly the ambiguity forward-walk resolution
+  // fails on later (#1743).
+  // Enumeration depth comes from each family's own artifact contract: a family
+  // whose pattern matches descendants (`stories` is `.docs/stories/**\/*.md`) is
+  // walked recursively, so a nested artifact cannot be staged unvalidated.
+  const familyPaths = async (step: StepName, dir: string): Promise<string[]> =>
+    (await listIdeaFiles(dir, ideaFiles, {
+      recursive: featureArtifactPatternsAreRecursive(step),
+    })).map((file) => relative(worktreePath, file));
+
+  const artifactStemViolations = validateFeatureArtifactStems(
+    [
+      { step: 'prd', paths: await familyPaths('prd', specsDir) },
+      { step: 'stories', paths: await familyPaths('stories', storiesDir) },
+      { step: 'plan', paths: await familyPaths('plan', plansDir) },
+      {
+        step: 'conflict_check',
+        paths: await familyPaths('conflict_check', join(worktreePath, '.docs', 'conflicts')),
+      },
+      {
+        step: 'coherence_check',
+        paths: await familyPaths('coherence_check', join(worktreePath, '.docs', 'coherence')),
+      },
+    ],
+    featureSlug,
+  );
+  if (artifactStemViolations.length > 0) {
+    const violations = artifactStemViolations
+      .map(({ path, expectedStem, strategy }) =>
+        `${path.replaceAll('\\', '/')}: expected stem "${expectedStem}" (${strategy})`)
+      .join('; ');
+    throw new Error(`landSpec: feature-scoped artifact stems do not match the feature: ${violations}`);
   }
 
   // 4e. ADR hard gate — no spec lands with an unapproved ADR (mirrors the
@@ -395,7 +467,7 @@ export async function landSpec(
   //    worktree's checked-out branch) — no `checkout -b`, no `checkout back`, and the
   //    primary working tree is never touched (FR-2). On failure we leave the worktree
   //    for inspection (FR-6) and never delete its branch.
-  const slug = slugify(idea);
+  const slug = featureSlug;
   const { stdout: headRef } = await execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd: worktreePath,
   });
@@ -482,24 +554,36 @@ export async function resolveIdeaFiles(
 }
 
 /**
- * Pick the artifact `.md` file in `dir` to use, restricted to files ALSO present
- * in `ideaFiles` (the attribution universe from `resolveIdeaFiles`). Zero matching
- * candidates → `null` (missing-artifact semantics, unchanged from `findNewestFile`).
- * Multiple candidates → newest mtime, but ONLY among the idea's own candidates —
- * mtime is never used to compare against a legacy file outside the attribution set.
+ * List EVERY artifact `.md` file in `dir` attributable to this idea — the files
+ * ALSO present in `ideaFiles` (the attribution universe from `resolveIdeaFiles`),
+ * sorted for deterministic reporting. `pickIdeaFile` reduces this set to one file
+ * for the gates that need a single artifact; stem validation needs the whole set,
+ * because land stages every `.docs/` file the idea authored, not just the pick.
+ *
+ * `recursive` walks descendant directories too. It is off by default because
+ * `pickIdeaFile`'s consumers resolve one artifact per family from that family's
+ * own directory. Stem validation turns it on for exactly the families whose
+ * artifact contract is itself recursive — see
+ * `featureArtifactPatternsAreRecursive`. Attribution already spans nested paths
+ * (`resolveIdeaFiles` admits any `.docs/` path), so a one-level walk would leave a
+ * nested artifact staged but unvalidated.
  */
-export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise<string | null> {
+export async function listIdeaFiles(
+  dir: string,
+  ideaFiles: Set<string>,
+  options: { recursive?: boolean } = {},
+): Promise<string[]> {
   try {
     await access(dir);
   } catch {
-    return null;
+    return [];
   }
 
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
-    return null;
+    return [];
   }
 
   // ideaFiles paths are `.docs/...`-relative to the worktree root. `dir` is an
@@ -514,14 +598,30 @@ export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise
 
   const matches: string[] = [];
   for (const e of entries) {
-    if (!e.isFile() || !String(e.name).endsWith('.md')) continue;
     const abs = join(dir, String(e.name));
+    if (e.isDirectory()) {
+      if (options.recursive) matches.push(...(await listIdeaFiles(abs, ideaFiles, options)));
+      continue;
+    }
+    if (!e.isFile() || !String(e.name).endsWith('.md')) continue;
     const rel = docsRel(abs);
     if (rel !== null && ideaFiles.has(rel)) {
       matches.push(abs);
     }
   }
 
+  return matches.sort();
+}
+
+/**
+ * Pick the artifact `.md` file in `dir` to use, restricted to files ALSO present
+ * in `ideaFiles` (the attribution universe from `resolveIdeaFiles`). Zero matching
+ * candidates → `null` (missing-artifact semantics, unchanged from `findNewestFile`).
+ * Multiple candidates → newest mtime, but ONLY among the idea's own candidates —
+ * mtime is never used to compare against a legacy file outside the attribution set.
+ */
+export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise<string | null> {
+  const matches = await listIdeaFiles(dir, ideaFiles);
   if (matches.length === 0) return null;
   if (matches.length === 1) return matches[0];
 

@@ -209,7 +209,11 @@ describe('acceptance: the exact observed session-limit message routes to a coord
       if (claudeCalls === 1) {
         return Promise.resolve({ stdout: SESSION_LIMIT_MESSAGE, stderr: '', exitCode: 1 });
       }
-      return Promise.resolve({ stdout: 'done', stderr: '', exitCode: 0 });
+      return Promise.resolve({
+        stdout: JSON.stringify({ type: 'result', result: 'done' }),
+        stderr: '',
+        exitCode: 0,
+      });
     }) as never);
 
     const provider = new ClaudeProvider();

@@ -15,6 +15,8 @@ This prose token `not-a-path` is not a declared corroboration path.
 **Files:**
 - `test/fixtures/daemon-e2e/touched.txt`
 
+**Criterion:** S1.1
+
 **Dependencies:** T0
 
 ## Task Dependency Graph

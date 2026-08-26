@@ -6,8 +6,6 @@
  *   operations invoke the repository's real conduct-ts scope-check command.
  * - runContainmentFloor() harvests commit-time widenings and hook-authored
  *   events at the build-step boundary.
- * - buildGraderPrompt() renders the harvested rationale provenance for the
- *   configured build_review grader.
  *
  * Third-party boundaries: none. Git is local and every fixture is isolated.
  */
@@ -19,10 +17,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import {
   runContainmentFloor,
-  type AcceptedScopeWidening,
 } from '../../src/engine/per-task-commit-floor.js';
 import { runScopeCheck } from '../../src/engine/scope-check-cli.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
@@ -70,20 +66,6 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
     const args = ['commit', '-m', subject];
     for (const trailer of trailers) args.push('-m', trailer);
     return git(...args);
-  }
-
-  function graderPrompt(acceptedWidenings: AcceptedScopeWidening[]): string {
-    return buildGraderPrompt({
-      diff: 'diff --git a/example b/example',
-      planBody: '### Task 3: config-only task',
-      mergeBase: 'base-sha',
-      baseRef: 'main',
-      baseKind: 'local',
-      trackingRefSha: null,
-      remoteHeadSha: null,
-      fresh: false,
-      acceptedWidenings,
-    });
   }
 
   beforeEach(async () => {
@@ -181,7 +163,6 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
     });
     expect(report.acceptedWidenings).toEqual([]);
     expect(report.skipNotes).toEqual([]);
-    expect(graderPrompt(report.acceptedWidenings)).not.toContain(unrelatedPath);
   });
 
   it('carries authored and derived rationales from a real commit into build_review', async () => {
@@ -220,9 +201,6 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
       }),
     ]));
 
-    const prompt = graderPrompt(report.acceptedWidenings);
-    expect(prompt).toMatch(new RegExp(`${authoredPath.replaceAll('/', '\\/')}[\\s\\S]*Provenance: Authored trailer`));
-    expect(prompt).toMatch(new RegExp(`${derivedPath.replaceAll('/', '\\/')}[\\s\\S]*Provenance: Derived commit rationale`));
   });
 
   it('surfaces an unresolvable check from the hook ledger in the build record', async () => {

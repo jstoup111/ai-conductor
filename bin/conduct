@@ -16,7 +16,10 @@ set -euo pipefail
 #   conduct --step bootstrap
 #   conduct --from plan
 
-HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve the real script path so the binary works when symlinked into
+# ~/.local/bin (otherwise dirname resolves to ~/.local/bin and the
+# bin/lib/ lookup breaks). Matches bin/conduct-ts.
+HARNESS_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 # shellcheck source=bin/lib/harness-common.sh
 source "${HARNESS_DIR}/bin/lib/harness-common.sh"
 ORIGINAL_CWD="$(pwd)"
@@ -45,6 +48,19 @@ log()  { echo -e "${BLUE}[conduct]${NC} $*"; }
 ok()   { echo -e "${GREEN}  ✓${NC} $*"; }
 fail() { echo -e "${RED}  ✗${NC} $*"; }
 warn() { echo -e "${YELLOW}  ⚠${NC} $*"; }
+
+rewrite_with_sed() {
+  local target=$1
+  shift
+  local temp
+  temp=$(mktemp "${target}.XXXXXX")
+  if cp -p "$target" "$temp" && sed "$@" "$target" > "$temp"; then
+    mv "$temp" "$target"
+  else
+    rm -f "$temp"
+    return 1
+  fi
+}
 
 CURRENT_STEP_FILE="${PIPELINE_DIR}/.current-step"
 STEP_START_FILE="${PIPELINE_DIR}/.step-start-time"
@@ -1628,7 +1644,7 @@ run_architecture_review() {
       fi
       # Mark approved ADRs — update Status from DRAFT to APPROVED
       for f in "${draft_adrs[@]}"; do
-        sed -i 's/^Status: DRAFT$/Status: APPROVED/' "$f"
+        rewrite_with_sed "$f" 's/^Status: DRAFT$/Status: APPROVED/'
         ok "ADR approved: $(basename "$f")"
       done
     fi
