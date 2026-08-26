@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-26T01:25:17.114Z
+Status: halted
 Slug: conflict-artifact-stem-is-validated-only-at-build-
 Class: plan-gap
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-conflict-artifact-stem-is-validated-only-at-build-
-Head SHA: b72179fac067d17d6cdb7eed955c065cbeb3464e
-Halted at: 2026-08-26T01:13:41.868Z
+Head SHA: 33522799175513b478b0f0f4b39055ae9992b555
+Halted at: 2026-08-26T02:22:32.695Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
