@@ -179,7 +179,9 @@ describe('engine/worktree-prepare', () => {
       await arrange();
       const events = new ConductorEventEmitter();
       const seen: ConductorEvent[] = [];
-      events.on('project_setup', (event) => seen.push(event));
+      events.on('project_setup', (event) => {
+        seen.push(event);
+      });
 
       await prepareWorktree(dir, undefined, { baseSha: 'base-a', events });
 
@@ -192,7 +194,9 @@ describe('engine/worktree-prepare', () => {
       await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
       const events = new ConductorEventEmitter();
       const seen: ConductorEvent[] = [];
-      events.on('project_setup', (event) => seen.push(event));
+      events.on('project_setup', (event) => {
+        seen.push(event);
+      });
 
       await prepareWorktree(dir, undefined, { baseSha: 'base-a', force: true, events });
 
