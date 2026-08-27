@@ -1,4 +1,5 @@
 // Covers: task:3
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { makeRunFeature, type FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
@@ -6,8 +7,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 
 describe('daemon dispatch session ID wiring', () => {
-  it('forwards the feature scope session ID to the conductor worktree runner', async () => {
-    const sessionId = 'dispatch-session-id';
+  it('forwards each newly minted feature scope session ID to its conductor worktree runner', async () => {
     const runConductor = vi.fn<FeatureRunnerDeps['runConductor']>(async () => undefined);
     const deps: FeatureRunnerDeps = {
       createWorktree: async () => ({ path: '/worktree', branch: 'feat/session-id' }),
@@ -20,14 +20,20 @@ describe('daemon dispatch session ID wiring', () => {
       beginFeatureRun: () => ({
         events: new ConductorEventEmitter(),
         providerExecution: {} as ProviderExecutionContext,
-        sessionId,
+        sessionId: randomUUID(),
         stop: () => undefined,
       }),
     };
 
-    await makeRunFeature(deps)({ slug: 'session-id-feature' } as BacklogItem);
+    const runFeature = makeRunFeature(deps);
+    await runFeature({ slug: 'session-id-feature-a' } as BacklogItem);
+    await runFeature({ slug: 'session-id-feature-b' } as BacklogItem);
 
-    expect(runConductor.mock.calls[0]?.[5]).toBe(sessionId);
+    const dispatchedSessionIds = runConductor.mock.calls.map((call) => call[5]);
+    expect(dispatchedSessionIds).toHaveLength(2);
+    expect(dispatchedSessionIds[0]).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(dispatchedSessionIds[1]).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(dispatchedSessionIds[0]).not.toBe(dispatchedSessionIds[1]);
   });
 
 });
