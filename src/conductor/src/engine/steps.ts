@@ -250,17 +250,6 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
-    name: 'retro',
-    label: 'Retro',
-    phase: 'SHIP',
-    enforcement: 'advisory',
-    prerequisites: ['architecture_review_as_built'],
-    skippableForTiers: ['S'],
-    isCheckpoint: false,
-    skillName: 'retro',
-    loopGate: true,
-  },
-  {
     // Engine-native loop gate (like `complexity`, no skillName): rebase the
     // feature branch onto the discovered base before finish. Its objective
     // verdict is "branch is current with base" — the conductor runs the rebase
@@ -269,7 +258,7 @@ export const ALL_STEPS: StepDefinition[] = [
     label: 'Rebase',
     phase: 'SHIP',
     enforcement: 'structural',
-    prerequisites: ['retro'],
+    prerequisites: ['architecture_review_as_built'],
     skippableForTiers: [],
     isCheckpoint: false,
     loopGate: true,

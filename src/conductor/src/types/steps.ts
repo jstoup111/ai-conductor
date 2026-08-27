@@ -20,7 +20,6 @@ export type StepName =
   | 'manual_test'
   | 'prd_audit'
   | 'architecture_review_as_built'
-  | 'retro'
   | 'rebase'
   | 'finish'
   // Conditional SHIP sub-routine — dispatched by the conductor when a blocking
@@ -73,7 +72,7 @@ export interface StepDefinition {
    * objective verdict is recomputed after it runs and the selector may route
    * to/over it. The conductor derives the loop region and the front/loop
    * boundary from this flag, so a custom config step inserted among the loop
-   * steps joins the loop. Built-ins: build, manual_test, retro, finish.
+   * steps joins the loop. Built-ins: build, manual_test, rebase, finish.
    */
   loopGate?: boolean;
   /**
