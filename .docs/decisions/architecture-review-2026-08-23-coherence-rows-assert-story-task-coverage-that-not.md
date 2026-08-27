@@ -155,6 +155,11 @@ corpus before drafting.
   discovery-side coherence check in `daemon-backlog.ts` must not be modified. A test must assert
   that a coherence artifact with zero `criterion` rows remains valid at discovery and that a merged
   spec lacking them is not blocked.
+
+  > **Amended 2026-08-26 by #1881:** C1's intent (a merged spec valid at discovery keeps
+  > building) is binding; its mechanism is not. `adr-2026-08-26-shared-coherence-parser-at-discovery`
+  > deletes `hasCoherenceTableDataRow` and routes discovery through the shared parser after the two
+  > predicates' divergence stranded a merged spec. The zero-`criterion`-rows test remains required.
 - **C2 — No silent affirmative default.** The new verdict and disposition fields must reject
   unrecognized values rather than treating them as affirmative, unlike the existing
   `NEGATIVE_VERDICTS` behavior. Both vocabularies are closed unions.

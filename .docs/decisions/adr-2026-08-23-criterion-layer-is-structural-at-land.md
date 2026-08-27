@@ -87,6 +87,13 @@ Backwards compatibility at BUILD is a fixed requirement of this decision, not a 
 - `hasCoherenceTableDataRow` and the discovery-side coherence check are **not** modified. A merged
   spec carrying zero `criterion` rows remains a valid coherence artifact at discovery and continues
   to build.
+
+> **Amended 2026-08-26 by #1881:** the requirement's intent is behavioral — a merged spec valid at
+> discovery stays valid and keeps building — not the preservation of `hasCoherenceTableDataRow`
+> itself. `adr-2026-08-26-shared-coherence-parser-at-discovery` deletes that bespoke predicate and
+> routes discovery through the shared `parseCoherenceArtifact` (shape-only, change-set-free, no
+> layer strictness), because the two predicates' acceptance sets diverged and stranded a merged
+> spec (#1881). The zero-`criterion`-rows invariant is preserved and remains pinned by test.
 - No BUILD or SHIP consumer may require a `criterion` row. `prd_audit` already reads the mapping
   conditionally ("where a committed coherence mapping exists"), and that tolerance is preserved.
 - All added strictness lives inside `runCoherenceGate`, which runs only at `landSpec`.
