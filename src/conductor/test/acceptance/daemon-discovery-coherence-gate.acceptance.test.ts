@@ -104,6 +104,29 @@ describe('Story 4 — discovery rejects a missing or invalid required coherence 
     expect(items.map((i) => i.slug)).toEqual(['valid-m-spec']);
   });
 
+  it('happy: a mixed-arity table whose FIRST data row is a five-cell legacy row is accepted', async () => {
+    // The coherence schema is deliberately mixed-arity: `criterion` rows carry a
+    // sixth diff-locality cell, every legacy row class carries five. A real
+    // L-tier artifact therefore has a six-column header above a five-cell
+    // `outcome` row, and discovery must accept it exactly as the canonical
+    // parser (parseCoherenceArtifact) does.
+    await commitSpec('mixed-arity', {
+      tier: 'L',
+      coherence:
+        '# Coherence\n\n' +
+        '| Row class | Cited id / criterion | Counterpart id(s) | Verdict | Notes | Disposition |\n' +
+        '|---|---|---|---|---|---|\n' +
+        '| outcome | outcome-1 | story-1 | covered | mapped |\n' +
+        '| criterion | Story 1 happy: it works. | task-1 | covered | quoted from task 1 | diff-local |\n',
+    });
+
+    const log: string[] = [];
+    const { items } = await discover(log);
+
+    expect(items.map((i) => i.slug)).toEqual(['mixed-arity']);
+    expect(log.filter((l) => /coherence/i.test(l))).toEqual([]);
+  });
+
   it('negative: an M-tier spec with NO coherence artifact is warn-skipped and never enters the backlog', async () => {
     await commitSpec('no-artifact', { tier: 'M' });
 
