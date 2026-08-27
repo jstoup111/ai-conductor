@@ -157,6 +157,23 @@ Rules: `category` is set **iff** `disposition == "halt"` (`architectural-clarity
 for `halt`. A `plan` rationale must name the examined plan task IDs and why none admits the fix.
 Each task `id` is unique and stable (`rem-<gap>-<n>`); `status` starts `pending`.
 
+**The gap `id` is the auditor's finding id, copied verbatim.** The engine matches your entries
+against the ids it parsed out of the audit report, one-to-one, and fails closed on any
+mismatch — a gap it cannot match by id is reported as missing and the run halts needs-human
+even when your disposition and rationale were right. Take the id from the report:
+
+| Trigger | `id` is | Example |
+|---|---|---|
+| as-built architecture review | the `Finding` cell of the `## Blocking Findings` row | `AB-1` |
+| `prd-audit` | the blocking `FR-N` row id, or its criterion id when the report has no PRD | `FR-10`, `S2.4` |
+| `build_review` rubric | `build_review:<stem>` | `build_review:testQuality` |
+| `finish` test failure | `test:<failing file stem>` | `test:daemon-backlog` |
+
+Never substitute the governing ADR slug, the clause name, the file path, or a restatement of
+the finding for that id — the ADR belongs in `rationale`, never in `id`. This holds for every
+disposition: a `halt` entry must carry the finding's own id too, or the escalation you wrote is
+discarded and replaced by an opaque id-mismatch halt.
+
 ## What You Are NOT
 
 - You are NOT the implementer — you write the task, not the code.
