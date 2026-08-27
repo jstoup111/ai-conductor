@@ -10,7 +10,7 @@ daemon's per-feature dispatch — through one shared wiring seam, closing the ga
 ```mermaid
 graph TD
     subgraph seam["Shared wiring seam (NEW)"]
-        wire["wireOtelVisualizer(config, ctx, events)<br/>resolveOtelConfig → createOtelVisualizer → start()"]
+        wire["wireOtelVisualizer(config, ctx, events)<br/>resolveOtelConfig → visualizer:otel factory → start(emitter, context)"]
     end
 
     subgraph interactive["Interactive entry (index.ts main tail)"]

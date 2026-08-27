@@ -13,13 +13,17 @@ resolution, and a cross-path parity guard. 10 tasks.
 ## Technical Approach
 
 - **Shared seam.** A new `wireOtelVisualizer(config, ctx, events)` helper in
-  `src/conductor/src/engine/otel/wire.ts` composes `resolveOtelConfig` →
-  `createOtelVisualizer` → `start()` and returns the started plugin or null.
-  `createOtelVisualizer` moves from `index.ts` into this module (re-exported from `index.ts`
-  so existing integration tests keep their import). `index.ts`'s inline block
-  (`index.ts:1279-1296`) becomes a call to the helper; `daemon-cli.ts`'s `beginFeatureRun`
+  `src/conductor/src/engine/otel/wire.ts` composes `resolveOtelConfig` → the `visualizer:otel`
+  built-in factory → the seam's `start(emitter, context)` and returns the started plugin or
+  null. This plan is written against the post-state of
+  `.docs/plans/connector-seam-for-event-submissions-is-registered.md`, which ships first (it
+  precedes this plan in dispatch order) and lands the `visualizer:otel` factory in
+  `registerBuiltins` plus the `selectVisualizers` loop in `main()`. The helper wraps that
+  factory's construction path — it does NOT bypass the registry with direct construction.
+  `index.ts`'s otel construction routes through the helper; `daemon-cli.ts`'s `beginFeatureRun`
   (`daemon-cli.ts:926-942`) gains a second call — one visualizer per dispatch, attached to
-  the feature-scoped bus.
+  the feature-scoped bus. Line anchors in this plan are pre-seam positions; locate by symbol
+  after rebase.
 - **C1 — run identity is read-only in the daemon path.** The step runner writes
   `.pipeline/conduct-session-id` only when absent, from its own `runId`
   (`src/conductor/src/engine/step-runners.ts:2608-2611`); adr-2026-07-27 D7 keeps it the sole
@@ -52,7 +56,9 @@ resolution, and a cross-path parity guard. 10 tasks.
 
 ## Prerequisites
 
-None — all touched modules exist; no migrations, packages, or config keys.
+The `connector-seam-for-event-submissions-is-registered` feature must be merged first — this
+plan builds on its `visualizer:otel` factory, `start(emitter, context)` seam contract, and
+`selectVisualizers` loop. No migrations, packages, or new config keys.
 
 ## Tasks
 
@@ -126,13 +132,13 @@ None — all touched modules exist; no migrations, packages, or config keys.
 **Steps:**
 1. Write failing test: `wireOtelVisualizer(config, ctx, events)` returns null when otel is absent/disabled; returns a started visualizer when enabled (fake OTLP transport); when `ctx.runId` is supplied the resource carries it and no file write occurs under the supplied pipelineDir
 2. Verify test fails (RED)
-3. Implement: create `src/conductor/src/engine/otel/wire.ts` moving `createOtelVisualizer` (from `src/conductor/src/index.ts:285`) plus a `wireOtelVisualizer` that composes resolveOtelConfig + construction + `start(events)`; re-export `createOtelVisualizer` from index.ts. Follow the audit-trail sink pattern: construct near the owning bus, subscribe, tear down with the owning scope; allowed variation — return-the-plugin instead of subscribe-object, since callers own stop timing
+3. Implement: create `src/conductor/src/engine/otel/wire.ts` with a `wireOtelVisualizer` that composes resolveOtelConfig + the `visualizer:otel` built-in factory (registered by the connector-seam feature in `registerBuiltins`) + the seam's `start(emitter, context)`; if any OTel creation helper still lives in `index.ts` after rebase, move it here and re-export from index.ts so existing importers compile. Follow the audit-trail sink pattern: construct near the owning bus, subscribe, tear down with the owning scope; allowed variation — return-the-plugin instead of subscribe-object, since callers own stop timing
 4. Verify test passes (GREEN)
 5. Commit with message: "Extract shared wireOtelVisualizer helper into engine/otel/wire.ts"
 
 **Done when:**
 - Helper tests pass for disabled-null, enabled-started, and injected-runId/no-write cases
-- `createOtelVisualizer` has exactly one definition (in wire.ts) and index.ts re-exports it (existing importers compile)
+- The OTel construction path has exactly one definition, reachable only through wire.ts and the registry factory (existing importers compile)
 
 **Files likely touched:**
 - src/conductor/src/engine/otel/wire.ts — new helper module
@@ -148,12 +154,12 @@ None — all touched modules exist; no migrations, packages, or config keys.
 **Steps:**
 1. Write failing test: the interactive wiring path produces the same visualizer list as before via the helper (drive the extracted seam with an enabled config; assert one started visualizer with the run's pipelineDir/feature/project context and no `ctx.runId` override)
 2. Verify test fails (RED)
-3. Implement: replace the inline block at `src/conductor/src/index.ts:1279-1296` with a `wireOtelVisualizer` call feeding the existing `visualizerList`/`buildVisualizers`/`stopVisualizers` lifecycle
+3. Implement: route the otel branch of the `selectVisualizers` loop the connector-seam feature landed in `src/conductor/src/index.ts` through a `wireOtelVisualizer` call feeding the existing `visualizerList`/`buildVisualizers`/`stopVisualizers` lifecycle
 4. Verify test passes (GREEN)
 5. Commit with message: "Route interactive OTel wiring through wireOtelVisualizer"
 
 **Done when:**
-- No call to resolveOtelConfig/createOtelVisualizer remains inline in main()'s tail; the helper is the only construction path there
+- No inline OTel construction remains in main()'s tail; the helper is the only construction path there
 - Existing interactive otel integration tests pass unchanged
 
 **Files likely touched:**
@@ -233,7 +239,7 @@ None — all touched modules exist; no migrations, packages, or config keys.
 **Steps:**
 1. Write failing test: with otel enabled and a transport that fails/hangs, dispatch events produce renderer_error events on the feature bus (bounded via the existing warn-once wrappers, not one per export), the dispatch completes successfully, and the scope stop resolves despite the hanging flush (within the visualizer's existing bounded flush behavior — the warn-once catch on the stop flush path)
 2. Verify test fails (RED)
-3. Implement: (expected mostly satisfied by the existing onWarning bridge createOtelVisualizer already wires — fix any daemon-path gap, e.g. renderer_error not reaching the feature bus renderer)
+3. Implement: (expected mostly satisfied by the existing onWarning bridge the OTel creation path already wires — fix any daemon-path gap, e.g. renderer_error not reaching the feature bus renderer)
 4. Verify test passes (GREEN)
 5. Commit with message: "Prove unreachable OTLP endpoint degrades to bounded warnings in daemon dispatch"
 

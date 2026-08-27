@@ -18,7 +18,7 @@ sequenceDiagram
     D->>B: beginFeatureRun(worktree «slug», item)
     B->>W: wire(config, worktree .pipeline/, featureEvents)
     alt otel enabled
-        W->>V: createOtelVisualizer(resolved, ctx)
+        W->>V: visualizer:otel factory(resolved, ctx)
         Note over V: resource: conductor.run.id from<br/>«worktree»/.pipeline/conduct-session-id (durable),<br/>conductor.feature=«slug», conductor.project
         W->>V: start(featureEvents)
     else disabled / absent
