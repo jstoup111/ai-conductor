@@ -19,7 +19,12 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
-const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
+// Invoke the current TypeScript entry point rather than bin/conduct-ts. The
+// wrapper deliberately pins a previously published, gitignored dist bundle,
+// which can be stale relative to the source behavior this acceptance test
+// covers.
+const CONDUCT_ENTRY_POINT = join(REPO_ROOT, 'src', 'conductor', 'src', 'index.ts');
+const TSX_LOADER = join(REPO_ROOT, 'src', 'conductor', 'node_modules', 'tsx', 'dist', 'loader.mjs');
 
 describe('acceptance: unattended inline --auto is rejected before pipeline setup', () => {
   let projectRoot: string;
@@ -58,7 +63,7 @@ describe('acceptance: unattended inline --auto is rejected before pipeline setup
   });
 
   function invoke(args: string[], stdin?: string) {
-    const result = spawnSync(REAL_CONDUCT_TS, args, {
+    const result = spawnSync(process.execPath, ['--import', TSX_LOADER, CONDUCT_ENTRY_POINT, ...args], {
       cwd: projectRoot,
       env: {
         ...process.env,
