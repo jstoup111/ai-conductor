@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:1
 /**
  * Covers: task:1, task:2, task:3, task:4
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
@@ -494,6 +494,73 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     ) as any;
     expect(inputPoint?.value).toBe(123);
     expect(outputPoint?.value).toBe(456);
+  });
+});
+
+// ── Task 1: step cost counter ───────────────────────────────────────────────
+
+describe('Task 1: step cost counter', () => {
+  it('records provider cost with step, model, and source attributes', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      model: 'gpt-5.6-terra',
+      tokenUsage: { input: 100, output: 50, costUsd: 0.42, costSource: 'provider' },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const costMetric = findMetric(metricExporter, 'conductor.step.cost')!;
+    const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'explore');
+    expect(point?.value).toBe(0.42);
+    expect(point?.attributes).toMatchObject({
+      step: 'explore',
+      model: 'gpt-5.6-terra',
+      source: 'provider',
+    });
+  });
+
+  it('records rate-card cost with the rate-card source attribute', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'plan',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: 0.12, costSource: 'rate-card' },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const costMetric = findMetric(metricExporter, 'conductor.step.cost')!;
+    const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'plan');
+    expect(point?.attributes['source']).toBe('rate-card');
+  });
+
+  it('records an explicit zero-cost observation', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: 0, costSource: 'provider' },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const costMetric = findMetric(metricExporter, 'conductor.step.cost')!;
+    const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'build');
+    expect(point?.value).toBe(0);
   });
 });
 
