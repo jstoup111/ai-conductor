@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-08-26
+## [1.0.0] - 2026-08-27
 
 ### Added
 
@@ -52,6 +52,11 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Manual testing now warns instead of blocking when browser automation dependencies are unavailable, while continuing curl checks and preserving real application failures. ([implementation PR #1902](https://github.com/jstoup111/ai-conductor/pull/1902)).
 - Restored configurable gate code-validity behavior and reliable Claude rate-limit hook handling. ([implementation PR #1914](https://github.com/jstoup111/ai-conductor/pull/1914)).
 - SHIP validation retries verdict reports from an earlier dispatch instead of routing their stale findings. ([implementation PR #1891](https://github.com/jstoup111/ai-conductor/pull/1891)).
+- The daemon now identifies the actual invalid as-built verdict defect instead of always reporting a plan gap. ([implementation PR #1919](https://github.com/jstoup111/ai-conductor/pull/1919)).
+- Implicitly invocable skills now stay within their lifecycle boundaries instead of activating on ordinary change, planning, review, or question prompts. ([implementation PR #1924](https://github.com/jstoup111/ai-conductor/pull/1924)).
+- Daemon discovery no longer rejects valid coherence artifacts whose table mixes six-cell criterion rows with five-cell legacy rows. ([implementation PR #1926](https://github.com/jstoup111/ai-conductor/pull/1926)).
+- As-built review remediation now resolves a governing clause written with backticks or bold around its ADR stem, and accepts the documented `<stem> + <decision number>` form, instead of halting for a human. ([implementation PR #1959](https://github.com/jstoup111/ai-conductor/pull/1959)).
+- PRD audits now safely parse, validate, and route no-owner over-scope findings. ([implementation PR #1909](https://github.com/jstoup111/ai-conductor/pull/1909)).
 
 ## Migration
 
