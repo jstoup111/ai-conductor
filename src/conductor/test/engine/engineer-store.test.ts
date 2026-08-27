@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach, assert, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile, access } from 'fs/promises';
 import { join } from 'path';
@@ -564,6 +565,33 @@ describe('engine/engineer-store', () => {
       const lines = await readSignalLines(engineerDir);
       expect(lines.length).toBe(1);
       expect(JSON.parse(lines[0]).feature).toBe('feat-x');
+    });
+
+    it('halted outcome writes a halt narrative with a reference and no provider invocation', async () => {
+      const mod = await loadEngineerStore();
+      const emitEngineerSignal = requireFn(mod, 'emitEngineerSignal');
+      const provider = makeProvider();
+      await emitEngineerSignal(
+        await emitArgs({
+          engineerDir,
+          outcome: { slug: 'feat-x', status: 'halted', reason: 'kickback cap exceeded' },
+          provider,
+        }),
+      );
+
+      const stored = JSON.parse((await readSignalLines(engineerDir))[0]);
+      const narrative = await readFile(join(engineerDir, stored.narrativeRef), 'utf-8');
+      expect({
+        providerCalls: provider.calls,
+        outcome: stored.outcome,
+        narrativeRef: stored.narrativeRef,
+        narrative,
+      }).toEqual({
+        providerCalls: 0,
+        outcome: 'halted',
+        narrativeRef: 'narratives/proj/feat-x-run-1.md',
+        narrative: expect.stringContaining('kickback cap exceeded'),
+      });
     });
 
     it('UNWRITABLE engineer dir → error logged + swallowed, NO throw', async () => {
