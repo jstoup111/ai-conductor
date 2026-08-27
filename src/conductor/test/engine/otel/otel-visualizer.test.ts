@@ -1,3 +1,4 @@
+// Covers: task:8
 /**
  * T9: OtelVisualizer — provider/processor setup (off hot path).
  * T17: hot-path guard — emit() resolves promptly even when the transport blocks.
@@ -9,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -84,6 +85,63 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     expect(() => vis.start(emitter)).not.toThrow();
     // cleanup
     return vis.stop();
+  });
+
+  it('uses identity supplied to start() for exported spans', async () => {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      pipelineDir,
+    );
+    const vis = new OtelVisualizer(resolved, {
+      runId: 'constructor-run',
+      feature: 'constructor-feature',
+      project: 'constructor-project',
+      spanExporter,
+      metricExporter,
+    });
+
+    vis.start(emitter, {
+      runId: 'start-run',
+      feature: 'start-feature',
+      project: 'start-project',
+      branch: 'feat/start-context',
+      engineVersion: '1.2.3',
+      pipelineDir,
+    });
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const resource = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.resource;
+    expect(resource?.attributes).toMatchObject({
+      'conductor.run.id': 'start-run',
+      'conductor.feature': 'start-feature',
+      'conductor.project': 'start-project',
+      'conductor.branch': 'feat/start-context',
+      'conductor.engine.version': '1.2.3',
+    });
+  });
+
+  it('persists a generated run id when start context omits one', async () => {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      pipelineDir,
+    );
+    const vis = new OtelVisualizer(resolved, { spanExporter, metricExporter });
+
+    vis.start(emitter, { pipelineDir });
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const persisted = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf-8');
+    const runId = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')
+      ?.resource.attributes['conductor.run.id'];
+    expect({ persisted, runId }).toEqual({
+      persisted: expect.stringMatching(/\S/),
+      runId: persisted,
+    });
   });
 
   it('stop() resolves — BatchSpanProcessor + PeriodicMetricReader flush and shut down', async () => {

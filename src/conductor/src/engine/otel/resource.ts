@@ -12,6 +12,10 @@ export interface ResourceContext {
   feature?: string;
   /** Project name. Defaults to 'unknown'. */
   project?: string;
+  /** Git branch for the active run. Defaults to 'unknown'. */
+  branch?: string;
+  /** Harness engine version for the active run. Defaults to 'unknown'. */
+  engineVersion?: string;
   /**
    * Override the run id. When supplied, the session-id file and generated id
    * are both bypassed. Used by tests that need deterministic run ids.
@@ -34,12 +38,16 @@ export function buildResource(ctx: ResourceContext): Resource {
   const runId = ctx.runId ?? resolveRunId(ctx.pipelineDir);
   const feature = ctx.feature ?? 'unknown';
   const project = ctx.project ?? 'unknown';
+  const branch = ctx.branch ?? 'unknown';
+  const engineVersion = ctx.engineVersion ?? 'unknown';
 
   return resourceFromAttributes({
     'service.name': SERVICE_NAME,
     'conductor.run.id': runId,
     'conductor.feature': feature,
     'conductor.project': project,
+    'conductor.branch': branch,
+    'conductor.engine.version': engineVersion,
   });
 }
 
