@@ -22,7 +22,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { load as loadYaml } from 'js-yaml';
-import { loadConfig } from '../../src/engine/config.js';
+import { loadConfig, satisfiesVersion, validateConfig } from '../../src/engine/config.js';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
@@ -113,7 +113,7 @@ describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
     expect(uncommented).toContain('# Harness config —');
   });
 
-  it('validates once every commented example is uncommented', async () => {
+  it('validates as a user config once every commented example is uncommented', async () => {
     const [raw, versionRaw] = await Promise.all([
       readFile(TEMPLATE_PATH, 'utf8'),
       readFile(VERSION_PATH, 'utf8'),
@@ -121,35 +121,32 @@ describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
     const uncommented = uncommentExamples(raw);
     const installedVersion = versionRaw.trim();
 
-    const tmpDir = await mkdtemp(join(tmpdir(), 'config-template-test-'));
-    try {
-      await mkdir(join(tmpDir, '.ai-conductor'), { recursive: true });
-      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), uncommented, 'utf8');
+    // This template is deliberately user-level-shaped: it contains the
+    // `conductor` block that loadConfig() must reject in a project file.
+    // Validate its parsed content through the same shared schema under the
+    // merged/user source, then separately assert its version floor.
+    const result = validateConfig(loadYaml(uncommented));
 
-      const result = await loadConfig(tmpDir, installedVersion);
-
-      if (!result.ok) {
-        throw new Error(
-          `Fully-uncommented template failed to validate against installed ` +
-            `version ${installedVersion}: [${result.error.type}] ${result.error.message}\n\n` +
-            `--- uncommented config ---\n${uncommented}`,
-        );
-      }
-      expect(result.ok).toBe(true);
-      expect(result.warnings).toEqual([]);
-
-      // The bootstrap-step regression: the illustrative steps.* example
-      // must name a real ALL_STEPS entry, not an out-of-band step.
-      expect(result.config.steps).toHaveProperty('explore');
-
-      // The harness_version regression: the constraint in the template must
-      // be satisfiable by the repo's actual (pre-1.0) VERSION.
-      expect(result.config.harness_version).toBe('>=0.99.0');
-      expect(raw).toMatch(/testQuality:\n\s+enabled: false/);
-      expect(raw).not.toMatch(/\b(?:tautology|scope|rootCause|completeness)\b/);
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+    if (!result.ok) {
+      throw new Error(
+        `Fully-uncommented user template failed to validate against installed ` +
+          `version ${installedVersion}: [${result.error.type}] ${result.error.message}\n\n` +
+          `--- uncommented config ---\n${uncommented}`,
+      );
     }
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+
+    // The bootstrap-step regression: the illustrative steps.* example
+    // must name a real ALL_STEPS entry, not an out-of-band step.
+    expect(result.config.steps).toHaveProperty('explore');
+
+    // The harness_version regression: the constraint in the template must
+    // be satisfiable by the repo's actual (pre-1.0) VERSION.
+    expect(result.config.harness_version).toBe('>=0.99.0');
+    expect(satisfiesVersion(installedVersion, result.config.harness_version ?? '')).toBe(true);
+    expect(raw).toMatch(/testQuality:\n\s+enabled: false/);
+    expect(raw).not.toMatch(/\b(?:tautology|scope|rootCause|completeness)\b/);
   });
 
   it('does not regress to an unsatisfiable harness_version constraint', async () => {
