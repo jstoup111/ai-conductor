@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-27T22:54:27.192Z
 Slug: remove-the-unattended-one-shot-inline-run-auto-the
 Class: plan-gap
 Halting step: prd_audit
