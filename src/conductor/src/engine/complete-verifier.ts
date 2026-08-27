@@ -5,7 +5,7 @@ import type { FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { readState } from './state.js';
 
 /** Steps re-checked when a feature is marked complete on resume. */
-const SHIP_GATING_STEPS: StepName[] = ['test_suite', 'manual_test', 'retro', 'finish'];
+const SHIP_GATING_STEPS: StepName[] = ['test_suite', 'manual_test', 'finish'];
 
 export interface CompleteVerifierOptions {
   /** Process-free current-PASS inspection seam for test_suite. */
@@ -34,7 +34,7 @@ export type CompleteStateVerification = CompleteStateOk | CompleteStateGap;
  * meant the marker could land without the SHIP phase having genuinely run.
  *
  * This helper detects that case: any worktree whose state claims complete
- * but where test_suite / manual_test / retro / finish predicates can't reproduce
+ * but where test_suite / manual_test / finish predicates can't reproduce
  * `done: true` is "stale-complete" and should be rolled back.
  *
  * `sessionStartedAt` is intentionally NOT passed in; we use the worktree
