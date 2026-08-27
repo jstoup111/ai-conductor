@@ -62,7 +62,7 @@ abandoned slug never resurfaces and real blocked work stays visible.
 - Given a plan that is blocked but still wanted remains under .docs/plans/, when the backlog scan runs, then it is still reported (as blocked or pending) — presence in .docs/plans remains the wanted/abandoned discriminator
 
 #### Negative Paths
-- Given the shipment audit's recursive plan enumeration, when it runs on the branch after migration, then no retired plan stem appears as an audit source and the audit exits with the same status as on the base branch
+- Given the shipment audit's historical plan enumeration, when it runs on the branch after migration, then its source set and exit status are identical to the base branch's (all nine retired stems already appear as historical sources there, and the engine surfacing them is tracked by #1964, out of scope for this docs-only migration)
 
 ### Done When
 - [ ] Backlog scan output on the branch contains none of the 9 retired stems and is otherwise identical to the base branch's

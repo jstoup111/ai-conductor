@@ -144,13 +144,13 @@ for tone and structure; `docs/runbooks/index.md` lists every runbook and must ga
 **Steps:**
 1. Run the backlog scan's enumeration on the branch (`git ls-tree --name-only HEAD:.docs/plans` filtered to `*.md`, the same non-recursive listing `daemon-backlog.ts` performs) and on the merge-base; diff the two lists.
 2. Assert none of the nine retired stems appear in either list, and that the two lists are identical except for this feature's own plan file.
-3. Run the shipment audit's recursive enumeration (`git ls-tree -r --name-only HEAD -- .docs/plans`) and assert no retired stem appears.
+3. Run the shipment audit's ACTUAL historical enumeration -- `git log --pretty=format: --name-only <ref> -- .docs/plans .docs/specs`, the source `src/conductor/src/engine/shipment-audit.ts:138-142` uses -- for `<ref>` = HEAD and `<ref>` = the merge-base, and assert the two source sets are identical. The nine retired stems are already historical sources at the merge-base (they lived under `.docs/plans/` before an earlier change moved them to `.docs/retired/`), so this migration neither adds nor removes an audit source; the engine surfacing them at all is issue #1964, out of scope here.
 4. Confirm `git diff --stat <merge-base>...HEAD -- src/` is empty (no engine change).
 5. Record the four observations in an empty commit with trailers `Task: 6` and `Evidence: skipped verification produced no diff; observations in this message`.
 
 **Done when:**
 - The branch's plans listing contains no retired stem and differs from the merge-base only by this feature's own artifacts
-- The recursive audit enumeration contains no retired stem
+- The shipment audit's historical source set is byte-identical between HEAD and the merge-base (zero added, zero removed)
 - The diff against the merge-base touches no path under src/
 - An empty commit records these observations
 
