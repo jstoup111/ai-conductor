@@ -397,7 +397,7 @@ suite for the hosted documentation site story; nothing invokes it automatically.
 > gate. Run the relevant script by hand (`bash test/test_bin_update.sh`) when you change those surfaces.
 > Tracked in [#1021](https://github.com/jstoup111/ai-conductor/issues/1021).
 
-`examples/` holds runnable end-to-end scenarios (`inline.sh`, `interactive.sh`, `daemon.sh`,
+`examples/` holds runnable end-to-end scenarios (`interactive.sh`, `daemon.sh`,
 `engineer.sh`, `intake-loop.sh`, each taking a tier `s|m|l`). Each creates a throwaway sandbox via
 `sandbox_up` and tears it down on exit. They invoke real flows, are not run by CI, and are not a scored
 regression suite.
