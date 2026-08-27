@@ -99,7 +99,7 @@ import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { UISubscriber } from "./ui/types.js";
-import type { VisualizerPlugin } from './types/plugin.js';
+import type { VisualizerPlugin, VisualizerStartContext } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
 import { detectIntakeLoopCommand, dispatchIntakeLoop } from './intake-loop-cli.js';
@@ -193,15 +193,16 @@ import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
 /**
- * Start every visualizer plugin by calling `.start(emitter)`. Returns the same
- * array (for chaining). Called immediately after EventPersister is started.
+ * Start every visualizer plugin by calling `.start(emitter, context)`. Returns
+ * the same array (for chaining). Called immediately after EventPersister is started.
  */
 export function buildVisualizers(
   visualizers: VisualizerPlugin[],
   emitter: ConductorEventEmitter,
+  context: VisualizerStartContext = {},
 ): VisualizerPlugin[] {
   for (const vis of visualizers) {
-    vis.start(emitter);
+    vis.start(emitter, context);
   }
   return visualizers;
 }

@@ -1,15 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
-import type { VisualizerPlugin } from '../../src/types/plugin.js';
+import type { VisualizerPlugin, VisualizerStartContext } from '../../src/types/plugin.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 class FakeVisualizer implements VisualizerPlugin {
   readonly name = 'fake-visualizer';
   startCalled = 0;
   stopCalled = 0;
+  receivedContext: VisualizerStartContext | undefined;
 
-  start(_emitter: ConductorEventEmitter): void {
+  start(_emitter: ConductorEventEmitter, context: VisualizerStartContext): void {
     this.startCalled++;
+    this.receivedContext = context;
   }
 
   async stop(): Promise<void> {
@@ -35,11 +37,23 @@ describe('VisualizerPlugin interface + registry', () => {
     expect(names).toContain('fake-visualizer');
   });
 
-  it('VisualizerPlugin.start() is callable with a ConductorEventEmitter', () => {
+  // Covers: task:1
+  it('VisualizerPlugin.start() passes every identity context field to the visualizer', () => {
     const plugin = new FakeVisualizer();
     const emitter = new ConductorEventEmitter();
-    plugin.start(emitter);
+    const context: VisualizerStartContext = {
+      runId: 'run-123',
+      project: 'ai-conductor',
+      branch: 'feature/visualizer-seam',
+      feature: 'connector-seam-for-event-submissions-is-registered',
+      engineVersion: '1.2.3',
+      pipelineDir: '/tmp/project/.pipeline',
+    };
+
+    plugin.start(emitter, context);
+
     expect(plugin.startCalled).toBe(1);
+    expect(plugin.receivedContext).toEqual(context);
   });
 
   it('VisualizerPlugin.stop() returns a Promise', async () => {
