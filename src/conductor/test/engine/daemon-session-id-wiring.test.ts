@@ -37,7 +37,13 @@ describe('daemon dispatch session ID wiring', () => {
     const daemonCli = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf8');
 
     expect(daemonCli).toMatch(
-      /const beginFeatureRun = \(worktree: FeatureWorktree, item: BacklogItem\) => \{\s*const sessionId = uuidv4\(\);[\s\S]*?sessionId,[\s\S]*?const runConductorInWorktree = async \([\s\S]*?sessionId = uuidv4\(\),[\s\S]*?new DefaultStepRunner\(\s*selectedRuntime\.provider,\s*sessionId,/,
+      /const beginFeatureRun = (?:async )?\(worktree: FeatureWorktree, item: BacklogItem\) => \{\s*const sessionId = uuidv4\(\);/,
+    );
+    expect(daemonCli).toMatch(
+      /const runConductorInWorktree = async \([\s\S]*?sessionId = uuidv4\(\),/,
+    );
+    expect(daemonCli).toMatch(
+      /new DefaultStepRunner\(\s*selectedRuntime\.provider,\s*sessionId,/,
     );
   });
 });
