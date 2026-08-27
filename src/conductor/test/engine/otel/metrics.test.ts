@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 /**
  * Covers: task:1, task:2, task:3, task:4
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
@@ -31,13 +31,14 @@ function makeVisualizer(
   spanExporter: InMemorySpanExporter,
   metricExporter: InMemoryMetricExporter,
   pipelineDir: string,
+  runId = `test-${Date.now()}`,
 ): OtelVisualizer {
   const resolved = resolveOtelConfig(
     { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
     pipelineDir,
   );
   return new OtelVisualizer(resolved, {
-    runId: `test-${Date.now()}`,
+    runId,
     feature: 'test-feature',
     project: 'test-project',
     spanExporter,
@@ -554,5 +555,69 @@ describe('Task 3: metric identity attributes', () => {
       findMetric(first, 'conductor.step.duration')!.dataPoints[0].attributes['project'],
       findMetric(second, 'conductor.step.duration')!.dataPoints[0].attributes['project'],
     ]).toEqual(['project-a', 'project-b']);
+  });
+});
+
+describe('Task 4: bounded metric identity', () => {
+  it('pinning: full-run data points omit the injected run id', async () => {
+    const runId = 'run-id-that-must-not-label-metrics';
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, runId);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'flaky' });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50 },
+    });
+    await emitter.emit({
+      type: 'pipeline_closeout',
+      obligation: 'simplify',
+      startedAt: 1_000,
+      endedAt: 1_125,
+      ts: 1_130,
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const dataPointAttributes = metricExporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+      .flatMap((metric) => metric.dataPoints.map((dataPoint) => dataPoint.attributes));
+
+    expect(dataPointAttributes.every((attributes) => (
+      !Object.keys(attributes).some((key) => /run[._-]?id/i.test(key))
+      && !Object.values(attributes).includes(runId)
+    ))).toBe(true);
+  });
+
+  it('pinning: counters aggregate across projects without changing instrument names', async () => {
+    const first = await recordMetricsWithIdentity({ project: 'project-a', feature: 'shared-feature' });
+    const second = await recordMetricsWithIdentity({ project: 'project-b', feature: 'shared-feature' });
+    const retries = (exporter: InMemoryMetricExporter) => (
+      findMetric(exporter, 'conductor.step.retries')!.dataPoints[0].value as number
+    );
+
+    expect({
+      firstInstrumentNames: getMetricNames(first),
+      secondInstrumentNames: getMetricNames(second),
+      retriesTotal: retries(first) + retries(second),
+    }).toEqual({
+      firstInstrumentNames: [
+        'conductor.step.duration',
+        'conductor.step.retries',
+        'conductor.step.tokens',
+        'conductor.pipeline.closeout.duration',
+      ],
+      secondInstrumentNames: [
+        'conductor.step.duration',
+        'conductor.step.retries',
+        'conductor.step.tokens',
+        'conductor.pipeline.closeout.duration',
+      ],
+      retriesTotal: 2,
+    });
   });
 });
