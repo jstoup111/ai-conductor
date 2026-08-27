@@ -97,6 +97,7 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 | Class | Meaning | Cleared by the re-kick sweep? |
 | --- | --- | --- |
 | `needs-human` | Only an operator can resolve it. | No — skipped on every sweep. |
+| `plan-gap` | `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | Yes, on a base-branch advance; verification refuses again if the violation remains. |
 | `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, on a base-branch advance, same as `mechanical`. |
@@ -710,16 +711,78 @@ from a `remediate` or `build_review` disposition asking for a DECIDE revision.
    assertion must change, add the correction beside the original rather than rewriting it — see
    [amendment requests](#amendment-requests) above. Story artifacts under `.docs/stories/` are the
    exception: replace the superseded assertion in place instead, with no amendment note.
-3. Clear the halt so the feature resumes into BUILD:
+3. Rewind so the feature resumes into BUILD and actually builds the revised plan, from inside the
+   feature worktree:
    ```bash
-   rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
+   cd .worktrees/<slug> && conduct-ts rewind --to build
    ```
+   [`conduct-ts rewind`](../reference/cli.md#conduct-ts-rewind) marks `build` and every later
+   non-skipped step stale, clears their gate verdicts, and clears `HALT` and `HALT.class` atomically.
+   Do not delete the halt markers by hand: that leaves the already-recorded `build`, `test_suite`,
+   and `build_review` verdicts standing, so the revised plan task is never built. If the plan you
+   edited is sealed — any plan amended after first BUILD entry is — reseal it first, per
+   [the protected-artifact recovery](#the-halt-is-a-protected-artifact-violation).
 
 If the feature is parked while you do this, unpark it last — the daemon re-dispatches as soon as it
 is eligible.
 
 If the grant remains, the feature did not enter the authorized step; re-read the HALT rather than
 clearing it again.
+
+### The halt is a plan gap
+
+**Symptom:** `.pipeline/HALT.class` is `plan-gap`. `prd_audit` or the as-built architecture review
+found an outcome the shipped work does not deliver and no active plan task owns the repair. The
+approved design is the ceiling here: the daemon retains this halt on every sweep, and clearing the
+marker without amending an artifact just re-halts on the same criterion. A committed record of the
+halt is on the feature branch at `.docs/halted/<slug>.md`; clearing the halt flips its status to
+resolved.
+
+**Blast radius:** the amendment rewrites committed DECIDE artifacts on the feature branch and
+re-runs BUILD and every later step. Nothing outside the feature moves.
+
+1. Read the gap. `.pipeline/prd-audit.md` (its per-criterion detail section) or
+   `.pipeline/architecture-review-as-built.md` (its `## Recorded Findings`) names each criterion and
+   why no active plan task owns the repair.
+2. Amend the artifact the gap actually indicts, in the feature worktree — usually the plan (add a
+   task naming the omitted work), sometimes the story (when the criterion overpromises what the
+   approved design can deliver). Update the feature's coherence table task and criterion rows in the
+   same commit, and commit inside the worktree.
+3. Reseal the amended protected paths from the main repository checkout, not the worktree — a plan
+   or story committed after first BUILD entry leaves the seal baseline stale:
+   ```bash
+   conduct-ts reseal --slug <slug> --path <path> [--path <path> ...] \
+     --reason "<why this amendment is approved>"
+   ```
+   [`conduct-ts reseal`](../reference/cli.md#conduct-ts-reseal) is TTY-only by design; run it
+   interactively. See [the protected-artifact recovery](#the-halt-is-a-protected-artifact-violation)
+   for what it checks.
+4. Rewind, from inside the feature worktree:
+   ```bash
+   cd .worktrees/<slug> && conduct-ts rewind --to build
+   ```
+   [`conduct-ts rewind`](../reference/cli.md#conduct-ts-rewind) marks `build` and every later
+   non-skipped step stale, clears their gate verdicts, and clears `HALT` and `HALT.class` atomically.
+   Clearing the markers by hand instead leaves `build`, `test_suite`, and `build_review` recorded as
+   done, so the amended plan task is never built.
+
+**Two plan gaps need no artifact amendment:**
+
+- **The gap is reader-facing documentation the plan deliberately delegated to the
+  `maintain-documentation` gating step.** That step runs `after: rebase`, downstream of the audit
+  that blocks on the criterion, so it can never clear its own gap. Make the documentation edits by
+  hand — documentation pages are not protected artifacts, so no reseal is needed — then clear the
+  halt by renaming:
+  ```bash
+  mv .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.cleared
+  rm -f .worktrees/<slug>/.pipeline/HALT.class
+  ```
+- **The gap needs machinery another, unmerged feature owns.** Leave this feature halted and sequence
+  the two. Amending this feature's plan to build the other feature's deliverable is wrong.
+
+**How to confirm:** the next dispatch re-enters BUILD rather than re-writing the same halt, and the
+audit that raised the gap passes its criterion on the following lap. `git show
+<feature-branch>:.docs/halted/<slug>.md` reads `Status: resolved`.
 
 ### Worktree preparation failed to install the preventive git hook
 
