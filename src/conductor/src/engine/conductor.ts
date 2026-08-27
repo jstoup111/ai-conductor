@@ -2761,9 +2761,9 @@ export class Conductor {
    * `kickbackTarget`, i.e. exactly `deriveGateTopology`'s `verdictSteps`) —
    * writes the skip down as a gate verdict. Without this, a skipped gate ends
    * the run with no `.pipeline/gates/<step>.json` at all and `gateSatisfied`
-   * falls back to the step-state flag, so `retro` (loopGate, skipped for tier S
-   * and on every daemon run) reached a resolved state with no verdict anywhere
-   * in the durable record.
+   * falls back to the step-state flag. A verdict-bearing step skipped for a
+   * tier or in auto mode could otherwise reach a resolved state with no verdict
+   * anywhere in the durable record.
    *
    * Satisfaction is unchanged — the selector already treats a skipped gate as
    * satisfied — so this only closes the hole in the record, never opens or
@@ -8858,7 +8858,7 @@ export class Conductor {
 
             if (attempt < stepMaxRetries) {
               // #188: carry the (model, effort) the NEXT attempt will use so
-              // retro Part C can measure how far up the ladder the step climbed.
+              // retry diagnostics can measure how far up the ladder the step climbed.
               // Omitted entirely when escalate:false (no movement to record, S5).
               const escNext = escalateAttempt(
                 resolved.model,
@@ -9878,7 +9878,7 @@ export class Conductor {
             if (step.enforcement === 'advisory') {
               // Advisory means "does not block the pipeline" — it must NOT mean
               // "reports success having produced nothing". Record the skip AND,
-              // for a verdict-bearing advisory step (`retro`), the failure that
+              // for a verdict-bearing advisory step, the failure that
               // caused it, so the durable gate record names the missing
               // artifact instead of leaving a hole a reader can only read as
               // "it passed".

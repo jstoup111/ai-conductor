@@ -11,7 +11,7 @@ import {
 /**
  * Objective completion check for a gate. Prefers the richer kickback-target
  * predicates (plan/stories) when present, else delegates to the conductor's
- * standard per-step completion check (build/manual_test/retro/finish/glob).
+ * standard per-step completion check (build/manual_test/finish/glob).
  * This is the single source the verdict layer recomputes from disk.
  */
 export async function checkGateCompletion(
@@ -56,8 +56,8 @@ function verdictPath(dir: string, step: StepName): string {
 
 /**
  * Recompute a gate's objective verdict from on-disk evidence and persist it.
- * Wraps the existing per-step completion predicates (build/manual_test/retro/
- * finish) and the new plan/stories predicates — a single uniform path.
+ * Wraps the existing per-step completion predicates (build/manual_test/finish)
+ * and the new plan/stories predicates — a single uniform path.
  */
 export async function computeAndWriteVerdict(
   dir: string,
@@ -98,16 +98,16 @@ export const SKIP_VERDICT_PREFIX = 'skipped: ';
 /**
  * Record a verdict-bearing gate that was resolved by a SKIP rather than by a
  * run (tier skip, track skip, config disable, `when:` false, upstream skip, or
- * the daemon's in-loop `retro` skip).
+ * an auto-mode advisory-step skip).
  *
  * Why this exists: `advanceTail` is the only place a run-step's objective
  * verdict is computed, and it is reached exclusively on the success tail. Every
  * skip path resolves the step and `continue`s, so the gate used to end the run
  * with NO verdict on disk at all — and `gateSatisfied` (selector.ts) then falls
  * back to the step-state flag, i.e. exactly the self-report the verdict layer
- * exists to distrust. `retro` is the step this bit hardest: it is `loopGate`,
- * it is skipped for tier S and on every daemon run, and it therefore shipped
- * "done" with no `.pipeline/gates/retro.json` anywhere in the audit record.
+ * exists to distrust. A verdict-bearing step skipped for a tier or in auto
+ * mode could therefore ship "done" with no `.pipeline/gates/<step>.json`
+ * anywhere in the audit record.
  *
  * The verdict is `satisfied: true` because that is what the selector already
  * does with a skipped gate (`isSkipped` short-circuits ahead of
