@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-27T23:01:48.911Z
 Slug: hard-delete-the-retired-wiring-check-step-name-fro
 Class: plan-gap
 Halting step: prd_audit
