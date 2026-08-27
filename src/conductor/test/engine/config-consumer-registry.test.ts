@@ -10,6 +10,14 @@ describe('config consumer registry', () => {
     expect(() => assertRegistryCovers(CONFIG_CONSUMER_KEY_SETS, configConsumerRegistry)).not.toThrow();
   });
 
+  it('does not count validation as a key consumer', () => {
+    for (const [key, declaration] of Object.entries(configConsumerRegistry)) {
+      expect(declaration.consumer, `${key} must name its runtime consumer`).not.toBe(
+        'src/conductor/src/engine/config.ts',
+      );
+    }
+  });
+
   it('fails for an undeclared accepted key', () => {
     expect(() => assertRegistryCovers({ top: ['present'] }, {})).toThrow('Config key is undeclared: present');
   });
