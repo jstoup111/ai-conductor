@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:2, task:8
 /**
  * T9: OtelVisualizer — provider/processor setup (off hot path).
  * T17: hot-path guard — emit() resolves promptly even when the transport blocks.
@@ -85,6 +85,42 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     expect(() => vis.start(emitter)).not.toThrow();
     // cleanup
     return vis.stop();
+  });
+
+  it('subscribes to exactly the event types derived by otelEventTypes()', async () => {
+    vi.resetModules();
+    const expectedEventTypes = ['renderer_error'];
+    vi.doMock('../../../src/engine/event-sinks.js', () => ({
+      otelEventTypes: () => expectedEventTypes,
+    }));
+
+    try {
+      const { OtelVisualizer: FreshOtelVisualizer } = await import('../../../src/engine/otel/otel-visualizer.js');
+      const { ConductorEventEmitter: FreshConductorEventEmitter } = await import('../../../src/ui/events.js');
+      const freshEmitter = new FreshConductorEventEmitter();
+      const on = vi.spyOn(freshEmitter, 'on');
+      const vis = new FreshOtelVisualizer(
+        resolveOtelConfig(
+          { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+          pipelineDir,
+        ),
+        {
+          runId: 'test-registry-subscriptions',
+          feature: 'test-feature',
+          project: 'test-project',
+          spanExporter,
+          metricExporter,
+        },
+      );
+
+      vis.start(freshEmitter);
+
+      expect(new Set(on.mock.calls.map(([type]) => type))).toEqual(new Set(expectedEventTypes));
+      await vis.stop();
+    } finally {
+      vi.doUnmock('../../../src/engine/event-sinks.js');
+      vi.resetModules();
+    }
   });
 
   it('uses identity supplied to start() for exported spans', async () => {
