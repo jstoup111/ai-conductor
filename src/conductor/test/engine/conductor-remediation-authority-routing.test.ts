@@ -229,23 +229,23 @@ describe('planRemediation implementation-only authority routing', () => {
     expect(plan).not.toContain('rem-unmatched');
   });
 
-  it('halts an all-unbound prd_audit remediation instead of sending it to BUILD', async () => {
+  it('names rejected gap ids and available criterion admission keys for an all-unbound prd_audit remediation', async () => {
     await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
     await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
-      '# Stories', '', '## Story 1: remediation', '', '#### Happy Path',
+      '# Stories', '', '## Story 5: remediation', '', '#### Happy Path',
       '- Given input, when repaired, then it holds.',
     ].join('\n'), 'utf8');
     await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
       '**PRD:** present', '', '## Verdict Table',
       '| Criterion | Grade | Plan task | PRD: | Evidence |',
       '| --- | --- | --- | --- | --- |',
-      '| S1.1 | FIXABLE | 1 | FR-7 | Missing implementation |',
+      '| S5.1 | FIXABLE | 1 | FR-S5.1 | Missing implementation |',
     ].join('\n'), 'utf8');
     const runner: StepRunner = {
       run: async () => {
         await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
           dispositions: [{
-            id: 'INVENTED-9', disposition: 'build', category: null,
+            id: 'FR-S5.1', disposition: 'build', category: null,
             rationale: 'Off-plan telemetry work.',
             tasks: [{ id: 'rem-invented', title: 'Build off-plan telemetry' }],
           }],
@@ -272,7 +272,57 @@ describe('planRemediation implementation-only authority routing', () => {
       kind: 'halt',
       detail: expect.stringContaining('no admitted remediation gap'),
     });
+    expect(outcome.detail).toContain('Rejected append-disposition gap IDs: FR-S5.1.');
+    expect(outcome.detail).toContain('Available admission keys: S5.1.');
     expect(await readFile(planPath, 'utf8')).not.toContain('rem-invented');
+  });
+
+  it('reports when a validated prd_audit report has no admission keys', async () => {
+    await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
+      '# Stories', '', '## Story 5: remediation', '', '#### Happy Path',
+      '- Given input, when repaired, then it holds.',
+    ].join('\n'), 'utf8');
+    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
+      '**PRD:** present', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      '| S5.1 | PASS | — | FR-S5.1 | Implementation is complete |',
+    ].join('\n'), 'utf8');
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'FR-S5.1', disposition: 'build', category: null,
+            rationale: 'Attempted repair despite no FIXABLE finding.',
+            tasks: [{ id: 'rem-unadmitted', title: 'Build an unadmitted repair' }],
+          }],
+        }), 'utf8');
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'prd audit blocked',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      detail: expect.stringContaining('no admitted remediation gap'),
+    });
+    expect(outcome.detail).toContain('Rejected append-disposition gap IDs: FR-S5.1.');
+    expect(outcome.detail).toContain('No admission keys were available.');
+    expect(await readFile(planPath, 'utf8')).not.toContain('rem-unadmitted');
   });
 
   it('halts a taskless unbound as-built remediation instead of routing its target', async () => {
