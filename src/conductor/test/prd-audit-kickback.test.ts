@@ -758,18 +758,18 @@ describe('prd_audit kickback', () => {
     expect(parseClearedOverScopeDecisions(body, new Map([['S3.1', 'x']]))).toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }, { kind: 'invalid-decision', criterion: 'S3.1' }] });
   });
 
-  it('rejects a cleared NC decision that is absent from the current report without recording it', async () => {
+  it('rejects a cleared NC decision whose summary differs from the current report without recording it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'over-scope-nc-cleared-'));
     dirs.push(root);
     const parsed = parseClearedOverScopeDecisions(
-      '```json over-scope-decisions\n[{"criterion":"NC.2","summary":"Visible addition.","decision":"accept","rationale":"Approved."}]\n```',
+      '```json over-scope-decisions\n[{"criterion":"NC.1","summary":"Reworded visible addition.","decision":"accept","rationale":"Approved."}]\n```',
       new Map([['NC.1', 'Visible addition.']]),
     );
 
     expect(parsed).toMatchObject({
       kind: 'parsed',
       decisions: [],
-      defects: [{ kind: 'unknown-criterion', criterion: 'NC.2' }],
+      defects: [{ kind: 'invalid-decision', criterion: 'NC.1' }],
     });
     if (parsed.kind === 'parsed') {
       await expect(recordOverScopeDecisions(root, parsed.decisions.map((decision) => ({ ...decision, operator: 'operator' })))).resolves.toEqual({ recorded: [] });
