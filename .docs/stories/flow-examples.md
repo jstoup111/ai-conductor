@@ -17,13 +17,12 @@ so I can discover what each demonstrates and how to run it.
 **Happy path**
 - Given a clean checkout,
 - When I open `examples/README.md`,
-- Then it lists all four scenarios (interactive, daemon, engineer, intake-loop),
+- Then it lists all five scenarios (inline, interactive, daemon, engineer, intake-loop),
   each with its command, whether it is headless self-asserting or a guided launcher, its
-  completion checkpoint, and the `./<flow>.sh [s|m|l]` invocation; the daemon flow is the
-  unattended demo (the inline one-shot example was retired by #1436).
+  completion checkpoint, and the `./<flow>.sh [s|m|l]` invocation.
 
 **Negative path**
-- Given I run a flow script with `--help` (or an unknown tier like `xl`),
+- Given I run `examples/inline.sh --help` (or an unknown tier like `examples/inline.sh xl`),
 - When the script starts,
 - Then it prints usage (valid tiers `s|m|l`) and exits non-zero without running any flow.
 
@@ -70,18 +69,18 @@ complexity tier.
 
 ---
 
-## Story 4 — unattended flow example is the daemon (headless, self-asserting)
+## Story 4 — inline flow example (headless, self-asserting)
 
 **Happy path**
-- Given the daemon flow example,
-- When it runs in the sandbox,
-- Then on reaching its completion checkpoint it prints `PASS daemon/<tier>` and exits 0
-  (the inline `--auto` one-shot example was retired by #1436; `inline --auto` rejects).
+- Given `./examples/inline.sh medium`,
+- When it runs `conduct-ts inline "<medium prompt>" --auto` in the sandbox,
+- Then on reaching the DONE marker (`feature_complete`) it prints `PASS inline/medium` and
+  exits 0.
 
 **Negative path**
-- Given the unattended flow ends without reaching its checkpoint,
+- Given the inline flow ends without a DONE marker,
 - When the script checks the checkpoint,
-- Then it prints `FAIL <flow>/<tier>` with the reason and exits non-zero.
+- Then it prints `FAIL inline/<tier>: no DONE marker` and exits non-zero.
 
 ---
 
