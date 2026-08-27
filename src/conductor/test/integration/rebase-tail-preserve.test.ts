@@ -257,10 +257,8 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     // Re-run gates: the foreign runtime delta touches their surface, so each
     // must have been re-dispatched a second time after the rebase kickback.
     // (build_review is disabled by default config in this fixture, so it
-    // never dispatches at all here, and wiring_check is a deprecated no-op
-    // that settles in-process — manual_test is what proves the invalidated
+    // never dispatches at all here; manual_test is what proves the invalidated
     // set actually re-runs while the preserved judged gates above do not.)
-    expect(counts.wiring_check ?? 0).toBe(0);
     expect(counts.manual_test).toBeGreaterThanOrEqual(2);
 
     // Final state confirms the preserved gates never left 'done' (no

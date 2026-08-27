@@ -129,8 +129,8 @@ describe('Integration: config flow', () => {
     const manualTestIdx = registry.findIndex((s) => s.name === 'manual_test');
 
     expect(customIdx).toBe(buildIdx + 1);
-    // build_review, wiring_check, and test_suite are between custom step and manual_test.
-    expect(manualTestIdx).toBe(customIdx + 4);
+    // test_suite and build_review are between the custom step and manual_test.
+    expect(manualTestIdx).toBe(customIdx + 3);
 
     const customStep = registry[customIdx];
     expect(customStep.phase).toBe('BUILD');

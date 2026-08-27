@@ -78,7 +78,7 @@ describe('FR-1: no-op when disabled', () => {
     const testEmitter = new ConductorEventEmitter();
     const testPersister = new EventPersister(testPath, testEmitter);
 
-    // Disabled config gate — same as production wiring check
+    // Disabled config gate leaves tracing inactive.
     const resolved = resolveOtelConfig({ /* no otel key */ }, testDir);
     expect(resolved.enabled).toBe(false);
     // When disabled, no visualizer is constructed or attached

@@ -208,7 +208,7 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
 
   it('renders model-driven rows from provider policies and deterministic BUILD gates as model-free engine machinery', () => {
     const tiers: readonly ComplexityTier[] = ['S', 'M', 'L'];
-    const modelFreeEngineSteps = new Set<StepName>(['wiring_check', 'test_suite']);
+    const modelFreeEngineSteps = new Set<StepName>(['test_suite']);
     const renderPolicyField = (
       policy: ProviderModelPolicy,
       step: StepName,
