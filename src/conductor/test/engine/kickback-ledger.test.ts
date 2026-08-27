@@ -155,7 +155,7 @@ describe('kickback-ledger', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(
       join(dir, '.pipeline/kickback-ledger.json'),
-      JSON.stringify({ version: 2, gates: { wiring_check: { count: 2 } } }),
+      JSON.stringify({ version: 2, gates: { test_suite: { count: 2 } } }),
     );
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -173,7 +173,7 @@ describe('kickback-ledger', () => {
     const ledger = {
       version: 1,
       gates: {
-        wiring_check: {
+        test_suite: {
           count: 2,
           treeHash: '0123456789abcdef0123456789abcdef01234567',
           lastReason: 'production export is orphaned',
@@ -188,7 +188,7 @@ describe('kickback-ledger', () => {
 
     await expect(readKickbackLedger(dir)).resolves.toEqual({
       ...ledger,
-      gates: { wiring_check: { ...ledger.gates.wiring_check, cumulative: 0, mechanicalFaults: 0 } },
+      gates: { test_suite: { ...ledger.gates.test_suite, cumulative: 0, mechanicalFaults: 0 } },
     });
   });
 
@@ -309,7 +309,7 @@ describe('kickback-ledger', () => {
     const legacyWinner = {
       version: 1,
       gates: {
-        wiring_check: {
+        test_suite: {
           count: 1,
           treeHash: '0000000000000000000000000000000000000000',
           lastReason: 'legacy winner',
@@ -324,7 +324,7 @@ describe('kickback-ledger', () => {
     const currentLedger: KickbackLedger = {
       version: 1,
       gates: {
-        wiring_check: {
+        test_suite: {
           count: 2,
           cumulative: 1,
           mechanicalFaults: 0,
@@ -353,8 +353,8 @@ describe('kickback-ledger', () => {
       expect(observedDuringWrite).toEqual({
         ...legacyWinner,
         gates: {
-          wiring_check: {
-            ...legacyWinner.gates.wiring_check,
+          test_suite: {
+            ...legacyWinner.gates.test_suite,
             cumulative: 0,
             mechanicalFaults: 0,
           },

@@ -257,7 +257,7 @@ describe("group-core: runNativeGroupBranch", () => {
   it("maps injected native results into ordered member-attributed outcomes", async () => {
     const events: Array<Pick<GroupMemberStepEvent, "member" | "phase" | "outcome">> = [];
     const members: GroupMember[] = [
-      { name: "wiring_check", skill: "", outcome: makeSkippedOutcome() },
+      { name: "manual_test", skill: "", outcome: makeSkippedOutcome() },
       { name: "test_suite", skill: "", outcome: makeSkippedOutcome() },
     ];
 
@@ -283,9 +283,9 @@ describe("group-core: runNativeGroupBranch", () => {
         { kind: "no-verdict", reason: "suite failed" },
       ],
       events: [
-        { member: "wiring_check", phase: "dispatch" },
+        { member: "manual_test", phase: "dispatch" },
         { member: "test_suite", phase: "dispatch" },
-        { member: "wiring_check", phase: "result", outcome: "verdict:pass" },
+        { member: "manual_test", phase: "result", outcome: "verdict:pass" },
         { member: "test_suite", phase: "result", outcome: "no-verdict" },
       ],
     });
@@ -298,7 +298,7 @@ describe("group-core: runNativeGroupBranch", () => {
     });
     let siblingSettled = false;
     const members: GroupMember[] = [
-      { name: "wiring_check", skill: "", outcome: makeSkippedOutcome() },
+      { name: "manual_test", skill: "", outcome: makeSkippedOutcome() },
       { name: "test_suite", skill: "", outcome: makeSkippedOutcome() },
     ];
     const events: Array<Pick<GroupMemberStepEvent, "member" | "phase" | "outcome">> = [];
@@ -306,7 +306,7 @@ describe("group-core: runNativeGroupBranch", () => {
     const groupPromise = runWithConcurrency(
       [
         () => runNativeGroupBranch(members[0]!, async () => {
-          throw new Error("wiring crashed");
+          throw new Error("manual test crashed");
         }, {
           onMemberEvent: ({ member, phase, outcome }) => {
             events.push({ member, phase, outcome });
@@ -327,13 +327,13 @@ describe("group-core: runNativeGroupBranch", () => {
 
     expect({ outcomes, siblingSettled, events }).toEqual({
       outcomes: [
-        { kind: "no-verdict", reason: "wiring crashed" },
+        { kind: "no-verdict", reason: "manual test crashed" },
         { kind: "verdict", verdict: "pass" },
       ],
       siblingSettled: true,
       events: [
-        { member: "wiring_check", phase: "dispatch" },
-        { member: "wiring_check", phase: "result", outcome: "no-verdict" },
+        { member: "manual_test", phase: "dispatch" },
+        { member: "manual_test", phase: "result", outcome: "no-verdict" },
       ],
     });
   });
