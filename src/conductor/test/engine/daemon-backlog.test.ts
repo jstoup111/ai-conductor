@@ -497,41 +497,45 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.items.map((item) => item.slug)).toEqual([slug]);
   });
 
-  it('keeps a six-wide header over five-cell legacy rows eligible at discovery', async () => {
-    const sixWideLegacyTable =
-      '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes | Disposition |\n' +
+  it('dispatches a parser-only criterion table whose header and separator widths differ', async () => {
+    // The retired discovery predicate rejected this because its five-cell
+    // header and six-cell separator differ. The shared parser deliberately
+    // ignores header width and accepts the typed six-cell criterion row.
+    const parserOnlyCriterionTable =
+      '| Row class | Criterion | Cited task ids | Verdict | Quote |\n' +
       '|---|---|---|---|---|---|\n' +
-      '| story | S1 | Task 1 | covered | fixture |\n';
-    await writeFile(join(dir, '.docs/plans/six-wide-legacy.md'), planWithDeps('.docs/stories/six-wide-legacy.md'));
-    await writeFile(join(dir, '.docs/stories/six-wide-legacy.md'), APPROVED_STORIES);
+      '| criterion | Story 1 happy | Task 1 | covered | fixture | diff-local |\n';
+    await writeFile(join(dir, '.docs/plans/parser-only-criterion.md'), planWithDeps('.docs/stories/parser-only-criterion.md'));
+    await writeFile(join(dir, '.docs/stories/parser-only-criterion.md'), APPROVED_STORIES);
     await mkdir(join(dir, '.docs/coherence'), { recursive: true });
-    await writeFile(join(dir, '.docs/coherence/six-wide-legacy.md'), sixWideLegacyTable);
+    await writeFile(join(dir, '.docs/coherence/parser-only-criterion.md'), parserOnlyCriterionTable);
 
     const result = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsTreeSource(dir),
     });
 
     expect(result.blocked).toEqual([]);
-    expect(result.items.map((item) => item.slug)).toEqual(['six-wide-legacy']);
+    expect(result.items.map((item) => item.slug)).toEqual(['parser-only-criterion']);
   });
 
-  it('keeps documented ragged legacy and criterion rows eligible at discovery', async () => {
-    const raggedTable =
+  it('dispatches a parser-only legacy table whose header and separator widths differ', async () => {
+    // This is the inverse arity mismatch: the retired predicate also rejected
+    // it before inspecting the valid five-cell legacy row.
+    const parserOnlyLegacyTable =
       '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes | Disposition |\n' +
-      '|---|---|---|---|---|---|\n' +
-      '| story | S1 | Task 1 | covered | fixture |\n' +
-      '| criterion | Story 1 happy | Task 1 | covered | fixture | diff-local |\n';
-    await writeFile(join(dir, '.docs/plans/ragged-coherence.md'), planWithDeps('.docs/stories/ragged-coherence.md'));
-    await writeFile(join(dir, '.docs/stories/ragged-coherence.md'), APPROVED_STORIES);
+      '|---|---|---|---|---|\n' +
+      '| story | S1 | Task 1 | covered | fixture |\n';
+    await writeFile(join(dir, '.docs/plans/parser-only-legacy.md'), planWithDeps('.docs/stories/parser-only-legacy.md'));
+    await writeFile(join(dir, '.docs/stories/parser-only-legacy.md'), APPROVED_STORIES);
     await mkdir(join(dir, '.docs/coherence'), { recursive: true });
-    await writeFile(join(dir, '.docs/coherence/ragged-coherence.md'), raggedTable);
+    await writeFile(join(dir, '.docs/coherence/parser-only-legacy.md'), parserOnlyLegacyTable);
 
     const result = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsTreeSource(dir),
     });
 
     expect(result.blocked).toEqual([]);
-    expect(result.items.map((item) => item.slug)).toEqual(['ragged-coherence']);
+    expect(result.items.map((item) => item.slug)).toEqual(['parser-only-legacy']);
   });
 
   it('blocks malformed coherence with the parser line detail in its remedy and warning', async () => {

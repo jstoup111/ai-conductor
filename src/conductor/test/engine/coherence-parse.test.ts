@@ -182,7 +182,7 @@ describe('parseCoherenceArtifact', () => {
   });
 
   // Covers: task:6
-  it('preserves the reachable retired discovery corpus under the exact legacy predicate', () => {
+  it('preserves legacy acceptances and enumerates only shared-parser acceptance expansions', () => {
     const corpus = [
       {
         name: 'minimal valid table',
@@ -204,21 +204,21 @@ describe('parseCoherenceArtifact', () => {
         parserAccepted: true,
       },
       {
-        name: 'six-wide header over five-cell legacy row',
-        content: `| Row Class | Id | Cited Ids | Verdict | Quote | Disposition |
+        name: 'five-wide header over six-wide separator and criterion row',
+        content: `| Row Class | Criterion | Cited Task Ids | Verdict | Quote |
 | --- | --- | --- | --- | --- | --- |
-| task | task:6 | story:2 | covered | fixture |
+| criterion | Given a fixture | task:6 | covered | fixture | diff-local |
 `,
-        oracleAccepted: true,
+        oracleAccepted: false,
         parserAccepted: true,
       },
       {
-        name: 'five-wide header over six-cell criterion row',
-        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
+        name: 'six-wide header over five-wide separator and legacy row',
+        content: `| Row Class | Id | Cited Ids | Verdict | Quote | Disposition |
 | --- | --- | --- | --- | --- |
-| criterion | Given a fixture | task:6 | covered | fixture | diff-local |
+| task | task:6 | story:2 | covered | fixture |
 `,
-        oracleAccepted: true,
+        oracleAccepted: false,
         parserAccepted: true,
       },
       {
@@ -246,6 +246,13 @@ describe('parseCoherenceArtifact', () => {
     }));
 
     expect(observations).toEqual(corpus);
-    expect(observations.filter(({ oracleAccepted, parserAccepted }) => oracleAccepted !== parserAccepted)).toEqual([]);
+    expect(observations.filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)).toEqual([]);
+    expect(observations
+      .filter(({ oracleAccepted, parserAccepted }) => !oracleAccepted && parserAccepted)
+      .map(({ name }) => name),
+    ).toEqual([
+      'five-wide header over six-wide separator and criterion row',
+      'six-wide header over five-wide separator and legacy row',
+    ]);
   });
 });
