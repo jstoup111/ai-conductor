@@ -1,10 +1,10 @@
-// Covers: task:1
+// Covers: task:1, task:2
 /**
  * T7: buildResource(ctx) — OTel Resource builder.
  * FR-6: service.name, conductor.run.id, conductor.feature, conductor.project.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile, mkdir } from 'fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildResource } from '../../../src/engine/otel/resource.js';
@@ -118,6 +118,22 @@ describe('buildResource', () => {
         'conductor.project': 'persisted-project',
       },
     ]);
+  });
+
+  it('pinning: returns a non-empty instance id when the pipeline directory is unwritable', async () => {
+    await chmod(pipelineDir, 0o500);
+
+    const resource = buildResource({ pipelineDir, feature: 'f', project: 'p' });
+
+    expect(resource.attributes['service.instance.id']).toMatch(/\S/);
+  });
+
+  it('pinning: mints a non-empty instance id for a whitespace-only session id', async () => {
+    await writeFile(join(pipelineDir, 'conduct-session-id'), '  \n\t ', 'utf-8');
+
+    const resource = buildResource({ pipelineDir, feature: 'f', project: 'p' });
+
+    expect(resource.attributes['service.instance.id']).toMatch(/\S/);
   });
 
   it('conductor.feature defaults to "unknown" when not supplied', () => {
