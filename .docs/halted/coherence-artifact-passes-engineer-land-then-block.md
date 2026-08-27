@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-27T10:33:36.588Z
+Status: halted
 Slug: coherence-artifact-passes-engineer-land-then-block
-Class: needs-human
+Class: plan-gap
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-coherence-artifact-passes-engineer-land-then-block
-Head SHA: bc79d17493678bbe1720acfd31c8d89ea25ca608
-Halted at: 2026-08-27T04:32:37.880Z
+Head SHA: c273d494508ff73fddf3b02ceb2df6b83f3d6c64
+Halted at: 2026-08-27T11:48:16.216Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation cannot resolve governing clause(s): AB-1: `adr-2026-08-26-shared-coherence-parser-at-discovery` + decision 3; AB-2: `adr-2026-08-26-shared-coherence-parser-at-discovery` + decision 4.
+prd-audit halted: needs human DECIDE — PLAN_GAP on S2.4.
 ```
