@@ -442,7 +442,7 @@ describe('daemon feature provider-event persistence', () => {
       depsForwardsScope:
         /beginFeatureRun:\s*cfg\.beginFeatureRun/.test(depsSource),
       depsForwardsFeatureBus:
-        /runConductor:\s*\(\s*wt,\s*item,\s*providerExecution,\s*featureEvents,\s*log\s*\)\s*=>\s*cfg\.runConductorInWorktree\(\s*wt,\s*item,\s*providerExecution,\s*featureEvents,\s*log\s*\)/.test(
+        /runConductor:\s*\(\s*wt,\s*item,\s*providerExecution,\s*featureEvents,\s*log,\s*sessionId\s*\)\s*=>\s*cfg\.runConductorInWorktree\(\s*wt,\s*item,\s*providerExecution,\s*featureEvents,\s*log,\s*sessionId\s*\)/.test(
           depsSource,
         ),
     }).toEqual({
