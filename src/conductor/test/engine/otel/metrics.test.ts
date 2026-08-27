@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 /**
  * Covers: task:1, task:2, task:3, task:4
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
@@ -561,6 +561,86 @@ describe('Task 1: step cost counter', () => {
     const costMetric = findMetric(metricExporter, 'conductor.step.cost')!;
     const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'build');
     expect(point?.value).toBe(0);
+  });
+});
+
+// ── Task 2: cost counter guards ─────────────────────────────────────────────
+
+describe('Task 2: cost counter guards', () => {
+  it('omits the cost metric when costUsd is absent while retaining token metrics', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50 },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect({
+      costMetric: findMetric(metricExporter, 'conductor.step.cost'),
+      tokenMetric: findMetric(metricExporter, 'conductor.step.tokens'),
+    }).toMatchObject({ costMetric: undefined, tokenMetric: expect.anything() });
+  });
+
+  it('omits cost points for NaN costUsd', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: Number.NaN },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(findMetric(metricExporter, 'conductor.step.cost')).toBeUndefined();
+  });
+
+  it('omits cost points for infinite costUsd', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: Number.POSITIVE_INFINITY },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(findMetric(metricExporter, 'conductor.step.cost')).toBeUndefined();
+  });
+
+  it('records finite costUsd without a source attribute when costSource is absent', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: 0.42 },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const costMetric = findMetric(metricExporter, 'conductor.step.cost')!;
+    const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'explore');
+    expect({ value: point?.value, attributes: point?.attributes }).toEqual({
+      value: 0.42,
+      attributes: { step: 'explore' },
+    });
   });
 });
 
