@@ -2372,13 +2372,14 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     // consulted first it would find nothing; the point is that isProcessed
     // short-circuits BEFORE shipped-record lookup even happens.
     let repairCalls = 0;
-    const { items: backlog } = await discoverBacklog(dir, async () => true, undefined, {
+    const { items: backlog, blocked } = await discoverBacklog(dir, async () => true, undefined, {
       treeSource: fsSource(dir),
       repairProcessed: async () => {
         repairCalls += 1;
       },
     });
     expect(backlog).toEqual([]);
+    expect(blocked).toEqual([]);
     expect(repairCalls).toBe(0);
   });
 
