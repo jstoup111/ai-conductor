@@ -43,6 +43,7 @@ export function buildResource(ctx: ResourceContext): Resource {
 
   return resourceFromAttributes({
     'service.name': SERVICE_NAME,
+    'service.instance.id': runId,
     'conductor.run.id': runId,
     'conductor.feature': feature,
     'conductor.project': project,

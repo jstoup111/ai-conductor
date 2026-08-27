@@ -1,3 +1,4 @@
+// Covers: task:1
 /**
  * T7: buildResource(ctx) — OTel Resource builder.
  * FR-6: service.name, conductor.run.id, conductor.feature, conductor.project.
@@ -85,6 +86,38 @@ describe('buildResource', () => {
   it('accepts a pre-supplied runId that overrides file/generated', () => {
     const resource = buildResource({ pipelineDir, feature: 'f', project: 'p', runId: 'fixed-id' });
     expect(resource.attributes['conductor.run.id']).toBe('fixed-id');
+  });
+
+  it('uses the resolved run id as service.instance.id while retaining resource attributes', async () => {
+    const explicit = buildResource({
+      pipelineDir,
+      feature: 'explicit-feature',
+      project: 'explicit-project',
+      runId: 'explicit-run-id',
+    });
+    await writeFile(join(pipelineDir, 'conduct-session-id'), 'persisted-run-id\n', 'utf-8');
+    const persisted = buildResource({
+      pipelineDir,
+      feature: 'persisted-feature',
+      project: 'persisted-project',
+    });
+
+    expect([explicit.attributes, persisted.attributes]).toEqual([
+      {
+        'service.name': 'ai-conductor',
+        'service.instance.id': 'explicit-run-id',
+        'conductor.run.id': 'explicit-run-id',
+        'conductor.feature': 'explicit-feature',
+        'conductor.project': 'explicit-project',
+      },
+      {
+        'service.name': 'ai-conductor',
+        'service.instance.id': 'persisted-run-id',
+        'conductor.run.id': 'persisted-run-id',
+        'conductor.feature': 'persisted-feature',
+        'conductor.project': 'persisted-project',
+      },
+    ]);
   });
 
   it('conductor.feature defaults to "unknown" when not supplied', () => {
