@@ -1,7 +1,7 @@
 ---
 name: debugging
 implicit_invocation: required
-description: "Use when encountering any bug, test failure, or unexpected behavior. Four-phase systematic investigation: root cause before fix. No fixes without evidence."
+description: "Use only when the requested task is diagnosis of an observed bug, test failure, or unexpected behavior, or when active BUILD encounters one. Do not invoke for feature implementation, proactive review, or speculative troubleshooting without a concrete failure."
 enforcement: gating
 phase: build
 standalone: true

@@ -1,7 +1,7 @@
 ---
 name: plan
 implicit_invocation: required
-description: "Use after stories are written and conflict-check has passed clean. Converts user stories into a step-by-step implementation plan with 2-5 minute task granularity."
+description: "Use only within active engineer/conduct DECIDE after accepted stories and a clean conflict-check, when a committed `.docs/plans` implementation artifact is required. Do not invoke for conversational planning, implementation checklists, or direct coding requests."
 enforcement: gating
 phase: decide
 standalone: false

@@ -1,7 +1,7 @@
 ---
 name: conflict-check
 implicit_invocation: required
-description: "Use after writing stories, before creating an implementation plan, or when adding features to an existing system. Detects contradictions, overlaps, state conflicts, resource contention, and oscillating requirements that are individually satisfiable but mutually exclusive in practice — the pair that sends work round a kickback loop that never terminates."
+description: "Use only within active engineer/conduct DECIDE after accepted stories and before plan, or when that workflow explicitly rechecks remediated stories. Detects story interactions; do not invoke for Git conflicts, merge conflicts, or general requirements discussion."
 enforcement: gating
 phase: decide
 standalone: true

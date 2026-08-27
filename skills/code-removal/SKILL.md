@@ -1,7 +1,7 @@
 ---
 name: code-removal
 implicit_invocation: required
-description: "Use when removing a file, seam, flag, symbol, or code path. Defines the evidence and test discipline for deletion-shaped work."
+description: "Use only when deletion is the requested deliverable inside an active change: removing a file, seam, flag, symbol, or code path. Do not invoke for additive work, renames, or refactors that merely edit or deprecate code."
 enforcement: advisory
 phase: all
 ---

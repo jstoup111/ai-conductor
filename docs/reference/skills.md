@@ -53,6 +53,11 @@ The 13 implicit-required shipped skills are:
 | `/engineer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/engineer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
 | Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims`, `code-removal` | Called from an active skill: issue authoring, fresh debugging, batch simplification, load-bearing claim verification, or removal-shaped build work — `/pipeline` dispatches `/code-removal` in place of a RED cycle |
 
+Because these skills remain visible for same-session composition, each description carries a closed
+activation boundary: the active lifecycle/caller state that qualifies, plus nearby requests that do
+not. A generic feature, change, plan, review, bug, or question is not sufficient by itself. Explicit
+operator invocation remains available regardless of these implicit-selection boundaries.
+
 The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `conduct`,
 `daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
 `remediate`, `retro`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
@@ -144,7 +149,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### verify-claims
 
-> Use whenever a statement, theory, or assumption is about to become load-bearing for a spec, plan, ADR, or code. Attaches grounded confidence estimates to claims, always surfaces assumptions, and HARD-BLOCKS work built on unconfirmed assumptions until the operator approves them.
+> Use only when an active workflow is about to rely on a nontrivial factual claim or assumption for a spec, plan, ADR, finding, or code decision. Do not invoke for casual questions, status reports, restatements, or trivially verifiable mechanics.
 
 - **Frontmatter** — `enforcement: gating`, `phase: all`, `standalone: true`, `requires: []`, no model pin.
 - **Engine step** — none. It is a discipline applied inside the calling skill's context and model, not
@@ -185,7 +190,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### architecture-diagram
 
-> Generate and maintain C4 architecture diagrams using Mermaid in Markdown. Runs at bootstrap, plan, and post-implementation. Gating — diagrams must reflect current architecture.
+> Use only within an active harness lifecycle when its architecture-diagram step is current. Generates and maintains C4 Mermaid diagrams; do not invoke for ordinary code changes or general architecture questions.
 
 - **Frontmatter** — `enforcement: gating`, `phase: all`, `standalone: true`, `requires: []`, `model: sonnet`.
 - **Engine step** — `architecture_diagram` (index 5, DECIDE, skipped at tier S). Engine enforcement is
@@ -250,7 +255,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### explore
 
-> Use at the start of any new feature or change. Explores context, asks clarifying questions one at a time, proposes 2-3 approaches with trade-offs, and decides the work track (product vs technical). Divergent half of the old brainstorm — produces no committed design doc; the product-track PRD is authored by /prd.
+> Use only within an active engineer/conduct DECIDE workflow when approach selection and product-versus-technical track classification are still unresolved. Do not invoke for ordinary implementation, review, explanation, or an already-decided change or hotfix.
 
 - **Frontmatter** — `enforcement: advisory`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
@@ -270,7 +275,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### prd
 
-> Use on the PRODUCT track after /explore, when a feature has user-facing requirements. Authors a product-only design doc (PRD) with enumerated functional requirements. Convergent half of the old brainstorm. Skipped on the technical track (no product requirements to spec).
+> Use only within active engineer/conduct DECIDE after explore confirmed the product track, when a committed product requirements document is required. Do not invoke for technical-track work, ordinary specifications, or general product discussion.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
@@ -285,7 +290,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### architecture-review
 
-> Use before implementation to review stories through a technical feasibility and architectural alignment lens. Also use at batch boundaries to catch architectural drift.
+> Use only within an active harness lifecycle when pre-stories feasibility review, a pipeline batch drift check, or the SHIP as-built review is current. Do not invoke for ordinary implementation, code review, or general architecture questions.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
@@ -311,7 +316,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### stories
 
-> Use after architecture-review, when the design is approved. Generates user stories with mandatory happy and negative paths as Given/When/Then scenarios — from the PRD's FRs (product track) or the technical intent (technical track).
+> Use only within active engineer/conduct DECIDE after architecture approval, when a committed `.docs/stories` acceptance artifact is required. Do not invoke for general user-story examples, requirements discussion, or direct implementation requests.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
@@ -327,7 +332,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### conflict-check
 
-> Use after writing stories, before creating an implementation plan, or when adding features to an existing system. Detects contradictions, overlaps, state conflicts, resource contention, and oscillating requirements that are individually satisfiable but mutually exclusive in practice — the pair that sends work round a kickback loop that never terminates.
+> Use only within active engineer/conduct DECIDE after accepted stories and before plan, or when that workflow explicitly rechecks remediated stories. Detects story interactions; do not invoke for Git conflicts, merge conflicts, or general requirements discussion.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
@@ -345,7 +350,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### plan
 
-> Use after stories are written and conflict-check has passed clean. Converts user stories into a step-by-step implementation plan with 2-5 minute task granularity.
+> Use only within active engineer/conduct DECIDE after accepted stories and a clean conflict-check, when a committed `.docs/plans` implementation artifact is required. Do not invoke for conversational planning, implementation checklists, or direct coding requests.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: false`,
   `requires: [".docs/stories/ with both paths", ".docs/conflicts/ clean pass or no blocking conflicts", verify-claims]`,
@@ -376,7 +381,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### coherence-check
 
-> Use at the end of DECIDE (after /plan), for Medium and Large tier specs only, to author the committed traceability mapping — outcomes → FRs → stories → tasks with per-row verdicts — that the land-time coherence gate validates. Not used for S tier.
+> Use only within active engineer/conduct DECIDE after plan for a Medium or Large spec. Authors the committed outcomes-to-requirements-to-stories-to-tasks mapping; do not invoke for Small work or ordinary traceability questions.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
@@ -405,7 +410,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### intake
 
-> Use when filing an intake issue to GitHub — capturing a bug, idea, or observation for a later DECIDE phase. Structures the issue as WHAT (observed evidence, impact) and desired OUTCOMES (observable acceptance signals), with verbatim logs/commands/repro artifacts a zero-context engineer can debug from. Never prescribes HOW — that belongs to DECIDE.
+> Use only when the requested deliverable is a GitHub intake issue, or when an active harness workflow hands an observation off for later DECIDE. Do not invoke merely because a bug, idea, or observation is being discussed.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
@@ -517,7 +522,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### code-removal
 
-> Use when removing a file, seam, flag, symbol, or code path. Defines the evidence and test discipline for deletion-shaped work.
+> Use only when deletion is the requested deliverable inside an active change: removing a file, seam, flag, symbol, or code path. Do not invoke for additive work, renames, or refactors that merely edit or deprecate code.
 
 - **Frontmatter** — `enforcement: advisory`, `phase: all`, no model pin. It is implicit-required:
   `/pipeline` activates it inside an already-running build session.
@@ -551,7 +556,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### simplify
 
-> Review changed code for duplication, complexity, and over-engineering at batch boundaries. Blocking gate — must pass before next batch proceeds.
+> Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, and over-engineering; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `standalone: false`, `requires: []`,
   `model: sonnet`.
@@ -569,7 +574,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### debugging
 
-> Use when encountering any bug, test failure, or unexpected behavior. Four-phase systematic investigation: root cause before fix. No fixes without evidence.
+> Use only when the requested task is diagnosis of an observed bug, test failure, or unexpected behavior, or when active BUILD encounters one. Do not invoke for feature implementation, proactive review, or speculative troubleshooting without a concrete failure.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `standalone: true`,
   `requires: [verify-claims]`, `model: opus`.

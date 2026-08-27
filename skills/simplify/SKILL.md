@@ -1,7 +1,7 @@
 ---
 name: simplify
 implicit_invocation: required
-description: "Review changed code for duplication, complexity, and over-engineering at batch boundaries. Blocking gate — must pass before next batch proceeds."
+description: "Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, and over-engineering; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code."
 enforcement: gating
 phase: build
 standalone: false
