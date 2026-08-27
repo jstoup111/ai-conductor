@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-27T13:59:08.564Z
+Status: halted
 Slug: abandoned-specs-are-kept-in-git-instead-of-the-iss
 Class: plan-gap
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-abandoned-specs-are-kept-in-git-instead-of-the-iss
-Head SHA: c0f9d68def960253dd50d91ee2868230d3331277
-Halted at: 2026-08-27T07:46:46.560Z
+Head SHA: 56330854e9ce09816e6c80e5287803b46082040a
+Halted at: 2026-08-27T14:41:07.689Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
