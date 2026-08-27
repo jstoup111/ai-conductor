@@ -329,7 +329,7 @@ export async function coordinateBuildReviewRubrics(
       continue;
     }
     if (branch.rubric === TEST_QUALITY_RUBRIC && preflight?.classification === "infrastructure-failure") {
-      resolved.set(branch.rubric, infrastructure(branch.rubric, preflight.reason));
+      resolved.set(branch.rubric, infrastructure(branch.rubric, preflight.reason, preflight.failureExcerpt));
       await input.emit?.({
         type: "build_review_rubric_infrastructure_failure",
         rubric: branch.rubric,

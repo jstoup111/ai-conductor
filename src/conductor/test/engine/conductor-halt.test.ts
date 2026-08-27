@@ -113,4 +113,16 @@ describe('renderExhaustedMechanicalBuildReviewHalt', () => {
       '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
     ].join('\n'));
   });
+
+  it('renders a materialization excerpt from the current aggregate', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: 'lap-current' as never,
+      snapshotDigest: 'sha256:current',
+      results: {
+        testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'preflight-failed', detail: 'materialization-failed: boom-checkout' },
+      },
+    });
+
+    expect(renderExhaustedMechanicalBuildReviewHalt(entry, aggregate)).toContain('boom-checkout');
+  });
 });

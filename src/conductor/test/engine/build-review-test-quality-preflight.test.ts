@@ -43,7 +43,9 @@ describe('build-review test-quality preflight', () => {
     });
 
     expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'scoped-run-failed' });
-    expect(preflightProjection(result).preflight).toEqual({ classification: 'infrastructure-failure', excerpt: '' });
+    expect(preflightProjection(result).preflight).toMatchObject({
+      classification: 'infrastructure-failure', excerpt: expect.stringContaining('command unavailable'),
+    });
   });
 
   it.each([
@@ -88,6 +90,45 @@ describe('build-review test-quality preflight', () => {
       classification: 'red',
       scopedRun: { exitCode: 1, runKind: 'nonzero-exit' },
     });
+  });
+
+  it.each([
+    ['checkout', { createCheckout: async () => { throw new Error('boom-checkout'); } }],
+    ['merge-base read', { readMergeBaseFile: async () => { throw new Error('boom-read'); } }],
+    ['materialized write', { writeFile: async () => { throw new Error('boom-write'); } }],
+  ])('retains the %s materialization error as bounded infrastructure evidence', async (_operation, overrides) => {
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ kind: 'nonzero-exit' as const, exitCode: 1, stdout: 'RED', stderr: '' }), removeCheckout: async () => {},
+      ...overrides,
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'materialization-failed' });
+    if (result.classification !== 'infrastructure-failure') throw new Error('expected infrastructure failure');
+    expect(result.failureExcerpt).toContain(`boom-${_operation === 'checkout' ? 'checkout' : _operation === 'merge-base read' ? 'read' : 'write'}`);
+  });
+
+  it('retains non-Error and truncated materialization throws as bounded evidence', async () => {
+    const nonError = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => { throw 'non-error materialization failure'; }, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ kind: 'nonzero-exit' as const, exitCode: 1, stdout: 'RED', stderr: '' }), removeCheckout: async () => {},
+    });
+    const oversized = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => { throw new Error(`HEAD ${'x'.repeat(TAUTOLOGY_EXCERPT_CAP_BYTES * 2)} TAIL`); }, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ kind: 'nonzero-exit' as const, exitCode: 1, stdout: 'RED', stderr: '' }), removeCheckout: async () => {},
+    });
+
+    expect(nonError).toMatchObject({ failureExcerpt: 'non-error materialization failure' });
+    if (oversized.classification !== 'infrastructure-failure') throw new Error('expected infrastructure failure');
+    expect(Buffer.byteLength(oversized.failureExcerpt!, 'utf8')).toBeLessThanOrEqual(TAUTOLOGY_EXCERPT_CAP_BYTES);
+    expect(oversized.failureExcerpt).toMatch(/\[\.\.\.truncated \d+ bytes\.\.\.\]/);
+    expect(oversized.failureExcerpt).toContain('TAIL');
   });
 
   it('derives removal-maintenance eligibility per changed selector rather than per diff', () => {
@@ -393,7 +434,7 @@ describe('build-review test-quality preflight', () => {
     ['cleanup failure', () => ({ removeCheckout: async () => { throw new Error('cleanup failed'); } }), 'cleanup-failed'],
     ['cache read failure', () => ({ readCache: async () => { throw new Error('cache unavailable'); } }), 'cache-read-failed'],
     ['cache write failure', () => ({ writeCache: async () => { throw new Error('cache unavailable'); } }), 'cache-write-failed'],
-  ])('does not fabricate an excerpt for %s', async (_name, overrides, reason) => {
+  ])('keeps non-throwing %s infrastructure failures output-free', async (_name, overrides, reason) => {
     const result = await materializeTautologyPreflight({
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
       diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
@@ -404,7 +445,11 @@ describe('build-review test-quality preflight', () => {
     });
 
     expect(result).toMatchObject({ classification: 'infrastructure-failure', reason });
-    expect(result).not.toHaveProperty('failureExcerpt');
+    if (_name === 'materialization failure') {
+      expect(result).toMatchObject({ failureExcerpt: expect.stringContaining('disk full') });
+    } else {
+      expect(result).not.toHaveProperty('failureExcerpt');
+    }
   });
 
   it('reuses an exact cached completed result without another checkout or scoped command', async () => {
@@ -467,6 +512,19 @@ describe('build-review test-quality preflight', () => {
     expect(result.classification).not.toBe('red');
     if (reason === 'missing-scoped-configuration') expect(removeCheckout).not.toHaveBeenCalled();
     else expect(removeCheckout).toHaveBeenCalledOnce();
+  });
+
+  it('retains a thrown scoped-run error as bounded infrastructure evidence', async () => {
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => { throw new Error('boom-run'); }, removeCheckout: async () => {},
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'scoped-run-failed' });
+    if (result.classification !== 'infrastructure-failure') throw new Error('expected infrastructure failure');
+    expect(result.failureExcerpt).toContain('boom-run');
   });
 
   it.each([

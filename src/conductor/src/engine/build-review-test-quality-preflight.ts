@@ -455,12 +455,24 @@ export async function materializeTautologyPreflight(
             },
           };
         }
-      } catch {
-        result = failure(aborted(signal) ? 'aborted' : 'scoped-run-failed', paths, classified.tests, sourceIdentities);
+      } catch (err) {
+        result = failure(
+          aborted(signal) ? 'aborted' : 'scoped-run-failed',
+          paths,
+          classified.tests,
+          sourceIdentities,
+          boundedHeadTailExcerpt(String((err as Error)?.stack ?? err)),
+        );
       }
     }
-  } catch {
-    result = failure(aborted(signal) ? 'aborted' : 'materialization-failed', paths, classified.tests, sourceIdentities);
+  } catch (err) {
+    result = failure(
+      aborted(signal) ? 'aborted' : 'materialization-failed',
+      paths,
+      classified.tests,
+      sourceIdentities,
+      boundedHeadTailExcerpt(String((err as Error)?.stack ?? err)),
+    );
   } finally {
     try {
       await deps.removeCheckout(checkout);
