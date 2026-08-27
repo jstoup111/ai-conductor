@@ -424,4 +424,62 @@ describe('hard-deleted BUILD gate leaves one serial BUILD verifier', () => {
       /test_suite failure unresolved after 2 build kickback\(s\)/,
     );
   });
+
+  it('preserves an unlaunchable suite as an infrastructure failure without a kickback charge', async () => {
+    await writeState(stateFilePath, {
+      ...FRONT_DONE,
+      build: 'done',
+      test_suite: 'pending',
+      build_review: 'pending',
+    });
+    const events = new ConductorEventEmitter();
+    const kickbacks: unknown[] = [];
+    const halts: Array<{ reason: string }> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event);
+    });
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build' || step === 'build_review') {
+          throw new Error(`${step} must not run after suite infrastructure failure`);
+        }
+        return { success: true };
+      },
+    };
+    const ensure = vi.fn(async () => ({
+      status: 'FAILED' as const,
+      reason: 'unlaunchable' as const,
+      message: 'spawn npm ENOENT',
+    }));
+
+    await new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events,
+      projectRoot,
+      mode: 'auto',
+      fromStep: 'test_suite',
+      maxRetries: 1,
+      verifyArtifacts: false,
+      fullSuiteVerifier: {
+        ensure,
+        inspect: async () => ({ status: 'STALE', reason: 'fingerprint_mismatch' }),
+      },
+    }).run();
+
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(kickbacks).toEqual([]);
+    expect((await readKickbackLedger(projectRoot)).gates.test_suite).toBeUndefined();
+    expect(halts).toEqual([
+      expect.objectContaining({
+        reason: expect.stringContaining('test_suite infrastructure failure (unlaunchable)'),
+      }),
+    ]);
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'test_suite infrastructure failure (unlaunchable): spawn npm ENOENT',
+    );
+  });
 });

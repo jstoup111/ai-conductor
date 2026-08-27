@@ -9747,6 +9747,22 @@ export class Conductor {
             // only daemon-hosted runs.
             const fullSuiteFailure = failedStepResult?.fullSuiteVerification;
             if (step.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED') {
+              // The verifier's only semantic suite result is a completed command
+              // with a non-zero exit. Every other typed result says it could not
+              // establish that verdict, so preserve that infrastructure class
+              // rather than charging the code-repair kickback budget.
+              if (fullSuiteFailure.reason !== 'nonzero_exit') {
+                const reason =
+                  `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` +
+                  `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
+                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               const evidence =
                 `full-suite verification failed (${fullSuiteFailure.reason}): ` +
                 `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
