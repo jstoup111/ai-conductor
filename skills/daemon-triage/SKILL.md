@@ -233,6 +233,8 @@ Distinguish clearly in the report: **feature-side** problems get fixed in the
 feature's own worktree; **harness-side** problems get an issue and a park, because
 patching around them per-feature hides the defect.
 
+For work that should not continue, follow [the abandonment runbook](../../docs/runbooks/abandoning-a-spec.md): record the decision on a closed issue and delete the DECIDE artifacts.
+
 ### 6. Write the triage report
 
 Write to the **daemon** directory, not the feature's `.pipeline/` — triage output
