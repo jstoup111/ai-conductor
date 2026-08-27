@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-27T10:27:52.308Z
 Slug: remove-retrospectives-full-and-micro-from-feature-
 Class: needs-human
 Halting step: unknown
