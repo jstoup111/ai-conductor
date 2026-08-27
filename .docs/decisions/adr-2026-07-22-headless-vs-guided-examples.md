@@ -14,6 +14,12 @@ The five flows split on whether they can run without a live Claude REPL:
 - **Interactive-only:** `inline --interactive` and the full `engineer` loop spawn a real
   `claude` REPL (`engineer-cli.ts:390-396`) and cannot self-assert a result.
 
+> **Amended 2026-08-26 by #1436:** `inline --auto` is no longer headless-capable — it was
+> deprecated by #1509 (the flag now rejects and exits 1) and its example is retired by
+> #1436. The daemon is the sole unattended flow; the headless-capable set is `daemon`
+> (drain), `intake-loop --once`, and the engineer primitives. The headless self-asserting
+> shape (`PASS/FAIL <flow>/<tier>`) is unchanged for the surviving examples.
+
 A single script shape cannot serve both: one needs to assert an exit signal, the other
 needs to hand the terminal to a human.
 

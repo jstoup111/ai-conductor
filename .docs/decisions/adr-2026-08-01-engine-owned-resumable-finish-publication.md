@@ -58,6 +58,11 @@ The coordinator never guesses a ship outcome.
 - Interactive conduct supplies operator-confirmed intent through the FINISH interaction.
 - Daemon mode supplies the existing authorized PR-only policy.
 - Foreground automatic mode supplies its existing safe PR-or-keep policy based on configured remote and authenticated publication capability.
+
+> **Amended 2026-08-26 by #1436:** foreground automatic mode is no longer reachable from
+> the CLI — `inline --auto` rejects and exits 1 since #1509. The `mode: 'auto'` PR-or-keep
+> policy above survives solely as daemon-dispatched behavior (`daemon-cli.ts` constructs the
+> Conductor with `mode: 'auto'`); the policy itself is unchanged.
 - Merge-local, discard, merge, and any ambiguous or destructive choice require operator authority and cannot be synthesized unattended.
 
 An absent or refused intent produces a typed human-decision result and leaves the final marker unwritten. This replaces marker absence as an overloaded refusal signal with an explicit refusal/halt disposition while preserving fail-closed completion.
