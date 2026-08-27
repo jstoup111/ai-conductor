@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ExportResult } from '@opentelemetry/core';
+import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { resolveOtelConfig } from '../src/engine/otel/otel-config.js';
@@ -257,6 +257,49 @@ describe('daemon OTel visualizer wiring', () => {
       visualizer: null,
       dispatches: 1,
       rendererErrors: [{ rendererName: 'otel', error: 'fake OTel constructor failure' }],
+    });
+  });
+
+  it('emits one renderer_error for repeated failed exports and still completes the dispatch', async () => {
+    const failingSpanExporter: SpanExporter = {
+      export(_spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
+        resultCallback({ code: ExportResultCode.FAILED, error: new Error('connection refused') });
+      },
+      async shutdown(): Promise<void> {},
+    };
+    const metricExporter: PushMetricExporter = {
+      export(_metrics: ResourceMetrics, resultCallback: (result: ExportResult) => void): void {
+        resultCallback({ code: ExportResultCode.SUCCESS });
+      },
+      async forceFlush(): Promise<void> {},
+      async shutdown(): Promise<void> {},
+    };
+    fixture.emitOtelEvents = true;
+    wireOtelVisualizer.mockImplementation((config, context, events) => {
+      const visualizer = createOtelVisualizer(
+        resolveOtelConfig(config, context.pipelineDir),
+        { spanExporter: failingSpanExporter, metricExporter },
+        events,
+      );
+      visualizer?.start(events, context);
+      return visualizer;
+    });
+
+    await dispatchWithSessionId(undefined, {
+      otel: { exporter: 'otlp', endpoint: 'http://fake-collector.invalid:4318' },
+    });
+
+    expect({
+      rendererErrors: fixture.persistedRendererErrors,
+      dispatches: fixture.scopes.length,
+      stoppedIdempotently: fixture.sameStopPromise,
+    }).toEqual({
+      rendererErrors: [{
+        rendererName: 'otel',
+        error: '[otel] span export failed: connection refused',
+      }],
+      dispatches: 1,
+      stoppedIdempotently: true,
     });
   });
 
