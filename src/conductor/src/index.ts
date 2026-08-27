@@ -200,17 +200,28 @@ import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
 
 /**
  * Start every visualizer plugin by calling `.start(emitter, context)`. Returns
- * the same array (for chaining). Called immediately after EventPersister is started.
+ * only successfully started visualizers for teardown. Called immediately after
+ * EventPersister is started.
  */
 export function buildVisualizers(
   visualizers: VisualizerPlugin[],
   emitter: ConductorEventEmitter,
   context: VisualizerStartContext = {},
 ): VisualizerPlugin[] {
+  const started: VisualizerPlugin[] = [];
   for (const vis of visualizers) {
-    vis.start(emitter, context);
+    try {
+      vis.start(emitter, context);
+      started.push(vis);
+    } catch (error) {
+      void emitter.emit({
+        type: 'renderer_error',
+        rendererName: vis.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
-  return visualizers;
+  return started;
 }
 
 /**
