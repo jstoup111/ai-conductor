@@ -13,8 +13,9 @@
   "acceptance_specs": "done",
   "build": "done",
   "wiring_check": "done",
+  "build_verification__wiring_check": "done",
   "rebase": "done",
   "test_suite": "done",
   "build_review": "failed",
-  "last_step": "build_review"
+  "last_step": "wiring_check"
 }

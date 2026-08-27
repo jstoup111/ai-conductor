@@ -1,0 +1,2 @@
+{"type":"parallel_started","step":"wiring_check","branches":["wiring_check","test_suite"],"ts":1000}
+{"type":"parallel_completed","step":"wiring_check","branches":["wiring_check","test_suite"],"activeInterval":{"startedAtMs":1000,"durationMs":250},"ts":1250}
