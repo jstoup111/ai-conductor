@@ -16,7 +16,7 @@ import { TerminalSubscriber } from '../ui/subscriber.js';
 import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-renderer.js';
 import { LocalMemoryProvider } from './local-memory-provider.js';
 import { resolveOtelConfig } from './otel/otel-config.js';
-import { OtelVisualizer } from './otel/otel-visualizer.js';
+import { createOtelVisualizer } from './otel/create-otel-visualizer.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { UIEventHandler } from '../ui/subscriber.js';
 
@@ -55,14 +55,30 @@ async function loadPluginModule(
   }
 }
 
+/**
+ * Validate a `kind: visualizer` entrypoint's own shape at discovery time and
+ * return the factory to register.
+ *
+ * A FUNCTION entrypoint is validated as callable and returned unwrapped — it is
+ * deliberately NOT invoked here. Discovery has no `VisualizerFactoryContext` to
+ * give it, so calling it with an empty stand-in made two conforming factories
+ * unloadable: one that reads any context member threw a `TypeError` the
+ * discovery loop swallowed, and one that returned its documented `null` for a
+ * disabled config was rejected as `missing required member: name`. The product's
+ * shape is a selection-time concern, checked when `selectVisualizers` invokes the
+ * factory with the real context (`src/index.ts`).
+ *
+ * An OBJECT entrypoint is its own product, so its `name`/`start`/`stop` shape is
+ * checked here and a defect raises `PluginLoadError` naming plugin and member.
+ */
 function validateVisualizerEntrypoint(
   plugin: unknown,
   manifest: { name: string },
 ): VisualizerFactory {
-  const factory = typeof plugin === 'function'
-    ? plugin as VisualizerFactory
-    : () => plugin as VisualizerPlugin;
-  const visualizer = factory({} as VisualizerFactoryContext);
+  if (typeof plugin === 'function') return plugin as VisualizerFactory;
+
+  const visualizer = plugin as VisualizerPlugin | undefined;
+  const factory: VisualizerFactory = () => visualizer as VisualizerPlugin;
 
   if (typeof visualizer?.name !== 'string') {
     throw new PluginLoadError(`Plugin ${manifest.name} missing required member: name`);
@@ -225,20 +241,15 @@ export function registerBuiltins(
     const resolved = resolveOtelConfig(ctx.config, ctx.pipelineDir);
     if (!resolved.enabled) return null;
 
-    const onWarning = (message: string): void => {
-      void ctx.emitter.emit({ type: 'renderer_error', rendererName: 'otel', error: message });
-    };
-    try {
-      return new OtelVisualizer(resolved, {
+    return createOtelVisualizer(
+      resolved,
+      {
         pipelineDir: ctx.pipelineDir,
         feature: ctx.startContext.feature ?? 'unknown',
         project: ctx.startContext.project ?? 'unknown',
-        onWarning,
-      });
-    } catch (err) {
-      onWarning(err instanceof Error ? err.message : String(err));
-      return null;
-    }
+      },
+      ctx.emitter,
+    );
   });
 
   return subscriber;

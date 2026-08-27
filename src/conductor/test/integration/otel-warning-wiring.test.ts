@@ -11,8 +11,9 @@
  *  (b) The visualizer is constructed successfully (not null on the happy path).
  *  (c) The run never throws even when every export call fails.
  *
- * Failing-test-first gate: before the fix, importing createOtelVisualizer from
- * src/index.ts fails (no such export) → import error = RED. After the fix: GREEN.
+ * `createOtelVisualizer` is the ONLY OtelVisualizer construction site in
+ * production: the built-in `visualizer:otel` factory registered by
+ * `registerBuiltins` delegates to it, so these assertions bind the shipped path.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
@@ -24,9 +25,10 @@ import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-met
 import type { ExportResult } from '@opentelemetry/core';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
-// Import the PRODUCTION construction helper — this import is what drives RED
-// before the fix (function does not exist as an export).
-import { createOtelVisualizer } from '../../src/index.js';
+// Import the PRODUCTION construction helper. `registerBuiltins`' `visualizer:otel`
+// factory calls this same function (src/engine/plugin-loader.ts), so these proofs
+// bind the shipped construction site while still injecting fake exporters.
+import { createOtelVisualizer } from '../../src/engine/otel/create-otel-visualizer.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
 /** Span exporter that always calls back with FAILED — dead/refused transport. */
@@ -76,7 +78,8 @@ describe('FR-8: onWarning wired at production construction site (createOtelVisua
       const rendererErrors: ConductorEvent[] = [];
       events.on('renderer_error', (ev) => { rendererErrors.push(ev); });
 
-      // PRODUCTION construction path — this is what main() must call.
+      // PRODUCTION construction path — the built-in visualizer:otel factory
+      // calls this exact function.
       const vis = createOtelVisualizer(
         resolved,
         {

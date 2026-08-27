@@ -194,12 +194,37 @@ entrypoint: index.js`,
       warning.mockRestore();
     });
 
-    it('skips a visualizer factory whose product is missing stop', async () => {
+    // A factory entrypoint's product shape is a selection-time concern: the
+    // factory is not called until `selectVisualizers` has a real context to
+    // give it. Discovery validates only that the entrypoint is callable.
+    it('registers a visualizer factory at load without invoking it', async () => {
       writeVisualizerModule(
-        'invalid-factory-visualizer',
-        `export default () => ({
-  name: 'invalid-factory-visualizer',
-  start() {}
+        'uninvoked-factory-visualizer',
+        `export default () => {
+  throw new Error('factory must not be invoked at discovery time');
+};`,
+      );
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await discoverPlugins(globalDir, projectDir, registry);
+
+      registry.markInitialized();
+      expect(warning).not.toHaveBeenCalled();
+      expect(registry.list('visualizer')).toEqual(['uninvoked-factory-visualizer']);
+      warning.mockRestore();
+    });
+
+    // Covers: task:3 — S5.1. A conforming factory that reads its context must
+    // register; it used to be invoked at load with `{} as VisualizerFactoryContext`,
+    // so reading any context member threw a TypeError the discovery loop swallowed.
+    it('registers a factory entrypoint that reads its context', async () => {
+      writeVisualizerModule(
+        'context-reading-visualizer',
+        `export default (ctx) => ({
+  name: 'context-reading-visualizer',
+  feature: ctx.config.feature,
+  start() {},
+  async stop() {}
 });`,
       );
       const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -207,10 +232,48 @@ entrypoint: index.js`,
       await discoverPlugins(globalDir, projectDir, registry);
 
       registry.markInitialized();
-      expect(warning).toHaveBeenCalledWith(
-        'Skipping plugin invalid-factory-visualizer: Plugin invalid-factory-visualizer missing required method: stop',
+      expect(warning).not.toHaveBeenCalled();
+      expect(registry.list('visualizer')).toEqual(['context-reading-visualizer']);
+
+      const factory = registry.get<(context: unknown) => { name: string; feature: string }>(
+        'visualizer',
+        'context-reading-visualizer',
       );
-      expect(registry.list('visualizer')).toEqual([]);
+      expect(factory({ config: { feature: 'demo' } })).toMatchObject({
+        name: 'context-reading-visualizer',
+        feature: 'demo',
+      });
+      warning.mockRestore();
+    });
+
+    // Covers: task:3 — S5.1. `null` is the documented "not enabled" return
+    // (the OTel built-in returns it for a disabled config). It used to be
+    // rejected at load as 'missing required member: name'.
+    it('registers a factory that returns null for a disabled config', async () => {
+      writeVisualizerModule(
+        'disabled-factory-visualizer',
+        `export default (ctx) => (ctx.config.enabled ? {
+  name: 'disabled-factory-visualizer',
+  start() {},
+  async stop() {}
+} : null);`,
+      );
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await discoverPlugins(globalDir, projectDir, registry);
+
+      registry.markInitialized();
+      expect(warning).not.toHaveBeenCalled();
+      expect(registry.list('visualizer')).toEqual(['disabled-factory-visualizer']);
+
+      const factory = registry.get<(context: unknown) => unknown>(
+        'visualizer',
+        'disabled-factory-visualizer',
+      );
+      expect(factory({ config: { enabled: false } })).toBeNull();
+      expect(factory({ config: { enabled: true } })).toMatchObject({
+        name: 'disabled-factory-visualizer',
+      });
       warning.mockRestore();
     });
   });

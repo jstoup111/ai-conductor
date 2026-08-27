@@ -194,9 +194,6 @@ import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { runOverlapScan, renderReport as renderOverlapReport } from './engine/overlap-scan.js';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
-import { resolveOtelConfig } from './engine/otel/otel-config.js';
-import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
-import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
@@ -336,34 +333,6 @@ export async function resolveDaemonProjectRoot(startCwd: string): Promise<string
     throw new Error(resolved.error);
   }
   return resolved.root;
-}
-
-/**
- * Construct an OtelVisualizer with production wiring (FR-8).
- *
- * Bridges `onWarning` to a `renderer_error` ConductorEvent on the shared bus so
- * transport failures surface to the operator as structured events instead of
- * silent drops. Constructor errors (e.g. disabled config passed by mistake) are
- * caught, surfaced as `renderer_error`, and null is returned so the run proceeds
- * with OTel disabled.
- *
- * Exported so integration tests can drive the exact production construction path
- * and verify the onWarning wiring without invoking main().
- */
-export function createOtelVisualizer(
-  resolved: ResolvedOtelConfig,
-  ctx: Omit<OtelVisualizerContext, 'onWarning'>,
-  events: ConductorEventEmitter,
-): OtelVisualizer | null {
-  const onWarning = (msg: string): void => {
-    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: msg });
-  };
-  try {
-    return new OtelVisualizer(resolved, { ...ctx, onWarning });
-  } catch (err) {
-    onWarning(err instanceof Error ? err.message : String(err));
-    return null;
-  }
 }
 
 // Harness VERSION lookup: probes a few candidate locations because the

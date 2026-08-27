@@ -172,6 +172,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `test_suite` | object | none | [test_suite](#test_suite) |
 | `llm_provider` | string \| string[] | `['claude']` | [llm_provider](#llm_provider) |
 | `ui_renderer` | string | `terminal` | [ui_renderer](#ui_renderer) |
+| `visualizers` | string[] | unset | [visualizers](#visualizers) |
 | `memory_provider` | string | `local` | [memory_provider](#memory_provider) |
 | `otel` | object | disabled | [otel](#otel) |
 | `build_progress` | object | see section | [build_progress](#build_progress) |
@@ -631,6 +632,34 @@ Plugin name for the run UI. Optional string, default `terminal` (`src/conductor/
 Not schema-validated — the key is allow-listed only. An unknown name makes `registry.get` **throw**
 `PluginNotFoundError` (`src/conductor/src/engine/plugin-registry.ts:37-46`), which is the opposite of
 `memory_provider`'s soft fallback.
+
+## visualizers
+
+Names of `kind: visualizer` plugins to start for this run. Optional array of strings, unset by
+default (`src/conductor/src/types/config.ts:439`).
+
+Schema-validated: a non-array value, or an array containing a non-string, fails `validateConfig`
+with `visualizers must be an array of strings` / `visualizers must contain only strings`
+(`src/conductor/src/engine/config.ts:788-795`).
+
+Each name is resolved against the plugin registry by `selectVisualizers`
+(`src/conductor/src/index.ts:236-274`). Resolution is soft, unlike `ui_renderer`:
+
+| Input | Result |
+| --- | --- |
+| Unset or `[]` | No visualizer is selected from this key |
+| A registered visualizer name | Its factory is invoked with the run's start context and the result is started |
+| A name that is not registered | Warn once per name, naming the registered visualizers, and skip it |
+| `otel` | Warn once and skip — see below |
+
+Project-local plugins shadow global plugins of the same kind and name, so a project install of a
+name wins over the global one (`src/conductor/src/engine/plugin-loader.ts:144-167`).
+
+`otel` is **not** selected through this key. The OTel visualizer is a built-in configured by its own
+[`otel`](#otel) block and is attempted on every run independently of `visualizers`
+(`src/conductor/src/index.ts:266-270`). Listing `otel` here warns
+`visualizer "otel" is configured through the "otel:" block; remove it from "visualizers".` and is
+otherwise ignored (`src/conductor/src/index.ts:243-248`).
 
 ## memory_provider
 
