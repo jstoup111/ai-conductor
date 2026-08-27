@@ -1,5 +1,5 @@
 // Covers: task:2
-// Covers: task:1
+// Covers: task:1, task:3
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -98,8 +98,6 @@ steps:
     model: haiku
   architecture_diagram:
     disable: true
-complexity:
-  default_tier: M
 `;
       await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), configYaml);
 
@@ -113,7 +111,6 @@ complexity:
       expect(result.config.phases?.UNDERSTAND?.effort).toBe('low');
       expect(result.config.steps?.memory?.model).toBe('haiku');
       expect(result.config.steps?.architecture_diagram?.disable).toBe(true);
-      expect(result.config.complexity?.default_tier).toBe('M');
       expect(result.warnings).toEqual([]);
     });
 
@@ -637,6 +634,16 @@ complexity:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toBe('Unknown step: retro');
+    });
+
+    it('accepts an empty complexity block and rejects its removed default tier as an unknown key', () => {
+      expect(validateConfig({ complexity: {} }).ok).toBe(true);
+
+      const result = validateConfig({ complexity: { default_tier: 'M' } });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toBe('Unknown key in complexity: "default_tier"');
     });
 
     it('rejects the removed TDD model configuration as an unknown step-level key', () => {

@@ -405,9 +405,7 @@ export interface HarnessConfig {
    * and custom steps (new entries with `after` + `skill`).
    */
   steps?: Record<string, StepConfig>;
-  complexity?: {
-    default_tier?: ComplexityTier;
-  };
+  complexity?: Record<string, never>;
   /** User-level global state — loaded from ~/.ai-conductor/config.yml. */
   conductor?: ConductorConfig;
   /** Preferred markdown viewer — user-level default, project can override. */

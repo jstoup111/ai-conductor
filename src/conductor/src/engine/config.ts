@@ -750,8 +750,8 @@ export function validateConfig(
       return errVal('complexity must be an object');
     }
     const cx = obj.complexity as Record<string, unknown>;
-    if (cx.default_tier !== undefined && !VALID_COMPLEXITY_TIERS.has(cx.default_tier as string)) {
-      return errVal('complexity.default_tier must be S|M|L');
+    for (const key of Object.keys(cx)) {
+      return errVal(`Unknown key in complexity: "${key}"`);
     }
   }
 

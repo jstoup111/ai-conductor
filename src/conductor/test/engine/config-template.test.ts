@@ -106,7 +106,6 @@ describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
     expect(uncommented).toContain('\ndefaults:\n');
     expect(uncommented).toContain('\nphases:\n');
     expect(uncommented).toContain('\nsteps:\n');
-    expect(uncommented).toContain('\ncomplexity:\n');
 
     // Prose/header comments were left alone.
     expect(uncommented).toContain('# --- Per-step overrides (optional)');
