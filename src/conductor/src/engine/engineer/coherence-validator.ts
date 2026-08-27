@@ -1551,8 +1551,12 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
 
   const parsed = parseCoherenceArtifact(coherenceText);
   if (!parsed.ok) {
+    const detail = parsed.detail
+      ? ` Detail: line ${parsed.detail.line}: ${parsed.detail.message}.`
+      : '';
     throw new Error(
       `landSpec: coherence gate: ${parsed.reason} at "${coherenceRelPath}". ` +
+        detail +
         'Run /coherence-check to author the traceability record before landing.',
     );
   }

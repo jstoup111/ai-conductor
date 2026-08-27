@@ -1,3 +1,4 @@
+// Covers: task:4
 // Test: coherence artifact parser (coherence-validator.ts)
 //
 // Covers parseCoherenceArtifact(text | null):
@@ -2311,6 +2312,53 @@ Return requests are accepted.
 });
 
 describe('runCoherenceGate criterion fail-closed guard', () => {
+  it('rejects a malformed coherence artifact before a waiver can bypass its parse failure', async () => {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-parse-waiver-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(canonicalPath, 'README.md'), '# fixture\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed fixture']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await mkdir(join(worktreePath, '.docs/coherence-waivers'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget, when shipped, then it arrives. | task-1 | covered | "Task 1 builds the widget." |
+`,
+    );
+    await writeFile(
+      join(worktreePath, '.docs/coherence-waivers/idea.md'),
+      'Waives: unparseable-criterion-row\nRationale: parsing failures must remain non-waivable.\n',
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'add malformed coherence artifact and waiver']);
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath,
+        tier: 'M',
+        track: 'technical',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: null,
+        planText: null,
+        prdText: null,
+        outcomeBullets: [],
+        ideaFiles: new Set(['.docs/coherence/idea.md', '.docs/coherence-waivers/idea.md']),
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).rejects.toThrow(/unparseable-criterion-row.*line 3.*expected 6 and actual 5/is);
+  });
+
   it('rejects unparseable story criteria even when a fresh waiver names criterion:stories-unparseable', async () => {
     const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-criterion-unparseable-'));
     temporaryRepositories.push(canonicalPath);
