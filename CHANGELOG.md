@@ -58,6 +58,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - As-built review remediation now resolves a governing clause written with backticks or bold around its ADR stem, and accepts the documented `<stem> + <decision number>` form, instead of halting for a human. ([implementation PR #1959](https://github.com/jstoup111/ai-conductor/pull/1959)).
 - PRD audits now safely parse, validate, and route no-owner over-scope findings. ([implementation PR #1909](https://github.com/jstoup111/ai-conductor/pull/1909)).
 - Remediation plans now accept case-variant criterion IDs and report actionable admission failures. ([implementation PR #1969](https://github.com/jstoup111/ai-conductor/pull/1969)).
+- Test-quality preflight failures now retain their bounded diagnostics so exhausted build reviews remain actionable. ([implementation PR #1970](https://github.com/jstoup111/ai-conductor/pull/1970)).
 
 ## Migration
 
