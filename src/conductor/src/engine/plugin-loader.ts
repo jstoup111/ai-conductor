@@ -15,6 +15,8 @@ import { CodexProvider } from '../execution/codex-provider.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
 import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-renderer.js';
 import { LocalMemoryProvider } from './local-memory-provider.js';
+import { resolveOtelConfig } from './otel/otel-config.js';
+import { OtelVisualizer } from './otel/otel-visualizer.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { UIEventHandler } from '../ui/subscriber.js';
 
@@ -218,6 +220,26 @@ export function registerBuiltins(
 
   // adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / Task A3: Register built-in local memory provider (C1 — real provider, not null)
   registry.register('memory_provider', 'local', LocalMemoryProvider);
+
+  registry.register('visualizer', 'otel', (ctx: VisualizerFactoryContext): VisualizerPlugin | null => {
+    const resolved = resolveOtelConfig(ctx.config, ctx.pipelineDir);
+    if (!resolved.enabled) return null;
+
+    const onWarning = (message: string): void => {
+      void ctx.emitter.emit({ type: 'renderer_error', rendererName: 'otel', error: message });
+    };
+    try {
+      return new OtelVisualizer(resolved, {
+        pipelineDir: ctx.pipelineDir,
+        feature: ctx.startContext.feature ?? 'unknown',
+        project: ctx.startContext.project ?? 'unknown',
+        onWarning,
+      });
+    } catch (err) {
+      onWarning(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  });
 
   return subscriber;
 }

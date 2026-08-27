@@ -400,6 +400,34 @@ describe('registerBuiltins — memory_provider:local (adr-2026-06-29-memory-prov
   });
 });
 
+describe('registerBuiltins — visualizer:otel', () => {
+  // Covers: task:4
+  it('registers an OTel factory that is inert when disabled and creates the file exporter when enabled', async () => {
+    const registry = new PluginRegistry();
+    const events = new ConductorEventEmitter();
+    registerBuiltins(registry, events, () => {});
+
+    const factory = registry.tryGet<import('../../src/types/plugin.js').VisualizerFactory>('visualizer', 'otel');
+
+    expect(factory).toBeTypeOf('function');
+    expect(factory!({
+      config: {},
+      pipelineDir: '/tmp/plugin-loader-otel-disabled',
+      startContext: {},
+      emitter: events,
+    })).toBeNull();
+    const visualizer = factory!({
+      config: { otel: { exporter: 'file' } },
+      pipelineDir: '/tmp/plugin-loader-otel-enabled',
+      startContext: { feature: 'plugin-loader-test', project: 'ai-conductor' },
+      emitter: events,
+    });
+
+    expect(visualizer?.name).toBe('otel');
+    await visualizer?.stop();
+  });
+});
+
 describe('registerBuiltins — Codex readiness timeout', () => {
   beforeEach(() => {
     mockExeca.mockReset();
