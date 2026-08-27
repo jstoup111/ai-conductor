@@ -23,7 +23,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
     );
     process.exit(1);
   }
-  return opts.auto ? 'auto' : opts.interactive ? 'interactive' : 'default';
+  return opts.interactive ? 'interactive' : 'default';
 }
 
 import { dirname, join, resolve as resolvePath } from 'node:path';
