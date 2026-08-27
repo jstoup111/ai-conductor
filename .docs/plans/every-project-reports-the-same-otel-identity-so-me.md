@@ -8,7 +8,7 @@
 
 Makes per-project and per-run metric identity exportable without collector rewriting: identity
 attributes injected on every metric data point plus `service.instance.id` on the Resource, in
-5 tasks.
+6 tasks.
 
 ## Technical Approach
 
@@ -33,6 +33,13 @@ instruments added concurrently (#1941's cost/dispatch counters) inherit them aut
   `src/conductor/test/engine/otel/resource.test.ts` (direct `buildResource` assertions). Follow
   those files' existing describe/it shape; allowed variation: direct `MetricsRecorder`
   construction with a test `Meter` where the visualizer path cannot express a case.
+
+Amended 2026-08-27 (adr-014 amendment, configurable project name): the data-point `project` value
+is `otel.project_name` when that config key is present and non-blank (trimmed), and
+`basename(ctx.project)` otherwise. The override rides the existing `otel:` block through
+`ResolvedOtelConfig` into `OtelVisualizer`, which already receives that resolved config as its
+first constructor argument — no new construction site, no second resolution path, and the
+basename derivation stays exactly where Task 5 puts it as the fallback branch. Task 6 delivers it.
 
 Rebase note: #1941 (merged spec, in-flight) adds two counters to `metrics.ts`. If it lands first,
 route its counters' attributes through the same merge helper during rebase; the identity seam is
@@ -149,23 +156,54 @@ None — all touched modules exist on main; no new dependencies.
 
 **Dependencies:** Task 3
 
+### Task 6: Configurable project name overrides the basename
+**Story:** Story 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: `resolveOtelConfig` carries a trimmed `otel.project_name` onto both enabled `ResolvedOtelConfig` variants and omits it when the key is absent, blank, or whitespace-only; driving `createOtelVisualizer` with a configured name yields data points whose `project` equals that name rather than the root's basename; two roots sharing a basename with distinct configured names yield distinct `project` values; absent/blank/whitespace-only configured names fall back to the basename with no error; with an override set, `service.name` is still `ai-conductor` and the Resource `conductor.project` is still the absolute root.
+2. Verify tests fail (RED).
+3. Implement: add optional `project_name?: string` to `OtelConfig`; resolve and trim it onto the enabled `ResolvedOtelConfig` variants in `resolveOtelConfig`; in the `OtelVisualizer` constructor use the resolved name when non-empty and `basename(ctx.project)` otherwise.
+4. Document the key in `docs/reference/configuration.md` alongside the other `otel:` keys, stating the basename default.
+5. Verify tests pass (GREEN), including every pre-existing otel-config, metrics, resource, and visualizer test unmodified.
+6. Commit: "Let otel.project_name override the basename project identity".
+
+**Done when:**
+- The configured-name assertion passes through the production construction path.
+- The same-basename/distinct-configured-name test yields distinct `project` values.
+- Absent, blank, and whitespace-only configured names each fall back to the basename with no error raised.
+- With an override set, `service.name` and the Resource `conductor.project` assertions are unchanged.
+- `docs/reference/configuration.md` documents `otel.project_name` and its basename default.
+
+**Files:**
+- src/conductor/src/types/config.ts — optional `project_name` on `OtelConfig`
+- src/conductor/src/engine/otel/otel-config.ts — resolve/trim onto `ResolvedOtelConfig`
+- src/conductor/src/engine/otel/otel-visualizer.ts — override-else-basename branch
+- src/conductor/test/engine/otel/otel-config.test.ts — resolution and blank-fallback tests
+- src/conductor/test/engine/otel/otel-visualizer.test.ts — end-to-end override tests
+- docs/reference/configuration.md — `otel.project_name` reference row
+
+**Dependencies:** Task 5
+
 ## Task Dependency Graph
 
 ```
 Task 1 ─▶ Task 2
 Task 3 ─▶ Task 4
-Task 3 ─▶ Task 5
+Task 3 ─▶ Task 5 ─▶ Task 6
 ```
 
 ## Integration Points
 
+- After Task 6: the exported `project` dimension is operator-controllable, so two roots sharing a
+  directory name are distinguishable from harness exports alone.
 - After Task 5: full identity observable end-to-end — resource instance id (Task 1) + data-point
   identity (Task 3) through the real construction path.
 
 ## Verification
 
-- [ ] All Story 1-3 happy-path criteria covered (Tasks 1, 3, 5)
-- [ ] All negative-path criteria covered as explicit tasks (Tasks 2, 4) plus Story 3's passthrough negative in Task 5
+- [ ] All Story 1-3 happy-path criteria covered (Tasks 1, 3, 5, 6)
+- [ ] All negative-path criteria covered as explicit tasks (Tasks 2, 4, 6) plus Story 3's passthrough negative in Task 5
 - [ ] No task exceeds 5 minutes
 - [ ] Every task has falsifiable Done-when checks
 - [ ] Dependencies explicit and acyclic

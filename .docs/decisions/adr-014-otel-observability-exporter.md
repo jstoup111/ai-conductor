@@ -121,6 +121,25 @@ Relevant existing facts (evidence):
 >   worktrees' traces separate") continues to hold for traces, and now also holds for metrics
 >   via the `feature` data-point attribute plus `service.instance.id`.
 
+> **Amended 2026-08-27 by #1938 (configurable project name):** the amendment above fixed the
+> data-point `project` value to `basename(projectRoot)`, which cannot distinguish two different
+> project roots that share a directory name (`/srv/tenant-a/shared` and `/opt/tenant-b/shared`
+> both export `project=shared`), so the stated outcome — two projects distinguishable from
+> harness exports alone — did not hold in that case. The value is now resolved as:
+> - `otel.project_name` from `.ai-conductor/config.yml` when present and non-blank, trimmed;
+> - otherwise `basename(projectRoot)`, unchanged from the amendment above.
+>
+> The override is an existing-block config key, not a new block: it joins `exporter`/`endpoint`/
+> `file`/`protocol` under `otel:` and flows to the visualizer through `ResolvedOtelConfig`, so
+> there is no second resolution path and no new construction site. It is deliberately an
+> operator-supplied name rather than an automatic disambiguator (a path hash): the value is a
+> query dimension operators type, so a readable name beats a collision-free but opaque one, and
+> the collision it repairs requires two same-named roots exporting to one backend. A blank,
+> whitespace-only, or absent value is not an error — it falls back to the basename and the run
+> proceeds, preserving the never-fails-a-run contract of Decision 5. The override changes only
+> the data-point `project` attribute: `service.name` stays the constant `ai-conductor` and the
+> Resource's `conductor.project` stays the absolute project root.
+
 ## Consequences
 
 **Positive**

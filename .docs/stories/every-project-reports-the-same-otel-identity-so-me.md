@@ -16,11 +16,14 @@ concurrent features') series never merge silently.
 #### Happy Path
 - Given two visualizer runs constructed with different project roots, when each records a step-close metric, then their exported data points carry distinct `project` attribute values and are distinguishable without any collector configuration
 - Given two visualizer runs for the same project with different feature names, when each records a step-close metric, then their exported data points carry distinct `feature` attribute values
-- Given a visualizer constructed with a project root path, when any metric data point is exported, then its `project` attribute is the stable project name (basename of the root), not the absolute path
+- Given a visualizer constructed with a project root path and no `otel.project_name` configured, when any metric data point is exported, then its `project` attribute is the stable project name (basename of the root), not the absolute path
 - Given a single run recording duration, retry, token, and closeout metrics, when the data points are exported, then every data point on every instrument carries the same `project` and `feature` attributes alongside its existing attributes (`step`, `kind`, `model`, `obligation`)
+- Given two project roots that share a directory name and a distinct non-blank `otel.project_name` configured for each, when each records a step-close metric, then their exported data points carry those configured values as `project` and are therefore distinguishable
 
 #### Negative Paths
 - Given a run recording metrics, when its data points are exported, then no data-point attribute set contains the run id (series growth per metric stays bounded as runs accumulate)
+- Given a config with no `otel.project_name` key, or one whose value is blank or whitespace-only, when a metric data point is exported, then its `project` attribute falls back to the basename of the project root and the run proceeds without error
+- Given a config whose `otel.project_name` is set to a non-blank value, when the exported Resource is inspected, then `service.name` is still exactly `ai-conductor` and `conductor.project` is still the absolute project root — the override changes only the data-point attribute
 - Given the existing pre-identity attribute expectations in the metrics test suite, when identity attributes are added, then pre-existing attributes are unchanged in name and value (additive only — no rename, no removal)
 - Given a consumer summing a metric across the whole fleet with no `by` clause, when data points from multiple projects are aggregated, then the total is well-defined because identity attributes only add dimensions and never split the metric into differently-named instruments
 
@@ -29,6 +32,9 @@ concurrent features') series never merge silently.
 - [ ] A two-instance test (different project roots, same in-memory exporter class) asserts distinct `project` values and basename form
 - [ ] A test asserts the absence of any run-id-valued attribute key on every exported data point
 - [ ] All pre-existing metrics tests pass unmodified
+- [ ] A test drives the production construction path with a configured `otel.project_name` and asserts it is the exported data-point `project` value
+- [ ] A test asserts absent, blank, and whitespace-only `otel.project_name` each fall back to the basename with no error raised
+- [ ] A test asserts a configured `otel.project_name` leaves `service.name` and the Resource `conductor.project` unchanged
 
 ## Story 2: Run identity on the resource ties traces and metrics and makes target_info joinable
 
