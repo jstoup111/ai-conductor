@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-27T10:33:36.836Z
 Slug: config-keys-that-validate-but-have-no-consumer-inc
 Class: needs-human
 Halting step: prd_audit
