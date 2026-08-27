@@ -1720,6 +1720,59 @@ describe('prd_audit kickback', () => {
   });
 
   /**
+   * Every REMEDIABLE clause authored in the wild backticks its stem
+   * (`` `adr-x` + Decision 4 ``). The grammar is anchored on a bare identifier,
+   * so the leading backtick failed the match before any ADR lookup ran and the
+   * finding became a needs-human HALT — on substance the bounded remediation
+   * route could have closed. The skill's own template also renders as
+   * `<stem> + <decision number>`, without the literal word `decision`.
+   */
+  it('resolves a governing clause through authored markdown emphasis', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-clause-emphasis-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const adrStem = 'adr-2026-08-26-authored-clause-emphasis';
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.docs', 'decisions'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 1: Existing approved work\n\n### Task 9: Second approved task\n');
+    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
+      '# ADR: Authored clause emphasis',
+      '**Status:** APPROVED',
+      '',
+      '## Decision',
+      '',
+      '4. **A clause cell carries no markup.** Emphasis is presentation, not identity.',
+      '',
+      '## Consequences',
+      '',
+      '- Something else entirely.',
+    ].join('\n'));
+
+    const plan = await readFile(planPath, 'utf8');
+    // The resolution reports the emphasis-stripped clause: it is rendered into
+    // the appended plan task, where the markup was never meaningful.
+    await expect(resolveAsBuiltGoverningClause(root, plan, `\`${adrStem}\` + Decision 4`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} + Decision 4` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, `**${adrStem}** + decision 4`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} + decision 4` });
+    // The skill template's own form omits the literal word `decision`.
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} + 4`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} + 4` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, '`Task 9`'))
+      .resolves.toEqual({ kind: 'plan-task', clause: 'Task 9', parentTask: '9' });
+
+    // Stripping emphasis must not widen the grammar: a clause naming two
+    // references stays unresolvable, and a decision the ADR lacks fails closed.
+    await expect(resolveAsBuiltGoverningClause(root, plan, 'Task 9 and Task 10'))
+      .resolves.toBeNull();
+    await expect(resolveAsBuiltGoverningClause(root, plan, `\`${adrStem}\` + Decision 5`))
+      .resolves.toBeNull();
+  });
+
+
+  /**
    * AB-R15/AB-R16 matrix (issue #1912). APPROVED decision 6 requires
    * `architecture_review_as_built.remediation.enabled: false` to revert EXACTLY
    * to halt-always-on-BLOCKED. The kill switch had been enforced per call site,
