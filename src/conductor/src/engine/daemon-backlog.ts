@@ -699,6 +699,14 @@ function hasCoherenceTableDataRow(content: string | null): boolean {
       .map((cell) => cell.trim());
   });
 
+  // A data row's cell count is deliberately NOT compared to the header's: the
+  // coherence schema is mixed-arity — `criterion` rows carry a sixth
+  // diff-locality cell, every legacy row class carries five — so a real L-tier
+  // artifact legitimately opens with a five-cell `outcome` row under a
+  // six-column header. Requiring equality here rejected valid artifacts that
+  // the canonical parser (`parseCoherenceArtifact`) accepts, blocking the
+  // feature at discovery with a "missing or unparseable" warning. Per-row arity
+  // is that parser's job, at land.
   for (let index = 0; index + 2 < rows.length; index += 1) {
     const header = rows[index];
     const separator = rows[index + 1];
@@ -709,7 +717,7 @@ function hasCoherenceTableDataRow(content: string | null): boolean {
       data === null ||
       header.length === 0 ||
       header.length !== separator.length ||
-      header.length !== data.length ||
+      data.length === 0 ||
       !separator.every((cell) => /^:?-{2,}:?$/.test(cell))
     ) {
       continue;
