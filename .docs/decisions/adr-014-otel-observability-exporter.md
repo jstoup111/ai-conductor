@@ -68,6 +68,15 @@ Relevant existing facts (evidence):
 > entrypoints at load, mirroring the existing `llm_provider` check, so a malformed plugin is
 > refused with a message instead of failing silently later.
 
+   > **Amended 2026-08-26 by #1934:** the visualizer wiring is now a shared helper called from
+   > BOTH entry points — `index.ts` `main()` (interactive) and `daemon-cli.ts`
+   > `beginFeatureRun` (one visualizer per daemon feature dispatch, on the feature-scoped bus,
+   > flushed by that dispatch's `stop()`). The seam is the one #1516's amendment above
+   > specifies (`start(emitter, context)` retrieved via the registry); only the wiring's
+   > location generalized, because the daemon path had none and exported nothing (#1934). In
+   > the daemon path `conductor.run.id` is resolved read-only/injected — the visualizer never
+   > writes `.pipeline/conduct-session-id` (adr-2026-07-27-cold-start-within-step-retries
+   > Decision 7 keeps the step runner its only writer).
 4. **Off the hot path.** The bus handler does O(1) non-blocking work and hands off to an OTel
    `BatchSpanProcessor` + `PeriodicExportingMetricReader`. The handler returns immediately so
    `emit()`'s await does not stall the bus (satisfies FR-8). Export I/O happens asynchronously in
