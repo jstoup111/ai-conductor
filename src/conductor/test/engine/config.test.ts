@@ -1,4 +1,5 @@
 // Covers: task:2
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -777,6 +778,54 @@ complexity:
         'accepted',
         'steps.memory.completion_artifact is not valid for built-in steps',
       ]);
+    });
+
+    it('accepts gate and kickback_target for a custom step', () => {
+      const result = validateConfig({
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            gate: false,
+            kickback_target: true,
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects gate and kickback_target for built-in steps', () => {
+      const result = validateConfig({
+        steps: { plan: { gate: false, kickback_target: true } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('plan');
+      expect(result.error.message).toContain('custom steps only');
+    });
+
+    it('rejects a non-boolean custom-step gate', () => {
+      const result = validateConfig({
+        steps: { lint: { after: 'build', skill: 'custom-lint', gate: 'loop' } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('gate');
+      expect(result.error.message).toContain('boolean');
+    });
+
+    it('rejects a non-boolean custom-step kickback_target', () => {
+      const result = validateConfig({
+        steps: { lint: { after: 'build', skill: 'custom-lint', kickback_target: 'yes' } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('kickback_target');
+      expect(result.error.message).toContain('boolean');
     });
 
     it('rejects built-in step setting `after` (fail-fast)', () => {

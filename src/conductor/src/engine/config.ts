@@ -530,6 +530,8 @@ export function validateConfig(
         'after',
         'enforcement',
         'completion_artifact',
+        'gate',
+        'kickback_target',
         'when',
         'parallel',
       ]);
@@ -562,6 +564,12 @@ export function validateConfig(
       }
       if (cfg.escalate !== undefined && typeof cfg.escalate !== 'boolean') {
         return errVal(`steps.${name}.escalate must be a boolean`);
+      }
+      if (cfg.gate !== undefined && typeof cfg.gate !== 'boolean') {
+        return errVal(`steps.${name}.gate must be a boolean`);
+      }
+      if (cfg.kickback_target !== undefined && typeof cfg.kickback_target !== 'boolean') {
+        return errVal(`steps.${name}.kickback_target must be a boolean`);
       }
       if (cfg.model !== undefined && typeof cfg.model !== 'string') {
         return errVal(`steps.${name}.model must be a string`);
@@ -708,6 +716,12 @@ export function validateConfig(
         }
         if (cfg.completion_artifact !== undefined) {
           return errVal(`steps.${name}.completion_artifact is not valid for built-in steps`);
+        }
+        if (cfg.gate !== undefined) {
+          return errVal(`steps.${name}.gate is valid for custom steps only`);
+        }
+        if (cfg.kickback_target !== undefined) {
+          return errVal(`steps.${name}.kickback_target is valid for custom steps only`);
         }
 
         // Disabling a gating/structural built-in is not allowed, unless the
