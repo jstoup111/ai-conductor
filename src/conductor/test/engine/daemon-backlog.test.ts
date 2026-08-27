@@ -396,17 +396,28 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
   });
 
-  it('blocks missing coherence while preserving the existing warning', async () => {
+  // Covers: task:7 — discovery keeps non-S coherence failures fail-closed
+  // through the shared parser, while S remains exempt.
+  it('blocks a merged non-S spec with no coherence file and warns once per slug', async () => {
     await writeFile(
       join(dir, '.docs/plans/missing-coherence.md'),
       planWithDeps('.docs/stories/missing-coherence.md'),
     );
     await writeFile(join(dir, '.docs/stories/missing-coherence.md'), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+    await writeFile(join(dir, '.docs/complexity/missing-coherence.md'), '# Complexity\n\nTier: M\n');
     const logs: string[] = [];
-
-    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+    const warned = new Set<string>();
+    const opts = {
       treeSource: fsTreeSource(dir),
-    });
+      hasWarned: async (slug: string) => warned.has(slug),
+      markWarned: async (slug: string) => {
+        warned.add(slug);
+      },
+    };
+
+    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+    await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
 
     expect(result.blocked).toEqual([
       {
@@ -416,8 +427,74 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       },
     ]);
     expect(logs).toContain(
-      'skip missing-coherence: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/missing-coherence.md) required for tier unresolved. Author it on the default branch; logged once.',
+      'skip missing-coherence: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/missing-coherence.md) required for tier M. Author it on the default branch; logged once.',
     );
+    expect(logs.filter((message) => message.startsWith('skip missing-coherence:'))).toHaveLength(1);
+  });
+
+  it('blocks an empty coherence artifact for a merged non-S spec and warns once per slug', async () => {
+    const slug = 'empty-coherence';
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, `.docs/coherence/${slug}.md`), '   \n');
+    await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+    await writeFile(join(dir, `.docs/complexity/${slug}.md`), '# Complexity\n\nTier: L\n');
+    const logs: string[] = [];
+    const warned = new Set<string>();
+    const opts = {
+      treeSource: fsTreeSource(dir),
+      hasWarned: async (warnedSlug: string) => warned.has(warnedSlug),
+      markWarned: async (warnedSlug: string) => {
+        warned.add(warnedSlug);
+      },
+    };
+
+    const first = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+    await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+
+    expect(first.blocked).toMatchObject([{ slug, reason: 'missing-coherence' }]);
+    expect(logs.filter((message) => message.startsWith(`skip ${slug}:`))).toHaveLength(1);
+  });
+
+  it('blocks prose without a coherence table for a merged non-S spec and warns once per slug', async () => {
+    const slug = 'table-less-coherence';
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, `.docs/coherence/${slug}.md`), '# Coherence\n\nThis is prose, not a table.\n');
+    await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+    await writeFile(join(dir, `.docs/complexity/${slug}.md`), '# Complexity\n\nTier: M\n');
+    const logs: string[] = [];
+    const warned = new Set<string>();
+    const opts = {
+      treeSource: fsTreeSource(dir),
+      hasWarned: async (warnedSlug: string) => warned.has(warnedSlug),
+      markWarned: async (warnedSlug: string) => {
+        warned.add(warnedSlug);
+      },
+    };
+
+    const first = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+    await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+
+    expect(first.blocked).toMatchObject([{ slug, reason: 'missing-coherence' }]);
+    expect(logs.filter((message) => message.startsWith(`skip ${slug}:`))).toHaveLength(1);
+  });
+
+  it('does not block a merged S-tier spec with no coherence file', async () => {
+    const slug = 's-tier-without-coherence';
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+    await writeFile(join(dir, `.docs/complexity/${slug}.md`), '# Complexity\n\nTier: S\n');
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(result.items.map((item) => item.slug)).toEqual([slug]);
   });
 
   it('keeps a six-wide header over five-cell legacy rows eligible at discovery', async () => {
