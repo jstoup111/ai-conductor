@@ -1,10 +1,14 @@
-// Covers: task:6, task:7, task:8
+// Covers: task:6, task:7, task:8, task:9
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ExportResult } from '@opentelemetry/core';
+import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
+import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { resolveOtelConfig } from '../src/engine/otel/otel-config.js';
+import { createOtelVisualizer } from '../src/engine/otel/create-otel-visualizer.js';
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
 type VisualizerPlugin = import('../src/types/plugin.js').VisualizerPlugin;
@@ -20,6 +24,7 @@ const fixture = vi.hoisted(() => ({
   visualizerConstructions: 0,
   constructorError: null as Error | null,
   sameStopPromise: false,
+  emitOtelEvents: false,
 }));
 const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null));
 const loadMergedConfig = vi.hoisted(() => vi.fn<LoadMergedConfig>());
@@ -44,8 +49,20 @@ vi.mock('../src/engine/daemon-runner.js', () => ({
     async (item: { slug: string }) => {
       const scope = await deps.beginFeatureRun({ path: fixture.worktreePath, branch: `feat/${item.slug}` }, item);
       fixture.scopes.push(scope);
-      await (scope.events as { emit: (event: { type: 'loop_halt'; reason: string }) => Promise<void> })
-        .emit({ type: 'loop_halt', reason: 'fake HALT' });
+      const events = scope.events as {
+        emit: (event:
+          | { type: 'step_started'; step: 'bootstrap'; index: number }
+          | { type: 'step_completed'; step: 'bootstrap'; status: 'done' }
+          | { type: 'feature_complete'; featureDesc: string }
+          | { type: 'loop_halt'; reason: string }
+        ) => Promise<void>;
+      };
+      if (fixture.emitOtelEvents) {
+        await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+        await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+        await events.emit({ type: 'feature_complete', featureDesc: 'fake feature complete' });
+      }
+      await events.emit({ type: 'loop_halt', reason: 'fake HALT' });
       const stop = scope.stop as () => Promise<void>;
       const firstStop = stop();
       fixture.sameStopPromise = firstStop === stop();
@@ -75,6 +92,7 @@ beforeEach(() => {
   fixture.visualizerConstructions = 0;
   fixture.constructorError = null;
   fixture.sameStopPromise = false;
+  fixture.emitOtelEvents = false;
   loadMergedConfig.mockClear();
   wireOtelVisualizer.mockClear();
   wireOtelVisualizer.mockImplementation((config, context, events) => {
@@ -240,5 +258,56 @@ describe('daemon OTel visualizer wiring', () => {
       dispatches: 1,
       rendererErrors: [{ rendererName: 'otel', error: 'fake OTel constructor failure' }],
     });
+  });
+
+  it('bounds hanging OTel transport warnings and completes daemon scope teardown', async () => {
+    const hangingSpanExporter: SpanExporter = {
+      export(_spans: ReadableSpan[], _resultCallback: (result: ExportResult) => void): void {
+        // Simulate a transport that accepts work but never responds.
+      },
+      async shutdown(): Promise<void> {},
+    };
+    const metricExporter: PushMetricExporter = {
+      export(_metrics: ResourceMetrics, resultCallback: (result: ExportResult) => void): void {
+        resultCallback({ code: 0 });
+      },
+      async forceFlush(): Promise<void> {},
+      async shutdown(): Promise<void> {},
+    };
+    fixture.emitOtelEvents = true;
+    wireOtelVisualizer.mockImplementation((config, context, events) => {
+      const visualizer = createOtelVisualizer(
+        resolveOtelConfig(config, context.pipelineDir),
+        {
+          spanExporter: hangingSpanExporter,
+          metricExporter,
+          exportTimeoutMillis: 25,
+        },
+        events,
+      );
+      visualizer?.start(events, context);
+      return visualizer;
+    });
+
+    const start = Date.now();
+    await dispatchWithSessionId(undefined, {
+      otel: { exporter: 'otlp', endpoint: 'http://fake-collector.invalid:4318' },
+    });
+
+    expect({
+      rendererErrors: fixture.persistedRendererErrors,
+      dispatches: fixture.scopes.length,
+      stoppedIdempotently: fixture.sameStopPromise,
+    }).toEqual({
+      rendererErrors: [
+        expect.objectContaining({
+          rendererName: 'otel',
+          error: expect.stringContaining('[otel] tracer flush error:'),
+        }),
+      ],
+      dispatches: 1,
+      stoppedIdempotently: true,
+    });
+    expect(Date.now() - start).toBeLessThan(1_000);
   });
 });
