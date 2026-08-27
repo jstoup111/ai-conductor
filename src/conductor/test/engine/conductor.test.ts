@@ -13915,7 +13915,6 @@ describe('build-step stall circuit breaker', () => {
       ['.docs/decisions/adr-001.md', 'x'],
       ['spec/acceptance/feature_spec.rb', 'x'],
       ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
-      ['.docs/retros/2026-04-18-retro.md', 'x'],
     ];
     for (const [rel, content] of artifacts) {
       const full = join(dir, rel);

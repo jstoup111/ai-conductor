@@ -57,7 +57,6 @@ Twenty entries. Alphabetized; the five with no code reference are marked.
 | `plans/` | `YYYY-MM-DD-<slug>.md` — the stem is the canonical feature key | `plan` skill; the engineer loop writes `.docs/plans/<slug>.md` at land | `plan` completion glob; land requires every parsed task to have a `Done when:` block with 2–5 nonblank list checks; seeds `.pipeline/task-status.json`; the build predicate parses `### Task <id>` headings; protected-artifact seal |
 | `release-waivers/` | `<plan-stem>.md` | operator, hand-authored in the same diff | the self-host release gate. Also the only `.docs` prefix always writable during BUILD |
 | `retired/` | `<plan-stem>.md`, plus `README.md` registering each retirement as delivered or abandoned | operator, hand-authored | **no code reference** — a plan moved here leaves the backlog scan's non-recursive `.docs/plans` listing, retiring work that another feature already delivered or the operator abandoned. See [`.docs/retired/README.md`](../../.docs/retired/README.md) |
-| `retros/` | `YYYY-MM-DD-<feature-name>.md` | `retro` skill | `retro` completion glob, resolved by slug or by mtime at or after session start |
 | `shipped/` | `<plan-stem>.md` | `conduct-ts shipped-record` | daemon backlog dedup; the only input to `conduct-ts kpi` |
 | `specs/` | `YYYY-MM-DD-<slug>.md` | `prd` skill (product track only) | `prd` completion glob; protected-artifact seal |
 | `stories/` | `YYYY-MM-DD-<slug>.md`, plus `epics/` and `features/<name>/` subdirs | `stories` skill | `stories` completion glob; plan-coverage check; coherence rows; protected-artifact seal |
@@ -138,8 +137,8 @@ Two independent mechanisms protect `.docs/` during a run.
 
 **Phase write-guard.** While a BUILD or SHIP step is dispatched, the engine stamps
 `.pipeline/phase-active` with `allow: <prefix>` lines and `docs-guard.sh` default-denies every other
-`.docs/` write. The allowlist is `.docs/release-waivers/` always, plus `.docs/retros/` and
-`.docs/stories/` during the `retro` step and `.docs/plans/` during the `remediate` step.
+`.docs/` write. The allowlist is `.docs/release-waivers/` always, plus `.docs/plans/` during the
+`remediate` step.
 
 `remediate` holds the plan-write permission because it is the step that reasons about a blocking
 gate's dispositions. `build` deliberately does not: a build agent rewriting its own plan to match
@@ -288,14 +287,13 @@ Every pattern declares one lifecycle scope:
 | `manual_test` | `.pipeline/manual-test-results.md` | run |
 | `prd_audit` | `.pipeline/prd-audit.md` | run |
 | `architecture_review_as_built` | `.pipeline/architecture-review-as-built.md` | run |
-| `retro` | `.docs/retros/*.md` | feature |
 | `rebase` | *(none — verdict computed from git state)* | — |
 | `finish` | *(none)* | — |
 | `remediate` | *(none — the engine reads `.pipeline/remediation.json` directly)* | — |
 | `attribution_verify` | *(none — computed, not a file)* | — |
 
-Totals: 9 steps write into `.docs/`, 7 write into `.pipeline/`, `acceptance_specs` matches project test
-sources, and 9 produce no file artifact at all.
+Totals: 8 steps write into `.docs/`, 6 write into `.pipeline/`, `acceptance_specs` matches project test
+sources, and 10 produce no file artifact at all.
 
 ### Feature-scoped resolution
 
@@ -736,7 +734,7 @@ log, the terminal UI, and the OTel visualizer without a second writer to this fi
 The pipeline's own closeout timing ledger, written by `conduct-ts closeout-event` — see
 [`conduct-ts closeout-event`](cli.md#conduct-ts-closeout-event). One JSON `pipeline_closeout`
 `ConductorEvent` per line: `obligation` (one of `evaluator`, `simplify`, `architecture-diagram`,
-`micro-retro`, `memory`, `summary`), `startedAt`/`endedAt` epoch milliseconds, and a
+`memory`, `summary`), `startedAt`/`endedAt` epoch milliseconds, and a
 pipeline-stamped `ts`. Append-only, gitignored, never committed.
 
 This is a deliberate second single-writer ledger, not a duplicate of `events.jsonl`: the pipeline
@@ -775,8 +773,7 @@ subscribed but intentionally emits no audit record. A write failure drops a
 `WRITE-FAILED` marker beside it and, for
 [`conduct-ts reseal`](cli.md#conduct-ts-reseal) specifically, fails the reseal itself — its writer is
 constructed fail-closed, unlike every step-attributed writer, because a reseal whose audit record was
-lost must not be treated as complete. No TypeScript reader exists; only the `retro` skill consults it,
-by prose.
+lost must not be treated as complete. No TypeScript reader exists.
 
 ### Daemon logs
 

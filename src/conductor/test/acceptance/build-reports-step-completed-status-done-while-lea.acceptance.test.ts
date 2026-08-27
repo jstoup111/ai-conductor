@@ -54,7 +54,6 @@ async function seedArtifacts(dir: string): Promise<void> {
         errors: 0,
       }),
     ],
-    ['.docs/retros/2026-08-04-retro.md', 'x'],
   ];
 
   for (const [relativePath, content] of artifacts) {

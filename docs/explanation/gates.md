@@ -22,14 +22,13 @@ A gate is a check that can block progression. Every step passes through two of t
    An agent cannot declare its own step complete; see [evidence model](evidence-model.md).
 
 A step that never ran still leaves a verdict. When the engine resolves a verdict-bearing step by *skipping*
-it — complexity tier, work track, bootstrap mode, an upstream skip, `disable: true`, a false `when:`, the
-daemon's in-loop `retro` skip, or an advisory step that failed and was auto-skipped in auto mode — it writes
+it — complexity tier, work track, bootstrap mode, an upstream skip, `disable: true`, a false `when:`, or an
+advisory step that failed and was auto-skipped in auto mode — it writes
 `{"satisfied": true, "reason": "skipped: <cause>"}` to `.pipeline/gates/<step>.json`. Satisfaction is
 unchanged (the selector has always treated a skipped gate as satisfied); what changes is that the skip is
 *recorded*. Before this, a skipped gate left no verdict file at all and the selector fell back to the step's
-own status flag, so `retro` — advisory, tier-S-skippable, and skipped on every daemon run — could reach a
-resolved state with no verdict anywhere in the audit record. Read the `skipped: ` prefix as "this gate was
-deliberately not run", never as "this gate's evidence passed".
+own status flag. Read the `skipped: ` prefix as "this gate was deliberately not run", never as "this gate's
+evidence passed".
 
 Those two are orthogonal. Prerequisites answer *may this run yet*; completion answers *did it actually
 happen*. A step can pass the first and fail the second forever, which is exactly what a halt looks like.
@@ -47,8 +46,8 @@ Enforcement is a property of the step, not of the gate. It decides what happens 
 
 Read the levels as a statement about *who can decline the step*:
 
-- **Advisory** steps are useful, not load-bearing. Memory recall, exploration, architecture diagrams, retro.
-  If one fails unattended the run keeps going, because a missing retro should not strand a finished feature.
+- **Advisory** steps are useful, not load-bearing. Memory recall, exploration, and architecture diagrams.
+  If one fails unattended the run keeps going rather than stranding an otherwise valid feature.
 - **Gating** steps are the correctness contract. A failure means the thing being gated is not true yet, so
   the run stops rather than proceeding on a false premise. The interactive recovery menu drops the `skip`
   option for these — you can retry, fix interactively, go back, or quit, but you cannot wave one through.
@@ -130,7 +129,6 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `manual_test` | a whitewashed retest — after a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
 | `prd_audit` | a partial or malformed audit report passing as complete — exactly one graded verdict row (`PASS`, `FIXABLE`, `PLAN_GAP`, or `OVER_SCOPE`) is required for every acceptance criterion across the feature's stories; a `FIXABLE` naming no plan task blocks. A finding without an owning criterion is a unique `NC.<n>` `OVER_SCOPE` row in `## Findings without an owning criterion`; its visible-scope operator decision is valid only for the same evidence summary. Invalid or duplicate rows are rejected individually while valid siblings remain routable, but any rejected row blocks with its diagnostic. Only the `## Verdict Table` section's story rows count as verdicts, so a prior-cycle history table cannot block an all-`PASS` audit. An unresolvable or unreadable criterion set also blocks fail-closed |
 | `architecture_review_as_built` | an unrecognized verdict passing by default — only an explicit approval verdict satisfies it |
-| `retro` | a retro from a different feature or a prior session counting for this one |
 | `finish` | a publication outcome that was never coherently recorded — `.pipeline/finish-choice` is the final record, not the source of interactive intent; a `pr` outcome additionally requires the recorded PR identity and verified publication evidence |
 | `finish` (release readiness) | a configured release-disposition result that is missing, stale, malformed, or unreadable — FINISH reports the exact typed condition before dispatching prose authoring or judgment, or making a publication mutation |
 | `finish` (prose authorship) | a retained PR whose body is still the engine-seeded placeholder — the coordinator dispatches its `author_pr_prose` pass (with the branch diff and the feature's spec artifacts) and accepts it only when re-observation shows the placeholder classification gone. The judgment pass is therefore never handed an unauthored body, and no prose defect commits the shipped record, so a prose halt stays re-dispatchable |

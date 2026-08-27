@@ -55,7 +55,7 @@ export interface BacklogItem {
   slug: string;
   /** Engineer-assessed complexity tier, parsed from `.docs/complexity/<slug>.md`
    *  on the base branch (FR: tier propagation). Drives BUILD-phase step skipping
-   *  in the conductor (Small skips acceptance_specs/retro). Absent for legacy or
+   *  in the conductor (Small skips acceptance_specs). Absent for legacy or
    *  non-engineer specs → the daemon falls back to 'M' (unchanged behavior). */
   tier?: ComplexityTier;
   /** Originating GitHub issue reference (`owner/repo#N`), parsed from

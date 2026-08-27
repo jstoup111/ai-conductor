@@ -117,11 +117,7 @@ export interface FeatureRunnerDeps {
   /** Persist that a slug shipped (with its PR url, when opened) so
    *  discoverBacklog skips it next poll and the startup dashboard can link it. */
   markProcessed: (slug: string, prUrl?: string) => Promise<void>;
-  /**
-   * Daemon mode. When true, emit a structured engineer signal + narrative to the
-   * cross-project engineer store on completion (Phase 9.1). Manual `/conduct` runs
-   * pass false — they keep writing repo `.docs/retros/` and emit nothing.
-   */
+  /** Daemon mode. When true, emit a structured engineer signal on completion. */
   daemon: boolean;
   /** Optional provider adapter retained for completion-emission compatibility. */
   provider?: LLMProvider;

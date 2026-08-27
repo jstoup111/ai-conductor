@@ -2,7 +2,7 @@
 
 A custom development harness for Claude Code and Codex. Markdown skills and agent personas that enforce a
 disciplined SDLC — design docs, user stories with mandatory negative paths, conflict detection, TDD with
-domain review, evaluator-gated code review, and dual retrospectives — plus an autonomous build daemon that
+domain review and evaluator-gated code review — plus an autonomous build daemon that
 takes a merged spec to an open pull request without supervision.
 
 There is no custom skill runtime. Claude Code powers the conductor automation, and Codex uses the same
@@ -155,7 +155,6 @@ Behavioral rules for projects using this harness live in [HARNESS.md](HARNESS.md
 6. **Dry business logic, not dry code** — extract shared behavior, not shared shape
 7. **Refactoring happens at batch boundaries** — the GREEN phase stays minimal
 8. **Memory persists across sessions** — decisions, patterns, and gotchas are not re-discovered
-9. **Self-improving** — retro findings feed back into harness improvements
 
 ## Contributing and support
 

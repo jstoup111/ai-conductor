@@ -1014,7 +1014,6 @@ describe('ST-927-8 — every production path uses the same routing seam', () => 
       '../../src/engine/project-prelude.ts',
       '../../src/engine/group-core.ts',
       '../../src/engine/attribution-lane.ts',
-      '../../src/engine/engineer-store.ts',
     ];
 
     const inspected = await Promise.all(

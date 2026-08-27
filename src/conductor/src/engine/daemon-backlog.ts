@@ -935,7 +935,7 @@ export async function discoverBacklog(
     const storiesRel = storiesRef.path;
 
     // Carry the engineer-assessed complexity tier so the daemon build honors it
-    // (Small skips acceptance_specs/retro). Resolve it before vetting so those
+    // (Small skips acceptance_specs). Resolve it before vetting so those
     // checks can use it. The marker is committed at
     // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — and
     // `slug` plus the base-branch tree source are unchanged through the vetting

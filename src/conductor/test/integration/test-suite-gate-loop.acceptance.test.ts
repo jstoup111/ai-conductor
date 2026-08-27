@@ -383,7 +383,7 @@ describe('test_suite native gate loop', () => {
           `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}\n`,
         haltClass: 'mechanical',
         finalGateState: 'failed',
-        restagedDownstreamState: 'stale',
+        restagedDownstreamState: undefined,
       });
     },
   );

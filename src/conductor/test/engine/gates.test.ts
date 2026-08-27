@@ -182,7 +182,7 @@ describe('engine/gates', () => {
     it('non-gating steps can be skipped', () => {
       expect(canSkipStep('explore')).toBe(true);
       expect(canSkipStep('memory')).toBe(true);
-      expect(canSkipStep('coherence_check')).toBe(true);
+      expect(canSkipStep('architecture_diagram')).toBe(true);
     });
   });
 });
