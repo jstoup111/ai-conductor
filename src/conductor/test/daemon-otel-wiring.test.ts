@@ -1,23 +1,34 @@
-// Covers: task:6, task:7
+// Covers: task:6, task:7, task:8
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolveOtelConfig } from '../src/engine/otel/otel-config.js';
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
 type VisualizerPlugin = import('../src/types/plugin.js').VisualizerPlugin;
+type HarnessConfig = import('../src/types/config.js').HarnessConfig;
+type LoadMergedConfig = typeof import('../src/engine/config.js').loadMergedConfig;
 
 const fixture = vi.hoisted(() => ({
   worktreePath: '',
   scopes: [] as Array<Record<string, unknown>>,
   visualizer: null as VisualizerPlugin | null,
   emittedBeforeHalt: [] as string[],
+  persistedRendererErrors: [] as Array<{ rendererName: string; error: string }>,
+  visualizerConstructions: 0,
+  constructorError: null as Error | null,
   sameStopPromise: false,
 }));
 const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null));
+const loadMergedConfig = vi.hoisted(() => vi.fn<LoadMergedConfig>());
 
 vi.mock('../src/engine/otel/wire.js', () => ({ wireOtelVisualizer }));
+vi.mock('../src/engine/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/config.js')>();
+  return { ...actual, loadMergedConfig };
+});
 vi.mock('../src/engine/self-host/daemon-build-token.js', () => ({
   readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
 }));
@@ -39,6 +50,14 @@ vi.mock('../src/engine/daemon-runner.js', () => ({
       const firstStop = stop();
       fixture.sameStopPromise = firstStop === stop();
       await firstStop;
+      const persisted = await readFile(join(fixture.worktreePath, '.pipeline', 'events.jsonl'), 'utf8');
+      fixture.persistedRendererErrors = persisted
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type: string; rendererName?: string; error?: string })
+        .filter((event) => event.type === 'renderer_error')
+        .map((event) => ({ rendererName: event.rendererName!, error: event.error! }));
       return { slug: item.slug, status: 'halted', reason: 'fake HALT' };
     },
 }));
@@ -52,9 +71,23 @@ beforeEach(() => {
   fixture.scopes = [];
   fixture.visualizer = null;
   fixture.emittedBeforeHalt = [];
+  fixture.persistedRendererErrors = [];
+  fixture.visualizerConstructions = 0;
+  fixture.constructorError = null;
   fixture.sameStopPromise = false;
+  loadMergedConfig.mockClear();
   wireOtelVisualizer.mockClear();
-  wireOtelVisualizer.mockImplementation((_config, context, events) => {
+  wireOtelVisualizer.mockImplementation((config, context, events) => {
+    if (!resolveOtelConfig(config, context.pipelineDir).enabled) return null;
+    fixture.visualizerConstructions += 1;
+    if (fixture.constructorError) {
+      void events.emit({
+        type: 'renderer_error',
+        rendererName: 'otel',
+        error: fixture.constructorError.message,
+      });
+      return null;
+    }
     fixture.visualizer?.start(events, context);
     return fixture.visualizer;
   });
@@ -64,17 +97,16 @@ afterEach(async () => {
   await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-async function dispatchWithSessionId(sessionId?: string | 'unreadable'): Promise<{ repo: string; pipelineDir: string }> {
+async function dispatchWithSessionId(
+  sessionId?: string | 'unreadable',
+  config: HarnessConfig = { otel: { exporter: 'file' } },
+): Promise<{ repo: string; pipelineDir: string }> {
   const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-wiring-'));
   dirs.push(repo);
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
   const pipelineDir = join(fixture.worktreePath, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
-  await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(
-    join(repo, '.ai-conductor', 'config.yml'),
-    'otel:\n  exporter: file\n',
-  );
+  loadMergedConfig.mockResolvedValue({ ok: true, config, warnings: [], deprecatedKeys: [] });
   if (sessionId === 'unreadable') {
     await mkdir(join(pipelineDir, 'conduct-session-id'));
   } else if (sessionId) {
@@ -153,6 +185,60 @@ describe('daemon OTel visualizer wiring', () => {
       events: ['loop_halt'],
       flushes: 1,
       sameStopPromise: true,
+    });
+  });
+
+  it('leaves an absent OTel configuration as the pre-visualizer feature dispatch', async () => {
+    await dispatchWithSessionId(undefined, {});
+
+    expect({
+      visualizerConstructions: fixture.visualizerConstructions,
+      visualizer: fixture.scopes[0]?.visualizer,
+      dispatches: fixture.scopes.length,
+      rendererErrors: fixture.persistedRendererErrors,
+      stoppedIdempotently: fixture.sameStopPromise,
+    }).toEqual({
+      visualizerConstructions: 0,
+      visualizer: null,
+      dispatches: 1,
+      rendererErrors: [],
+      stoppedIdempotently: true,
+    });
+  });
+
+  it('treats an invalid OTel block as disabled and completes the same feature dispatch', async () => {
+    await dispatchWithSessionId(
+      undefined,
+      { otel: { exporter: 'unknown' } } as unknown as HarnessConfig,
+    );
+
+    expect({
+      visualizerConstructions: fixture.visualizerConstructions,
+      visualizer: fixture.scopes[0]?.visualizer,
+      dispatches: fixture.scopes.length,
+      rendererErrors: fixture.persistedRendererErrors,
+    }).toEqual({
+      visualizerConstructions: 0,
+      visualizer: null,
+      dispatches: 1,
+      rendererErrors: [],
+    });
+  });
+
+  it('keeps the feature dispatch running when enabled OTel construction reports renderer_error', async () => {
+    fixture.constructorError = new Error('fake OTel constructor failure');
+    await dispatchWithSessionId();
+
+    expect({
+      visualizerConstructions: fixture.visualizerConstructions,
+      visualizer: fixture.scopes[0]?.visualizer,
+      dispatches: fixture.scopes.length,
+      rendererErrors: fixture.persistedRendererErrors,
+    }).toEqual({
+      visualizerConstructions: 1,
+      visualizer: null,
+      dispatches: 1,
+      rendererErrors: [{ rendererName: 'otel', error: 'fake OTel constructor failure' }],
     });
   });
 });
