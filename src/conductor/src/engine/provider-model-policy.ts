@@ -46,7 +46,6 @@ const CLAUDE_STEP_MODELS: Record<StepName, string> = {
   acceptance_specs: 'opus',
   build: 'sonnet',
   build_review: 'opus',
-  wiring_check: 'sonnet', // deprecated compatibility step; never dispatched
   test_suite: 'sonnet',
   manual_test: 'sonnet',
   prd_audit: 'opus',
@@ -74,7 +73,6 @@ const CODEX_STEP_MODELS: Record<StepName, string> = {
   acceptance_specs: 'gpt-5.6-sol',
   build: 'gpt-5.6-terra',
   build_review: 'gpt-5.6-sol',
-  wiring_check: 'gpt-5.6-terra', // deprecated compatibility step; never dispatched
   test_suite: 'gpt-5.6-terra',
   manual_test: 'gpt-5.6-terra',
   prd_audit: 'gpt-5.6-sol',
@@ -102,7 +100,6 @@ const STEP_EFFORTS: Record<StepName, EffortLevel> = {
   acceptance_specs: 'medium',
   build: 'medium',
   build_review: 'high',
-  wiring_check: 'low', // deprecated compatibility step; never dispatched
   test_suite: 'low',
   manual_test: 'medium',
   prd_audit: 'high',

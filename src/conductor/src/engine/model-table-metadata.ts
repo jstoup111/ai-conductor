@@ -3,9 +3,6 @@ import type { StepName } from '../types/steps.js';
 // These steps retain exhaustive provider-policy placeholders for StepName
 // type safety, but execute entirely in-process and never dispatch a model.
 export const MODEL_FREE_ENGINE_STEPS = [
-  // Retained only so deprecated StepName resolution remains exhaustive; this
-  // entry no longer represents an executable verifier or model-table row.
-  'wiring_check',
   'test_suite',
 ] as const satisfies readonly StepName[];
 
@@ -47,7 +44,6 @@ export const STEP_RATIONALE: Record<StepName, string> = {
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
   build_review:
     'Fresh-session grader for explicitly enabled, criterion-bound test-quality concerns — adversarial evidence judgement demands a high-capability model, same class as prd_audit/code-review.',
-  wiring_check: 'Deprecated compatibility no-op; reachability is no longer judged anywhere in BUILD.',
   test_suite:
     'Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required.',
   manual_test: 'Structured validation against stories — pattern-following.',

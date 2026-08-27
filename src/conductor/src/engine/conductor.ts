@@ -64,7 +64,6 @@ import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
-  runNativeGroupBranch,
   runWithConcurrency,
   makeSkippedOutcome,
   makeNoVerdictOutcome,
@@ -134,7 +133,6 @@ import {
   shouldSkipForUpstreamSkip,
   getGroupForStep,
   getStepDefinition,
-  BUILD_VERIFICATION_GROUP,
   VALIDATION_GROUP,
 } from './steps.js';
 import type { StepGroup } from '../types/index.js';
@@ -2105,7 +2103,6 @@ export class Conductor {
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
-  private retainedFullSuiteFailure: FullSuiteVerifierResult | undefined;
   private featureDesc?: string;
   private worktreeBranch?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
@@ -5536,11 +5533,6 @@ export class Conductor {
     // partial join on a HALT/failed round" invariant), since those paths
     // run only after this is cleared and never consult it themselves.
     let inFlightGroupCompletions: Record<string, StepStatus> | undefined;
-    // A deterministic BUILD-verification failure routed this invocation back
-    // through build. Its next verification round must establish every
-    // non-skipped member afresh; old member state/gate verdicts cannot stand
-    // in for that round's join.
-    let buildRepairVerificationPending = false;
     let signalExitRequested = false;
 
     // Save state on SIGINT/SIGTERM/SIGHUP before exit
@@ -6266,7 +6258,7 @@ export class Conductor {
         // (including the checkpoint after manual_test) is byte-for-byte unchanged.
         const builtinGroup = getGroupForStep(step.name);
         // The group engages only when the ENTRY step's own gate passes —
-        // upstream prerequisites (build/build_review/wiring_check) unsatisfied
+        // upstream prerequisites unsatisfied
         // means the fan-out must not dispatch any member. Falling through
         // lands on the ordinary checkGate below, which emits `gate_blocked`
         // and returns (the daemon's finally backstop then writes its
@@ -6282,16 +6274,13 @@ export class Conductor {
           // dispatches — real fan-out of the still-dispatchable members lands
           // in later tasks (17+).
           const groupTrack = await this.resolveTrack(state);
-          const reverifyDoneBuildMembers =
-            builtinGroup.name === BUILD_VERIFICATION_GROUP.name &&
-            buildRepairVerificationPending;
           const membership = resolveGroupMembership(
             builtinGroup,
             state,
             groupTrack,
             this.modelPolicyForStep(step.name),
             this.config,
-            reverifyDoneBuildMembers,
+            false,
           );
           // Engagement is keyed to the first member that still needs work,
           // rather than blindly to members[0]. A nominal entry that was
@@ -6359,17 +6348,12 @@ export class Conductor {
               1,
               Math.min(this.validationConcurrency, membership.dispatchable.length),
             );
-            // Native BUILD members report their evidence decision through
-            // their own StepRunResult. The join only observes that result;
-            // it does not add another validity predicate.
-            const nativeBranchResults = new Map<string, StepRunResult>();
             const branchDispatchStartedAt = new Map<string, number>();
             const branchHandshakeFailures = new Map<string, CompletionResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
               // D1: one identity per branch dispatch, minted here and passed
               // into the branch below so the provider-lifecycle `attempt.id`
-              // is this exact value. Native members run no provider dispatch,
-              // so their id is only the stamp's.
+              // is this exact value.
               const branchRunIds = new Map(
                 members.map((member) => [member.name, randomUUID()] as const),
               );
@@ -6384,36 +6368,7 @@ export class Conductor {
                 roundChanges,
               );
               return runWithConcurrency(
-                members.map((member) => () => {
-                  if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
-                    return runNativeGroupBranch(
-                      member,
-                      async () => {
-                        const result = member.name === 'wiring_check'
-                          ? this.runWiringCheckStep(state)
-                          : this.runTestSuiteStep();
-                        const settled = await result;
-                        nativeBranchResults.set(member.name, settled);
-                        return settled;
-                      },
-                      {
-                        onMemberEvent: async (event) => {
-                          if (event.phase === 'result') {
-                            await this.stampVerdictRunIdentity(
-                              event.member as StepName,
-                              branchRunIds.get(event.member),
-                            );
-                          }
-                          if (event.phase === 'result' && event.outcome === 'verdict:pass') {
-                            const syntheticKey = `${builtinGroup.name}__${event.member}`;
-                            inFlightGroupCompletions![event.member] = 'done';
-                            inFlightGroupCompletions![syntheticKey] = 'done';
-                          }
-                        },
-                      },
-                    );
-                  }
-                  return runGroupBranch(
+                members.map((member) => () => runGroupBranch(
                     member,
                     state,
                     {
@@ -6465,8 +6420,7 @@ export class Conductor {
                       },
                     },
                     1,
-                  );
-                }),
+                  )),
                 cap,
               );
             };
@@ -6642,161 +6596,6 @@ export class Conductor {
                     : await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
                 );
               }
-            }
-
-            // Task 11: once the BUILD join has accepted a member's own
-            // evidence result, make that reuse/recompute decision observable.
-            // The event is derived exclusively from the native branch result
-            // already used by this round; it grants no new validity authority.
-            if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
-              for (let idx = 0; idx < membership.dispatchable.length; idx += 1) {
-                const member = membership.dispatchable[idx]!;
-                const outcome = outcomes[idx];
-                if (
-                  member.name !== 'test_suite' ||
-                  outcome?.kind !== 'verdict' ||
-                  outcome.verdict !== 'pass' ||
-                  !gateVerdicts.get(member.name)?.satisfied
-                ) {
-                  continue;
-                }
-                const verification = nativeBranchResults.get(member.name)?.fullSuiteVerification;
-                if (member.name === 'test_suite' && verification?.status === 'REUSED') {
-                  await emitTracked({
-                    type: 'build_member_evidence_reused',
-                    member: 'test_suite',
-                    decision: 'reuse',
-                    basis: 'fingerprint-match',
-                  });
-                  continue;
-                }
-                await emitTracked({
-                  type: 'build_member_evidence_recomputed',
-                  member: 'test_suite',
-                  decision: 'recompute',
-                  basis: verification?.status === 'EXECUTED' &&
-                      verification.freshness.reason === 'fingerprint_mismatch'
-                    ? 'fingerprint-mismatch'
-                    : 'fresh-evidence-required',
-                });
-              }
-            }
-
-            const deterministicFailureIdxs =
-              builtinGroup.name === BUILD_VERIFICATION_GROUP.name
-                ? outcomes
-                  .map((outcome, idx) =>
-                    (outcome.kind === 'no-verdict' && outcome.reason !== 'authFailure') ||
-                    (outcome.kind === 'verdict' &&
-                      outcome.verdict === 'pass' &&
-                      this.verifyArtifacts &&
-                      !gateVerdicts.get(membership.dispatchable[idx]!.name)?.satisfied)
-                      ? idx
-                      : -1,
-                  )
-                  .filter((idx) => idx !== -1)
-                : [];
-            if (deterministicFailureIdxs.length > 0) {
-              const fullSuiteFailure = this.retainedFullSuiteFailure;
-              this.retainedFullSuiteFailure = undefined;
-              const deterministicFailures = [] as Array<{
-                member: typeof membership.dispatchable[number];
-                evidence: string;
-              }>;
-              for (const failureIdx of deterministicFailureIdxs) {
-                const member = membership.dispatchable[failureIdx]!;
-                deterministicFailures.push({
-                  member,
-                  evidence: member.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED'
-                    ? `full-suite verification failed (${fullSuiteFailure.reason}): ` +
-                      `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`
-                    : outcomes[failureIdx]!.kind === 'no-verdict'
-                      ? (outcomes[failureIdx] as NoVerdictOutcome).reason
-                    : (gateVerdicts.get(membership.dispatchable[failureIdx]!.name)?.reason ??
-                      'deterministic BUILD verification gate unsatisfied'),
-                });
-              }
-              const remediationRecords = await Promise.all(deterministicFailures.map((failure) =>
-                this.recordDeterministicGateRepair(failure.member.name, {
-                  reason: failure.member.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED'
-                    ? fullSuiteFailure.reason
-                    : 'deterministic_gate_unsatisfied',
-                  message: failure.member.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED'
-                    ? fullSuiteFailure.message
-                    : failure.evidence,
-                }),
-              ));
-              const remediationRecord = remediationRecords.find(Boolean);
-              const kickbacks = [] as Awaited<ReturnType<typeof consumeKickbackBudget>>[];
-              for (const failure of deterministicFailures) {
-                kickbacks.push(
-                  await consumeKickbackBudget(failure.member.name as StepName, failure.evidence),
-                );
-              }
-              if (kickbacks.every((kickback) => !kickback.exhausted)) {
-                const evidence = deterministicFailures.map((failure) => failure.evidence).join('\n');
-                const hasNoVerdict = deterministicFailureIdxs.some(
-                  (idx) => outcomes[idx]!.kind === 'no-verdict',
-                );
-                const from = deterministicFailures.length === 1
-                  ? deterministicFailures[0]!.member.name as StepName
-                  : step.name;
-                await emitTracked({
-                  type: 'kickback',
-                  from,
-                  to: 'build',
-                  evidence,
-                  count: Math.max(...kickbacks.map((kickback) => kickback.entry.count)),
-                });
-                pendingRetryHints.set(
-                  'build',
-                  `${deterministicFailures.map((failure) => failure.member.name).join(', ')} ` +
-                    `failed deterministic BUILD verification:\n${evidence}` +
-                    (remediationRecord
-                      ? `\nRecorded rebase-repair context: ${remediationRecord.id}`
-                      : ''),
-                );
-                for (const failure of deterministicFailures) {
-                  await captureKickbackToBuildContext(failure.member.name as StepName);
-                }
-                const navigationIndex = await this.navigateStateBack(state, 'build', steps);
-                buildRepairVerificationPending = true;
-                const staleChanges: Record<string, unknown> = {};
-                if (hasNoVerdict) {
-                  for (const member of membership.dispatchable) {
-                    staleChanges[member.name] = 'stale';
-                  }
-                  if (fullSuiteFailure?.status === 'FAILED') staleChanges.test_suite = 'failed';
-                } else {
-                  for (const member of membership.dispatchable) {
-                    staleChanges[member.name] = 'stale';
-                  }
-                }
-                await this.commitStateChanges(state, 'restage BUILD verification members', staleChanges);
-                i = navigationIndex - 1;
-                continue;
-              }
-              const exhausted = deterministicFailures.find(
-                (_, idx) => kickbacks[idx]!.exhausted,
-              )!;
-              const exhaustedKickback = kickbacks[deterministicFailures.indexOf(exhausted)]!;
-              const reason =
-                `${exhausted.member.name} failure unresolved after ${exhaustedKickback.entry.count} ` +
-                `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${exhaustedKickback.entry.lastReason}`;
-              const mechanical = exhausted.member.name === 'test_suite' &&
-                fullSuiteFailure?.status === 'FAILED';
-              if (mechanical) state.test_suite = 'failed';
-              await this.closeOpenExecutions();
-              await this.writeHaltMarker(
-                reason + '\n',
-                mechanical ? 'mechanical' : 'needs-human',
-              );
-              await this.persistPendingStateChanges(state, 'persist conductor transition');
-              const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
-              process.off('SIGINT', sigintHandler);
-              if (!this.daemon) process.off('SIGTERM', sigterm);
-              return;
             }
 
             // manual_test's own gate is satisfied merely by the results
@@ -7710,7 +7509,7 @@ export class Conductor {
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
         await emitTracked({ type: 'step_started', step: step.name, index: i });
-        if (step.deprecated && step.name !== 'wiring_check') {
+        if (step.deprecated) {
           await emitTracked({
             type: 'deprecated_step',
             step: step.name,
@@ -8237,8 +8036,6 @@ export class Conductor {
                   ? await this.runWorktreeStep(state)
                   : step.name === 'rebase'
                       ? await this.runRebaseStep(state)
-                      : step.name === 'wiring_check'
-                        ? await this.runWiringCheckStep(state)
                       : step.name === 'test_suite'
                         ? await this.runTestSuiteStep()
                         : step.name === 'finish' && this.finishPublication
@@ -11300,14 +11097,12 @@ export class Conductor {
 
   private async runTestSuiteStep(): Promise<StepRunResult> {
     this.retainedFullSuiteInspection = undefined;
-    this.retainedFullSuiteFailure = undefined;
     const inspection = await this.fullSuiteVerifier.inspect();
     if (inspection.status === 'STALE') {
       await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
     }
     const verification = await this.fullSuiteVerifier.ensure();
     if (verification.status === 'FAILED') {
-      this.retainedFullSuiteFailure = verification;
       return {
         success: false,
         output: verification.message,
@@ -11336,16 +11131,6 @@ export class Conductor {
       output: `Full test suite ${verification.status}`,
       fullSuiteVerification: verification,
     };
-  }
-
-  private async runWiringCheckStep(state: ConductState): Promise<StepRunResult> {
-    await this.events.emit({
-      type: 'deprecated_step',
-      step: 'wiring_check',
-      adr: 'adr-2026-08-11-wiring-judged-in-build-review',
-    });
-    void state;
-    return { success: true };
   }
 
   /**

@@ -47,7 +47,6 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   acceptance_specs: 3,
   build: 3,
   build_review: 3,
-  wiring_check: 1, // deprecated compatibility step; never dispatched
   test_suite: 1,
   manual_test: 3,
   prd_audit: 3,
@@ -77,7 +76,6 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   acceptance_specs: 'auto',
   build: 'auto',
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
-  wiring_check: 'auto', // deprecated compatibility step; never dispatched
   test_suite: 'auto', // deterministic native verifier; no generative review
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED

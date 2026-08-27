@@ -735,12 +735,6 @@ export class DefaultStepRunner implements StepRunner {
         'rebase is handled by the engine (native git rebase-on-latest); it must not be dispatched to run()',
       );
     }
-    if (step === 'wiring_check') {
-      return {
-        success: false,
-        output: 'wiring_check is retired; build_review owns wiring judgement',
-      };
-    }
     // build_review is a one-shot grader dispatch — never resumes the main
     // conductor session (see runBuildReview() for the resolveRebaseConflict
     // fresh-uuid/resume:false pattern).

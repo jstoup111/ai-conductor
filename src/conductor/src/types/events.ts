@@ -689,7 +689,7 @@ export type ConductorEvent =
        * that declares the member satisfied for the round.
        */
       type: 'build_member_evidence_reused';
-      member: 'wiring_check' | 'test_suite';
+      member: 'test_suite';
       decision: 'reuse';
       basis: 'fingerprint-match';
     }
@@ -700,7 +700,7 @@ export type ConductorEvent =
        * evidence, command output, credentials, or host paths.
        */
       type: 'build_member_evidence_recomputed';
-      member: 'wiring_check' | 'test_suite';
+      member: 'test_suite';
       decision: 'recompute';
       basis:
         | 'recorded-head-versus-current-head'

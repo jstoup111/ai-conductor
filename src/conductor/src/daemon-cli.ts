@@ -2396,9 +2396,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // These values are closed event classifications, not evidence payloads.
       // Keep the daemon log equally closed so a malformed forwarded event
       // cannot echo a host path, command output, or credential-like value.
-      const member = event.member === 'wiring_check'
-        ? 'wiring_check'
-        : event.member === 'test_suite'
+      const member = event.member === 'test_suite'
           ? 'test_suite'
           : 'unknown-member';
       const decision = event.decision === 'reuse'
