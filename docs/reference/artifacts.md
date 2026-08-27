@@ -37,7 +37,7 @@ engine reads (resume probe) and excludes (self-host fingerprint) but never write
 
 ## `.docs/` — committed artifacts
 
-Twenty entries. Alphabetized; the five with no code reference are marked.
+Nineteen entries. Alphabetized; the four with no code reference are marked.
 
 | Entry | Naming | Written by | Read by / gate role |
 | --- | --- | --- | --- |
@@ -56,13 +56,14 @@ Twenty entries. Alphabetized; the five with no code reference are marked.
 | `phase7-daemon-validation.md` | loose file | manual | **no code reference** |
 | `plans/` | `YYYY-MM-DD-<slug>.md` — the stem is the canonical feature key | `plan` skill; the engineer loop writes `.docs/plans/<slug>.md` at land | `plan` completion glob; land requires every parsed task to have a `Done when:` block with 2–5 nonblank list checks; seeds `.pipeline/task-status.json`; the build predicate parses `### Task <id>` headings; protected-artifact seal |
 | `release-waivers/` | `<plan-stem>.md` | operator, hand-authored in the same diff | the self-host release gate. Also the only `.docs` prefix always writable during BUILD |
-| `retired/` | `<plan-stem>.md`, plus `README.md` registering each retirement as delivered or abandoned | operator, hand-authored | **no code reference** — a plan moved here leaves the backlog scan's non-recursive `.docs/plans` listing, retiring work that another feature already delivered or the operator abandoned. See [`.docs/retired/README.md`](../../.docs/retired/README.md) |
 | `shipped/` | `<plan-stem>.md` | `conduct-ts shipped-record` | daemon backlog dedup; the only input to `conduct-ts kpi` |
 | `specs/` | `YYYY-MM-DD-<slug>.md` | `prd` skill (product track only) | `prd` completion glob; protected-artifact seal |
 | `stories/` | `YYYY-MM-DD-<slug>.md`, plus `epics/` and `features/<name>/` subdirs | `stories` skill | `stories` completion glob; plan-coverage check; coherence rows; protected-artifact seal |
 | `track/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `explore` skill | `parseTrack` reads a `Track: product\|technical` line. Missing ⇒ defaults to `product`. Decides whether `prd` and `prd_audit` run. The file also carries a `Scope boundary:` line recording the operator-confirmed fix breadth; `plan` and `stories` read it as binding free-form text — no code parses it |
 
 Every entry above is committed.
+
+Abandoned work leaves no repository artifact; its record is a closed issue — see [abandoning a spec](../runbooks/abandoning-a-spec.md).
 
 `.docs/coherence-waivers/` is the one entry you may not find on disk. Git does not track empty
 directories, so the directory appears the first time a waiver is committed — nothing pre-creates it, and
