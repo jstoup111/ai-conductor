@@ -1,5 +1,5 @@
-// Covers: task:5
-import { describe, expect, it } from 'vitest';
+// Covers: task:5, task:6
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { selectVisualizers, buildVisualizers } from '../../src/index.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -43,7 +43,7 @@ function factoryFor(
 
 function createFactoryContext(
   emitter: ConductorEventEmitter,
-  visualizers: string[],
+  visualizers?: string[],
 ): VisualizerFactoryContext {
   return {
     config: { visualizers } as HarnessConfig,
@@ -61,6 +61,10 @@ function createFactoryContext(
 }
 
 describe('visualizer selection', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('starts a configured factory with run identity and delivers emitted events', async () => {
     const registry = new PluginRegistry();
     const emitter = new ConductorEventEmitter();
@@ -105,5 +109,46 @@ describe('visualizer selection', () => {
       ['shared-feature'],
       ['shared-feature'],
     ]);
+  });
+
+  it('warns once and skips a configured visualizer that is not registered', () => {
+    const registry = new PluginRegistry();
+    const emitter = new ConductorEventEmitter();
+    const context = createFactoryContext(emitter, ['ghost', 'ghost']);
+    registry.register('visualizer', 'registered', factoryFor(new FakeVisualizer('registered'), () => {}));
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const selected = selectVisualizers(registry, context.config, context);
+
+    expect({ selected, warnings: warning.mock.calls }).toEqual({
+      selected: [],
+      warnings: [[
+        'visualizer "ghost" is not registered; registered visualizers: registered.',
+      ]],
+    });
+  });
+
+  it('warns once and ignores otel in visualizers because its block owns enablement', () => {
+    const registry = new PluginRegistry();
+    const emitter = new ConductorEventEmitter();
+    const context = createFactoryContext(emitter, ['otel', 'otel']);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const selected = selectVisualizers(registry, context.config, context);
+
+    expect({ selected, warnings: warning.mock.calls }).toEqual({
+      selected: [],
+      warnings: [[
+        'visualizer "otel" is configured through the "otel:" block; remove it from "visualizers".',
+      ]],
+    });
+  });
+
+  it.each([[], undefined])('starts no visualizers when visualizers is %j and OTel is disabled', (visualizers) => {
+    const registry = new PluginRegistry();
+    const emitter = new ConductorEventEmitter();
+    const context = createFactoryContext(emitter, visualizers);
+
+    expect(selectVisualizers(registry, context.config, context)).toEqual([]);
   });
 });

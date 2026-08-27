@@ -224,12 +224,38 @@ export function selectVisualizers(
   context: VisualizerFactoryContext,
 ): VisualizerPlugin[] {
   const selected: VisualizerPlugin[] = [];
-  const names = [...(config.visualizers ?? []), 'otel'];
+  const warnedNames = new Set<string>();
 
-  for (const name of names) {
+  for (const name of config.visualizers ?? []) {
+    if (name === 'otel') {
+      if (!warnedNames.has(name)) {
+        warnedNames.add(name);
+        console.warn('visualizer "otel" is configured through the "otel:" block; remove it from "visualizers".');
+      }
+      continue;
+    }
+
     const factory = registry.tryGet<VisualizerFactory>('visualizer', name);
-    const visualizer = factory?.(context);
-    if (visualizer) selected.push(visualizer);
+    if (!factory) {
+      if (!warnedNames.has(name)) {
+        warnedNames.add(name);
+        console.warn(
+          `visualizer "${name}" is not registered; registered visualizers: ${registry.list('visualizer').join(', ') || '(none)'}.`,
+        );
+      }
+      continue;
+    }
+
+    const visualizer = factory(context);
+    if (visualizer) {
+      selected.push(visualizer);
+    }
+  }
+
+  const otelFactory = registry.tryGet<VisualizerFactory>('visualizer', 'otel');
+  const otelVisualizer = otelFactory?.(context);
+  if (otelVisualizer) {
+    selected.push(otelVisualizer);
   }
 
   return selected;
