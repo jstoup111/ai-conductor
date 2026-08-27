@@ -19,7 +19,7 @@ Claude Code configuration; do not copy them into this project.
 | UNDERSTAND | bootstrap, memory |
 | DECIDE | brainstorm, stories, conflict-check, plan |
 | BUILD | tdd, debugging, code-review{{PIPELINE_SKILL}} |
-| SHIP | finish, retro |
+| SHIP | manual-test, prd-audit, architecture-review --as-built, finish |
 
 ## Harness Behavioral Rules
 

@@ -18,7 +18,7 @@ immediately — from the evidence in the issue alone — without anchoring them 
 filer's first idea of a fix.
 
 This skill applies whether the filer is the operator (from chat or phone) or an agent
-filing on the operator's behalf (halt monitor, retro proposals, bugs discovered
+filing on the operator's behalf (halt monitor, follow-up proposals, bugs discovered
 mid-build). GitHub's intake issue form (`.github/ISSUE_TEMPLATE/intake.yml`) scaffolds
 the same shape on web/mobile; anything filed via `gh issue create` must follow it by
 hand — this skill is how.

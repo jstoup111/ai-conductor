@@ -349,7 +349,7 @@ runs the full 3-stage review from the `code-review` skill on this scoped context
 Rationale: intermediate-batch reviews check compliance against a narrow diff + a handful
 of acceptance criteria — a task Sonnet handles well. The final batch review evaluates
 cross-batch integration and the full architectural picture, which is where Opus's deeper
-reasoning pays off. Retro on the 2026-04-17 Medium run (31 tasks, 7 batches) showed all
+reasoning pays off. A review of the 2026-04-17 Medium run (31 tasks, 7 batches) showed all
 4 intermediate evaluators could have run on Sonnet without verdict drift — they were the
 largest single token line item in that run.
 
@@ -513,7 +513,7 @@ as a halt — **not** as a successful exit. Before exiting, you MUST:
 
 This contract is mandatory. Without the marker, the conductor reads
 `task-status.json`, sees nothing in flight, and concludes the build step
-is done — silently cascading through `manual-test` / `retro` / `finish`
+is done — silently cascading through `manual-test` / `finish`
 to mark the entire feature complete while the user's actual blocker is
 still open. The build-completion predicate in
 the build-completion predicate checks for the
@@ -550,7 +550,7 @@ If stories in `.docs/stories/` have been modified since the plan was created:
 
 ### State Management
 
-Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `plan-ref.md` (active plan path), `task-status.json` (per-task status and rework cycle counts), and `audit-trail/` (per-task `review.json`, `rework-N.json`, `commit.txt`, plus `summary.json` for retro).
+Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `plan-ref.md` (active plan path), `task-status.json` (per-task status and rework cycle counts), and `audit-trail/` (per-task `review.json`, `rework-N.json`, `commit.txt`, plus `summary.json` for final pipeline metrics).
 
 ### Parallel Execution (Standard and Full Autonomy)
 
@@ -629,17 +629,12 @@ At natural batch boundaries (after completing a group of related tasks):
 - Verify architecture diagrams are current (if structural files changed in this batch, run the
   `architecture-diagram` workflow in verification mode; Claude `/architecture-diagram`; Codex
   `$architecture-diagram`)
-- Run a **micro-retro** (see below)
 - Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
   tried, what worked, and what's next (see Progress Log below)
 - Report batch status as a single line: `Batch N: X/Y PASS, Z rework`
 - In Conservative mode: get explicit approval to continue
 - In Standard mode: continue unless the user intervenes
 - In Full mode: continue automatically
-
-### Micro-Retros (Per-Phase)
-
-At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity. If dispatched through the selected host's available subagent facility, the micro-retro dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
 
 ### Memory Checkpoint (Per-Batch)
 
@@ -665,8 +660,8 @@ When the rework budget is exhausted, consider reverting to the last clean batch 
 ### Pipeline Summary
 
 **GATE: At final-task completion, write `.pipeline/summary.json` before marking the
-pipeline done.** The retro skill reads this file; if it is missing, retro has to spawn an
-Explore agent to recompute stats from git log + task-status.json. That is wasted tokens.
+pipeline done.** It preserves final pipeline metrics without recomputing them from git log
+and `task-status.json`.
 
 Required fields (all numeric unless noted):
 
@@ -694,8 +689,7 @@ Counts come from `.pipeline/task-status.json` and `.pipeline/audit-trail/`. Time
 come from `session-created` (start) and the write time (end). Commit SHAs come from
 `git log --format=%H --reverse <plan-ref-commit>..HEAD` (first + last).
 
-Do NOT defer this to the `/retro` skill — by retro time the session may have compacted
-mid-task telemetry. Write the file while the data is still in context.
+Write the file while the data is still in context.
 
 ## Verification
 
@@ -711,4 +705,4 @@ mid-task telemetry. Write the file while the data is still in context.
 - [ ] State tracked in `.pipeline/` with audit trail
 - [ ] Conflict check re-run if stories changed
 - [ ] Batch summaries presented at natural boundaries
-- [ ] Pipeline summary available for retro
+- [ ] Pipeline summary available for final metrics

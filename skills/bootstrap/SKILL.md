@@ -159,7 +159,7 @@ sections for Node projects). If `.claudeignore` already exists, do NOT overwrite
 Copy `templates/pull_request_template.md` to `.github/pull_request_template.md`.
 Create `.github/` directory if it doesn't exist. If a PR template already exists, do NOT overwrite.
 The template contains `[feature_description]`, `[story_count]`, and `[branch]` placeholders
-that `conduct` fills in when creating the PR after retro.
+that `conduct` fills in when creating the PR.
 
 ### 3d. Generate Claude Code Settings
 
@@ -302,7 +302,7 @@ copy-verify-swap before the symlink is created (adr-2026-06-29-safe-reversible-m
 yourself** — it will already be a symlink when this skill runs.
 
 Create if missing (idempotent): `.pipeline/` (audit-trail/), `.worktrees/`, `.docs/` (specs/,
-complexity/, stories/, conflicts/, architecture/, decisions/, plans/, retros/, intake/). These
+complexity/, stories/, conflicts/, architecture/, decisions/, plans/, intake/). These
 are the full set of `.docs/` subdirectories the conductor and daemon read/write across the SDLC
 — keep this list in parity with them.
 

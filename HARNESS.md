@@ -40,7 +40,7 @@ cite `verify-claims` in their own SKILL.md:
 
 Execution steps that merely act on an already-gated artifact (`tdd`, `pipeline`), orchestration
 (`conduct`, `engineer`), and mechanical steps (`bootstrap`, `memory`, `architecture-diagram`,
-`simplify`, `retro`, `finish`, `pr`, `rebase`) do **not** self-cite — they rely on this rule and on
+`simplify`, `finish`, `pr`, `rebase`) do **not** self-cite — they rely on this rule and on
 the upstream/surrounding gates. Casual conversation and trivially-verifiable mechanics with no
 downstream blast radius are out of scope.
 
@@ -49,7 +49,7 @@ downstream blast radius are out of scope.
 Skills chain via artifacts in `.docs/`. No skill orchestrates another internally.
 
 ```
-UNDERSTAND → DECIDE → BUILD(engine-native configured-verifier gate) → ✓checkpoint → SHIP(manual-test) → ✓checkpoint → SHIP(prd-audit, architecture-review --as-built, retro, finish)
+UNDERSTAND → DECIDE → BUILD(engine-native configured-verifier gate) → ✓checkpoint → SHIP(manual-test) → ✓checkpoint → SHIP(prd-audit, architecture-review --as-built, finish)
 ```
 
 In daemon/auto runs the three SHIP validators (manual-test, prd-audit,
@@ -70,7 +70,7 @@ behavior that violates a story remains a blocking `FAIL` and follows the normal 
 | DECIDE | explore (track) → complexity → prd (product track only) → architecture-diagram → architecture-review → stories → conflict-check → plan → coherence-check (M/L only, skipped for S) | .docs/track/, .docs/specs/, .docs/complexity/, .docs/architecture/, .docs/decisions/, .docs/stories/, .docs/conflicts/, .docs/plans/, .docs/coherence/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review → engine-native configured-verifier gate | Acceptance specs, code, unit tests, aggregate verifier evidence, .pipeline/ |
 | CHECKPOINT | User validation after build | Harness pause — continue, go back, or quit |
-| SHIP | manual-test, prd-audit, architecture-review --as-built, retro, finish/pr | .pipeline/manual-test-results.md, .pipeline/prd-audit.md, .pipeline/architecture-review-as-built.md (run evidence, gitignored), .docs/retros/ |
+| SHIP | manual-test, prd-audit, architecture-review --as-built, finish/pr | .pipeline/manual-test-results.md, .pipeline/prd-audit.md, .pipeline/architecture-review-as-built.md (run evidence, gitignored), .docs/shipped/ |
 | CHECKPOINT | User validation after manual-test | Harness pause — continue, go back, or quit |
 
 ### Plan Task Ownership
@@ -443,7 +443,7 @@ remain separate boundaries.
 
 No output restrictions. Exploration, questions, and detailed explanations are expected.
 
-### SHIP Phase (retro, finish, pr, manual-test)
+### SHIP Phase (manual-test, prd-audit, architecture-review --as-built, finish, pr)
 
 Structured output only. Follow the skill's output template. No free-form commentary.
 
@@ -454,7 +454,7 @@ the matching context into the session. Skills reference tech-context when availa
 
 **Load once, reference everywhere:** Tech-context files are read once during `/bootstrap` and
 become part of the session context. Skills that need tech-context (stories, tdd, writing-system-tests,
-code-review, debugging, retro) should reference the already-loaded context rather than re-reading
+code-review, debugging) should reference the already-loaded context rather than re-reading
 the files independently. This avoids redundant file reads across skill invocations.
 
 ## MCP Servers (When Available)
@@ -538,7 +538,7 @@ When setting up a new project with `/bootstrap`, configure `allowedTools` in
 
 When launching multiple Explore agents, partition by **directory** (e.g., Agent 1: `app/` + `db/`,
 Agent 2: `spec/` + `.docs/`) — never by topic. Topic-based partitioning causes 30-50% file read
-overlap (observed in retros). Directory partitioning ensures each agent reads a disjoint set of files.
+overlap (observed in prior investigations). Directory partitioning ensures each agent reads a disjoint set of files.
 
 If exploration was already performed earlier in the session (e.g., during brainstorm), pass the
 summary to subsequent agents (e.g., Plan) instead of re-exploring the same scope.
@@ -679,7 +679,6 @@ tmux sessions; the next `daemon start` (or engineer nudge) respawns.
   project style or pattern catalog. A declared exact replication remains a
   distinct mechanical case: reproduce its specified source exactly rather than
   treating pattern choice as permission to vary it.
-- Retro runs on both harness AND application after every feature
 - Tech-context is additive — never overrides generic skill behavior
 - **Docs track features.** Every feature that adds or changes user-facing
   behavior MUST update the project's `README` and any affected documentation in

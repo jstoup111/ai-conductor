@@ -298,7 +298,7 @@ Each empty commit carries `Task: <id>` (the task ID) plus `Evidence: satisfied-b
 `Evidence: skipped <reason>` (the evidence form). The conductor recognizes these commits and
 marks the task `completed` without requiring ordinary code changes. This enables honest tracking:
 a task that "completes" via verification is marked differently from one that completes via code
-delivery, supporting retro analysis and pipeline audits.
+delivery, supporting pipeline audits.
 
 ### Memory Checkpoint (Per-Cycle, Conditional)
 
@@ -362,7 +362,7 @@ focused and token-efficient. In Claude Code, this applies to Agent tool dispatch
 **Context budget rules:**
 - **Provide file paths and metadata, not full contents.** Give subagents file paths, line
   counts, and key method names/signatures. Subagents read files themselves — copying full
-  file contents into prompts wastes tokens (40-50K per feature observed in retros).
+  file contents into prompts wastes tokens (40-50K per feature observed in prior runs).
 - **For domain review: inline the diff only.** Paste the specific new/changed code (the diff)
   into the domain reviewer prompt — this is typically small (<50 lines). Do NOT inline entire files.
 - **Name domain types that exist** (e.g., "Domain types: Contact, Tag, ContactTag") so the

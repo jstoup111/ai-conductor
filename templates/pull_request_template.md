@@ -20,7 +20,6 @@
 
 - [ ] Code review passed
 - [ ] No lint/type-check warnings
-- [ ] Retro captured in `.docs/retros/`
 
 ## Artifacts
 
@@ -29,4 +28,3 @@
 | Design | `.docs/specs/` |
 | Stories | `.docs/stories/` |
 | Plan | `.docs/plans/` |
-| Retro | `.docs/retros/` |
