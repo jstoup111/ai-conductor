@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, expect, it } from 'vitest';
 
 import { EVENT_SINKS, type SinkDeclaration } from '../src/engine/event-sinks.js';
@@ -13,6 +14,7 @@ describe('event sink registry', () => {
       render: false,
       persist: true,
       audit: false,
+      otel: false,
     });
   });
 });
