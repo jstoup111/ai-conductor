@@ -20,6 +20,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Plan specifications now require every task to declare two to five nonblank completion checks before landing. ([implementation PR #1866](https://github.com/jstoup111/ai-conductor/pull/1866)).
 - Adds a guided workflow for safely removing obsolete code and verifying remaining references. ([implementation PR #1899](https://github.com/jstoup111/ai-conductor/pull/1899)).
 - Daemon runs now route wholly remediable as-built architecture-review findings through one bounded build remediation lap, while design findings halt for human input. ([implementation PR #1908](https://github.com/jstoup111/ai-conductor/pull/1908)).
+- Adds configurable visualizer plugins that receive Conductor event streams. ([implementation PR #1958](https://github.com/jstoup111/ai-conductor/pull/1958)).
 
 ### Changed
 
