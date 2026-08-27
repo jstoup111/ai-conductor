@@ -72,13 +72,52 @@ describe('engine/gates', () => {
     });
 
     it('checks all prerequisites for finish', () => {
-      // finish requires rebase (which itself follows manual_test)
+      // finish requires rebase (which itself follows architecture_review_as_built)
       const state: ConductState = {};
       const result = checkGate('finish', state);
       expect(result.passed).toBe(false);
       if (!result.passed) {
         expect(result.reason).toContain('rebase');
       }
+    });
+
+    describe('SHIP tail: architecture_review_as_built → rebase → finish', () => {
+      it('allows rebase after a satisfied as-built review', () => {
+        expect(
+          checkGate('rebase', { architecture_review_as_built: 'done' }),
+        ).toEqual({ passed: true });
+      });
+
+      it('blocks rebase when the as-built review is unsatisfied', () => {
+        const result = checkGate('rebase', {
+          architecture_review_as_built: 'failed',
+        });
+
+        expect(result).toEqual({
+          passed: false,
+          reason: 'Prerequisites not satisfied: architecture_review_as_built',
+          unsatisfied: ['architecture_review_as_built'],
+        });
+      });
+
+      it('accepts a valid skipped as-built prerequisite', () => {
+        expect(
+          checkGate('rebase', { architecture_review_as_built: 'skipped' }),
+        ).toEqual({ passed: true });
+      });
+
+      it('blocks rebase after a failed validation-group as-built member', () => {
+        // The validation-group join persists each failed member as `failed`;
+        // rebase must read that member state rather than bypassing the join.
+        const result = checkGate('rebase', {
+          architecture_review_as_built: 'failed',
+        });
+
+        expect(result.passed).toBe(false);
+        if (!result.passed) {
+          expect(result.unsatisfied).toEqual(['architecture_review_as_built']);
+        }
+      });
     });
 
     it('uses only the Task 2-style state when test_suite is marked done', () => {

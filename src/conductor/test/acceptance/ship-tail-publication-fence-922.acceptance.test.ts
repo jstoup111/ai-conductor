@@ -296,4 +296,55 @@ describe('SHIP-tail publication fence (#922)', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('executes the surviving SHIP tail exactly as architecture_review_as_built → rebase → finish', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ship-tail-order-'));
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    try {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const state: Record<string, unknown> = {
+        complexity_tier: 'M',
+        track: 'technical',
+      };
+      for (const step of ALL_STEPS) {
+        if (step.name === 'architecture_review_as_built') break;
+        state[step.name] = 'done';
+      }
+      await writeState(statePath, state as ConductState);
+
+      const started: StepName[] = [];
+      const events = new ConductorEventEmitter();
+      events.on('step_started', (event) => {
+        if (event.type === 'step_started') started.push(event.step);
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async () => ({ success: true })),
+      };
+
+      await new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'architecture_review_as_built',
+        verifyArtifacts: false,
+      }).run();
+
+      expect(started.filter((step) => [
+        'architecture_review_as_built',
+        'rebase',
+        'finish',
+      ].includes(step))).toEqual([
+        'architecture_review_as_built',
+        'rebase',
+        'finish',
+      ]);
+      expect(vi.mocked(runner.run).mock.calls.map(([step]) => step)).toEqual([
+        'architecture_review_as_built',
+        'finish',
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
