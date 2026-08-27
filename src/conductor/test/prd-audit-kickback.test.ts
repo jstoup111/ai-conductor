@@ -25,6 +25,7 @@ import {
   recordOverScopeDecisions,
   renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
+import { parsePrdAuditReport } from '../src/engine/artifacts.js';
 import { readGrowth, readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import { readState, writeState } from '../src/engine/state.js';
@@ -1633,6 +1634,17 @@ describe('prd_audit kickback', () => {
       '| NC.1 | OVER_SCOPE | within | Internal implementation detail |',
     ].join('\n');
 
+    const parsed = parsePrdAuditReport(report);
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: {
+        findings: [
+          { criterion: 'S3.1', grade: 'PASS' },
+          { criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Internal implementation detail' },
+        ],
+        rejectedRows: [{ key: 'S3.2', reason: expect.stringContaining('invalid Grade') }],
+      },
+    });
     expect(routePrdAuditOverScope(report, [])).toEqual({ kind: 'none' });
   });
 
@@ -1655,6 +1667,17 @@ describe('prd_audit kickback', () => {
       ].join('\n'),
     });
 
+    const report = await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8');
+    expect(parsePrdAuditReport(report)).toMatchObject({
+      ok: true,
+      value: {
+        findings: [
+          { criterion: 'S2.1', grade: 'FIXABLE' },
+          { criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Internal implementation detail' },
+        ],
+        rejectedRows: [],
+      },
+    });
     expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
     expect(fixture.gateBlocks).toEqual([]);
     expect(await readFile(fixture.planPath, 'utf8')).toContain('**Criterion:** S2.1');

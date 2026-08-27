@@ -3909,7 +3909,7 @@ describe('engine/artifacts', () => {
           '',
           '## Findings without an owning criterion',
           '| Finding | Grade | Intent relation | Evidence |',
-          '| --- | --- | --- |',
+          '| --- | --- | --- | --- |',
           '| NC.1 | OVER_SCOPE | within | Internal implementation detail |',
         ].join('\n'),
       );
@@ -3920,6 +3920,28 @@ describe('engine/artifacts', () => {
       });
 
       expect(result).toEqual({ done: true, verdictFreshness: expect.any(Object) });
+      const withinReport = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf8');
+      expect(parsePrdAuditReport(withinReport)).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Internal implementation detail' },
+          ],
+          rejectedRows: [],
+        },
+      });
+
+      await createFile(
+        '.pipeline/prd-audit.md',
+        withinReport.replace('| NC.1 | OVER_SCOPE | within |', '| NC.1 | OVER_SCOPE | outside-visible |'),
+      );
+      const outsideVisible = await checkStepCompletion(dir, 'prd_audit', {
+        featureDesc: 'feature',
+        sessionStartedAt: 0,
+      });
+      expect(outsideVisible.done).toBe(false);
+      expect(outsideVisible.reason).toContain('NC.1 (OVER_SCOPE)');
     });
   });
 
