@@ -110,7 +110,6 @@ describe('mergeability-first daemon finish', () => {
         manual_test: 'done',
         build: 'done',
         build_review: 'done',
-        wiring_check: 'done',
         test_suite: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
@@ -121,7 +120,6 @@ describe('mergeability-first daemon finish', () => {
       const preservedGatePaths = [
         'build',
         'build_review',
-        'wiring_check',
         'test_suite',
         'manual_test',
         'prd_audit',

@@ -1,6 +1,6 @@
 /**
  * Acceptance coverage for the surviving BUILD-verification flows after the
- * retired wiring_check step name is hard-deleted.
+ * retired BUILD gate is hard-deleted.
  *
  * Covers: S2.1, S2.2, S2.N1, S2.N2, task:13
  * Covers: S4.1, S4.N1, S4.N2, task:6
@@ -28,7 +28,7 @@ const PASS_EVIDENCE: FullSuitePassEvidence = {
   version: 3,
   outcome: 'PASS',
   reason: 'exit_zero',
-  fingerprint: 'sha256:hard-delete-wiring-check',
+  fingerprint: 'sha256:serial-build-verifier',
   categoryFingerprints: {
     additional_inputs: 'sha256:additional-inputs',
     dependencies: 'sha256:dependencies',
@@ -54,7 +54,7 @@ const FRONT_DONE: ConductState = {
   run_started_at: 1,
   complexity_tier: 'M',
   track: 'technical',
-  feature_desc: 'hard-delete-retired-wiring-check-step',
+  feature_desc: 'serial-build-verifier',
   worktree: 'done',
   memory: 'done',
   explore: 'done',
@@ -69,12 +69,12 @@ const FRONT_DONE: ConductState = {
   acceptance_specs: 'done',
 };
 
-describe('hard-deleted wiring_check leaves one serial BUILD verifier', () => {
+describe('hard-deleted BUILD gate leaves one serial BUILD verifier', () => {
   let projectRoot: string;
   let stateFilePath: string;
 
   beforeEach(async () => {
-    projectRoot = await mkdtemp(join(tmpdir(), 'hard-delete-wiring-check-'));
+    projectRoot = await mkdtemp(join(tmpdir(), 'serial-build-verifier-'));
     stateFilePath = join(projectRoot, '.pipeline', 'conduct-state.json');
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     await initTestRepo(projectRoot);

@@ -41,7 +41,7 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
       'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
       'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
-      'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
+      'test_suite', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
     await writeState(stateFilePath, state as ConductState);

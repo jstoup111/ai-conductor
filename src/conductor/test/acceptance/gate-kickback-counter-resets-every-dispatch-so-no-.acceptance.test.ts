@@ -35,14 +35,12 @@
  *        production caller of `classifyBuildProgress`), reached from
  *        `manual_test` (`:2468`), the validation-group join (`:3288`),
  *        `build_review` (`:5115`), `prd_audit` (`:5438`), and the generic
- *        gate site (`:5597`). `wiring_check` reaches it from NOWHERE today —
- *        that absence is Story 3.
+ *        gate site (`:5597`). The retired BUILD gate has no remaining route.
  *      * `conductor.ts:2396` — `captureKickbackToBuildContext`, the baseline
  *        producer, currently `currentCommitSha`.
  *
- * `wiring_check` is the vehicle for most cases: it is the gate that actually
- * livelocked on 2026-07-26, its failure reason is deterministic (no LLM
- * grader), and its self-heal block is not daemon-gated
+ * build_review is the vehicle for the remaining cases: its failure reason is
+ * deterministic (no LLM grader), and its self-heal block is not daemon-gated
  * (`conductor.ts:5246-5254`), so the fixture stays small. `build_review` is
  * driven separately for Story 5's second converted HALT site.
  *
@@ -51,7 +49,7 @@
  *    of it (plan Tasks 1-2, 6, 8, 10). Nothing in `src/` mentions it.
  *  - `currentTreeHash` / `git rev-parse HEAD^{tree}` — verified absent from
  *    the whole repo (plan Task 4).
- *  - `wiring_check`'s D2 capture/check pair (plan Tasks 12-13).
+ *  - the retired gate's D2 capture/check pair (plan Tasks 12-13).
  *  - `.pipeline/HALT.class` on either cap-HALT path — both hand-roll
  *    `writeFile` today (`conductor.ts:5218-5227`, `:5325-5334`) and write no
  *    class sidecar (plan Tasks 14-15).
@@ -168,9 +166,7 @@ function frontDone(): ConductState {
 /** The kickback vehicle. `build_review` is the deterministic BUILD gate that
  * still routes an unsatisfied verdict back to `build`: a test-quality
  * rubric FAIL re-enters `build` directly, which is the cap path
- * this file bounds. (`wiring_check`, the original 2026-07-26 vehicle, is now a
- * deprecated no-op that never kicks back —
- * adr-2026-08-11-wiring-judged-in-build-review.) */
+ * this file bounds. */
 const FAIL_VERDICT = (message: string): string =>
   JSON.stringify({
     verdict: 'FAIL',

@@ -23,7 +23,7 @@ import { writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
-describe('BUILD repair re-dispatches every verification member without stranding review', () => {
+describe('BUILD repair re-dispatches test_suite without stranding review', () => {
   const dirs: string[] = [];
 
   afterEach(async () => {
@@ -32,7 +32,7 @@ describe('BUILD repair re-dispatches every verification member without stranding
   });
 
   it('re-dispatches every member after a BUILD-verification repair before build_review', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'build-repair-stale-wiring-'));
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-repair-stale-suite-'));
     dirs.push(projectRoot);
     const stateFilePath = join(projectRoot, '.pipeline', 'conduct-state.json');
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
@@ -54,9 +54,6 @@ describe('BUILD repair re-dispatches every verification member without stranding
       architecture_review: 'done',
       acceptance_specs: 'done',
       build: 'done',
-      // Both members must be dispatchable so the first group round can kick
-      // back to BUILD, then prove the repaired round re-dispatches both.
-      wiring_check: 'pending',
       test_suite: 'pending',
       build_review: 'pending',
     };
@@ -126,7 +123,7 @@ describe('BUILD repair re-dispatches every verification member without stranding
       events,
       mode: 'auto',
       daemon: true,
-      fromStep: 'wiring_check',
+      fromStep: 'test_suite',
       verifyArtifacts: true,
       maxRetries: 1,
       config: { validation_concurrency: 2, build_review: { enabled: true } },
@@ -140,28 +137,19 @@ describe('BUILD repair re-dispatches every verification member without stranding
 
     await conductor.run();
 
-    // wiring_check is a deprecated no-op that settles in-process, so it never
-    // reaches the runner in either round — the runner's `unexpected dispatch`
-    // throw is the regression lock. Normal width-one reuse has dedicated
-    // coverage in deterministic-build-verification-flow.acceptance.test.ts.
     // Repaired test_suite settles from its own content-addressed evidence;
     // a prior gate verdict is never the authority for this REUSED outcome.
     expect(suiteOutcomes).toEqual(['INDETERMINATE', 'REUSED']);
     expect(buildRuns).toBe(1);
     expect(reviewRuns).toBe(1);
-    expect(parallelRounds.filter((round) =>
-      round.includes('wiring_check') || round.includes('test_suite'),
-    )).toEqual([
-      ['wiring_check', 'test_suite'],
-      ['wiring_check', 'test_suite'],
-    ]);
+    expect(parallelRounds).toEqual([]);
     expect(blocked).not.toContainEqual(expect.objectContaining({ step: 'build_review' }));
 
     const haltPath = join(projectRoot, '.pipeline', 'HALT');
     if (await access(haltPath).then(() => true, () => false)) {
       const halt = await readFile(haltPath, 'utf-8');
       expect(halt).not.toMatch(/loop exited without a terminal verdict/i);
-      expect(halt).not.toMatch(/Prerequisites not satisfied: wiring_check/i);
+      expect(halt).not.toMatch(/Prerequisites not satisfied: test_suite/i);
     }
   });
 });

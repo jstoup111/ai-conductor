@@ -69,14 +69,10 @@ describe('Deterministic BUILD verification flow', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it('joins the BUILD verification group before dispatching paid review or SHIP', async () => {
+  it('runs test_suite before dispatching paid review or SHIP', async () => {
     const timeline: string[] = [];
-    const deprecatedSteps: string[] = [];
     const recomputedMembers: string[] = [];
     const events = new ConductorEventEmitter();
-    events.on('deprecated_step', (event) => {
-      if (event.type === 'deprecated_step') deprecatedSteps.push(event.step);
-    });
     events.on('build_member_evidence_recomputed', (event) => {
       if (event.type === 'build_member_evidence_recomputed') recomputedMembers.push(event.member);
     });
@@ -103,7 +99,7 @@ describe('Deterministic BUILD verification flow', () => {
       events,
       projectRoot,
       mode: 'auto',
-      fromStep: 'wiring_check',
+      fromStep: 'test_suite',
       maxRetries: 1,
       verifyArtifacts: false,
       config: { validation_concurrency: 2 },
@@ -115,60 +111,20 @@ describe('Deterministic BUILD verification flow', () => {
 
     await conductor.run();
 
-    // wiring_check is a deprecated no-op: it resolves as a step name and
-    // passes without dispatching, so test_suite is the group's only live
-    // member (adr-2026-08-11-deprecated-no-op-step-retirement).
     expect(timeline.slice(0, 2)).toEqual([
       'test_suite',
       'build_review',
     ]);
-    expect(timeline).not.toContain('wiring_check');
     expect(ensure).toHaveBeenCalledTimes(1);
-    expect(deprecatedSteps).toEqual(['wiring_check']);
-    expect(recomputedMembers).not.toContain('wiring_check');
+    expect(recomputedMembers).not.toContain('test_suite');
     expect(timeline.indexOf('manual_test')).toBeGreaterThan(
       timeline.indexOf('build_review'),
     );
   });
 
-  it('emits one deprecation notice when serial execution runs wiring_check', async () => {
-    const deprecatedSteps: string[] = [];
-    const events = new ConductorEventEmitter();
-    events.on('deprecated_step', (event) => {
-      if (event.type === 'deprecated_step') deprecatedSteps.push(event.step);
-    });
-    const conductor = new Conductor({
-      stateFilePath,
-      stepRunner: {
-        run: async (step: StepName) => step === 'manual_test'
-          ? { success: false, output: 'stop after serial wiring_check event proof' }
-          : { success: true },
-      },
-      events,
-      projectRoot,
-      mode: 'default',
-      fromStep: 'wiring_check',
-      maxRetries: 1,
-      verifyArtifacts: false,
-      fullSuiteVerifier: {
-        ensure: async () => ({
-          status: 'REUSED',
-          freshness: { status: 'CURRENT', evidence: PASS_EVIDENCE },
-          evidence: PASS_EVIDENCE,
-        }),
-        inspect: async () => ({ status: 'CURRENT', evidence: PASS_EVIDENCE }),
-      },
-    });
-
-    await conductor.run();
-
-    expect(deprecatedSteps).toEqual(['wiring_check']);
-  });
-
   it.each([
     {
       label: 'aggregate suite',
-      wiringPasses: true,
       suitePasses: false,
       expectedDiagnostic: 'suite regression',
     },
@@ -202,7 +158,7 @@ describe('Deterministic BUILD verification flow', () => {
         events: new ConductorEventEmitter(),
         projectRoot,
         mode: 'auto',
-        fromStep: 'wiring_check',
+        fromStep: 'test_suite',
         maxRetries: 1,
         verifyArtifacts: false,
         config: { validation_concurrency: 2 },
@@ -239,7 +195,7 @@ describe('Deterministic BUILD verification flow', () => {
       events: new ConductorEventEmitter(),
       projectRoot,
       mode: 'auto',
-      fromStep: 'wiring_check',
+      fromStep: 'test_suite',
       maxRetries: 1,
       verifyArtifacts: false,
       config: { validation_concurrency: 1 },
@@ -266,8 +222,7 @@ describe('Deterministic BUILD verification flow', () => {
 
   it('reuses a satisfied persisted verdict on resume without re-dispatching the group', async () => {
     // A satisfied persisted verdict is normal resume state, not a BUILD
-    // repair. The already-done member retains its shortcut, and with
-    // wiring_check retired to a no-op the group needs no dispatch at all.
+    // repair. The completed test suite retains its shortcut.
     await writeState(stateFilePath, {
       ...BUILD_COMPLETE,
       test_suite: 'done',
@@ -302,7 +257,7 @@ describe('Deterministic BUILD verification flow', () => {
       events,
       projectRoot,
       mode: 'auto',
-      fromStep: 'wiring_check',
+      fromStep: 'build_review',
       maxRetries: 1,
       verifyArtifacts: false,
       config: { validation_concurrency: 2 },
@@ -323,10 +278,7 @@ describe('Deterministic BUILD verification flow', () => {
 
     expect(timeline.slice(0, 1)).toEqual(['build_review']);
     expect(timeline).not.toContain('test_suite');
-    expect(timeline).not.toContain('wiring_check');
-    // A fully-satisfied group keeps the serial event shape — no parallel
-    // round is opened for a member that never needs dispatch.
-    expect(parallelStarted.filter((event) => event.step === 'wiring_check')).toEqual([]);
+    // A completed serial verifier opens no parallel round.
     expect(parallelStarted.every((event) => !event.branches.includes('test_suite'))).toBe(true);
   });
 });

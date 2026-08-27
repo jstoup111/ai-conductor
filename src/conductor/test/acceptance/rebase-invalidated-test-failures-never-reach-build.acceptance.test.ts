@@ -202,11 +202,6 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
         message: 'ENOENT agents/planner.md',
         observedAt,
       });
-      await record(root, 'wiring_check', {
-        reason: 'missing_coverage',
-        message: 'test/obsolete.test.ts was deleted by the advanced base',
-        observedAt: observedAt + 1,
-      });
       await record(root, 'test_suite', {
         reason: 'test_failure',
         message: 'ENOENT agents/planner.md',
@@ -224,10 +219,6 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
         expect.objectContaining({
           gate: 'test_suite',
           diagnostic: expect.stringContaining('agents/planner.md'),
-        }),
-        expect.objectContaining({
-          gate: 'wiring_check',
-          diagnostic: expect.stringContaining('test/obsolete.test.ts'),
         }),
       ]));
       expect(repairs.some((repair) => repair.diagnostic.includes('unrelated.test.ts'))).toBe(false);
@@ -263,11 +254,6 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
         reason: 'test_failure',
         message: 'ENOENT agents/planner.md',
         observedAt,
-      });
-      await record(root, 'wiring_check', {
-        reason: 'missing_coverage',
-        message: 'test/obsolete.test.ts disappeared after the base advance',
-        observedAt: observedAt + 1,
       });
 
       // An invalidated aggregate proof is a BUILD boundary: repair context

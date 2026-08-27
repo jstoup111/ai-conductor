@@ -43,7 +43,7 @@ const BUILD_ONLY: ConductState = {
   worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
   stories: 'done', conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
   architecture_review: 'done', acceptance_specs: 'done', test_suite: 'done',
-  build_review: 'done', wiring_check: 'done', manual_test: 'done', prd_audit: 'done',
+  build_review: 'done', manual_test: 'done', prd_audit: 'done',
   architecture_review_as_built: 'done', rebase: 'done', finish: 'done',
   complexity_tier: 'M', track: 'technical', feature_desc: 'live-boundary-containment',
 } as ConductState;

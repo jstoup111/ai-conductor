@@ -214,11 +214,10 @@ afterEach(async () => {
 });
 
 describe('Story 1 — automated pre-SHIP gate (FR-1, FR-7)', () => {
-  it('places one non-disableable BUILD gate after wiring_check and before every SHIP validator', () => {
+  it('places one non-disableable BUILD gate before every SHIP validator', () => {
     const names = ALL_STEPS.map((step) => step.name as string);
     const suiteIndex = names.indexOf('test_suite');
 
-    expect(suiteIndex).toBe(names.indexOf('wiring_check') + 1);
     expect(suiteIndex).toBeLessThan(names.indexOf('manual_test'));
     expect(ALL_STEPS[suiteIndex]).toMatchObject({
       name: 'test_suite',

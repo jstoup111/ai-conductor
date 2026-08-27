@@ -61,7 +61,6 @@ const BUILD_ONLY_READY_STATE: ConductState = {
   ...READY_STATE,
   feature_desc: 'sandbox-auth-expiry-park',
   build_review: 'done',
-  wiring_check: 'done',
   manual_test: 'done',
   prd_audit: 'done',
   architecture_review_as_built: 'done',

@@ -98,29 +98,6 @@ async function commitPlainWork(dir: string, sequence: number): Promise<void> {
   await execa('git', ['commit', '-m', `chore: land work ${sequence}`], { cwd: dir });
 }
 
-function withPassingWiring(dir: string, runner: StepRunner): StepRunner {
-  return {
-    ...runner,
-    run: async (step, state, options) => {
-      if (step === 'wiring_check') {
-        const { stdout } = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
-        await writeFile(
-          join(dir, '.pipeline/wiring-evidence.json'),
-          JSON.stringify({
-            schema: 1,
-            base: 'fixture-base',
-            head: stdout.trim(),
-            layer2: { applicable: false },
-            waivers: [],
-            tasks: [{ id: 'fixture', contract: 'none (fixture)', gaps: [] }],
-          }),
-        );
-      }
-      return runner.run(step, state, options);
-    },
-  };
-}
-
 describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () => {
   let dir: string;
   let statePath: string;
@@ -168,7 +145,7 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
     };
     return new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingWiring(dir, runner),
+      stepRunner: runner,
       events,
       projectRoot: dir,
       mode: 'auto',

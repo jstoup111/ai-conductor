@@ -713,7 +713,7 @@ describe('Story 5: the daemon log renders BUILD member settle decisions', () => 
     const hostile = '/Users/operator/.ssh/id_ed25519 token=super-secret-password';
     const reused = lines({
       type: 'build_member_evidence_reused',
-      member: 'wiring_check',
+      member: 'test_suite',
       decision: 'reuse',
       basis: 'fingerprint-match',
       hostile,
@@ -733,7 +733,7 @@ describe('Story 5: the daemon log renders BUILD member settle decisions', () => 
     } as unknown as ConductorEvent);
 
     expect(reused).toEqual([
-      expect.stringMatching(/wiring_check.*reuse.*fingerprint-match/i),
+      expect.stringMatching(/test_suite.*reuse.*fingerprint-match/i),
     ]);
     expect(recomputed).toEqual([
       expect.stringMatching(/test_suite.*recompute.*fingerprint-mismatch/i),

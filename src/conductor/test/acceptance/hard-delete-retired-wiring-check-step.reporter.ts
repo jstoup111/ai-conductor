@@ -4,7 +4,7 @@ import type { Reporter } from 'vitest/reporters';
 import { collectReporterTestResults, firstReporterError } from './reporter-test-results.js';
 
 const INTENT_RATIONALE =
-  'BUILD verification still emits the retired wiring_check fan-out topology instead of running test_suite serially before build_review.';
+  'BUILD verification still emits a retired fan-out topology instead of running test_suite serially before build_review.';
 
 export default class HardDeleteWiringCheckReporter implements Reporter {
   onTestRunEnd(testModules: ReadonlyArray<TestModule>, errors: ReadonlyArray<unknown>): void {
