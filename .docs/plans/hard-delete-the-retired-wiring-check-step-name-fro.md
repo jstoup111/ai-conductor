@@ -365,6 +365,29 @@ gate/ledger files, no real LLM calls. Variation allowed: helper setup and fixtur
 
 **Dependencies:** Task 6, Task 7
 
+### Task 14: Canonical docs sweep — the retired step name leaves reader-facing pages (C4)
+**Story:** Story 1
+**Type:** infrastructure
+
+**Steps:**
+1. Enumerate the surviving references: `git grep -n "wiring_check" -- docs/ HARNESS.md README.md` — nine pages carry them (`HARNESS.md`, `docs/explanation/gates.md`, `docs/guides/running-the-daemon.md`, `docs/reference/artifacts.md`, `docs/reference/configuration.md`, `docs/reference/models.md`, `docs/reference/skills.md`, `docs/reference/steps.md`, `docs/runbooks/stalled-or-stuck-feature.md`). Re-run the grep rather than trusting this list.
+2. Rewrite each reference to describe the surviving topology: the BUILD verification group has one member, `test_suite`; `wiring_check` no longer exists as a step name, a gate key, a model-table row, or a parallel execution key.
+3. Where a page documents recovery or configuration keyed on the retired name (`docs/runbooks/stalled-or-stuck-feature.md`, `docs/reference/configuration.md`), describe what an operator with a leftover `steps.wiring_check` entry now sees — the ordinary unknown-custom-step failure Task 11 pins — rather than deleting the guidance outright.
+4. Leave deliberate historical mentions intact only where the page is describing a past state (an ADR quote, a changelog line); every present-tense claim that the step exists is a defect.
+5. Verify: `git grep -n "wiring_check" -- docs/ HARNESS.md README.md` returns only historical-context lines, each identifiable as such.
+6. Commit: "docs: remove the retired wiring_check step from the canonical pages".
+
+**Done when:**
+- [ ] No page under `docs/`, plus `HARNESS.md` and `README.md`, describes `wiring_check` as an existing step, gate, model-table row, or execution key.
+- [ ] `docs/reference/steps.md` and `docs/explanation/gates.md` describe the BUILD verification group as single-member (`test_suite`).
+- [ ] Every surviving occurrence of the string is a past-tense historical reference, enumerated in the commit message.
+- [ ] `test/test_harness_integrity.sh` passes, including the model-table check (5a).
+
+**Files likely touched:**
+- HARNESS.md; docs/explanation/gates.md; docs/guides/running-the-daemon.md; docs/reference/artifacts.md; docs/reference/configuration.md; docs/reference/models.md; docs/reference/skills.md; docs/reference/steps.md; docs/runbooks/stalled-or-stuck-feature.md
+
+**Dependencies:** Task 5
+
 ## Task Dependency Graph
 
 ```

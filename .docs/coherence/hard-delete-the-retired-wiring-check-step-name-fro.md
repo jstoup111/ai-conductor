@@ -18,7 +18,7 @@ no contradiction or oscillation.
 | outcome | outcome-6 | story-1, story-6 | covered | Typo guard not weakened: operator-supplied unknown names fail by name (Story 1 negative), and any undeclared config step fails identically (Story 6 negative). |
 | adr | adr-2026-08-14-retire-build-review-wiring-rubric | story-1 | covered | The 2026-08-26 amendment lifts its deletion prohibition; Story 1 delivers the deletion the amendment authorizes. |
 | adr | adr-2026-07-29-deterministic-build-verification-fanout | story-2, story-3, story-4 | covered | The 2026-08-26 amendment dissolves the group; Stories 2–4 preserve its surviving binding semantics (gating, failure classification/budget, post-repair re-verification). |
-| story | story-1 | task-1, task-2, task-4, task-5, task-12 | covered | Engine excision, orphaned deprecated machinery, test sweep, model-table regeneration, fail-by-name. |
+| story | story-1 | task-1, task-2, task-4, task-5, task-12, task-14 | covered | Engine excision, orphaned deprecated machinery, test sweep, model-table regeneration, fail-by-name, canonical docs sweep. |
 | story | story-2 | task-13 | covered | Surviving BUILD topology pinned end to end. |
 | story | story-3 | task-7, task-8 | covered | Deterministic classification/budget and the infrastructure-failure class. |
 | story | story-4 | task-6 | covered | Post-repair re-verification with reuse refusal. |
@@ -37,6 +37,7 @@ no contradiction or oscillation.
 | task | task-11 | story-6 | covered | Leftover config block fails the ordinary custom-step way. |
 | task | task-12 | story-1 | covered | rewind --to unknown step fails by name, mutating nothing. |
 | task | task-13 | story-2 | covered | build → test_suite → build_review with zero group events. |
+| task | task-14 | story-1 | covered | Cites Story 1; delivers architecture-review condition C4's nine-page docs sweep. |
 | criterion | Story 1 happy: Given the engine's step registry, when the ordered step list for a BUILD-phase feature is resolved, then every listed step dispatches work and `test_suite` is the sole deterministic BUILD verification step | task-1 | covered | "prerequisites are exactly `['test_suite']` and `STEP_GROUPS` contains only the SHIP validation group" | diff-local |
 | criterion | Story 1 happy: Given the model-selection table generator, when `bin/generate-model-table` runs, then its output matches the committed HARNESS.md generated section and integrity check 5a passes | task-5 | covered | "`test/test_harness_integrity.sh` passes, including check 5a" | diff-local |
 | criterion | Story 1 happy: Given the daemon dashboard/status rendering of a BUILD-phase feature, when steps are rendered, then only registry steps appear | task-1 | covered | "src/conductor/src/ui/dashboard-snapshot.ts" | diff-local |
