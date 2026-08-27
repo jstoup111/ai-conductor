@@ -163,6 +163,36 @@ consumer project has that bus, yet scope-check's general-benefit reading returne
 and the rule was landed in `HARNESS.md` and the shipped `skills/` catalog over a correct contrary
 steer.)
 
+### Skill Deletions Ship as Two Features
+
+A change whose deliverable includes **deleting a skill directory** — or any directory of
+production files — MUST be split into two features, landed in order:
+
+1. **Mechanical cleanup.** Remove every reference to the skill: callers, tests, config keys,
+   contract entries, model-table rows, symlink targets, and documentation mentions. The skill
+   directory itself stays on disk and unreferenced. This feature's diff edits files; it deletes
+   no directory.
+2. **Removal.** Delete the now-unreferenced directory, and nothing else.
+
+Do NOT combine them, and do not treat "the deletion is only a few files" as grounds to skip the
+split — the split is about what the diff does, not how large it is.
+
+**Why.** `build_review`'s testQuality preflight materializes a counterfactual checkout of HEAD and
+restores merge-base content for every changed production file, to prove the changed tests actually
+fail against pre-change code. When one diff both deletes a directory and rewrites the tests that
+referenced it, that restore writes into a directory that does not exist at HEAD, the preflight dies
+as `materialization-failed`, and the feature burns its entire three-fault mechanical allowance and
+halts `needs-human`. The only recovery the halt documents is a permanent testQuality coverage
+waiver. Splitting the work keeps every diff materializable, and keeps the deletion reviewable on
+its own. (First hit by `remove-retrospectives-full-and-micro-from-feature-`, which deleted
+`skills/retro/`; engine defect tracked as #1961.)
+
+The `code-removal` skill governs how each of those features is executed. This rule governs how the
+work is divided before that skill is reached.
+
+Per this repo's Design Principle the durable fix is machinery — the preflight should create the
+parent directory it is restoring into — so this rule is the interim guard, not the endpoint.
+
 ## Validation Rules (This Repo)
 
 **Every change to this harness repo MUST be validated before committing.** This is not optional.
