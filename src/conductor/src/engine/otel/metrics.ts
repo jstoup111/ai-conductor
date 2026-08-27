@@ -10,7 +10,7 @@
  * TokenUsage absent → no data points (no NaN / zero-fill). Partial kinds
  * (input/output only) → only present kinds recorded.
  */
-import type { Meter, Counter, Histogram } from '@opentelemetry/api';
+import type { Attributes, Meter, Counter, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
 
@@ -26,7 +26,13 @@ export class MetricsRecorder {
   private readonly tokensCounter: Counter;
   private readonly closeoutDurationHistogram: Histogram;
 
-  constructor(meter: Meter) {
+  constructor(
+    meter: Meter,
+    private readonly identityAttrs: { project: string; feature: string } = {
+      project: 'unknown',
+      feature: 'unknown',
+    },
+  ) {
     this.durationHistogram = meter.createHistogram('conductor.step.duration', {
       description: 'Duration of conductor steps in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
       unit: 'ms',
@@ -63,11 +69,11 @@ export class MetricsRecorder {
     model?: string,
   ): void {
     // Duration: always record (even 0 ms is a valid observation).
-    this.durationHistogram.record(durationMs, { step });
+    this.durationHistogram.record(durationMs, this.withIdentity({ step }));
 
     // Retries: skip when zero to avoid meaningless zero data points.
     if (retryCount > 0) {
-      this.retriesCounter.add(retryCount, { step });
+      this.retriesCounter.add(retryCount, this.withIdentity({ step }));
     }
 
     // Tokens: only when tokenUsage is present; only present kinds recorded.
@@ -79,9 +85,9 @@ export class MetricsRecorder {
 
   /** Record a pipeline-owned closeout obligation as it is re-emitted on the bus. */
   onPipelineCloseout(event: Extract<ConductorEvent, { type: 'pipeline_closeout' }>): void {
-    this.closeoutDurationHistogram.record(event.endedAt - event.startedAt, {
+    this.closeoutDurationHistogram.record(event.endedAt - event.startedAt, this.withIdentity({
       obligation: event.obligation,
-    });
+    }));
   }
 
   /**
@@ -100,8 +106,15 @@ export class MetricsRecorder {
     for (const kind of MetricsRecorder.TOKEN_KINDS) {
       const value = usage[kind];
       if (typeof value === 'number' && !Number.isNaN(value)) {
-        this.tokensCounter.add(value, model ? { step, kind, model } : { step, kind });
+        this.tokensCounter.add(
+          value,
+          this.withIdentity(model ? { step, kind, model } : { step, kind }),
+        );
       }
     }
+  }
+
+  private withIdentity(attrs: Attributes): Attributes {
+    return { ...attrs, ...this.identityAttrs };
   }
 }

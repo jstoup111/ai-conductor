@@ -1,3 +1,4 @@
+// Covers: task:3
 /**
  * Covers: task:1, task:2, task:3, task:4
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
@@ -55,6 +56,26 @@ function findMetric(exporter: InMemoryMetricExporter, name: string) {
     .getMetrics()
     .flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics))
     .find((m) => m.descriptor.name === name);
+}
+
+async function recordMetricsWithIdentity(identityAttrs: { project: string; feature: string }) {
+  const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const meterProvider = new MeterProvider({
+    readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+  });
+  const recorder = new MetricsRecorder(meterProvider.getMeter('metrics-recorder-test'), identityAttrs);
+
+  recorder.onStepClose('build', 25, 1, { input: 100, output: 50 }, 'test-model');
+  recorder.onPipelineCloseout({
+    type: 'pipeline_closeout',
+    obligation: 'simplify',
+    startedAt: 1_000,
+    endedAt: 1_125,
+    ts: 1_130,
+  });
+  await meterProvider.forceFlush();
+
+  return exporter;
 }
 
 // ── Shared setup ──────────────────────────────────────────────────────────────
@@ -499,5 +520,39 @@ describe('Task 19: closeout duration histogram', () => {
       (dataPoint) => dataPoint.attributes['obligation'] === 'simplify',
     );
     expect(point?.value).toMatchObject({ count: 1, sum: 125 });
+  });
+});
+
+describe('Task 3: metric identity attributes', () => {
+  it('adds identity without removing each instrument’s existing attributes', async () => {
+    const exporter = await recordMetricsWithIdentity({
+      project: 'project-a',
+      feature: 'feature-a',
+    });
+
+    expect({
+      duration: findMetric(exporter, 'conductor.step.duration')!.dataPoints.map((point) => point.attributes),
+      retries: findMetric(exporter, 'conductor.step.retries')!.dataPoints.map((point) => point.attributes),
+      tokens: findMetric(exporter, 'conductor.step.tokens')!.dataPoints.map((point) => point.attributes),
+      closeout: findMetric(exporter, 'conductor.pipeline.closeout.duration')!.dataPoints.map((point) => point.attributes),
+    }).toEqual({
+      duration: [{ step: 'build', project: 'project-a', feature: 'feature-a' }],
+      retries: [{ step: 'build', project: 'project-a', feature: 'feature-a' }],
+      tokens: [
+        { step: 'build', kind: 'input', model: 'test-model', project: 'project-a', feature: 'feature-a' },
+        { step: 'build', kind: 'output', model: 'test-model', project: 'project-a', feature: 'feature-a' },
+      ],
+      closeout: [{ obligation: 'simplify', project: 'project-a', feature: 'feature-a' }],
+    });
+  });
+
+  it('keeps project identity distinct between recorder instances', async () => {
+    const first = await recordMetricsWithIdentity({ project: 'project-a', feature: 'shared-feature' });
+    const second = await recordMetricsWithIdentity({ project: 'project-b', feature: 'shared-feature' });
+
+    expect([
+      findMetric(first, 'conductor.step.duration')!.dataPoints[0].attributes['project'],
+      findMetric(second, 'conductor.step.duration')!.dataPoints[0].attributes['project'],
+    ]).toEqual(['project-a', 'project-b']);
   });
 });
