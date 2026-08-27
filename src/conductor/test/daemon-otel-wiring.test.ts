@@ -15,6 +15,8 @@ type VisualizerPlugin = import('../src/types/plugin.js').VisualizerPlugin;
 type HarnessConfig = import('../src/types/config.js').HarnessConfig;
 type LoadMergedConfig = typeof import('../src/engine/config.js').loadMergedConfig;
 
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const fixture = vi.hoisted(() => ({
   worktreePath: '',
   scopes: [] as Array<Record<string, unknown>>,
@@ -162,23 +164,21 @@ describe('daemon OTel visualizer wiring', () => {
   it('uses the scope session ID without creating conduct-session-id when it is absent', async () => {
     const { pipelineDir } = await dispatchWithSessionId();
     const context = wireOtelVisualizer.mock.calls[0]?.[1];
+    const scopeSessionId = fixture.scopes[0]?.sessionId;
 
-    expect({
-      runId: context?.runId,
-      scopeSessionId: fixture.scopes[0]?.sessionId,
-      wroteSessionId: existsSync(join(pipelineDir, 'conduct-session-id')),
-    }).toEqual({
-      runId: fixture.scopes[0]?.sessionId,
-      scopeSessionId: fixture.scopes[0]?.sessionId,
-      wroteSessionId: false,
-    });
+    expect(scopeSessionId).toMatch(UUID_V4);
+    expect(context?.runId).toBe(scopeSessionId);
+    expect(existsSync(join(pipelineDir, 'conduct-session-id'))).toBe(false);
   });
 
   it('falls back to the scope session ID when the persisted ID cannot be read', async () => {
     await dispatchWithSessionId('unreadable');
     const context = wireOtelVisualizer.mock.calls[0]?.[1];
+    const scopeSessionId = fixture.scopes[0]?.sessionId;
 
-    expect(context?.runId).toBe(fixture.scopes[0]?.sessionId);
+    expect(scopeSessionId).toMatch(UUID_V4);
+    expect(context?.runId).toBe(scopeSessionId);
+    expect(context?.runId).not.toBe('unreadable');
   });
 
   it('flushes once after a HALT, preserving pre-halt events before scope teardown', async () => {

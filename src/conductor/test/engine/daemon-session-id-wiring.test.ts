@@ -1,8 +1,5 @@
 // Covers: task:3
 import { describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
 import { makeRunFeature, type FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -33,17 +30,4 @@ describe('daemon dispatch session ID wiring', () => {
     expect(runConductor.mock.calls[0]?.[5]).toBe(sessionId);
   });
 
-  it('mints the scope ID and defaults legacy worktree calls to a fresh UUID', () => {
-    const daemonCli = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf8');
-
-    expect(daemonCli).toMatch(
-      /const beginFeatureRun = (?:async )?\(worktree: FeatureWorktree, item: BacklogItem\) => \{\s*const sessionId = uuidv4\(\);/,
-    );
-    expect(daemonCli).toMatch(
-      /const runConductorInWorktree = async \([\s\S]*?sessionId = uuidv4\(\),/,
-    );
-    expect(daemonCli).toMatch(
-      /new DefaultStepRunner\(\s*selectedRuntime\.provider,\s*sessionId,/,
-    );
-  });
 });
