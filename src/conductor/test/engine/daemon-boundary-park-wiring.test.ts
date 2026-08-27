@@ -62,6 +62,7 @@ describe('daemon operator-park boundary wiring', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
     );
   });
 

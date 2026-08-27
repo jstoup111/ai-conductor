@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildVisualizers,
+  buildInteractiveVisualizers,
   createVisualizerStartContext,
   resolveCurrentBranch,
   selectVisualizers,
@@ -342,11 +343,7 @@ describe('visualizer selection', () => {
       context.pipelineDir = pipelineDir;
       context.config.otel = { exporter: 'file' };
 
-      const started = buildVisualizers(
-        selectVisualizers(registry, context.config, context),
-        emitter,
-        context.startContext,
-      );
+      const started = buildInteractiveVisualizers(registry, context.config, context);
       await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
       await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
       await emitter.emit({ type: 'feature_complete', featureDesc: 'otel-without-fake' });

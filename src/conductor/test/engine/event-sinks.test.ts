@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +9,7 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 import {
   EVENT_SINKS,
   auditedEventTypes,
+  otelEventTypes,
   persistedEventTypes,
   renderedEventTypes,
   type SinkDeclaration,
@@ -207,6 +209,7 @@ const deliberatelyNotPersisted = {
   render: false,
   persist: false,
   audit: false,
+  otel: false,
 } satisfies SinkDeclaration;
 void deliberatelyNotPersisted;
 
@@ -241,6 +244,23 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('subscribes OpenTelemetry only to its defined event set', () => {
+    expect(new Set(otelEventTypes())).toEqual(new Set([
+      'step_started',
+      'step_completed',
+      'step_failed',
+      'step_retry',
+      'gate_verdict',
+      'kickback',
+      'feature_complete',
+      'build_progress',
+      'unattributed_progress',
+      'build_no_progress',
+      'build_stall',
+      'pipeline_closeout',
+    ]));
+  });
+
   it('persists engine-owned build-review occurrences through the shared ledger exactly once', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'build-review-event-sinks-'));
     const events = new ConductorEventEmitter();
@@ -414,7 +434,7 @@ describe('event sink subscriptions', () => {
 
     expect({ progress, sinks: EVENT_SINKS.credentials_park_progress }).toEqual({
       progress,
-      sinks: { render: true, persist: true, audit: false },
+      sinks: { render: true, persist: true, audit: false, otel: false },
     });
   });
 
@@ -424,7 +444,7 @@ describe('event sink subscriptions', () => {
       rendered: renderedEventTypes().includes('pipeline_closeout'),
       persisted: persistedEventTypes().includes('pipeline_closeout'),
     }).toEqual({
-      sinks: { render: true, persist: false, audit: false },
+      sinks: { render: true, persist: false, audit: false, otel: true },
       rendered: true,
       persisted: false,
     });
@@ -436,8 +456,8 @@ describe('event sink subscriptions', () => {
       refused: EVENT_SINKS.build_review_disposition_refused,
       persisted: persistedEventTypes(),
     }).toEqual({
-      accepted: { render: false, persist: false, audit: false },
-      refused: { render: false, persist: false, audit: false },
+      accepted: { render: false, persist: false, audit: false, otel: false },
+      refused: { render: false, persist: false, audit: false, otel: false },
       persisted: expect.not.arrayContaining([
         'build_review_disposition_accepted',
         'build_review_disposition_refused',
@@ -447,7 +467,7 @@ describe('event sink subscriptions', () => {
 
   it('audits engine-reported non-binding build-review dispositions', () => {
     expect(EVENT_SINKS.build_review_disposition_version_invalidated).toEqual({
-      render: false, persist: true, audit: true,
+      render: false, persist: true, audit: true, otel: false,
     });
   });
 
@@ -476,6 +496,7 @@ describe('event sink subscriptions', () => {
         render: true,
         persist: true,
         audit: false,
+        otel: false,
       },
     });
   });
@@ -503,7 +524,7 @@ describe('event sink subscriptions', () => {
       persisted: persistedEventTypes().includes('build_review_repair_context'),
     }).toEqual({
       provenance,
-      sink: { render: false, persist: true, audit: false },
+      sink: { render: false, persist: true, audit: false, otel: false },
       persisted: true,
     });
   });
@@ -518,6 +539,7 @@ describe('event sink subscriptions', () => {
       render: true,
       persist: true,
       audit: true,
+      otel: false,
     });
   });
 
@@ -550,8 +572,8 @@ describe('event sink subscriptions', () => {
       refused: EVENT_SINKS.protected_artifact_reseal_refused,
     }).toEqual({
       events,
-      performed: { render: true, persist: false, audit: true },
-      refused: { render: true, persist: false, audit: true },
+      performed: { render: true, persist: false, audit: true, otel: false },
+      refused: { render: true, persist: false, audit: true, otel: false },
     });
   });
 
@@ -565,9 +587,9 @@ describe('event sink subscriptions', () => {
       writeFailed: EVENT_SINKS.halt_record_write_failed,
       pushFailed: EVENT_SINKS.halt_record_push_failed,
     }).toEqual({
-      written: { render: true, persist: true, audit: true },
-      writeFailed: { render: true, persist: true, audit: true },
-      pushFailed: { render: true, persist: true, audit: true },
+      written: { render: true, persist: true, audit: true, otel: false },
+      writeFailed: { render: true, persist: true, audit: true, otel: false },
+      pushFailed: { render: true, persist: true, audit: true, otel: false },
     });
   });
 

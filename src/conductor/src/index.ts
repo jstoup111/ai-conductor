@@ -1,4 +1,5 @@
 export * from './types/index.js';
+export { wireOtelVisualizer } from './engine/otel/wire.js';
 export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
@@ -98,6 +99,7 @@ import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
+import { wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveEngineVersion } from './engine/shipped-record.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { UISubscriber } from "./ui/types.js";
@@ -224,9 +226,8 @@ export function buildVisualizers(
 }
 
 /**
- * Build the visualizers for one run from the configured registry entries and
- * the built-in OTel factory. OTel is attempted independently of
- * `visualizers`; its factory owns the `otel:` configuration gate.
+ * Build the configured non-OTel visualizers for one run. OTel owns its
+ * configuration gate and lifecycle through `buildInteractiveVisualizers`.
  */
 export function selectVisualizers(
   registry: PluginRegistry,
@@ -262,13 +263,30 @@ export function selectVisualizers(
     }
   }
 
-  const otelFactory = registry.tryGet<VisualizerFactory>('visualizer', 'otel');
-  const otelVisualizer = otelFactory && invokeVisualizerFactory('otel', otelFactory, context);
-  if (otelVisualizer) {
-    selected.push(otelVisualizer);
-  }
-
   return selected;
+}
+
+/**
+ * Start configured connectors and the built-in OTel connector for an
+ * interactive run. OTel starts through its shared helper, while the returned
+ * list keeps the existing caller-owned stop lifecycle intact.
+ */
+export function buildInteractiveVisualizers(
+  registry: PluginRegistry,
+  config: HarnessConfig,
+  context: VisualizerFactoryContext,
+): VisualizerPlugin[] {
+  const started = buildVisualizers(
+    selectVisualizers(registry, config, context),
+    context.emitter,
+    context.startContext,
+  );
+  const otel = wireOtelVisualizer(
+    config,
+    { ...context.startContext, pipelineDir: context.pipelineDir },
+    context.emitter,
+  );
+  return otel ? [...started, otel] : started;
 }
 
 /** Invoke a visualizer factory with its real context and refuse malformed products. */
@@ -1380,8 +1398,8 @@ async function main(): Promise<void> {
   const auditWriter = new AuditTrailWriter(projectRoot);
   auditWriter.subscribe(events);
 
-  // Build configured visualizers plus OTel, whose built-in factory retains
-  // ownership of its `otel:` configuration gate.
+  // Build configured visualizers plus OTel, whose shared helper retains
+  // ownership of its `otel:` configuration gate and start lifecycle.
   const visualizerContext: VisualizerFactoryContext = {
     config: config ?? {},
     pipelineDir,
@@ -1395,10 +1413,10 @@ async function main(): Promise<void> {
       pipelineDir,
     }),
   };
-  const visualizerList = buildVisualizers(
-    selectVisualizers(registry, visualizerContext.config, visualizerContext),
-    events,
-    visualizerContext.startContext,
+  const visualizerList = buildInteractiveVisualizers(
+    registry,
+    visualizerContext.config,
+    visualizerContext,
   );
 
   const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {

@@ -62,6 +62,7 @@ import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-label
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { isForwardedFromFeature, startFeatureEventPersistence } from './engine/event-persister.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
+import { wireOtelVisualizer } from './engine/otel/wire.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
@@ -923,21 +924,40 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     }
     return featureLog;
   };
-  const beginFeatureRun = (worktree: FeatureWorktree, item: BacklogItem) => {
+  const beginFeatureRun = async (worktree: FeatureWorktree, item: BacklogItem) => {
+    const sessionId = uuidv4();
     const persistence = startFeatureEventPersistence(worktree.path, events);
     const featureEvents = persistence.events;
+    const pipelineDir = join(worktree.path, '.pipeline');
+    const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8')
+      .catch(() => undefined);
+    const visualizer = wireOtelVisualizer(config ?? {}, {
+      pipelineDir,
+      runId: persistedSessionId?.trim() || sessionId,
+      feature: item.slug,
+      project: projectRoot,
+    }, featureEvents);
     const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents = renderedEventTypes();
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
-    return {
-      ...persistence,
-      providerExecution: createProviderExecution(featureEvents, featureLog),
-      log: featureLog,
-      stop: () => {
+    let stopPromise: Promise<void> | undefined;
+    const stop = (): Promise<void> => {
+      if (stopPromise) return stopPromise;
+      stopPromise = (async () => {
+        await visualizer?.stop();
         for (const type of renderableEvents) featureEvents.off(type, renderEvent);
         persistence.stop();
-      },
+      })();
+      return stopPromise;
+    };
+    return {
+      ...persistence,
+      sessionId,
+      visualizer,
+      providerExecution: createProviderExecution(featureEvents, featureLog),
+      log: featureLog,
+      stop,
     };
   };
   // Resolve the active memory provider once at run start so all steps see the
@@ -955,6 +975,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     providerExecution = createProviderExecution(),
     featureEvents: ConductorEventEmitter = events,
     featureLog = log,
+    sessionId = uuidv4(),
   ) => {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
@@ -992,7 +1013,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     const stepRunner = new DefaultStepRunner(
       selectedRuntime.provider,
-      uuidv4(),
+      sessionId,
       wt.path,
       {
         featureDesc: item.slug,

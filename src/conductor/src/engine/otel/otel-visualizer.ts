@@ -40,6 +40,7 @@ import {
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { ConductorEvent } from '../../types/events.js';
+import { otelEventTypes } from '../event-sinks.js';
 import type { VisualizerPlugin, VisualizerStartContext } from '../../types/plugin.js';
 import type { ResolvedOtelConfig } from './otel-config.js';
 import { buildResource } from './resource.js';
@@ -271,21 +272,7 @@ export class OtelVisualizer implements VisualizerPlugin {
   start(emitter: ConductorEventEmitter, context?: VisualizerStartContext): void {
     this.initializeProviders(context ?? this.legacyStartContext);
     this.emitter = emitter;
-    const eventTypes: ConductorEvent['type'][] = [
-      'step_started',
-      'step_completed',
-      'step_failed',
-      'step_retry',
-      'gate_verdict',
-      'kickback',
-      'feature_complete',
-      'build_progress',
-      'unattributed_progress',
-      'build_no_progress',
-      'build_stall',
-      'pipeline_closeout',
-    ];
-    for (const type of eventTypes) {
+    for (const type of otelEventTypes()) {
       emitter.on(type, (event) => {
         // Synchronous, O(1): span/metric APIs enqueue to batch processors.
         this.handleEvent(event);

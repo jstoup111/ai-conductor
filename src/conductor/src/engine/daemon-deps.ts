@@ -40,6 +40,7 @@ export interface RealDepsConfig {
     providerExecution?: ProviderExecutionContext,
     featureEvents?: ConductorEventEmitter,
     log?: (message: string) => void,
+    sessionId?: string,
   ) => Promise<void | OperatorParkedTermination>;
   /** Legacy narrative provider when provider-aware feature execution is absent. */
   provider?: LLMProvider;
@@ -121,8 +122,8 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     prepareWorktree: (wt, log) =>
       prepareWorktree(wt.path, log ?? cfg.log, { verbose: cfg.verbose ?? false }),
 
-    runConductor: (wt, item, providerExecution, featureEvents, log) =>
-      cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents, log),
+    runConductor: (wt, item, providerExecution, featureEvents, log, sessionId) =>
+      cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents, log, sessionId),
 
     readOutcome: (wt) => readWorktreeOutcome(wt.path),
 

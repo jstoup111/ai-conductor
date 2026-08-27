@@ -480,7 +480,7 @@ To clear a halt safely, use the procedure in
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
 | `pipeline-events.jsonl` | Pipeline-owned closeout timing events | Separate single-writer ledger — see below |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
-| `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. Append-only, unbounded |
+| `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
 | `conduct.log` | Session narrative | Written only by the legacy bash CLI; `conduct-ts` never writes it. Read by `rate-limit-wait.sh` |
 | `progress.log` | Batch-boundary narrative | Appended by the `pipeline` skill |
 

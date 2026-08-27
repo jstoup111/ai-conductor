@@ -68,6 +68,8 @@ export interface FeatureWorktree {
 export interface FeatureRunScope {
   events: ConductorEventEmitter;
   providerExecution: ProviderExecutionContext;
+  /** Per-dispatch identity supplied by the daemon entry point when available. */
+  sessionId?: string;
   /** Immutable logger that attributes runner-owned output to this feature. */
   log?: (message: string) => void;
   stop: () => void | Promise<void>;
@@ -100,6 +102,7 @@ export interface FeatureRunnerDeps {
     providerExecution?: ProviderExecutionContext,
     events?: ConductorEventEmitter,
     log?: (message: string) => void,
+    sessionId?: string,
   ) => Promise<void | OperatorParkedTermination>;
   /** Read the loop outcome from the worktree's markers. */
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
@@ -398,6 +401,7 @@ export function makeRunFeature(
         providerExecution,
         featureRun?.events,
         featureLog,
+        featureRun?.sessionId,
       );
       if (conductorTermination?.kind === 'operator-parked') {
         return {

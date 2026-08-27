@@ -656,8 +656,8 @@ Project-local plugins shadow global plugins of the same kind and name, so a proj
 name wins over the global one (`src/conductor/src/engine/plugin-loader.ts:144-167`).
 
 `otel` is **not** selected through this key. The OTel visualizer is a built-in configured by its own
-[`otel`](#otel) block and is attempted on every run independently of `visualizers`
-(`src/conductor/src/index.ts:266-270`). Listing `otel` here warns
+[`otel`](#otel) block and is attempted independently of `visualizers` for interactive runs and for
+each daemon-dispatched feature (`src/conductor/src/engine/otel/wire.ts`). Listing `otel` here warns
 `visualizer "otel" is configured through the "otel:" block; remove it from "visualizers".` and is
 otherwise ignored (`src/conductor/src/index.ts:243-248`).
 
@@ -678,7 +678,8 @@ Not schema-validated.
 
 OpenTelemetry export. Allow-listed at the top level but **not validated by `validateConfig`** — all
 handling lives in `resolveOtelConfig` (`src/conductor/src/engine/otel/otel-config.ts:26-70`), which never
-throws.
+throws. When enabled, it exports interactive runs and each daemon-dispatched feature independently;
+the daemon resource identifies the feature, project, and durable dispatch run id.
 
 | Key | Type | Required | Allowed | Default |
 | --- | --- | --- | --- | --- |
