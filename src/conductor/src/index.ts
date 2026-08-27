@@ -1042,6 +1042,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Reject the retired unattended inline mode before creating any pipeline
+  // state or initializing provider-facing runtime.
+  const mode = deriveMode(opts);
+
   let projectRoot = process.cwd();
   let pipelineDir = join(projectRoot, '.pipeline');
   let stateFilePath = join(pipelineDir, 'conduct-state.json');
@@ -1326,7 +1330,6 @@ async function main(): Promise<void> {
   } catch {
     sessionId = uuidv4();
   }
-  const mode = deriveMode(opts);
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
   const rendererOpts = {
