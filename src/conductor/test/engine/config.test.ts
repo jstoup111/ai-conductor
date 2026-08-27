@@ -60,6 +60,31 @@ steps:
       expect(result.error.message).toMatch(/line \d+/i);
     });
 
+    it('rejects retired and arbitrary undeclared step names as custom steps missing after', async () => {
+      const loadUndeclaredStep = async (name: string) => {
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          `steps:\n  ${name}:\n    max_retries: 2\n`,
+        );
+        const result = await loadConfig(tmpDir);
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error('expected config validation failure');
+        return result.error;
+      };
+
+      const retired = await loadUndeclaredStep('wiring_check');
+      const arbitrary = await loadUndeclaredStep('undeclared_step');
+
+      expect(retired).toMatchObject({
+        type: 'validation_error',
+        message: 'Custom step "wiring_check" requires \'after: <existing-step>\'',
+      });
+      expect(arbitrary).toMatchObject({
+        type: 'validation_error',
+        message: 'Custom step "undeclared_step" requires \'after: <existing-step>\'',
+      });
+    });
+
     it('accepts config when harness version satisfies constraint', async () => {
       const configYaml = `harness_version: ">=1.0.0"\n`;
       await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), configYaml);
