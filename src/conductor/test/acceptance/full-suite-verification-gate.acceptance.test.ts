@@ -288,20 +288,10 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     });
     expect(template).toMatch(/test_suite:[\s\S]*command:[^\n]*npm test[\s\S]*working_directory:/i);
     const testScript = JSON.parse(packageJson).scripts.test as string;
-    // Signal simulation runs in an isolated fork after the ordinary fork-pool
-    // batch. Running both Vitest processes concurrently can terminate the
-    // aggregate shell with SIGHUP before it emits the required aggregate pass
-    // sentinel.
     // Every invocation goes through the Node 26 temp-dir wrapper
     // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
-    expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(3);
+    expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(1);
     expect(testScript).not.toMatch(/(^|[^-])vitest run/);
-    expect(testScript).toContain('vitest.signal.config.ts');
-    expect(testScript).not.toContain('& ordinary=$!');
-    expect(testScript).not.toContain('& signals=$!');
-    expect(testScript).not.toContain('wait "$ordinary"');
-    expect(testScript).not.toContain('wait "$signals"');
-    expect(testScript).toMatch(/vitest\.signal\.config\.ts --reporter=dot(?! --silent)/);
 
     // The no-argument branch is the aggregate gate's command. Any positional
     // path passed there narrows the run to those paths, silently dropping
@@ -312,19 +302,6 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     const defaultBranch = testScript.slice(testScript.indexOf('else'), testScript.indexOf('fi &&'));
     expect(defaultBranch).not.toMatch(/(^|\s)(\.\/)?test\//);
 
-    // Whatever `vitest.config.ts` excludes for pool reasons must be run by the
-    // signal config instead, so the two commands still cover the include set.
-    const signalConfig = await readFile(join(CONDUCTOR_ROOT, 'vitest.signal.config.ts'), 'utf8');
-    const excludeBlock = vitestConfig.match(/exclude:\s*\[([\s\S]*?)\]/)?.[1] ?? '';
-    const poolExcluded = [...excludeBlock.matchAll(/'(test\/[^'*]*\.test\.ts)'/g)].map(
-      (match) => match[1]!,
-    );
-    expect(poolExcluded.length).toBeGreaterThan(0);
-    for (const excluded of poolExcluded) {
-      expect(signalConfig).toContain(excluded);
-    }
-    expect(signalConfig).toMatch(/pool:\s*'forks'/);
-    expect(signalConfig).toMatch(/maxWorkers:\s*1/);
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);
     // vitest 4 removed `poolOptions`; the fork cap is `maxWorkers` now. It
