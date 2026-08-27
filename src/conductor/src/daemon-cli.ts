@@ -564,6 +564,18 @@ export function buildProgressReKickDeps(
 }
 
 /**
+ * Construct the setup retry used by both setup-triage stages.  Triage must
+ * re-run setup even when a prior dispatch left a valid success marker.
+ */
+export function createForcedSetupPrepare(
+  prepare: typeof prepareWorktree,
+  log: ((message: string) => void) | undefined,
+  verbose: boolean,
+): (worktreePath: string) => Promise<void> {
+  return (worktreePath) => prepare(worktreePath, log, { verbose, force: true });
+}
+
+/**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
  * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
@@ -1197,8 +1209,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const git: GitRunner = makeGitRunner(worktree.path);
 
     // Inject prepareWorktree for retry after quarantine
-    const runPrepare = (worktreePath: string) =>
-      prepareWorktree(worktreePath, featureLog, { verbose: config?.daemon_verbose ?? false, force: true });
+    const runPrepare = createForcedSetupPrepare(
+      prepareWorktree,
+      featureLog,
+      config?.daemon_verbose ?? false,
+    );
 
     // Triage stage 1: run-triage (TS-2/TS-3)
     // Classify tree state and route: clean → pass, dirty → quarantine+retry

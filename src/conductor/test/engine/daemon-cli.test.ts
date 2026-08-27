@@ -24,7 +24,12 @@ import { acquireScratchHome } from '../../src/engine/self-host/provider-scratch.
 import type { ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
-import { renderDaemonEvent, runDaemonMode } from '../../src/daemon-cli.js';
+import {
+  createForcedSetupPrepare,
+  renderDaemonEvent,
+  runDaemonMode,
+} from '../../src/daemon-cli.js';
+import type { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -51,6 +56,34 @@ class RecordingConductStateStore implements ConductStateStore<ConductState> {
     return this.result;
   }
 }
+
+describe('daemon setup-triage prepare wiring', () => {
+  it('constructs a marker-bypassing prepare callback', async () => {
+    const prepare = vi.fn(async () => {});
+    const log = vi.fn();
+    const runPrepare = createForcedSetupPrepare(
+      prepare as typeof prepareWorktree,
+      log,
+      true,
+    );
+
+    await runPrepare('/worktrees/after-quarantine');
+    await runPrepare('/worktrees/after-fix');
+
+    expect(prepare).toHaveBeenNthCalledWith(
+      1,
+      '/worktrees/after-quarantine',
+      log,
+      { verbose: true, force: true },
+    );
+    expect(prepare).toHaveBeenNthCalledWith(
+      2,
+      '/worktrees/after-fix',
+      log,
+      { verbose: true, force: true },
+    );
+  });
+});
 
 describe('daemon state-store command boundary (Task 17)', () => {
   it('records daemon base-state updates through the shared mutation port', async () => {

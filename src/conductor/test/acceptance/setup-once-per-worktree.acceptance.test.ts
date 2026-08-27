@@ -36,6 +36,7 @@ import {
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { createForcedSetupPrepare } from '../../src/daemon-cli.js';
 
 const execFileAsync = promisify(execFile);
 const SETUP_MARKER = join('.daemon', 'setup-ok.json');
@@ -190,9 +191,15 @@ exit 0
         worktree,
         'setup-once-fix',
         async () => {},
-        async (path) => {
-          await prepareWorktree(path, undefined, prepareOptions(baseSha, events, true));
-        },
+        createForcedSetupPrepare(
+          (path, log, options) => prepareWorktree(
+            path,
+            log,
+            { ...options, baseSha, events },
+          ),
+          undefined,
+          false,
+        ),
       );
 
       expect(outcome).toMatchObject({
@@ -229,9 +236,15 @@ exit 0
         worktree,
         'setup-once-quarantine',
         new SetupFailureError('prior setup failure', 'PRIOR_FAILURE'),
-        async (path) => {
-          await prepareWorktree(path, undefined, prepareOptions(baseSha, events, true));
-        },
+        createForcedSetupPrepare(
+          (path, log, options) => prepareWorktree(
+            path,
+            log,
+            { ...options, baseSha, events },
+          ),
+          undefined,
+          false,
+        ),
       );
 
       expect(outcome).toMatchObject({
