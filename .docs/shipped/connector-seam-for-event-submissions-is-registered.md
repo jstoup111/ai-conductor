@@ -4,6 +4,17 @@ spec_hash: 32d8ee4016b4de2d667cd1a41d609fd154a87c505b978762db92dcf7903a8386
 pr: https://github.com/jstoup111/ai-conductor/pull/1958
 shipped: 2026-08-27
 engine_version: 20260827T134019Z-eaa70631ea5e
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/otel/create-otel-visualizer.ts:19 — `createOtelVisualizer` was moved out of `src/conductor/src/index.ts` into a new module and is no longer exported from the CLI entry module"
+    accepted: true
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.2
+    summary: "src/conductor/src/engine/otel/otel-visualizer.ts:169,272 — an unplanned `legacyStartContext` compatibility field lets `start()` be called with no context, fed by `'unknown'` fallbacks at src/conductor/src/engine/plugin-loader.ts:247-248"
+    accepted: true
 ---
 
 ## Cost
