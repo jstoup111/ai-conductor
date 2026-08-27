@@ -81,6 +81,13 @@ Dispatch the **`remediation-planner`** agent with the blocking gaps + their evid
 returns, per gap, a **disposition** and (for autonomous dispositions) concrete file-scoped **tasks**.
 Keep context tight: feed the agent the blocking gaps and their evidence, not the whole codebase.
 
+Pass each gap's **finding id exactly as the report writes it** — the `Finding` cell for an
+as-built `## Blocking Findings` row (`AB-1`), the `FR-N` (or criterion) row id for `prd-audit`.
+The engine matches the planner's returned ids against those parsed ids one-to-one and fails
+closed on a mismatch, so a returned entry keyed by the governing ADR slug instead of the finding
+id halts the run needs-human with an id-mismatch message that hides the disposition the planner
+actually chose.
+
 ### 3. Disposition Decision
 
 Each blocking gap or stall-question gets exactly one disposition. **HALT is reserved for
