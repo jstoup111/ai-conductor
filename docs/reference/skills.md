@@ -658,7 +658,9 @@ joins before `build_review`.
   `plan contract:` and `prior attempts:` pointer lines (see
   [gates](../explanation/gates.md#where-a-build_review-fail-goes)).
 - **Outputs** — `.pipeline/remediation.json`, overwritten each run. The engine then appends each task
-  into the feature's plan. No completion glob — the engine reads the JSON directly to route.
+  into the feature's plan. For a `prd_audit` finding without a PRD, its disposition ID is the report
+  criterion `S<story>.<ordinal>` (for example, `S5.1`); the engine admits criterion IDs
+  case-insensitively. No completion glob — the engine reads the JSON directly to route.
 - **Gate role** — advisory; it is the unblocker rather than a blocker. HALT is reserved for exactly
   three categories: architectural clarity, product scope, and unanswerable. Every other gap must route
   to `build`, `acceptance_specs`, `architecture_review`, or `plan`. On absent, stale, or malformed
