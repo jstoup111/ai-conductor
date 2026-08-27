@@ -256,19 +256,51 @@ export function selectVisualizers(
       continue;
     }
 
-    const visualizer = factory(context);
+    const visualizer = invokeVisualizerFactory(name, factory, context);
     if (visualizer) {
       selected.push(visualizer);
     }
   }
 
   const otelFactory = registry.tryGet<VisualizerFactory>('visualizer', 'otel');
-  const otelVisualizer = otelFactory?.(context);
+  const otelVisualizer = otelFactory && invokeVisualizerFactory('otel', otelFactory, context);
   if (otelVisualizer) {
     selected.push(otelVisualizer);
   }
 
   return selected;
+}
+
+/** Invoke a visualizer factory with its real context and refuse malformed products. */
+function invokeVisualizerFactory(
+  pluginName: string,
+  factory: VisualizerFactory,
+  context: VisualizerFactoryContext,
+): VisualizerPlugin | null {
+  let visualizer: unknown;
+  try {
+    visualizer = factory(context);
+  } catch (error) {
+    console.warn(`Plugin ${pluginName} factory failed: ${String(error)}`);
+    return null;
+  }
+
+  if (visualizer === null) return null;
+  const candidate = visualizer as Partial<VisualizerPlugin> | undefined;
+  if (typeof candidate?.name !== 'string') {
+    console.warn(`Plugin ${pluginName} missing required member: name`);
+    return null;
+  }
+  if (typeof candidate.start !== 'function') {
+    console.warn(`Plugin ${pluginName} missing required method: start`);
+    return null;
+  }
+  if (typeof candidate.stop !== 'function') {
+    console.warn(`Plugin ${pluginName} missing required method: stop`);
+    return null;
+  }
+
+  return visualizer as VisualizerPlugin;
 }
 
 /**

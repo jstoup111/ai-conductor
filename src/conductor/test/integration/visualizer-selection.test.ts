@@ -180,6 +180,56 @@ describe('visualizer selection', () => {
     });
   });
 
+  it('warns and skips a configured factory that throws while retaining valid siblings', () => {
+    const registry = new PluginRegistry();
+    const emitter = new ConductorEventEmitter();
+    const valid = new FakeVisualizer('valid');
+    const context = createFactoryContext(emitter, ['broken', 'valid']);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    registry.register('visualizer', 'broken', () => {
+      throw new Error('factory failed');
+    });
+    registry.register('visualizer', 'valid', factoryFor(valid, () => {}));
+
+    let selected: VisualizerPlugin[] = [];
+    expect(() => { selected = selectVisualizers(registry, context.config, context); }).not.toThrow();
+    expect({ selected, warnings: warning.mock.calls }).toEqual({
+      selected: [valid],
+      warnings: [['Plugin broken factory failed: Error: factory failed']],
+    });
+  });
+
+  it('warns and skips a factory product missing stop while retaining valid siblings', () => {
+    const registry = new PluginRegistry();
+    const emitter = new ConductorEventEmitter();
+    const valid = new FakeVisualizer('valid');
+    const context = createFactoryContext(emitter, ['broken', 'valid']);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    registry.register('visualizer', 'broken', () => ({
+      name: 'broken',
+      start(): void {},
+    }) as unknown as VisualizerPlugin);
+    registry.register('visualizer', 'valid', factoryFor(valid, () => {}));
+
+    expect({ selected: selectVisualizers(registry, context.config, context), warnings: warning.mock.calls }).toEqual({
+      selected: [valid],
+      warnings: [['Plugin broken missing required method: stop']],
+    });
+  });
+
+  it('silently skips a configured factory that opts out with null', () => {
+    const registry = new PluginRegistry();
+    const emitter = new ConductorEventEmitter();
+    const context = createFactoryContext(emitter, ['disabled']);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    registry.register('visualizer', 'disabled', () => null);
+
+    expect({ selected: selectVisualizers(registry, context.config, context), warnings: warning.mock.calls }).toEqual({
+      selected: [],
+      warnings: [],
+    });
+  });
+
   it('warns once and ignores otel in visualizers because its block owns enablement', () => {
     const registry = new PluginRegistry();
     const emitter = new ConductorEventEmitter();

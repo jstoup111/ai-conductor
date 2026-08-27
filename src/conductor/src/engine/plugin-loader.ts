@@ -65,8 +65,8 @@ async function loadPluginModule(
  * unloadable: one that reads any context member threw a `TypeError` the
  * discovery loop swallowed, and one that returned its documented `null` for a
  * disabled config was rejected as `missing required member: name`. The product's
- * shape is a selection-time concern, checked when `selectVisualizers` invokes the
- * factory with the real context (`src/index.ts`).
+ * shape is a selection-time concern: `selectVisualizers` invokes the factory with
+ * the real context and refuses thrown or malformed non-null products (`src/index.ts`).
  *
  * An OBJECT entrypoint is its own product, so its `name`/`start`/`stop` shape is
  * checked here and a defect raises `PluginLoadError` naming plugin and member.
