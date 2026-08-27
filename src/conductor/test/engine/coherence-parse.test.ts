@@ -4,42 +4,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseCoherenceArtifact } from '../../src/engine/coherence-parse.js';
-
-// Retired discovery predicate, copied verbatim from daemon-backlog.ts before
-// Task 5. It is deliberately test-local: the shared parser is the production
-// authority, while this preserves the old acceptance set as a regression oracle.
-function retiredHasCoherenceTableDataRow(content: string | null): boolean {
-  if (content === null || content.trim().length === 0) return false;
-
-  const rows = content.split(/\r?\n/).map((line) => {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
-    return trimmed
-      .slice(1, -1)
-      .split('|')
-      .map((cell) => cell.trim());
-  });
-
-  for (let index = 0; index + 2 < rows.length; index += 1) {
-    const header = rows[index];
-    const separator = rows[index + 1];
-    const data = rows[index + 2];
-    if (
-      header === null ||
-      separator === null ||
-      data === null ||
-      header.length === 0 ||
-      header.length !== separator.length ||
-      data.length === 0 ||
-      !separator.every((cell) => /^:?-{2,}:?$/.test(cell))
-    ) {
-      continue;
-    }
-    return true;
-  }
-
-  return false;
-}
+import {
+  coherenceRegressionCorpus,
+  retiredHasCoherenceTableDataRow,
+} from './coherence-corpus.js';
 
 function staticImportSpecifiers(source: string): string[] {
   return [...source.matchAll(/^\s*import(?:[\s\S]*?from\s*)?['"]([^'"]+)['"];?\s*$/gm)].map(
@@ -181,72 +149,61 @@ describe('parseCoherenceArtifact', () => {
     expect(result.detail).toBeUndefined();
   });
 
+  it.each([
+    ['empty criterion text', '| criterion |  | task:3 | covered | evidence | diff-local |', 'criterion text must not be empty'],
+    ['criterion with no task ids', '| criterion | Given a widget |  | covered | evidence | diff-local |', 'criterion row must cite at least one task id'],
+  ] as const)('reports the source line for %s', (_label, row, message) => {
+    const result = parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+${row}
+`);
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message },
+    });
+  });
+
+  it('reports the source line and actual width for a malformed legacy row', () => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:3 | story:3 | covered |
+`);
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: { line: 3, message: 'legacy row expected 5 and actual 4 cells' },
+    });
+  });
+
+  it.each([
+    ['id', '| task |  | story:3 | covered | evidence |', 'legacy row has empty id'],
+    ['verdict', '| task | task:3 | story:3 |  | evidence |', 'legacy row has empty verdict'],
+  ] as const)('reports the source line for an empty legacy %s', (_field, row, message) => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+${row}
+`);
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: { line: 3, message },
+    });
+  });
+
   // Covers: task:6
   it('preserves legacy acceptances and enumerates only shared-parser acceptance expansions', () => {
-    const corpus = [
-      {
-        name: 'minimal valid table',
-        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
-| --- | --- | --- | --- | --- |
-| task | task:6 | story:2 | covered | fixture |
-`,
-        oracleAccepted: true,
-        parserAccepted: true,
-      },
-      {
-        name: 'ragged mixed legacy and criterion rows',
-        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
-| --- | --- | --- | --- | --- |
-| task | task:6 | story:2 | covered | fixture |
-| criterion | Given a fixture | task:6 | covered | fixture | diff-local |
-`,
-        oracleAccepted: true,
-        parserAccepted: true,
-      },
-      {
-        name: 'five-wide header over six-wide separator and criterion row',
-        content: `| Row Class | Criterion | Cited Task Ids | Verdict | Quote |
-| --- | --- | --- | --- | --- | --- |
-| criterion | Given a fixture | task:6 | covered | fixture | diff-local |
-`,
-        oracleAccepted: false,
-        parserAccepted: true,
-      },
-      {
-        name: 'six-wide header over five-wide separator and legacy row',
-        content: `| Row Class | Id | Cited Ids | Verdict | Quote | Disposition |
-| --- | --- | --- | --- | --- |
-| task | task:6 | story:2 | covered | fixture |
-`,
-        oracleAccepted: false,
-        parserAccepted: true,
-      },
-      {
-        name: 'zero-criterion legacy artifact',
-        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
-| --- | --- | --- | --- | --- |
-| outcome | outcome:1 | fr:1 | covered | fixture |
-| fr | fr:1 | story:2 | covered | fixture |
-| story | story:2 | task:6 | covered | fixture |
-| task | task:6 | story:2 | covered | fixture |
-| adr | adr-2026-08-26-example | task:6 | covered | fixture |
-`,
-        oracleAccepted: true,
-        parserAccepted: true,
-      },
-      { name: 'absent artifact', content: null, oracleAccepted: false, parserAccepted: false },
-      { name: 'empty artifact', content: ' \t\n ', oracleAccepted: false, parserAccepted: false },
-      { name: 'table-less content', content: '# Coherence\n\nNo table here.\n', oracleAccepted: false, parserAccepted: false },
-    ] as const;
-
-    const observations = corpus.map((fixture) => ({
+    const observations = coherenceRegressionCorpus.map((fixture) => ({
       ...fixture,
       oracleAccepted: retiredHasCoherenceTableDataRow(fixture.content),
       parserAccepted: parseCoherenceArtifact(fixture.content).ok,
     }));
 
-    expect(observations).toEqual(corpus);
-    expect(observations.filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)).toEqual([]);
+    expect(observations).toEqual(coherenceRegressionCorpus);
+    expect(observations.filter(({ oracleAccepted, parserAccepted, discovery }) => oracleAccepted && !parserAccepted && discovery !== 'processed')).toEqual([]);
     expect(observations
       .filter(({ oracleAccepted, parserAccepted }) => !oracleAccepted && parserAccepted)
       .map(({ name }) => name),

@@ -158,7 +158,10 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       const verdict = rawVerdict.trim();
       const quote = unquote(rawQuote);
       if (criterion.length === 0) {
-        return { ok: false, reason: 'unparseable-criterion-row' };
+        return structuralParseFailure('unparseable-criterion-row', {
+          line,
+          message: 'criterion text must not be empty',
+        });
       }
       if (!isCriterionVerdict(verdict)) {
         return structuralParseFailure('unparseable-criterion-row', {
@@ -171,7 +174,10 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
       if (citedIds.length === 0) {
-        return { ok: false, reason: 'unparseable-criterion-row' };
+        return structuralParseFailure('unparseable-criterion-row', {
+          line,
+          message: 'criterion row must cite at least one task id',
+        });
       }
       const dispositionText = rawDisposition.trim();
       if (dispositionText && !isCriterionDiffLocalityDisposition(dispositionText)) {
@@ -187,7 +193,10 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       continue;
     }
     if (cells.length !== 5) {
-      return { ok: false, reason: 'unparseable-coherence-artifact' };
+      return structuralParseFailure('unparseable-coherence-artifact', {
+        line,
+        message: `legacy row expected 5 and actual ${cells.length} cells`,
+      });
     }
     if (!LEGACY_ROW_CLASSES.has(rowClass)) {
       return structuralParseFailure('unparseable-coherence-artifact', {
@@ -198,8 +207,17 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
     const [, rawId, rawCitedIds, rawVerdict, rawQuote] = cells;
     const id = rawId.trim();
     const verdict = rawVerdict.trim();
-    if (id.length === 0 || verdict.length === 0) {
-      return { ok: false, reason: 'unparseable-coherence-artifact' };
+    if (id.length === 0) {
+      return structuralParseFailure('unparseable-coherence-artifact', {
+        line,
+        message: 'legacy row has empty id',
+      });
+    }
+    if (verdict.length === 0) {
+      return structuralParseFailure('unparseable-coherence-artifact', {
+        line,
+        message: 'legacy row has empty verdict',
+      });
     }
     const citedIds = rawCitedIds
       .split(',')

@@ -247,7 +247,11 @@ Ship the widget with arrival tracking.
 | --- | --- | --- | --- | --- | --- |
 | criterion | Given a widget, when shipped, then it arrives. |  | covered | "Task 2 ships the widget." | diff-local |
 `),
-    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+    ).toEqual({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: 'criterion row must cite at least one task id' },
+    });
   });
 
   it.each(['covered', 'gap', 'fail'] as const)(
@@ -2116,8 +2120,10 @@ ${row}
       expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('probably-covered') });
     } else if (_label === 'out-of-vocabulary disposition') {
       expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('maybe-local') });
+    } else if (_label === 'empty criterion') {
+      expect(result.detail).toEqual({ line: 3, message: 'criterion text must not be empty' });
     } else {
-      expect(result.detail).toBeUndefined();
+      expect(result.detail).toEqual({ line: 3, message: 'criterion row must cite at least one task id' });
     }
   });
 
@@ -2312,6 +2318,36 @@ Return requests are accepted.
 });
 
 describe('runCoherenceGate criterion fail-closed guard', () => {
+  it('carries an empty criterion row reason, line, and disagreement text through land', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-empty-criterion-'));
+    temporaryRepositories.push(worktreePath);
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | | task:1 | covered | evidence | diff-local |
+`,
+    );
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath: worktreePath,
+        tier: 'M',
+        track: 'technical',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: null,
+        planText: null,
+        prdText: null,
+        outcomeBullets: [],
+        ideaFiles: new Set(['.docs/coherence/idea.md']),
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).rejects.toThrow(/unparseable-criterion-row.*line 3.*criterion text must not be empty/is);
+  });
+
   it('rejects a malformed coherence artifact before a waiver can bypass its parse failure', async () => {
     const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-parse-waiver-'));
     temporaryRepositories.push(canonicalPath);

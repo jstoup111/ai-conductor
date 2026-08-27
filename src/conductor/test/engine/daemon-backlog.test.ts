@@ -16,6 +16,10 @@ import { makeGitRunner } from '../../src/engine/rebase.js';
 import { parseComplexityTier } from '../../src/engine/artifacts.js';
 import { parseCoherenceArtifact } from '../../src/engine/coherence-parse.js';
 import {
+  coherenceRegressionCorpus,
+  retiredHasCoherenceTableDataRow,
+} from './coherence-corpus.js';
+import {
   renderShippedRecord,
   parseShippedRecord,
   specHash,
@@ -566,6 +570,58 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       'skip malformed-coherence: merged spec cannot build — missing or unparseable coherence artifact ' +
         '(.docs/coherence/malformed-coherence.md) required for tier unresolved. ' +
         'Author it on the default branch; logged once. Detail: line 3: criterion row expected 6 and actual 5 cells.',
+    );
+  });
+
+  // Covers: task:6 — the retired acceptance corpus is exercised through
+  // discovery as well as directly through the shared parser.
+  it('keeps the shared coherence corpus eligible through discovery or processed dedup', async () => {
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+    for (const fixture of coherenceRegressionCorpus) {
+      await writeFile(join(dir, `.docs/plans/${fixture.slug}.md`), planWithDeps(`.docs/stories/${fixture.slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${fixture.slug}.md`), APPROVED_STORIES);
+      await writeFile(join(dir, `.docs/complexity/${fixture.slug}.md`), '# Complexity\n\nTier: M\n');
+      if (fixture.content !== null) {
+        await writeFile(join(dir, `.docs/coherence/${fixture.slug}.md`), fixture.content);
+      }
+    }
+
+    const result = await discoverBacklog(
+      dir,
+      async (slug) => slug === 'decide-artifact-coherence-check',
+      undefined,
+      { treeSource: fsTreeSource(dir) },
+    );
+    const observations = coherenceRegressionCorpus.map((fixture) => ({
+      ...fixture,
+      oracleAccepted: retiredHasCoherenceTableDataRow(fixture.content),
+      parserAccepted: parseCoherenceArtifact(fixture.content).ok,
+    }));
+
+    expect(observations).toEqual(coherenceRegressionCorpus);
+    expect(observations.filter(({ oracleAccepted, discovery }) => oracleAccepted && discovery === 'blocked')).toEqual([]);
+    expect(observations
+      .filter(({ oracleAccepted, parserAccepted }) => !oracleAccepted && parserAccepted)
+      .map(({ name }) => name),
+    ).toEqual([
+      'five-wide header over six-wide separator and criterion row',
+      'six-wide header over five-wide separator and legacy row',
+    ]);
+    expect(observations.filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)).toEqual([
+      expect.objectContaining({ slug: 'decide-artifact-coherence-check', discovery: 'processed' }),
+    ]);
+    expect(result.items.map((item) => item.slug)).toEqual(
+      coherenceRegressionCorpus
+        .filter(({ discovery }) => discovery === 'eligible')
+        .map(({ slug }) => slug)
+        .sort(),
+    );
+    expect(result.blocked.map((item) => item.slug)).toEqual(
+      coherenceRegressionCorpus
+        .filter(({ discovery }) => discovery === 'blocked')
+        .map(({ slug }) => slug)
+        .sort(),
     );
   });
 
