@@ -18,7 +18,9 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
     process.exit(1);
   }
   if (opts.auto) {
-    console.error('Error: --auto is deprecated. Use `conduct-ts daemon start` instead.');
+    console.error(
+      'Error: --auto is deprecated. Use `conduct-ts daemon start` instead; see docs/guides/running-the-daemon.md.',
+    );
     process.exit(1);
   }
   return opts.auto ? 'auto' : opts.interactive ? 'interactive' : 'default';
