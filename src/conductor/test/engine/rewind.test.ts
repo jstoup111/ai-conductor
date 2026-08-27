@@ -272,5 +272,28 @@ describe('rewindState', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('rejects a retired operator target by name without changing state bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-retired-target-'));
+    const statePath = join(root, '.pipeline/conduct-state.json');
+    const original = `${JSON.stringify(completeState, null, 2)}\n`;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(statePath, original);
+      await writeFile(join(root, '.pipeline/HALT'), 'operator action required\n');
+      await writeFile(join(root, '.pipeline/HALT.class'), 'needs-human\n');
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'wiring_check' }, root))
+        .resolves.toBe(1);
+
+      expect(error).toHaveBeenCalledWith(expect.stringMatching(/wiring_check.*Valid steps:/s));
+      expect(await readFile(statePath, 'utf-8')).toBe(original);
+    } finally {
+      error.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   });
 });
