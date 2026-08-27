@@ -101,6 +101,8 @@ Option A. Specifics:
    `.pipeline/audit-trail/events.jsonl` as the first-class gate/rework history source
    (existing autoheal/pipeline/simplify artifacts remain additional sources).
    `.pipeline/` stays gitignored run evidence — nothing here is a committed artifact.
+
+> **Amended 2026-08-26 by #1905:** `skills/retro/` is removed (#1905), so the retro skill is no longer a consumer. The sink and writer machinery stand: `.pipeline/audit-trail/events.jsonl` remains the gate/rework history source, consumed by the engineer-store signal path and operators.
 7. **Non-coupling:** does not block on #191 (unimplemented verdict schema —
    `gate-verdicts.ts` has a plain interface, verified). When #191 lands, its
    schema-validated verdict becomes the source object for gate records; the record

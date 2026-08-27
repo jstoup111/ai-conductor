@@ -51,6 +51,8 @@ already owns the structured signal. Option B's only advantage (reuse the in-loop
 because halted and tier-skipped features force an emission-time narrative path regardless — so B
 ends up with two mechanisms where A has one.
 
+> **Amended 2026-08-26 by #1905:** superseded in part by #1905 (operator decision, full retro purge). The done-completion narrative provider call (Option A's narrative production, `buildRetroPrompt`) is removed; no provider call occurs on `done`. Halt narratives (`renderHaltNarrative`) and the store format survive unchanged — `narrativeRef` was already optional and is now absent for all non-halted outcomes. The daemon-conditional skip of the in-loop retro step is moot: the step itself is deleted.
+
 **Store format + mechanism (locked):**
 - `~/.ai-conductor/engineer/signals.jsonl` — append-only, **one JSON line per feature-run**.
 - `~/.ai-conductor/engineer/narratives/<project>/<feature>-<runId>.md` — narratives keyed by `runId`

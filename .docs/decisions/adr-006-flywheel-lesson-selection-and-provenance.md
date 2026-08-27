@@ -108,6 +108,8 @@ Provenance = Option A (authored-keys intersection), with B deferred.**
   present in the planning artifact, not just logged. No relevant signals → inject an explicit "no
   prior lessons" (never pad with unrelated noise). A malformed signal line is skipped (9.1
   resilient-parse convention), never aborting the read.
+
+> **Amended 2026-08-26 by #1905:** the daemon-completion retro narrative is removed (#1905); `narrativeRef` (already optional per ADR-002) is now populated only for halt narratives. The digest's narrative-ref channel therefore carries halt narratives only; kickback/halt/retry-hotspot signals are unchanged.
 - **Provenance (FR-12):** the engineer maintains an **authored-keys ledger** of the `(project, feature)`
   pairs it has planned (recorded at spec-PR open, FR-6/7) and computes the flywheel trend over
   `store signals ∩ ledger` — **no 9.1 schema change**. Non-engineer daemon work is excluded because it

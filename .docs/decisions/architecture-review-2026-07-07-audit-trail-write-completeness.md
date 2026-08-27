@@ -17,6 +17,8 @@
 - **Integration surface:** engine-internal (bus subscription + two wiring points +
   daemon watcher callback) plus one skill-doc update (`skills/retro/SKILL.md`).
   No consumer-visible CLI/hook/schema surface.
+
+> **Amended 2026-08-26 by #1905:** `skills/retro/SKILL.md` is removed (#1905); the skill-doc consumer named here no longer exists. The write-completeness machinery itself is unaffected.
 - **Data implications:** new gitignored run-evidence file
   `.pipeline/audit-trail/events.jsonl`; append-only; no migrations.
 - **Performance:** one small synchronous append per step outcome — negligible.
