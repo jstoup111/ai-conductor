@@ -59,7 +59,7 @@ describe('TerminalRenderer', () => {
   });
 
   it('renders dashboard on config_skip', async () => {
-    await renderer.handle({ type: 'config_skip', step: 'retro' });
+    await renderer.handle({ type: 'config_skip', step: 'rebase' });
     expect(stream.output()).toContain('Conductor: Add login');
   });
 

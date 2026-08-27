@@ -25,7 +25,7 @@ import { currentCommitSha } from '../../src/engine/project-prelude.js';
 // test exercises the selector-driven tail directly. Medium (M) tier so
 // manual_test still runs (S-tier now legitimately skips manual_test per D5;
 // see steps.ts skippableForTiers) — the tail is build → manual_test →
-// (retro tier-skipped only at S, so it runs at M too) → finish.
+// (the surviving SHIP tail completes) → finish.
 
 const FRONT_DONE: ConductState = {
   complexity_tier: 'M',
@@ -209,7 +209,6 @@ describe('integration/gate-loop', () => {
     expect(ran).toContain('build');
     expect(ran).toContain('manual_test');
     expect(ran).toContain('finish');
-    expect(ran).toContain('retro'); // M tier: retro is not tier-skipped
     expect(completed).toBe(true);
     expect(converged).toBe(true); // loop_converged event emitted
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
@@ -872,7 +871,6 @@ describe('integration/gate-loop', () => {
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
-      'retro',
       'finish',
     ]) delete state[name];
     await writeState(statePath, {
@@ -922,14 +920,13 @@ describe('integration/gate-loop', () => {
     });
     await conductor.run();
 
-    // build, the three-member product validation group, retro, and finish
+    // build, the three-member product validation group, rebase, and finish
     // each receive one fresh session.
     expect(ran).toEqual([
       'build',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
-      'retro',
       'finish',
     ]);
     expect(resetSession.mock.calls.map(([step]) => step)).toEqual([
@@ -937,7 +934,6 @@ describe('integration/gate-loop', () => {
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
-      'retro',
       'finish',
     ]);
   });
@@ -2469,9 +2465,7 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
           );
           return { success: true };
         }
-        if (step === 'retro') {
-          await writeFile(join(repoDir, '.pipeline/retro.md'), '# Retro\n');
-        } else if (step === 'finish') {
+        if (step === 'finish') {
           await writeFile(join(repoDir, '.pipeline/finish-choice'), 'pr\n');
           const state = JSON.parse(await readFile(realStatePath, 'utf-8'));
           state.pr_url = 'https://example.com/pr/1';

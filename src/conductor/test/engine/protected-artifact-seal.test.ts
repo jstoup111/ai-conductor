@@ -3032,47 +3032,12 @@ describe('verifyProtectedArtifactSeal', () => {
   });
 });
 
-describe('isActiveStepArtifactException', () => {
-  it('permits only a protected target under the exact active step prefix', () => {
-    expect(
-      isActiveStepArtifactException({
-        phase: 'SHIP',
-        step: 'retro',
-        target: '.docs/stories/retro-907.md',
-      }),
-    ).toBe(true);
-  });
-
-  it('rejects a sibling path that merely resembles the active step prefix', () => {
-    expect(
-      isActiveStepArtifactException({
-        phase: 'SHIP',
-        step: 'retro',
-        target: '.docs/stories-unrelated/retro-907.md',
-      }),
-    ).toBe(false);
-  });
-
-  it('does not let a later step reuse a prior step protected-artifact permission', () => {
-    expect(
-      isActiveStepArtifactException({
-        phase: 'SHIP',
-        step: 'manual_test',
-        target: '.docs/stories/retro-907.md',
-      }),
-    ).toBe(false);
-  });
-});
-
 describe('classifyMutationTarget', () => {
   const projectRoot = '/workspace/feature-907';
 
   it.each([
     ['known unprotected', 'src/conductor.ts', 'BUILD', 'build', {
       kind: 'unprotected', target: 'src/conductor.ts',
-    }],
-    ['exact allowed', '.docs/stories/retro-907.md', 'SHIP', 'retro', {
-      kind: 'allowed', target: '.docs/stories/retro-907.md',
     }],
     ['protected', '.docs/plans/frozen.md', 'BUILD', 'build', {
       kind: 'protected', target: '.docs/plans/frozen.md',

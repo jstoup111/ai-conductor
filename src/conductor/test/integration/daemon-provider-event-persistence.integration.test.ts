@@ -227,7 +227,7 @@ describe('daemon feature provider-event persistence', () => {
 
     await featureAEvents?.emit({
       type: 'step_completed',
-      step: 'retro',
+      step: 'rebase',
       status: 'done',
     });
     await featureBEvents?.emit({
@@ -404,7 +404,7 @@ describe('daemon feature provider-event persistence', () => {
         { type: 'step_completed', step: 'build' },
         { type: 'step_completed', step: 'finish' },
         { type: 'step_completed', step: 'manual_test' },
-        { type: 'step_completed', step: 'retro' },
+        { type: 'step_completed', step: 'rebase' },
       ],
     });
   });

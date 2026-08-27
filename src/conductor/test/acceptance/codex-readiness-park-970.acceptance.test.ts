@@ -303,7 +303,6 @@ describe('acceptance: Codex readiness park #970', () => {
       manual_test: 'done',
       prd_audit: 'done',
       architecture_review_as_built: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     });
@@ -357,7 +356,7 @@ describe('acceptance: Codex readiness park #970', () => {
     await writeState(flowStatePath, {
       ...READY_STATE,
       build_review: 'done', wiring_check: 'done', manual_test: 'done', prd_audit: 'done',
-      architecture_review_as_built: 'done', retro: 'done', rebase: 'done', finish: 'done',
+      architecture_review_as_built: 'done', rebase: 'done', finish: 'done',
     });
     const readiness = vi.fn().mockResolvedValue({ provider: 'codex', source: 'cached-login', state: nonReadyState });
     const { runtimes, fallbackReadiness } = recoveryRuntimes(readiness);
@@ -392,7 +391,7 @@ describe('acceptance: Codex readiness park #970', () => {
   ] as const)('grouped recovery: %s and preserves completed siblings', async (_case, trialKind) => {
     await writeState(flowStatePath, {
       ...READY_STATE,
-      build: 'done', build_review: 'done', wiring_check: 'done', retro: 'done', rebase: 'done', finish: 'done',
+      build: 'done', build_review: 'done', wiring_check: 'done', rebase: 'done', finish: 'done',
     });
     const readiness = vi.fn().mockResolvedValue(probeFailedReadiness());
     const { runtimes, fallbackReadiness } = recoveryRuntimes(readiness);
@@ -456,7 +455,7 @@ describe('acceptance: Codex readiness park #970', () => {
     await expectUnavailableProbeTrial();
     await writeState(flowStatePath, {
       ...READY_STATE,
-      build: 'done', build_review: 'done', wiring_check: 'done', retro: 'done', rebase: 'done', finish: 'done',
+      build: 'done', build_review: 'done', wiring_check: 'done', rebase: 'done', finish: 'done',
     });
     const readiness = vi.fn().mockResolvedValue({ provider: 'codex', source: 'cached-login', state: nonReadyState });
     const { runtimes, fallbackReadiness } = recoveryRuntimes(readiness);

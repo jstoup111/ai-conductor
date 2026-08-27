@@ -22,7 +22,6 @@ const EXPECTED_CUSTOM_COMPLETION_PREDICATES = [
   'finish',
   'manual_test',
   'prd_audit',
-  'retro',
   'test_suite',
   'wiring_check',
 ];

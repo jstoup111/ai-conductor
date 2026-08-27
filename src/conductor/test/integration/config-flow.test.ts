@@ -58,12 +58,12 @@ describe('Integration: config flow', () => {
       complexity_tier: 'L',
       architecture_review: 'pending',
       architecture_review_as_built: 'pending',
-      retro: 'pending',
+      rebase: 'pending',
     } as ConductState);
 
     const config: HarnessConfig = {
       steps: {
-        retro: { disable: true },
+        rebase: { disable: true },
         architecture_review: { disable: true },
       },
     };
@@ -81,7 +81,7 @@ describe('Integration: config flow', () => {
     await conductor.run();
 
     // Disabled steps should not appear in runner calls
-    expect(runner.calls).not.toContain('retro');
+    expect(runner.calls).not.toContain('rebase');
     expect(runner.calls).not.toContain('architecture_review');
     // The as-built sweep is independent of DECIDE-time architecture review and
     // runs even when that earlier review was explicitly disabled.
@@ -94,7 +94,7 @@ describe('Integration: config flow', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.value.retro).toBe('skipped');
+    expect(result.value.rebase).toBe('skipped');
     expect(result.value.architecture_review).toBe('skipped');
     expect(result.value.architecture_review_as_built).toBe('done');
 
@@ -102,7 +102,7 @@ describe('Integration: config flow', () => {
     const skipEvents = collectedEvents.filter((e) => e.type === 'config_skip');
     expect(skipEvents).toHaveLength(2);
     const skippedSteps = skipEvents.map((e) => (e as { step: string }).step);
-    expect(skippedSteps).toContain('retro');
+    expect(skippedSteps).toContain('rebase');
     expect(skippedSteps).toContain('architecture_review');
     expect(skippedSteps).not.toContain('architecture_review_as_built');
   });

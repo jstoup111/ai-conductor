@@ -17,7 +17,7 @@ import type {
 // the module and the symbol it needs INSIDE the test body, so a missing module
 // or missing export surfaces as that test's own failure (RED) rather than a
 // whole-file collection crash that skips every test. Every assertion encodes a
-// behavior from `.docs/stories/phase-9.1-retro-signal-engineer-memory.md`; until
+// behavior from the historical engineer-memory story; until
 // the module is implemented each fails on its behavioral assertion.
 //
 // Real fs throughout (a tmp engineer dir via `$AI_CONDUCTOR_ENGINEER_DIR`, a tmp
@@ -57,7 +57,7 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
 // A scriptable fake provider used to prove completion emission never invokes an
 // injected third-party adapter.
 function makeProvider(
-  narrative = '# Retro\n\nWent fine.',
+  narrative = '# Halt\n\nNeeds attention.',
 ): LLMProvider & {
   calls: number;
   interactiveCalls: number;

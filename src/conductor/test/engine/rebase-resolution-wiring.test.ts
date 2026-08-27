@@ -43,13 +43,13 @@ const execFile = promisify(execFileCb);
 /**
  * Seed state with every step BEFORE 'rebase' marked done/skipped so the
  * conductor can start at `fromStep: 'rebase'` without failing gate checks.
- * `retro` is skipped because the daemon always skips it.
+ * Every prerequisite before rebase is complete.
  */
 async function seedPreRebaseState(statePath: string): Promise<void> {
   const state: ConductState = {};
   for (const s of ALL_STEPS) {
     if (s.name === 'rebase') break;
-    (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
+    (state as Record<string, unknown>)[s.name] = 'done';
   }
   (state as Record<string, unknown>).finish = 'done';
   await writeState(statePath, state);

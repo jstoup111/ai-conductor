@@ -799,7 +799,6 @@ describe('prd_audit kickback', () => {
       complexity_tier: 'M',
       track: 'product',
       run_started_at: Date.now() - 1_000,
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     };
@@ -1257,7 +1256,6 @@ describe('prd_audit kickback', () => {
       manual_test: 'skipped',
       prd_audit: 'skipped',
       architecture_review_as_built: 'pending',
-      retro: 'skipped',
       rebase: 'skipped',
       finish: 'done',
     });

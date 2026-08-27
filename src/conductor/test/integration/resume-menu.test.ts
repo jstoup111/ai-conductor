@@ -75,8 +75,8 @@ describe('Integration: resume menu', () => {
       join(wt2, 'conduct-state.json'),
       JSON.stringify({
         feature_desc: 'Auth system',
-        last_step: 'retro',
-        retro: 'in_progress',
+        last_step: 'rebase',
+        rebase: 'in_progress',
         worktree: 'done',
         memory: 'done',
         brainstorm: 'done',

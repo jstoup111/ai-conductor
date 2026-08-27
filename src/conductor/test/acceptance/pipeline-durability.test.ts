@@ -131,7 +131,6 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
       build_review: 'skipped',
       manual_test: 'skipped',
       prd_audit: 'skipped',
-      retro: 'skipped',
       architecture_review_as_built: 'skipped',
       rebase: 'skipped',
     });
@@ -678,7 +677,6 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
       build_review: 'skipped',
       manual_test: 'skipped',
       prd_audit: 'skipped',
-      retro: 'skipped',
       architecture_review_as_built: 'skipped',
       rebase: 'skipped',
     };
@@ -767,7 +765,6 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
       build_review: 'skipped',
       manual_test: 'skipped',
       prd_audit: 'skipped',
-      retro: 'skipped',
       architecture_review_as_built: 'skipped',
       rebase: 'skipped',
     };

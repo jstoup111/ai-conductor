@@ -81,7 +81,6 @@ describe('engine/selector — selectNextGate', () => {
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
-      retro: VSAT,
       rebase: VSAT,
       finish: VSAT,
     };
@@ -98,7 +97,6 @@ describe('engine/selector — selectNextGate', () => {
       manual_test: VSAT,
       prd_audit: { satisfied: false, checkedAt: 2, reason: 'FR-3 MISSING' },
       architecture_review_as_built: VSAT,
-      retro: VSAT,
       rebase: VSAT,
       finish: VSAT,
     };
@@ -106,7 +104,7 @@ describe('engine/selector — selectNextGate', () => {
     expect(d).toMatchObject({ kind: 'run', step: 'prd_audit' });
   });
 
-  it('skips a tier-skipped step (retro on Small) and selects finish', () => {
+  it('selects finish once every surviving SHIP gate is satisfied', () => {
     const state: ConductState = { ...frontDone(), complexity_tier: 'S' };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
@@ -117,7 +115,6 @@ describe('engine/selector — selectNextGate', () => {
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
       rebase: VSAT,
-      // retro has no verdict and is pending, but is skippable for Small
     };
     const d = selectNextGate(input(state, verdicts));
     expect(d).toMatchObject({ kind: 'run', step: 'finish' });
@@ -181,7 +178,6 @@ describe('engine/selector — selectNextGate', () => {
       wiring_check: 'skipped',
       test_suite: 'skipped',
       manual_test: 'skipped',
-      retro: 'skipped',
     };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       prd_audit: VSAT,
@@ -231,7 +227,6 @@ describe('engine/selector — selectNextGate', () => {
       test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
-      retro: VSAT,
       rebase: VSAT,
       // no as-built verdict; pending despite the skipped DECIDE review
     };
@@ -343,7 +338,6 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
-      retro: VSAT,
       rebase: VSAT,
       finish: VSAT,
     };
@@ -351,7 +345,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
     expect(idx).toBe(-1);
   });
 
-  it('skips tier-skippable steps (retro on Small) and returns next unsatisfied', () => {
+  it('returns the next unsatisfied gate after surviving SHIP gates are satisfied', () => {
     const state: ConductState = { ...frontDone(), complexity_tier: 'S' };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
@@ -362,7 +356,6 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
       rebase: VSAT,
-      // retro is pending and tier-skipped; should be skipped
       // finish is pending and unsatisfied, so it should be returned
     };
     const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
@@ -398,7 +391,6 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
       wiring_check: 'skipped',
       test_suite: 'skipped',
       manual_test: 'skipped',
-      retro: 'skipped',
       // prd_audit is pending and unsatisfied
     };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
@@ -454,7 +446,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
 
   it('tier-skipped steps without verdicts are skipped (skipped-tier no-attract parity)', () => {
     // Story 4 negative path (b) — selector parity for skipped-tier no-attract
-    // On tier S, retro is tier-skipped and pending. With no verdict, it reads as satisfied
+    // On tier S, manual_test is tier-skipped and pending. With no verdict, it reads as satisfied
     // (skipped → satisfied). The selector should not include it in unsatisfied scan.
 
     const state: ConductState = { ...frontDone(), complexity_tier: 'S' };
@@ -471,7 +463,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
     };
     const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
 
-    // All gates from regionStart onwards are satisfied or skipped (retro is tier-skipped).
+    // All gates from regionStart onwards are satisfied or skipped (manual_test is tier-skipped).
     // Should return -1 (no unsatisfied gates).
     expect(idx).toBe(-1);
   });

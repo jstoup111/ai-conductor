@@ -513,7 +513,6 @@ describe('as-built SHIP routing', () => {
       manual_test: 'skipped',
       prd_audit: 'skipped',
       architecture_review_as_built: 'pending',
-      retro: 'skipped',
       rebase: 'skipped',
       finish: 'done',
     });
@@ -693,7 +692,6 @@ describe('as-built SHIP routing', () => {
       manual_test: 'pending',
       prd_audit: 'pending',
       architecture_review_as_built: 'pending',
-      retro: 'skipped',
       rebase: 'skipped',
       finish: 'done',
     });
@@ -877,7 +875,6 @@ describe('as-built SHIP routing', () => {
       run_started_at: Date.now() - 1_000,
     };
     for (const [index, step] of ALL_STEPS.entries()) state[step.name] = index < fromIndex ? 'done' : 'pending';
-    state.retro = 'skipped';
     state.rebase = 'done';
     state.finish = 'done';
     await writeState(statePath, state as ConductState);

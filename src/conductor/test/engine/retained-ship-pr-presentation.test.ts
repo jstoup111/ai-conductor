@@ -235,7 +235,7 @@ describe('firstShipConsumer (registry-derived)', () => {
 
   it('resolves a config-declared custom SHIP step ahead of finish', () => {
     const config = {
-      steps: { 'release-disposition': customStep('release-disposition', 'retro') },
+      steps: { 'release-disposition': customStep('release-disposition', 'rebase') },
     } as unknown as HarnessConfig;
     const steps = buildStepRegistry(config);
 
@@ -251,7 +251,7 @@ describe('firstShipConsumer (registry-derived)', () => {
   it('a hypothetical ADDITIONAL custom SHIP step before finish is covered too', () => {
     const config = {
       steps: {
-        'release-disposition': customStep('release-disposition', 'retro'),
+        'release-disposition': customStep('release-disposition', 'rebase'),
         'compliance-attest': customStep('compliance-attest', 'release-disposition'),
       },
     } as unknown as HarnessConfig;

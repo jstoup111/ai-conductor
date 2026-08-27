@@ -101,7 +101,6 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
           build_review: 'skipped',
           manual_test: 'skipped',
           prd_audit: 'skipped',
-          retro: 'skipped',
           architecture_review_as_built: 'skipped',
           rebase: 'skipped',
           pr_url: PR_URL,
@@ -313,7 +312,6 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
       state.build_review = 'skipped';
-      state.retro = 'skipped';
       state.rebase = 'skipped';
       state.finish = 'skipped';
       state.pr_url = PR_URL;
@@ -750,7 +748,6 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
       state.build_review = 'skipped';
-      state.retro = 'skipped';
       state.rebase = 'skipped';
       state.finish = 'skipped';
       state.pr_url = PR_URL;
@@ -839,7 +836,6 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       kickbackState.complexity_tier = 'L';
       kickbackState.feature_desc = 'feat';
       kickbackState.build_review = 'skipped';
-      kickbackState.retro = 'skipped';
       kickbackState.rebase = 'skipped';
       kickbackState.finish = 'skipped';
       kickbackState.pr_url = PR_URL;
@@ -916,7 +912,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       for (const s of ALL_STEPS) {
         if (s.name === 'rebase') break;
         (rebaseState as Record<string, unknown>)[s.name] =
-          s.name === 'retro' ? 'skipped' : 'done';
+          'done';
       }
       // Phase 2 measures only the rebase-entry guard. Give the following
       // finish fence its established valid skips so it cannot start unrelated

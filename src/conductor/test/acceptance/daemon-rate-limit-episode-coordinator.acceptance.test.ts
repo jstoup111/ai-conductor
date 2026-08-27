@@ -175,7 +175,6 @@ describe('acceptance: the exact observed session-limit message routes to a coord
     manual_test: 'done',
     prd_audit: 'done',
     architecture_review_as_built: 'done',
-    retro: 'done',
     rebase: 'done',
     finish: 'done',
   } as ConductState;

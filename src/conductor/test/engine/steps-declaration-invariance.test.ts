@@ -21,7 +21,6 @@ const expectedPolicies: Record<ComplexityTier, {
       'coherence_check',
       'acceptance_specs',
       'manual_test',
-      'retro',
     ],
     enabledGateSteps: ['prd', 'stories', 'plan', 'wiring_check', 'test_suite', 'build_review', 'prd_audit', 'architecture_review_as_built', 'finish'],
   },

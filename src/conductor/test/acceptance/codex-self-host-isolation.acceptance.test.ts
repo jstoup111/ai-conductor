@@ -69,7 +69,6 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       manual_test: 'done',
       prd_audit: 'done',
       architecture_review_as_built: 'done',
-      retro: 'skipped',
       rebase: 'done',
       finish: 'done',
     } as ConductState);
@@ -180,7 +179,6 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
-        retro: 'skipped',
         rebase: 'done',
         finish: 'done',
       } as ConductState);

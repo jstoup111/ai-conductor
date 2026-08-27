@@ -2566,7 +2566,6 @@ describe('engine/conductor', () => {
       }
       seed.prd_audit = 'pending';
       seed.architecture_review_as_built = 'skipped';
-      seed.retro = 'skipped';
       seed.rebase = 'skipped';
       seed.finish = 'done';
       await writeState(statePath, seed as ConductState);
@@ -2836,7 +2835,6 @@ describe('engine/conductor', () => {
           state[candidate.name] = 'done';
         }
         state[step] = 'pending';
-        state.retro = 'skipped';
         state.rebase = 'skipped';
         state.finish = 'done';
         await writeState(statePath, state as ConductState);
@@ -2893,7 +2891,6 @@ describe('engine/conductor', () => {
           state[candidate.name] = 'done';
         }
         state[step] = 'pending';
-        state.retro = 'skipped';
         state.rebase = 'skipped';
         state.finish = 'done';
         await writeState(statePath, state as ConductState);
@@ -2949,7 +2946,6 @@ describe('engine/conductor', () => {
       }
       state.prd_audit = 'pending';
       state.architecture_review_as_built = 'skipped';
-      state.retro = 'skipped';
       state.rebase = 'skipped';
       state.finish = 'done';
       await writeState(statePath, state as ConductState);
@@ -2995,7 +2991,6 @@ describe('engine/conductor', () => {
       }
       state.prd_audit = 'pending';
       state.architecture_review_as_built = 'skipped';
-      state.retro = 'skipped';
       state.rebase = 'skipped';
       state.finish = 'done';
       await writeState(statePath, state as ConductState);
@@ -3069,7 +3064,6 @@ describe('engine/conductor', () => {
       }
       state.prd_audit = 'pending';
       state.architecture_review_as_built = 'skipped';
-      state.retro = 'skipped';
       state.rebase = 'skipped';
       state.finish = 'done';
       await writeState(statePath, state as ConductState);
@@ -3139,7 +3133,6 @@ describe('engine/conductor', () => {
       }
       state.prd_audit = 'pending';
       state.architecture_review_as_built = 'skipped';
-      state.retro = 'skipped';
       state.rebase = 'skipped';
       state.finish = 'done';
       await writeState(statePath, state as ConductState);
@@ -3444,7 +3437,7 @@ describe('engine/conductor', () => {
 
       // Write SATISFIED verdicts for all gates
       for (const gateName of ['build', 'build_review', 'manual_test', 'prd_audit',
-        'architecture_review_as_built', 'retro', 'rebase'] as StepName[]) {
+        'architecture_review_as_built', 'rebase'] as StepName[]) {
         await writeVerdict(dir, gateName, { satisfied: true, checkedAt: 1 });
       }
 
@@ -5605,7 +5598,6 @@ describe('engine/conductor', () => {
           build_review: 'skipped',
           manual_test: 'skipped',
           prd_audit: 'skipped',
-          retro: 'skipped',
           architecture_review_as_built: 'skipped',
           rebase: 'skipped',
         },
@@ -6747,7 +6739,7 @@ describe('engine/conductor', () => {
 
   it('clamp does not attract back to tier-skipped steps without verdicts (Story 4, skipped-tier no-attract)', async () => {
     // Story 4 negative path (b): skipped-tier no-attract
-    // On tier S, retro and architecture_review_as_built are tier-skipped. With no verdict files,
+    // On tier S, manual_test is tier-skipped. With no verdict files,
     // they read as satisfied (skipped → satisfied via isSkipped logic). The clamp should not
     // pull back to them.
 
@@ -6784,7 +6776,7 @@ describe('engine/conductor', () => {
     await conductor.run();
 
     // First step is prd_audit (first unsatisfied gate).
-    // The clamp should not be pulled back by tier-skipped steps (retro, architecture_review_as_built)
+    // The clamp should not be pulled back by tier-skipped steps (manual_test)
     // because they read as satisfied (skipped status via isSkipped logic).
     expect(stepsRun[0]).toBe('prd_audit');
   });
@@ -6912,7 +6904,6 @@ describe('engine/conductor', () => {
       expect(result.value['architecture_diagram']).toBe('skipped');
       expect(result.value['architecture_review']).toBe('skipped');
       expect(result.value['acceptance_specs']).toBe('skipped');
-      expect(result.value['retro']).toBe('skipped');
       // Non-skippable steps should be 'done'
       expect(result.value['worktree']).toBe('done');
       expect(result.value['build']).toBe('done');
@@ -6933,7 +6924,7 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    expect(tierSkipEvents.length).toBe(7);
+    expect(tierSkipEvents.length).toBe(6);
     expect(tierSkipEvents.map((e) => e.step)).toContain('conflict_check');
     expect(tierSkipEvents.map((e) => e.step)).toContain('coherence_check');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_diagram');
@@ -6941,7 +6932,6 @@ describe('engine/conductor', () => {
     expect(tierSkipEvents.map((e) => e.step)).toContain('acceptance_specs');
     expect(tierSkipEvents.map((e) => e.step)).toContain('manual_test');
     expect(tierSkipEvents.map((e) => e.step)).not.toContain('architecture_review_as_built');
-    expect(tierSkipEvents.map((e) => e.step)).toContain('retro');
     // All events should have tier 'S'
     expect(tierSkipEvents.every((e) => e.tier === 'S')).toBe(true);
   });
@@ -7528,7 +7518,6 @@ describe('engine/conductor', () => {
       build_review: 'done',
       wiring_check: 'done',
       test_suite: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState;
@@ -7881,7 +7870,6 @@ describe('engine/conductor', () => {
       build_review: 'done',
       wiring_check: 'done',
       test_suite: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState;
@@ -8024,7 +8012,6 @@ describe('engine/conductor', () => {
       build_review: 'done',
       wiring_check: 'done',
       test_suite: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState;
@@ -8167,7 +8154,6 @@ describe('engine/conductor', () => {
       build_review: 'skipped',
       wiring_check: 'skipped',
       test_suite: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState;
@@ -8325,7 +8311,6 @@ describe('engine/conductor', () => {
       build_review: 'skipped',
       wiring_check: 'skipped',
       test_suite: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState;
@@ -8534,7 +8519,6 @@ describe('engine/conductor', () => {
       build_review: 'skipped',
       wiring_check: 'skipped',
       test_suite: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState;
@@ -8683,7 +8667,6 @@ describe('engine/conductor', () => {
       build_review: 'skipped',
       wiring_check: 'skipped',
       test_suite: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState;
@@ -8903,7 +8886,6 @@ describe('engine/conductor', () => {
       build_review: 'skipped',
       wiring_check: 'skipped',
       test_suite: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState;
@@ -9090,7 +9072,6 @@ describe('engine/conductor', () => {
       build_review: 'done',
       wiring_check: 'done',
       test_suite: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState;
@@ -9215,7 +9196,6 @@ describe('engine/conductor', () => {
         manual_test: 'pending',
         prd_audit: 'pending',
         architecture_review_as_built: 'pending',
-        retro: 'pending',
         rebase: 'pending',
         finish: 'pending',
         remediate: 'pending',
@@ -9572,7 +9552,6 @@ describe('engine/conductor', () => {
     // After 'continue' at build checkpoint, conductor should proceed to manual_test and beyond
     expect(stepsRun).toContain('build');
     expect(stepsRun).toContain('manual_test');
-    expect(stepsRun).toContain('retro');
     expect(stepsRun).toContain('finish');
   });
 
@@ -10562,7 +10541,7 @@ describe('engine/conductor', () => {
       expect(onNavigate).toHaveBeenCalled();
       // No navigation_back events
       expect(navEvents).toHaveLength(0);
-      // Conductor should have continued forward (build, manual_test, retro, finish)
+      // Conductor should have continued forward (build, manual_test, rebase, finish)
       expect(stepsRun).toContain('build');
       expect(stepsRun).toContain('manual_test');
       expect(stepsRun).toContain('finish');
@@ -10651,7 +10630,6 @@ describe('engine/conductor', () => {
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
-        retro: 'done',
         rebase: 'done',
         finish: 'done',
       };
@@ -13324,9 +13302,12 @@ describe('engine/conductor', () => {
         await writeFile(join(dir, '.docs/decisions/technical-assessment-2026-04-16.md'), 'a');
       });
       await mkdir(join(dir, '.docs/specs'), { recursive: true });
-      await writeFile(join(dir, '.docs/specs/p.md'), 'x');
+      await writeFile(join(dir, '.docs/specs/p.md'), '# Requirements\n\n### FR-1: Fixture requirement\n');
       await mkdir(join(dir, '.docs/stories'), { recursive: true });
-      await writeFile(join(dir, '.docs/stories/p.md'), 'x');
+      await writeFile(
+        join(dir, '.docs/stories/p.md'),
+        '## Story 1: fixture\n\n**Requirements:** FR-1\n\n### Happy Path\n- Given a fixture, when it runs, then it passes.\n',
+      );
       await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
       await writeFile(join(dir, '.docs/conflicts/p.md'), 'x');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
@@ -13338,8 +13319,6 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.docs/decisions/adr-001.md'), 'x');
       await mkdir(join(dir, 'spec/acceptance'), { recursive: true });
       await writeFile(join(dir, 'spec/acceptance/s.rb'), 'x');
-      await mkdir(join(dir, '.docs/retros'), { recursive: true });
-      await writeFile(join(dir, '.docs/retros/r.md'), 'x');
 
       // Write a task-status.json with an INCOMPLETE task
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -13406,17 +13385,19 @@ describe('engine/conductor', () => {
     it('passes a step whose declared artifacts exist on disk', async () => {
       // Pre-create artifacts whose creation isn't part of the runner's
       // simulated work (UNDERSTAND/DECIDE/BUILD steps that the conductor
-      // expects to find pre-existing). For SHIP-phase steps (manual_test,
-      // retro, finish), have the runner mock create the artifact when the
+      // expects to find pre-existing). For SHIP-phase steps (manual_test and
+      // finish), have the runner mock create the artifact when the
       // step runs — this mirrors real behavior (skill writes its proof
       // mid-step) and ensures the file's mtime is naturally fresh relative
       // to session_started_at.
       const { mkdir: _mkdir, writeFile: _wf } = await import('fs/promises');
-      const RETRO_SLUG = 'add-foo';
       const preFixtures: Array<[string, string]> = [
         ['.docs/decisions/technical-assessment-2026-04-16.md', 'test'],
         ['.docs/specs/2026-04-16-plan.md', 'test'],
-        ['.docs/stories/2026-04-16-plan.md', 'test'],
+        [
+          '.docs/stories/2026-04-16-plan.md',
+          '## Story 1: fixture\n\n**Requirements:** FR-1\n\n### Happy Path\n- Given a fixture, when it runs, then it passes.\n',
+        ],
         ['.docs/conflicts/2026-04-16-plan.md', 'test'],
         // Empty-is-done is removed (ADR): the build gate parses the plan and
         // requires every plan task resolved, so the fixture plan declares one
@@ -13447,7 +13428,6 @@ describe('engine/conductor', () => {
         await _wf(full, content);
       }
 
-      // Seed feature_desc so the retro predicate slug-matches on filename.
       const seedRes = await readState(statePath);
       const seed = seedRes.ok ? seedRes.value : {};
       seed.feature_desc = 'add foo';
@@ -13480,19 +13460,13 @@ describe('engine/conductor', () => {
             await _mkdir(join(dir, '.pipeline'), { recursive: true });
             await _wf(
               join(dir, '.pipeline/prd-audit.md'),
-              '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|--|--|--|\n| FR-1 | ALIGNED | | foo.ts:1 | yes |\n',
+              '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | PASS | — | FR-1 | foo.ts:1 |\n',
             );
           } else if (step === 'architecture_review_as_built') {
             await _mkdir(join(dir, '.docs/decisions'), { recursive: true });
             await _wf(
               join(dir, '.pipeline/architecture-review-as-built.md'),
               '# As-Built Review\n\nVerdict: APPROVED\n',
-            );
-          } else if (step === 'retro') {
-            await _mkdir(join(dir, '.docs/retros'), { recursive: true });
-            await _wf(
-              join(dir, `.docs/retros/2026-05-01-${RETRO_SLUG}.md`),
-              '# Retro\n',
             );
           } else if (step === 'finish') {
             await _mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -13510,9 +13484,9 @@ describe('engine/conductor', () => {
         config: { build_review: { rubrics: { testQuality: { enabled: true } } } },
       });
 
-      const failedEvents: Array<{ step: string }> = [];
+      const failedEvents: Array<{ step: string; error: string }> = [];
       events.on('step_failed', (e) => {
-        if (e.type === 'step_failed') failedEvents.push({ step: e.step });
+        if (e.type === 'step_failed') failedEvents.push({ step: e.step, error: e.error });
       });
 
       await conductor.run();
@@ -16918,7 +16892,7 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
   it('reports undefined group for ordinary serial steps', () => {
     expect(getGroupForStep('build')).toBeUndefined();
     expect(getGroupForStep('build_review')).toBeUndefined();
-    expect(getGroupForStep('retro')).toBeUndefined();
+    expect(getGroupForStep('rebase')).toBeUndefined();
   });
 
   it('leaves each member with its own full StepDefinition (skill/gate config unchanged)', () => {
@@ -16946,7 +16920,7 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
 
     // Ordinary serial steps are completely unaffected.
     expect(tryGetStepIndex('build')).not.toBeNull();
-    expect(tryGetStepIndex('retro')).not.toBeNull();
+    expect(tryGetStepIndex('rebase')).not.toBeNull();
     expect(tryGetStepIndex('remediate')).toBeNull();
   });
 

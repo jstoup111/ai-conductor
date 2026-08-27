@@ -121,7 +121,7 @@ describe('engine/cost-rollup', () => {
       }),
       JSON.stringify({
         type: 'provider_attempt',
-        step: 'retro',
+        step: 'rebase',
         provider: 'claude',
         outcome: 'success',
         invoked: true,

@@ -132,7 +132,6 @@ describe('SHIP-tail publication fence (#922)', () => {
         manual_test: 'done',
         prd_audit: 'failed',
         architecture_review_as_built: 'stale',
-        retro: 'skipped',
         rebase: 'done',
       } as ConductState);
 
@@ -170,7 +169,6 @@ describe('SHIP-tail publication fence (#922)', () => {
         manual_test: 'stale',
         prd_audit: 'failed',
         architecture_review_as_built: 'stale',
-        retro: 'skipped',
         rebase: 'done',
       } as ConductState);
 
@@ -249,7 +247,6 @@ describe('SHIP-tail publication fence (#922)', () => {
         manual_test: 'skipped',
         prd_audit: 'failed',
         architecture_review_as_built: 'stale',
-        retro: 'skipped',
         rebase: 'done',
       } as ConductState);
 

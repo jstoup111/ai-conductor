@@ -42,7 +42,7 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
       'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
       'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
       'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
-      'architecture_review_as_built', 'retro', 'rebase',
+      'architecture_review_as_built', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
     await writeState(stateFilePath, state as ConductState);
     const asBuiltReport = join(pipelineDir, 'architecture-review-as-built.md');

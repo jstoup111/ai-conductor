@@ -254,7 +254,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       seed.finish = 'in_progress';
       await writeState(statePath, seed as ConductState);
       for (const name of ['build', 'build_review', 'manual_test', 'prd_audit',
-        'architecture_review_as_built', 'retro', 'rebase'] as StepName[]) {
+        'architecture_review_as_built', 'rebase'] as StepName[]) {
         await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
       }
 
@@ -431,7 +431,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       const seed = seedDoneThrough('finish');
       await writeState(statePath, seed as ConductState);
       for (const name of ['build', 'build_review', 'manual_test', 'prd_audit',
-        'architecture_review_as_built', 'retro', 'rebase'] as StepName[]) {
+        'architecture_review_as_built', 'rebase'] as StepName[]) {
         await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
       }
 

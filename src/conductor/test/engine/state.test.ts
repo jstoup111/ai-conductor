@@ -484,14 +484,13 @@ describe('engine/state', () => {
       acceptance_specs: 'done',
       build: 'done',
       manual_test: 'done',
-      retro: 'done',
       finish: 'done',
     };
 
     const stepNames = [
       'worktree', 'memory', 'explore', 'complexity', 'stories',
       'conflict_check', 'plan', 'architecture_diagram', 'architecture_review',
-      'acceptance_specs', 'build', 'manual_test', 'retro', 'finish',
+      'acceptance_specs', 'build', 'manual_test', 'finish',
     ] as const;
 
     it('marks all done steps after target as stale', () => {
@@ -509,7 +508,6 @@ describe('engine/state', () => {
       expect(result.acceptance_specs).toBe('stale');
       expect(result.build).toBe('stale');
       expect(result.manual_test).toBe('stale');
-      expect(result.retro).toBe('stale');
       expect(result.finish).toBe('stale');
     });
 

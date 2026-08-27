@@ -214,7 +214,6 @@ describe('test_suite native gate loop', () => {
       manual_test: 'pending',
       prd_audit: 'pending',
       architecture_review_as_built: 'pending',
-      retro: 'done',
     });
     const observed: unknown[] = [];
     const events = new ConductorEventEmitter();
@@ -300,7 +299,6 @@ describe('test_suite native gate loop', () => {
         manual_test: 'pending',
         prd_audit: 'pending',
         architecture_review_as_built: 'pending',
-        retro: 'done',
       });
       const timeline: string[] = [];
       const buildRetryReasons: Array<string | undefined> = [];
@@ -363,7 +361,7 @@ describe('test_suite native gate loop', () => {
         haltMarker,
         haltClass,
         finalGateState: finalState.test_suite,
-        restagedDownstreamState: finalState.retro,
+        restagedDownstreamState: finalState.rebase,
       }).toEqual({
         ensureCalls: 3,
         relevantTimeline: ['test_suite', 'build', 'test_suite', 'build', 'test_suite'],

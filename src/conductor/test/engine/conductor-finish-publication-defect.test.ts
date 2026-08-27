@@ -96,7 +96,6 @@ describe('conductor/finish publication defect', () => {
       build_review: 'skipped',
       manual_test: 'skipped',
       prd_audit: 'skipped',
-      retro: 'skipped',
       architecture_review_as_built: 'skipped',
       rebase: 'skipped',
       pr_url: PR_URL,

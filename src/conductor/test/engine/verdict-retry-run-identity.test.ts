@@ -55,7 +55,6 @@ describe('verdict retry-input identity reader', () => {
     }
     seed.prd_audit = 'pending';
     seed.architecture_review_as_built = 'skipped';
-    seed.retro = 'skipped';
     seed.rebase = 'skipped';
     seed.finish = 'done';
     await writeState(statePath, seed as ConductState);
@@ -103,7 +102,6 @@ describe('verdict retry-input identity reader', () => {
     }
     seed.prd_audit = 'pending';
     seed.architecture_review_as_built = 'skipped';
-    seed.retro = 'skipped';
     seed.rebase = 'skipped';
     seed.finish = 'done';
     await writeState(statePath, seed as ConductState);
@@ -175,7 +173,6 @@ describe('verdict retry-input identity reader', () => {
     }
     seed.prd_audit = 'pending';
     seed.architecture_review_as_built = 'skipped';
-    seed.retro = 'skipped';
     seed.rebase = 'skipped';
     seed.finish = 'done';
     await writeState(statePath, seed as ConductState);

@@ -74,7 +74,6 @@ function preBuildDoneState(): ConductState {
     manual_test: 'done',
     prd_audit: 'done',
     architecture_review_as_built: 'done',
-    retro: 'done',
     rebase: 'done',
     complexity_tier: 'S',
     track: 'technical', // no PRD/prd_audit — keeps the SHIP tail minimal

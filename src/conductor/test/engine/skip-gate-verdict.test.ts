@@ -25,16 +25,16 @@ import {
 } from '../../src/engine/gate-verdicts.js';
 
 /**
- * Regression: `retro` is a verdict-bearing loop gate (steps.ts `loopGate: true`)
- * that is skipped for tier S and on every daemon run. Every skip path resolved
+ * Regression: a verdict-bearing loop gate skipped for tier S must persist a
+ * verdict. Every skip path resolved
  * the step with `saveStepStatus(..., 'skipped')` + `continue`, and the ONLY
  * place a run-step's verdict is persisted is `advanceTail`, which is reached
  * exclusively on the success tail. So the gate ended the run resolved with NO
- * `.pipeline/gates/retro.json` at all, and `gateSatisfied` (selector.ts) then
+ * `.pipeline/gates/<step>.json` at all, and `gateSatisfied` (selector.ts) then
  * fell back to the step-state flag — the self-report the verdict layer exists
  * to distrust. Observed in production: worktree
  * `.worktrees/parked-feature-reconciliation-1060` shipped `done` with nine gate
- * verdicts on disk and no `retro.json`.
+ * verdicts on disk for every skipped gate.
  */
 describe('skip paths leave an honest gate verdict', () => {
   let dir: string;
@@ -52,13 +52,13 @@ describe('skip paths leave an honest gate verdict', () => {
   });
 
   it('recordSkipVerdict persists a satisfied verdict whose reason names the skip', async () => {
-    const verdict = await recordSkipVerdict(dir, 'retro', 'complexity tier S');
+    const verdict = await recordSkipVerdict(dir, 'manual_test', 'complexity tier S');
 
     expect(verdict.satisfied).toBe(true);
     expect(verdict.reason).toBe(`${SKIP_VERDICT_PREFIX}complexity tier S`);
     expect(isSkipVerdict(verdict)).toBe(true);
 
-    const onDisk = await readVerdict(dir, 'retro');
+    const onDisk = await readVerdict(dir, 'manual_test');
     expect(onDisk?.satisfied).toBe(true);
     expect(onDisk?.reason).toBe(`${SKIP_VERDICT_PREFIX}complexity tier S`);
     expect(onDisk?.checkedAt).toBeTypeOf('number');
@@ -72,8 +72,8 @@ describe('skip paths leave an honest gate verdict', () => {
     expect(isSkipVerdict(null)).toBe(false);
   });
 
-  it('a tier-S run records the retro skip as a verdict instead of leaving the gate blank', async () => {
-    // Bounded fixture: tier S skips retro before any dispatch; the mocked
+  it('a tier-S run records the manual-test skip as a verdict instead of leaving the gate blank', async () => {
+    // Bounded fixture: tier S skips manual_test before any dispatch; the mocked
     // runner succeeds for everything else and the run ends at `finish`.
     await writeState(statePath, { complexity_tier: 'S' } as ConductState);
     const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
@@ -86,11 +86,11 @@ describe('skip paths leave an honest gate verdict', () => {
 
     await conductor.run();
 
-    const retro = await readVerdict(dir, 'retro');
-    expect(retro).not.toBeNull();
-    expect(retro?.satisfied).toBe(true);
-    expect(isSkipVerdict(retro)).toBe(true);
-    expect(retro?.reason).toContain('complexity tier S');
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest).not.toBeNull();
+    expect(manualTest?.satisfied).toBe(true);
+    expect(isSkipVerdict(manualTest)).toBe(true);
+    expect(manualTest?.reason).toContain('complexity tier S');
   });
 
   it('only verdict-bearing steps get a skip verdict — a plain step writes no gate file', async () => {
@@ -114,48 +114,21 @@ describe('skip paths leave an honest gate verdict', () => {
       }
     ).recordStepSkip.bind(conductor);
 
-    const retro = ALL_STEPS.find((s) => s.name === 'retro')!;
+    const manualTest = ALL_STEPS.find((s) => s.name === 'manual_test')!;
     const explore = ALL_STEPS.find((s) => s.name === 'explore')!;
-    expect(retro.loopGate).toBe(true);
+    expect(manualTest.loopGate).toBe(true);
     expect(explore.loopGate).toBeUndefined();
     expect(explore.kickbackTarget).toBeUndefined();
 
     const state = {} as ConductState;
-    await recordStepSkip(state, retro, 'daemon mode — narrative emitted to the engineer store');
+    await recordStepSkip(state, manualTest, 'complexity tier S');
     await recordStepSkip(state, explore, 'complexity tier S');
 
-    expect(isSkipVerdict(await readVerdict(dir, 'retro'))).toBe(true);
-    expect((await readVerdict(dir, 'retro'))?.reason).toContain('daemon mode');
+    expect(isSkipVerdict(await readVerdict(dir, 'manual_test'))).toBe(true);
+    expect((await readVerdict(dir, 'manual_test'))?.reason).toContain('complexity tier S');
     expect(await readVerdict(dir, 'explore')).toBeNull();
-    expect(state.retro).toBe('skipped');
+    expect(state.manual_test).toBe('skipped');
     expect(state.explore).toBe('skipped');
   });
 
-  it('an advisory retro that fails its completion check records the failure, not a silent pass', async () => {
-    // `retro` is advisory: auto mode auto-skips it so it cannot block the run.
-    // Advisory must mean "does not block", never "reports done having produced
-    // nothing" — the skip has to carry the failure reason into the record.
-    await writeState(statePath, { complexity_tier: 'M' } as ConductState);
-    const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) =>
-        step === 'retro'
-          ? { success: false, output: 'retro skill produced no report' }
-          : { success: true },
-      ),
-    };
-    const conductor = new Conductor({
-      projectRoot: dir,
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-      mode: 'auto',
-    });
-
-    await conductor.run();
-
-    const retro = await readVerdict(dir, 'retro');
-    expect(retro).not.toBeNull();
-    expect(isSkipVerdict(retro)).toBe(true);
-    expect(retro?.reason).toContain('advisory step failed');
-  });
 });
