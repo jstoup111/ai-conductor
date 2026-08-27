@@ -99,7 +99,13 @@ import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { UISubscriber } from "./ui/types.js";
-import type { VisualizerPlugin, VisualizerStartContext } from './types/plugin.js';
+import type {
+  VisualizerFactory,
+  VisualizerFactoryContext,
+  VisualizerPlugin,
+  VisualizerStartContext,
+} from './types/plugin.js';
+import type { HarnessConfig } from './types/config.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
 import { detectIntakeLoopCommand, dispatchIntakeLoop } from './intake-loop-cli.js';
@@ -205,6 +211,28 @@ export function buildVisualizers(
     vis.start(emitter, context);
   }
   return visualizers;
+}
+
+/**
+ * Build the visualizers for one run from the configured registry entries and
+ * the built-in OTel factory. OTel is attempted independently of
+ * `visualizers`; its factory owns the `otel:` configuration gate.
+ */
+export function selectVisualizers(
+  registry: PluginRegistry,
+  config: HarnessConfig,
+  context: VisualizerFactoryContext,
+): VisualizerPlugin[] {
+  const selected: VisualizerPlugin[] = [];
+  const names = [...(config.visualizers ?? []), 'otel'];
+
+  for (const name of names) {
+    const factory = registry.tryGet<VisualizerFactory>('visualizer', name);
+    const visualizer = factory?.(context);
+    if (visualizer) selected.push(visualizer);
+  }
+
+  return selected;
 }
 
 /**
@@ -1277,24 +1305,24 @@ async function main(): Promise<void> {
   const auditWriter = new AuditTrailWriter(projectRoot);
   auditWriter.subscribe(events);
 
-  // Wire visualizer plugins (FR-1 gate: OTel visualizer only when enabled).
-  const visualizerList: VisualizerPlugin[] = [];
-  const otelResolved = resolveOtelConfig(config ?? {}, pipelineDir);
-  if (otelResolved.enabled) {
-    const otelVis = createOtelVisualizer(
-      otelResolved,
-      {
-        pipelineDir,
-        feature: opts.featureDesc ?? 'unknown',
-        project: projectRoot,
-      },
-      events,
-    );
-    if (otelVis) {
-      visualizerList.push(otelVis);
-    }
-  }
-  buildVisualizers(visualizerList, events);
+  // Build configured visualizers plus OTel, whose built-in factory retains
+  // ownership of its `otel:` configuration gate.
+  const visualizerContext: VisualizerFactoryContext = {
+    config: config ?? {},
+    pipelineDir,
+    emitter: events,
+    startContext: {
+      runId: sessionId,
+      project: projectRoot,
+      feature: opts.featureDesc,
+      pipelineDir,
+    },
+  };
+  const visualizerList = buildVisualizers(
+    selectVisualizers(registry, visualizerContext.config, visualizerContext),
+    events,
+    visualizerContext.startContext,
+  );
 
   const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
