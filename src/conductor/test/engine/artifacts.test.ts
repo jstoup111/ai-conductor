@@ -422,8 +422,13 @@ describe('engine/artifacts', () => {
 
       expect(parsed.ok).toBe(true);
       if (parsed.ok) {
-        const normalizedKeys = parsed.value.findings.map(({ criterion }) => criterion.toUpperCase());
-        expect(new Set(normalizedKeys).size).toBe(normalizedKeys.length);
+        expect(parsed.value.findings).toEqual([
+          expect.objectContaining({ criterion: 'S1.2', grade: 'PASS' }),
+        ]);
+        expect(parsed.value.rejectedRows).toEqual([
+          expect.objectContaining({ key: 'S1.1', reason: expect.stringContaining('duplicate') }),
+          expect.objectContaining({ key: 'S1.1', reason: expect.stringContaining('duplicate') }),
+        ]);
       }
     });
 
