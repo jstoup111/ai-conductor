@@ -11149,6 +11149,23 @@ export class Conductor {
       status: 'CURRENT',
       evidence: verification.evidence,
     };
+    if (verification.status === 'REUSED') {
+      await this.events.emit({
+        type: 'build_member_evidence_reused',
+        member: 'test_suite',
+        decision: 'reuse',
+        basis: 'fingerprint-match',
+      });
+    } else {
+      await this.events.emit({
+        type: 'build_member_evidence_recomputed',
+        member: 'test_suite',
+        decision: 'recompute',
+        basis: verification.freshness.reason === 'fingerprint_mismatch'
+          ? 'fingerprint-mismatch'
+          : 'fresh-evidence-required',
+      });
+    }
     return {
       success: true,
       output: `Full test suite ${verification.status}`,

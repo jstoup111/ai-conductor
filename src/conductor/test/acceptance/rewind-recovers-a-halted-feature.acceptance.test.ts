@@ -149,7 +149,11 @@ describe('conduct-ts rewind recovery', () => {
         inspect,
         ensure: async () => {
           dispatched.push('test_suite');
-          return { status: 'EXECUTED', evidence: {} as never } as never;
+          return {
+            status: 'EXECUTED',
+            freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
+            evidence: {} as never,
+          } as never;
         },
       },
     });

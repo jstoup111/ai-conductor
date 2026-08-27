@@ -22,6 +22,91 @@ const FIXTURES = join(
   'rebase-invalidated-test-suite-proof-halts-build-review',
 );
 
+describe('Conductor test-suite member evidence events', () => {
+  async function runTestSuiteStep(
+    verification: Awaited<ReturnType<FullSuiteVerifier['ensure']>>,
+  ) {
+    const events = new ConductorEventEmitter();
+    const emitted: unknown[] = [];
+    events.on('build_member_evidence_reused', (event) => { emitted.push(event); });
+    events.on('build_member_evidence_recomputed', (event) => { emitted.push(event); });
+    const conductor = new Conductor({
+      projectRoot: '/test-suite-member-evidence-events',
+      stateFilePath: '/test-suite-member-evidence-events/conduct-state.json',
+      stepRunner: { run: async () => ({ success: true }) },
+      events,
+      fullSuiteVerifier: {
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        ensure: async () => verification,
+      },
+    });
+
+    const result = await (conductor as unknown as {
+      runTestSuiteStep: () => Promise<unknown>;
+    }).runTestSuiteStep();
+
+    return { emitted, result };
+  }
+
+  it.each([
+    {
+      verification: { status: 'REUSED', evidence: {} as never },
+      event: {
+        type: 'build_member_evidence_reused',
+        member: 'test_suite',
+        decision: 'reuse',
+        basis: 'fingerprint-match',
+      },
+    },
+    {
+      verification: {
+        status: 'EXECUTED',
+        freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
+        evidence: {} as never,
+      },
+      event: {
+        type: 'build_member_evidence_recomputed',
+        member: 'test_suite',
+        decision: 'recompute',
+        basis: 'fingerprint-mismatch',
+      },
+    },
+    {
+      verification: {
+        status: 'EXECUTED',
+        freshness: { status: 'STALE', reason: 'source_changed' },
+        evidence: {} as never,
+      },
+      event: {
+        type: 'build_member_evidence_recomputed',
+        member: 'test_suite',
+        decision: 'recompute',
+        basis: 'fresh-evidence-required',
+      },
+    },
+  ] as const)('emits the settled BUILD-member outcome for $verification.status evidence', async ({ verification, event }) => {
+    const { emitted } = await runTestSuiteStep(verification);
+
+    expect(emitted).toEqual([event]);
+  });
+
+  it.each([
+    {
+      status: 'FAILED',
+      reason: 'execution_failed',
+      message: 'suite failed',
+    },
+    {
+      status: 'UNEXPECTED',
+      message: 'suite returned an invalid status',
+    },
+  ] as const)('does not emit a settled BUILD-member outcome for $status evidence', async (verification) => {
+    const { emitted } = await runTestSuiteStep(verification as never);
+
+    expect(emitted).toEqual([]);
+  });
+});
+
 describe('conductor gate loop: stale test-suite proof after rebase', () => {
   let projectRoot: string;
 
@@ -149,7 +234,11 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
         ensure: async () => {
           observed.push('test_suite');
           current = true;
-          return { status: 'EXECUTED', evidence: {} as never } as never;
+          return {
+            status: 'EXECUTED',
+            freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
+            evidence: {} as never,
+          } as never;
         },
       },
     });
@@ -184,7 +273,11 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
         ensure: async () => {
           observed.push('test_suite');
           current = true;
-          return { status: 'EXECUTED', evidence: {} as never } as never;
+          return {
+            status: 'EXECUTED',
+            freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
+            evidence: {} as never,
+          } as never;
         },
       },
     });
