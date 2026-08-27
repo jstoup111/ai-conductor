@@ -1,9 +1,15 @@
 // Covers: task:5, task:6, task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execa } from 'execa';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { selectVisualizers, buildVisualizers } from '../../src/index.js';
+import {
+  buildVisualizers,
+  createVisualizerStartContext,
+  resolveCurrentBranch,
+  selectVisualizers,
+} from '../../src/index.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { registerBuiltins } from '../../src/engine/plugin-loader.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -69,6 +75,46 @@ function createFactoryContext(
 describe('visualizer selection', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('builds production connector identity without fabricating unavailable fields', () => {
+    expect(createVisualizerStartContext({
+      runId: 'run-1516',
+      project: '/project',
+      feature: 'connector-seam-for-event-submissions-is-registered',
+      branch: undefined,
+      engineVersion: 'dev',
+      pipelineDir: '/tmp/visualizer-selection',
+    })).toEqual({
+      runId: 'run-1516',
+      project: '/project',
+      feature: 'connector-seam-for-event-submissions-is-registered',
+      branch: undefined,
+      engineVersion: 'dev',
+      pipelineDir: '/tmp/visualizer-selection',
+    });
+  });
+
+  it('derives the checked-out branch and leaves detached HEAD explicitly absent', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'visualizer-branch-'));
+    try {
+      await execa('git', ['init', '--initial-branch', 'feature/visualizer'], { cwd: projectRoot });
+      await execa('git', ['config', 'user.email', 'visualizer@example.test'], { cwd: projectRoot });
+      await execa('git', ['config', 'user.name', 'Visualizer test'], { cwd: projectRoot });
+      await writeFile(join(projectRoot, 'README.md'), 'fixture\n');
+      await execa('git', ['add', 'README.md'], { cwd: projectRoot });
+      await execa('git', ['commit', '-m', 'fixture'], { cwd: projectRoot });
+
+      const branch = await resolveCurrentBranch(projectRoot);
+      await execa('git', ['checkout', '--detach'], { cwd: projectRoot });
+
+      expect({ branch, detachedBranch: await resolveCurrentBranch(projectRoot) }).toEqual({
+        branch: 'feature/visualizer',
+        detachedBranch: undefined,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it('starts a configured factory with run identity and delivers emitted events', async () => {

@@ -27,6 +27,7 @@ import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
 import { realpathSync, writeSync } from 'node:fs';
+import { execa } from 'execa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
@@ -97,6 +98,7 @@ import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
+import { resolveEngineVersion } from './engine/shipped-record.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { UISubscriber } from "./ui/types.js";
 import type {
@@ -388,6 +390,41 @@ async function readHarnessVersion(): Promise<string> {
     }
   }
   return '0.0.0';
+}
+
+interface VisualizerStartContextInput {
+  runId: string;
+  project: string;
+  feature?: string;
+  pipelineDir: string;
+  branch?: string;
+  engineVersion?: string;
+}
+
+/** Build identity for every visualizer without fabricating unavailable values. */
+export function createVisualizerStartContext(
+  input: VisualizerStartContextInput,
+): VisualizerStartContext {
+  return {
+    runId: input.runId,
+    project: input.project,
+    feature: input.feature,
+    branch: input.branch,
+    engineVersion: input.engineVersion,
+    pipelineDir: input.pipelineDir,
+  };
+}
+
+export async function resolveCurrentBranch(projectRoot: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: projectRoot,
+    });
+    const branch = stdout.trim();
+    return branch && branch !== 'HEAD' ? branch : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // --- Merged worktree cleanup ---
@@ -1348,12 +1385,14 @@ async function main(): Promise<void> {
     config: config ?? {},
     pipelineDir,
     emitter: events,
-    startContext: {
+    startContext: createVisualizerStartContext({
       runId: sessionId,
       project: projectRoot,
       feature: opts.featureDesc,
+      branch: await resolveCurrentBranch(projectRoot),
+      engineVersion: resolveEngineVersion(__dirname),
       pipelineDir,
-    },
+    }),
   };
   const visualizerList = buildVisualizers(
     selectVisualizers(registry, visualizerContext.config, visualizerContext),
