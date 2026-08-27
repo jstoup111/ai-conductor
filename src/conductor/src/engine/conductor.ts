@@ -5907,6 +5907,11 @@ export class Conductor {
         // `failed` is NOT short-circuited here — the conductor re-enters a
         // failed step so it can run through the retry/recovery flow again.
         const currentStatus = state[step.name];
+        // A repaired tree cannot rely on a suite verdict that attested the
+        // prior tree. Remember this before BUILD settles so its success path
+        // can restage the serial verifier for a fresh evidence check.
+        const reverifyDoneTestSuiteAfterBuild =
+          step.name === 'build' && state.test_suite === 'done';
         const alreadyResolved = currentStatus === 'done' || currentStatus === 'skipped';
         const explicitlyTargeted = this.fromStep === step.name;
         if (alreadyResolved && !explicitlyTargeted) {
@@ -10862,6 +10867,16 @@ export class Conductor {
                 },
               ],
             });
+            if (
+              reverifyDoneTestSuiteAfterBuild &&
+              treeHashBeforeBuild !== treeAfter
+            ) {
+              await this.commitStateChanges(
+                state,
+                'restage test_suite after repaired build',
+                { test_suite: 'stale' },
+              );
+            }
           }
           await emitTracked({
             type: 'step_completed',

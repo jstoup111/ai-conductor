@@ -235,4 +235,57 @@ describe('hard-deleted BUILD gate leaves one serial BUILD verifier', () => {
     expect(timeline.lastIndexOf('test_suite')).toBeLessThan(timeline.lastIndexOf('build_review'));
     expect(buildVerificationRounds).toEqual([]);
   });
+
+  it('recomputes test_suite evidence after an explicit repaired BUILD before review', async () => {
+    await writeState(stateFilePath, {
+      ...FRONT_DONE,
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'pending',
+    });
+    const timeline: string[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        timeline.push(step);
+        if (step === 'build') {
+          await writeFile(join(projectRoot, 'repair.txt'), 'repaired\n');
+          execSync('git add repair.txt', { cwd: projectRoot });
+          execSync('git commit -q -m "repair"', { cwd: projectRoot });
+          return { success: true };
+        }
+        if (step === 'manual_test') {
+          return { success: false, output: 'expected boundary after repaired verification' };
+        }
+        return { success: true };
+      },
+    };
+    const inspect = vi.fn(async () => ({
+      status: 'STALE' as const,
+      reason: 'fingerprint_mismatch' as const,
+    }));
+    const ensure = vi.fn(async () => {
+      timeline.push('test_suite');
+      return {
+        status: 'EXECUTED' as const,
+        freshness: { status: 'STALE' as const, reason: 'fingerprint_mismatch' as const },
+        evidence: PASS_EVIDENCE,
+      };
+    });
+
+    await new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      fromStep: 'build',
+      maxRetries: 1,
+      verifyArtifacts: false,
+      fullSuiteVerifier: { ensure, inspect },
+    }).run();
+
+    expect(timeline.slice(0, 3)).toEqual(['build', 'test_suite', 'build_review']);
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
 });
