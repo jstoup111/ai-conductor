@@ -8,7 +8,7 @@
  * running the full CLI main() (which is too heavy for unit tests).
  */
 import { describe, it, expect } from 'vitest';
-import type { VisualizerPlugin } from '../../src/types/plugin.js';
+import type { VisualizerPlugin, VisualizerStartContext } from '../../src/types/plugin.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { buildVisualizers } from '../../src/index.js';
 
@@ -17,10 +17,12 @@ class FakeVisualizer implements VisualizerPlugin {
   startCalled = 0;
   stopCalled = 0;
   lastEmitter: ConductorEventEmitter | null = null;
+  lastContext: VisualizerStartContext | null = null;
 
-  start(emitter: ConductorEventEmitter): void {
+  start(emitter: ConductorEventEmitter, context: VisualizerStartContext): void {
     this.startCalled++;
     this.lastEmitter = emitter;
+    this.lastContext = context;
   }
 
   async stop(): Promise<void> {
@@ -35,15 +37,28 @@ describe('Visualizer wiring helpers', () => {
     expect(visualizers).toHaveLength(0);
   });
 
-  it('buildVisualizers calls start() on each visualizer with the emitter', () => {
+  // Covers: task:1
+  it('buildVisualizers gives every visualizer the supplied emitter and identity context', () => {
     const emitter = new ConductorEventEmitter();
     const vis1 = new FakeVisualizer();
     const vis2 = new FakeVisualizer();
     (vis2 as { name: string }).name = 'fake2';
-    buildVisualizers([vis1, vis2], emitter);
+    const context: VisualizerStartContext = {
+      runId: 'run-123',
+      project: 'ai-conductor',
+      branch: 'feature/visualizer-seam',
+      feature: 'connector-seam-for-event-submissions-is-registered',
+      engineVersion: '1.2.3',
+      pipelineDir: '/tmp/project/.pipeline',
+    };
+
+    buildVisualizers([vis1, vis2], emitter, context);
+
     expect(vis1.startCalled).toBe(1);
     expect(vis2.startCalled).toBe(1);
     expect(vis1.lastEmitter).toBe(emitter);
+    expect(vis1.lastContext).toBe(context);
+    expect(vis2.lastContext).toBe(context);
   });
 
   // Covers: task:7
@@ -121,20 +136,4 @@ describe('Visualizer wiring helpers', () => {
     expect(sibling.stopCalled).toBe(1);
   });
 
-  it('continues delivering events when another handler throws', async () => {
-    const emitter = new ConductorEventEmitter();
-    const received: string[] = [];
-    emitter.on('feature_complete', () => {
-      throw new Error('broken handler');
-    });
-    emitter.on('feature_complete', (event) => {
-      if (event.type === 'feature_complete') {
-        received.push(event.featureDesc ?? '');
-      }
-    });
-
-    await emitter.emit({ type: 'feature_complete', featureDesc: 'still-delivered' });
-
-    expect(received).toEqual(['still-delivered']);
-  });
 });

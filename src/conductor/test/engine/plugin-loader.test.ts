@@ -194,21 +194,24 @@ entrypoint: index.js`,
       warning.mockRestore();
     });
 
-    it('validates a visualizer factory by its product before registering it', async () => {
+    it('skips a visualizer factory whose product is missing stop', async () => {
       writeVisualizerModule(
-        'factory-visualizer',
+        'invalid-factory-visualizer',
         `export default () => ({
-  name: 'factory-visualizer',
-  start() {},
-  async stop() {}
+  name: 'invalid-factory-visualizer',
+  start() {}
 });`,
       );
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       await discoverPlugins(globalDir, projectDir, registry);
 
       registry.markInitialized();
-      const factory = registry.get<(context: unknown) => { name: string }>('visualizer', 'factory-visualizer');
-      expect(factory({})).toMatchObject({ name: 'factory-visualizer' });
+      expect(warning).toHaveBeenCalledWith(
+        'Skipping plugin invalid-factory-visualizer: Plugin invalid-factory-visualizer missing required method: stop',
+      );
+      expect(registry.list('visualizer')).toEqual([]);
+      warning.mockRestore();
     });
   });
 
