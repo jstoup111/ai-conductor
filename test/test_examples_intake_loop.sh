@@ -5,9 +5,10 @@ set -uo pipefail
 # (.docs/stories/flow-examples.md, "intake-loop flow example (headless,
 # seeded queue)") and the examples/fixtures/intake/ fixture (plan Task 12).
 #
-# conduct-ts is stubbed at the PATH boundary (see test_examples_inline.sh for
-# the rationale). intake-status.json's path (verified against
-# src/conductor/src/intake-loop-cli.ts: join(engineerDir, 'intake-status.json'))
+# conduct-ts is stubbed at the PATH boundary so the run completes fast and
+# deterministically without a real credentialed provider session.
+# intake-status.json's path (verified against src/conductor/src/intake-loop-cli.ts:
+# join(engineerDir, 'intake-status.json'))
 # is written under $AI_CONDUCTOR_ENGINEER_DIR, matching sandbox_up's
 # isolation (Story 2).
 #

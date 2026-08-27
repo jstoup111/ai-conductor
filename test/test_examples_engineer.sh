@@ -6,9 +6,10 @@ set -uo pipefail
 # primitives + guided full loop)") and the examples/fixtures/engineer/
 # fixture (plan Task 10).
 #
-# conduct-ts is stubbed at the PATH boundary (see test_examples_inline.sh for
-# the rationale). The stub's engineer subcommands mirror the real CLI JSON
-# kinds verified against src/conductor/src/engine/engineer-cli.ts:
+# conduct-ts is stubbed at the PATH boundary so the run completes fast and
+# deterministically without a real credentialed provider session. The stub's
+# engineer subcommands mirror the real CLI JSON kinds verified against
+# src/conductor/src/engine/engineer-cli.ts:
 # {kind:'worktree',...}, {kind:'land'}/{kind:'reject'} (via stderr + exit 1),
 # {kind:'pr-opened',url}/{kind:'local-commit'} for handoff.
 #
