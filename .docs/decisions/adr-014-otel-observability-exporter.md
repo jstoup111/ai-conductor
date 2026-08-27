@@ -71,6 +71,29 @@ Relevant existing facts (evidence):
   mirrors the `events.jsonl` ergonomics), written to `.pipeline/otel.jsonl` (distinct from
   `events.jsonl`).
 
+> **Amended 2026-08-26 by #1938 (two-layer identity):** the run-id *source* above is unchanged,
+> but its placement and the identity layering are revised because metric backends do not turn
+> Resource attributes into series labels — Resource-only identity made all projects' metric
+> series byte-identical (observed against a live OTLP collector + Prometheus, 2026-08-26).
+> The identity contract is now:
+> - `service.name` stays the constant `ai-conductor` (one product; the project is a dimension,
+>   never folded into the service name).
+> - `service.instance.id` = the resolved run id (same source chain as `conductor.run.id`, which
+>   remains on the Resource unchanged). This makes `target_info` joinable per OTel convention.
+>   Per adr-2026-07-27-cold-start-within-step-retries §7, this is the conduct feature-run id —
+>   never a provider-session or per-attempt identifier (`attempt.id` of
+>   adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity is a distinct, narrower id).
+> - `project` and `feature` are additionally injected as **data-point attributes** on every
+>   metric instrument, at a single seam in `MetricsRecorder`, so per-project/per-feature series
+>   are distinguishable without collector rewriting and fleet totals remain a plain `sum()`.
+>   The run id is deliberately **not** a data-point attribute (bounded series growth).
+> - The data-point `project` value is the stable project name (basename of the project root),
+>   not the absolute path; the full path stays on the Resource as `conductor.project`.
+> - The Resource keeps `conductor.feature`/`conductor.project` for trace indexing — the
+>   worktree-isolation claim below ("distinct `conductor.run.id` per run keeps two concurrent
+>   worktrees' traces separate") continues to hold for traces, and now also holds for metrics
+>   via the `feature` data-point attribute plus `service.instance.id`.
+
 ## Consequences
 
 **Positive**
