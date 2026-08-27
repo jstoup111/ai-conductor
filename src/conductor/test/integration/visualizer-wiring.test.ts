@@ -67,7 +67,9 @@ describe('Visualizer wiring helpers', () => {
     };
     const errors: Array<{ rendererName: string; error: string }> = [];
     emitter.on('renderer_error', (event) => {
-      errors.push(event);
+      if (event.type === 'renderer_error') {
+        errors.push(event);
+      }
     });
 
     const started = buildVisualizers([first, second, third], emitter);
@@ -126,7 +128,9 @@ describe('Visualizer wiring helpers', () => {
       throw new Error('broken handler');
     });
     emitter.on('feature_complete', (event) => {
-      received.push(event.featureDesc);
+      if (event.type === 'feature_complete') {
+        received.push(event.featureDesc ?? '');
+      }
     });
 
     await emitter.emit({ type: 'feature_complete', featureDesc: 'still-delivered' });
