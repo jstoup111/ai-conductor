@@ -1,10 +1,9 @@
 /**
  * Engineer memory store (Phase 9.1).
  *
- * On daemon feature completion the daemon emits a structured *signal* + a
- * *narrative* to a cross-project store at `~/.ai-conductor/engineer/` so a future
- * engineer (Phase 9.3) can learn from how features fared — without writing retro
- * clutter into the feature's repo.
+ * On daemon feature completion the daemon emits a structured *signal* to a
+ * cross-project store at `~/.ai-conductor/engineer/`; halted features also retain
+ * a diagnostic *narrative* without writing it into the feature's repo.
  *
  * Layout (ADR-002, locked):
  *   ~/.ai-conductor/engineer/
@@ -24,10 +23,6 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import type { FeatureOutcome } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
-import {
-  executeProviderCandidates,
-  type ProviderExecutionContext,
-} from './provider-execution.js';
 import {
   parseEvents,
   aggregateDurations,
@@ -50,7 +45,7 @@ const NARRATIVES_DIR = 'narratives';
  * One per-feature-run record. Each line in `signals.jsonl` is a serialized
  * `EngineerSignal` (FR-3). Empty signal categories serialize as `[]` (never
  * missing/null) so a reader can aggregate uniformly; `narrativeRef` is optional
- * (absent when the retro step was tier-skipped).
+ * (absent for non-halted outcomes).
  */
 export interface EngineerSignal {
   schemaVersion: number;
@@ -276,30 +271,18 @@ export async function appendSignal(engineerDir: string, sig: EngineerSignal): Pr
   await appendFile(join(engineerDir, SIGNALS_LOG), line, 'utf-8');
 }
 
-// ─── FR-5 / FR-6: narratives ──────────────────────────────────────────────────
+// ─── FR-6: halt narratives ────────────────────────────────────────────────────
 
 export interface ProduceNarrativeArgs {
   outcome: FeatureOutcome;
   project: string;
   feature: string;
   runId: string;
-  /** The (still-present, pre-teardown) worktree the feature ran in. */
-  worktreePath: string;
-  /** Legacy provider used only when providerExecution is absent. */
-  provider?: LLMProvider;
-  /** Per-feature built-in provider routing; absent preserves legacy/custom use. */
-  providerExecution?: ProviderExecutionContext;
-  /** True when the complexity tier skipped the in-loop retro step (ST-005). */
-  tierSkippedRetro: boolean;
 }
 
 /**
- * Produce the narrative for a completed feature.
- *   - `done` (retro not tier-skipped) → full retro via the LLM provider (the
- *     work the in-loop retro would have done), exactly one provider call.
- *   - tier-skipped → no narrative (`undefined`), no provider call.
- *   - `halted` → a short halt narrative assembled from the gate + reason; no
- *     provider call. A halt with no reason records "reason unavailable".
+ * Produce a diagnostic narrative only when a feature halts. Completed and
+ * errored outcomes retain their structured signal without a narrative.
  */
 export async function produceNarrative(
   args: ProduceNarrativeArgs,
@@ -307,44 +290,7 @@ export async function produceNarrative(
   if (args.outcome.status === 'halted') {
     return renderHaltNarrative(args);
   }
-
-  // Tier-skipped features have no retro source — emit a signal without a
-  // narrative rather than fabricate one (FR-5 negative).
-  if (args.tierSkippedRetro) return undefined;
-
-  // `done` (or any non-halted, non-tier-skipped outcome): full retro.
-  const prompt = buildRetroPrompt(args);
-  const result = args.providerExecution
-    ? await (args.providerExecution.executor ?? executeProviderCandidates)({
-        step: 'retro',
-        configuredProviders: args.providerExecution.configuredProviders,
-        preferredProvider:
-          args.providerExecution.config?.steps?.retro?.llm_provider,
-        runtimes: args.providerExecution.runtimes,
-        sessions: args.providerExecution.sessions.beginBranch('retro'),
-        config: args.providerExecution.config,
-        onAttempt: args.providerExecution.onAttempt,
-        warn: args.providerExecution.warn,
-        options: {
-          prompt,
-          cwd: args.worktreePath,
-        },
-      })
-    : await args.provider?.invoke({
-        prompt,
-        sessionId: `engineer-retro-${args.feature}-${args.runId}`,
-        resume: false,
-        cwd: args.worktreePath,
-      }) ?? {
-        success: false,
-        output: 'No narrative provider configured',
-        exitCode: 1,
-      };
-  // Don't persist provider error text as a narrative — on failure, emit the
-  // signal with no narrativeRef rather than a bogus retro (the best-effort
-  // caller logs it).
-  if (!result.success) return undefined;
-  return result.output;
+  return undefined;
 }
 
 function renderHaltNarrative(args: ProduceNarrativeArgs): string {
@@ -367,16 +313,6 @@ function renderHaltNarrative(args: ProduceNarrativeArgs): string {
     }`,
     '',
   ].join('\n');
-}
-
-function buildRetroPrompt(args: ProduceNarrativeArgs): string {
-  return [
-    `Write a concise retrospective for the completed feature "${args.feature}" in project`,
-    `"${args.project}" (run ${args.runId}). The feature finished with outcome "done".`,
-    `Base it on the worktree at ${args.worktreePath} (its .pipeline/events.jsonl and the diff).`,
-    `Cover: what went well, what was hard, retries/kickbacks if any, and one improvement.`,
-    `Output Markdown only.`,
-  ].join(' ');
 }
 
 /**
@@ -407,17 +343,14 @@ export interface EmitEngineerSignalArgs {
   project: string;
   feature: string;
   runId: string;
-  worktreePath: string;
-  /** Legacy provider used only when providerExecution is absent. */
+  /** Optional adapter injection; completion emission must never invoke it. */
   provider?: LLMProvider;
-  providerExecution?: ProviderExecutionContext;
-  tierSkippedRetro: boolean;
   log?: (msg: string) => void;
 }
 
 /**
- * Orchestrate emission: assemble the signal, produce + write the narrative,
- * then append the (now narrativeRef-tagged) signal line. BEST-EFFORT — any
+ * Orchestrate emission: assemble the signal, produce + write a halt narrative
+ * when applicable, then append the (now narrativeRef-tagged) signal line. BEST-EFFORT — any
  * error is logged and swallowed so it never aborts feature completion. The
  * signal line is independent of narrative failure: if the narrative throws, the
  * signal is still appended (without a narrativeRef).
@@ -441,10 +374,6 @@ export async function emitEngineerSignal(args: EmitEngineerSignalArgs): Promise<
         project: args.project,
         feature: args.feature,
         runId: args.runId,
-        worktreePath: args.worktreePath,
-        provider: args.provider,
-        providerExecution: args.providerExecution,
-        tierSkippedRetro: args.tierSkippedRetro,
       });
       if (narrative != null) {
         signal.narrativeRef = await writeNarrative(

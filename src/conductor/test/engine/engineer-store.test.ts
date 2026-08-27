@@ -1,5 +1,5 @@
 // Covers: task:1
-import { describe, it, expect, beforeEach, afterEach, assert, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, assert } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
@@ -9,14 +9,6 @@ import type {
   LLMProvider,
   InvokeResult,
 } from '../../src/execution/llm-provider.js';
-import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
-import { ProviderSessionStore } from '../../src/engine/provider-session.js';
-import { ModelAvailability } from '../../src/engine/model-availability.js';
-import {
-  CLAUDE_MODEL_POLICY,
-  CODEX_MODEL_POLICY,
-} from '../../src/engine/provider-model-policy.js';
-import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 
 // ───────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for the not-yet-built engineer-store module (Phase 9.1).
@@ -29,8 +21,8 @@ import { executeProviderCandidates } from '../../src/engine/provider-execution.j
 // the module is implemented each fails on its behavioral assertion.
 //
 // Real fs throughout (a tmp engineer dir via `$AI_CONDUCTOR_ENGINEER_DIR`, a tmp
-// project dir). The ONLY mock is the LLM provider (third-party boundary) used
-// for the `done` narrative.
+// project dir). Provider fakes are injected only to verify that completion
+// emission does not invoke them.
 // ───────────────────────────────────────────────────────────────────────────
 
 const MODULE = '../../src/engine/engineer-store.js';
@@ -62,9 +54,8 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
   return fn as (...args: any[]) => any;
 }
 
-// A scriptable fake provider: records the prompt it was invoked with and
-// returns a canned narrative. Lets us assert the `done` path calls the LLM and
-// the `halted`/tier-skip paths do NOT.
+// A scriptable fake provider used to prove completion emission never invokes an
+// injected third-party adapter.
 function makeProvider(
   narrative = '# Retro\n\nWent fine.',
 ): LLMProvider & {
@@ -341,178 +332,6 @@ describe('engine/engineer-store', () => {
     });
   });
 
-  // ─── FR-5 / FR-6: narratives ───────────────────────────────────────────────
-
-  describe('FR-5/FR-6: produceNarrative + writeNarrative', () => {
-    it('routes a completed-feature retro through its configured provider context', async () => {
-      const mod = await loadEngineerStore();
-      const produceNarrative = requireFn(mod, 'produceNarrative');
-      const capturedProvider = makeProvider('captured daemon narrative');
-      const codexProvider = makeProvider('codex retro narrative');
-      const sessions = new ProviderSessionStore({
-        createSessionId: () => 'feature-retro-codex-session',
-      });
-      const beginBranch = vi.spyOn(sessions, 'beginBranch');
-      const providerExecutor = vi.fn(executeProviderCandidates);
-      const onAttempt = vi.fn();
-
-      const text = await produceNarrative({
-        outcome: { slug: 'feat-x', status: 'done' },
-        project: 'proj',
-        feature: 'feat-x',
-        runId: 'run-1',
-        worktreePath: projectDir,
-        provider: capturedProvider,
-        providerExecution: {
-          configuredProviders: ['claude', 'codex'],
-          runtimes: new ProviderRuntimeSet([
-            {
-              key: 'claude',
-              provider: capturedProvider,
-              policy: CLAUDE_MODEL_POLICY,
-              builtIn: true,
-              availability: new ModelAvailability(
-                CLAUDE_MODEL_POLICY.modelFallbackLadder,
-              ),
-            },
-            {
-              key: 'codex',
-              provider: codexProvider,
-              policy: CODEX_MODEL_POLICY,
-              builtIn: true,
-              availability: new ModelAvailability(
-                CODEX_MODEL_POLICY.modelFallbackLadder,
-              ),
-            },
-          ]),
-          sessions,
-          executor: providerExecutor,
-          onAttempt,
-          config: {
-            llm_provider: ['claude', 'codex'],
-            steps: {
-              retro: { llm_provider: 'codex' },
-            },
-          },
-        },
-        tierSkippedRetro: false,
-      });
-
-      expect({
-        text,
-        capturedCalls: capturedProvider.calls,
-        capturedInteractiveCalls: capturedProvider.interactiveCalls,
-        codexCalls: codexProvider.calls,
-        codexInteractiveCalls: codexProvider.interactiveCalls,
-        codexInvocations: codexProvider.invocations.map((invocation) => ({
-          sessionId: invocation.sessionId,
-          resume: invocation.resume,
-          cwd: invocation.cwd,
-        })),
-        beginBranchCalls: beginBranch.mock.calls,
-        executorSteps: providerExecutor.mock.calls.map(([input]) => input.step),
-        attemptSinkForwarded:
-          providerExecutor.mock.calls[0]?.[0].onAttempt === onAttempt,
-        codexSession: sessions.current('codex'),
-      }).toEqual({
-        text: 'codex retro narrative',
-        capturedCalls: 0,
-        capturedInteractiveCalls: 0,
-        codexCalls: 1,
-        codexInteractiveCalls: 0,
-        codexInvocations: [
-          {
-            // Fresh session per invocation, never the injected store's id
-            // (session reuse was removed by design).
-            sessionId: expect.stringMatching(
-              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-            ),
-            resume: false,
-            cwd: projectDir,
-          },
-        ],
-        beginBranchCalls: [['retro']],
-        executorSteps: ['retro'],
-        attemptSinkForwarded: true,
-        codexSession: undefined,
-      });
-    });
-
-    it('done → full retro narrative via the LLM provider, narrativeRef set', async () => {
-      const mod = await loadEngineerStore();
-      const produceNarrative = requireFn(mod, 'produceNarrative');
-      const writeNarrative = requireFn(mod, 'writeNarrative');
-      const provider = makeProvider('# Full Retro\n\nDetailed analysis.');
-
-      const text = await produceNarrative({
-        outcome: { slug: 'feat-x', status: 'done' },
-        project: 'proj',
-        feature: 'feat-x',
-        runId: 'run-1',
-        worktreePath: projectDir,
-        provider,
-        tierSkippedRetro: false,
-      });
-      expect(provider.calls).toBe(1);
-      expect(text).toContain('Retro');
-
-      const ref = await writeNarrative(engineerDir, 'proj', 'feat-x', 'run-1', text as string);
-      expect(ref).toContain('feat-x-run-1.md');
-      const onDisk = await readFile(join(engineerDir, 'narratives', 'proj', 'feat-x-run-1.md'), 'utf-8');
-      expect(onDisk).toContain('Full Retro');
-    });
-
-    it('tier-skipped done → NO narrative (no LLM call, returns absent)', async () => {
-      const mod = await loadEngineerStore();
-      const produceNarrative = requireFn(mod, 'produceNarrative');
-      const provider = makeProvider();
-      const text = await produceNarrative({
-        outcome: { slug: 'feat-x', status: 'done' },
-        project: 'proj',
-        feature: 'feat-x',
-        runId: 'run-1',
-        worktreePath: projectDir,
-        provider,
-        tierSkippedRetro: true,
-      });
-      expect(provider.calls).toBe(0);
-      expect(text == null).toBe(true);
-    });
-
-    it('halted → SHORT halt narrative (gate+reason), no LLM call', async () => {
-      const mod = await loadEngineerStore();
-      const produceNarrative = requireFn(mod, 'produceNarrative');
-      const provider = makeProvider();
-      const text = await produceNarrative({
-        outcome: { slug: 'feat-x', status: 'halted', reason: 'kickback cap exceeded' },
-        project: 'proj',
-        feature: 'feat-x',
-        runId: 'run-1',
-        worktreePath: projectDir,
-        provider,
-        tierSkippedRetro: false,
-      });
-      expect(provider.calls).toBe(0);
-      expect(text).toContain('kickback cap exceeded');
-    });
-
-    it('halt with NO reason → "reason unavailable" note, no throw', async () => {
-      const mod = await loadEngineerStore();
-      const produceNarrative = requireFn(mod, 'produceNarrative');
-      const provider = makeProvider();
-      const text = await produceNarrative({
-        outcome: { slug: 'feat-x', status: 'halted' },
-        project: 'proj',
-        feature: 'feat-x',
-        runId: 'run-1',
-        worktreePath: projectDir,
-        provider,
-        tierSkippedRetro: false,
-      });
-      expect((text ?? '').toLowerCase()).toContain('reason unavailable');
-    });
-  });
-
   // ─── FR-8: re-run retains history (run-id keyed) ───────────────────────────
 
   describe('FR-8: re-run retains history (run-id keyed)', () => {
@@ -551,20 +370,38 @@ describe('engine/engineer-store', () => {
         project: 'proj',
         feature: 'feat-x',
         runId: 'run-1',
-        worktreePath: projectDir,
-        provider: makeProvider(),
-        tierSkippedRetro: false,
         ...extra,
       };
     }
 
-    it('writable store → signal line + narrative written', async () => {
+    it('done outcome → valid signal without narrativeRef and no provider invocation', async () => {
       const mod = await loadEngineerStore();
       const emitEngineerSignal = requireFn(mod, 'emitEngineerSignal');
-      await emitEngineerSignal(await emitArgs({ engineerDir }));
+      const provider = makeProvider();
+      await emitEngineerSignal(await emitArgs({ engineerDir, provider }));
+
       const lines = await readSignalLines(engineerDir);
-      expect(lines.length).toBe(1);
-      expect(JSON.parse(lines[0]).feature).toBe('feat-x');
+      expect(lines).toHaveLength(1);
+      const stored = JSON.parse(lines[0]);
+      expect({
+        providerCalls: provider.calls,
+        schemaVersion: stored.schemaVersion,
+        project: stored.project,
+        feature: stored.feature,
+        outcome: stored.outcome,
+        narrativeRef: stored.narrativeRef,
+        kickbacks: stored.kickbacks,
+        halts: stored.halts,
+      }).toEqual({
+        providerCalls: 0,
+        schemaVersion: 1,
+        project: 'proj',
+        feature: 'feat-x',
+        outcome: 'done',
+        narrativeRef: undefined,
+        kickbacks: expect.any(Array),
+        halts: expect.any(Array),
+      });
     });
 
     it('halted outcome writes a halt narrative with a reference and no provider invocation', async () => {
@@ -608,21 +445,6 @@ describe('engine/engineer-store', () => {
       expect(logs.some((m) => /engineer|signal|emit/i.test(m))).toBe(true);
     });
 
-    it('partial failure (narrative fails, signal ok) → logged, no throw', async () => {
-      const mod = await loadEngineerStore();
-      const emitEngineerSignal = requireFn(mod, 'emitEngineerSignal');
-      const throwingProvider: LLMProvider = {
-        async invoke(): Promise<InvokeResult> {
-          throw new Error('provider boom');
-        },
-      };
-      await expect(
-        emitEngineerSignal(await emitArgs({ engineerDir, provider: throwingProvider })),
-      ).resolves.toBeUndefined();
-      // The signal line is best-effort independent of the narrative failure.
-      const lines = await readSignalLines(engineerDir);
-      expect(lines.length).toBe(1);
-    });
   });
 
   // ─── FR-11: append-safe under concurrency ──────────────────────────────────
