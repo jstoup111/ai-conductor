@@ -98,6 +98,8 @@ Option B, with these specifics:
    Bash CLI writers (`shipped-record`) are outside the write surface — the accepted
    scope. DECIDE/UNDERSTAND/SETUP steps write no marker, so authoring is unaffected.
 
+> **Amended 2026-08-26 by #1905:** the `retro` step is removed (#1905), which empties the per-step prefix table — no built-in step now carries per-step docs-write prefixes. The allowlist mechanism and the ALWAYS-ALLOWED part stand for future steps.
+
 ## Consequences
 
 ### Positive

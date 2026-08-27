@@ -13,6 +13,8 @@ states satisfy the gate. Replacing the rebase prerequisite with `retro` implemen
 ordering without a new runtime component, external dependency, schema change, or configuration
 surface.
 
+> **Amended 2026-08-26 by #1905:** the `retro` step is removed (#1905); the rebase prerequisite is re-pointed to `architecture_review_as_built`. The serial ordering this review verified is preserved without the retro hop, and the skipped-prerequisite gate concern no longer applies to retro.
+
 ## Alignment
 
 The change preserves the validation group's concurrent behavior while serializing only the

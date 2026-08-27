@@ -165,6 +165,8 @@ introduces no IPC and no protocol, only a second append-only ledger in the same 
   obligations and is weaker than steady-state data will be.
 - A new blocking condition in the batch gate: a missing closeout event now fails where it
   previously passed. Intended, but it is a new way for a build to block.
+
+> **Amended 2026-08-26 by #1905:** `micro-retro` is removed from the closeout obligation roster (event union + CLI allowlist, same change). The batch gate's enforced obligation set shrinks accordingly in the same change, so no batch blocks on a missing micro-retro event. Readers already tolerate absence (`unrecorded`).
 - This feature delivers **no latency reduction**. That is the accepted cost of not optimizing
   against an unfalsifiable metric.
 

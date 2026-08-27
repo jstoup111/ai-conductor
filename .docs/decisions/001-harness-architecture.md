@@ -35,6 +35,8 @@ as the execution engine. No custom runtime.
 
 5. **Dual retrospective** analyzes both harness workflow and application code health after each feature.
 
+> **Amended 2026-08-26 by #1905:** Decision 5 is retired. The operator rejected retrospective behavior (full and micro); the retrospective capability, its SHIP step, and the batch-boundary micro-retro are removed. The self-improvement loop is carried by the engineer-store structured signal (kickbacks, halts, retry hotspots, halt narratives) instead.
+
 6. **Memory protocol** with categorized storage and staleness detection across sessions.
 
 ## Consequences

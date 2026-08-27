@@ -43,6 +43,8 @@ subagent-dispatch tool, into every build worktree at provisioning time
    build worktree — the hook is worktree-global, so every `/pipeline` dispatch
    template (TDD implementation, evaluator, simplify, micro-retro,
    memory-checkpoint) carries a line-1 marker.
+
+> **Amended 2026-08-26 by #1905:** micro-retro is removed as a dispatch template (#1905). The binding rule (ALL in-session Agent dispatches carry a line-1 marker) is unchanged; the enumeration no longer includes micro-retro.
 3. **Stamping semantics (replicates `runTaskStart`):** on `Task: <id>` the hook
    validates the id against the engine-seeded `task-status.json` row set
    (unknown id → block, exit 2), flips the row to `in_progress` (atomic

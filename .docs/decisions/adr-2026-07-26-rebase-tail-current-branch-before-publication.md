@@ -49,6 +49,8 @@ Choose Option C:
    `validation_concurrency` and join before the serial tail advances.
 2. `rebase` depends on the completed-or-skipped validation tail (`retro`); `finish` continues to
    depend on `rebase`.
+
+> **Amended 2026-08-26 by #1905:** the `retro` step is removed (operator decision, full purge). `rebase` now depends directly on the completed-or-skipped validation tail terminus `architecture_review_as_built`; `finish` still depends on `rebase`. The serial-publication fence this decision established is preserved — only the retro hop is gone.
 3. Immediately before any `finish` dispatch or publication side effect, the engine resolves
    validation membership with the existing tier, track, upstream-skip, bootstrap-mode, and
    configuration predicates. Validly skipped members are excluded.
