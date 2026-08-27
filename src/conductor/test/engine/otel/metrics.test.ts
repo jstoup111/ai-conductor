@@ -587,6 +587,7 @@ describe('Task 4: bounded metric identity', () => {
       .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
       .flatMap((metric) => metric.dataPoints.map((dataPoint) => dataPoint.attributes));
 
+    expect(dataPointAttributes).not.toHaveLength(0);
     expect(dataPointAttributes.every((attributes) => (
       !Object.keys(attributes).some((key) => /run[._-]?id/i.test(key))
       && !Object.values(attributes).includes(runId)
