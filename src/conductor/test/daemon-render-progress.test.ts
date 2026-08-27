@@ -29,6 +29,33 @@ afterEach(() => {
   chalk.level = originalLevel;
 });
 
+describe('renderDaemonEvent: persisted BUILD member settlement', () => {
+  beforeEach(() => {
+    chalk.level = 0;
+  });
+
+  it('labels a legacy member fallback while retaining the current test_suite name', () => {
+    const legacy = JSON.parse(JSON.stringify({
+      type: 'build_member_evidence_reused',
+      member: 'wiring_check',
+      decision: 'reuse',
+      basis: 'fingerprint-match',
+    })) as ConductorEvent;
+
+    expect(lines(legacy)).toEqual([
+      '· BUILD member unknown-member settled: reuse (fingerprint-match)',
+    ]);
+    expect(lines({
+      type: 'build_member_evidence_reused',
+      member: 'test_suite',
+      decision: 'reuse',
+      basis: 'fingerprint-match',
+    })).toEqual([
+      '· BUILD member test_suite settled: reuse (fingerprint-match)',
+    ]);
+  });
+});
+
 describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', () => {
   beforeEach(() => {
     chalk.level = 0;
