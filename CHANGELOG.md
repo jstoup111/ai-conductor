@@ -62,6 +62,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Test-quality preflight failures now retain their bounded diagnostics so exhausted build reviews remain actionable. ([implementation PR #1970](https://github.com/jstoup111/ai-conductor/pull/1970)).
 - Ensure OpenTelemetry exports from daemon-dispatched builds include stable feature and run identity. ([implementation PR #1973](https://github.com/jstoup111/ai-conductor/pull/1973)).
 - Remediation planner keys each gap by the auditor's finding id, so autonomously-remediable findings route instead of halting on an id mismatch. ([implementation PR #1977](https://github.com/jstoup111/ai-conductor/pull/1977)).
+- daemon-triage classifies plan-gap halts instead of reporting them as mechanical, and the stalled-feature runbook carries the amend-reseal-rewind recovery. ([implementation PR #1980](https://github.com/jstoup111/ai-conductor/pull/1980)).
 
 ## Migration
 
