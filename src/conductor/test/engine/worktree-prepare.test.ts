@@ -14,6 +14,9 @@ import {
   SetupFailureError,
   OPERATOR_ONLY_SKILLS,
   runProjectTeardown,
+  hashSetupScript,
+  readSetupMarker,
+  writeSetupMarker,
 } from '../../src/engine/worktree-prepare.js';
 import {
   PRE_DISPATCH_HOOK,
@@ -46,6 +49,50 @@ describe('engine/worktree-prepare', () => {
     await writeFile(path, body, 'utf-8');
     await chmod(path, mode);
   }
+
+  describe('setup success marker', () => {
+    it('writes and reads a versioned marker atomically', async () => {
+      const marker = {
+        version: 1 as const,
+        setupScriptHash: 'hash',
+        baseSha: 'base-sha',
+        preparedAtCommit: 'prepared-sha',
+      };
+
+      await writeSetupMarker(dir, marker);
+
+      expect(await readSetupMarker(dir)).toEqual(marker);
+      await expect(access(join(dir, '.daemon', 'setup-ok.json'))).resolves.toBeUndefined();
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['corrupt', '{not json'],
+      ['unknown version', JSON.stringify({ version: 2 })],
+    ])('returns null for a %s marker', async (_label, contents) => {
+      if (contents !== undefined) {
+        await mkdir(join(dir, '.daemon'), { recursive: true });
+        await writeFile(join(dir, '.daemon', 'setup-ok.json'), contents, 'utf-8');
+      }
+
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+    });
+
+    it('fingerprints setup content and mode, and returns null when absent', async () => {
+      await expect(hashSetupScript(dir)).resolves.toBeNull();
+
+      await writeSetup('#!/usr/bin/env bash\necho first\n', 0o755);
+      const first = await hashSetupScript(dir);
+      await writeFile(join(dir, SETUP_SCRIPT), '#!/usr/bin/env bash\necho second\n', 'utf-8');
+      const changedBytes = await hashSetupScript(dir);
+      await chmod(join(dir, SETUP_SCRIPT), 0o744);
+      const changedMode = await hashSetupScript(dir);
+
+      expect(first).not.toBeNull();
+      expect(changedBytes).not.toBe(first);
+      expect(changedMode).not.toBe(changedBytes);
+    });
+  });
 
   describe('runProjectTeardown', () => {
     it.each([undefined, { verbose: true }] as const)(

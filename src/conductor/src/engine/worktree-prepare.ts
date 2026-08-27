@@ -41,6 +41,7 @@
  */
 import { execa } from 'execa';
 import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat, lstat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { PRE_COMMIT_HOOK, PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 import {
@@ -51,6 +52,57 @@ import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
+
+const SETUP_MARKER_VERSION = 1;
+const SETUP_MARKER_PATH = join('.daemon', 'setup-ok.json');
+
+export interface SetupMarker {
+  version: typeof SETUP_MARKER_VERSION;
+  setupScriptHash: string;
+  baseSha: string;
+  preparedAtCommit: string;
+}
+
+/** Return a content-and-mode fingerprint for the project setup script. */
+export async function hashSetupScript(worktreePath: string): Promise<string | null> {
+  try {
+    const script = join(worktreePath, SETUP_SCRIPT);
+    const [contents, metadata] = await Promise.all([readFile(script), stat(script)]);
+    return createHash('sha256')
+      .update(contents)
+      .update(String(metadata.mode & 0o777))
+      .digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+/** Read a valid success marker, treating every malformed shape as absent. */
+export async function readSetupMarker(worktreePath: string): Promise<SetupMarker | null> {
+  try {
+    const raw = await readFile(join(worktreePath, SETUP_MARKER_PATH), 'utf-8');
+    const value: unknown = JSON.parse(raw);
+    if (
+      !value || typeof value !== 'object' ||
+      (value as { version?: unknown }).version !== SETUP_MARKER_VERSION ||
+      typeof (value as { setupScriptHash?: unknown }).setupScriptHash !== 'string' ||
+      typeof (value as { baseSha?: unknown }).baseSha !== 'string' ||
+      typeof (value as { preparedAtCommit?: unknown }).preparedAtCommit !== 'string'
+    ) return null;
+    return value as SetupMarker;
+  } catch {
+    return null;
+  }
+}
+
+/** Atomically persist a marker only after a successful project setup. */
+export async function writeSetupMarker(worktreePath: string, marker: SetupMarker): Promise<void> {
+  const path = join(worktreePath, SETUP_MARKER_PATH);
+  const tempPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+  await mkdir(join(worktreePath, '.daemon'), { recursive: true });
+  await writeFile(tempPath, `${JSON.stringify(marker)}\n`, 'utf-8');
+  await rename(tempPath, path);
+}
 
 /** Conventional, project-supplied teardown entrypoint run before worktree removal. */
 export const TEARDOWN_SCRIPT = join('bin', 'teardown');
