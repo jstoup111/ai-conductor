@@ -237,6 +237,8 @@ export interface OtelConfig {
   file?: string;
   /** OTLP wire protocol. Defaults to 'http/protobuf' (port 4318). */
   protocol?: 'http/protobuf' | 'grpc';
+  /** Optional metric project identity. Defaults to the project root basename. */
+  project_name?: string;
 }
 
 /**

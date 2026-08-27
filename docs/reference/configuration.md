@@ -683,10 +683,15 @@ terminal paths.
 | `otel.endpoint` | string | Yes, when `exporter: otlp` | any URL | — |
 | `otel.file` | string | No | any path | `<pipelineDir>/otel.jsonl` |
 | `otel.protocol` | string | No | `http/protobuf`, `grpc` per the type | passed through unchecked; omitted when falsy |
+| `otel.project_name` | string | No | any non-blank name | project root basename |
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
 `{ enabled: false, error: "Unknown otel exporter '<x>'. Valid options: otlp, file." }`; `otlp` without an
 endpoint yields `{ enabled: false, error: "otel exporter='otlp' requires an 'endpoint' URL …" }`.
+
+`otel.project_name` is trimmed before use. An absent, blank, or whitespace-only value falls back to
+the basename of the absolute project root for metric data-point identity; it does not affect
+`service.name` (`ai-conductor`) or the Resource `conductor.project` attribute.
 
 > **Known limitation.** `otel.protocol` is passed through entirely unvalidated
 > (`otel-config.ts:60`) even though the type restricts it to `'http/protobuf' | 'grpc'`

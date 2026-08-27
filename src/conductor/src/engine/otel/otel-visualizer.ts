@@ -169,6 +169,13 @@ export class OtelVisualizer implements VisualizerPlugin {
   private readonly exportTimeoutMillis: number;
   /** Compatibility only for legacy direct callers that omit start context. */
   private readonly legacyStartContext: VisualizerStartContext;
+  /**
+   * Configured `otel.project_name`, when the config is enabled and set it.
+   * Overrides the start context's project basename as the metric identity's
+   * `project` attribute, so two checkouts of the same repository can report
+   * distinct identities.
+   */
+  private readonly projectNameOverride?: string;
   private tracerProvider: BasicTracerProvider | null = null;
   private meterProvider: MeterProvider | null = null;
   private spanManager: SpanManager | null = null;
@@ -246,6 +253,7 @@ export class OtelVisualizer implements VisualizerPlugin {
       feature: ctx.feature,
       project: ctx.project,
     };
+    if (config.enabled && config.projectName) this.projectNameOverride = config.projectName;
   }
 
   /**
@@ -437,7 +445,7 @@ export class OtelVisualizer implements VisualizerPlugin {
     const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
     const meter = this.meterProvider.getMeter('conductor', '1.0.0');
     this.metricsRecorder = new MetricsRecorder(meter, {
-      project: basename(context.project),
+      project: this.projectNameOverride ?? basename(context.project),
       feature: context.feature,
     });
     this.spanManager = new SpanManager(tracer, this.onWarning, {

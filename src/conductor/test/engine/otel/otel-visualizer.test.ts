@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:8
+// Covers: task:2, task:5, task:6, task:8
 /**
  * T9: OtelVisualizer — provider/processor setup (off hot path).
  * T17: hot-path guard — emit() resolves promptly even when the transport blocks.
@@ -276,15 +276,19 @@ describe('Task 5: visualizer identity wiring', () => {
     await rm(identityTempDir, { recursive: true, force: true });
   });
 
-  async function exportStepMetric(feature: string) {
+  async function exportStepMetric(
+    feature: string,
+    project = join(identityTempDir, 'projects', 'nested-project'),
+    projectName?: string,
+  ) {
     const resolved = resolveOtelConfig(
-      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', project_name: projectName } },
       identityPipelineDir,
     );
     const vis = new OtelVisualizer(resolved, {
       runId: 'shared-resource-run-id',
       feature,
-      project: join(identityTempDir, 'projects', 'nested-project'),
+      project,
       spanExporter: identitySpanExporter,
       metricExporter: identityMetricExporter,
     });
@@ -327,6 +331,27 @@ describe('Task 5: visualizer identity wiring', () => {
       step: 'build',
       project: 'nested-project',
       feature: 'unknown',
+    });
+  });
+
+  it('uses configured names to distinguish same-basename roots without changing resource identity', async () => {
+    const firstProject = join(identityTempDir, 'tenant-a', 'shared');
+    const secondProject = join(identityTempDir, 'tenant-b', 'shared');
+    const first = await exportStepMetric('feature-a', firstProject, ' tenant-a ');
+    identityMetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    identitySpanExporter = new InMemorySpanExporter();
+    const second = await exportStepMetric('feature-b', secondProject, 'tenant-b');
+
+    expect({
+      firstProject: first.dataPoint.attributes['project'],
+      secondProject: second.dataPoint.attributes['project'],
+      serviceName: first.metricResource.attributes['service.name'],
+      conductorProject: first.metricResource.attributes['conductor.project'],
+    }).toEqual({
+      firstProject: 'tenant-a',
+      secondProject: 'tenant-b',
+      serviceName: 'ai-conductor',
+      conductorProject: firstProject,
     });
   });
 });
