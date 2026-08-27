@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:7
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -6,8 +6,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
+type VisualizerPlugin = import('../src/types/plugin.js').VisualizerPlugin;
 
-const fixture = vi.hoisted(() => ({ worktreePath: '', scopes: [] as Array<Record<string, unknown>> }));
+const fixture = vi.hoisted(() => ({
+  worktreePath: '',
+  scopes: [] as Array<Record<string, unknown>>,
+  visualizer: null as VisualizerPlugin | null,
+  emittedBeforeHalt: [] as string[],
+  sameStopPromise: false,
+}));
 const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null));
 
 vi.mock('../src/engine/otel/wire.js', () => ({ wireOtelVisualizer }));
@@ -26,8 +33,13 @@ vi.mock('../src/engine/daemon-runner.js', () => ({
     async (item: { slug: string }) => {
       const scope = await deps.beginFeatureRun({ path: fixture.worktreePath, branch: `feat/${item.slug}` }, item);
       fixture.scopes.push(scope);
-      (scope.stop as () => void)();
-      return { slug: item.slug, status: 'done' };
+      await (scope.events as { emit: (event: { type: 'loop_halt'; reason: string }) => Promise<void> })
+        .emit({ type: 'loop_halt', reason: 'fake HALT' });
+      const stop = scope.stop as () => Promise<void>;
+      const firstStop = stop();
+      fixture.sameStopPromise = firstStop === stop();
+      await firstStop;
+      return { slug: item.slug, status: 'halted', reason: 'fake HALT' };
     },
 }));
 
@@ -38,7 +50,14 @@ let dirs: string[] = [];
 beforeEach(() => {
   dirs = [];
   fixture.scopes = [];
+  fixture.visualizer = null;
+  fixture.emittedBeforeHalt = [];
+  fixture.sameStopPromise = false;
   wireOtelVisualizer.mockClear();
+  wireOtelVisualizer.mockImplementation((_config, context, events) => {
+    fixture.visualizer?.start(events, context);
+    return fixture.visualizer;
+  });
 });
 
 afterEach(async () => {
@@ -110,5 +129,30 @@ describe('daemon OTel visualizer wiring', () => {
     const context = wireOtelVisualizer.mock.calls[0]?.[1];
 
     expect(context?.runId).toBe(fixture.scopes[0]?.sessionId);
+  });
+
+  it('flushes once after a HALT, preserving pre-halt events before scope teardown', async () => {
+    const flush = vi.fn(async () => undefined);
+    fixture.visualizer = {
+      name: 'fake-otel',
+      start(events) {
+        events.on('loop_halt', () => {
+          fixture.emittedBeforeHalt.push('loop_halt');
+        });
+      },
+      stop: flush,
+    };
+
+    await dispatchWithSessionId();
+
+    expect({
+      events: fixture.emittedBeforeHalt,
+      flushes: flush.mock.calls.length,
+      sameStopPromise: fixture.sameStopPromise,
+    }).toEqual({
+      events: ['loop_halt'],
+      flushes: 1,
+      sameStopPromise: true,
+    });
   });
 });

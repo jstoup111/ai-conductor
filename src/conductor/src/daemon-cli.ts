@@ -941,16 +941,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents = renderedEventTypes();
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
+    let stopPromise: Promise<void> | undefined;
+    const stop = (): Promise<void> => {
+      if (stopPromise) return stopPromise;
+      stopPromise = (async () => {
+        await visualizer?.stop();
+        for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+        persistence.stop();
+      })();
+      return stopPromise;
+    };
     return {
       ...persistence,
       sessionId,
       visualizer,
       providerExecution: createProviderExecution(featureEvents, featureLog),
       log: featureLog,
-      stop: () => {
-        for (const type of renderableEvents) featureEvents.off(type, renderEvent);
-        persistence.stop();
-      },
+      stop,
     };
   };
   // Resolve the active memory provider once at run start so all steps see the
