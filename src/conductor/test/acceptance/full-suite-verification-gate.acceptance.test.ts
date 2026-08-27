@@ -289,10 +289,10 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     });
     expect(template).toMatch(/test_suite:[\s\S]*command:[^\n]*npm test[\s\S]*working_directory:/i);
     const testScript = JSON.parse(packageJson).scripts.test as string;
-    // Signal simulation needs a thread worker, so it runs in its own process
-    // after the fork-pool batch. Running both Vitest processes concurrently
-    // can terminate the aggregate shell with SIGHUP before it emits the
-    // required aggregate pass sentinel.
+    // Signal simulation runs in an isolated fork after the ordinary fork-pool
+    // batch. Running both Vitest processes concurrently can terminate the
+    // aggregate shell with SIGHUP before it emits the required aggregate pass
+    // sentinel.
     // Every invocation goes through the Node 26 temp-dir wrapper
     // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
     expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(3);
@@ -324,6 +324,8 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     for (const excluded of poolExcluded) {
       expect(signalConfig).toContain(excluded);
     }
+    expect(signalConfig).toMatch(/pool:\s*'forks'/);
+    expect(signalConfig).toMatch(/maxWorkers:\s*1/);
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);
     // vitest 4 removed `poolOptions`; the fork cap is `maxWorkers` now. It

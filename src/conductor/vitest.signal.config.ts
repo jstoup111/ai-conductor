@@ -12,7 +12,13 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['./test/setup.ts'],
     globalSetup: ['./test/global-setup.ts'],
-    pool: 'threads',
+    // This suite deliberately exercises the Conductor SIGHUP handler. A
+    // thread worker shares its process with Vitest's coordinator, so the
+    // simulated signal terminates the runner instead of just the test worker.
+    // Keep the one excluded file in a single fork: it preserves process
+    // isolation without consuming the ordinary suite's two-fork budget.
+    pool: 'forks',
+    maxWorkers: 1,
     testTimeout: 20000,
     hookTimeout: 30000,
   },

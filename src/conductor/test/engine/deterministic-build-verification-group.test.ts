@@ -24,6 +24,52 @@ describe('deterministic BUILD verification group', () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
+  // This test invokes the process-level SIGHUP path. It must run before the
+  // ordinary conductor fixtures, whose completed runs have already installed
+  // and removed their own process listeners in this worker.
+  it('does not persist a native suite as done when interrupted before its failed objective verdict joins', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-repair-'));
+    dirs.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(stateFilePath, JSON.stringify({
+      plan: 'done', build: 'done', wiring_check: 'pending', test_suite: 'pending',
+      build_review: 'stale', build_verification__wiring_check: 'done',
+      build_verification__test_suite: 'done',
+    }));
+    let sighupHandler: (() => Promise<void>) | undefined;
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
+      // Vitest may register its own SIGHUP listener after the conductor starts.
+      // Retain the conductor's first registration rather than invoking Vitest's
+      // real signal handler at the assertion boundary.
+      if (event === 'SIGHUP' && sighupHandler === undefined) {
+        sighupHandler = handler as () => Promise<void>;
+      }
+      return process;
+    }) as typeof process.on);
+    const exitProcess = vi.fn();
+    const ensure = vi.fn(async () => ({ status: 'FAILED' as const, reason: 'test_failure' as never, message: 'objective suite failure' }));
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: { run: vi.fn(async (step) => step === 'build' ? { success: false, output: 'stop after failed join' } : Promise.reject(new Error(`unexpected dispatch: ${step}`))) },
+      events: new ConductorEventEmitter(), projectRoot, fromStep: 'wiring_check', mode: 'auto', daemon: true,
+      maxRetries: 1, config: { validation_concurrency: 2 },
+      fullSuiteVerifier: { inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })), ensure },
+      exitProcess, onRecovery: async () => 'quit',
+    });
+    const run = conductor.run();
+    await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(sighupHandler).toBeDefined());
+    const beforeSignal = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
+    await sighupHandler!();
+    const persisted = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
+    await run;
+    expect(exitProcess).toHaveBeenCalledWith(129);
+    expect({
+      beforeSignalSyntheticDone: beforeSignal.build_verification__test_suite === 'done',
+      afterSignalDone: [persisted.test_suite, persisted.build_verification__test_suite].includes('done'),
+    }).toEqual({ beforeSignalSyntheticDone: false, afterSignalDone: false });
+  });
+
   it('accepts reconciled stale BUILD prerequisites at build review', () => {
     expect(checkGate('build_review', {
       wiring_check: 'stale',
@@ -286,82 +332,6 @@ describe('deterministic BUILD verification group', () => {
     await runFailure('wiring_check');
 
     expect(recorded).toEqual(['test_suite', 'wiring_check']);
-  });
-
-  it('does not persist a native suite as done when interrupted before its failed objective verdict joins', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-repair-'));
-    dirs.push(projectRoot);
-    const stateFilePath = join(projectRoot, 'conduct-state.json');
-    await writeFile(stateFilePath, JSON.stringify({
-      plan: 'done',
-      build: 'done',
-      wiring_check: 'pending',
-      test_suite: 'pending',
-      build_review: 'stale',
-      build_verification__wiring_check: 'done',
-      build_verification__test_suite: 'done',
-    }));
-
-    let sighupHandler: (() => Promise<void>) | undefined;
-    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
-      // Vitest may register its own SIGHUP listener after the conductor starts.
-      // Retain the conductor's first registration rather than invoking Vitest's
-      // real signal handler at the assertion boundary.
-      if (event === 'SIGHUP' && sighupHandler === undefined) {
-        sighupHandler = handler as () => Promise<void>;
-      }
-      return process;
-    }) as typeof process.on);
-    const exitProcess = vi.fn();
-    const events = new ConductorEventEmitter();
-    const ensure = vi.fn(async () => ({
-      status: 'FAILED' as const,
-      reason: 'test_failure' as never,
-      message: 'objective suite failure',
-    }));
-    const conductor = new Conductor({
-      stateFilePath,
-      stepRunner: {
-        run: vi.fn(async (step) => {
-          if (step === 'build') return { success: false, output: 'stop after failed join' };
-          throw new Error(`unexpected dispatch: ${step}`);
-        }),
-      },
-      events,
-      projectRoot,
-      fromStep: 'wiring_check',
-      mode: 'auto',
-      daemon: true,
-      maxRetries: 1,
-      config: { validation_concurrency: 2 },
-      fullSuiteVerifier: {
-        inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
-        ensure,
-      },
-      exitProcess,
-      onRecovery: async () => 'quit',
-    });
-
-    const run = conductor.run();
-    await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(sighupHandler).toBeDefined());
-    const beforeSignal = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
-    await sighupHandler!();
-    const persisted = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
-    await run;
-
-    expect(exitProcess).toHaveBeenCalledWith(129);
-
-    expect({
-      beforeSignalSyntheticDone: beforeSignal.build_verification__test_suite === 'done',
-      afterSignalDone: [
-        persisted.test_suite,
-        persisted.build_verification__test_suite,
-      ].includes('done'),
-    }).toEqual({
-      beforeSignalSyntheticDone: false,
-      afterSignalDone: false,
-    });
   });
 
   it('fails closed on an indeterminate native suite result', async () => {
