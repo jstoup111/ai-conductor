@@ -88,6 +88,30 @@ const ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS = {
   remediation: { enabled: true },
 } as const;
 const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
+/** Accepted config-key universe used by the consumer-registry coverage gate. */
+export const CONFIG_CONSUMER_KEY_SETS = {
+  top: [
+    'harness_version', 'defaults', 'phases', 'steps', 'complexity', 'conductor',
+    'markdown_viewer', 'mermaid_renderer', 'assess', 'acceptance_spec_globs', 'test_suite',
+    'llm_provider', 'ui_renderer', 'visualizers', 'memory_provider', 'otel', 'build_progress',
+    'provider_stream', 'spec_owner', 'owner_gate_cutover', 'attribution_audit_sample_pct',
+    'rebase_resolution_attempts', 'validation_concurrency', 'harness_self_host',
+    'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
+    'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'build_review', 'conflict_check',
+    'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
+    'retry_routing', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
+    'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup',
+    'step_heartbeat_stall_minutes', 'stale_claim_window_hours',
+    'provider_preparation_timeout_minutes', 'teardown_timeout_seconds',
+  ],
+  defaults: ['model', 'effort', 'max_retries', 'escalate'],
+  phases: ['model', 'effort', 'max_retries', 'escalate', 'by_tier'],
+  steps: ['llm_provider', 'model', 'effort', 'max_retries', 'disable', 'escalate', 'skill', 'hooks', 'by_tier', 'after', 'enforcement', 'completion_artifact', 'gate', 'kickback_target', 'when', 'parallel'],
+  conductor: ['update_channel', 'auto_check', 'current_version', 'last_checked_at'],
+  harness_self_host: ['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', 'sandbox_build_env', 'live_containment', 'version_approval_gate', 'release_artifact_gate'],
+  harness_self_host_build_auth: ['mode', 'token_path'],
+  mergeable_autoresolve: ['enabled', 'cooldownMinutes', 'suiteCommand'],
+} as const;
 export const DEPRECATED_BUILD_REVIEW_RUBRIC_IDS = [
   'scope',
   'completeness',
@@ -351,85 +375,7 @@ export function validateConfig(
   const warnings: ConfigWarning[] = [];
   const deprecatedKeys: DeprecatedConfigKey[] = [];
 
-  const knownTopLevelKeys = new Set([
-    'harness_version',
-    'defaults',
-    'phases',
-    'steps',
-    'complexity',
-    'conductor',
-    'markdown_viewer',
-    'mermaid_renderer',
-    'assess',
-    'acceptance_spec_globs',
-    'test_suite',
-    // Plugin selections (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection)
-    'llm_provider',
-    'ui_renderer',
-    'visualizers',
-    'memory_provider',
-    // Observability
-    'otel',
-    // Intra-step build progress events (poll/quiet/heartbeat cadence).
-    'build_progress',
-    // Live provider-stream observation cadence.
-    'provider_stream',
-    // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
-    'spec_owner',
-    'owner_gate_cutover',
-    'attribution_audit_sample_pct',
-    // Rebase auto-resolution attempt cap (rebase-resolution-skill).
-    'rebase_resolution_attempts',
-    // Bounds the validation-phase fan-out concurrency.
-    'validation_concurrency',
-    // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
-    'harness_self_host',
-    // Model availability fallback ladder.
-    'model_fallback_ladder',
-    // Daemon auto-restart on stale engine.
-    'auto_restart_on_stale_engine',
-    // Minimum interval between engine-refresh (origin fetch) attempts.
-    'engine_refresh_min_interval_seconds',
-    // Maximum time to wait for the Codex readiness doctor command.
-    'codex_doctor_timeout_seconds',
-    // Auto-resolve merge conflicts on open PRs.
-    'mergeable_autoresolve',
-    // Opt-in judgement gate at the build → manual_test seam.
-    'build_review',
-    // ADR corpus scope for conflict-check.
-    'conflict_check',
-    // SHIP prd_audit remediation caps and PLAN_GAP routing policy.
-    'prd_audit',
-    // Per-check tier policy for the as-built architecture review.
-    'architecture_review_as_built',
-    // CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
-    'ci_watch',
-    // Progress-aware build halt/park decision (daemon-halts-a-build-that-is-making-forward-progre).
-    'build_progress_halt',
-    // Retry-routing kill-switch (retry-classify-rerun-vs-route).
-    'retry_routing',
-    // Retired build-review wiring rubric. The key is still accepted so an
-    // existing consumer config does not hard-fail on upgrade; it is ignored.
-    'wiring',
-    // Kickback→build no-op escalation (adr-2026-07-13-kickback-build-no-op-escalation).
-    'kickback_escalation',
-    // Cumulative build-review convergence-bound kill-switch.
-    'cumulative_kickback_bound',
-    // Gate-verdict code-validity preservation kill-switch.
-    'gate_code_validity',
-    // Default-off verbose skip logging in gate-writeback (daemon-suppress-other-owner-log-noise).
-    'daemon_verbose',
-    // Removes parked feature worktrees after reconciliation by default.
-    'reconcile_parked_auto_cleanup',
-    // Deprecated heartbeat compatibility no-op; retained so legacy configs load.
-    'step_heartbeat_stall_minutes',
-    // Stale-claim reap window override (engineer-unclaim-requeue-verb-stale-claimed-ledger).
-    'stale_claim_window_hours',
-    // Provider lifecycle preparation deadline.
-    'provider_preparation_timeout_minutes',
-    // Bounded grace period for project-supplied worktree teardown hooks.
-    'teardown_timeout_seconds',
-  ]);
+  const knownTopLevelKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.top);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
       return errVal(`Unknown top-level key: "${key}"`);
@@ -441,7 +387,7 @@ export function validateConfig(
 
   // defaults
   if (obj.defaults !== undefined) {
-    const err = validateEffortAndModelBag(obj.defaults, 'defaults');
+    const err = validateEffortAndModelBag(obj.defaults, 'defaults', false);
     if (err) return { ok: false, error: err };
   }
 
@@ -457,7 +403,7 @@ export function validateConfig(
       if (!VALID_PHASES.has(phase)) {
         return errVal(`Unknown phase: "${phase}"`);
       }
-      const err = validateEffortAndModelBag(value, `phases.${phase}`);
+      const err = validateEffortAndModelBag(value, `phases.${phase}`, true);
       if (err) return { ok: false, error: err };
     }
   }
@@ -517,24 +463,7 @@ export function validateConfig(
         }
       }
 
-      const knownStepKeys = new Set([
-        'llm_provider',
-        'model',
-        'effort',
-        'max_retries',
-        'disable',
-        'escalate',
-        'skill',
-        'hooks',
-        'by_tier',
-        'after',
-        'enforcement',
-        'completion_artifact',
-        'gate',
-        'kickback_target',
-        'when',
-        'parallel',
-      ]);
+      const knownStepKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.steps);
       for (const k of Object.keys(cfg)) {
         if (!knownStepKeys.has(k)) {
           return errVal(`Unknown key in steps.${name}: "${k}"`);
@@ -756,6 +685,12 @@ export function validateConfig(
   }
 
   // conductor (user-level global state)
+  if (opts.source === 'project' && 'conductor' in obj) {
+    return errVal(
+      `conductor must not be set in a project config (${projectConfigPath(projectRoot ?? '.')}): ` +
+        'it is per-user update-check state. Move conductor to your user config at ~/.ai-conductor/config.yml.',
+    );
+  }
   if (obj.conductor !== undefined) {
     const err = validateConductorBlock(obj.conductor);
     if (err) return { ok: false, error: err };
@@ -1313,7 +1248,6 @@ export function validateConfig(
 
 const SELF_HOST_ACTIVATIONS = new Set(['auto', 'force_on', 'force_off']);
 const SELF_HOST_GATE_KEYS = [
-  'skill_relink_preflight',
   'sandbox_build_env',
   'live_containment',
   'version_approval_gate',
@@ -1325,7 +1259,7 @@ function validateSelfHostBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'harness_self_host must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', ...SELF_HOST_GATE_KEYS]);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.harness_self_host);
   for (const k of Object.keys(obj)) {
     // Reject unknown keys so a typo'd gate name surfaces instead of silently
     // leaving that gate at its (enabled) default — TR-11 negative path.
@@ -1374,7 +1308,7 @@ function validateBuildAuthBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'harness_self_host.build_auth must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['mode', 'token_path']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.harness_self_host_build_auth);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return {
@@ -1606,7 +1540,7 @@ function validateConductorBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'conductor must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['update_channel', 'auto_check', 'current_version', 'last_checked_at']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.conductor);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return {
@@ -2024,7 +1958,7 @@ function validateMergeableAutoresolveBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'mergeable_autoresolve must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['enabled', 'cooldownMinutes', 'suiteCommand']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.mergeable_autoresolve);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return { type: 'validation_error', message: `Unknown key in mergeable_autoresolve: "${k}"` };
@@ -2148,14 +2082,14 @@ function validateMermaidRendererBlock(raw: unknown): ConfigError | null {
   return null;
 }
 
-function validateEffortAndModelBag(raw: unknown, path: string): ConfigError | null {
+function validateEffortAndModelBag(raw: unknown, path: string, allowByTier: boolean): ConfigError | null {
   if (!isPlainObject(raw)) {
     return { type: 'validation_error', message: `${path} must be an object` };
   }
   const obj = raw as Record<string, unknown>;
   // defaults/phases accept the same knobs as steps minus skill/disable/hooks/after.
   // (review is not user-configurable — it's fixed per step in resolved-config.ts)
-  const allowed = new Set(['model', 'effort', 'max_retries', 'escalate', 'by_tier']);
+  const allowed = new Set<string>(allowByTier ? CONFIG_CONSUMER_KEY_SETS.phases : CONFIG_CONSUMER_KEY_SETS.defaults);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return {
@@ -2179,7 +2113,7 @@ function validateEffortAndModelBag(raw: unknown, path: string): ConfigError | nu
   if (obj.model !== undefined && typeof obj.model !== 'string') {
     return { type: 'validation_error', message: `${path}.model must be a string` };
   }
-  if (obj.by_tier !== undefined) {
+  if (allowByTier && obj.by_tier !== undefined) {
     return validateByTier(obj.by_tier, `${path}.by_tier`);
   }
   return null;

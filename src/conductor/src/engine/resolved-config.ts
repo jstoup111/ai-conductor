@@ -506,38 +506,6 @@ export function resolveTeardownTimeoutSeconds(config?: HarnessConfig): number {
   return override;
 }
 
-/**
- * Resolve the auth park timeout from HarnessConfig.
- *
- * Reads `config.auth_park_timeout_minutes` (top-level HarnessConfig key).
- *
- * Resolution rules:
- *   - undefined / absent     → DEFAULT_AUTH_PARK_TIMEOUT_MINUTES (60)
- *   - finite number (any)    → use the value (0 and negatives signal opt-out at runtime)
- *   - non-numeric (string)   → throw with clear error message
- *   - NaN or Infinity        → throw with clear error message
- *
- * @throws Error if the value is non-numeric or non-finite (NaN, Infinity)
- */
-export function resolveAuthParkTimeoutMinutes(config?: HarnessConfig): number {
-  const override = config?.auth_park_timeout_minutes;
-  if (override === undefined || override === null) {
-    return DEFAULT_AUTH_PARK_TIMEOUT_MINUTES;
-  }
-  if (typeof override !== 'number') {
-    throw new Error(
-      `Invalid auth_park_timeout_minutes: expected a number, got ${typeof override} (${JSON.stringify(override)})`
-    );
-  }
-  if (!Number.isFinite(override)) {
-    throw new Error(
-      `Invalid auth_park_timeout_minutes: must be a finite number, got ${override}`
-    );
-  }
-  // Preserve 0 and negative values as opt-out signals; positive values are timeout in minutes
-  return override;
-}
-
 /** Default lifecycle deadline, in minutes, before provider process spawn. */
 const DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES = 5;
 
@@ -590,7 +558,6 @@ export function getDefaultBuildAuthTokenPath(): string {
 /** Fully-resolved self-host guardrail settings (no optional fields). */
 export interface ResolvedSelfHostConfig {
   activation: SelfHostActivation;
-  skillRelinkPreflight: boolean;
   sandboxBuildEnv: boolean;
   liveContainment: boolean;
   versionApprovalGate: boolean;
@@ -647,7 +614,6 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
 
   return {
     activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
-    skillRelinkPreflight: block?.skill_relink_preflight ?? true,
     sandboxBuildEnv: block?.sandbox_build_env ?? true,
     liveContainment: typeof block?.live_containment === 'boolean'
       ? block.live_containment
@@ -662,35 +628,6 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     buildAuthMode: buildAuthBlock?.mode || DEFAULT_BUILD_AUTH_MODE,
     // Daemon build-auth token path: explicit, tilde-expanded, or default
     buildAuthTokenPath: resolveTokenPath(buildAuthBlock?.token_path),
-  };
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Mergeable autoresolve configuration (auto-resolve merge conflicts on open PRs)
-// ────────────────────────────────────────────────────────────────────────────
-
-export const DEFAULT_MERGEABLE_AUTORESOLVE_ENABLED = false;
-export const DEFAULT_MERGEABLE_AUTORESOLVE_COOLDOWN_MINUTES = 60;
-
-/** Fully-resolved mergeable autoresolve settings (no optional fields). */
-export interface ResolvedMergeableAutoresolveConfig {
-  enabled: boolean;
-  cooldownMinutes: number;
-  suiteCommand: string | undefined;
-}
-
-/**
- * Resolve the `mergeable_autoresolve` block to concrete settings.
- * Absent block defaults to disabled (safe-by-default).
- * Validation of the raw block happens in `validateConfig`; this resolver
- * assumes a validated (or absent) block and only applies defaults.
- */
-export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMergeableAutoresolveConfig {
-  const block = config?.mergeable_autoresolve;
-  return {
-    enabled: block?.enabled ?? DEFAULT_MERGEABLE_AUTORESOLVE_ENABLED,
-    cooldownMinutes: block?.cooldownMinutes ?? DEFAULT_MERGEABLE_AUTORESOLVE_COOLDOWN_MINUTES,
-    suiteCommand: block?.suiteCommand,
   };
 }
 

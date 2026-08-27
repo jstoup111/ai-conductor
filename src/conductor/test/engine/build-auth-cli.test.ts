@@ -20,7 +20,6 @@ import {
 function baseSelfHost(overrides: Partial<ResolvedSelfHostConfig> = {}): ResolvedSelfHostConfig {
   return {
     activation: 'auto',
-    skillRelinkPreflight: true,
     sandboxBuildEnv: true,
     liveContainment: true,
     versionApprovalGate: true,

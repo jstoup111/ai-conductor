@@ -617,6 +617,22 @@ steps:
       expect(result.error.message).toContain('unknown_key');
     });
 
+    it('rejects the removed top-level auth_park_timeout_minutes key', () => {
+      const result = validateConfig({ auth_park_timeout_minutes: 15 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toBe('Unknown top-level key: "auth_park_timeout_minutes"');
+    });
+
+    it('rejects defaults.by_tier but keeps phase and step tier overrides valid', () => {
+      const rejected = validateConfig({ defaults: { by_tier: { S: {} } } });
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.message).toBe('Unknown key in defaults: "by_tier"');
+
+      expect(validateConfig({ phases: { BUILD: { by_tier: { S: {} } } } }).ok).toBe(true);
+      expect(validateConfig({ steps: { build: { by_tier: { S: {} } } } }).ok).toBe(true);
+    });
+
     it('rejects unknown step-level keys (fail-fast)', () => {
       const result = validateConfig({
         steps: { memory: { model: 'haiku', bogus_key: 1 } },
@@ -1000,6 +1016,16 @@ steps:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toMatch(/boolean/);
+    });
+
+    it('rejects a conductor block from project source and accepts it after merge', () => {
+      const project = validateConfig({ conductor: {} }, '/repo', { source: 'project' });
+      expect(project.ok).toBe(false);
+      if (!project.ok) {
+        expect(project.error.message).toMatch(/\.ai-conductor\/config\.yml/);
+        expect(project.error.message).toMatch(/Move.*~\/.ai-conductor\/config\.yml/);
+      }
+      expect(validateConfig({ conductor: {} }, '/repo', { source: 'merged' }).ok).toBe(true);
     });
   });
 
