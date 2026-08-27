@@ -4,6 +4,12 @@ spec_hash: fc7c72885854a4bc30047a85e8dddb5fc32e6160518c07020e1d84037bc916e0
 pr: https://github.com/jstoup111/ai-conductor/pull/1973
 shipped: 2026-08-27
 engine_version: 20260827T172153Z-9278310339a6
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/otel/wire.ts:26-38 — the helper builds its own `PluginRegistry` and calls `registerBuiltins` on every invocation instead of consuming the caller's registry, and starts the visualizer outside the `invokeVisualizerFactory`/`buildVisualizers` containment the interactive path previously used"
+    accepted: false
 ---
 
 ## Cost
