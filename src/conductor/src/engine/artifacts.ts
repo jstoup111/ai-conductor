@@ -1464,21 +1464,33 @@ export function isSkipAttempt(section: string): boolean {
 }
 
 /**
- * Pull the value off the `Verdict:` line of an as-built review report, e.g.
- * `**Verdict:** APPROVED WITH DRIFT NOTES` → `APPROVED WITH DRIFT NOTES`.
- * Tolerates optional bold markers and an accidental double colon. Returns null
- * when there is no Verdict line (fail-closed: the gate treats that as not-done).
+ * Read the `Verdict:` line of an as-built review report, retaining an
+ * unrecognized value for diagnostics while keeping the recognized vocabulary
+ * closed.
+ */
+export function readAsBuiltVerdictLine(content: string):
+  | { found: false }
+  | { found: true; raw: string; recognized: string | null } {
+  const m = content.match(
+    /^[^\S\n]*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*(.*?)\s*\*{0,2}\s*$/im,
+  );
+  if (!m) return { found: false };
+  const raw = m[1].replace(/\*+/g, '').trim().toUpperCase();
+  if (!raw) return { found: false };
+  const recognized = raw === 'APPROVED' || raw === 'APPROVED WITH DRIFT NOTES' ||
+      raw === 'PLAN_GAP' || raw === 'BLOCKED'
+    ? raw
+    : null;
+  return { found: true, raw, recognized };
+}
+
+/**
+ * Pull the recognized value off the `Verdict:` line of an as-built review
+ * report. Returns null when the line is absent or uses an unknown verdict.
  */
 export function parseAsBuiltVerdict(content: string): string | null {
-  const m = content.match(
-    /^[^\S\n]*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*(.+?)\s*\*{0,2}\s*$/im,
-  );
-  if (!m) return null;
-  const value = m[1].replace(/\*+/g, '').trim().toUpperCase();
-  return value === 'APPROVED' || value === 'APPROVED WITH DRIFT NOTES' ||
-    value === 'PLAN_GAP' || value === 'BLOCKED'
-    ? value
-    : null;
+  const verdict = readAsBuiltVerdictLine(content);
+  return verdict.found ? verdict.recognized : null;
 }
 
 /** The terminal interpretation of a fresh as-built review report. */
@@ -1488,7 +1500,10 @@ export type AsBuiltReviewOutcome =
   | { kind: 'plan-gap-undelivered' }
   | { kind: 'blocked-remediable' }
   | { kind: 'blocked-design' }
-  | { kind: 'invalid' };
+  | { kind: 'invalid'; cause: 'no-verdict-line' }
+  | { kind: 'invalid'; cause: 'unrecognized-verdict'; value: string }
+  | { kind: 'invalid'; cause: 'plan-gap-missing-outcome' }
+  | { kind: 'invalid'; cause: 'unparseable-blocked-findings'; detail: string };
 
 /**
  * Classify the as-built review's explicit verdict without giving its prose any
@@ -1497,23 +1512,47 @@ export type AsBuiltReviewOutcome =
  * halt, while an omitted/malformed outcome remains fail-closed as invalid.
  */
 export function classifyAsBuiltReviewOutcome(content: string): AsBuiltReviewOutcome {
-  const verdict = parseAsBuiltVerdict(content);
-  if (verdict === null) return { kind: 'invalid' };
-  if (verdict === 'APPROVED' || verdict === 'APPROVED WITH DRIFT NOTES') return { kind: 'approved' };
-  if (verdict === 'BLOCKED') {
+  const verdict = readAsBuiltVerdictLine(content);
+  if (!verdict.found) return { kind: 'invalid', cause: 'no-verdict-line' };
+  if (verdict.recognized === null) {
+    return { kind: 'invalid', cause: 'unrecognized-verdict', value: verdict.raw };
+  }
+  const recognizedVerdict = verdict.recognized;
+  if (recognizedVerdict === 'APPROVED' || recognizedVerdict === 'APPROVED WITH DRIFT NOTES') return { kind: 'approved' };
+  if (recognizedVerdict === 'BLOCKED') {
     const findings = parseAsBuiltBlockedFindings(content);
-    if (!findings.ok) return { kind: 'invalid' };
+    if (!findings.ok) {
+      return { kind: 'invalid', cause: 'unparseable-blocked-findings', detail: findings.error };
+    }
     return findings.value.findings.some((finding) => finding.class === 'DESIGN')
       ? { kind: 'blocked-design' }
       : { kind: 'blocked-remediable' };
   }
-  if (verdict !== 'PLAN_GAP') return { kind: 'invalid' };
+  if (recognizedVerdict !== 'PLAN_GAP') return { kind: 'invalid', cause: 'unrecognized-verdict', value: recognizedVerdict };
 
   const outcome = content.match(/^[^\S\n]*\*{0,2}\s*Outcome delivered\s*\*{0,2}\s*:+\s*(yes|no)\s*$/im)?.[1]
     ?.toLowerCase();
   if (outcome === 'yes') return { kind: 'plan-gap-delivered' };
   if (outcome === 'no') return { kind: 'plan-gap-undelivered' };
-  return { kind: 'invalid' };
+  return { kind: 'invalid', cause: 'plan-gap-missing-outcome' };
+}
+
+/** Render the operator-facing reason for an invalid as-built review outcome. */
+export function renderAsBuiltInvalidReason(
+  outcome: Extract<AsBuiltReviewOutcome, { kind: 'invalid' }>,
+): string {
+  switch (outcome.cause) {
+    case 'no-verdict-line':
+      return 'no parseable `Verdict:` line was found in the as-built review; record one `Verdict: <value>` line and re-run the as-built review';
+    case 'unrecognized-verdict':
+      return `as-built review verdict ${outcome.value} is unrecognized; use one of APPROVED, APPROVED WITH DRIFT NOTES, PLAN_GAP, or BLOCKED and re-run the as-built review`;
+    case 'plan-gap-missing-outcome':
+      return 'as-built review must record `Outcome delivered: yes|no` for PLAN_GAP; re-run the as-built review';
+    case 'unparseable-blocked-findings':
+      return `as-built BLOCKED findings block is unparseable: ${outcome.detail}; re-run the as-built review`;
+  }
+  const exhaustive: never = outcome;
+  return exhaustive;
 }
 
 /**
@@ -3287,7 +3326,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (outcome.kind === 'invalid') {
         return {
           done: false,
-          reason: 'as-built review must record `Verdict:` plus `Outcome delivered: yes|no` for PLAN_GAP; re-run the as-built review',
+          reason: renderAsBuiltInvalidReason(outcome),
           routeClass: 'absent',
         };
       }

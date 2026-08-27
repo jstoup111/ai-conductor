@@ -1,3 +1,4 @@
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +7,8 @@ import {
   checkStepCompletion,
   classifyAsBuiltReviewOutcome,
   parseAsBuiltBlockedFindings,
+  readAsBuiltVerdictLine,
+  renderAsBuiltInvalidReason,
 } from '../src/engine/artifacts.js';
 import { Conductor, type StepRunner } from '../src/engine/conductor.js';
 import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
@@ -33,6 +36,30 @@ afterEach(async () => {
 });
 
 describe('as-built verdict gate', () => {
+  it('does not treat a Verdict heading and body as a verdict line', () => {
+    expect(readAsBuiltVerdictLine('## Verdict\n\n**BLOCKED**')).toEqual({ found: false });
+  });
+
+  it('does not find a verdict in empty content', () => {
+    expect(readAsBuiltVerdictLine('')).toEqual({ found: false });
+  });
+
+  it('retains an unrecognized verdict line for diagnosis', () => {
+    expect(readAsBuiltVerdictLine('Verdict: REJECTED')).toEqual({
+      found: true,
+      raw: 'REJECTED',
+      recognized: null,
+    });
+  });
+
+  it('recognizes a bold, lower-case approved-with-drift-notes verdict line', () => {
+    expect(readAsBuiltVerdictLine('**Verdict:** approved with drift notes')).toEqual({
+      found: true,
+      raw: 'APPROVED WITH DRIFT NOTES',
+      recognized: 'APPROVED WITH DRIFT NOTES',
+    });
+  });
+
   it('parses an all-remediable BLOCKED findings table', () => {
     const report = [
       'Verdict: BLOCKED',
@@ -193,7 +220,11 @@ describe('as-built verdict gate', () => {
       class: 'mechanical-fault',
       error: 'As-built BLOCKED report has duplicate Blocking Findings sections.',
     });
-    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'As-built BLOCKED report has duplicate Blocking Findings sections.',
+    });
   });
 
   it('rejects a second Blocking Findings table within the authoritative section', () => {
@@ -215,7 +246,11 @@ describe('as-built verdict gate', () => {
       class: 'mechanical-fault',
       error: 'As-built BLOCKED report has duplicate Blocking Findings tables.',
     });
-    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'As-built BLOCKED report has duplicate Blocking Findings tables.',
+    });
   });
 
   it('returns a typed fault naming a duplicate Finding id within one table', () => {
@@ -234,7 +269,11 @@ describe('as-built verdict gate', () => {
       class: 'mechanical-fault',
       error: 'As-built Blocking Findings table has duplicate Finding id "ARCH-1".',
     });
-    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'As-built Blocking Findings table has duplicate Finding id "ARCH-1".',
+    });
   });
 
   it('classifies an all-REMEDIABLE BLOCKED findings table as blocked-remediable', () => {
@@ -295,8 +334,114 @@ describe('as-built verdict gate', () => {
     ];
 
     for (const report of reports) {
-      expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'invalid' });
+      expect(classifyAsBuiltReviewOutcome(report)).toMatchObject({
+        kind: 'invalid',
+        cause: 'unparseable-blocked-findings',
+        detail: expect.any(String),
+      });
     }
+  });
+
+  it('classifies a heading-style verdict as a missing verdict line', () => {
+    expect(classifyAsBuiltReviewOutcome('## Verdict\n\n**BLOCKED**')).toEqual({
+      kind: 'invalid',
+      cause: 'no-verdict-line',
+    });
+  });
+
+  it('classifies an unrecognized verdict with its raw value', () => {
+    expect(classifyAsBuiltReviewOutcome('Verdict: REJECTED')).toEqual({
+      kind: 'invalid',
+      cause: 'unrecognized-verdict',
+      value: 'REJECTED',
+    });
+  });
+
+  it.each(['Verdict: PLAN_GAP', 'Verdict: PLAN_GAP\nOutcome delivered: maybe'])(
+    'classifies PLAN_GAP report %j without a valid outcome as missing its outcome',
+    (report) => {
+      expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+        kind: 'invalid',
+        cause: 'plan-gap-missing-outcome',
+      });
+    },
+  );
+
+  it('classifies malformed BLOCKED findings with the parser error', () => {
+    expect(classifyAsBuiltReviewOutcome('Verdict: BLOCKED')).toEqual({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'As-built BLOCKED report is missing its Blocking Findings table.',
+    });
+  });
+
+  it('renders a missing verdict line without PLAN_GAP-specific guidance', () => {
+    expect(renderAsBuiltInvalidReason({ kind: 'invalid', cause: 'no-verdict-line' })).toEqual(
+      expect.stringMatching(/^(?=.*no parseable `Verdict:` line was found)(?=.*`Verdict: <value>`)(?!.*PLAN_GAP)(?!.*Outcome delivered).+$/),
+    );
+  });
+
+  it('renders an unrecognized verdict with its value and the closed vocabulary', () => {
+    expect(renderAsBuiltInvalidReason({
+      kind: 'invalid',
+      cause: 'unrecognized-verdict',
+      value: 'REJECTED',
+    })).toEqual(expect.stringMatching(/(?=.*REJECTED)(?=.*APPROVED)(?=.*APPROVED WITH DRIFT NOTES)(?=.*PLAN_GAP)(?=.*BLOCKED)/));
+  });
+
+  it('renders PLAN_GAP guidance when its outcome is missing', () => {
+    expect(renderAsBuiltInvalidReason({ kind: 'invalid', cause: 'plan-gap-missing-outcome' })).toEqual(
+      expect.stringMatching(/(?=.*PLAN_GAP)(?=.*Outcome delivered: yes\|no)(?=.*re-run the as-built review)/),
+    );
+  });
+
+  it('renders the BLOCKED findings parser detail', () => {
+    expect(renderAsBuiltInvalidReason({
+      kind: 'invalid',
+      cause: 'unparseable-blocked-findings',
+      detail: 'missing findings table',
+    })).toEqual(expect.stringMatching(/(?=.*BLOCKED findings block)(?=.*missing findings table)/));
+  });
+
+  it.each([
+    ['a delivered PLAN_GAP', 'Verdict: PLAN_GAP\nOutcome delivered: yes', { kind: 'plan-gap-delivered' }],
+    ['an undelivered PLAN_GAP', 'Verdict: PLAN_GAP\nOutcome delivered: no', { kind: 'plan-gap-undelivered' }],
+    [
+      'a remediable BLOCKED report',
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | REMEDIABLE | Task 2 | Add the missing guard |',
+      ].join('\n'),
+      { kind: 'blocked-remediable' },
+    ],
+    [
+      'a design BLOCKED report',
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
+      ].join('\n'),
+      { kind: 'blocked-design' },
+    ],
+  ])('keeps %s classified through the invalid-cause split', (_description, report, expected) => {
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual(expected);
+  });
+
+  it('keeps a marker-only Verdict invalid without PLAN_GAP guidance', () => {
+    const outcome = classifyAsBuiltReviewOutcome('Verdict: **');
+    if (outcome.kind !== 'invalid') throw new Error('expected an invalid as-built outcome');
+
+    expect({ outcome, reason: renderAsBuiltInvalidReason(outcome) }).toEqual({
+      outcome: { kind: 'invalid', cause: 'no-verdict-line' },
+      reason: expect.not.stringContaining('PLAN_GAP'),
+    });
   });
 
   it('keeps non-BLOCKED outcomes unchanged without a findings table', () => {
@@ -313,6 +458,19 @@ describe('as-built verdict gate', () => {
     await expect(
       checkStepCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: Date.now() - 1_000 }),
     ).resolves.toMatchObject({ done: true });
+  });
+
+  it('returns the missing-verdict-line reason through the as-built completion predicate', async () => {
+    const dir = await fixture();
+    await writeAsBuilt(dir, '## Verdict\n\n**BLOCKED**\n');
+
+    await expect(
+      checkStepCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: Date.now() - 1_000 }),
+    ).resolves.toMatchObject({
+      done: false,
+      reason: renderAsBuiltInvalidReason({ kind: 'invalid', cause: 'no-verdict-line' }),
+      routeClass: 'absent',
+    });
   });
 
   it('keeps undelivered PLAN_GAP, blocked-design, and missing verdict reports unsatisfied', async () => {
