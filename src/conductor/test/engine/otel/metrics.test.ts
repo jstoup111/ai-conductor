@@ -644,6 +644,44 @@ describe('Task 2: cost counter guards', () => {
   });
 });
 
+// ── Task 3: dispatch metering classification ───────────────────────────────
+
+describe('Task 3: dispatch metering classification', () => {
+  it('records one dispatch for each fully-metered, cost-unmetered, and unmetered close', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: 0.42 },
+    });
+    await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'plan',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50 },
+    });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const dispatches = findMetric(metricExporter, 'conductor.step.dispatches')!;
+    expect(dispatches.dataPoints.map((dataPoint) => ({
+      value: dataPoint.value,
+      attributes: dataPoint.attributes,
+    }))).toEqual([
+      { value: 1, attributes: { step: 'explore', metering: 'fully-metered' } },
+      { value: 1, attributes: { step: 'plan', metering: 'cost-unmetered' } },
+      { value: 1, attributes: { step: 'build', metering: 'unmetered' } },
+    ]);
+  });
+});
+
 // ── Task 19: closeout duration histogram ────────────────────────────────────
 
 describe('Task 19: closeout duration histogram', () => {

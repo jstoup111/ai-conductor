@@ -15,6 +15,7 @@ import type { Attributes, Meter, Counter, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
 import type { RunOutcome } from './span-manager.js';
+import { classifyMetering } from '../metering.js';
 
 /** Explicit duration histogram boundaries, from 10 ms through 30 minutes. */
 export const DURATION_BUCKET_BOUNDARIES_MS = [
@@ -27,6 +28,7 @@ export class MetricsRecorder {
   private readonly retriesCounter: Counter;
   private readonly tokensCounter: Counter;
   private readonly costCounter: Counter;
+  private readonly dispatchesCounter: Counter;
   private readonly closeoutDurationHistogram: Histogram;
   private readonly runOutcomesCounter: Counter;
 
@@ -51,6 +53,9 @@ export class MetricsRecorder {
     this.costCounter = meter.createCounter('conductor.step.cost', {
       description: 'Cost per conductor step',
       unit: 'usd',
+    });
+    this.dispatchesCounter = meter.createCounter('conductor.step.dispatches', {
+      description: 'Number of conductor step dispatches classified by metering status',
     });
     this.closeoutDurationHistogram = meter.createHistogram('conductor.pipeline.closeout.duration', {
       description: 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
@@ -86,6 +91,8 @@ export class MetricsRecorder {
     if (retryCount > 0) {
       this.retriesCounter.add(retryCount, this.withIdentity({ step }));
     }
+
+    this.dispatchesCounter.add(1, { step, metering: classifyMetering(tokenUsage) });
 
     // Tokens: only when tokenUsage is present; only present kinds recorded.
     if (tokenUsage !== undefined && tokenUsage !== null) {
