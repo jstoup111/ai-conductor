@@ -295,24 +295,18 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       });
 
       // Resume's clamp treats a non-current completion as pending; a complete
-      // current PASS remains done. wiring_check is deliberately not consulted.
+      // current PASS remains done.
       expect(completion.done).toBe(done);
-      expect(ALL_STEPS.find((step) => step.name === 'wiring_check')?.loopGate).not.toBe(true);
     });
 
-    // wiring_check is omitted: it is a deprecated no-op that settles
-    // in-process, so a stale wiring proof never steers a resume entry
-    // (adr-2026-08-11-wiring-judged-in-build-review).
     it('a stale test_suite proof resumes before build_review', async () => {
       const staleGate: StepName = 'test_suite';
       const seed = seedDoneThrough('manual_test');
       seed.build = 'done';
-      seed.wiring_check = 'done';
       seed.test_suite = 'stale';
       seed.build_review = 'stale';
       await writeState(statePath, seed as ConductState);
       await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
-      await writeVerdict(dir, 'wiring_check', { satisfied: true, checkedAt: 1 });
       await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback });
       await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
 
@@ -386,13 +380,11 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     it('a stale step is selected even though its own verdict still says satisfied', async () => {
       const seed = seedDoneThrough('build');
       seed.build = 'done';
-      seed.wiring_check = 'done';
       seed.test_suite = 'done';
       seed.build_review = 'stale';
       seed.rebase = 'done';
       await writeState(statePath, seed as ConductState);
       await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
-      await writeVerdict(dir, 'wiring_check', { satisfied: true, checkedAt: 1 });
       await writeVerdict(dir, 'test_suite', { satisfied: true, checkedAt: 1 });
       // Stale but the on-disk verdict lies and says satisfied — state must win.
       await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
@@ -506,7 +498,6 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       const seed = seedDoneThrough('build');
       seed.build = 'failed';
       seed.build_review = 'stale';
-      seed.wiring_check = 'stale';
       seed.test_suite = 'stale';
       seed.manual_test = 'stale';
       seed.architecture_review_as_built = 'stale';
@@ -517,7 +508,6 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       // The divergence: verdict satisfied, state failed.
       await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
       await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
-      await writeVerdict(dir, 'wiring_check', { satisfied: false, checkedAt: 1, kickback });
       await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
     }
 
@@ -622,7 +612,6 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     it('halts with an explicit named verdict when repeated prerequisite dispatch cannot resolve', async () => {
       const seed = seedDoneThrough('finish');
       seed.build = 'failed';
-      seed.wiring_check = 'pending';
       await writeState(statePath, seed as ConductState);
       for (const name of ALL_STEPS.filter((step) => step.loopGate).map((step) => step.name)) {
         if (name !== 'build') await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });

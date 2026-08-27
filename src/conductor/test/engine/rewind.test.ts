@@ -62,7 +62,7 @@ describe('rewindState', () => {
     worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', prd: 'done',
     architecture_diagram: 'done', architecture_review: 'done', stories: 'done',
     conflict_check: 'done', plan: 'done', coherence_check: 'done', acceptance_specs: 'done',
-    build: 'done', wiring_check: 'done', test_suite: 'done', build_review: 'done',
+    build: 'done', test_suite: 'done', build_review: 'done',
     manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
     rebase: 'done', finish: 'done', last_step: 'finish',
   };
@@ -110,7 +110,7 @@ describe('rewindState', () => {
     const config: HarnessConfig = {
       steps: { lint: { after: 'build', skill: 'lint', enforcement: 'gating' } },
     };
-    const state = { ...completeState, lint: 'done', wiring_check: 'skipped', last_step: 'finish' } as ConductState;
+    const state = { ...completeState, lint: 'done', last_step: 'finish' } as ConductState;
 
     const result = await rewindState({ state, config, target: 'lint', store, readCurrentState: async () => state });
 

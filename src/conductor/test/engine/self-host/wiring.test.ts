@@ -70,7 +70,6 @@ function preBuildDoneState(): ConductState {
     acceptance_specs: 'done',
     test_suite: 'done',
     build_review: 'done',
-    wiring_check: 'done',
     manual_test: 'done',
     prd_audit: 'done',
     architecture_review_as_built: 'done',

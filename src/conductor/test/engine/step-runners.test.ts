@@ -3567,19 +3567,6 @@ TIER: M`,
       await writeFile(planPath, '# Plan\n\nDo the thing.\n', 'utf-8');
     });
 
-    it('has no provider runner for the retired wiring_check step', async () => {
-      const provider = createMockProvider();
-      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
-        planPath,
-      });
-
-      const result = await runner.run('wiring_check', emptyState);
-
-      expect(result.success).toBe(false);
-      expect(provider.invoke).not.toHaveBeenCalled();
-    });
-
     it('retains one public build_review step while delegating fan-out orchestration without a legacy provider call', async () => {
       const provider = createMockProvider();
       const coordinate = vi.fn(async () => ({ success: true, output: 'five rubric branches settled' }));
