@@ -270,7 +270,7 @@ async function excludeEngineArtifacts(
       // No exclude file yet — start fresh.
     }
     const lines = new Set(existing.split('\n').map((l) => l.trim()));
-    const wanted = ['.claude/'];
+    const wanted = ['.claude/', '.daemon/'];
     const missing = wanted.filter((w) => !lines.has(w));
     if (missing.length === 0) {
       return;
