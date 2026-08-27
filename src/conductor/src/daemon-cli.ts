@@ -27,6 +27,7 @@ import {
 } from './engine/ci-fix.js';
 import {
   resolveRebaseResolutionAttempts,
+  resolveDispatchStartTimeoutSeconds,
   resolveSelfHostConfig,
   resolveTeardownTimeoutSeconds,
 } from './engine/resolved-config.js';
@@ -1273,6 +1274,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     memoryProvider,
     log,
     verbose: config?.daemon_verbose ?? false,
+    dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
     teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
     runSetupTriage,
   });

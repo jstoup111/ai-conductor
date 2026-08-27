@@ -10,6 +10,7 @@ import {
   sanitizeNamespace,
   SETUP_SCRIPT,
   TEARDOWN_SCRIPT,
+  DISPATCH_START_SCRIPT,
   NAMESPACE_VAR,
   SetupFailureError,
   OPERATOR_ONLY_SKILLS,
@@ -17,7 +18,10 @@ import {
   hashSetupScript,
   readSetupMarker,
   writeSetupMarker,
+  runDispatchStart,
 } from '../../src/engine/worktree-prepare.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 import {
   PRE_DISPATCH_HOOK,
   DOCS_GUARD_HOOK,
@@ -46,6 +50,13 @@ describe('engine/worktree-prepare', () => {
   async function writeTeardown(body: string, mode = 0o755): Promise<void> {
     await mkdir(join(dir, 'bin'), { recursive: true });
     const path = join(dir, TEARDOWN_SCRIPT);
+    await writeFile(path, body, 'utf-8');
+    await chmod(path, mode);
+  }
+
+  async function writeDispatchStart(body: string, mode = 0o755): Promise<void> {
+    await mkdir(join(dir, 'bin'), { recursive: true });
+    const path = join(dir, DISPATCH_START_SCRIPT);
     await writeFile(path, body, 'utf-8');
     await chmod(path, mode);
   }
@@ -149,6 +160,74 @@ describe('engine/worktree-prepare', () => {
       await writeSetup('#!/usr/bin/env bash\necho reran >> setup-count\n');
       await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
       expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('reran');
+    });
+
+    it.each([
+      ['no marker', async () => {}, 'no-marker'],
+      ['corrupt marker', async () => {
+        await mkdir(join(dir, '.daemon'), { recursive: true });
+        await writeFile(join(dir, '.daemon', 'setup-ok.json'), '{bad json', 'utf-8');
+      }, 'marker-invalid'],
+      ['changed script', async () => {
+        await writeSetupMarker(dir, { version: 1, setupScriptHash: 'stale', baseSha: 'base-a', preparedAtCommit: 'old' });
+      }, 'script-changed'],
+      ['moved base', async () => {
+        await writeSetupMarker(dir, { version: 1, setupScriptHash: (await hashSetupScript(dir))!, baseSha: 'base-old', preparedAtCommit: 'old' });
+      }, 'base-moved'],
+    ])('emits evidence-derived %s setup invalidation reason', async (_name, arrange, reason) => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      await arrange();
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('project_setup', (event) => seen.push(event));
+
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a', events });
+
+      expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('ran');
+      expect(seen).toEqual([{ type: 'project_setup', ran: true, reason }]);
+    });
+
+    it('forces setup despite a valid marker and emits forced', async () => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('project_setup', (event) => seen.push(event));
+
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a', force: true, events });
+
+      expect((await readFile(join(dir, 'setup-count'), 'utf-8')).trim().split('\n')).toHaveLength(2);
+      expect(seen).toEqual([{ type: 'project_setup', ran: true, reason: 'forced' }]);
+    });
+  });
+
+  describe('runDispatchStart', () => {
+    it('is silent when absent, receives the dispatch environment, and contains failure', async () => {
+      const log = vi.fn();
+      await expect(runDispatchStart(dir, log)).resolves.toBeUndefined();
+      expect(log).not.toHaveBeenCalled();
+
+      await writeDispatchStart(`#!/usr/bin/env node
+require('node:fs').writeFileSync('dispatch-start.json', JSON.stringify({ ci: process.env.CI, namespace: process.env.WORKTREE_NAMESPACE, cwd: process.cwd() }));
+`);
+      await expect(runDispatchStart(dir)).resolves.toBeUndefined();
+      expect(JSON.parse(await readFile(join(dir, 'dispatch-start.json'), 'utf-8'))).toEqual({
+        ci: 'true', namespace: sanitizeNamespace(basename(dir)), cwd: dir,
+      });
+
+      await writeDispatchStart('#!/usr/bin/env bash\necho hook-failed >&2\nexit 2\n');
+      await expect(runDispatchStart(dir, log)).resolves.toBeUndefined();
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining('dispatch-start: failed'));
+    });
+
+    it('runs on every prepare, including marker-valid setup skips', async () => {
+      await writeSetup('#!/usr/bin/env bash\ntrue\n');
+      await writeDispatchStart('#!/usr/bin/env bash\necho dispatch >> dispatch-count\n');
+
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+
+      expect((await readFile(join(dir, 'dispatch-count'), 'utf-8')).trim().split('\n')).toHaveLength(2);
     });
   });
 

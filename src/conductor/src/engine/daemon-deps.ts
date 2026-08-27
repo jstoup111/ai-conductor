@@ -63,6 +63,8 @@ export interface RealDepsConfig {
   verbose?: boolean;
   /** Resolved bounded runtime for the project teardown hook. */
   teardownTimeoutSeconds?: number;
+  /** Resolved bounded runtime for the project dispatch-start hook. */
+  dispatchStartTimeoutSeconds?: number;
   /** Deterministic setup-failure triage (adr-2026-07-09-setup-failure-triage), daemon-only. */
   runSetupTriage?: (
     error: SetupFailureError,
@@ -127,7 +129,12 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       } catch {
         // Missing base evidence deliberately leaves the marker gate fail-closed.
       }
-      await prepareWorktree(wt.path, log ?? cfg.log, { verbose: cfg.verbose ?? false, baseSha, events });
+      await prepareWorktree(wt.path, log ?? cfg.log, {
+        verbose: cfg.verbose ?? false,
+        baseSha,
+        events,
+        dispatchStartTimeoutSeconds: cfg.dispatchStartTimeoutSeconds,
+      });
     },
 
     runConductor: (wt, item, providerExecution, featureEvents, log, sessionId) =>

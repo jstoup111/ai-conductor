@@ -575,6 +575,16 @@ See [configuration](../reference/configuration.md#teardown_timeout_seconds) for 
 [environment variables](../reference/environment.md#written-into-child-process-environments) for its
 process contract.
 
+## Per-dispatch hook
+
+An executable `bin/dispatch-start` runs at the end of worktree preparation on every daemon dispatch,
+including a redispatch whose successful `bin/setup` marker skips provisioning. It receives the same
+`CI=true` and `WORKTREE_NAMESPACE` environment as setup and teardown. The hook is optional and silent
+when absent. Its output is shown only with `daemon_verbose: true`; a non-zero exit, timeout, or
+unrunnable script is logged and contained so the dispatch proceeds. Configure its bounded timeout
+with `dispatch_start_timeout_seconds` (default 120 seconds); see
+[configuration](../reference/configuration.md#dispatch_start_timeout_seconds).
+
 ## Retained worktrees
 
 A feature's worktree is **not** removed when its implementation PR opens. The mergeable sweep

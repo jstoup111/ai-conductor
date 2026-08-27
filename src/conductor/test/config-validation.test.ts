@@ -456,6 +456,16 @@ describe('teardown_timeout_seconds config field', () => {
   });
 });
 
+describe('dispatch_start_timeout_seconds config field', () => {
+  it('accepts a finite positive override without treating it as an unknown key', () => {
+    expect(validateConfig({ dispatch_start_timeout_seconds: 0.1 })).toMatchObject({
+      ok: true,
+      config: { dispatch_start_timeout_seconds: 0.1 },
+      warnings: [],
+    });
+  });
+});
+
 describe('reconcile_parked_auto_cleanup config field', () => {
   it('hard-errors a non-boolean value with the field name', () => {
     expect(validateConfig({ reconcile_parked_auto_cleanup: 'yes' })).toMatchObject({

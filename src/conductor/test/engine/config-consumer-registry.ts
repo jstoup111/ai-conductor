@@ -87,6 +87,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   stale_claim_window_hours: consumer(RESOLVED_CONFIG),
   provider_preparation_timeout_minutes: consumer(RESOLVED_CONFIG),
   teardown_timeout_seconds: consumer(RESOLVED_CONFIG),
+  dispatch_start_timeout_seconds: consumer(RESOLVED_CONFIG),
 
   // ── defaults / phases ─────────────────────────────────────────────────────
   // resolveProviderNative/NeutralStepConfig read `defaultsCfg?.<key>` and

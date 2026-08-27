@@ -560,6 +560,12 @@ export interface HarnessConfig {
    */
   teardown_timeout_seconds?: number;
   /**
+   * Maximum seconds a project-supplied `bin/dispatch-start` hook may run at
+   * the start of each daemon dispatch. Omitted or invalid values use the
+   * bounded engine default.
+   */
+  dispatch_start_timeout_seconds?: number;
+  /**
    * When true, the daemon automatically restarts when the engine becomes stale.
    * When false or absent, manual restart is required. Invalid values resolve to
    * false with a single warning. Default: false. Never throws.

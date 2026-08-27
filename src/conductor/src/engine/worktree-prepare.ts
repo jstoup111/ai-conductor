@@ -194,7 +194,13 @@ export interface SessionHookRepairOutcome {
 export async function prepareWorktree(
   worktreePath: string,
   log?: (msg: string) => void,
-  opts?: { verbose?: boolean; baseSha?: string; force?: boolean; events?: ConductorEventEmitter },
+  opts?: {
+    verbose?: boolean;
+    baseSha?: string;
+    force?: boolean;
+    events?: ConductorEventEmitter;
+    dispatchStartTimeoutSeconds?: number;
+  },
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
   await writeNamespaceEnv(worktreePath, namespace, log);
@@ -221,10 +227,23 @@ export async function prepareWorktree(
       });
     }
   }
-  await runDispatchStart(worktreePath, log, { verbose: opts?.verbose });
+  await runDispatchStart(worktreePath, log, {
+    verbose: opts?.verbose,
+    timeoutSeconds: opts?.dispatchStartTimeoutSeconds,
+  });
 }
 
 type SetupDecision = Extract<ConductorEvent, { type: 'project_setup' }>;
+
+/** Distinguish a missing marker from one that exists but cannot prove validity. */
+async function setupMarkerExists(worktreePath: string): Promise<boolean> {
+  try {
+    await lstat(join(worktreePath, SETUP_MARKER_PATH));
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
 
 async function setupDecision(worktreePath: string, baseSha: string | undefined, force: boolean): Promise<SetupDecision> {
   if (force) return { type: 'project_setup', ran: true, reason: 'forced' };
@@ -233,7 +252,13 @@ async function setupDecision(worktreePath: string, baseSha: string | undefined, 
     readSetupMarker(worktreePath),
     hashSetupScript(worktreePath),
   ]);
-  if (marker === null) return { type: 'project_setup', ran: true, reason: 'no-marker' };
+  if (marker === null) {
+    return {
+      type: 'project_setup',
+      ran: true,
+      reason: await setupMarkerExists(worktreePath) ? 'marker-invalid' : 'no-marker',
+    };
+  }
   if (setupScriptHash === null || marker.setupScriptHash !== setupScriptHash) return { type: 'project_setup', ran: true, reason: 'script-changed' };
   if (marker.baseSha !== baseSha) return { type: 'project_setup', ran: true, reason: 'base-moved' };
   return { type: 'project_setup', ran: false, reason: 'marker-valid' };
@@ -730,8 +755,9 @@ export async function runDispatchStart(
     const detail = err instanceof Error ? err.message : String(err);
     const text = err !== null && typeof err === 'object' && typeof (err as { all?: unknown }).all === 'string'
       ? (err as { all: string }).all : detail;
-    const prefix = (err as { timedOut?: unknown }).timedOut === true ? 'timed out' : 'failed';
-    log?.(`dispatch-start: ${prefix} in ${worktreePath}: ${extractTail(text, 50)}`);
+    const timedOut = (err as { timedOut?: unknown }).timedOut === true;
+    const prefix = timedOut ? `timed out in ${worktreePath} after ${timeoutSeconds} second(s)` : `failed in ${worktreePath}`;
+    log?.(`dispatch-start: ${prefix}: ${extractTail(text, 50)}`);
   }
 }
 

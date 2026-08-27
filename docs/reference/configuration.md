@@ -202,6 +202,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `reconcile_parked_auto_cleanup` | boolean | `true` | [reconcile_parked_auto_cleanup](#reconcile_parked_auto_cleanup) |
 | `provider_preparation_timeout_minutes` | number | `5` | [provider_preparation_timeout_minutes](#provider_preparation_timeout_minutes) |
 | `teardown_timeout_seconds` | number | `120` | [teardown_timeout_seconds](#teardown_timeout_seconds) |
+| `dispatch_start_timeout_seconds` | number | `120` | [dispatch_start_timeout_seconds](#dispatch_start_timeout_seconds) |
 | `step_heartbeat_stall_minutes` | number | deprecated no-op | [step_heartbeat_stall_minutes](#step_heartbeat_stall_minutes) |
 | `stale_claim_window_hours` | number | `24` | [stale_claim_window_hours](#stale_claim_window_hours) |
 
@@ -1169,6 +1170,20 @@ parked-feature reconciliation. A missing `bin/teardown` is silent. A timeout, no
 unrunnable script is logged and contained; removal continues once its normal safety proof has
 authorized it. See [running the daemon](../guides/running-the-daemon.md#project-teardown-hook) for
 the hook contract and [worktree recovery](../runbooks/worktree-and-evidence-recovery.md) for recovery.
+
+## dispatch_start_timeout_seconds
+
+Maximum time, in seconds, for a project's optional `bin/dispatch-start` hook at the start of every
+daemon dispatch. Absent values resolve to `120`; a finite positive value, including a fractional
+number, replaces that bound.
+
+```yaml
+dispatch_start_timeout_seconds: 120
+```
+
+This timeout is deliberately non-disableable. `0`, negative, non-numeric, non-finite, and `null`
+values produce one warning at resolution and fall back to `120`. A missing hook is silent; a timeout,
+non-zero exit, or unrunnable script is logged and contained, so the dispatch continues.
 
 ## step_heartbeat_stall_minutes
 
