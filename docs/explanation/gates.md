@@ -142,8 +142,9 @@ counterfactual is classified solely by the scoped command's exit code; the engin
 runner-specific output. Exit code zero stays green and every nonzero exit is counterfactual RED. Only
 launch, timeout, and signal are scoped-run infrastructure outcomes. The preflight is evidence the judge
 may cite, never a finding by itself — a test that stays green under revert is not automatically a
-failure. A scoped-run infrastructure failure carries a bounded output excerpt on the existing
-`.pipeline/events.jsonl` event spine.
+failure. A preflight infrastructure failure carries its bounded diagnostic excerpt on the existing
+`.pipeline/events.jsonl` event spine and in the `build_review` aggregate, so a materialization or
+scoped-run failure remains diagnosable after the mechanical allowance is exhausted.
 
 Each predicate's exact file, format, and failure text is in [artifacts](../reference/artifacts.md).
 
