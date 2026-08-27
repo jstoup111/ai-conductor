@@ -5,50 +5,75 @@
 layer that keeps old names working through the major. Decision + scoping feature for #227;
 implementation ships with cutover PR #226's major. Verdict vocabulary is out of scope (#1918).
 
+> **Amended 2026-08-26 by operator review of #1921:** this spec now owns the complete
+> Player/Composer implementation rather than a later scoping-only handoff. The diagram below
+> reflects the planned production architecture: canonical commands and skill names, compatibility
+> aliases, canonical config keys, and single-write `.player/` state with legacy migration.
+
 ## Diagram
 
 ```mermaid
 graph TD
-  subgraph Operator["Operator surfaces (renamed at 1.0)"]
-    CLI["conduct daemon «sub» CLI subtree<br/>→ conduct player «sub»"]
-    ENGCLI["conduct-ts engineer «sub»<br/>→ conduct-ts composer «sub»"]
-    SKILLS["/engineer skill + agent personas<br/>→ /composer"]
-    DOCS["Docs / HARNESS.md / runbooks<br/>daemon+engineer wording"]
+  OP(["Operator / scripts"])
+
+  subgraph Boundary["Compatibility boundary"]
+    PLAYER_ALIAS["player command parser<br/>player = canonical<br/>daemon = deprecated alias"]
+    COMPOSER_ALIAS["composer command parser<br/>composer = canonical<br/>engineer = deprecated alias"]
+    SKILL_ALIAS["Supported-host skill discovery<br/>composer = canonical<br/>engineer = deprecated alias"]
+    CONFIG_ALIAS["Config normalization<br/>player keys win<br/>legacy keys emit config_deprecated_key"]
   end
 
-  subgraph Machine["Machine-read surfaces (renamed + migrated)"]
-    CONFIG["Config keys<br/>e.g. auto_restart_on_stale_engine"]
-    STATE[".daemon/ runtime state dir<br/>→ .player/ (pid, logs, grants, parked)"]
-    EVENTS["ConductorEvent names / telemetry<br/>daemon-* identifiers"]
+  subgraph Canonical["Canonical Player / Composer surfaces"]
+    PLAYER["conduct-ts player «sub»<br/>run + observe + park + supervisor verbs"]
+    COMPOSER["conduct-ts composer «sub»<br/>idea→spec launcher + deterministic primitives"]
+    SKILLS["composer skill<br/>Claude /composer · Codex $composer"]
+    CONFIG["player_verbose<br/>player_auto_restart_on_stale_engine"]
   end
 
-  subgraph Alias["Transition layer (new, temporary)"]
-    SHIM["Command alias shim<br/>daemon/engineer accepted,<br/>prints deprecation warning"]
-    MIG["Migration block (#226 major)<br/>config-key + state-dir migration"]
+  subgraph State["Durable Player state"]
+    STATE_MIGRATION["State resolution boundary<br/>writers migrate .daemon/ → .player/<br/>observers dual-read legacy state"]
+    PLAYER_STATE[".player/<br/>pid, logs, grants, parked,<br/>blocked/gated snapshots, evals"]
   end
 
-  OP(["Operator / scripts"]) --> SHIM
-  SHIM -->|"forwards old → new"| CLI
-  SHIM -->|"forwards old → new"| ENGCLI
-  MIG --> CONFIG
-  MIG --> STATE
-  CLI --> STATE
-  ENGCLI --> STATE
-  CLI --> EVENTS
-  DOCS -.->|"docs sweep in same PR"| CLI
-  SKILLS -.-> ENGCLI
+  RUNTIME["Existing conductor runtime<br/>internal engine modules unchanged"]
+  EVENTS["Existing event spine<br/>config_deprecated_key reused"]
+
+  OP --> PLAYER_ALIAS
+  OP --> COMPOSER_ALIAS
+  OP --> SKILL_ALIAS
+  OP --> CONFIG_ALIAS
+  PLAYER_ALIAS --> PLAYER
+  COMPOSER_ALIAS --> COMPOSER
+  SKILL_ALIAS --> SKILLS
+  CONFIG_ALIAS --> CONFIG
+  CONFIG_ALIAS --> EVENTS
+  PLAYER --> STATE_MIGRATION
+  CONFIG --> RUNTIME
+  COMPOSER --> RUNTIME
+  SKILLS --> COMPOSER
+  STATE_MIGRATION --> PLAYER_STATE
+  PLAYER_STATE --> RUNTIME
+  PLAYER --> RUNTIME
 ```
 
 ## Legend
 
-- **Operator surfaces** — human-facing names; renamed with alias/deprecation cover.
-- **Machine-read surfaces** — parsed by code; rename requires migration, not just wording.
-- **Transition layer** — new machinery this decision scopes: the alias shim (old subcommand
-  names forward to the new ones with a deprecation warning) and the `## Migration` block that
-  travels with the #226 major. Dashed edges are documentation relationships, not calls.
+- **Compatibility boundary** — canonicalizes old names once. New code consumes only Player/Composer
+  names; old CLI and skill names remain temporary aliases and produce a deprecation warning.
+- **Config normalization** — `player_verbose` and `player_auto_restart_on_stale_engine` are
+  canonical. `daemon_verbose` and `auto_restart_on_stale_engine` remain accepted temporarily;
+  canonical values win when both forms are present, and legacy use reuses the existing
+  `config_deprecated_key` event.
+- **State resolution boundary** — writes only `.player/`. A mutating Player command migrates an
+  old-only `.daemon/` tree before writing; read-only `status`/`logs` commands may read an old-only
+  tree without mutating it. Ambiguous old+new state fails closed without overwriting either tree.
+  The v1 migration block uses the same mapping, including `daemon.pid`/`daemon.log` to their
+  Player-named counterparts.
+- **Internal engine** — `engine` remains the correct name for the Conductor runtime whose identity
+  the Player watches. Internal module/type renaming is not part of the vocabulary boundary.
 - `« »` marks variable parts.
 - Repo name `ai-conductor`, the `conduct`/`conduct-ts` entrypoints, and event-spine internals
-  keep their names; `EVENTS` identifiers do not rename (resolved by
+  keep their names; existing event identifiers do not rename (resolved by
   adr-2026-08-26-music-vocabulary-player-composer-rename — the `ConductorEvent` union carries no
   daemon-named identifiers).
 
@@ -58,3 +83,4 @@ graph TD
 |------|--------|--------|
 | 2026-08-26 | Initial generation | DECIDE for #227 (music-vocabulary rename scoping) |
 | 2026-08-26 | EVENTS open question resolved: no rename | ADR approved; plan authored |
+| 2026-08-26 | Replaced the scoping-only view with the implementation architecture | Operator selected complete rename implementation in #1921 review |

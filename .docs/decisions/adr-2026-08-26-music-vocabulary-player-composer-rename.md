@@ -55,6 +55,17 @@ occurrences. The `ConductorEvent` union (`src/conductor/src/ui/types.ts`) contai
 7. **This spec delivers the decision and scoping only.** The rename implementation is its own
    feature, sequenced with #226; #885's namespace prefix decision unblocks on this ADR.
 
+   > **Amended 2026-08-26 by operator review of #1921:** this spec now delivers the complete
+   > rename implementation. `player` and `composer` are the canonical CLI/skill names; `daemon`
+   > and `engineer` remain temporary compatibility aliases that warn once per invocation. The
+   > canonical config keys are `player_verbose` and `player_auto_restart_on_stale_engine`; the
+   > legacy keys remain accepted at the config-normalization boundary and emit the existing
+   > `config_deprecated_key` event, with canonical values winning when both forms are present.
+   > Player state writes only to `.player/`; mutating commands migrate an old-only `.daemon/`
+   > tree, read-only observers may read an old-only tree without mutation, and an ambiguous
+   > old+new pair is reported without overwriting either tree. Internal `engine` terminology
+   > remains correct for the Conductor runtime and is not mechanically renamed.
+
 ## Consequences
 
 - #227 closes with a recorded decision; #885 and #226 can proceed against a fixed vocabulary.
@@ -66,6 +77,17 @@ occurrences. The `ConductorEvent` union (`src/conductor/src/ui/types.ts`) contai
   not solved in this ADR.
 - Until the rename ships, docs and code keep `daemon`/`engineer`; no piecemeal renaming outside
   the scoped feature.
+
+### Consequence amendment — complete implementation in this spec
+
+- This spec's BUILD implements the rename; there is no later rename-scope feature.
+- Canonical CLI and skill entrypoints are additive during the compatibility window, while legacy
+  entrypoints remain aliases rather than separate runtime owners.
+- Config values normalize to Player keys before consumers read them; legacy-key observability stays
+  on the existing event spine.
+- `.player/` becomes the only new-write root. Legacy state is retained through old-only migration or
+  read-only observation, and ambiguous/partial conflicts require operator reconciliation rather than
+  automatic merging.
 
 ## Assumptions (verify-claims)
 
