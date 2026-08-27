@@ -868,10 +868,6 @@ check_manual_test() {
   return 0
 }
 
-check_retro() {
-  compgen -G "${PROJECT_DIR}/.docs/retros/*.md" > /dev/null 2>&1
-}
-
 # ─── Step Definitions ─────────────────────────────────────────────────────────
 
 run_bootstrap() {
@@ -1895,22 +1891,8 @@ Record results in .pipeline/manual-test-results.md. For any FAILs, write a faili
   fail "Manual test has FAILs — bugs need fixing"; save_state "manual_test" "failed"; return 1
 }
 
-run_retro() {
-  step_header 12 "retro" "SHIP"
-  if step_done "retro"; then
-    ok "Already complete"; return 0
-  fi
-  log "Running dual retrospective..."
-  run_claude "Run the /retro skill. Both parts:
-Part A (Harness): correctness, gate quality, autonomy friction
-Part B (Application): architecture, code quality, test quality, security, tech debt
-Write to .docs/retros/ with file:line references."
-  check_retro && { ok "Retro complete"; save_state "retro" "done"; return 0; }
-  fail "No retro in .docs/retros/"; save_state "retro" "failed"; return 1
-}
-
 run_finish() {
-  step_header 13 "finish" "SHIP"
+  step_header 12 "finish" "SHIP"
   if step_done "finish"; then
     ok "Already complete"; return 0
   fi
@@ -2067,11 +2049,6 @@ if ip > 0:
         fi
       fi
       ;;
-    retro)
-      if compgen -G "${PROJECT_DIR}/.docs/retros/*.md" > /dev/null 2>&1; then
-        echo "complete"
-      fi
-      ;;
     finish)
       local pr_url
       pr_url=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('pr_url',''))" 2>/dev/null || echo "")
@@ -2095,10 +2072,10 @@ show_status() {
   echo -e "  ${BOLD}Ctrl+C${NC} pause  ${BOLD}--log${NC} tail output  ${BOLD}--status${NC} check progress"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_diagram" "architecture_review" "acceptance_specs" "build" "manual_test" "retro" "finish")
-  local labels=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "diagrams" "arch review" "acceptance specs" "tdd/pipeline" "manual-test" "retro" "finish/pr")
-  local phases=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
-  local checks=("" "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_diagram check_architecture_review check_acceptance_specs check_build check_manual_test check_retro "")
+  local steps=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_diagram" "architecture_review" "acceptance_specs" "build" "manual_test" "finish")
+  local labels=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "diagrams" "arch review" "acceptance specs" "tdd/pipeline" "manual-test" "finish/pr")
+  local phases=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP")
+  local checks=("" "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_diagram check_architecture_review check_acceptance_specs check_build check_manual_test "")
 
   local current_step
   current_step=$(get_current_step)
@@ -2494,8 +2471,6 @@ recover() {
       recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task." ;;
     manual_test)
       recover_prompt="Run /manual-test. Test every story's acceptance criteria. Record results in .pipeline/manual-test-results.md." ;;
-    retro)
-      recover_prompt="Run /retro. Both parts: harness + application. Write to .docs/retros/." ;;
     finish)
       recover_prompt="Run /finish to verify all tests pass, show changes for review, and present completion options." ;;
   esac
@@ -2646,7 +2621,7 @@ usage() {
   echo ""
   echo "Steps: worktree, memory, brainstorm, complexity, stories, conflict-check,"
   echo "       plan, architecture-diagram, architecture-review, acceptance-specs,"
-  echo "       build, manual-test, retro, finish"
+  echo "       build, manual-test, finish"
   echo ""
   echo "Project-level (run once, not per-feature): bootstrap, assess"
   echo ""
@@ -2930,7 +2905,6 @@ if [ -n "$SINGLE_STEP" ]; then
     build)                                  run_build ;;
     finish)                                 run_finish ;;
     manual-test|manual_test)                run_manual_test ;;
-    retro)                                  run_retro ;;
     *) fail "Unknown step: $SINGLE_STEP"; usage; exit 1 ;;
   esac
   show_status
@@ -2940,12 +2914,12 @@ fi
 # Step registry — use underscores to match save_state() keys in conduct-state.json
 # Worktree is created right after complexity assessment so all subsequent commits
 # (stories, plan, build, etc.) are isolated on the feature branch.
-ALL_STEPS=(worktree memory brainstorm complexity stories conflict_check plan architecture_diagram architecture_review acceptance_specs build manual_test retro finish)
-STEP_FUNCS=(run_worktree_setup run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_diagram run_architecture_review run_acceptance_specs run_build run_manual_test run_retro run_finish)
+ALL_STEPS=(worktree memory brainstorm complexity stories conflict_check plan architecture_diagram architecture_review acceptance_specs build manual_test finish)
+STEP_FUNCS=(run_worktree_setup run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_diagram run_architecture_review run_acceptance_specs run_build run_manual_test run_finish)
 
 # Labels and phases for navigate_back menu (must match ALL_STEPS order)
-STEP_LABELS=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "diagrams" "arch review" "acceptance specs" "tdd/pipeline" "manual-test" "retro" "finish/pr")
-STEP_PHASES=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
+STEP_LABELS=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "diagrams" "arch review" "acceptance specs" "tdd/pipeline" "manual-test" "finish/pr")
+STEP_PHASES=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP")
 
 # Steps that trigger a user validation checkpoint after completion
 CHECKPOINT_STEPS="build manual_test"
@@ -3225,11 +3199,11 @@ refresh_display
 if [ "$i" -ge "${#STEP_FUNCS[@]}" ]; then
   send_notification "SDLC complete" "All steps finished."
 
-  # Commit any uncommitted artifacts (retro, manual-test results, etc.)
+  # Commit any uncommitted final artifacts.
   log "Committing final artifacts..."
   git add .docs/ .pipeline/ .memory/ 2>/dev/null || true
   if ! git diff --cached --quiet 2>/dev/null; then
-    git commit -m "Add SHIP phase artifacts: retro, manual-test results
+    git commit -m "Add SHIP phase artifacts: manual-test results
 
 Co-Authored-By: conduct" 2>/dev/null || true
   fi
@@ -3247,7 +3221,6 @@ Co-Authored-By: conduct" 2>/dev/null || true
   echo ""
   echo -e "${GREEN}${BOLD}SDLC complete.${NC}"
   [ -n "$pr_url" ] && echo -e "  PR: ${pr_url}"
-  echo "  Retro: $(ls .docs/retros/*.md 2>/dev/null | head -1 || echo '.docs/retros/')"
   echo "  Cleanup: conduct --cleanup (or automatic on next --resume)"
   echo ""
 else

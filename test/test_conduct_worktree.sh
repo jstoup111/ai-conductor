@@ -504,7 +504,7 @@ test_step_done_authority() {
   # for their "Already complete" guard. Otherwise inherited artifacts from prior
   # features cause steps to skip on new features.
 
-  local per_feature_steps=("brainstorm" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "manual_test" "retro")
+  local per_feature_steps=("brainstorm" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "manual_test")
 
   for step in "${per_feature_steps[@]}"; do
     local func_name="run_${step}"
