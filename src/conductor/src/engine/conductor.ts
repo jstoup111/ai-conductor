@@ -7509,14 +7509,6 @@ export class Conductor {
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
         await emitTracked({ type: 'step_started', step: step.name, index: i });
-        if (step.deprecated) {
-          await emitTracked({
-            type: 'deprecated_step',
-            step: step.name,
-            adr: step.deprecated.adr,
-          });
-        }
-
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →
         // `stale`), never on a clean first run. Such a step ran before, so a

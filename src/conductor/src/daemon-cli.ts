@@ -2147,13 +2147,6 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'step_started':
       log(`${dot} ${chalk.cyan('▶')} ${event.step}`);
       break;
-    case 'deprecated_step':
-      log(
-        chalk.yellow(
-          `${dot} ⚠ DEPRECATED: ${event.step} is a no-op — see ${event.adr}`,
-        ),
-      );
-      break;
     case 'step_completed':
       {
         let treeAnnotation = '';
