@@ -1,3 +1,4 @@
+// Covers: task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile as fsReadFile, readdir } from 'fs/promises';
 import { join } from 'path';
@@ -418,9 +419,77 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
   });
 
+  it('keeps a six-wide header over five-cell legacy rows eligible at discovery', async () => {
+    const sixWideLegacyTable =
+      '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes | Disposition |\n' +
+      '|---|---|---|---|---|---|\n' +
+      '| story | S1 | Task 1 | covered | fixture |\n';
+    await writeFile(join(dir, '.docs/plans/six-wide-legacy.md'), planWithDeps('.docs/stories/six-wide-legacy.md'));
+    await writeFile(join(dir, '.docs/stories/six-wide-legacy.md'), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, '.docs/coherence/six-wide-legacy.md'), sixWideLegacyTable);
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(result.items.map((item) => item.slug)).toEqual(['six-wide-legacy']);
+  });
+
+  it('keeps documented ragged legacy and criterion rows eligible at discovery', async () => {
+    const raggedTable =
+      '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes | Disposition |\n' +
+      '|---|---|---|---|---|---|\n' +
+      '| story | S1 | Task 1 | covered | fixture |\n' +
+      '| criterion | Story 1 happy | Task 1 | covered | fixture | diff-local |\n';
+    await writeFile(join(dir, '.docs/plans/ragged-coherence.md'), planWithDeps('.docs/stories/ragged-coherence.md'));
+    await writeFile(join(dir, '.docs/stories/ragged-coherence.md'), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, '.docs/coherence/ragged-coherence.md'), raggedTable);
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(result.items.map((item) => item.slug)).toEqual(['ragged-coherence']);
+  });
+
+  it('blocks malformed coherence with the parser line detail in its remedy and warning', async () => {
+    const malformedTable =
+      '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes | Disposition |\n' +
+      '|---|---|---|---|---|---|\n' +
+      '| criterion | Story 1 happy | Task 1 | covered | fixture |\n';
+    await writeFile(join(dir, '.docs/plans/malformed-coherence.md'), planWithDeps('.docs/stories/malformed-coherence.md'));
+    await writeFile(join(dir, '.docs/stories/malformed-coherence.md'), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, '.docs/coherence/malformed-coherence.md'), malformedTable);
+    const logs: string[] = [];
+
+    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([
+      {
+        slug: 'malformed-coherence',
+        reason: 'missing-coherence',
+        remedy:
+          'Author a valid coherence table in .docs/coherence/malformed-coherence.md on the default branch. ' +
+          'Detail: line 3: criterion row expected 6 and actual 5 cells.',
+      },
+    ]);
+    expect(logs).toContain(
+      'skip malformed-coherence: merged spec cannot build — missing or unparseable coherence artifact ' +
+        '(.docs/coherence/malformed-coherence.md) required for tier unresolved. ' +
+        'Author it on the default branch; logged once. Detail: line 3: criterion row expected 6 and actual 5 cells.',
+    );
+  });
+
   // Plan Task 19 — a legacy coherence artifact (all five legacy row classes,
   // zero criterion rows) still satisfies discovery. This fails if the
-  // criterion layer is ever wired into `hasCoherenceTableDataRow` or the
+  // criterion layer changes the shared parser's legacy-row handling or the
   // discovery-side coherence branch.
   it('keeps a criterion-free legacy coherence artifact eligible at discovery (plan Task 19)', async () => {
     const legacyOnlyTable =
