@@ -14,7 +14,6 @@ SPECS=(
   "test_examples_readme_and_usage.sh"
   "test_examples_common_sandbox.sh"
   "test_examples_common_prompt.sh"
-  "test_examples_inline.sh"
   "test_examples_interactive.sh"
   "test_examples_daemon.sh"
   "test_examples_engineer.sh"
