@@ -307,6 +307,35 @@ None — no migrations, no new dependencies.
 
 **Dependencies:** 11; 2
 
+### Task 13: A project with no `bin/setup` reports honestly
+**Story:** Story 1
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests: preparing a worktree whose project has no `bin/setup` emits `project_setup` with `ran: false` and a reason naming the absent script, for all three entry shapes — no marker and no `baseSha`, no marker with a `baseSha`, and `force: true`; and the daemon renders that event as a skip, not as `project setup ran`.
+2. Verify RED — today `setupDecision` (`worktree-prepare.ts:248-262`) returns `ran: true` before `runProjectSetup` discovers the script is absent (`:217`, no-script return at `:776-777`), so a scriptless project emits `{ran: true, reason: 'no-marker'}` on every dispatch and `daemon-cli.ts:2113` prints `· project setup ran (no-marker)`.
+3. Implement: probe for the setup script first in `setupDecision` and return `{ ran: false, reason: 'no-script' }` when it is absent, ahead of the `force` and missing-`baseSha` branches — with no script there is nothing for the triage force path of Task 8 to run, so `ran: false` is the honest answer there too.
+4. Add `'no-script'` to the `project_setup` reason union (`src/conductor/src/types/events.ts:178`), keeping the union closed as Task 4 requires.
+5. Distinguish an absent script from an unreadable one: `hashSetupScript` returning null must not be read as absence at `worktree-prepare.ts:262`, where it means the script changed.
+6. Verify GREEN, including the preserved `no bin/setup — skipping project setup` log line and every pre-existing worktree-prepare and daemon-render test unmodified.
+7. Commit: "fix(setup): a project with no bin/setup reports ran:false with reason no-script".
+
+**Done when:**
+- [ ] A scriptless project emits `project_setup {ran: false, reason: 'no-script'}` for the no-marker, marker-with-baseSha, and forced entry shapes.
+- [ ] The daemon renders that event as `project setup skipped (no-script)`.
+- [ ] The `no bin/setup — skipping project setup` line is unchanged, and no marker is written for a scriptless project.
+- [ ] An unreadable-but-present setup script still reports `script-changed`, not `no-script`.
+- [ ] The reason union remains closed and every pre-existing reason keeps its meaning.
+
+**Files likely touched:**
+- src/conductor/src/engine/worktree-prepare.ts — script probe ahead of the decision branches
+- src/conductor/src/types/events.ts — `no-script` reason
+- src/conductor/src/daemon-cli.ts — renderer wording for the new reason
+- src/conductor/test/engine/worktree-prepare.test.ts — the three entry-shape tests
+- src/conductor/test/daemon-render.test.ts — render assertion
+
+**Dependencies:** Task 4; Task 5
+
 ## Task Dependency Graph
 
 ```

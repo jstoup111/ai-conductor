@@ -12,7 +12,7 @@ jstoup111/ai-conductor#1930. Verdicts confirmed against the real artifact files.
 | adr | adr-2026-08-26-setup-once-per-worktree-marker | story-1, story-2, story-3, story-4 | covered | New ADR; every sub-decision lands in a story |
 | adr | adr-2026-07-09-setup-failure-triage | story-4 | covered | Amended 2026-08-26; force path preserves trigger contract |
 | adr | adr-2026-08-07-project-teardown-hook-contract-and-containment | story-3 | covered | Amended 2026-08-26; dispatch-start copies its containment shape |
-| story | story-1 | task-2, task-4, task-6 | covered | Skip + event + daemon threading |
+| story | story-1 | task-2, task-4, task-6, task-13 | covered | Skip + event + daemon threading + honest reporting for a scriptless project |
 | story | story-2 | task-1, task-3, task-5, task-7 | covered | Marker mechanics, reasons, exclude |
 | story | story-3 | task-10, task-11, task-12 | covered | Resolver, runner, wiring |
 | story | story-4 | task-8, task-9 | covered | Force path + acceptance proof |
@@ -28,8 +28,9 @@ jstoup111/ai-conductor#1930. Verdicts confirmed against the real artifact files.
 | task | task-10 | story-3 | covered | Infrastructure: timeout resolver |
 | task | task-11 | story-3 | covered | Contained runner |
 | task | task-12 | story-3 | covered | Every-dispatch wiring |
+| task | task-13 | story-1 | covered | Cites Story 1; makes the emitted event and daemon line honest when the project has no bin/setup |
 | criterion | Story 1 happy: Given a worktree whose last `bin/setup` run succeeded and whose marker matches the current `bin/setup` content hash and resolved-base SHA, when the daemon dispatches the feature again, then `bin/setup` is not executed and a `project_setup` event with `ran: false, reason: marker-valid` is emitted and rendered in the daemon log | task-2, task-4 | covered | emits `{ ran: false, reason: 'marker-valid' }` on skip | diff-local |
-| criterion | Story 1 happy: Given a project with no `bin/setup`, when the daemon dispatches, then behavior is unchanged from today (no setup, no marker written, existing "no bin/setup" logging preserved) | task-2 | covered | The no-`bin/setup` project path is byte-identical to today | diff-local |
+| criterion | Story 1 happy: Given a project with no `bin/setup`, when the daemon dispatches, then behavior is unchanged from today (no setup, no marker written, existing "no bin/setup" logging preserved) | task-2, task-13 | covered | The no-`bin/setup` project path is byte-identical to today | diff-local |
 | criterion | Story 1 negative: Given a marker file that is missing, corrupt JSON, or carries an unknown version, when the daemon dispatches, then `bin/setup` runs (fail-closed) and the emitted `project_setup` event names the reason (`no-marker` or `marker-invalid`) | task-2, task-5 | covered | corrupt/wrong-version marker ⇒ `marker-invalid` | diff-local |
 | criterion | Story 1 negative: Given the marker's stored base SHA cannot be compared because base resolution fails, when the daemon dispatches, then `bin/setup` runs rather than being skipped on doubt | task-6 | covered | Base-resolution failure in the dep results in setup running (fail-closed) | diff-local |
 | criterion | Story 2 happy: Given a worktree recreated from its branch (no marker present), when the daemon dispatches, then `bin/setup` runs and the event reason is `no-marker` | task-5 | covered | recreated dir (no marker) ⇒ `no-marker` | diff-local |
