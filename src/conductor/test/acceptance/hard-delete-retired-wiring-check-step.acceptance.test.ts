@@ -12,14 +12,16 @@
 
 import { execSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { writeState } from '../../src/engine/state.js';
+import { readTestSuiteRemediations } from '../../src/engine/test-suite-remediation.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
@@ -287,5 +289,139 @@ describe('hard-deleted BUILD gate leaves one serial BUILD verifier', () => {
     expect(timeline.slice(0, 3)).toEqual(['build', 'test_suite', 'build_review']);
     expect(inspect).toHaveBeenCalledTimes(1);
     expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it('records one repair and one budget charge per deterministic suite failure', async () => {
+    await writeState(stateFilePath, {
+      ...FRONT_DONE,
+      build: 'done',
+      test_suite: 'pending',
+      build_review: 'pending',
+    });
+    await writeFile(
+      join(projectRoot, '.pipeline', 'events.jsonl'),
+      `${JSON.stringify({
+        type: 'rebase_changed',
+        ts: new Date(Date.now() - 1_000).toISOString(),
+        allChangedPaths: ['src/repair-1.ts', 'src/repair-2.ts'],
+      })}\n`,
+    );
+
+    const kickbacks: Array<{ from: StepName; to: StepName; count: number }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+    let buildRuns = 0;
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build') {
+          buildRuns += 1;
+          const repair = `repair-${buildRuns}.txt`;
+          await writeFile(join(projectRoot, repair), 'repaired\n');
+          execSync(`git add ${repair}`, { cwd: projectRoot });
+          execSync(`git commit -q -m "repair ${buildRuns}"`, { cwd: projectRoot });
+        }
+        if (step === 'manual_test') {
+          return { success: false, output: 'expected boundary after suite recovery' };
+        }
+        return { success: true };
+      },
+    };
+    const failures = ['src/repair-1.ts failed', 'src/repair-2.ts failed'];
+    const ensure = vi.fn(async () => {
+      const message = failures.shift();
+      if (message) {
+        return {
+          status: 'FAILED' as const,
+          reason: 'nonzero_exit' as const,
+          message,
+        };
+      }
+      return {
+        status: 'EXECUTED' as const,
+        freshness: { status: 'STALE' as const, reason: 'fingerprint_mismatch' as const },
+        evidence: PASS_EVIDENCE,
+      };
+    });
+
+    await new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events,
+      projectRoot,
+      mode: 'auto',
+      fromStep: 'test_suite',
+      maxRetries: 1,
+      verifyArtifacts: false,
+      fullSuiteVerifier: {
+        ensure,
+        inspect: async () => ({ status: 'STALE', reason: 'fingerprint_mismatch' }),
+      },
+    }).run();
+
+    expect(buildRuns).toBe(2);
+    expect(ensure).toHaveBeenCalledTimes(3);
+    expect(kickbacks).toEqual([
+      expect.objectContaining({ from: 'test_suite', to: 'build', count: 1 }),
+      expect.objectContaining({ from: 'test_suite', to: 'build', count: 1 }),
+    ]);
+    expect((await readKickbackLedger(projectRoot)).gates.test_suite?.count).toBe(1);
+    expect(await readTestSuiteRemediations(projectRoot)).toEqual([
+      expect.objectContaining({ gate: 'test_suite', diagnostic: 'src/repair-1.ts failed' }),
+      expect.objectContaining({ gate: 'test_suite', diagnostic: 'src/repair-2.ts failed' }),
+    ]);
+  });
+
+  it('halts unchanged repeated suite failures at the existing per-gate cap', async () => {
+    await writeState(stateFilePath, {
+      ...FRONT_DONE,
+      build: 'done',
+      test_suite: 'pending',
+      build_review: 'pending',
+    });
+    const kickbacks: Array<{ from: StepName; to: StepName; count: number }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+    let buildRuns = 0;
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build') buildRuns += 1;
+        if (step === 'build_review') throw new Error('review must stay blocked');
+        return { success: true };
+      },
+    };
+    const ensure = vi.fn(async () => ({
+      status: 'FAILED' as const,
+      reason: 'nonzero_exit' as const,
+      message: 'src/no-progress.ts failed',
+    }));
+
+    await new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events,
+      projectRoot,
+      mode: 'auto',
+      fromStep: 'test_suite',
+      maxRetries: 1,
+      verifyArtifacts: false,
+      fullSuiteVerifier: {
+        ensure,
+        inspect: async () => ({ status: 'STALE', reason: 'fingerprint_mismatch' }),
+      },
+    }).run();
+
+    expect(buildRuns).toBe(2);
+    expect(ensure).toHaveBeenCalledTimes(3);
+    expect(kickbacks).toEqual([
+      expect.objectContaining({ from: 'test_suite', to: 'build', count: 1 }),
+      expect.objectContaining({ from: 'test_suite', to: 'build', count: 2 }),
+    ]);
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(
+      /test_suite failure unresolved after 2 build kickback\(s\)/,
+    );
   });
 });
