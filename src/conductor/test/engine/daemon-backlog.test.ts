@@ -14,6 +14,7 @@ import {
 } from '../../src/engine/daemon-backlog.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { parseComplexityTier } from '../../src/engine/artifacts.js';
+import { parseCoherenceArtifact } from '../../src/engine/coherence-parse.js';
 import {
   renderShippedRecord,
   parseShippedRecord,
@@ -487,11 +488,10 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
   });
 
-  // Plan Task 19 — a legacy coherence artifact (all five legacy row classes,
-  // zero criterion rows) still satisfies discovery. This fails if the
-  // criterion layer changes the shared parser's legacy-row handling or the
-  // discovery-side coherence branch.
-  it('keeps a criterion-free legacy coherence artifact eligible at discovery (plan Task 19)', async () => {
+  // Plan Task 19 / Covers: task:6 — a legacy coherence artifact (all five
+  // legacy row classes, zero criterion rows) stays eligible through the shared
+  // parser that discovery consumes.
+  it('keeps a shared-parser-accepted criterion-free legacy coherence artifact eligible at discovery (plan Task 19)', async () => {
     const legacyOnlyTable =
       '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n' +
       '|---|---|---|---|---|\n' +
@@ -500,6 +500,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       '| story | S1 | Task 1 | covered | fixture |\n' +
       '| task | Task 1 | S1 | covered | fixture |\n' +
       '| adr | adr-2026-01-01-x | Task 1 | covered | fixture |\n';
+    expect(parseCoherenceArtifact(legacyOnlyTable)).toMatchObject({ ok: true });
     await writeFile(join(dir, '.docs/plans/legacy-coherence.md'), planWithDeps('.docs/stories/legacy-coherence.md'));
     await writeFile(join(dir, '.docs/stories/legacy-coherence.md'), APPROVED_STORIES);
     await mkdir(join(dir, '.docs/coherence'), { recursive: true });

@@ -5,6 +5,42 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseCoherenceArtifact } from '../../src/engine/coherence-parse.js';
 
+// Retired discovery predicate, copied verbatim from daemon-backlog.ts before
+// Task 5. It is deliberately test-local: the shared parser is the production
+// authority, while this preserves the old acceptance set as a regression oracle.
+function retiredHasCoherenceTableDataRow(content: string | null): boolean {
+  if (content === null || content.trim().length === 0) return false;
+
+  const rows = content.split(/\r?\n/).map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
+    return trimmed
+      .slice(1, -1)
+      .split('|')
+      .map((cell) => cell.trim());
+  });
+
+  for (let index = 0; index + 2 < rows.length; index += 1) {
+    const header = rows[index];
+    const separator = rows[index + 1];
+    const data = rows[index + 2];
+    if (
+      header === null ||
+      separator === null ||
+      data === null ||
+      header.length === 0 ||
+      header.length !== separator.length ||
+      header.length !== data.length ||
+      !separator.every((cell) => /^:?-{2,}:?$/.test(cell))
+    ) {
+      continue;
+    }
+    return true;
+  }
+
+  return false;
+}
+
 describe('parseCoherenceArtifact', () => {
   it('parses a minimal valid coherence table without importing orchestration dependencies', () => {
     const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
@@ -124,5 +160,85 @@ describe('parseCoherenceArtifact', () => {
     expect(result).toEqual({ ok: false, reason });
     if (result.ok) return;
     expect(result.detail).toBeUndefined();
+  });
+
+  // Covers: task:6
+  it('preserves the reachable retired discovery corpus, with only the six-wide header newly accepted', () => {
+    const corpus = [
+      {
+        name: 'minimal valid table',
+        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:6 | story:2 | covered | fixture |
+`,
+        reachableAtDiscovery: true,
+        oracleAccepted: true,
+        parserAccepted: true,
+      },
+      {
+        name: 'ragged mixed legacy and criterion rows',
+        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:6 | story:2 | covered | fixture |
+| criterion | Given a fixture | task:6 | covered | fixture | diff-local |
+`,
+        reachableAtDiscovery: true,
+        oracleAccepted: true,
+        parserAccepted: true,
+      },
+      {
+        name: 'six-wide header over five-cell legacy row',
+        content: `| Row Class | Id | Cited Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| task | task:6 | story:2 | covered | fixture |
+`,
+        reachableAtDiscovery: true,
+        oracleAccepted: false,
+        parserAccepted: true,
+      },
+      {
+        name: 'zero-criterion legacy artifact',
+        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome:1 | fr:1 | covered | fixture |
+| fr | fr:1 | story:2 | covered | fixture |
+| story | story:2 | task:6 | covered | fixture |
+| task | task:6 | story:2 | covered | fixture |
+| adr | adr-2026-08-26-example | task:6 | covered | fixture |
+`,
+        reachableAtDiscovery: true,
+        oracleAccepted: true,
+        parserAccepted: true,
+      },
+      { name: 'absent artifact', content: null, reachableAtDiscovery: true, oracleAccepted: false, parserAccepted: false },
+      { name: 'empty artifact', content: ' \t\n ', reachableAtDiscovery: true, oracleAccepted: false, parserAccepted: false },
+      { name: 'table-less content', content: '# Coherence\n\nNo table here.\n', reachableAtDiscovery: true, oracleAccepted: false, parserAccepted: false },
+      {
+        // ADR-2026-08-26 records this old-parser acceptance class as shipped,
+        // so shipped/processed dedup removes it before discovery parses it.
+        name: 'shipped unreachable malformed legacy row',
+        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| widget | task:6 | story:2 | covered | fixture |
+`,
+        reachableAtDiscovery: false,
+        oracleAccepted: true,
+        parserAccepted: false,
+      },
+    ] as const;
+
+    const observations = corpus.map((fixture) => ({
+      ...fixture,
+      oracleAccepted: retiredHasCoherenceTableDataRow(fixture.content),
+      parserAccepted: parseCoherenceArtifact(fixture.content).ok,
+    }));
+
+    expect(observations).toEqual(corpus);
+    expect(observations.filter(({ reachableAtDiscovery, oracleAccepted, parserAccepted }) =>
+      reachableAtDiscovery && oracleAccepted && !parserAccepted,
+    )).toEqual([]);
+    expect(observations.filter(({ reachableAtDiscovery, oracleAccepted, parserAccepted }) =>
+      reachableAtDiscovery && !oracleAccepted && parserAccepted,
+    ).map(({ name }) => name)).toEqual(['six-wide header over five-cell legacy row']);
   });
 });
