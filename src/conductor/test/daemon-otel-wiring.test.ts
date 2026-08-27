@@ -5,8 +5,10 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
+
 const fixture = vi.hoisted(() => ({ worktreePath: '', scopes: [] as Array<Record<string, unknown>> }));
-const wireOtelVisualizer = vi.hoisted(() => vi.fn(() => ({ name: 'otel' })));
+const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null));
 
 vi.mock('../src/engine/otel/wire.js', () => ({ wireOtelVisualizer }));
 vi.mock('../src/engine/self-host/daemon-build-token.js', () => ({
@@ -90,10 +92,10 @@ describe('daemon OTel visualizer wiring', () => {
 
   it('uses the scope session ID without creating conduct-session-id when it is absent', async () => {
     const { pipelineDir } = await dispatchWithSessionId();
-    const context = wireOtelVisualizer.mock.calls[0]?.[1] as { runId: string };
+    const context = wireOtelVisualizer.mock.calls[0]?.[1];
 
     expect({
-      runId: context.runId,
+      runId: context?.runId,
       scopeSessionId: fixture.scopes[0]?.sessionId,
       wroteSessionId: existsSync(join(pipelineDir, 'conduct-session-id')),
     }).toEqual({
@@ -105,8 +107,8 @@ describe('daemon OTel visualizer wiring', () => {
 
   it('falls back to the scope session ID when the persisted ID cannot be read', async () => {
     await dispatchWithSessionId('unreadable');
-    const context = wireOtelVisualizer.mock.calls[0]?.[1] as { runId: string };
+    const context = wireOtelVisualizer.mock.calls[0]?.[1];
 
-    expect(context.runId).toBe(fixture.scopes[0]?.sessionId);
+    expect(context?.runId).toBe(fixture.scopes[0]?.sessionId);
   });
 });
