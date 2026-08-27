@@ -366,6 +366,7 @@ export function validateConfig(
     // Plugin selections (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection)
     'llm_provider',
     'ui_renderer',
+    'visualizers',
     'memory_provider',
     // Observability
     'otel',
@@ -781,6 +782,16 @@ export function validateConfig(
     }
     if (!obj.acceptance_spec_globs.every((g) => typeof g === 'string')) {
       return errVal('acceptance_spec_globs must contain only strings');
+    }
+  }
+
+  // visualizers — configured visualizer plugin names.
+  if (obj.visualizers !== undefined) {
+    if (!Array.isArray(obj.visualizers)) {
+      return errVal('visualizers must be an array of strings');
+    }
+    if (!obj.visualizers.every((name) => typeof name === 'string')) {
+      return errVal('visualizers must contain only strings');
     }
   }
 
