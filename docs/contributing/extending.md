@@ -13,6 +13,34 @@ CLI command.
 Paths are relative to the repository root. Engine source lives under `src/conductor/src/`; see
 [code organization](code-organization.md) for the layer map.
 
+## Add a visualizer plugin
+
+Place a plugin in either `~/.ai-conductor/plugins/<name>/` or
+`<project>/.ai-conductor/plugins/<name>/`. The project-local plugin takes precedence when both use
+the same name. Its `plugin.yml` needs `kind: visualizer`, a lowercase-hyphenated `name`, and an
+`entrypoint`; `harness_version` is optional.
+
+The entrypoint's default export may be a `VisualizerPlugin` object or a factory. A factory receives
+`VisualizerFactoryContext` and returns a `VisualizerPlugin` for that run, or `null` when disabled.
+The context supplies the resolved harness config, pipeline directory, shared event emitter, and
+`startContext` identity (`runId`, `project`, `branch`, `feature`, `engineVersion`, and
+`pipelineDir` when available). A plugin object must expose its `name`, `start(emitter, context)`,
+and async `stop()` methods. `start` subscribes to the shared emitter; `stop` unsubscribes and
+flushes any pending export.
+
+Select it in the project configuration:
+
+```yaml
+visualizers:
+  - <name>
+```
+
+Invalid configured names warn and are skipped. A failing factory, malformed factory product, or
+failing `start` also leaves the run running while skipping that visualizer. The built-in `otel`
+visualizer is configured through the separate [`otel`](../reference/configuration.md#otel) block,
+not this list. See [configuration](../reference/configuration.md#visualizers) for selection and
+validation behavior.
+
 ## Add a skill
 
 ### Skill files to change

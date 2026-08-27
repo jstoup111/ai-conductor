@@ -2,12 +2,21 @@ import { readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { loadManifestFromFile } from './plugin-manifest.js';
 import { PluginRegistry } from './plugin-registry.js';
-import { PluginManifestError, PluginLoadError, PluginVersionError } from '../types/plugin.js';
+import {
+  PluginManifestError,
+  PluginLoadError,
+  PluginVersionError,
+  type VisualizerFactory,
+  type VisualizerFactoryContext,
+  type VisualizerPlugin,
+} from '../types/plugin.js';
 import { ClaudeProvider } from '../execution/claude-provider.js';
 import { CodexProvider } from '../execution/codex-provider.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
 import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-renderer.js';
 import { LocalMemoryProvider } from './local-memory-provider.js';
+import { resolveOtelConfig } from './otel/otel-config.js';
+import { createOtelVisualizer } from './otel/create-otel-visualizer.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { UIEventHandler } from '../ui/subscriber.js';
 
@@ -47,6 +56,44 @@ async function loadPluginModule(
 }
 
 /**
+ * Validate a `kind: visualizer` entrypoint's own shape at discovery time and
+ * return the factory to register.
+ *
+ * A FUNCTION entrypoint is validated as callable and returned unwrapped — it is
+ * deliberately NOT invoked here. Discovery has no `VisualizerFactoryContext` to
+ * give it, so calling it with an empty stand-in made two conforming factories
+ * unloadable: one that reads any context member threw a `TypeError` the
+ * discovery loop swallowed, and one that returned its documented `null` for a
+ * disabled config was rejected as `missing required member: name`. The product's
+ * shape is a selection-time concern: `selectVisualizers` invokes the factory with
+ * the real context and refuses thrown or malformed non-null products (`src/index.ts`).
+ *
+ * An OBJECT entrypoint is its own product, so its `name`/`start`/`stop` shape is
+ * checked here and a defect raises `PluginLoadError` naming plugin and member.
+ */
+function validateVisualizerEntrypoint(
+  plugin: unknown,
+  manifest: { name: string },
+): VisualizerFactory {
+  if (typeof plugin === 'function') return plugin as VisualizerFactory;
+
+  const visualizer = plugin as VisualizerPlugin | undefined;
+  const factory: VisualizerFactory = () => visualizer as VisualizerPlugin;
+
+  if (typeof visualizer?.name !== 'string') {
+    throw new PluginLoadError(`Plugin ${manifest.name} missing required member: name`);
+  }
+  if (typeof visualizer.start !== 'function') {
+    throw new PluginLoadError(`Plugin ${manifest.name} missing required method: start`);
+  }
+  if (typeof visualizer.stop !== 'function') {
+    throw new PluginLoadError(`Plugin ${manifest.name} missing required method: stop`);
+  }
+
+  return factory;
+}
+
+/**
  * Discovers and registers plugins from filesystem directories.
  * Scans globalDir and projectDir for plugin subdirectories, loading plugin.yml
  * from each. Project-local plugins shadow global plugins with the same kind+name.
@@ -72,7 +119,19 @@ export async function discoverPlugins(
           const manifest = loadManifestFromFile(manifestPath);
           // Task 10: Load the actual plugin module
           const plugin = await loadPluginModule(pluginPath, manifest);
-          registry.register(manifest.kind, manifest.name, plugin);
+          if (manifest.kind === 'visualizer') {
+            try {
+              registry.register(manifest.kind, manifest.name, validateVisualizerEntrypoint(plugin, manifest));
+            } catch (err) {
+              if (err instanceof PluginLoadError) {
+                console.warn(`Skipping plugin ${entry.name}: ${err.message}`);
+                continue;
+              }
+              throw err;
+            }
+          } else {
+            registry.register(manifest.kind, manifest.name, plugin);
+          }
         } catch (err) {
           if (err instanceof PluginManifestError) {
             // Skip invalid manifest in auto-discovery (Task 10 behavior)
@@ -98,6 +157,18 @@ export async function discoverPlugins(
           const manifest = loadManifestFromFile(manifestPath);
           // Task 10: Load the actual plugin module
           const plugin = await loadPluginModule(pluginPath, manifest);
+          let registeredPlugin = plugin;
+          if (manifest.kind === 'visualizer') {
+            try {
+              registeredPlugin = validateVisualizerEntrypoint(plugin, manifest);
+            } catch (err) {
+              if (err instanceof PluginLoadError) {
+                console.warn(`Skipping plugin ${entry.name}: ${err.message}`);
+                continue;
+              }
+              throw err;
+            }
+          }
 
           // Check if we're shadowing a global plugin
           const globalPlugins = registry.list(manifest.kind);
@@ -109,7 +180,7 @@ export async function discoverPlugins(
           }
 
           // Register project-local plugin (overwrites global if same kind+name)
-          registry.register(manifest.kind, manifest.name, plugin);
+          registry.register(manifest.kind, manifest.name, registeredPlugin);
         } catch (err) {
           if (err instanceof PluginManifestError) {
             // Skip invalid manifest in auto-discovery
@@ -165,6 +236,21 @@ export function registerBuiltins(
 
   // adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / Task A3: Register built-in local memory provider (C1 — real provider, not null)
   registry.register('memory_provider', 'local', LocalMemoryProvider);
+
+  registry.register('visualizer', 'otel', (ctx: VisualizerFactoryContext): VisualizerPlugin | null => {
+    const resolved = resolveOtelConfig(ctx.config, ctx.pipelineDir);
+    if (!resolved.enabled) return null;
+
+    return createOtelVisualizer(
+      resolved,
+      {
+        pipelineDir: ctx.pipelineDir,
+        feature: ctx.startContext.feature ?? 'unknown',
+        project: ctx.startContext.project ?? 'unknown',
+      },
+      ctx.emitter,
+    );
+  });
 
   return subscriber;
 }

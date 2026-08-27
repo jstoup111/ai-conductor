@@ -40,7 +40,7 @@ import {
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { ConductorEvent } from '../../types/events.js';
-import type { VisualizerPlugin } from '../../types/plugin.js';
+import type { VisualizerPlugin, VisualizerStartContext } from '../../types/plugin.js';
 import type { ResolvedOtelConfig } from './otel-config.js';
 import { buildResource } from './resource.js';
 import { buildExporters } from './transport.js';
@@ -125,14 +125,14 @@ class WarnOnceMetricExporter implements PushMetricExporter {
 }
 
 export interface OtelVisualizerContext {
-  /** Deterministic run ID. When absent, buildResource() resolves from the session file. */
+  /** @deprecated Identity is consumed only from VisualizerPlugin.start(). */
   runId?: string;
-  /** Path to the .pipeline directory (for session-id file when runId absent). */
+  /** @deprecated Identity is consumed only from VisualizerPlugin.start(). */
   pipelineDir?: string;
-  /** Feature name for resource attributes. */
-  feature: string;
-  /** Project name for resource attributes. */
-  project: string;
+  /** @deprecated Identity is consumed only from VisualizerPlugin.start(). */
+  feature?: string;
+  /** @deprecated Identity is consumed only from VisualizerPlugin.start(). */
+  project?: string;
   /** Inject a span exporter (replaces transport; used in tests). */
   spanExporter?: SpanExporter;
   /** Inject a metric exporter (replaces transport; used in tests). */
@@ -161,10 +161,16 @@ const EXPORT_TIMEOUT_MS = 5_000;
 export class OtelVisualizer implements VisualizerPlugin {
   readonly name = 'otel';
 
-  private readonly tracerProvider: BasicTracerProvider;
-  private readonly meterProvider: MeterProvider;
-  private readonly spanManager: SpanManager;
-  private readonly metricsRecorder: MetricsRecorder;
+  private readonly spanExporter: SpanExporter;
+  private readonly metricExporter: PushMetricExporter;
+  private readonly onWarning?: (msg: string) => void;
+  private readonly exportTimeoutMillis: number;
+  /** Compatibility only for legacy direct callers that omit start context. */
+  private readonly legacyStartContext: VisualizerStartContext;
+  private tracerProvider: BasicTracerProvider | null = null;
+  private meterProvider: MeterProvider | null = null;
+  private spanManager: SpanManager | null = null;
+  private metricsRecorder: MetricsRecorder | null = null;
   /**
    * Bounded warning emitter (FR-8). When ctx.onWarning is provided, this is a
    * once-wrapper shared by both the exporter callback path AND the stop() flush
@@ -190,14 +196,6 @@ export class OtelVisualizer implements VisualizerPlugin {
   private sigHandler: (() => void) | null = null;
 
   constructor(config: ResolvedOtelConfig, ctx: OtelVisualizerContext) {
-
-    // Build the OTel resource from injected context (FR-6).
-    const resource = buildResource({
-      pipelineDir: ctx.pipelineDir ?? '',
-      runId: ctx.runId,
-      feature: ctx.feature,
-      project: ctx.project,
-    });
 
     // Resolve exporters: injected (tests) > transport (production).
     let spanExporter: SpanExporter;
@@ -236,39 +234,16 @@ export class OtelVisualizer implements VisualizerPlugin {
       metricExporter = new WarnOnceMetricExporter(metricExporter, this.warnOnce);
     }
 
-    // TracerProvider with BatchSpanProcessor (export is async/background; R1).
-    // exportTimeoutMillis bounds how long a single export call may run before
-    // being abandoned (T19). Default: EXPORT_TIMEOUT_MS (5 s).
-    const exportTimeoutMillis = ctx.exportTimeoutMillis ?? EXPORT_TIMEOUT_MS;
-    this.tracerProvider = new BasicTracerProvider({
-      resource,
-      spanProcessors: [new BatchSpanProcessor(spanExporter, { exportTimeoutMillis })],
-    });
-
-    // MeterProvider with PeriodicExportingMetricReader (export is async; R1).
-    const reader = new PeriodicExportingMetricReader({
-      exporter: metricExporter,
-      exportIntervalMillis: METRIC_EXPORT_INTERVAL_MS,
-    });
-    this.meterProvider = new MeterProvider({ resource, readers: [reader] });
-
-    const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
-    const meter = this.meterProvider.getMeter('conductor', '1.0.0');
-
-    // MetricsRecorder is wired to SpanManager via a callback.
-    this.metricsRecorder = new MetricsRecorder(meter);
-
-    this.spanManager = new SpanManager(tracer, ctx.onWarning, {
-      onStepClose: (step, durationMs, retryCount) => {
-        // tokenUsage/model are passed below via handleEvent; stashed per-step.
-        // We retrieve them here from the pending maps.
-        const tokenUsage = this.pendingTokenUsage.get(step);
-        this.pendingTokenUsage.delete(step);
-        const model = this.pendingModel.get(step);
-        this.pendingModel.delete(step);
-        this.metricsRecorder.onStepClose(step, durationMs, retryCount, tokenUsage, model);
-      },
-    });
+    this.spanExporter = spanExporter;
+    this.metricExporter = metricExporter;
+    this.onWarning = ctx.onWarning;
+    this.exportTimeoutMillis = ctx.exportTimeoutMillis ?? EXPORT_TIMEOUT_MS;
+    this.legacyStartContext = {
+      runId: ctx.runId,
+      pipelineDir: ctx.pipelineDir,
+      feature: ctx.feature,
+      project: ctx.project,
+    };
   }
 
   /**
@@ -293,7 +268,8 @@ export class OtelVisualizer implements VisualizerPlugin {
    * Also registers SIGINT/SIGTERM handlers that call stop() on process termination
    * (T21). Handlers are unregistered in stop() to prevent leaks across instances.
    */
-  start(emitter: ConductorEventEmitter): void {
+  start(emitter: ConductorEventEmitter, context?: VisualizerStartContext): void {
+    this.initializeProviders(context ?? this.legacyStartContext);
     this.emitter = emitter;
     const eventTypes: ConductorEvent['type'][] = [
       'step_started',
@@ -359,6 +335,7 @@ export class OtelVisualizer implements VisualizerPlugin {
 
   /** Internal flush implementation. Only ever called once (guarded by stopPromise). */
   private async _doStop(): Promise<void> {
+    if (!this.spanManager || !this.tracerProvider || !this.meterProvider) return;
     // Force-close any spans still open (e.g. interrupted run, FR-9).
     this.spanManager.forceCloseAll();
 
@@ -390,6 +367,7 @@ export class OtelVisualizer implements VisualizerPlugin {
   // ── Internal event dispatch (synchronous, O(1)) ────────────────────────────
 
   private handleEvent(event: ConductorEvent): void {
+    if (!this.spanManager || !this.metricsRecorder) return;
     switch (event.type) {
       case 'step_started':
         this.spanManager.onStepStarted(event);
@@ -443,5 +421,39 @@ export class OtelVisualizer implements VisualizerPlugin {
         this.metricsRecorder.onPipelineCloseout(event);
         break;
     }
+  }
+
+  private initializeProviders(context: VisualizerStartContext): void {
+    if (this.tracerProvider || this.meterProvider || this.spanManager || this.metricsRecorder) return;
+
+    const resource = buildResource({
+      pipelineDir: context.pipelineDir ?? '',
+      runId: context.runId,
+      feature: context.feature,
+      project: context.project,
+      branch: context.branch,
+      engineVersion: context.engineVersion,
+    });
+    this.tracerProvider = new BasicTracerProvider({
+      resource,
+      spanProcessors: [new BatchSpanProcessor(this.spanExporter, { exportTimeoutMillis: this.exportTimeoutMillis })],
+    });
+    const reader = new PeriodicExportingMetricReader({
+      exporter: this.metricExporter,
+      exportIntervalMillis: METRIC_EXPORT_INTERVAL_MS,
+    });
+    this.meterProvider = new MeterProvider({ resource, readers: [reader] });
+    const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
+    const meter = this.meterProvider.getMeter('conductor', '1.0.0');
+    this.metricsRecorder = new MetricsRecorder(meter);
+    this.spanManager = new SpanManager(tracer, this.onWarning, {
+      onStepClose: (step, durationMs, retryCount) => {
+        const tokenUsage = this.pendingTokenUsage.get(step);
+        this.pendingTokenUsage.delete(step);
+        const model = this.pendingModel.get(step);
+        this.pendingModel.delete(step);
+        this.metricsRecorder?.onStepClose(step, durationMs, retryCount, tokenUsage, model);
+      },
+    });
   }
 }

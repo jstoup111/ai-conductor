@@ -27,6 +27,7 @@ import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
 import { realpathSync, writeSync } from 'node:fs';
+import { execa } from 'execa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
@@ -97,9 +98,16 @@ import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
+import { resolveEngineVersion } from './engine/shipped-record.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { UISubscriber } from "./ui/types.js";
-import type { VisualizerPlugin } from './types/plugin.js';
+import type {
+  VisualizerFactory,
+  VisualizerFactoryContext,
+  VisualizerPlugin,
+  VisualizerStartContext,
+} from './types/plugin.js';
+import type { HarnessConfig } from './types/config.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
 import { detectIntakeLoopCommand, dispatchIntakeLoop } from './intake-loop-cli.js';
@@ -186,24 +194,113 @@ import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { runOverlapScan, renderReport as renderOverlapReport } from './engine/overlap-scan.js';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
-import { resolveOtelConfig } from './engine/otel/otel-config.js';
-import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
-import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
 /**
- * Start every visualizer plugin by calling `.start(emitter)`. Returns the same
- * array (for chaining). Called immediately after EventPersister is started.
+ * Start every visualizer plugin by calling `.start(emitter, context)`. Returns
+ * only successfully started visualizers for teardown. Called immediately after
+ * EventPersister is started.
  */
 export function buildVisualizers(
   visualizers: VisualizerPlugin[],
   emitter: ConductorEventEmitter,
+  context: VisualizerStartContext = {},
 ): VisualizerPlugin[] {
+  const started: VisualizerPlugin[] = [];
   for (const vis of visualizers) {
-    vis.start(emitter);
+    try {
+      vis.start(emitter, context);
+      started.push(vis);
+    } catch (error) {
+      void emitter.emit({
+        type: 'renderer_error',
+        rendererName: vis.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
-  return visualizers;
+  return started;
+}
+
+/**
+ * Build the visualizers for one run from the configured registry entries and
+ * the built-in OTel factory. OTel is attempted independently of
+ * `visualizers`; its factory owns the `otel:` configuration gate.
+ */
+export function selectVisualizers(
+  registry: PluginRegistry,
+  config: HarnessConfig,
+  context: VisualizerFactoryContext,
+): VisualizerPlugin[] {
+  const selected: VisualizerPlugin[] = [];
+  const warnedNames = new Set<string>();
+
+  for (const name of config.visualizers ?? []) {
+    if (name === 'otel') {
+      if (!warnedNames.has(name)) {
+        warnedNames.add(name);
+        console.warn('visualizer "otel" is configured through the "otel:" block; remove it from "visualizers".');
+      }
+      continue;
+    }
+
+    const factory = registry.tryGet<VisualizerFactory>('visualizer', name);
+    if (!factory) {
+      if (!warnedNames.has(name)) {
+        warnedNames.add(name);
+        console.warn(
+          `visualizer "${name}" is not registered; registered visualizers: ${registry.list('visualizer').join(', ') || '(none)'}.`,
+        );
+      }
+      continue;
+    }
+
+    const visualizer = invokeVisualizerFactory(name, factory, context);
+    if (visualizer) {
+      selected.push(visualizer);
+    }
+  }
+
+  const otelFactory = registry.tryGet<VisualizerFactory>('visualizer', 'otel');
+  const otelVisualizer = otelFactory && invokeVisualizerFactory('otel', otelFactory, context);
+  if (otelVisualizer) {
+    selected.push(otelVisualizer);
+  }
+
+  return selected;
+}
+
+/** Invoke a visualizer factory with its real context and refuse malformed products. */
+function invokeVisualizerFactory(
+  pluginName: string,
+  factory: VisualizerFactory,
+  context: VisualizerFactoryContext,
+): VisualizerPlugin | null {
+  let visualizer: unknown;
+  try {
+    visualizer = factory(context);
+  } catch (error) {
+    console.warn(`Plugin ${pluginName} factory failed: ${String(error)}`);
+    return null;
+  }
+
+  if (visualizer === null) return null;
+  const candidate = visualizer as Partial<VisualizerPlugin> | undefined;
+  if (typeof candidate?.name !== 'string') {
+    console.warn(`Plugin ${pluginName} missing required member: name`);
+    return null;
+  }
+  if (typeof candidate.start !== 'function') {
+    console.warn(`Plugin ${pluginName} missing required method: start`);
+    return null;
+  }
+  if (typeof candidate.stop !== 'function') {
+    console.warn(`Plugin ${pluginName} missing required method: stop`);
+    return null;
+  }
+
+  return visualizer as VisualizerPlugin;
 }
 
 /**
@@ -270,34 +367,6 @@ export async function resolveDaemonProjectRoot(startCwd: string): Promise<string
   return resolved.root;
 }
 
-/**
- * Construct an OtelVisualizer with production wiring (FR-8).
- *
- * Bridges `onWarning` to a `renderer_error` ConductorEvent on the shared bus so
- * transport failures surface to the operator as structured events instead of
- * silent drops. Constructor errors (e.g. disabled config passed by mistake) are
- * caught, surfaced as `renderer_error`, and null is returned so the run proceeds
- * with OTel disabled.
- *
- * Exported so integration tests can drive the exact production construction path
- * and verify the onWarning wiring without invoking main().
- */
-export function createOtelVisualizer(
-  resolved: ResolvedOtelConfig,
-  ctx: Omit<OtelVisualizerContext, 'onWarning'>,
-  events: ConductorEventEmitter,
-): OtelVisualizer | null {
-  const onWarning = (msg: string): void => {
-    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: msg });
-  };
-  try {
-    return new OtelVisualizer(resolved, { ...ctx, onWarning });
-  } catch (err) {
-    onWarning(err instanceof Error ? err.message : String(err));
-    return null;
-  }
-}
-
 // Harness VERSION lookup: probes a few candidate locations because the
 // installed layout can be a symlink chain (~/.local/bin/conduct-ts →
 // <harness>/bin/conduct-ts → <harness>/src/conductor/dist/index.js).
@@ -322,6 +391,41 @@ async function readHarnessVersion(): Promise<string> {
     }
   }
   return '0.0.0';
+}
+
+interface VisualizerStartContextInput {
+  runId: string;
+  project: string;
+  feature?: string;
+  pipelineDir: string;
+  branch?: string;
+  engineVersion?: string;
+}
+
+/** Build identity for every visualizer without fabricating unavailable values. */
+export function createVisualizerStartContext(
+  input: VisualizerStartContextInput,
+): VisualizerStartContext {
+  return {
+    runId: input.runId,
+    project: input.project,
+    feature: input.feature,
+    branch: input.branch,
+    engineVersion: input.engineVersion,
+    pipelineDir: input.pipelineDir,
+  };
+}
+
+export async function resolveCurrentBranch(projectRoot: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: projectRoot,
+    });
+    const branch = stdout.trim();
+    return branch && branch !== 'HEAD' ? branch : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // --- Merged worktree cleanup ---
@@ -1276,24 +1380,26 @@ async function main(): Promise<void> {
   const auditWriter = new AuditTrailWriter(projectRoot);
   auditWriter.subscribe(events);
 
-  // Wire visualizer plugins (FR-1 gate: OTel visualizer only when enabled).
-  const visualizerList: VisualizerPlugin[] = [];
-  const otelResolved = resolveOtelConfig(config ?? {}, pipelineDir);
-  if (otelResolved.enabled) {
-    const otelVis = createOtelVisualizer(
-      otelResolved,
-      {
-        pipelineDir,
-        feature: opts.featureDesc ?? 'unknown',
-        project: projectRoot,
-      },
-      events,
-    );
-    if (otelVis) {
-      visualizerList.push(otelVis);
-    }
-  }
-  buildVisualizers(visualizerList, events);
+  // Build configured visualizers plus OTel, whose built-in factory retains
+  // ownership of its `otel:` configuration gate.
+  const visualizerContext: VisualizerFactoryContext = {
+    config: config ?? {},
+    pipelineDir,
+    emitter: events,
+    startContext: createVisualizerStartContext({
+      runId: sessionId,
+      project: projectRoot,
+      feature: opts.featureDesc,
+      branch: await resolveCurrentBranch(projectRoot),
+      engineVersion: resolveEngineVersion(__dirname),
+      pipelineDir,
+    }),
+  };
+  const visualizerList = buildVisualizers(
+    selectVisualizers(registry, visualizerContext.config, visualizerContext),
+    events,
+    visualizerContext.startContext,
+  );
 
   const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,

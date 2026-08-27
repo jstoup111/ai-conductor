@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -1270,6 +1271,30 @@ complexity:
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.config.memory_provider).toBeUndefined();
+    });
+  });
+
+  describe('visualizers config field', () => {
+    it('loads configured visualizer names and leaves an absent key undefined', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'visualizers:\n  - first\n  - second\n',
+      );
+
+      const configured = await loadConfig(tmpDir);
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), '{}\n');
+      const absent = await loadConfig(tmpDir);
+
+      expect({
+        configured: configured.ok ? configured.config.visualizers : configured.error.message,
+        absent: absent.ok ? absent.config.visualizers : absent.error.message,
+      }).toEqual({ configured: ['first', 'second'], absent: undefined });
+    });
+
+    it('rejects a non-array visualizers value like acceptance_spec_globs', () => {
+      const result = validateConfig({ visualizers: 'first' });
+
+      expect(result.ok ? '' : result.error.message).toMatch(/visualizers must be an array of strings/);
     });
   });
 

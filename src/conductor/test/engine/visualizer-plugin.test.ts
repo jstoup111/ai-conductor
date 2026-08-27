@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { VisualizerPlugin } from '../../src/types/plugin.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -33,13 +33,6 @@ describe('VisualizerPlugin interface + registry', () => {
     registry.register('visualizer', plugin.name, plugin);
     const names = registry.list('visualizer');
     expect(names).toContain('fake-visualizer');
-  });
-
-  it('VisualizerPlugin.start() is callable with a ConductorEventEmitter', () => {
-    const plugin = new FakeVisualizer();
-    const emitter = new ConductorEventEmitter();
-    plugin.start(emitter);
-    expect(plugin.startCalled).toBe(1);
   });
 
   it('VisualizerPlugin.stop() returns a Promise', async () => {

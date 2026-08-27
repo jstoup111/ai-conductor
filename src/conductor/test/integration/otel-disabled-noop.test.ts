@@ -12,7 +12,8 @@ import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
-import { buildVisualizers, createOtelVisualizer } from '../../src/index.js';
+import { buildVisualizers } from '../../src/index.js';
+import { createOtelVisualizer } from '../../src/engine/otel/create-otel-visualizer.js';
 import type { VisualizerPlugin } from '../../src/types/plugin.js';
 
 async function emitBasicRun(emitter: ConductorEventEmitter): Promise<void> {

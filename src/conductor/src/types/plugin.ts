@@ -37,6 +37,29 @@ export interface PluginManifest {
 }
 
 /**
+ * Identity available when a visualizer attaches to a conductor event stream.
+ * Values are absent only when they cannot be derived for the active run.
+ */
+export interface VisualizerStartContext {
+  runId?: string;
+  project?: string;
+  branch?: string;
+  feature?: string;
+  engineVersion?: string;
+  pipelineDir?: string;
+}
+
+/**
+ * Runtime dependencies supplied when constructing a visualizer plugin.
+ */
+export interface VisualizerFactoryContext {
+  config: import('./config.js').HarnessConfig;
+  pipelineDir: string;
+  startContext: VisualizerStartContext;
+  emitter: import('../ui/events.js').ConductorEventEmitter;
+}
+
+/**
  * A visualizer plugin subscribes to the ConductorEventEmitter as a listener
  * (via .on(...)) and exports observations to an external system (e.g. OTel).
  * It renders nothing to the terminal. Multiple visualizers may be active at once.
@@ -51,10 +74,16 @@ export interface VisualizerPlugin {
    * Attach to the event emitter. Called once at run start.
    * Implementations must only call emitter.on() — never modify emission sites.
    */
-  start(emitter: import('../ui/events.js').ConductorEventEmitter): void;
+  start(
+    emitter: import('../ui/events.js').ConductorEventEmitter,
+    context: VisualizerStartContext,
+  ): void;
   /** Detach from the emitter and flush pending export data. Returns when flush completes. */
   stop(): Promise<void>;
 }
+
+/** Creates a visualizer for one conductor run, or opts out when disabled. */
+export type VisualizerFactory = (context: VisualizerFactoryContext) => VisualizerPlugin | null;
 
 /**
  * Error thrown when plugin manifest validation fails.

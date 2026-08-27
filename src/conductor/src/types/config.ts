@@ -436,6 +436,8 @@ export interface HarnessConfig {
   llm_provider?: ProviderSelection;
   /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */
   ui_renderer?: string;
+  /** Names of visualizer plugins to start for this run. */
+  visualizers?: string[];
   /**
    * Plugin selection: which memory provider to use (defaults to 'local').
    * Set in `.ai-conductor/config.yml`; resolved once at run start so every
