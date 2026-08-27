@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-27T13:59:08.564Z
 Slug: abandoned-specs-are-kept-in-git-instead-of-the-iss
 Class: plan-gap
 Halting step: prd_audit
