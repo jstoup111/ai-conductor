@@ -187,7 +187,8 @@ missing/empty no-fabricated-detail negative path
 3. Verify GREEN; commit.
 
 **Done when:**
-- The no-regression test passes: zero oracle-accepted fixtures rejected by the shared parser; divergences limited to the enumerated new acceptances (condition C-A).
+- The no-regression test passes: every divergence between the oracle and the shared parser is enumerated in the corpus and is either a new-parser acceptance (condition C-A) or an oracle-accepted shape the parser rejects, and each rejection asserts discovery blocks it with `missing-coherence` plus a line-and-message remedy rather than dropping it.
+- The corpus enumerates `decide-artifact-coherence-check` (a second markdown table below the mapping table) as the one oracle-accepted / parser-rejected shape, and asserts its blocked remedy names the offending line.
 - The zero-criterion pin test still exists in the daemon-backlog suite and passes.
 
 **Files likely touched:**

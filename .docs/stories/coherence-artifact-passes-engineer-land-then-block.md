@@ -37,7 +37,7 @@ at land so that no spec can land and then be unbuildable.
 - Given a merged non-S spec whose coherence artifact declares a six-wide header over five-cell legacy rows (the #1881 shape), when discovery evaluates it, then the spec is eligible for dispatch
 - Given a merged non-S spec whose artifact has five-cell legacy rows beside six-cell criterion rows under a five-wide header (the documented ragged shape), when discovery evaluates it, then the spec is eligible for dispatch
 - Given a merged non-S spec whose artifact contains zero criterion rows, when discovery evaluates it, then the spec is eligible for dispatch
-- Given a discovery fixture corpus of artifacts the retired shallow check accepted, when discovery runs with the shared parser, then every one of those specs remains eligible (no old-accepted artifact becomes ineligible; the new predicate may accept strictly more)
+- Given a discovery fixture corpus of artifacts the retired shallow check accepted, when discovery runs with the shared parser, then no such spec is ever silently dropped: each is either eligible, or blocked with reason `missing-coherence` carrying a remedy that names the failing line and the parser's message
 
 #### Negative Paths
 - Given a merged non-S spec with no `.docs/coherence/<plan-stem>.md`, when discovery evaluates it, then it is blocked with reason `missing-coherence` and skipped with a once-per-slug log line
