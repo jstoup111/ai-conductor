@@ -57,6 +57,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon discovery no longer rejects valid coherence artifacts whose table mixes six-cell criterion rows with five-cell legacy rows. ([implementation PR #1926](https://github.com/jstoup111/ai-conductor/pull/1926)).
 - As-built review remediation now resolves a governing clause written with backticks or bold around its ADR stem, and accepts the documented `<stem> + <decision number>` form, instead of halting for a human. ([implementation PR #1959](https://github.com/jstoup111/ai-conductor/pull/1959)).
 - PRD audits now safely parse, validate, and route no-owner over-scope findings. ([implementation PR #1909](https://github.com/jstoup111/ai-conductor/pull/1909)).
+- Remediation plans now accept case-variant criterion IDs and report actionable admission failures. ([implementation PR #1969](https://github.com/jstoup111/ai-conductor/pull/1969)).
 
 ## Migration
 
