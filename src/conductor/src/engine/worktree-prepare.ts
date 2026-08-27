@@ -49,6 +49,9 @@ import {
   DOCS_GUARD_HOOK,
 } from './session-hook-assets.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
+import { resolveDispatchStartTimeoutSeconds } from './resolved-config.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEvent } from '../types/events.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -106,6 +109,7 @@ export async function writeSetupMarker(worktreePath: string, marker: SetupMarker
 
 /** Conventional, project-supplied teardown entrypoint run before worktree removal. */
 export const TEARDOWN_SCRIPT = join('bin', 'teardown');
+export const DISPATCH_START_SCRIPT = join('bin', 'dispatch-start');
 
 /**
  * Skills declaring `operator_only: true` in their SKILL.md frontmatter.
@@ -190,7 +194,7 @@ export interface SessionHookRepairOutcome {
 export async function prepareWorktree(
   worktreePath: string,
   log?: (msg: string) => void,
-  opts?: { verbose?: boolean; baseSha?: string; force?: boolean },
+  opts?: { verbose?: boolean; baseSha?: string; force?: boolean; events?: ConductorEventEmitter },
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
   await writeNamespaceEnv(worktreePath, namespace, log);
@@ -198,11 +202,14 @@ export async function prepareWorktree(
   await writeGitHooksAndWire(worktreePath, log);
   await ensureSessionHooks(worktreePath, log);
   await excludeEngineArtifacts(worktreePath, log);
-  if (!opts?.force && await hasValidSetupMarker(worktreePath, opts?.baseSha)) {
-    return;
+  const decision = await setupDecision(worktreePath, opts?.baseSha, opts?.force ?? false);
+  if (opts?.events) await opts.events.emit({ type: 'project_setup', ran: decision.ran, reason: decision.reason });
+  else log?.(`project setup ${decision.ran ? 'running' : 'skipped'} (${decision.reason})`);
+  let setupRan = false;
+  if (decision.ran) {
+    await rm(join(worktreePath, SETUP_MARKER_PATH), { force: true });
+    setupRan = await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
   }
-  await rm(join(worktreePath, SETUP_MARKER_PATH), { force: true });
-  const setupRan = await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
   if (setupRan && opts?.baseSha) {
     const setupScriptHash = await hashSetupScript(worktreePath);
     if (setupScriptHash) {
@@ -214,16 +221,22 @@ export async function prepareWorktree(
       });
     }
   }
+  await runDispatchStart(worktreePath, log, { verbose: opts?.verbose });
 }
 
-async function hasValidSetupMarker(worktreePath: string, baseSha?: string): Promise<boolean> {
-  if (!baseSha) return false;
+type SetupDecision = Extract<ConductorEvent, { type: 'project_setup' }>;
+
+async function setupDecision(worktreePath: string, baseSha: string | undefined, force: boolean): Promise<SetupDecision> {
+  if (force) return { type: 'project_setup', ran: true, reason: 'forced' };
+  if (!baseSha) return { type: 'project_setup', ran: true, reason: 'no-marker' };
   const [marker, setupScriptHash] = await Promise.all([
     readSetupMarker(worktreePath),
     hashSetupScript(worktreePath),
   ]);
-  return marker !== null && setupScriptHash !== null &&
-    marker.baseSha === baseSha && marker.setupScriptHash === setupScriptHash;
+  if (marker === null) return { type: 'project_setup', ran: true, reason: 'no-marker' };
+  if (setupScriptHash === null || marker.setupScriptHash !== setupScriptHash) return { type: 'project_setup', ran: true, reason: 'script-changed' };
+  if (marker.baseSha !== baseSha) return { type: 'project_setup', ran: true, reason: 'base-moved' };
+  return { type: 'project_setup', ran: false, reason: 'marker-valid' };
 }
 
 /**
@@ -697,6 +710,28 @@ export async function runProjectTeardown(
       50,
     );
     log?.(`teardown: failed in ${worktreePath}: ${outputTail}`);
+  }
+}
+
+/** Run the optional per-dispatch lifecycle script; all failures are contained. */
+export async function runDispatchStart(
+  worktreePath: string,
+  log?: (msg: string) => void,
+  opts?: { verbose?: boolean; timeoutSeconds?: number },
+): Promise<void> {
+  const script = join(worktreePath, DISPATCH_START_SCRIPT);
+  const timeoutSeconds = opts?.timeoutSeconds ?? resolveDispatchStartTimeoutSeconds();
+  try { await access(script); } catch { return; }
+  try {
+    const result = await execa(script, [], { cwd: worktreePath, all: true, timeout: timeoutSeconds * 1000, env: { CI: 'true', [NAMESPACE_VAR]: sanitizeNamespace(basename(worktreePath)) } });
+    const lines = (result.all ?? '').split('\n').filter((line) => line.trim() !== '');
+    if (opts?.verbose) for (const line of lines) log?.(`dispatch-start: ${line}`);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    const text = err !== null && typeof err === 'object' && typeof (err as { all?: unknown }).all === 'string'
+      ? (err as { all: string }).all : detail;
+    const prefix = (err as { timedOut?: unknown }).timedOut === true ? 'timed out' : 'failed';
+    log?.(`dispatch-start: ${prefix} in ${worktreePath}: ${extractTail(text, 50)}`);
   }
 }
 

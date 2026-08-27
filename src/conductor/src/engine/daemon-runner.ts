@@ -94,7 +94,7 @@ export interface FeatureRunnerDeps {
    * aborts the feature (worktree kept) rather than building against a
    * half-prepared environment.
    */
-  prepareWorktree?: (worktree: FeatureWorktree, log?: (message: string) => void) => Promise<void>;
+  prepareWorktree?: (worktree: FeatureWorktree, log?: (message: string) => void, events?: ConductorEventEmitter) => Promise<void>;
   /** Run the conductor's gate loop in the worktree to DONE/HALT (finish=open PR). */
   runConductor: (
     worktree: FeatureWorktree,
@@ -349,7 +349,7 @@ export function makeRunFeature(
       // other primitive throw (worktree kept, feature errored).
       if (deps.prepareWorktree) {
         try {
-          await deps.prepareWorktree(worktree, featureLog);
+          await deps.prepareWorktree(worktree, featureLog, featureRun?.events);
         } catch (prepareErr) {
           // Check if error is a SetupFailureError (by name and presence of outputTail)
           const isSetupFailure = prepareErr instanceof Error &&

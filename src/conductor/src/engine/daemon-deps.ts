@@ -119,8 +119,16 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
     // each project translate the namespace into its own shared/namespaced infra.
-    prepareWorktree: (wt, log) =>
-      prepareWorktree(wt.path, log ?? cfg.log, { verbose: cfg.verbose ?? false }),
+    prepareWorktree: async (wt, log, events) => {
+      let baseSha: string | undefined;
+      try {
+        const base = await resolveWorktreeBase(cfg.projectRoot, cfg.baseBranch);
+        baseSha = (await execa('git', ['rev-parse', '--verify', base], { cwd: cfg.projectRoot })).stdout.trim();
+      } catch {
+        // Missing base evidence deliberately leaves the marker gate fail-closed.
+      }
+      await prepareWorktree(wt.path, log ?? cfg.log, { verbose: cfg.verbose ?? false, baseSha, events });
+    },
 
     runConductor: (wt, item, providerExecution, featureEvents, log, sessionId) =>
       cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents, log, sessionId),

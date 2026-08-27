@@ -1197,7 +1197,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     // Inject prepareWorktree for retry after quarantine
     const runPrepare = (worktreePath: string) =>
-      prepareWorktree(worktreePath, featureLog, { verbose: config?.daemon_verbose ?? false });
+      prepareWorktree(worktreePath, featureLog, { verbose: config?.daemon_verbose ?? false, force: true });
 
     // Triage stage 1: run-triage (TS-2/TS-3)
     // Classify tree state and route: clean → pass, dirty → quarantine+retry
@@ -2120,6 +2120,9 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'project_setup':
+      log(`${dot} project setup ${event.ran ? 'ran' : 'skipped'} (${event.reason})`);
+      break;
     case 'operator_rewind':
       log(
         `${chalk.yellow('↶ REWIND:')} ${event.target} (operator; demoted ${event.demoted.join(', ') || 'none'})`,
