@@ -43,7 +43,6 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import {
   ALL_STEPS,
-  BUILD_VERIFICATION_GROUP,
   STEP_GROUPS,
   VALIDATION_GROUP,
   getGroupForStep,
@@ -1149,7 +1148,6 @@ describe('engine/conductor', () => {
       ): Promise<void>;
     }).commitStateChanges(state, 'join BUILD verification group', {
       build: 'done',
-      build__wiring_check: 'done',
       build__test_suite: 'done',
     });
 
@@ -1157,7 +1155,6 @@ describe('engine/conductor', () => {
       name: 'join BUILD verification group',
       mutations: expect.arrayContaining([
         expect.objectContaining({ field: 'build', expected: 'in_progress', next: 'done' }),
-        expect.objectContaining({ field: 'build__wiring_check', expected: undefined, next: 'done' }),
         expect.objectContaining({ field: 'build__test_suite', expected: undefined, next: 'done' }),
       ]),
     });
@@ -1711,7 +1708,6 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
-        s.name !== 'wiring_check' &&
         s.name !== 'rebase',
     ).length;
     expect(runner.run).toHaveBeenCalledTimes(dispatchedSteps);
@@ -1789,7 +1785,6 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
-        s.name !== 'wiring_check' &&
         s.name !== 'rebase',
     ).map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
@@ -2121,7 +2116,7 @@ describe('engine/conductor', () => {
       complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
       architecture_review: 'done', stories: 'done', conflict_check: 'done',
       writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
-      wiring_check: 'done', test_suite: 'done',
+       test_suite: 'done',
     } as ConductState);
 
     let buildReviewCalls = 0;
@@ -2179,7 +2174,7 @@ describe('engine/conductor', () => {
       complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
       architecture_review: 'done', stories: 'done', conflict_check: 'done',
       writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
-      wiring_check: 'done', test_suite: 'done',
+       test_suite: 'done',
     } as ConductState);
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) =>
@@ -2223,7 +2218,7 @@ describe('engine/conductor', () => {
       complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
       architecture_review: 'done', stories: 'done', conflict_check: 'done',
       writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
-      wiring_check: 'done', test_suite: 'done',
+       test_suite: 'done',
     } as ConductState);
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) =>
@@ -2268,7 +2263,7 @@ describe('engine/conductor', () => {
       complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
       architecture_review: 'done', stories: 'done', conflict_check: 'done',
       writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
-      wiring_check: 'done', test_suite: 'done',
+       test_suite: 'done',
     } as ConductState);
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) =>
@@ -6882,7 +6877,6 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
-        s.name !== 'wiring_check' &&
         s.name !== 'rebase',
     ).map((s) => s.name);
     expect(stepsRun).toEqual(expectedOrder);
@@ -6958,7 +6952,6 @@ describe('engine/conductor', () => {
         n !== 'complexity' &&
         n !== 'worktree' &&
         n !== 'test_suite' &&
-        n !== 'wiring_check' &&
         n !== 'rebase',
     );
     expect(stepsRun).toEqual(expectedOrder);
@@ -7140,8 +7133,7 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
-      wiring_check: 'done',
-      test_suite: 'done',
+       test_suite: 'done',
     } as ConductState);
 
     const runner = createMockStepRunner();
@@ -7254,8 +7246,7 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
-      wiring_check: 'done',
-      test_suite: 'done',
+       test_suite: 'done',
     } as ConductState;
 
     it('mode=auto reaching the validation group entry point takes the group path', async () => {
@@ -7408,8 +7399,7 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
-      wiring_check: 'done',
-      test_suite: 'done',
+       test_suite: 'done',
     } as ConductState;
 
     it('width 1: a single dispatchable member degrades to serial semantics — no parallel_started emitted', async () => {
@@ -7516,7 +7506,6 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
-      wiring_check: 'done',
       test_suite: 'done',
       rebase: 'done',
       finish: 'done',
@@ -7868,7 +7857,6 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
-      wiring_check: 'done',
       test_suite: 'done',
       rebase: 'done',
       finish: 'done',
@@ -8010,7 +7998,6 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
-      wiring_check: 'done',
       test_suite: 'done',
       rebase: 'done',
       finish: 'done',
@@ -8152,7 +8139,6 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'skipped',
-      wiring_check: 'skipped',
       test_suite: 'done',
       rebase: 'done',
       finish: 'done',
@@ -8309,7 +8295,6 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'skipped',
-      wiring_check: 'skipped',
       test_suite: 'done',
       rebase: 'done',
       finish: 'done',
@@ -8517,7 +8502,6 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'skipped',
-      wiring_check: 'skipped',
       test_suite: 'done',
       rebase: 'done',
       finish: 'done',
@@ -8665,7 +8649,6 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'skipped',
-      wiring_check: 'skipped',
       test_suite: 'done',
       rebase: 'done',
       finish: 'done',
@@ -8884,7 +8867,6 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'skipped',
-      wiring_check: 'skipped',
       test_suite: 'done',
       rebase: 'done',
       finish: 'done',
@@ -9070,7 +9052,6 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
-      wiring_check: 'done',
       test_suite: 'done',
       rebase: 'done',
       finish: 'done',
@@ -9192,7 +9173,7 @@ describe('engine/conductor', () => {
         acceptance_specs: 'pending',
         build: 'pending',
         build_review: 'pending',
-        wiring_check: 'pending',
+        test_suite: 'pending',
         manual_test: 'pending',
         prd_audit: 'pending',
         architecture_review_as_built: 'pending',
@@ -10343,8 +10324,7 @@ describe('engine/conductor', () => {
         plan: 'done', coherence_check: 'done',
         build: 'done',
         build_review: 'done',
-        wiring_check: 'done',
-        test_suite: 'done',
+         test_suite: 'done',
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
@@ -10362,7 +10342,7 @@ describe('engine/conductor', () => {
       // ...except a deprecated no-op, which has no work to redo and would
       // otherwise burn a selection lap every round
       // (adr-2026-08-11-deprecated-no-op-step-retirement).
-      expect(result.state['wiring_check']).toBe('done');
+      expect(result.state['test_suite']).toBe('stale');
       expect(result.state['manual_test']).toBe('stale');
       expect(result.state['prd_audit']).toBe('stale');
       expect(result.state['architecture_review_as_built']).toBe('stale');
@@ -10625,8 +10605,7 @@ describe('engine/conductor', () => {
         acceptance_specs: 'done',
         build: 'done',
         build_review: 'done',
-        wiring_check: 'done',
-        test_suite: 'done',
+         test_suite: 'done',
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
@@ -16820,34 +16799,6 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
   });
 });
 
-describe('built-in deterministic BUILD verification group', () => {
-  it('registers wiring and suite verification between build and build review', () => {
-    expect(BUILD_VERIFICATION_GROUP.members).toEqual(['wiring_check', 'test_suite']);
-    expect(STEP_GROUPS[BUILD_VERIFICATION_GROUP.name]).toBe(BUILD_VERIFICATION_GROUP);
-    expect(getGroupForStep('wiring_check')).toBe(BUILD_VERIFICATION_GROUP);
-    expect(getGroupForStep('test_suite')).toBe(BUILD_VERIFICATION_GROUP);
-    expect(VALIDATION_GROUP.members).toEqual([
-      'manual_test',
-      'prd_audit',
-      'architecture_review_as_built',
-    ]);
-
-    const buildIndex = ALL_STEPS.findIndex((step) => step.name === 'build');
-    const wiringIndex = ALL_STEPS.findIndex((step) => step.name === 'wiring_check');
-    const suiteIndex = ALL_STEPS.findIndex((step) => step.name === 'test_suite');
-    const reviewIndex = ALL_STEPS.findIndex((step) => step.name === 'build_review');
-    expect([wiringIndex, suiteIndex]).toEqual([buildIndex + 1, buildIndex + 2]);
-    expect(reviewIndex).toBe(suiteIndex + 1);
-
-    expect(ALL_STEPS.find((step) => step.name === 'wiring_check')?.prerequisites).toEqual(['build']);
-    expect(ALL_STEPS.find((step) => step.name === 'test_suite')?.prerequisites).toEqual(['build']);
-    expect(ALL_STEPS.find((step) => step.name === 'build_review')?.prerequisites).toEqual([
-      'wiring_check',
-      'test_suite',
-    ]);
-  });
-});
-
 // adr-2026-07-10-validation-group-join.md, Decision-1: the SHIP sequence
 // gains a built-in validation group entry describing the three validators
 // as a group, without disturbing their existing standalone StepDefinitions
@@ -16863,7 +16814,7 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
 
   it('positions the group after build review in ALL_STEPS ordering', () => {
     const buildReviewIdx = ALL_STEPS.findIndex((s) => s.name === 'build_review');
-    const wiringCheckIdx = ALL_STEPS.findIndex((s) => s.name === 'wiring_check');
+    const wiringCheckIdx = ALL_STEPS.findIndex((s) => s.name === 'test_suite');
     const testSuiteIdx = ALL_STEPS.findIndex((s) => s.name === 'test_suite');
     const firstMemberIdx = ALL_STEPS.findIndex((s) => s.name === VALIDATION_GROUP.members[0]);
     expect(firstMemberIdx).toBe(buildReviewIdx + 1);

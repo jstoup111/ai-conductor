@@ -533,8 +533,7 @@ describe('engine/artifacts', () => {
         ],
         build: ['.pipeline/task-status.json'],
         build_review: ['.pipeline/build-review.json'],
-        wiring_check: [],
-        test_suite: ['.pipeline/test-suite-evidence.json'],
+         test_suite: ['.pipeline/test-suite-evidence.json'],
         manual_test: ['.pipeline/manual-test-results.md'],
         prd_audit: ['.pipeline/prd-audit.md'],
         architecture_review_as_built: ['.pipeline/architecture-review-as-built.md'],
@@ -5965,14 +5964,14 @@ Task 1 → Task 2
   });
 
   // Task 13 (gate-step-completion-validates-against-code-state-, #817):
-  // characterization/regression coverage proving wiring_check, acceptance_specs,
+  // characterization/regression coverage proving test_suite, acceptance_specs,
   // and the build (task-status.json resume) predicate are byte-identical to
   // their pre-#817 behavior — the code-validity preserve mechanism
   // (gateVerdictStillValid / codeStamp sidecars) was scoped to build_review,
   // prd_audit, architecture_review_as_built, and manual_test ONLY (Tasks 1-9).
   // These tests would FAIL if a future change accidentally wired the preserve
   // mechanism into any of these three untouched gates.
-  describe('Task 13: wiring_check / acceptance_specs / build stay byte-identical (#817 out-of-scope gates)', () => {
+  describe('Task 13: test_suite / acceptance_specs / build stay byte-identical (#817 out-of-scope gates)', () => {
     describe('structural regression guard: predicate source never references the preserve mechanism', () => {
       let artifactsSource: string;
 
@@ -6002,8 +6001,8 @@ Task 1 → Task 2
         return artifactsSource.slice(start, i);
       }
 
-      it('wiring_check predicate body does not reference gateVerdictStillValid or codeStamp', () => {
-        const body = extractPredicateBody('wiring_check');
+      it('test_suite predicate body does not reference gateVerdictStillValid or codeStamp', () => {
+        const body = extractPredicateBody('test_suite');
         expect(body).not.toMatch(/gateVerdictStillValid/);
         expect(body).not.toMatch(/codeStamp/);
       });
@@ -6018,14 +6017,6 @@ Task 1 → Task 2
         const body = extractPredicateBody('build');
         expect(body).not.toMatch(/gateVerdictStillValid/);
         expect(body).not.toMatch(/codeStamp/);
-      });
-    });
-
-    describe('wiring_check: deprecated no-op', () => {
-      it('does not inspect obsolete evidence or current HEAD', async () => {
-        const ctx = { getHeadSha: async () => 'current-sha-222' };
-        const result = await checkStepCompletion(dir, 'wiring_check', ctx);
-        expect(result).toEqual({ done: true });
       });
     });
 

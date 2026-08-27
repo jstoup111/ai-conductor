@@ -59,7 +59,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
       conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
       architecture_review: 'skipped', acceptance_specs: 'skipped', build: 'done',
-      wiring_check: 'skipped', test_suite: 'done',
+       test_suite: 'done',
     });
 
     const runner: StepRunner = {
@@ -113,8 +113,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       architecture_review: 'skipped',
       acceptance_specs: 'skipped',
       build: 'done',
-      wiring_check: 'skipped',
-      test_suite: 'done',
+       test_suite: 'done',
     });
 
     const runner: StepRunner = {
@@ -356,7 +355,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
       conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
       architecture_review: 'skipped', acceptance_specs: 'skipped',
-      wiring_check: 'skipped', test_suite: 'done',
+       test_suite: 'done',
     });
     const calls: string[] = [];
     const runner: StepRunner = {
@@ -404,7 +403,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
       conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
       architecture_review: 'skipped', acceptance_specs: 'skipped',
-      wiring_check: 'skipped', test_suite: 'done',
+       test_suite: 'done',
     });
     await writeKickbackLedger(dir, {
       version: 1,
@@ -488,7 +487,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
         conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
         architecture_review: 'skipped', acceptance_specs: 'skipped', build: 'done',
-        wiring_check: 'skipped', test_suite: 'done',
+         test_suite: 'done',
       });
       await writeKickbackLedger(dir, { version: 1, gates: { build_review: initialEntry } });
 
@@ -853,7 +852,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
         conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
         architecture_review: 'skipped', acceptance_specs: 'skipped',
-        wiring_check: 'skipped', test_suite: 'done',
+         test_suite: 'done',
       });
       await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
         tasks: Array.from({ length: lap }, (_, id) => ({ id: `t${id}`, status: 'completed' })),

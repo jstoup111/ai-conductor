@@ -95,7 +95,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
       conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
       architecture_review: 'skipped', acceptance_specs: 'skipped',
-      build: 'done', wiring_check: 'skipped', test_suite: 'done', build_review: 'pending',
+      build: 'done',  test_suite: 'done', build_review: 'pending',
     } satisfies Partial<ConductState>));
     return { stateFilePath, head };
   }
@@ -278,7 +278,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
         },
       },
       events: new ConductorEventEmitter(),
-      fromStep: 'wiring_check',
+      fromStep: 'build_review',
       verifyArtifacts: true,
       fullSuiteVerifier: { inspect, ensure: vi.fn() },
     });
@@ -344,12 +344,12 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
         },
       },
       events: new ConductorEventEmitter(),
-      fromStep: 'wiring_check',
+      fromStep: 'build_review',
       verifyArtifacts: true,
       config: {
         steps: {
           non_attesting_gate: {
-            after: 'wiring_check',
+            after: 'build_review',
             skill: 'skills/test/SKILL.md',
           },
         },

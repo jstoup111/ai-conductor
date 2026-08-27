@@ -23,7 +23,6 @@ const EXPECTED_CUSTOM_COMPLETION_PREDICATES = [
   'manual_test',
   'prd_audit',
   'test_suite',
-  'wiring_check',
 ];
 
 function source(relativePath: string): ts.SourceFile {
