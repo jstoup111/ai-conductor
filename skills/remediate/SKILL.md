@@ -210,7 +210,7 @@ The conductor reads this file to route, so the shape is exact:
 ```
 
 Field rules:
-- `id` — the blocking FR id (`FR-N`); for an as-built finding, the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`); for a finish test failure, `test:<failing file stem>` (e.g. `test:loop-intake`); for a `build_review` trigger gap, `build_review:<stem>` (e.g. `build_review:completeness`); for a stall-question, `stall:<slug>` where `<slug>` is a 1-3 word summary of the question topic (e.g. `stall:validation-layer`, `stall:acceptance-test-fidelity`).
+- `id` — the blocking FR id (`FR-N`). For a `prd_audit` report row where `PRD: none`, use that row's report criterion exactly as `S<story>.<ordinal>` (e.g. `S5.1`); real `FR-N` rows remain `FR-N`. For an as-built finding, use the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`); for a finish test failure, `test:<failing file stem>` (e.g. `test:loop-intake`); for a `build_review` trigger gap, `build_review:<stem>` (e.g. `build_review:completeness`); for a stall-question, `stall:<slug>` where `<slug>` is a 1-3 word summary of the question topic (e.g. `stall:validation-layer`, `stall:acceptance-test-fidelity`).
 - `disposition` — one of `build` | `acceptance_specs` | `architecture_review` | `plan` | `publication` | `halt`.
   Use `publication` when the shipped code is already correct and the ONLY defect is in what the
   pull request *says* — a placeholder or wrong-template body, a stale title, a missing `Closes`
@@ -284,6 +284,7 @@ Headers re-parse via the Task 18 grammar and must include:
 - [ ] A gap requiring another feature's sealed-artifact amendment routes to its owning DECIDE step,
       never to `build` or `acceptance_specs`
 - [ ] A `plan` rationale names the examined plan task IDs and why none admits the fix
-- [ ] `id` format correct: `FR-N`, `build_review:<stem>`, `test:<stem>`, `adr-<stem>`, or
-      `stall:<slug>`
+- [ ] `id` format correct: `prd_audit` rows with `PRD: none` use their report criterion exactly as
+      `S<story>.<ordinal>` (e.g. `S5.1`); real `FR-N` rows remain `FR-N`; other sources use
+      `build_review:<stem>`, `test:<stem>`, `adr-<stem>`, or `stall:<slug>`
 - [ ] Valid JSON written to `.pipeline/remediation.json` matching the contract exactly
