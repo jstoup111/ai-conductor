@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:4
 /**
  * Covers: task:1, task:2, task:3, task:4
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
@@ -679,6 +679,36 @@ describe('Task 3: dispatch metering classification', () => {
       { value: 1, attributes: { step: 'plan', metering: 'cost-unmetered' } },
       { value: 1, attributes: { step: 'build', metering: 'unmetered' } },
     ]);
+  });
+});
+
+// ── Task 4: unmetered close observability ──────────────────────────────────
+
+describe('Task 4: unmetered close observability', () => {
+  it('records an unmetered dispatch and duration, with no token or cost points', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const dispatches = findMetric(metricExporter, 'conductor.step.dispatches')!;
+    expect(dispatches.dataPoints
+      .filter((dataPoint) => dataPoint.attributes['step'] === 'build')
+      .map((dataPoint) => ({ value: dataPoint.value, attributes: dataPoint.attributes }))).toEqual([
+        { value: 1, attributes: { step: 'build', metering: 'unmetered' } },
+      ]);
+    expect(findMetric(metricExporter, 'conductor.step.duration')?.dataPoints).toContainEqual(
+      expect.objectContaining({ attributes: { step: 'build' } }),
+    );
+    expect(findMetric(metricExporter, 'conductor.step.tokens')?.dataPoints.filter(
+      (dataPoint) => dataPoint.attributes['step'] === 'build',
+    ) ?? []).toHaveLength(0);
+    expect(findMetric(metricExporter, 'conductor.step.cost')?.dataPoints.filter(
+      (dataPoint) => dataPoint.attributes['step'] === 'build',
+    ) ?? []).toHaveLength(0);
   });
 });
 
