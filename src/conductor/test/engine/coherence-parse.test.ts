@@ -15,17 +15,19 @@ function staticImportSpecifiers(source: string): string[] {
   );
 }
 
-function transitiveStaticImports(moduleUrl: URL, visited = new Set<string>()): Array<{ source: URL; specifier: string }> {
+function transitiveStaticImports(moduleUrl: URL, visited = new Set<string>()): Array<{ specifier: string; target: URL }> {
   if (visited.has(moduleUrl.href)) return [];
   visited.add(moduleUrl.href);
 
   const imports = staticImportSpecifiers(readFileSync(moduleUrl, 'utf8'));
   return imports.flatMap((specifier) => {
-    const edge = { source: moduleUrl, specifier };
+    const target = specifier.startsWith('.')
+      ? new URL(specifier.replace(/\.js$/, '.ts'), moduleUrl)
+      : new URL(`file:///external/${specifier}`);
+    const edge = { specifier, target };
     if (!specifier.startsWith('.')) return [edge];
 
-    const dependencyUrl = new URL(specifier.replace(/\.js$/, '.ts'), moduleUrl);
-    return [edge, ...transitiveStaticImports(dependencyUrl, visited)];
+    return [edge, ...transitiveStaticImports(target, visited)];
   });
 }
 
@@ -59,7 +61,7 @@ describe('parseCoherenceArtifact', () => {
       /(?:^|\/)owner-gate\.ts$/,
       /(?:^|\/)blocker-resolver\.ts$/,
     ]) {
-      expect(staticImports.some(({ source }) => disallowed.test(source.pathname))).toBe(false);
+      expect(staticImports.some(({ target }) => disallowed.test(target.pathname))).toBe(false);
     }
     expect(staticImports.some(({ specifier }) => specifier.startsWith('node:fs'))).toBe(false);
     expect(staticImports.some(({ specifier }) => specifier.startsWith('node:child_process'))).toBe(false);
@@ -203,7 +205,11 @@ ${row}
     }));
 
     expect(observations).toEqual(coherenceRegressionCorpus);
-    expect(observations.filter(({ oracleAccepted, parserAccepted, discovery }) => oracleAccepted && !parserAccepted && discovery !== 'processed')).toEqual([]);
+    expect(
+      observations
+        .filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)
+        .map(({ slug }) => slug),
+    ).toEqual(['decide-artifact-coherence-check']);
     expect(observations
       .filter(({ oracleAccepted, parserAccepted }) => !oracleAccepted && parserAccepted)
       .map(({ name }) => name),

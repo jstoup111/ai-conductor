@@ -9,7 +9,6 @@ export interface CoherenceCorpusFixture {
   content: string | null;
   oracleAccepted: boolean;
   parserAccepted: boolean;
-  discovery: 'eligible' | 'blocked' | 'processed';
 }
 
 // Retired discovery predicate, copied verbatim from daemon-backlog.ts before
@@ -57,7 +56,6 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
 `,
     oracleAccepted: true,
     parserAccepted: true,
-    discovery: 'eligible',
   },
   {
     slug: 'ragged-mixed-rows',
@@ -69,7 +67,6 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
 `,
     oracleAccepted: true,
     parserAccepted: true,
-    discovery: 'eligible',
   },
   {
     slug: 'five-wide-header-criterion',
@@ -80,7 +77,6 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
 `,
     oracleAccepted: false,
     parserAccepted: true,
-    discovery: 'eligible',
   },
   {
     slug: 'six-wide-header-legacy',
@@ -91,7 +87,6 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
 `,
     oracleAccepted: false,
     parserAccepted: true,
-    discovery: 'eligible',
   },
   {
     slug: 'zero-criterion-legacy',
@@ -106,7 +101,6 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
 `,
     oracleAccepted: true,
     parserAccepted: true,
-    discovery: 'eligible',
   },
   {
     // Real shipped-artifact shape: the retired predicate accepts the first
@@ -124,9 +118,8 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
 `,
     oracleAccepted: true,
     parserAccepted: false,
-    discovery: 'processed',
   },
-  { slug: 'absent-artifact', name: 'absent artifact', content: null, oracleAccepted: false, parserAccepted: false, discovery: 'blocked' },
-  { slug: 'empty-artifact', name: 'empty artifact', content: ' \t\n ', oracleAccepted: false, parserAccepted: false, discovery: 'blocked' },
-  { slug: 'table-less-content', name: 'table-less content', content: '# Coherence\n\nNo table here.\n', oracleAccepted: false, parserAccepted: false, discovery: 'blocked' },
+  { slug: 'absent-artifact', name: 'absent artifact', content: null, oracleAccepted: false, parserAccepted: false },
+  { slug: 'empty-artifact', name: 'empty artifact', content: ' \t\n ', oracleAccepted: false, parserAccepted: false },
+  { slug: 'table-less-content', name: 'table-less content', content: '# Coherence\n\nNo table here.\n', oracleAccepted: false, parserAccepted: false },
 ];

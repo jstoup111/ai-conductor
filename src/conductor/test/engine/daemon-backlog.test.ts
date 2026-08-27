@@ -15,10 +15,7 @@ import {
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { parseComplexityTier } from '../../src/engine/artifacts.js';
 import { parseCoherenceArtifact } from '../../src/engine/coherence-parse.js';
-import {
-  coherenceRegressionCorpus,
-  retiredHasCoherenceTableDataRow,
-} from './coherence-corpus.js';
+import { coherenceRegressionCorpus } from './coherence-corpus.js';
 import {
   renderShippedRecord,
   parseShippedRecord,
@@ -575,7 +572,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
 
   // Covers: task:6 — the retired acceptance corpus is exercised through
   // discovery as well as directly through the shared parser.
-  it('keeps the shared coherence corpus eligible through discovery or processed dedup', async () => {
+  it('derives coherence-corpus reachability from discovery, with shipped dedup before parsing', async () => {
     await mkdir(join(dir, '.docs/coherence'), { recursive: true });
     await mkdir(join(dir, '.docs/complexity'), { recursive: true });
     for (const fixture of coherenceRegressionCorpus) {
@@ -587,39 +584,30 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       }
     }
 
+    const isProcessed = vi.fn(async (slug: string) => slug === 'decide-artifact-coherence-check');
     const result = await discoverBacklog(
       dir,
-      async (slug) => slug === 'decide-artifact-coherence-check',
+      isProcessed,
       undefined,
       { treeSource: fsTreeSource(dir) },
     );
-    const observations = coherenceRegressionCorpus.map((fixture) => ({
-      ...fixture,
-      oracleAccepted: retiredHasCoherenceTableDataRow(fixture.content),
-      parserAccepted: parseCoherenceArtifact(fixture.content).ok,
-    }));
-
-    expect(observations).toEqual(coherenceRegressionCorpus);
-    expect(observations.filter(({ oracleAccepted, discovery }) => oracleAccepted && discovery === 'blocked')).toEqual([]);
-    expect(observations
+    expect(isProcessed).toHaveBeenCalledWith('decide-artifact-coherence-check');
+    expect(coherenceRegressionCorpus
       .filter(({ oracleAccepted, parserAccepted }) => !oracleAccepted && parserAccepted)
       .map(({ name }) => name),
     ).toEqual([
       'five-wide header over six-wide separator and criterion row',
       'six-wide header over five-wide separator and legacy row',
     ]);
-    expect(observations.filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)).toEqual([
-      expect.objectContaining({ slug: 'decide-artifact-coherence-check', discovery: 'processed' }),
-    ]);
     expect(result.items.map((item) => item.slug)).toEqual(
       coherenceRegressionCorpus
-        .filter(({ discovery }) => discovery === 'eligible')
+        .filter(({ parserAccepted }) => parserAccepted)
         .map(({ slug }) => slug)
         .sort(),
     );
     expect(result.blocked.map((item) => item.slug)).toEqual(
       coherenceRegressionCorpus
-        .filter(({ discovery }) => discovery === 'blocked')
+        .filter(({ slug, parserAccepted }) => slug !== 'decide-artifact-coherence-check' && !parserAccepted)
         .map(({ slug }) => slug)
         .sort(),
     );
