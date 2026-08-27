@@ -52,6 +52,15 @@ Option A, with these binding sub-decisions:
    when — `prepareWorktree` fails in a **daemon** dispatch. The `autoresolve.ts` prepare path
    and manual `/conduct` runs are out of scope (unchanged). Setup exit 0 ⇒ byte-for-byte the
    existing dispatch path.
+
+   > **Amended 2026-08-26 by #1930:** setup no longer runs unconditionally on every daemon
+   > dispatch — a content-addressed success marker
+   > (adr-2026-08-26-setup-once-per-worktree-marker) may skip it when the worktree is already
+   > prepared. Triage's trigger is unchanged: it fires only on a `SetupFailureError` from an
+   > actual setup run (a skipped setup cannot throw), and triage's own `runPrepare`
+   > verification re-runs pass `force: true` so they always execute real setup rather than
+   > being marker-short-circuited. When setup does run and exits 0, the dispatch path remains
+   > byte-for-byte as decided here, plus the marker write.
 2. **Quarantine mechanism:** a commit on a dedicated branch ref
    `wip/setup-quarantine-<slug>` created from the worktree HEAD containing ALL uncommitted
    and untracked state (git add -A of the dirty tree), followed by `reset --hard HEAD` +

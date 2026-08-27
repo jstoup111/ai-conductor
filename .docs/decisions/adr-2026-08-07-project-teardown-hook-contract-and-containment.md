@@ -108,7 +108,15 @@ No unconfirmed load-bearing assumption remains; this ADR is safe to approve.
 resolution, `cwd` set to the worktree, `all: true`, and `env: { CI: 'true', [NAMESPACE_VAR]:
 namespace }` where `namespace` is recomputed by the same
 `sanitizeNamespace(basename(worktreePath))` call. No marker file, ledger, or persisted state
-is introduced (FR-2, FR-3). An absent script returns silently — and, unlike the setup side,
+is introduced (FR-2, FR-3).
+
+> **Amended 2026-08-26 by #1930:** two scoped changes to this contract, decided in
+> adr-2026-08-26-setup-once-per-worktree-marker: (1) the *setup* side now persists one
+> engine-authored success marker (`«worktree»/.daemon/setup-ok.json`) gating setup re-runs —
+> the teardown side and the namespace's pure-function-of-path property remain state-free as
+> decided here; (2) the contract gains a third member, optional `bin/dispatch-start`, run
+> every dispatch under this same containment shape (namespaced env, mandatory timeout via
+> `dispatch_start_timeout_seconds`, failures logged never thrown, absent script silent). An absent script returns silently — and, unlike the setup side,
 emits **no** log line at all, because FR-4 requires byte-identical log output for
 non-adopting projects.
 
