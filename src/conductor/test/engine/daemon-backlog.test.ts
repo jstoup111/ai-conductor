@@ -15,7 +15,10 @@ import {
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { parseComplexityTier } from '../../src/engine/artifacts.js';
 import { parseCoherenceArtifact } from '../../src/engine/coherence-parse.js';
-import { coherenceRegressionCorpus } from './coherence-corpus.js';
+import {
+  coherenceRegressionCorpus,
+  retiredHasCoherenceTableDataRow,
+} from './coherence-corpus.js';
 import {
   renderShippedRecord,
   parseShippedRecord,
@@ -591,8 +594,15 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       undefined,
       { treeSource: fsTreeSource(dir) },
     );
+    const observations = coherenceRegressionCorpus.map((fixture) => ({
+      ...fixture,
+      oracleAccepted: retiredHasCoherenceTableDataRow(fixture.content),
+      parserAccepted: parseCoherenceArtifact(fixture.content).ok,
+    }));
+
+    expect(observations).toEqual(coherenceRegressionCorpus);
     expect(isProcessed).toHaveBeenCalledWith('decide-artifact-coherence-check');
-    expect(coherenceRegressionCorpus
+    expect(observations
       .filter(({ oracleAccepted, parserAccepted }) => !oracleAccepted && parserAccepted)
       .map(({ name }) => name),
     ).toEqual([
@@ -600,17 +610,18 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       'six-wide header over five-wide separator and legacy row',
     ]);
     expect(result.items.map((item) => item.slug)).toEqual(
-      coherenceRegressionCorpus
+      observations
         .filter(({ parserAccepted }) => parserAccepted)
         .map(({ slug }) => slug)
         .sort(),
     );
     expect(result.blocked.map((item) => item.slug)).toEqual(
-      coherenceRegressionCorpus
+      observations
         .filter(({ slug, parserAccepted }) => slug !== 'decide-artifact-coherence-check' && !parserAccepted)
         .map(({ slug }) => slug)
         .sort(),
     );
+    expect(result.blocked.map((item) => item.slug)).not.toContain('decide-artifact-coherence-check');
   });
 
   // Plan Task 19 / Covers: task:6 — a legacy coherence artifact (all five
