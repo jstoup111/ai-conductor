@@ -561,6 +561,19 @@ export function remediationLapCapForGate(
   return genericCap;
 }
 
+/**
+ * Authored `Governing clause` cells carry inline markdown. The clause grammar is
+ * anchored on a bare identifier, so a habitually backticked stem
+ * (`` `adr-x` + Decision 4 ``) failed the match before any ADR lookup ran, and
+ * every real-world REMEDIABLE finding became a needs-human HALT on substance the
+ * bounded remediation route could have closed. Emphasis carries no meaning in
+ * this cell; strip it before matching. `_` is left intact because it is a legal
+ * character in a task id.
+ */
+function stripClauseEmphasis(clause: string): string {
+  return clause.replace(/[`*]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 export type AsBuiltGoverningClauseResolution =
   | { kind: 'adr'; clause: string }
   | { kind: 'plan-task'; clause: string; parentTask: string };
@@ -571,7 +584,7 @@ export async function resolveAsBuiltGoverningClause(
   activePlan: string,
   clause: string,
 ): Promise<AsBuiltGoverningClauseResolution | null> {
-  const normalizedClause = clause.trim();
+  const normalizedClause = stripClauseEmphasis(clause);
   const taskReference = normalizedClause.match(/^task\s+([A-Za-z0-9._-]+)$/i)?.[1] ??
     (/^[A-Za-z0-9._-]+$/.test(normalizedClause) ? normalizedClause : undefined);
   if (taskReference !== undefined) {
@@ -584,7 +597,10 @@ export async function resolveAsBuiltGoverningClause(
   }
 
   const adrReference = normalizedClause.match(
-    /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+(?:\+\s*)?decision\s+(\d+)$/i,
+    // The skill's own template renders as `<stem> + <decision number>`, so the
+    // literal word `decision` is optional; requiring it made the documented
+    // form unresolvable.
+    /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+(?:\+\s*)?(?:decision\s+)?(\d+)$/i,
   );
   if (!adrReference) return null;
   const [, stem, decisionNumber] = adrReference;
@@ -3858,7 +3874,9 @@ export class Conductor {
         haltClass: 'needs-human',
         detail:
           'As-built review remediation cannot resolve governing clause(s): ' +
-          asBuiltUnresolvableClauses.map(({ id, clause }) => `${id}: ${clause}`).join('; ') + '.',
+          asBuiltUnresolvableClauses.map(({ id, clause }) => `${id}: ${clause}`).join('; ') +
+          '. A REMEDIABLE row cites exactly one clause: an APPROVED ADR filename stem plus its ' +
+          'decision number, or one task id from this feature\'s plan.',
       };
     }
 

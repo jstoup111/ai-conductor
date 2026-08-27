@@ -427,9 +427,12 @@ and ships when acceptance criteria still pass, and halts when a stated outcome i
 
 A `BLOCKED` report must contain exactly one `## Blocking Findings` table with `Finding`, `Class`,
 `Governing clause`, and `Summary` columns. `Class` is either `REMEDIABLE` or `DESIGN`. Every
-`REMEDIABLE` row names an approved ADR decision (`<ADR filename stem> decision <number>`) or a task in
-the feature's active plan; a missing or malformed table, class, clause, or row is invalid and halts for
-a human.
+`REMEDIABLE` row names an approved ADR decision (`<ADR filename stem> decision <number>`, where the word
+`decision` is optional) or a task in the feature's active plan; a missing or malformed table, class,
+clause, or row is invalid and halts for a human. Inline markdown emphasis around the clause — a
+backticked or bolded stem — is stripped before the clause is resolved, so `` `adr-x` + Decision 4 ``
+resolves exactly as `adr-x decision 4` does. A clause naming more than one reference
+(`Task 9 and Task 10`) remains unresolvable: cite one clause per row and split the finding.
 
 When every valid finding is `REMEDIABLE`, daemon runs with as-built remediation enabled can dispatch the
 bounded remediation route, append the authorized repair work, and re-stage BUILD. The route is bounded by

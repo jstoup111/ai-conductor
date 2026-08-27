@@ -494,7 +494,8 @@ UNEXERCISED entries carry their observation signature)
 ## Blocking Findings (required exactly when Verdict is BLOCKED)
 | Finding | Class | Governing clause | Summary |
 |---|---|---|---|
-| AB-1 | REMEDIABLE | <ADR filename stem> + <decision number>, or <task id from this feature's plan> | <one-line finding summary> |
+| AB-1 | REMEDIABLE | adr-2026-06-29-rate-limit-strategy decision 4 | <one-line finding summary> |
+| AB-2 | REMEDIABLE | Task 7 | <one-line finding summary> |
 ## Blocking Violations (if BLOCKED — which APPROVED ADR or unreachable rung, file:line)
 ## Resolution (if BLOCKED — code fix OR superseding ADR; human-approved)
 ```
@@ -502,7 +503,11 @@ UNEXERCISED entries carry their observation signature)
 For a `BLOCKED` verdict, `## Blocking Findings` is required exactly once and contains one row per
 finding. `Class` is a closed set: exactly `REMEDIABLE` or `DESIGN`. A `REMEDIABLE` row's
 `Governing clause` must name either an ADR filename stem plus its decision number, or a task id from
-this feature's own plan; a REMEDIABLE row without a governing clause is malformed. `DESIGN` is for a
+this feature's own plan; a REMEDIABLE row without a governing clause is malformed. Write the clause
+as **bare text** — no backticks, no bold — and cite **exactly one** clause per row: the resolver
+matches a single identifier, so `` `adr-x` + Decision 4 `` and `Task 9 and Task 10` are both
+unresolvable and HALT the bounded remediation route. Split a finding that spans two tasks into two
+rows. `DESIGN` is for a
 finding that requires a human architectural decision rather than work already required by an approved
 artifact.
 
@@ -562,5 +567,7 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
       `REMEDIABLE` or `DESIGN`
 - [ ] **As-built mode:** every REMEDIABLE blocking finding cites its governing ADR filename stem
       plus decision number, or its task id from this feature's plan; a missing clause is malformed
+- [ ] **As-built mode:** every `Governing clause` cell is bare text (no backticks or bold) naming
+      exactly one clause
 - [ ] **As-built mode:** `.pipeline/review-required-architecture-as-built` marker written when the
       verdict is not a clean APPROVED
