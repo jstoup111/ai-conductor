@@ -2,7 +2,14 @@ import { readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { loadManifestFromFile } from './plugin-manifest.js';
 import { PluginRegistry } from './plugin-registry.js';
-import { PluginManifestError, PluginLoadError, PluginVersionError } from '../types/plugin.js';
+import {
+  PluginManifestError,
+  PluginLoadError,
+  PluginVersionError,
+  type VisualizerFactory,
+  type VisualizerFactoryContext,
+  type VisualizerPlugin,
+} from '../types/plugin.js';
 import { ClaudeProvider } from '../execution/claude-provider.js';
 import { CodexProvider } from '../execution/codex-provider.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
@@ -46,6 +53,28 @@ async function loadPluginModule(
   }
 }
 
+function validateVisualizerEntrypoint(
+  plugin: unknown,
+  manifest: { name: string },
+): VisualizerFactory {
+  const factory = typeof plugin === 'function'
+    ? plugin as VisualizerFactory
+    : () => plugin as VisualizerPlugin;
+  const visualizer = factory({} as VisualizerFactoryContext);
+
+  if (typeof visualizer?.name !== 'string') {
+    throw new PluginLoadError(`Plugin ${manifest.name} missing required member: name`);
+  }
+  if (typeof visualizer.start !== 'function') {
+    throw new PluginLoadError(`Plugin ${manifest.name} missing required method: start`);
+  }
+  if (typeof visualizer.stop !== 'function') {
+    throw new PluginLoadError(`Plugin ${manifest.name} missing required method: stop`);
+  }
+
+  return factory;
+}
+
 /**
  * Discovers and registers plugins from filesystem directories.
  * Scans globalDir and projectDir for plugin subdirectories, loading plugin.yml
@@ -72,7 +101,19 @@ export async function discoverPlugins(
           const manifest = loadManifestFromFile(manifestPath);
           // Task 10: Load the actual plugin module
           const plugin = await loadPluginModule(pluginPath, manifest);
-          registry.register(manifest.kind, manifest.name, plugin);
+          if (manifest.kind === 'visualizer') {
+            try {
+              registry.register(manifest.kind, manifest.name, validateVisualizerEntrypoint(plugin, manifest));
+            } catch (err) {
+              if (err instanceof PluginLoadError) {
+                console.warn(`Skipping plugin ${entry.name}: ${err.message}`);
+                continue;
+              }
+              throw err;
+            }
+          } else {
+            registry.register(manifest.kind, manifest.name, plugin);
+          }
         } catch (err) {
           if (err instanceof PluginManifestError) {
             // Skip invalid manifest in auto-discovery (Task 10 behavior)
@@ -98,6 +139,18 @@ export async function discoverPlugins(
           const manifest = loadManifestFromFile(manifestPath);
           // Task 10: Load the actual plugin module
           const plugin = await loadPluginModule(pluginPath, manifest);
+          let registeredPlugin = plugin;
+          if (manifest.kind === 'visualizer') {
+            try {
+              registeredPlugin = validateVisualizerEntrypoint(plugin, manifest);
+            } catch (err) {
+              if (err instanceof PluginLoadError) {
+                console.warn(`Skipping plugin ${entry.name}: ${err.message}`);
+                continue;
+              }
+              throw err;
+            }
+          }
 
           // Check if we're shadowing a global plugin
           const globalPlugins = registry.list(manifest.kind);
@@ -109,7 +162,7 @@ export async function discoverPlugins(
           }
 
           // Register project-local plugin (overwrites global if same kind+name)
-          registry.register(manifest.kind, manifest.name, plugin);
+          registry.register(manifest.kind, manifest.name, registeredPlugin);
         } catch (err) {
           if (err instanceof PluginManifestError) {
             // Skip invalid manifest in auto-discovery

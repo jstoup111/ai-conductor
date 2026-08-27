@@ -149,6 +149,69 @@ entrypoint: index.js`
     });
   });
 
+  describe('visualizer interface validation', () => {
+    function writeVisualizerModule(name: string, source: string): void {
+      const pluginDir = join(globalDir, name);
+      mkdirSync(pluginDir);
+      writeFileSync(
+        join(pluginDir, 'plugin.yml'),
+        `kind: visualizer
+name: ${name}
+entrypoint: index.js`,
+      );
+      writeFileSync(join(pluginDir, 'index.js'), source);
+    }
+
+    // Covers: task:3
+    it('rejects a visualizer missing stop without preventing a valid sibling from registering', async () => {
+      writeVisualizerModule(
+        'missing-stop',
+        `export default {
+  name: 'missing-stop',
+  start() {}
+};`,
+      );
+      writeVisualizerModule(
+        'working-visualizer',
+        `export default {
+  name: 'working-visualizer',
+  start() {},
+  async stop() {}
+};`,
+      );
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await discoverPlugins(globalDir, projectDir, registry);
+
+      registry.markInitialized();
+      expect(warning).toHaveBeenCalledWith(
+        'Skipping plugin missing-stop: Plugin missing-stop missing required method: stop',
+      );
+      expect(registry.list('visualizer')).toEqual(['working-visualizer']);
+
+      const factory = registry.get<(context: unknown) => { name: string }>('visualizer', 'working-visualizer');
+      expect(factory({})).toMatchObject({ name: 'working-visualizer' });
+      warning.mockRestore();
+    });
+
+    it('validates a visualizer factory by its product before registering it', async () => {
+      writeVisualizerModule(
+        'factory-visualizer',
+        `export default () => ({
+  name: 'factory-visualizer',
+  start() {},
+  async stop() {}
+});`,
+      );
+
+      await discoverPlugins(globalDir, projectDir, registry);
+
+      registry.markInitialized();
+      const factory = registry.get<(context: unknown) => { name: string }>('visualizer', 'factory-visualizer');
+      expect(factory({})).toMatchObject({ name: 'factory-visualizer' });
+    });
+  });
+
   describe('happy path: project-local plugin discovery', () => {
     it('discovers and registers a plugin from projectDir', async () => {
       const pluginDir = join(projectDir, 'project-provider');
