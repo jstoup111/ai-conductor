@@ -3834,7 +3834,7 @@ export class Conductor {
             // Planner gap ids are FR-N by contract; reports are criterion
             // keyed. Bind both identities so every report association remains
             // available for the cap and append authorization.
-            prdAuditFindings.set(finding.criterion, boundFinding);
+            prdAuditFindings.set(finding.criterion.toUpperCase(), boundFinding);
             for (const frId of finding.prdIds) prdAuditFindings.set(frId, boundFinding);
           }
         }

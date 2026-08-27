@@ -229,6 +229,59 @@ describe('planRemediation implementation-only authority routing', () => {
     expect(plan).not.toContain('rem-unmatched');
   });
 
+  it.each([
+    ['S5.1', 's5.1'],
+    ['s5.1', 'S5.1'],
+  ])('routes a criterion-bound remediation when report criterion %s and gap id %s differ only by case', async (criterion, gapId) => {
+    await writeFile(
+      planPath,
+      Array.from({ length: 20 }, (_, index) => `### Task ${index + 1}: authored work\n`).join(''),
+      'utf8',
+    );
+    await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
+      '# Stories', '', '## Story 5: remediation', '', '#### Happy Path',
+      '- Given input, when repaired, then it holds.',
+    ].join('\n'), 'utf8');
+    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
+      '**PRD:** none', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '| --- | --- | --- | --- | --- |',
+      `| ${criterion} | FIXABLE | 1 | none | Missing implementation |`,
+    ].join('\n'), 'utf8');
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: gapId, disposition: 'build', category: null,
+            rationale: 'Repair the criterion-bound implementation.',
+            tasks: [{ id: `rem-case-${gapId}`, title: 'Implement the criterion repair' }],
+          }],
+        }), 'utf8');
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 } } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string; hint?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'prd audit blocked',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(outcome.hint).toContain(gapId);
+    expect(await readFile(planPath, 'utf8')).toContain(`rem-case-${gapId}`);
+  });
+
   it('halts the FR-S5.1 non-match without prefix admission and names available criterion keys', async () => {
     await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
     await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
