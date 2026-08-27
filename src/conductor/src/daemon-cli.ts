@@ -924,6 +924,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     return featureLog;
   };
   const beginFeatureRun = (worktree: FeatureWorktree, item: BacklogItem) => {
+    const sessionId = uuidv4();
     const persistence = startFeatureEventPersistence(worktree.path, events);
     const featureEvents = persistence.events;
     const featureLog = featureLogFor(item.slug);
@@ -932,6 +933,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
     return {
       ...persistence,
+      sessionId,
       providerExecution: createProviderExecution(featureEvents, featureLog),
       log: featureLog,
       stop: () => {
@@ -955,6 +957,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     providerExecution = createProviderExecution(),
     featureEvents: ConductorEventEmitter = events,
     featureLog = log,
+    sessionId = uuidv4(),
   ) => {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
@@ -992,7 +995,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     const stepRunner = new DefaultStepRunner(
       selectedRuntime.provider,
-      uuidv4(),
+      sessionId,
       wt.path,
       {
         featureDesc: item.slug,
