@@ -42,15 +42,34 @@ export async function readState(path: string): Promise<StateResult<ConductState>
     };
   }
 
+  let parsed: ConductState;
   try {
-    const parsed = JSON.parse(raw) as ConductState;
-    return { ok: true, value: migrateState(parsed) };
+    parsed = JSON.parse(raw) as ConductState;
   } catch {
     return {
       ok: false,
       error: { type: 'corrupted', message: 'Invalid JSON in state file' },
     };
   }
+
+  // A persisted `retro` status can no longer participate in selection. Route
+  // it through the registry's established fail-loud diagnostic rather than
+  // loading a state that can leave a removed gate permanently pending.
+  if (Object.prototype.hasOwnProperty.call(parsed, 'retro')) {
+    try {
+      getStepDefinition('retro' as StepName);
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          type: 'corrupted',
+          message: error instanceof Error ? error.message : 'Unknown step: retro',
+        },
+      };
+    }
+  }
+
+  return { ok: true, value: migrateState(parsed) };
 }
 
 /**

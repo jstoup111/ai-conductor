@@ -115,6 +115,17 @@ describe('engine/state', () => {
         expect(result.error.type).toBe('corrupted');
       }
     });
+
+    it('rejects a stale retro step status by its unknown name', async () => {
+      await writeFile(statePath, JSON.stringify({ retro: 'done' }));
+
+      const result = await readState(statePath);
+
+      expect(result).toEqual({
+        ok: false,
+        error: { type: 'corrupted', message: 'Unknown step: retro' },
+      });
+    });
   });
 
   // --- writeState ---
