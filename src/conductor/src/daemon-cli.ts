@@ -1080,8 +1080,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // at acceptance_specs every cycle. (`fromStep` forced acceptance_specs
       // and, being explicitly targeted, re-ran it on every resume.)
       resume: true,
-      // Phase 9.1: daemon runs skip the in-loop retro; the emission step writes
-      // the narrative to the engineer store instead of the repo's .docs/retros/.
+      // Enable daemon-specific lifecycle behavior in the in-process conductor.
       daemon: true,
       featureSlug: item.slug,
       operatorParkBoundary: () =>

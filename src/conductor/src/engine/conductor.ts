@@ -1493,11 +1493,8 @@ export interface ConductorOptions {
    */
   verifyArtifacts?: boolean;
   /**
-   * Daemon mode (Phase 9.1). When true, the in-loop `retro` step is skipped:
-   * the daemon's emission step owns narrative production into the cross-project
-   * engineer store instead of writing `.docs/retros/` into the feature repo (ADR-002
-   * Option A). Manual `/conduct` runs leave this false and keep writing repo
-   * retros unchanged. Default false.
+   * Daemon mode. Enables daemon-specific lifecycle behavior such as terminal
+   * markers, automated rebase, and remediation routing. Default false.
    */
   daemon?: boolean;
   /**
@@ -5953,21 +5950,6 @@ export class Conductor {
             await emitTracked({ type: 'config_skip', step: step.name });
             continue;
           }
-        }
-
-        // Phase 9.1 (ADR-002 Option A): under the daemon, skip the in-loop `retro`
-        // step. The daemon's emission step owns narrative production into the
-        // cross-project engineer store, so writing `.docs/retros/` into the feature
-        // repo here would be redundant clutter. Manual runs (daemon=false) are
-        // unaffected and keep writing repo retros.
-        if (this.daemon && step.name === 'retro') {
-          await this.recordStepSkip(
-            state,
-            step,
-            'daemon mode — narrative emitted to the engineer store, not .docs/retros/',
-          );
-          await emitTracked({ type: 'config_skip', step: step.name });
-          continue;
         }
 
         // Check if step should be skipped because bootstrap detected a 'new'
