@@ -41,6 +41,26 @@ function retiredHasCoherenceTableDataRow(content: string | null): boolean {
   return false;
 }
 
+function staticImportSpecifiers(source: string): string[] {
+  return [...source.matchAll(/^\s*import(?:[\s\S]*?from\s*)?['"]([^'"]+)['"];?\s*$/gm)].map(
+    ([, specifier]) => specifier,
+  );
+}
+
+function transitiveStaticImports(moduleUrl: URL, visited = new Set<string>()): Array<{ source: URL; specifier: string }> {
+  if (visited.has(moduleUrl.href)) return [];
+  visited.add(moduleUrl.href);
+
+  const imports = staticImportSpecifiers(readFileSync(moduleUrl, 'utf8'));
+  return imports.flatMap((specifier) => {
+    const edge = { source: moduleUrl, specifier };
+    if (!specifier.startsWith('.')) return [edge];
+
+    const dependencyUrl = new URL(specifier.replace(/\.js$/, '.ts'), moduleUrl);
+    return [edge, ...transitiveStaticImports(dependencyUrl, visited)];
+  });
+}
+
 describe('parseCoherenceArtifact', () => {
   it('parses a minimal valid coherence table without importing orchestration dependencies', () => {
     const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
@@ -61,21 +81,20 @@ describe('parseCoherenceArtifact', () => {
       ],
     });
 
-    const source = readFileSync(new URL('../../src/engine/coherence-parse.ts', import.meta.url), 'utf8');
-    const staticImports = [...source.matchAll(/^\s*import(?:[\s\S]*?from\s*)?['"]([^'"]+)['"];?\s*$/gm)].map(
-      ([, specifier]) => specifier,
+    const staticImports = transitiveStaticImports(
+      new URL('../../src/engine/coherence-parse.ts', import.meta.url),
     );
 
     for (const disallowed of [
-      /(?:^|\/)overlap-scan(?:\.js)?$/,
-      /(?:^|\/)rebase(?:\.js)?$/,
-      /(?:^|\/)owner-gate(?:\.js)?$/,
-      /(?:^|\/)blocker-resolver(?:\.js)?$/,
-      /^node:fs$/,
-      /^node:child_process$/,
+      /(?:^|\/)overlap-scan\.ts$/,
+      /(?:^|\/)rebase\.ts$/,
+      /(?:^|\/)owner-gate\.ts$/,
+      /(?:^|\/)blocker-resolver\.ts$/,
     ]) {
-      expect(staticImports.some((specifier) => disallowed.test(specifier))).toBe(false);
+      expect(staticImports.some(({ source }) => disallowed.test(source.pathname))).toBe(false);
     }
+    expect(staticImports.some(({ specifier }) => specifier.startsWith('node:fs'))).toBe(false);
+    expect(staticImports.some(({ specifier }) => specifier.startsWith('node:child_process'))).toBe(false);
   });
 
   it('reports the source line and expected criterion width for a five-cell criterion row', () => {
@@ -171,7 +190,6 @@ describe('parseCoherenceArtifact', () => {
 | --- | --- | --- | --- | --- |
 | task | task:6 | story:2 | covered | fixture |
 `,
-        reachableAtDiscovery: true,
         oracleAccepted: true,
         parserAccepted: true,
       },
@@ -182,7 +200,6 @@ describe('parseCoherenceArtifact', () => {
 | task | task:6 | story:2 | covered | fixture |
 | criterion | Given a fixture | task:6 | covered | fixture | diff-local |
 `,
-        reachableAtDiscovery: true,
         oracleAccepted: true,
         parserAccepted: true,
       },
@@ -192,7 +209,6 @@ describe('parseCoherenceArtifact', () => {
 | --- | --- | --- | --- | --- | --- |
 | task | task:6 | story:2 | covered | fixture |
 `,
-        reachableAtDiscovery: true,
         oracleAccepted: true,
         parserAccepted: true,
       },
@@ -202,7 +218,6 @@ describe('parseCoherenceArtifact', () => {
 | --- | --- | --- | --- | --- |
 | criterion | Given a fixture | task:6 | covered | fixture | diff-local |
 `,
-        reachableAtDiscovery: true,
         oracleAccepted: true,
         parserAccepted: true,
       },
@@ -216,25 +231,12 @@ describe('parseCoherenceArtifact', () => {
 | task | task:6 | story:2 | covered | fixture |
 | adr | adr-2026-08-26-example | task:6 | covered | fixture |
 `,
-        reachableAtDiscovery: true,
         oracleAccepted: true,
         parserAccepted: true,
       },
-      { name: 'absent artifact', content: null, reachableAtDiscovery: true, oracleAccepted: false, parserAccepted: false },
-      { name: 'empty artifact', content: ' \t\n ', reachableAtDiscovery: true, oracleAccepted: false, parserAccepted: false },
-      { name: 'table-less content', content: '# Coherence\n\nNo table here.\n', reachableAtDiscovery: true, oracleAccepted: false, parserAccepted: false },
-      {
-        // ADR-2026-08-26 records this old-parser acceptance class as shipped,
-        // so shipped/processed dedup removes it before discovery parses it.
-        name: 'shipped unreachable malformed legacy row',
-        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
-| --- | --- | --- | --- | --- |
-| widget | task:6 | story:2 | covered | fixture |
-`,
-        reachableAtDiscovery: false,
-        oracleAccepted: true,
-        parserAccepted: false,
-      },
+      { name: 'absent artifact', content: null, oracleAccepted: false, parserAccepted: false },
+      { name: 'empty artifact', content: ' \t\n ', oracleAccepted: false, parserAccepted: false },
+      { name: 'table-less content', content: '# Coherence\n\nNo table here.\n', oracleAccepted: false, parserAccepted: false },
     ] as const;
 
     const observations = corpus.map((fixture) => ({
@@ -244,11 +246,6 @@ describe('parseCoherenceArtifact', () => {
     }));
 
     expect(observations).toEqual(corpus);
-    expect(observations.filter(({ reachableAtDiscovery, oracleAccepted, parserAccepted }) =>
-      reachableAtDiscovery && oracleAccepted && !parserAccepted,
-    )).toEqual([]);
-    expect(observations.filter(({ reachableAtDiscovery, oracleAccepted, parserAccepted }) =>
-      reachableAtDiscovery && !oracleAccepted && parserAccepted,
-    )).toEqual([]);
+    expect(observations.filter(({ oracleAccepted, parserAccepted }) => oracleAccepted !== parserAccepted)).toEqual([]);
   });
 });

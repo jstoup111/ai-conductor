@@ -2359,8 +2359,15 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     expect(logs.join('\n')).toMatch(/already-shipped.*shipped dedup/i);
   });
 
-  it('a candidate already marked processed locally is skipped WITHOUT consulting shipped records', async () => {
+  it('a processed candidate with a malformed legacy coherence row is skipped before discovery parses it', async () => {
     await writeSpec('cache-hit');
+    await writeFile(
+      join(dir, '.docs/coherence/cache-hit.md'),
+      `| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| widget | task:6 | story:2 | covered | fixture |
+`,
+    );
     // Deliberately do NOT write a shipped record — if the dedup path were
     // consulted first it would find nothing; the point is that isProcessed
     // short-circuits BEFORE shipped-record lookup even happens.
