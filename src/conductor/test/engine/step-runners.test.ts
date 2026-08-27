@@ -3856,6 +3856,28 @@ TIER: M`,
       });
     });
 
+    it('persists a preflight materialization excerpt when the mechanical allowance is exhausted', async () => {
+      await scopedPlan();
+      const runner = new DefaultStepRunner(createMockProvider(), 'session-1', dir, {
+        gitRunner: scopedGit(), planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+        buildReviewEffectiveResolver: vi.fn(async () => ({ ok: false, reason: 'fixture disposition failure' }) as never),
+      });
+      vi.spyOn(runner as any, 'runTautologyPreflight').mockResolvedValue({
+        classification: 'infrastructure-failure', reason: 'materialization-failed', failureExcerpt: 'boom-checkout',
+        changedPaths: [], changedTestSelectors: [], sourceIdentities: { mergeBase: 'abc123', headSha: 'head' },
+      });
+
+      await runner.run('build_review', emptyState);
+      await runner.run('build_review', emptyState);
+      await runner.run('build_review', emptyState);
+
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).resolves.toContain(
+        '"detail": "materialization-failed: boom-checkout"',
+      );
+    });
+
     it.each([
       {
         name: 'test-quality is enabled explicitly',

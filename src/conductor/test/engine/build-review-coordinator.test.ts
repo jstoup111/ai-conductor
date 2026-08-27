@@ -349,12 +349,27 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(input.writeArtifact).not.toHaveBeenCalled();
     expect(result).toEqual({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "scoped-run-timeout" }],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "scoped-run-timeout", detail: "scoped run exceeded 60s" }],
     });
     expect(emit.mock.calls.map(([event]) => event)).toEqual([{
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current",
       reason: "scoped-run-timeout", excerpt: "scoped run exceeded 60s",
     }]);
+  });
+
+  it("leaves an excerpt-less preflight infrastructure failure byte-identical", async () => {
+    const input = coordinationInput(true, {
+      preflight: vi.fn(async () => ({
+        classification: "infrastructure-failure" as const, reason: "materialization-failed" as const,
+        changedPaths: [], changedTestSelectors: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
+      })),
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(testQualityBranch(result)).toEqual({
+      kind: "infrastructure-failure", rubric: "testQuality", reason: "materialization-failed",
+    });
   });
 });
 
