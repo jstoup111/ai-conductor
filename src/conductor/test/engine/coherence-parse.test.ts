@@ -30,7 +30,7 @@ function retiredHasCoherenceTableDataRow(content: string | null): boolean {
       data === null ||
       header.length === 0 ||
       header.length !== separator.length ||
-      header.length !== data.length ||
+      data.length === 0 ||
       !separator.every((cell) => /^:?-{2,}:?$/.test(cell))
     ) {
       continue;
@@ -163,7 +163,7 @@ describe('parseCoherenceArtifact', () => {
   });
 
   // Covers: task:6
-  it('preserves the reachable retired discovery corpus, with only the six-wide header newly accepted', () => {
+  it('preserves the reachable retired discovery corpus under the exact legacy predicate', () => {
     const corpus = [
       {
         name: 'minimal valid table',
@@ -193,7 +193,17 @@ describe('parseCoherenceArtifact', () => {
 | task | task:6 | story:2 | covered | fixture |
 `,
         reachableAtDiscovery: true,
-        oracleAccepted: false,
+        oracleAccepted: true,
+        parserAccepted: true,
+      },
+      {
+        name: 'five-wide header over six-cell criterion row',
+        content: `| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| criterion | Given a fixture | task:6 | covered | fixture | diff-local |
+`,
+        reachableAtDiscovery: true,
+        oracleAccepted: true,
         parserAccepted: true,
       },
       {
@@ -239,6 +249,6 @@ describe('parseCoherenceArtifact', () => {
     )).toEqual([]);
     expect(observations.filter(({ reachableAtDiscovery, oracleAccepted, parserAccepted }) =>
       reachableAtDiscovery && !oracleAccepted && parserAccepted,
-    ).map(({ name }) => name)).toEqual(['six-wide header over five-cell legacy row']);
+    )).toEqual([]);
   });
 });
