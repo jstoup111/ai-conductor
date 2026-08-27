@@ -322,6 +322,13 @@ halts instead of dispatching an empty route to the builder. The one exception is
 there the answer legitimately lives in the gap's `rationale` with `tasks: []`, so a taskless `build` is
 accepted only when the gap's source is a build-stall.
 
+For a `prd_audit` `FIXABLE` finding, the remediation disposition identifies the finding by its report
+criterion: a feature without a PRD uses `S<story>.<ordinal>` (for example, `S5.1`), while a PRD-backed
+finding may use its `FR-N` identity. The engine matches criterion keys case-insensitively when admitting
+the planner's task, so a case-only spelling difference cannot strand an otherwise authorized repair.
+An ID that matches neither an admitted criterion nor another authorized gate finding halts with the
+rejected IDs and the available admission keys rather than appending unbounded work.
+
 Remediation tasks must not order a regression. A task that removes, replaces, rewrites, or relaxes
 existing code, tests, or assertions has to name the completed plan task or story criterion whose
 delivered behavior and coverage survive the change, and — unless the evidence shows that coverage is

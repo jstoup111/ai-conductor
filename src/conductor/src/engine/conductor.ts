@@ -3834,7 +3834,7 @@ export class Conductor {
             // Planner gap ids are FR-N by contract; reports are criterion
             // keyed. Bind both identities so every report association remains
             // available for the cap and append authorization.
-            prdAuditFindings.set(finding.criterion, boundFinding);
+            prdAuditFindings.set(finding.criterion.toUpperCase(), boundFinding);
             for (const frId of finding.prdIds) prdAuditFindings.set(frId, boundFinding);
           }
         }
@@ -4246,12 +4246,25 @@ export class Conductor {
     );
     const routedFixes = buildStallSource ? fixes : admittedFixes;
     if (fixes.length > 0 && routedFixes.length === 0) {
+      const rejectedAppendGapIds = fixes
+        .filter((gap) => remediationDispositionAppendsToPlan(gap.disposition))
+        .map((gap) => gap.id);
+      const admissionKeys = [...new Set([
+        ...(prdAuditValidated ? prdAuditFindings.keys() : []),
+        ...(asBuiltValidated ? asBuiltFindings.keys() : []),
+      ])].sort();
       return {
         kind: 'halt',
         haltClass: KICKBACK_CAP_HALT_CLASS,
         detail:
           `${hintSource.source} remediation requested no admitted remediation gap; ` +
           'only criterion-bound appends and non-appending publication or halt gaps may route.' +
+          (rejectedAppendGapIds.length > 0
+            ? `\n\nRejected append-disposition gap IDs: ${rejectedAppendGapIds.join(', ')}.`
+            : '') +
+          (admissionKeys.length > 0
+            ? `\nAvailable admission keys: ${admissionKeys.join(', ')}.`
+            : '\nNo admission keys were available.') +
           renderAsBuiltBlockedFindingDetail(asBuiltReport),
       };
     }
