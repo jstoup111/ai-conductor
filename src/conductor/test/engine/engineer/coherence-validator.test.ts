@@ -279,7 +279,11 @@ Ship the widget with arrival tracking.
 | --- | --- | --- | --- | --- | --- |
 | criterion | Given a widget, when shipped, then it arrives. | task-1 | probably-covered | "Task 1 owns the widget." | diff-local |
 `),
-    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+    ).toMatchObject({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: expect.stringContaining('probably-covered') },
+    });
   });
 
   it('keeps legacy rows affirmative-by-default for an unknown verdict', () => {
@@ -308,7 +312,11 @@ Ship the widget with arrival tracking.
 | --- | --- | --- | --- | --- |
 | decision | adr-2026-08-10 | story-1 | covered | "records the decision" |
 `),
-    ).toEqual({ ok: false, reason: 'unparseable-coherence-artifact' });
+    ).toMatchObject({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: { line: 3, message: expect.stringContaining('decision') },
+    });
   });
 
   it('rejects a missing file (null input) as missing-coherence-artifact', () => {
@@ -1891,7 +1899,11 @@ Cover the two acceptance variants: created and updated.
 | --- | --- | --- | --- | --- | --- |
 | criterion | ${criterion} | task-1 | covered | "Ship the widget with arrival tracking." | maybe-local |
 `),
-    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+    ).toMatchObject({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: expect.stringContaining('maybe-local') },
+    });
   });
 
   // Plan Task 17 — the #1799 census regression, using the real criterion text
@@ -2088,14 +2100,24 @@ Grounded quote evidence.
     ],
   ])('keeps malformed criterion rows non-waivable: %s', (_label, row) => {
     // S3.5 and S5.3 require malformed values to be refused rather than defaulted.
-    expect(
-      parseCoherenceArtifact(
-        `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+    const result = parseCoherenceArtifact(
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
 | --- | --- | --- | --- | --- | --- |
 ${row}
 `,
-      ),
-    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'unparseable-criterion-row' });
+    if (result.ok) return;
+
+    if (_label === 'wrong cell count') {
+      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('expected 6 and actual 5') });
+    } else if (_label === 'unknown verdict') {
+      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('probably-covered') });
+    } else if (_label === 'out-of-vocabulary disposition') {
+      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('maybe-local') });
+    } else {
+      expect(result.detail).toBeUndefined();
+    }
   });
 
   it('keeps unparseable story criteria as a fail-closed check result, not a waiver-compatible gap', () => {

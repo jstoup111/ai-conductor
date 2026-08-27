@@ -39,9 +39,15 @@ export type CoherenceParseFailureReason =
   | 'unparseable-coherence-artifact'
   | 'unparseable-criterion-row';
 
+/** Source context for a structural parse failure that can be cited in the artifact. */
+export interface CoherenceParseFailureDetail {
+  line: number;
+  message: string;
+}
+
 export type CoherenceParseResult =
   | { ok: true; rows: CoherenceRow[] }
-  | { ok: false; reason: CoherenceParseFailureReason };
+  | { ok: false; reason: CoherenceParseFailureReason; detail?: CoherenceParseFailureDetail };
 
 export const LEGACY_ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task', 'adr']);
 
@@ -84,6 +90,13 @@ export function isSeparatorRow(cells: string[]): boolean {
   return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell));
 }
 
+function structuralParseFailure(
+  reason: CoherenceParseFailureReason,
+  detail: CoherenceParseFailureDetail,
+): Extract<CoherenceParseResult, { ok: false }> {
+  return { ok: false, reason, detail };
+}
+
 /**
  * Parse coherence artifact text into typed rows.
  *
@@ -100,11 +113,12 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
   }
 
   const lines = text.split('\n');
-  const tableRowLines: string[][] = [];
+  const tableRowLines: Array<{ cells: string[]; line: number }> = [];
   let sawHeader = false;
   let sawSeparator = false;
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    const lineNumber = index + 1;
     const cells = splitRow(line);
     if (cells === null) continue;
     if (!sawHeader) {
@@ -113,12 +127,15 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
     }
     if (!sawSeparator) {
       if (!isSeparatorRow(cells)) {
-        return { ok: false, reason: 'unparseable-coherence-artifact' };
+        return structuralParseFailure('unparseable-coherence-artifact', {
+          line: lineNumber,
+          message: 'separator row expected after coherence table header',
+        });
       }
       sawSeparator = true;
       continue;
     }
-    tableRowLines.push(cells);
+    tableRowLines.push({ cells, line: lineNumber });
   }
 
   if (!sawHeader || !sawSeparator || tableRowLines.length === 0) {
@@ -126,19 +143,28 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
   }
 
   const rows: CoherenceRow[] = [];
-  for (const cells of tableRowLines) {
+  for (const { cells, line } of tableRowLines) {
     const rawRowClass = cells[0];
     const rowClass = rawRowClass.trim().toLowerCase();
     if (rowClass === 'criterion') {
       if (cells.length !== 6) {
-        return { ok: false, reason: 'unparseable-criterion-row' };
+        return structuralParseFailure('unparseable-criterion-row', {
+          line,
+          message: `criterion row expected 6 and actual ${cells.length} cells`,
+        });
       }
       const [, rawCriterion, rawCitedIds, rawVerdict, rawQuote, rawDisposition] = cells;
       const criterion = rawCriterion.trim();
       const verdict = rawVerdict.trim();
       const quote = unquote(rawQuote);
-      if (criterion.length === 0 || !isCriterionVerdict(verdict)) {
+      if (criterion.length === 0) {
         return { ok: false, reason: 'unparseable-criterion-row' };
+      }
+      if (!isCriterionVerdict(verdict)) {
+        return structuralParseFailure('unparseable-criterion-row', {
+          line,
+          message: `unknown criterion verdict "${verdict}"`,
+        });
       }
       const citedIds = rawCitedIds
         .split(',')
@@ -149,7 +175,10 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       }
       const dispositionText = rawDisposition.trim();
       if (dispositionText && !isCriterionDiffLocalityDisposition(dispositionText)) {
-        return { ok: false, reason: 'unparseable-criterion-row' };
+        return structuralParseFailure('unparseable-criterion-row', {
+          line,
+          message: `unknown criterion disposition "${dispositionText}"`,
+        });
       }
       const disposition: CriterionDiffLocalityDisposition | undefined =
         dispositionText === '' ? undefined : (dispositionText as CriterionDiffLocalityDisposition);
@@ -157,8 +186,14 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       rows.push({ rowClass, criterion, citedIds, verdict, quote, disposition });
       continue;
     }
-    if (cells.length !== 5 || !LEGACY_ROW_CLASSES.has(rowClass)) {
+    if (cells.length !== 5) {
       return { ok: false, reason: 'unparseable-coherence-artifact' };
+    }
+    if (!LEGACY_ROW_CLASSES.has(rowClass)) {
+      return structuralParseFailure('unparseable-coherence-artifact', {
+        line,
+        message: `unknown coherence row class "${rawRowClass}"`,
+      });
     }
     const [, rawId, rawCitedIds, rawVerdict, rawQuote] = cells;
     const id = rawId.trim();
