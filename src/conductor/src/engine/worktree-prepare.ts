@@ -190,7 +190,7 @@ export interface SessionHookRepairOutcome {
 export async function prepareWorktree(
   worktreePath: string,
   log?: (msg: string) => void,
-  opts?: { verbose?: boolean; baseSha?: string },
+  opts?: { verbose?: boolean; baseSha?: string; force?: boolean },
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
   await writeNamespaceEnv(worktreePath, namespace, log);
@@ -198,10 +198,22 @@ export async function prepareWorktree(
   await writeGitHooksAndWire(worktreePath, log);
   await ensureSessionHooks(worktreePath, log);
   await excludeEngineArtifacts(worktreePath, log);
-  if (await hasValidSetupMarker(worktreePath, opts?.baseSha)) {
+  if (!opts?.force && await hasValidSetupMarker(worktreePath, opts?.baseSha)) {
     return;
   }
-  await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
+  await rm(join(worktreePath, SETUP_MARKER_PATH), { force: true });
+  const setupRan = await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
+  if (setupRan && opts?.baseSha) {
+    const setupScriptHash = await hashSetupScript(worktreePath);
+    if (setupScriptHash) {
+      await writeSetupMarker(worktreePath, {
+        version: SETUP_MARKER_VERSION,
+        setupScriptHash,
+        baseSha: opts.baseSha,
+        preparedAtCommit: opts.baseSha,
+      });
+    }
+  }
 }
 
 async function hasValidSetupMarker(worktreePath: string, baseSha?: string): Promise<boolean> {
@@ -694,14 +706,14 @@ async function runProjectSetup(
   namespace: string,
   log?: (msg: string) => void,
   verbose = false,
-): Promise<void> {
+): Promise<boolean> {
   const script = join(worktreePath, SETUP_SCRIPT);
 
   try {
     await access(script);
   } catch {
     log?.('no bin/setup — skipping project setup');
-    return;
+    return false;
   }
 
   log?.(`running ${SETUP_SCRIPT}`);
@@ -732,6 +744,7 @@ async function runProjectSetup(
       }
     }
     log?.('setup: ok');
+    return true;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     // Extract output tail from the error (last 50 lines of combined stdout/stderr).

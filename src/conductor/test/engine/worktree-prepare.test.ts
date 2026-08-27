@@ -132,6 +132,24 @@ describe('engine/worktree-prepare', () => {
 
       expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('ran');
     });
+
+    it('writes a marker only after successful setup and clears a stale marker before a forced failure', async () => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+
+      const marker = await readSetupMarker(dir);
+      expect(marker).toMatchObject({ baseSha: 'base-a', setupScriptHash: await hashSetupScript(dir) });
+
+      await writeSetup('#!/usr/bin/env bash\necho broken >&2\nexit 1\n');
+      await expect(prepareWorktree(dir, undefined, { baseSha: 'base-a', force: true }))
+        .rejects.toBeInstanceOf(SetupFailureError);
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+
+      await writeSetup('#!/usr/bin/env bash\necho reran >> setup-count\n');
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+      expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('reran');
+    });
   });
 
   describe('runProjectTeardown', () => {
