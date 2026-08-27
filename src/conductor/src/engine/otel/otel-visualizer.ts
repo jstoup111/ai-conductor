@@ -38,6 +38,7 @@ import {
   type ResourceMetrics,
 } from '@opentelemetry/sdk-metrics';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
+import { basename } from 'node:path';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { ConductorEvent } from '../../types/events.js';
 import { otelEventTypes } from '../event-sinks.js';
@@ -435,7 +436,10 @@ export class OtelVisualizer implements VisualizerPlugin {
     this.meterProvider = new MeterProvider({ resource, readers: [reader] });
     const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
     const meter = this.meterProvider.getMeter('conductor', '1.0.0');
-    this.metricsRecorder = new MetricsRecorder(meter);
+    this.metricsRecorder = new MetricsRecorder(meter, {
+      project: basename(context.project),
+      feature: context.feature,
+    });
     this.spanManager = new SpanManager(tracer, this.onWarning, {
       onStepClose: (step, durationMs, retryCount) => {
         const tokenUsage = this.pendingTokenUsage.get(step);
