@@ -69,12 +69,14 @@ describe('Deterministic BUILD verification flow', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it('runs test_suite before dispatching paid review or SHIP', async () => {
+  it('runs build, test_suite, and build_review in serial order without a verification group event', async () => {
     const timeline: string[] = [];
-    const recomputedMembers: string[] = [];
+    const parallelStarted: Array<{ step: string; branches: string[] }> = [];
     const events = new ConductorEventEmitter();
-    events.on('build_member_evidence_recomputed', (event) => {
-      if (event.type === 'build_member_evidence_recomputed') recomputedMembers.push(event.member);
+    events.on('parallel_started', (event) => {
+      if (event.type === 'parallel_started') {
+        parallelStarted.push({ step: event.step, branches: event.branches });
+      }
     });
     const runner: StepRunner = {
       run: async (step: StepName) => {
@@ -99,7 +101,7 @@ describe('Deterministic BUILD verification flow', () => {
       events,
       projectRoot,
       mode: 'auto',
-      fromStep: 'test_suite',
+      fromStep: 'build',
       maxRetries: 1,
       verifyArtifacts: false,
       config: { validation_concurrency: 2 },
@@ -111,12 +113,17 @@ describe('Deterministic BUILD verification flow', () => {
 
     await conductor.run();
 
-    expect(timeline.slice(0, 2)).toEqual([
+    expect(timeline.slice(0, 3)).toEqual([
+      'build',
       'test_suite',
       'build_review',
     ]);
     expect(ensure).toHaveBeenCalledTimes(1);
-    expect(recomputedMembers).not.toContain('test_suite');
+    expect(parallelStarted).toContainEqual(expect.objectContaining({
+      step: 'manual_test',
+      branches: expect.arrayContaining(['manual_test', 'prd_audit', 'architecture_review_as_built']),
+    }));
+    expect(parallelStarted.filter((event) => event.branches.includes('test_suite'))).toEqual([]);
     expect(timeline.indexOf('manual_test')).toBeGreaterThan(
       timeline.indexOf('build_review'),
     );
@@ -171,12 +178,58 @@ describe('Deterministic BUILD verification flow', () => {
       await conductor.run();
 
       expect(dispatched).toContain('test_suite');
+      expect(ensure).toHaveBeenCalledTimes(3);
       expect(dispatched).not.toContain('build_review');
       expect(dispatched).not.toContain('manual_test');
       expect(dispatched).not.toContain('prd_audit');
       expect(dispatched).not.toContain('architecture_review_as_built');
     },
   );
+
+  it('restarts from the pending serial test_suite after BUILD completed', async () => {
+    await writeState(stateFilePath, {
+      ...BUILD_COMPLETE,
+      test_suite: 'pending',
+      build_review: 'pending',
+    });
+    const timeline: string[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        timeline.push(step);
+        if (step === 'manual_test') {
+          return { success: false, output: 'stop after restart topology proof' };
+        }
+        return { success: true };
+      },
+    };
+    const ensure = vi.fn(async () => {
+      timeline.push('test_suite');
+      return {
+        status: 'EXECUTED',
+        freshness: { status: 'STALE', reason: 'missing' },
+        evidence: PASS_EVIDENCE,
+      } as const;
+    });
+
+    await new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      resume: true,
+      maxRetries: 1,
+      verifyArtifacts: false,
+      config: { validation_concurrency: 2 },
+      fullSuiteVerifier: {
+        ensure,
+        inspect: async () => ({ status: 'STALE', reason: 'missing' }),
+      },
+    }).run();
+
+    expect(timeline.slice(0, 2)).toEqual(['test_suite', 'build_review']);
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
 
   it('dispatches the live verification member before review at concurrency one', async () => {
     const timeline: string[] = [];
