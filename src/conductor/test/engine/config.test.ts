@@ -14,7 +14,7 @@ import {
   resolveMemoryProvider,
   resolveValidationConcurrency,
 } from '../../src/engine/config.js';
-import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import * as resolvedConfig from '../../src/engine/resolved-config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
 describe('config', () => {
@@ -617,7 +617,12 @@ steps:
       expect(result.error.message).toContain('unknown_key');
     });
 
-    it('rejects the removed top-level auth_park_timeout_minutes key', () => {
+    it('removes the obsolete top-level auth-park resolver and rejects stray config', () => {
+      // This assertion protects the actual removal. The validator rejected
+      // this top-level key before the cleanup, so rejection alone would not
+      // distinguish a restored dead resolver from the intended API surface.
+      expect(resolvedConfig).not.toHaveProperty('resolveAuthParkTimeoutMinutes');
+
       const result = validateConfig({ auth_park_timeout_minutes: 15 });
       expect(result.ok).toBe(false);
       if (result.ok) return;
