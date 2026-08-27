@@ -538,7 +538,6 @@ describe('engine/artifacts', () => {
         manual_test: ['.pipeline/manual-test-results.md'],
         prd_audit: ['.pipeline/prd-audit.md'],
         architecture_review_as_built: ['.pipeline/architecture-review-as-built.md'],
-        retro: ['.docs/retros/*.md'],
         rebase: [],
         finish: [],
         remediate: [],
@@ -791,7 +790,6 @@ describe('engine/artifacts', () => {
       await createFile('.docs/plans/feature-b.md');
       await createFile('.docs/conflicts/foreign-conflict.md');
       await createFile('.docs/conflicts/unconventional-current.md');
-      await createFile('.docs/retros/legacy-singleton.md');
       await createFile('.docs/decisions/technical-assessment-one.md');
       await createFile('.docs/decisions/technical-assessment-two.md');
       await createFile('.pipeline/task-status.json', '{}');
@@ -811,16 +809,10 @@ describe('engine/artifacts', () => {
         featureIdentities: ['unknown-feature'],
         changedPaths: new Set<string>(),
       };
-      const legacyContext = {
-        featureIdentities: [],
-        changedPaths: new Set<string>(),
-      };
-
-      const [prd, plan, changed, singleton, repository, run, raw] = await Promise.all([
+      const [prd, plan, changed, repository, run, raw] = await Promise.all([
         resolveArtifactFiles(dir, 'prd', featureB),
         resolveArtifactFiles(dir, 'plan', featureB),
         resolveArtifactFiles(dir, 'conflict_check', changedFeature),
-        resolveArtifactFiles(dir, 'retro', legacyContext),
         resolveArtifactFiles(dir, 'assess', unknownFeature),
         resolveArtifactFiles(dir, 'build', unknownFeature),
         findArtifactFiles(dir, 'prd'),
@@ -833,7 +825,6 @@ describe('engine/artifacts', () => {
         prd: relativeFiles(prd.files),
         plan: relativeFiles(plan.files),
         changed: relativeFiles(changed.files),
-        singleton: relativeFiles(singleton.files),
         repository: relativeFiles(repository.files),
         run: relativeFiles(run.files),
         raw: relativeFiles(raw),
@@ -841,26 +832,12 @@ describe('engine/artifacts', () => {
         prd: ['.docs/specs/2026-07-28-feature-b.md'],
         plan: ['.docs/plans/feature-b.md'],
         changed: ['.docs/conflicts/unconventional-current.md'],
-        singleton: ['.docs/retros/legacy-singleton.md'],
         repository: [
           '.docs/decisions/technical-assessment-one.md',
           '.docs/decisions/technical-assessment-two.md',
         ],
         run: ['.pipeline/task-status.json'],
         raw: ['.docs/specs/2026-07-28-feature-b.md', '.docs/specs/feature-a.md'],
-      });
-    });
-
-    it('selects one unrecognizable legacy feature artifact for an identified active feature', async () => {
-      await createFile('.docs/retros/legacy-singleton.md');
-
-      const result = await resolveArtifactFiles(dir, 'retro', {
-        featureIdentities: ['active-feature'],
-        changedPaths: new Set<string>(),
-      });
-
-      expect(result).toEqual({
-        files: [join(dir, '.docs/retros/legacy-singleton.md')],
       });
     });
 
@@ -880,21 +857,6 @@ describe('engine/artifacts', () => {
           code: 'ambiguous',
           reason:
             'stories has 2 artifact candidates and none can be associated with active feature "feature-b". Naming rule: normalized-stem (date prefix stripped); expected stem "feature-b"; example expected filename ".docs/stories/feature-b.md".',
-        },
-      });
-    });
-
-    it('keeps the empty-candidate missing diagnostic byte-identical', async () => {
-      const result = await resolveArtifactFiles(dir, 'retro', {
-        featureIdentities: ['feature-b'],
-        changedPaths: new Set<string>(),
-      });
-
-      expect(result).toEqual({
-        files: [],
-        diagnostic: {
-          code: 'missing',
-          reason: 'retro has no artifact candidates for active feature "feature-b"',
         },
       });
     });
@@ -3962,43 +3924,6 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(true);
       const marker = JSON.parse(await readFile(join(dir, SIDECAR), 'utf-8'));
       expect(marker.codeStamp).toBe('eee555');
-    });
-  });
-
-  describe('checkStepCompletion: retro predicate', () => {
-    it('fails when no retro files exist', async () => {
-      const result = await checkStepCompletion(dir, 'retro');
-      expect(result.done).toBe(false);
-      expect(result.reason).toMatch(/no \.docs\/retros/);
-    });
-
-    it('fails when only stale prior-feature retros exist', async () => {
-      await createFile('.docs/retros/2025-01-01-other-feature.md', '# Retro');
-      const past = new Date(Date.now() - 60_000);
-      await utimes(join(dir, '.docs/retros/2025-01-01-other-feature.md'), past, past);
-      const result = await checkStepCompletion(dir, 'retro', {
-        sessionStartedAt: Date.now(),
-        featureDesc: 'add foo',
-      });
-      expect(result.done).toBe(false);
-      expect(result.reason).toMatch(/no retro found for current feature|stale/);
-    });
-
-    it('passes when a fresh slug-matched retro exists', async () => {
-      await createFile('.docs/retros/2026-05-01-add-foo.md', '# Retro');
-      const result = await checkStepCompletion(dir, 'retro', {
-        sessionStartedAt: 0,
-        featureDesc: 'add foo',
-      });
-      expect(result).toEqual({ done: true });
-    });
-
-    it('passes when feature_desc is unavailable and any fresh retro file exists', async () => {
-      await createFile('.docs/retros/some-retro.md', '# Retro');
-      const result = await checkStepCompletion(dir, 'retro', {
-        sessionStartedAt: 0,
-      });
-      expect(result).toEqual({ done: true });
     });
   });
 

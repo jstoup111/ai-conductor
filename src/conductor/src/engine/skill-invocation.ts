@@ -38,7 +38,6 @@ export const STEP_SKILL_INVOCATIONS: Readonly<
     skillName: 'architecture-review',
     arguments: ['--as-built'],
   },
-  retro: { kind: 'skill', skillName: 'retro', arguments: [] },
   rebase: { kind: 'skill', skillName: 'rebase', arguments: [] },
   finish: { kind: 'skill', skillName: 'finish', arguments: [] },
   // Conditional SHIP sub-routine: plans remediation for a blocking audit.

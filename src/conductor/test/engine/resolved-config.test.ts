@@ -315,7 +315,7 @@ describe('engine/resolved-config', () => {
     it('returns the registered phase', () => {
       expect(phaseForStep('explore')).toBe('DECIDE');
       expect(phaseForStep('build')).toBe('BUILD');
-      expect(phaseForStep('retro')).toBe('SHIP');
+      expect(phaseForStep('finish')).toBe('SHIP');
     });
 
     it('throws on unknown step', () => {
@@ -348,7 +348,7 @@ describe('engine/resolved-config', () => {
         ['architecture_diagram', 'DECIDE'], ['architecture_review', 'DECIDE'],
         ['worktree', 'SETUP'], ['acceptance_specs', 'BUILD'], ['build', 'BUILD'],
         ['build_review', 'BUILD'], ['wiring_check', 'BUILD'], ['test_suite', 'BUILD'], ['manual_test', 'SHIP'],
-        ['prd_audit', 'SHIP'], ['architecture_review_as_built', 'SHIP'], ['retro', 'SHIP'],
+        ['prd_audit', 'SHIP'], ['architecture_review_as_built', 'SHIP'],
         ['rebase', 'SHIP'], ['finish', 'SHIP'], ['remediate', 'SHIP'],
         ['attribution_verify', 'SHIP'],
       ] as const;
@@ -383,7 +383,6 @@ describe('engine/resolved-config', () => {
         { step: 'manual_test', model: 'sonnet', effort: 'medium' },
         { step: 'prd_audit', model: 'opus', effort: 'high' },
         { step: 'architecture_review_as_built', model: 'opus', effort: 'high' },
-        { step: 'retro', model: 'sonnet', effort: 'medium' },
         { step: 'rebase', model: 'opus', effort: 'high' },
         { step: 'finish', model: 'sonnet', effort: 'medium' },
         { step: 'remediate', model: 'opus', effort: 'medium' },
