@@ -190,7 +190,7 @@ export interface SessionHookRepairOutcome {
 export async function prepareWorktree(
   worktreePath: string,
   log?: (msg: string) => void,
-  opts?: { verbose?: boolean },
+  opts?: { verbose?: boolean; baseSha?: string },
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
   await writeNamespaceEnv(worktreePath, namespace, log);
@@ -198,7 +198,20 @@ export async function prepareWorktree(
   await writeGitHooksAndWire(worktreePath, log);
   await ensureSessionHooks(worktreePath, log);
   await excludeEngineArtifacts(worktreePath, log);
+  if (await hasValidSetupMarker(worktreePath, opts?.baseSha)) {
+    return;
+  }
   await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
+}
+
+async function hasValidSetupMarker(worktreePath: string, baseSha?: string): Promise<boolean> {
+  if (!baseSha) return false;
+  const [marker, setupScriptHash] = await Promise.all([
+    readSetupMarker(worktreePath),
+    hashSetupScript(worktreePath),
+  ]);
+  return marker !== null && setupScriptHash !== null &&
+    marker.baseSha === baseSha && marker.setupScriptHash === setupScriptHash;
 }
 
 /**

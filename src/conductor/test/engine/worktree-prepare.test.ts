@@ -92,6 +92,46 @@ describe('engine/worktree-prepare', () => {
       expect(changedBytes).not.toBe(first);
       expect(changedMode).not.toBe(changedBytes);
     });
+
+    it('skips setup only for a marker matching the script and resolved base', async () => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      const scriptHash = await hashSetupScript(dir);
+      await writeSetupMarker(dir, {
+        version: 1,
+        setupScriptHash: scriptHash!,
+        baseSha: 'base-a',
+        preparedAtCommit: 'provenance-only',
+      });
+
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+
+      await expect(access(join(dir, 'setup-count'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it.each([
+      ['no marker', undefined, 'base-a'],
+      ['corrupt marker', '{nope', 'base-a'],
+      ['unknown marker version', JSON.stringify({ version: 2 }), 'base-a'],
+      ['missing base SHA', undefined, undefined],
+    ])('runs setup fail-closed with %s', async (_label, markerContents, baseSha) => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      const scriptHash = await hashSetupScript(dir);
+      if (markerContents === undefined && baseSha === undefined) {
+        await writeSetupMarker(dir, {
+          version: 1,
+          setupScriptHash: scriptHash!,
+          baseSha: 'base-a',
+          preparedAtCommit: 'provenance-only',
+        });
+      } else if (markerContents !== undefined) {
+        await mkdir(join(dir, '.daemon'), { recursive: true });
+        await writeFile(join(dir, '.daemon', 'setup-ok.json'), markerContents, 'utf-8');
+      }
+
+      await prepareWorktree(dir, undefined, { baseSha });
+
+      expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('ran');
+    });
   });
 
   describe('runProjectTeardown', () => {
