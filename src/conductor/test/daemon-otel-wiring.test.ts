@@ -9,6 +9,7 @@ import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-met
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { resolveOtelConfig } from '../src/engine/otel/otel-config.js';
 import { createOtelVisualizer } from '../src/engine/otel/create-otel-visualizer.js';
+import type { FeatureRunnerDeps, FeatureRunScope } from '../src/engine/daemon-runner.js';
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
 type VisualizerPlugin = import('../src/types/plugin.js').VisualizerPlugin;
@@ -19,7 +20,7 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 
 const fixture = vi.hoisted(() => ({
   worktreePath: '',
-  scopes: [] as Array<Record<string, unknown>>,
+  scopes: [] as Array<FeatureRunScope & { visualizer?: VisualizerPlugin | null }>,
   visualizer: null as VisualizerPlugin | null,
   emittedBeforeHalt: [] as string[],
   persistedRendererErrors: [] as Array<{ rendererName: string; error: string }>,
@@ -27,6 +28,7 @@ const fixture = vi.hoisted(() => ({
   constructorError: null as Error | null,
   sameStopPromise: false,
   emitOtelEvents: false,
+  runnerSessionIds: [] as string[],
 }));
 const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null));
 const loadMergedConfig = vi.hoisted(() => vi.fn<LoadMergedConfig>());
@@ -46,40 +48,78 @@ vi.mock('../src/engine/ci-fix.js', async (importOriginal) => {
     defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
   };
 });
-vi.mock('../src/engine/daemon-runner.js', () => ({
-  makeRunFeature: (deps: { beginFeatureRun: (worktree: { path: string; branch: string }, item: { slug: string }) => Promise<Record<string, unknown>> }) =>
-    async (item: { slug: string }) => {
-      const scope = await deps.beginFeatureRun({ path: fixture.worktreePath, branch: `feat/${item.slug}` }, item);
-      fixture.scopes.push(scope);
-      const events = scope.events as {
-        emit: (event:
-          | { type: 'step_started'; step: 'bootstrap'; index: number }
-          | { type: 'step_completed'; step: 'bootstrap'; status: 'done' }
-          | { type: 'feature_complete'; featureDesc: string }
-          | { type: 'loop_halt'; reason: string }
-        ) => Promise<void>;
+vi.mock('../src/engine/daemon-runner.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/daemon-runner.js')>();
+  return {
+    ...actual,
+    makeRunFeature: (deps: FeatureRunnerDeps) => {
+      const runFeature = actual.makeRunFeature({
+        ...deps,
+        createWorktree: async () => ({ path: fixture.worktreePath, branch: 'feat/feature-a' }),
+        prepareWorktree: undefined,
+        readOutcome: async () => ({ done: false, halted: true }),
+        teardownWorktree: async () => undefined,
+        markProcessed: async () => undefined,
+        beginFeatureRun: async (worktree, item): Promise<FeatureRunScope> => {
+          const scope = await deps.beginFeatureRun!(worktree, item);
+          fixture.scopes.push(scope);
+          const events = scope.events as {
+            emit: (event:
+              | { type: 'step_started'; step: 'bootstrap'; index: number }
+              | { type: 'step_completed'; step: 'bootstrap'; status: 'done' }
+              | { type: 'feature_complete'; featureDesc: string }
+              | { type: 'loop_halt'; reason: string }
+            ) => Promise<void>;
+          };
+          if (fixture.emitOtelEvents) {
+            await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+            await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+            await events.emit({ type: 'feature_complete', featureDesc: 'fake feature complete' });
+          }
+          await events.emit({ type: 'loop_halt', reason: 'fake HALT' });
+          return scope;
+        },
+      });
+      return async (item: { slug: string }) => {
+        const result = await runFeature(item as Parameters<typeof runFeature>[0]);
+        const scope = fixture.scopes.at(-1)!;
+        const stop = scope.stop as () => Promise<void>;
+        const firstStop = stop();
+        fixture.sameStopPromise = firstStop === stop();
+        await firstStop;
+        const persisted = await readFile(join(fixture.worktreePath, '.pipeline', 'events.jsonl'), 'utf8');
+        fixture.persistedRendererErrors = persisted
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as { type: string; rendererName?: string; error?: string })
+          .filter((event) => event.type === 'renderer_error')
+          .map((event) => ({ rendererName: event.rendererName!, error: event.error! }));
+        return result;
       };
-      if (fixture.emitOtelEvents) {
-        await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
-        await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-        await events.emit({ type: 'feature_complete', featureDesc: 'fake feature complete' });
-      }
-      await events.emit({ type: 'loop_halt', reason: 'fake HALT' });
-      const stop = scope.stop as () => Promise<void>;
-      const firstStop = stop();
-      fixture.sameStopPromise = firstStop === stop();
-      await firstStop;
-      const persisted = await readFile(join(fixture.worktreePath, '.pipeline', 'events.jsonl'), 'utf8');
-      fixture.persistedRendererErrors = persisted
-        .trim()
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as { type: string; rendererName?: string; error?: string })
-        .filter((event) => event.type === 'renderer_error')
-        .map((event) => ({ rendererName: event.rendererName!, error: event.error! }));
-      return { slug: item.slug, status: 'halted', reason: 'fake HALT' };
     },
-}));
+  };
+});
+vi.mock('../src/engine/step-runners.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/step-runners.js')>();
+  return {
+    ...actual,
+    DefaultStepRunner: class {
+      constructor(_provider: unknown, sessionId: string) {
+        fixture.runnerSessionIds.push(sessionId);
+      }
+    },
+  };
+});
+vi.mock('../src/engine/conductor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/conductor.js')>();
+  return {
+    ...actual,
+    Conductor: class {
+      async run(): Promise<void> {}
+    },
+  };
+});
 
 import { runDaemonMode } from '../src/daemon-cli.js';
 
@@ -95,6 +135,7 @@ beforeEach(() => {
   fixture.constructorError = null;
   fixture.sameStopPromise = false;
   fixture.emitOtelEvents = false;
+  fixture.runnerSessionIds = [];
   loadMergedConfig.mockClear();
   wireOtelVisualizer.mockClear();
   wireOtelVisualizer.mockImplementation((config, context, events) => {
@@ -169,6 +210,7 @@ describe('daemon OTel visualizer wiring', () => {
     expect(scopeSessionId).toMatch(UUID_V4);
     expect(context?.runId).toBe(scopeSessionId);
     expect(existsSync(join(pipelineDir, 'conduct-session-id'))).toBe(false);
+    expect(fixture.runnerSessionIds).toEqual([scopeSessionId]);
   });
 
   it('falls back to the scope session ID when the persisted ID cannot be read', async () => {
