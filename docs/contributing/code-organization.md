@@ -64,7 +64,7 @@ Static-analysis configuration sits at two levels. Anything needing the TypeScrip
 | `engine/engineer/intake/` | 16 | Intake queue, ledger, GitHub issue read/write-back, label sync, closed-issue reconciliation. |
 | `engine/self-host/` | 16 | Guardrails for the harness building itself: detector, write fence, sandbox build env, build auth, version gate, release gate. |
 | `engine/halt-issues/` | 6 | Halt-monitor issue reconciliation and its CLI. |
-| `engine/otel/` | 6 | OpenTelemetry config, metrics, and the visualizer. |
+| `engine/otel/` | 8 | OpenTelemetry config, metrics, visualizer, and shared entry-point wiring. |
 | `engine/owner-gate/` | 5 | Multi-operator identity partitioning. |
 
 Flat `engine/` files cluster by filename prefix. Use the prefix to find the subsystem:
