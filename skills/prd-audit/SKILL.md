@@ -17,14 +17,14 @@ exists; the plan's stated outcome is also intent context. This is a finding-auth
 grounded judgement and do not implement, amend DECIDE artifacts, append remediation tasks, or choose
 the gate route. The engine owns those mechanical outcomes.
 
-Each finding is keyed to one story criterion and carries exactly one grade:
-`PASS | FIXABLE | PLAN_GAP | OVER_SCOPE`.
+Each finding carries exactly one grade: `PASS | FIXABLE | PLAN_GAP | OVER_SCOPE`. Verdict Table
+findings are keyed to active story criteria; no-owner OVER_SCOPE findings are keyed as `NC.<n>` in
+their dedicated section below. The engine rejects malformed rows with a diagnostic while retaining
+valid sibling rows. Never invent a key (`OS.1`, `SCOPE.2`) or write duplicate rows for one key.
 
-**Every Verdict Table key must be an id of an active story criterion.** The engine reads the
-table mechanically: a key that is not of the form `S<story>.<criterion>` fails the report, and
-so does a well-formed key that names no criterion in the active stories. Both discard the whole
-report — every other verdict in it is lost — and halt the run for a human. Never invent a key
-(`OS.1`, `SCOPE.2`), and never write two rows for the same criterion.
+**Every Verdict Table key must be an id of an active story criterion.** Use the form
+`S<story>.<criterion>`; do not use `NC.<n>` in the Verdict Table. A well-formed story key that
+names no criterion in the active stories is also invalid.
 
 Per the `/verify-claims` protocol, cite concrete `file:line` evidence and give a confidence when
 evidence is ambiguous. Do not turn uncertainty into a PASS.
@@ -67,10 +67,11 @@ For every story criterion, record one row.
   finding; a rationale that does justify it is evidence for no finding.
   **An unplanned change usually owns no story criterion.** Key the row to the criterion whose
   behavior the change actually affects when one exists. When none does, do not force it into the
-  table and do not borrow an unrelated criterion's key: report it under a `## Findings without an
-  owning criterion` section below the table, in the same row format but headed `Finding` instead
-  of `Criterion`, with its judgement in Criterion detail as usual. The engine cannot route those
-  findings today (#1848); they are reported for the operator.
+  table or borrow an unrelated criterion's key. Report it under a `## Findings without an owning
+  criterion` section below the table. Its first column is `Finding` and each row's first cell must
+  be a unique `NC.<n>` key (for example, `NC.1`). `NC.<n>` keys belong only in this section, where
+  every row must be `OVER_SCOPE`; do not use another grade. Give each no-owner finding exactly one
+  row — duplicate `NC.<n>` keys are rejected. Include its judgement in Criterion detail as usual.
 
 Do not conflate grades: an unmet criterion with an existing owner is FIXABLE even if another
 criterion is a PLAN_GAP. One row carries one grade.
@@ -84,7 +85,7 @@ contract. Per-FR evidence may appear below the table, but never replaces the cri
 ```markdown
 # PRD Audit: <Feature Name>
 **Date:** YYYY-MM-DD
-**PRD:** present | none
+**PRD:** present
 **Intent sources:** stories: .docs/stories/<feature>.md; PRD: .docs/specs/<feature>.md | none; plan outcome: <outcome>
 **Overall:** PASS | BLOCKED
 
@@ -96,6 +97,12 @@ contract. Per-FR evidence may appear below the table, but never replaces the cri
 | S6.2 | FIXABLE | 4 | FR-7 | — | src/engine/example.ts:58 — missing guard |
 | S6.3 | PLAN_GAP | — | FR-7 | — | No active task owns the missing behavior |
 | S9.2 | OVER_SCOPE | — | FR-9 | outside-visible | src/engine/example.ts:77 — outside intent, user-visible |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Intent relation | Evidence |
+| --- | --- | --- | --- |
+| NC.1 | OVER_SCOPE | outside-visible | src/engine/unplanned.ts:12 — outside intent, user-visible behavior |
 
 ## Criterion detail
 ### S6.2 — <criterion summary>
@@ -127,5 +134,5 @@ the policy to this evidence.
 - [ ] Unreadable criteria and PRD-to-story coverage gaps are surfaced, never silently passed
 - [ ] Each finding cites `file:line` evidence and has calibrated confidence where ambiguous
 - [ ] Every OVER_SCOPE row carries an `Intent relation` of `within`, `outside-harmless`, or `outside-visible`; detail judges intent, user visibility, Scope trailers, and reseal rationale
-- [ ] Every Verdict Table key is an active story criterion id, each appearing on exactly one row; a finding owning no criterion is reported below the table, never keyed to an invented or unrelated id
+- [ ] Every Verdict Table key is an active story criterion id, each appearing on exactly one row; a finding owning no criterion is reported below the table as one unique `NC.<n>` OVER_SCOPE row, never keyed to an invented or unrelated id
 - [ ] Report written to `.pipeline/prd-audit.md`; no implementation, plan mutation, or routing performed

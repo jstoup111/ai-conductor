@@ -151,6 +151,7 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
   parsePrdAuditReport,
+  isNoOwnerKey,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   readRemediationPlan,
@@ -813,7 +814,13 @@ export function routePrdAuditPlanGaps(
   config: HarnessConfig,
 ): PrdAuditPlanGapRoute {
   const parsed = parsePrdAuditReport(reportText);
-  if (!parsed.ok) return { kind: 'none' };
+  // A rejected row is a row the parser could not read, not a finding — it never
+  // appears in `parsed.value.findings`, so the `hasOtherBlockingGrade` scan
+  // below cannot see it. Without this guard a rejected row riding with a
+  // recordable negative-path PLAN_GAP returns `record`, and either SHIP path
+  // then overrides the gate as satisfied, so the row never blocks by name.
+  // Matches the sibling guard in `routePrdAuditOverScope`.
+  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
 
   const findings = parsed.value.findings
     .filter((finding) => finding.grade === 'PLAN_GAP')
@@ -874,7 +881,7 @@ export function routePrdAuditOverScope(
   decisions: readonly OverScopeDecision[],
 ): PrdAuditOverScopeRoute {
   const parsed = parsePrdAuditReport(reportText);
-  if (!parsed.ok) return { kind: 'none' };
+  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
   const relations = overScopeRelations(reportText);
   const overScopeFindings = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
   if (overScopeFindings.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
@@ -882,8 +889,13 @@ export function routePrdAuditOverScope(
     .map((finding) => {
       const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
       const relation = relations.get(finding.criterion) as IntentRelation;
-      const classification = classifyOverScopeCriterion(finding.criterion, relations, decisions);
-      const durableDecision = decisions.filter((entry) => entry.criterion === finding.criterion).at(-1);
+      const classification = classifyOverScopeCriterion(finding.criterion, summary, relations, decisions);
+      const durableDecision = decisions
+        .filter((entry) => {
+          if (entry.criterion !== finding.criterion) return false;
+          return !/^NC\.\d+$/i.test(finding.criterion) || entry.summary.trim() === summary.trim();
+        })
+        .at(-1);
       return {
         gate: 'prd_audit' as const,
         grade: 'OVER_SCOPE' as const,
@@ -3567,9 +3579,19 @@ export class Conductor {
       return { kind: 'none' };
     }
     const relations = overScopeRelations(reportText);
-    const blockingCriteria = new Set([...relations].filter(([, relation]) => relation === 'outside-visible').map(([criterion]) => criterion));
+    const parsedReport = parsePrdAuditReport(reportText);
+    const blockingFindings = new Map(
+      parsedReport.ok
+        ? parsedReport.value.findings
+          .filter((finding) => finding.grade === 'OVER_SCOPE' && relations.get(finding.criterion) === 'outside-visible')
+          .map((finding) => [
+            finding.criterion,
+            finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`,
+          ])
+        : [],
+    );
     const cleared = await readFile(join(this.projectRoot, '.pipeline', 'HALT.cleared'), 'utf8').catch(() => '');
-    const parsed = parseClearedOverScopeDecisions(cleared, blockingCriteria);
+    const parsed = parseClearedOverScopeDecisions(cleared, blockingFindings);
     // D7: a defect the operator's edit produced must reach the next halt body,
     // not only the spine. Emitting it and dropping it made the re-halt look
     // identical to a halt where the operator had never touched the block.
@@ -3583,7 +3605,7 @@ export class Conductor {
       const result = operator ? await recordOverScopeDecisions(this.projectRoot, parsed.decisions.map((decision) => ({ ...decision, operator }))) : { recorded: [], failure: 'missing-operator' as const };
       const defects = [...parsed.defects, ...(result.failure ? [{ kind: result.failure === 'missing-operator' ? 'missing-operator' as const : 'write-failed' as const }] : [])];
       harvestDefects = defects;
-      if (parsed.decisions.length || defects.length) await this.events.emit({ type: 'over_scope_decision', criteria: [...blockingCriteria], decisions: result.recorded.map((decision) => ({ criterion: decision.criterion, decision: decision.decision })), defects });
+      if (parsed.decisions.length || defects.length) await this.events.emit({ type: 'over_scope_decision', criteria: [...blockingFindings.keys()], decisions: result.recorded.map((decision) => ({ criterion: decision.criterion, decision: decision.decision })), defects });
     }
     const decisions = await readOverScopeDecisions(this.projectRoot);
     const route = routePrdAuditOverScope(reportText, decisions.decisions);
@@ -3776,6 +3798,13 @@ export class Conductor {
           await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
           return { kind: 'halt', haltClass: 'mechanical', detail };
         }
+        if (parsed.value.rejectedRows.length > 0) {
+          const detail = `PRD audit report rejected rows: ${parsed.value.rejectedRows
+            .map((row) => `${row.key ?? row.rowText} (${row.reason})`)
+            .join('; ')}`;
+          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
+          return { kind: 'halt', haltClass: 'mechanical', detail };
+        }
         const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
         const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
         const criterionOrdinalByStory = new Map<string, number>();
@@ -3788,7 +3817,7 @@ export class Conductor {
         }));
         const unresolvedCriteria = parsed.value.findings
           .map((finding) => finding.criterion)
-          .filter((criterion) => !criteria.has(criterion));
+          .filter((criterion) => !isNoOwnerKey(criterion) && !criteria.has(criterion));
         if (criteria.size === 0 || unresolvedCriteria.length > 0) {
           const detail = criteria.size === 0
             ? 'PRD audit remediation cannot resolve the active story criteria.'
@@ -8988,8 +9017,7 @@ export class Conductor {
               if (prdAuditRoute.kind === 'record') {
                 // Recorded negative-path PLAN_GAP and harmless/within-intent
                 // OVER_SCOPE findings are explicit accepted risk, not repair
-                // requests. Preserve fresh-verdict metadata while allowing
-                // the SHIP tail to settle this gate as satisfied.
+                // requests. A rejected report never reaches this route.
                 completion = { ...completion, done: true, reason: undefined, missing: undefined };
               }
             }

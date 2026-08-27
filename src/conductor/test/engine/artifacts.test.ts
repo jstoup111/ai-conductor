@@ -1,3 +1,4 @@
+// Covers: S1.1, S1.2, S1.3, task:1, task:10
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
@@ -89,6 +90,8 @@ import {
   removeBuildReviewVerdict,
   PR_BODY_REGEN_ATTEMPT_MARKER,
   uncommittedPathsOrNull,
+  isNoOwnerKey,
+  parsePrdAuditReport,
 } from '../../src/engine/artifacts.js';
 import type {
   CompletionResult,
@@ -141,6 +144,356 @@ describe('engine/artifacts', () => {
     await mkdir(dirPath, { recursive: true });
     await writeFile(fullPath, content);
   }
+
+  describe('parsePrdAuditReport', () => {
+    it('salvages valid criterion rows while diagnosing invented criterion keys', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | FR-1 | First valid row |
+| OS.1 | PASS | — | FR-1 | Invented key |
+| S1.2 | PLAN_GAP | — | FR-2 | Second valid row |
+| OS.2 | OVER_SCOPE | — | FR-3 | Another invented key |
+| S1.3 | FIXABLE | 3 | FR-3 | Third valid row |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'S1.2', grade: 'PLAN_GAP' },
+            { criterion: 'S1.3', grade: 'FIXABLE', planTask: 3 },
+          ],
+          rejectedRows: [
+            { key: 'OS.1', reason: expect.stringContaining('accepted key forms') },
+            { key: 'OS.2', reason: expect.stringContaining('accepted key forms') },
+          ],
+        },
+      });
+      if (parsed.ok) {
+        expect(parsed.value.findings).toHaveLength(3);
+        expect(parsed.value.rejectedRows).toHaveLength(2);
+        expect(parsed.value.rejectedRows.map(({ rowText }) => rowText)).toEqual([
+          '| OS.1 | PASS | — | FR-1 | Invented key |',
+          '| OS.2 | OVER_SCOPE | — | FR-3 | Another invented key |',
+        ]);
+      }
+    });
+
+    it('rejects only invalid rows while retaining their valid siblings', () => {
+      const activePlan = '### Task 3: existing task\n';
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | FR-1 | Valid sibling |
+| S1.2 | UNKNOWN | — | FR-1 | Invalid grade |
+| S1.3 | FIXABLE | no | FR-1 | Invalid task |
+| S1.4 | FIXABLE | — | FR-1 | Missing task |
+| S1.5 | FIXABLE | 99 | FR-1 | Absent task |
+| NC.1 | OVER_SCOPE | — | none | Wrong section |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Evidence |
+| --- | --- | --- |
+| NC.1 | PASS | Wrong grade |
+| NC.2 | OVER_SCOPE | Valid no-owner sibling |
+`, activePlan);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'NC.2', grade: 'OVER_SCOPE' },
+          ],
+          rejectedRows: [
+            { key: 'S1.2', reason: expect.stringContaining('invalid Grade') },
+            { key: 'S1.3', reason: expect.stringContaining('invalid Plan task') },
+            { key: 'S1.4', reason: expect.stringContaining('no Plan task') },
+            { key: 'S1.5', reason: expect.stringContaining('absent from the active plan') },
+            { key: 'NC.1', reason: expect.stringContaining('Verdict Table') },
+            { key: 'NC.1', reason: expect.stringContaining('only OVER_SCOPE') },
+          ],
+        },
+      });
+    });
+
+    it('keeps missing report-level structure as a mechanical fault', () => {
+      expect(parsePrdAuditReport('## Verdict Table')).toMatchObject({
+        ok: false,
+        class: 'mechanical-fault',
+      });
+      expect(parsePrdAuditReport('**PRD:** present')).toMatchObject({
+        ok: false,
+        class: 'mechanical-fault',
+      });
+    });
+
+    it('parses no-owner OVER_SCOPE findings alongside Verdict Table findings', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | FR-1 | — | Existing criterion evidence |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Intent relation | Evidence |
+| --- | --- | --- | --- |
+| nc.1 | OVER_SCOPE | outside-visible | src/engine/no-owner.ts:10 — visible unplanned behavior |
+| NC.2 | OVER_SCOPE | within | src/engine/no-owner.ts:20 — harmless implementation detail |
+`);
+
+      expect(parsed).toEqual({
+        ok: true,
+        value: {
+          prd: 'present',
+          rejectedRows: [],
+          findings: [
+            {
+              criterion: 'S1.1',
+              grade: 'PASS',
+              prdIds: ['FR-1'],
+              evidence: 'Existing criterion evidence',
+            },
+            {
+              criterion: 'NC.1',
+              grade: 'OVER_SCOPE',
+              prdIds: [],
+              evidence: 'src/engine/no-owner.ts:10 — visible unplanned behavior',
+            },
+            {
+              criterion: 'NC.2',
+              grade: 'OVER_SCOPE',
+              prdIds: [],
+              evidence: 'src/engine/no-owner.ts:20 — harmless implementation detail',
+            },
+          ],
+        },
+      });
+    });
+
+    it('parses the prd-audit skill no-owner report example without rejected rows', async () => {
+      const skill = await readFile(join(REPOSITORY_ROOT, 'skills/prd-audit/SKILL.md'), 'utf8');
+      const reportExample = skill.match(/```markdown\n(# PRD Audit:[\s\S]*?)```/)?.[1];
+      const noOwnerSection = reportExample?.match(/## Findings without an owning criterion[\s\S]*/)?.[0];
+
+      expect(noOwnerSection).toBeDefined();
+      expect(reportExample).toBeDefined();
+
+      const parsed = parsePrdAuditReport(reportExample ?? '');
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.value.findings).toContainEqual(
+          expect.objectContaining({ criterion: 'NC.1', grade: 'OVER_SCOPE' }),
+        );
+        expect(parsed.value.rejectedRows).toEqual([]);
+      }
+    });
+
+    it('rejects an old no-owner row without an NC key per-row', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | none | Valid criterion sibling |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Evidence |
+| --- | --- | --- |
+| Unplanned user-visible behavior | OVER_SCOPE | src/engine/no-owner.ts:10 |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [{ criterion: 'S1.1', grade: 'PASS' }],
+          rejectedRows: [{
+            key: 'Unplanned user-visible behavior',
+            reason: expect.stringContaining('NC.<number>'),
+          }],
+        },
+      });
+    });
+
+    it('rejects every duplicate Verdict Table finding while retaining unique siblings', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | FR-1 | Unique sibling |
+| S1.3 | PASS | — | FR-1 | First S1.3 carrier |
+| S1.3 | OVER_SCOPE | — | FR-1 | Second S1.3 carrier |
+| S4.1 | PASS | — | FR-4 | First S4.1 carrier |
+| S4.1 | OVER_SCOPE | — | FR-4 | Second S4.1 carrier |
+| S4.2 | PASS | — | FR-4 | Other unique sibling |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'S4.2', grade: 'PASS' },
+          ],
+          rejectedRows: [
+            { key: 'S1.3', reason: expect.stringContaining('duplicate') },
+            { key: 'S1.3', reason: expect.stringContaining('duplicate') },
+            { key: 'S4.1', reason: expect.stringContaining('duplicate') },
+            { key: 'S4.1', reason: expect.stringContaining('duplicate') },
+          ],
+        },
+      });
+      if (parsed.ok) {
+        expect(parsed.value.rejectedRows.map(({ key }) => key)).toEqual([
+          'S1.3', 'S1.3', 'S4.1', 'S4.1',
+        ]);
+        expect(parsed.value.rejectedRows.map(({ reason }) => reason).join(' ')).toContain('S1.3');
+        expect(parsed.value.rejectedRows.map(({ reason }) => reason).join(' ')).toContain('S4.1');
+      }
+    });
+
+    it('rejects duplicate no-owner findings but does not diagnose unique keys', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | none | Unique criterion sibling |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Evidence |
+| --- | --- | --- |
+| NC.1 | OVER_SCOPE | First NC.1 carrier |
+| NC.1 | OVER_SCOPE | Second NC.1 carrier |
+| NC.2 | OVER_SCOPE | Unique no-owner sibling |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'NC.2', grade: 'OVER_SCOPE' },
+          ],
+          rejectedRows: [
+            { key: 'NC.1', reason: expect.stringContaining('duplicate') },
+            { key: 'NC.1', reason: expect.stringContaining('duplicate') },
+          ],
+        },
+      });
+    });
+
+    it('never returns two findings with the same normalized key', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| s1.1 | PASS | — | FR-1 | First carrier |
+| S1.1 | OVER_SCOPE | — | FR-1 | Second carrier |
+| S1.2 | PASS | — | FR-1 | Unique sibling |
+`);
+
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.value.findings).toEqual([
+          expect.objectContaining({ criterion: 'S1.2', grade: 'PASS' }),
+        ]);
+        expect(parsed.value.rejectedRows).toEqual([
+          expect.objectContaining({ key: 'S1.1', reason: expect.stringContaining('duplicate') }),
+          expect.objectContaining({ key: 'S1.1', reason: expect.stringContaining('duplicate') }),
+        ]);
+      }
+    });
+
+    it('leaves all-unique keys free of duplicate diagnostics', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | none | First unique criterion |
+| S1.2 | OVER_SCOPE | — | none | Second unique criterion |
+
+## Findings without an owning criterion
+
+| Finding | Grade | Evidence |
+| --- | --- | --- |
+| NC.1 | OVER_SCOPE | Unique no-owner finding |
+`);
+
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1' },
+            { criterion: 'S1.2' },
+            { criterion: 'NC.1' },
+          ],
+          rejectedRows: [],
+        },
+      });
+    });
+
+    it('keeps the sectionless report result shape unchanged', () => {
+      expect(parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| S2.1 | FIXABLE | 3 | none | — | Missing guard |
+`)).toEqual({
+        ok: true,
+        value: {
+          prd: 'none',
+          rejectedRows: [],
+          findings: [
+            {
+              criterion: 'S2.1',
+              grade: 'FIXABLE',
+              planTask: 3,
+              prdIds: [],
+              evidence: 'Missing guard',
+            },
+          ],
+        },
+      });
+    });
+
+    it('identifies no-owner keys without accepting story criteria', () => {
+      expect([isNoOwnerKey('NC.1'), isNoOwnerKey('S1.2')]).toEqual([true, false]);
+    });
+  });
 
   describe('STEP_ARTIFACT_GLOBS', () => {
     it('derives the complete ordered compatibility map while retaining per-pattern scope', async () => {
@@ -3450,6 +3803,48 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(true);
     });
 
+    it('honors an accepted NC finding only when its normalized evidence summary still matches', async () => {
+      const summary = '  Visible behavior outside the approved plan.  ';
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+          '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
+          '## Findings without an owning criterion\n' +
+          '| Finding | Grade | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- |\n' +
+          `| NC.1 | OVER_SCOPE | outside-visible | ${summary} |\n`,
+      );
+      await createFile(
+        '.pipeline/accepted-widenings.json',
+        JSON.stringify({
+          version: 1,
+          decisions: [{
+            criterion: 'NC.1',
+            summary: summary.trim(),
+            decision: 'accept',
+            rationale: 'Approved for this feature.',
+            operator: 'test',
+            decidedAt: '2026-08-26T00:00:00.000Z',
+          }],
+        }),
+      );
+
+      expect((await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 })).done).toBe(true);
+
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+          '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
+          '## Findings without an owning criterion\n' +
+          '| Finding | Grade | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- |\n' +
+          '| NC.1 | OVER_SCOPE | outside-visible | Changed visible behavior outside the approved plan. |\n',
+      );
+      const mismatched = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(mismatched.done).toBe(false);
+      expect(mismatched.reason).toContain('NC.1 (OVER_SCOPE)');
+    });
+
     it('the same finding still blocks when the operator has NOT accepted it', async () => {
       await writeReport('| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n');
       const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
@@ -3471,6 +3866,18 @@ describe('engine/artifacts', () => {
       expect(result.reason).toContain('S5.7 (PLAN_GAP)');
     });
 
+    it('blocks an otherwise all-PASS report when it contains rejected rows, naming every rejected key and reason', async () => {
+      await writeReport(
+        '| S3.1 | PASS | — | none | within | conductor.ts:8163 |\n' +
+          '| S3.2 | MAYBE | — | none | within | conductor.ts:8164 |\n',
+      );
+
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('rejected rows: S3.2 (PRD audit finding S3.2 has an invalid Grade.)');
+    });
+
     it('accepting one finding does not clear an unaccepted sibling', async () => {
       await writeReport(
         '| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n' +
@@ -3481,6 +3888,65 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toContain('S4.2 (OVER_SCOPE)');
       expect(result.reason).not.toContain('S3.1');
+    });
+
+    it('completes an all-PASS report with a within-intent NC finding without treating it as an unknown story criterion', async () => {
+      await createFile(
+        '.docs/stories/feature.md',
+        [
+          '# Stories',
+          '',
+          '## Story 1: audited behavior',
+          '',
+          '#### Happy Path',
+          '- Given input, when exercised, then the expected behavior occurs.',
+        ].join('\n'),
+      );
+      await createFile(
+        '.pipeline/prd-audit.md',
+        [
+          '# PRD Audit',
+          '',
+          '**PRD:** none',
+          '',
+          table.trimEnd(),
+          '| S1.1 | PASS | — | none | within | Covered behavior |',
+          '',
+          '## Findings without an owning criterion',
+          '| Finding | Grade | Intent relation | Evidence |',
+          '| --- | --- | --- | --- |',
+          '| NC.1 | OVER_SCOPE | within | Internal implementation detail |',
+        ].join('\n'),
+      );
+
+      const result = await checkStepCompletion(dir, 'prd_audit', {
+        featureDesc: 'feature',
+        sessionStartedAt: 0,
+      });
+
+      expect(result).toEqual({ done: true, verdictFreshness: expect.any(Object) });
+      const withinReport = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf8');
+      expect(parsePrdAuditReport(withinReport)).toMatchObject({
+        ok: true,
+        value: {
+          findings: [
+            { criterion: 'S1.1', grade: 'PASS' },
+            { criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Internal implementation detail' },
+          ],
+          rejectedRows: [],
+        },
+      });
+
+      await createFile(
+        '.pipeline/prd-audit.md',
+        withinReport.replace('| NC.1 | OVER_SCOPE | within |', '| NC.1 | OVER_SCOPE | outside-visible |'),
+      );
+      const outsideVisible = await checkStepCompletion(dir, 'prd_audit', {
+        featureDesc: 'feature',
+        sessionStartedAt: 0,
+      });
+      expect(outsideVisible.done).toBe(false);
+      expect(outsideVisible.reason).toContain('NC.1 (OVER_SCOPE)');
     });
   });
 
@@ -4883,6 +5349,61 @@ Task 1 → Task 2
           attemptRunId: 'current-run',
           config: { gate_code_validity: { enabled: false } },
         })).resolves.toMatchObject({ done: true });
+      });
+
+      it('preserves a stale report with a matching accepted NC finding', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        const summary = 'Visible behavior outside the approved plan.';
+        const report = [
+          '**PRD:** none',
+          '',
+          '## Verdict Table',
+          '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |',
+          '| --- | --- | --- | --- | --- | --- |',
+          '| S3.1 | PASS | — | none | within | Covered behavior |',
+          '',
+          '## Findings without an owning criterion',
+          '| Finding | Grade | Intent relation | Evidence |',
+          '| --- | --- | --- | --- |',
+          `| NC.1 | OVER_SCOPE | outside-visible | ${summary} |`,
+        ].join('\n');
+        await writeFile(join(gdir, PATH), report);
+        await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
+        await writeFile(join(gdir, '.pipeline/accepted-widenings.json'), JSON.stringify({
+          version: 1,
+          decisions: [{
+            criterion: 'NC.1', summary, decision: 'accept', rationale: 'Approved.', operator: 'test', decidedAt: '2026-08-26T00:00:00.000Z',
+          }],
+        }));
+        await writeSidecar(gdir, baseline);
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+        expect(result).toMatchObject({ done: true, verdictFreshness: { outcome: 'preserved_surface_miss' } });
+      });
+
+      it('does not preserve a stale all-PASS report when the current report has rejected rows', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        const report = [
+          '**PRD:** none',
+          '',
+          '## Verdict Table',
+          '| Criterion | Grade | Plan task | Evidence |',
+          '| --- | --- | --- | --- |',
+          '| S1.1 | PASS | — | Valid row |',
+          '| S1.2 | MAYBE | — | Rejected row |',
+        ].join('\n');
+        await writeFile(join(gdir, PATH), report);
+        await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
+        await writeSidecar(gdir, baseline);
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
       });
 
       it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {

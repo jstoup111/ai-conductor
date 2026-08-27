@@ -24,7 +24,7 @@ describe('prd-audit skill contract', () => {
 
     expect(report).toEqual(expect.any(String));
     expect(report).toMatch(/^# PRD Audit: <Feature Name>/m);
-    expect(report).toMatch(/^\*\*PRD:\*\* present \| none/m);
+    expect(report).toMatch(/^\*\*PRD:\*\* present/m);
     expect(report).toMatch(/^\*\*Intent sources:\*\* /m);
     expect(report).toMatch(/^\| Criterion \| Grade \| Plan task \| PRD: \| Intent relation \| Evidence \|/m);
     expect(report).toMatch(/^\| S6\.1 \| PASS \| — \| FR-7 \| /m);
@@ -55,6 +55,7 @@ describe('parsePrdAuditReport', () => {
       ok: true,
       value: {
         prd: 'present',
+        rejectedRows: [],
         findings: [
           { criterion: 'S2.1', grade: 'FIXABLE', planTask: 4, prdIds: [], evidence: 'Missing guard' },
           { criterion: 'S2.2', grade: 'PLAN_GAP', prdIds: [], evidence: 'No plan task owns this' },
@@ -83,6 +84,7 @@ describe('parsePrdAuditReport', () => {
       ok: true,
       value: {
         prd: 'present',
+        rejectedRows: [],
         findings: [
           { criterion: 'S6.1', grade: 'PASS', prdIds: ['FR-7'], evidence: 'Implemented' },
           { criterion: 'S6.2', grade: 'FIXABLE', planTask: 4, prdIds: ['FR-7'], evidence: 'Missing guard' },
@@ -127,9 +129,16 @@ describe('parsePrdAuditReport', () => {
     ].join('\n');
 
     expect(parsePrdAuditReport(report)).toEqual({
-      ok: false,
-      class: 'mechanical-fault',
-      error: 'PRD audit finding S2.1 has an invalid Grade.',
+      ok: true,
+      value: {
+        prd: 'none',
+        findings: [],
+        rejectedRows: [{
+          key: 'S2.1',
+          rowText: '| S2.1 | MAYBE | | Unclear |',
+          reason: 'PRD audit finding S2.1 has an invalid Grade.',
+        }],
+      },
     });
   });
 
@@ -147,9 +156,16 @@ describe('parsePrdAuditReport', () => {
     ].join('\n');
 
     expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: false,
-      class: 'mechanical-fault',
-      error: 'PRD audit finding S2.1 is FIXABLE but has no Plan task.',
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [],
+        rejectedRows: [{
+          key: 'S2.1',
+          rowText: '| S2.1 | FIXABLE | | Missing guard |',
+          reason: 'PRD audit finding S2.1 is FIXABLE but has no Plan task.',
+        }],
+      },
     });
   });
 
@@ -165,9 +181,16 @@ describe('parsePrdAuditReport', () => {
     ].join('\n');
 
     expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: false,
-      class: 'mechanical-fault',
-      error: 'PRD audit finding S2.1 names Plan task 99, which is absent from the active plan.',
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [],
+        rejectedRows: [{
+          key: 'S2.1',
+          rowText: '| S2.1 | FIXABLE | 99 | Missing guard |',
+          reason: 'PRD audit finding S2.1 names Plan task 99, which is absent from the active plan.',
+        }],
+      },
     });
   });
 
@@ -183,9 +206,16 @@ describe('parsePrdAuditReport', () => {
     ].join('\n');
 
     expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: false,
-      class: 'mechanical-fault',
-      error: 'PRD audit finding S2.1 has an invalid Grade.',
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [],
+        rejectedRows: [{
+          key: 'S2.1',
+          rowText: '| S2.1 | FIXABLE, PLAN_GAP | 4 | Missing guard |',
+          reason: 'PRD audit finding S2.1 has an invalid Grade.',
+        }],
+      },
     });
   });
 
@@ -205,6 +235,7 @@ describe('parsePrdAuditReport', () => {
       ok: true,
       value: {
         prd: 'present',
+        rejectedRows: [],
         findings: [
           { criterion: 'S2.1', grade: 'FIXABLE', planTask: 4, prdIds: [], evidence: 'Missing guard' },
           { criterion: 'S2.2', grade: 'PLAN_GAP', prdIds: [], evidence: 'No plan task owns this' },
@@ -232,6 +263,7 @@ describe('parsePrdAuditReport', () => {
       ok: true,
       value: {
         prd: 'present',
+        rejectedRows: [],
         findings: [{ criterion: 'S1.1', grade: 'PASS', prdIds: ['FR-1'], evidence: 'Implemented' }],
       },
     });

@@ -904,7 +904,11 @@ async function sweptArtifactStillValid(
       // spare a report that does not itself currently read clean.
       const report = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
       const parsed = parsePrdAuditReport(report);
-      if (parsed.ok ? parsed.value.findings.some((finding) => finding.grade !== 'PASS') : findUnalignedFrRows(report).length > 0) return false;
+      if (
+        parsed.ok
+          ? parsed.value.rejectedRows.length > 0 || parsed.value.findings.some((finding) => finding.grade !== 'PASS')
+          : findUnalignedFrRows(report).length > 0
+      ) return false;
       const resolution = artifactResolution ?? (await buildArtifactResolutionContext(dir, { git }));
       if ((await prdAuditCoverageGap(dir, resolution, report)) !== null) return false;
       return (await prdAuditStoryCoverageGap(dir, resolution, undefined, report)) === null;
@@ -3110,12 +3114,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                 const preDecisions = (await readOverScopeDecisions(dir)).decisions;
                 if (
                   (parsed.ok
-                    ? parsed.value.findings.some(
+                    ? parsed.value.rejectedRows.length > 0 || parsed.value.findings.some(
                         (finding) =>
                           finding.grade !== 'PASS' &&
                           !(
                             finding.grade === 'OVER_SCOPE' &&
-                            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, preRelations, preDecisions))
+                            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, finding.evidence, preRelations, preDecisions))
                           ),
                       )
                     : findUnalignedFrRows(report).length > 0) ||
@@ -3182,6 +3186,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         }
         continue;
       }
+      if (parsed.value.rejectedRows.length > 0) {
+        blockingReason = `prd-audit found rejected rows: ${formatPrdAuditRejectedRows(parsed.value.rejectedRows)} — correct the report and re-audit`;
+        break;
+      }
       // An accepted or non-visible OVER_SCOPE finding is recorded, not blocking.
       // Without this the operator could accept scope bloat and still never
       // ship: the gate re-selected prd_audit forever because acceptance was
@@ -3194,7 +3202,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           finding.grade !== 'PASS' &&
           !(
             finding.grade === 'OVER_SCOPE' &&
-            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, relations, decisions))
+            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, finding.evidence, relations, decisions))
           ),
       );
       if (blocking.length > 0) {
@@ -4155,6 +4163,7 @@ function parseFrVerdictRow(line: string): ParsedFrRow | null {
 
 /** Heading that opens the authoritative verdict table, at any heading level. */
 const VERDICT_TABLE_HEADING_RE = /^\s{0,3}#{1,6}\s+Verdict\s+Table\s*$/i;
+const NO_OWNER_FINDINGS_HEADING_RE = /^\s{0,3}#{1,6}\s+Findings\s+without\s+an\s+owning\s+criterion\s*$/i;
 const MARKDOWN_HEADING_RE = /^\s{0,3}#{1,6}\s+/;
 
 /**
@@ -4181,6 +4190,16 @@ function verdictTableLines(content: string): string[] {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
+/** Return the lines in the explicit no-owner findings section, when present. */
+function noOwnerFindingsLines(content: string): string[] {
+  const lines = content.split('\n');
+  const start = lines.findIndex((line) => NO_OWNER_FINDINGS_HEADING_RE.test(line));
+  if (start === -1) return [];
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => MARKDOWN_HEADING_RE.test(line));
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 /** The only grades a criterion-level PRD-audit finding may carry. */
 export type PrdAuditGrade = 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE';
 
@@ -4193,9 +4212,22 @@ export interface PrdAuditFinding {
   evidence: string;
 }
 
+export interface PrdAuditRejectedRow {
+  rowText: string;
+  key?: string;
+  reason: string;
+}
+
 export interface PrdAuditReport {
   prd: 'present' | 'none';
   findings: PrdAuditFinding[];
+  rejectedRows: PrdAuditRejectedRow[];
+}
+
+interface ParsedPrdAuditFinding {
+  finding: PrdAuditFinding;
+  rowText: string;
+  section: 'verdict-table' | 'no-owner';
 }
 
 export type PrdAuditReportParseResult =
@@ -4209,6 +4241,11 @@ const PRD_AUDIT_GRADES: ReadonlySet<PrdAuditGrade> = new Set([
   'OVER_SCOPE',
 ]);
 const CRITERION_ID_RE = /^S\d+\.\d+$/i;
+const NO_OWNER_KEY_RE = /^NC\.\d+$/i;
+
+export function isNoOwnerKey(key: string): boolean {
+  return NO_OWNER_KEY_RE.test(key);
+}
 
 function tableCells(line: string): string[] {
   return line
@@ -4347,12 +4384,30 @@ function asBuiltBlockedFindingsMechanicalFault(error: string): AsBuiltBlockedFin
   return { ok: false, class: 'mechanical-fault', error };
 }
 
+function rejectedPrdAuditRow(
+  rejectedRows: PrdAuditRejectedRow[],
+  line: string,
+  key: string | undefined,
+  reason: string,
+): void {
+  rejectedRows.push({
+    rowText: line.trim(),
+    ...(key === undefined ? {} : { key }),
+    reason,
+  });
+}
+
+const CRITERION_KEY_REASON =
+  'Criterion has invalid key; accepted key forms are S<number>.<number> in the Verdict Table and NC.<number> in Findings without an owning criterion.';
+const NO_OWNER_KEY_REASON =
+  'Finding has invalid key; accepted key forms are NC.<number> in Findings without an owning criterion.';
+
 /**
  * Parse the criterion-grade verdict table emitted by `prd_audit`.
  *
  * The existing per-FR table is evidence only; the criterion table is the
- * authoritative routing contract. Invalid grade vocabulary fails closed here
- * instead of being interpreted by a later route as an implicit new grade.
+ * authoritative routing contract. Report-level structure faults fail closed;
+ * invalid rows are retained as diagnostics so valid sibling rows still route.
  */
 export function parsePrdAuditReport(
   content: string,
@@ -4384,7 +4439,8 @@ export function parsePrdAuditReport(
   const activePlanTaskIds = activePlan === undefined
     ? undefined
     : new Set(parsePlanTaskPaths(activePlan).keys());
-  const findings: PrdAuditFinding[] = [];
+  const parsedFindings: ParsedPrdAuditFinding[] = [];
+  const rejectedRows: PrdAuditRejectedRow[] = [];
 
   let readingCriterionTable = false;
   for (const line of lines.slice(headerIndex + 1)) {
@@ -4399,14 +4455,20 @@ export function parsePrdAuditReport(
     readingCriterionTable = true;
     const cells = tableCells(line);
     if (isTableSeparator(cells)) continue;
-    const criterion = cells[criterionIndex]?.toUpperCase();
+    const key = cells[criterionIndex]?.trim();
+    const criterion = key?.toUpperCase();
     if (!criterion || !CRITERION_ID_RE.test(criterion)) {
-      return prdAuditMechanicalFault('PRD audit finding has an empty or malformed Criterion.');
+      const reason = criterion && isNoOwnerKey(criterion)
+        ? 'NC.<number> keys are valid only in Findings without an owning criterion, not the Verdict Table.'
+        : CRITERION_KEY_REASON;
+      rejectedPrdAuditRow(rejectedRows, line, key || undefined, reason);
+      continue;
     }
 
     const rawGrade = cells[gradeIndex]?.toUpperCase();
     if (!rawGrade || !PRD_AUDIT_GRADES.has(rawGrade as PrdAuditGrade)) {
-      return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Grade.`);
+      rejectedPrdAuditRow(rejectedRows, line, criterion, `PRD audit finding ${criterion} has an invalid Grade.`);
+      continue;
     }
 
     const rawPlanTask = planTaskIndex === -1 ? '' : cells[planTaskIndex] ?? '';
@@ -4414,40 +4476,137 @@ export function parsePrdAuditReport(
       ? undefined
       : Number(rawPlanTask);
     if (planTask !== undefined && (!Number.isInteger(planTask) || planTask < 1)) {
-      return prdAuditMechanicalFault(`PRD audit finding ${criterion} has an invalid Plan task.`);
+      rejectedPrdAuditRow(rejectedRows, line, criterion, `PRD audit finding ${criterion} has an invalid Plan task.`);
+      continue;
     }
     if (rawGrade === 'FIXABLE' && planTask === undefined) {
-      return prdAuditMechanicalFault(
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
         `PRD audit finding ${criterion} is FIXABLE but has no Plan task.`,
       );
+      continue;
     }
     if (
       rawGrade === 'FIXABLE' &&
       activePlanTaskIds !== undefined &&
       !activePlanTaskIds.has(String(planTask))
     ) {
-      return prdAuditMechanicalFault(
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
         `PRD audit finding ${criterion} names Plan task ${planTask}, which is absent from the active plan.`,
       );
+      continue;
     }
 
-    findings.push({
-      criterion,
-      grade: rawGrade as PrdAuditGrade,
-      ...(planTask === undefined ? {} : { planTask }),
-      prdIds: Object.freeze([...(prdIndex === -1 ? '' : cells[prdIndex] ?? '').matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((match) => match[0].toUpperCase())),
-      evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
+    parsedFindings.push({
+      finding: {
+        criterion,
+        grade: rawGrade as PrdAuditGrade,
+        ...(planTask === undefined ? {} : { planTask }),
+        prdIds: Object.freeze([...(prdIndex === -1 ? '' : cells[prdIndex] ?? '').matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((match) => match[0].toUpperCase())),
+        evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
+      },
+      rowText: line,
+      section: 'verdict-table',
     });
+  }
+
+  const noOwnerLines = noOwnerFindingsLines(content);
+  const noOwnerHeaderIndex = noOwnerLines.findIndex((line) => {
+    if (!/^\s*\|/.test(line)) return false;
+    const cells = tableCells(line).map((cell) => cell.toLowerCase());
+    return cells.includes('finding') && cells.includes('grade');
+  });
+  if (noOwnerHeaderIndex !== -1) {
+    const noOwnerHeader = tableCells(noOwnerLines[noOwnerHeaderIndex]).map((cell) => cell.toLowerCase());
+    const findingIndex = noOwnerHeader.indexOf('finding');
+    const noOwnerGradeIndex = noOwnerHeader.indexOf('grade');
+    const noOwnerEvidenceIndex = noOwnerHeader.indexOf('evidence');
+    let readingNoOwnerTable = false;
+
+    for (const line of noOwnerLines.slice(noOwnerHeaderIndex + 1)) {
+      if (!/^\s*\|/.test(line)) {
+        if (readingNoOwnerTable && line.trim() === '') break;
+        continue;
+      }
+      readingNoOwnerTable = true;
+      const cells = tableCells(line);
+      if (isTableSeparator(cells)) continue;
+      const key = cells[findingIndex]?.trim();
+      const criterion = key?.toUpperCase();
+      if (!criterion || !isNoOwnerKey(criterion)) {
+        rejectedPrdAuditRow(rejectedRows, line, key || undefined, NO_OWNER_KEY_REASON);
+        continue;
+      }
+
+      const rawGrade = cells[noOwnerGradeIndex]?.toUpperCase();
+      if (!rawGrade || !PRD_AUDIT_GRADES.has(rawGrade as PrdAuditGrade)) {
+        rejectedPrdAuditRow(rejectedRows, line, criterion, `PRD audit finding ${criterion} has an invalid Grade.`);
+        continue;
+      }
+      if (rawGrade !== 'OVER_SCOPE') {
+        rejectedPrdAuditRow(
+          rejectedRows,
+          line,
+          criterion,
+          `PRD audit finding ${criterion} in Findings without an owning criterion admits only OVER_SCOPE.`,
+        );
+        continue;
+      }
+
+      parsedFindings.push({
+        finding: {
+          criterion,
+          grade: rawGrade as PrdAuditGrade,
+          prdIds: Object.freeze([]),
+          evidence: noOwnerEvidenceIndex === -1 ? '' : cells[noOwnerEvidenceIndex] ?? '',
+        },
+        rowText: line,
+        section: 'no-owner',
+      });
+    }
+  }
+
+  const findingsBySectionAndKey = new Map<string, ParsedPrdAuditFinding[]>();
+  for (const parsedFinding of parsedFindings) {
+    const normalizedKey = parsedFinding.finding.criterion.toUpperCase();
+    const groupKey = `${parsedFinding.section}:${normalizedKey}`;
+    const group = findingsBySectionAndKey.get(groupKey) ?? [];
+    group.push(parsedFinding);
+    findingsBySectionAndKey.set(groupKey, group);
+  }
+
+  const findings: PrdAuditFinding[] = [];
+  for (const duplicateGroup of findingsBySectionAndKey.values()) {
+    if (duplicateGroup.length === 1) {
+      findings.push(duplicateGroup[0].finding);
+      continue;
+    }
+    const normalizedKey = duplicateGroup[0].finding.criterion.toUpperCase();
+    for (const duplicate of duplicateGroup) {
+      rejectedPrdAuditRow(
+        rejectedRows,
+        duplicate.rowText,
+        duplicate.finding.criterion,
+        `PRD audit finding ${duplicate.finding.criterion} duplicates normalized key ${normalizedKey}; every carrier of a duplicate key is rejected.`,
+      );
+    }
   }
 
   return {
     ok: true,
-    value: { prd: prdMarker[1].toLowerCase() as PrdAuditReport['prd'], findings },
+    value: {
+      prd: prdMarker[1].toLowerCase() as PrdAuditReport['prd'],
+      findings,
+      rejectedRows,
+    },
   };
 }
 
 function prdAuditMechanicalFault(error: string): PrdAuditReportParseResult {
   return { ok: false, class: 'mechanical-fault', error };
+}
+
+function formatPrdAuditRejectedRows(rows: readonly PrdAuditRejectedRow[]): string {
+  return rows.map((row) => `${row.key ?? row.rowText} (${row.reason})`).join('; ');
 }
 
 /** Return a diagnostic when a resolved PRD requirement lacks an audit verdict row. */
@@ -4513,7 +4672,11 @@ async function prdAuditStoryCoverageGap(
   const parsed = parsePrdAuditReport(reportContent);
   if (!parsed.ok) return parsed.error;
   const expectedCriteria = new Set(criterionIds);
-  const reportedCriteria = new Set(parsed.value.findings.map((finding) => finding.criterion));
+  const reportedCriteria = new Set(
+    parsed.value.findings
+      .map((finding) => finding.criterion)
+      .filter((criterion) => !isNoOwnerKey(criterion)),
+  );
   const unknownCriteria = [...reportedCriteria].filter((criterion) => !expectedCriteria.has(criterion));
   if (unknownCriteria.length > 0) {
     return `PRD audit report names criteria absent from the active stories: ${unknownCriteria.join(', ')}.`;
@@ -4670,15 +4833,25 @@ export async function classifyPrdAuditGaps(
       !(await fileIsFreshSinceSession(f, sessionStartedAt))
     ) continue;
     const content = await readFile(f, 'utf-8');
+    const parsed = parsePrdAuditReport(content);
+    if (parsed.ok && parsed.value.rejectedRows.length > 0) {
+      return {
+        kind: 'needs-decide',
+        summary: `rejected rows: ${formatPrdAuditRejectedRows(parsed.value.rejectedRows)}`,
+      };
+    }
     // An OVER_SCOPE criterion the operator already accepted, or one whose
     // intent relation never made it blocking, is not a gap this routing should
     // act on. Reading only the fresh rows made an accepted widening re-route
     // the next lap exactly as it did before the operator decided (ADR D8).
     const relations = overScopeRelations(content);
+    const findingSummaries = new Map(
+      parsed.ok ? parsed.value.findings.map((finding) => [finding.criterion, finding.evidence]) : [],
+    );
     const settled = new Set(
       [...relations.keys()].filter((criterion) =>
         ['accepted', 'not-blocking'].includes(
-          classifyOverScopeCriterion(criterion, relations, decisions),
+          classifyOverScopeCriterion(criterion, findingSummaries.get(criterion) ?? '', relations, decisions),
         )),
     );
     blocking.push(...findUnalignedFrRowsWithClass(content, settled));

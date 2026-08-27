@@ -242,12 +242,41 @@ None — #1873's decision-block machinery is already on main.
 
 **Dependencies:** Task 3
 
+### Task 10: Gate consumers honor the NC key contract
+**Story:** Story 5
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: drive `checkStepCompletion(root, 'prd_audit')` over a project with a stories file, an all-PASS Verdict Table, and one `NC.1 | OVER_SCOPE | within` row, and assert the result is done with no "names criteria absent from the active stories" reason; add a companion test on the remediation authorization path asserting an NC row does not produce `{ kind: 'halt', haltClass: 'mechanical' }`. Include one lap that also carries a FIXABLE row, so the case the SHIP-path overrides never covered is exercised.
+2. Verify RED.
+3. Edit src/conductor/src/engine/artifacts.ts: exempt no-owner keys from the unknown-criteria comparison in `prdAuditStoryCoverageGap` via `isNoOwnerKey` — its first consumer outside the parser. An NC key must never be reported as absent from the stories, and must never be counted as missing story coverage.
+4. Edit src/conductor/src/engine/conductor.ts: apply the same exemption to the `unresolvedCriteria` computation in the prd-audit remediation authorization, so an NC row on the remediation path no longer returns a mechanical halt.
+5. Remove the masking overrides that overwrite the gate verdict and `completion.done` when the over-scope route returns `record`. With both consumers NC-aware they no longer carry the case, and they are what kept this defect invisible to the suite.
+6. Verify GREEN; run the full conductor suite and test/test_harness_integrity.sh.
+7. Commit: "fix(prd-audit): gate consumers honor the NC key contract".
+
+**Done when:**
+- An all-PASS report carrying one `NC.1 | OVER_SCOPE | within` row scores done at the gate, with no "absent from the active stories" reason.
+- The same report plus a FIXABLE row reaches the remediation path without a mechanical halt.
+- `isNoOwnerKey` has a consumer at each of the two gate sites, not only inside the parser.
+- Neither masking override remains on the two SHIP paths.
+- The full conductor suite and test/test_harness_integrity.sh exit 0.
+
+**Files likely touched:**
+- src/conductor/src/engine/artifacts.ts — `prdAuditStoryCoverageGap` NC exemption
+- src/conductor/src/engine/conductor.ts — remediation-authorization exemption; masking overrides removed
+- src/conductor/test/engine/artifacts.test.ts — gate-level NC coverage tests
+- src/conductor/test/prd-audit-kickback.test.ts — remediation-path NC test
+
+**Dependencies:** Task 7
+
 ## Task Dependency Graph
 
 ```
 Task 1 ──▶ Task 2 ──▶ Task 3 ──▶ Task 9
    │           └────▶ Task 4 ──▶ Task 8
    └──▶ Task 5 ──▶ Task 6 ──▶ Task 7 ──▶ Task 8
+                                  └────▶ Task 10
 ```
 
 ## Integration Points
@@ -256,6 +285,9 @@ Task 1 ──▶ Task 2 ──▶ Task 3 ──▶ Task 9
   blocking, salvaged result.
 - After Task 7: the full decision lifecycle for NC findings works unit-level; Task 8 proves it
   end-to-end.
+- After Task 10: the two gate consumers accept the NC shape the parser and the skill already
+  teach, so an NC finding survives the gate on every path — not only the two SHIP paths whose
+  overrides previously masked it.
 
 ## Verification
 
