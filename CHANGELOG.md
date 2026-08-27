@@ -60,6 +60,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - PRD audits now safely parse, validate, and route no-owner over-scope findings. ([implementation PR #1909](https://github.com/jstoup111/ai-conductor/pull/1909)).
 - Remediation plans now accept case-variant criterion IDs and report actionable admission failures. ([implementation PR #1969](https://github.com/jstoup111/ai-conductor/pull/1969)).
 - Test-quality preflight failures now retain their bounded diagnostics so exhausted build reviews remain actionable. ([implementation PR #1970](https://github.com/jstoup111/ai-conductor/pull/1970)).
+- Ensure OpenTelemetry exports from daemon-dispatched builds include stable feature and run identity. ([implementation PR #1973](https://github.com/jstoup111/ai-conductor/pull/1973)).
 
 ## Migration
 
