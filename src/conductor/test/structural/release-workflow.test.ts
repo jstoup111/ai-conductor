@@ -99,6 +99,24 @@ describe('structural: release workflow', () => {
     expect(source).toContain('runReleasePublisherAction');
   });
 
+  it('baselines the release-PR bump on the nearest RELEASE tag, not any marker tag', async () => {
+    const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release-pr.yml'), 'utf8');
+    const workflow = job(loadYaml(source), 'release PR workflow');
+    const jobs = job(workflow.jobs, 'release PR workflow jobs');
+    const maintenance = job(jobs['release-pr-maintenance'], 'release PR maintenance job');
+    const script = (maintenance.steps as Array<Record<string, unknown>>)
+      .map((step) => String((step.with as Record<string, unknown> | undefined)?.script ?? ''))
+      .find((value) => value.includes('latestTag')) ?? '';
+
+    // A bare `describe --tags` returns the nearest reachable tag of ANY kind, so a
+    // non-release marker tag on main (the `retro-last` recovery anchor, 2026-08-26)
+    // became the version baseline and wedged maintenance on every merge with
+    // `Invalid current version: retro-last`.
+    expect(script).toMatch(
+      /latestTag:[^\n]*\[[^\]]*'describe'[^\]]*'--tags'[^\]]*'--abbrev=0'[^\]]*'--match'[^\]]*'v\*\.\*\.\*'[^\]]*\]/,
+    );
+  });
+
   it('wires the stable branch through a create-or-fast-forward GitHub ref adapter', async () => {
     const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
     const workflow = job(loadYaml(source), 'release workflow');

@@ -70,7 +70,13 @@ jobs:
             }
 
             const git = {
-              latestTag: () => gitOutput(['describe', '--tags', '--abbrev=0']),
+              // Match RELEASE tags only. Bare `describe --tags` returns the nearest
+              // reachable tag of ANY kind, so a non-release marker tag on main (the
+              // `retro-last` recovery anchor, 2026-08-26) becomes the baseline and
+              // `bumpVersion` dies with `Invalid current version: retro-last`, wedging
+              // release-PR maintenance on every merge. Same `v*.*.*` restriction
+              // `bin/update` already applies (adr-2026-08-09).
+              latestTag: () => gitOutput(['describe', '--tags', '--abbrev=0', '--match', 'v*.*.*']),
               // Merge commits are disabled on this repository: every PR lands as a
               // single-parent squash or rebase commit, so the candidate range is
               // every commit since the tag, not just merge commits.
