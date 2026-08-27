@@ -50,6 +50,24 @@ Relevant existing facts (evidence):
    sites. (Note: "register a plugin with zero `index.ts` change" was never achievable — both
    `ui_renderer` selection and `EventPersister` are wired in `index.ts`; the exporter is no
    different.)
+> **Amended 2026-08-26 by #1516:** Decision 3's selection loop was never delivered — only the
+> `buildVisualizers`/`stopVisualizers` lifecycle helpers shipped, and the OTel exporter was
+> hard-wired into `index.ts` past the registry, so an installed `kind: visualizer` plugin
+> registers and is silently never started. The selection loop now lands as specified, with these
+> refinements: (a) the run loop retrieves enabled visualizers from the registry — installed
+> connectors are enabled by name via a new `visualizers: [names]` config key, while the built-in
+> OTel exporter registers as `visualizer:otel` and stays enabled solely by the existing `otel:`
+> gate (operator surface unchanged); a named-but-missing connector warns once and is skipped,
+> mirroring `resolveMemoryProvider`. (b) The seam contract becomes `start(emitter, context)`,
+> where `context` carries run identity (runId, project, branch, feature, engineVersion,
+> pipelineDir) — the identity ADR-014 routed through the OTel-private constructor is now part of
+> the seam, since most `ConductorEvent`s carry none. (c) `buildVisualizers` gains per-plugin
+> error isolation (a throwing `start()` emits an error event and drops that connector; the run
+> continues), extending decision 5's failure isolation from transport failures to the seam
+> itself, matching ADR-003's renderer rule. (d) The loader shape-validates `visualizer`
+> entrypoints at load, mirroring the existing `llm_provider` check, so a malformed plugin is
+> refused with a message instead of failing silently later.
+
 4. **Off the hot path.** The bus handler does O(1) non-blocking work and hands off to an OTel
    `BatchSpanProcessor` + `PeriodicExportingMetricReader`. The handler returns immediately so
    `emit()`'s await does not stall the bus (satisfies FR-8). Export I/O happens asynchronously in
