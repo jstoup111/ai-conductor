@@ -214,7 +214,7 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
       });
 
       const repairs = await remediation.readTestSuiteRemediations(root);
-      expect(repairs).toHaveLength(2);
+      expect(repairs).toHaveLength(1);
       expect(repairs).toEqual(expect.arrayContaining([
         expect.objectContaining({
           gate: 'test_suite',
@@ -273,13 +273,13 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
       });
       expect(proofInspections).toBe(1);
       expect(inputs.testSuiteProof).toMatchObject({ provenanceHeadSha: 'fixture-head', outcome: 'PASS' });
-      expect(inputs.repairContext).toHaveLength(2);
+      expect(inputs.repairContext).toHaveLength(1);
       // The provenance the conductor persists as `build_review_repair_context`.
       // Its emission leg (StepRunResult -> conductor -> ledger) is pinned by
       // test/integration/gate-loop.test.ts's "build_review grading provenance".
       expect(inputs.repairProvenance).toEqual({
         disposition: 'context_available',
-        repairCount: 2,
+        repairCount: 1,
       });
     } finally {
       persister.stop();

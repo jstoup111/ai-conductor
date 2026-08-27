@@ -243,11 +243,6 @@ describe('test_suite native gate loop', () => {
     message: string;
   }>([
     {
-      label: 'non-zero exit',
-      reason: 'nonzero_exit',
-      message: 'unit/auth.test.ts failed; credential=[REDACTED]',
-    },
-    {
       label: 'missing config',
       reason: 'missing_config',
       message: 'Project config must declare test_suite',
@@ -268,7 +263,7 @@ describe('test_suite native gate loop', () => {
       message: 'Unable to fingerprint declared test input',
     },
   ])(
-    'routes persistent $label evidence through BUILD twice, then halts at the shared cap',
+    'preserves persistent $label infrastructure evidence without charging a BUILD kickback',
     async ({ reason, message }) => {
       await writeState(stateFilePath, {
         ...FRONT_DONE,
@@ -323,8 +318,8 @@ describe('test_suite native gate loop', () => {
       const finalState = persisted.ok ? persisted.value : {};
       const haltMarker = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf-8');
       const haltClass = await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf-8');
-      const routedEvidence =
-        `full-suite verification failed (${reason}): ${message}\n` +
+      const infrastructureEvidence =
+        `test_suite infrastructure failure (${reason}): ${message}\n` +
         'Evidence: .pipeline/test-suite-evidence.json';
       expect({
         ensureCalls: ensure.mock.calls.length,
@@ -340,23 +335,14 @@ describe('test_suite native gate loop', () => {
         finalGateState: finalState.test_suite,
         restagedDownstreamState: finalState.rebase,
       }).toEqual({
-        ensureCalls: 3,
-        relevantTimeline: ['test_suite', 'build', 'test_suite', 'build', 'test_suite'],
+        ensureCalls: 1,
+        relevantTimeline: ['test_suite'],
         shipDispatches: [],
-        kickbacks: [
-          { evidence: routedEvidence, count: 1 },
-          { evidence: routedEvidence, count: 2 },
-        ],
-        // Both rounds use the serial test_suite verification path.
-        buildRetryReasons: [
-          `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
-          `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
-        ],
-        haltReason:
-          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}`,
-        haltMarker:
-          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}\n`,
-        haltClass: 'mechanical',
+        kickbacks: [],
+        buildRetryReasons: [],
+        haltReason: infrastructureEvidence,
+        haltMarker: `${infrastructureEvidence}\n`,
+        haltClass: 'needs-human',
         finalGateState: 'failed',
         restagedDownstreamState: undefined,
       });
