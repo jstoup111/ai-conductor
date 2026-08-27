@@ -1,7 +1,7 @@
 ---
 name: verify-claims
 implicit_invocation: required
-description: "Use whenever a statement, theory, or assumption is about to become load-bearing for a spec, plan, ADR, or code. Attaches grounded confidence estimates to claims, always surfaces assumptions, and HARD-BLOCKS work built on unconfirmed assumptions until the operator approves them."
+description: "Use only when an active workflow is about to rely on a nontrivial factual claim or assumption for a spec, plan, ADR, finding, or code decision. Do not invoke for casual questions, status reports, restatements, or trivially verifiable mechanics."
 enforcement: gating
 phase: all
 standalone: true

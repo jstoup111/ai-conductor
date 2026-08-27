@@ -1,7 +1,7 @@
 ---
 name: architecture-review
 implicit_invocation: required
-description: "Use before implementation to review stories through a technical feasibility and architectural alignment lens. Also use at batch boundaries to catch architectural drift."
+description: "Use only within an active harness lifecycle when pre-stories feasibility review, a pipeline batch drift check, or the SHIP as-built review is current. Do not invoke for ordinary implementation, code review, or general architecture questions."
 enforcement: gating
 phase: decide
 standalone: true

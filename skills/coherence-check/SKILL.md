@@ -1,7 +1,7 @@
 ---
 name: coherence-check
 implicit_invocation: required
-description: "Use at the end of DECIDE (after /plan), for Medium and Large tier specs only, to author the committed traceability mapping — outcomes → FRs → stories → tasks with per-row verdicts — that the land-time coherence gate validates. Not used for S tier."
+description: "Use only within active engineer/conduct DECIDE after plan for a Medium or Large spec. Authors the committed outcomes-to-requirements-to-stories-to-tasks mapping; do not invoke for Small work or ordinary traceability questions."
 enforcement: gating
 phase: decide
 standalone: true

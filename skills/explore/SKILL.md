@@ -1,7 +1,7 @@
 ---
 name: explore
 implicit_invocation: required
-description: "Use at the start of any new feature or change. Explores context, asks clarifying questions one at a time, proposes 2-3 approaches with trade-offs, and decides the work track (product vs technical). Divergent half of the old brainstorm — produces no committed design doc; the product-track PRD is authored by /prd."
+description: "Use only within an active engineer/conduct DECIDE workflow when approach selection and product-versus-technical track classification are still unresolved. Do not invoke for ordinary implementation, review, explanation, or an already-decided change or hotfix."
 enforcement: advisory
 phase: decide
 standalone: true

@@ -1,7 +1,7 @@
 ---
 name: stories
 implicit_invocation: required
-description: "Use after architecture-review, when the design is approved. Generates user stories with mandatory happy and negative paths as Given/When/Then scenarios — from the PRD's FRs (product track) or the technical intent (technical track)."
+description: "Use only within active engineer/conduct DECIDE after architecture approval, when a committed `.docs/stories` acceptance artifact is required. Do not invoke for general user-story examples, requirements discussion, or direct implementation requests."
 enforcement: gating
 phase: decide
 standalone: true

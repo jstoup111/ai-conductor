@@ -1,7 +1,7 @@
 ---
 name: architecture-diagram
 implicit_invocation: required
-description: "Generate and maintain C4 architecture diagrams using Mermaid in Markdown. Runs at bootstrap, plan, and post-implementation. Gating — diagrams must reflect current architecture."
+description: "Use only within an active harness lifecycle when its architecture-diagram step is current. Generates and maintains C4 Mermaid diagrams; do not invoke for ordinary code changes or general architecture questions."
 enforcement: gating
 phase: all
 standalone: true
