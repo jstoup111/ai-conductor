@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-28T16:02:38.383Z
 Slug: bin-setup-re-runs-on-every-dispatch-instead-of-onc
 Class: protected-artifact
 Halting step: test_suite
