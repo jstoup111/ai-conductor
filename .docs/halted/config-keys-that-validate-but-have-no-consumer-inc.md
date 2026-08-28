@@ -1,20 +1,19 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-27T22:57:39.820Z
+Status: halted
 Slug: config-keys-that-validate-but-have-no-consumer-inc
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: protected-artifact
+Halting step: test_suite
+Phase: BUILD
 Branch: feat/daemon-config-keys-that-validate-but-have-no-consumer-inc
-Head SHA: 1c887a0585384240fd46c0579851c54c2aafefcf
-Halted at: 2026-08-27T15:17:47.343Z
+Head SHA: 62b3279b97b4cda7cff3db6307222eb0402ec36b
+Halted at: 2026-08-28T11:54:28.481Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-prd-audit halted: needs human DECIDE — PLAN_GAP on S5.1.
+Protected artifact changed: .docs/architecture/config-keys-that-validate-but-have-no-consumer-inc.md
+Feature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.
 ```
