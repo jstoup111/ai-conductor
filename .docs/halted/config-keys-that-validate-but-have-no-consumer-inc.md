@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-28T12:31:59.591Z
 Slug: config-keys-that-validate-but-have-no-consumer-inc
 Class: protected-artifact
 Halting step: test_suite
