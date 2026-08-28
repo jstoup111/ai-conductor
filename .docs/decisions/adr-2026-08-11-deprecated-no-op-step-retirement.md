@@ -67,6 +67,27 @@ the step as a deprecated no-op; delete the name only in a later, separate change
 or consumer config can still reference it.** Deletion of the name remains available later and is
 then a genuinely safe change, because by that point nothing in flight names it.
 
+> **Operator waiver (2026-08-28, scoped to `wiring_check` only).** The operator waives the
+> "no live state can still reference it" precondition for this one name, admitting the second
+> phase now rather than waiting for every in-flight worktree to drain. This mirrors the scoped
+> waiver in `adr-2026-08-26-config-key-consumer-registry-and-dead-surface-removal` decision 2 and,
+> like it, does not relax the two-phase contract for any future retirement.
+>
+> **What makes the waiver safe here is a property, not a promise.** Eight live worktrees carried
+> `wiring_check` in `.pipeline/conduct-state.json` when this was waived, so the literal
+> precondition was not met. It does not need to be: the deleting change keeps a persisted
+> `wiring_check` *loadable* rather than rejecting it, and derives resume position only from the
+> surviving registry (`test/engine/historical-wiring-state-loadability.test.ts`, exercising
+> committed historical fixtures). Option A was rejected because it "fails closed on the population
+> that cannot run a migration first"; this change does not fail closed on that population at all,
+> so the con that motivated the rejection does not apply.
+>
+> **The distinction is load-bearing, and the counterexample is one day old.** Removing the `retro`
+> step took the opposite path — `readState` fail-louds on a persisted `retro` key — and on
+> 2026-08-28 ten in-flight worktrees loaded as `corrupted` with `Unknown step: retro` and every one
+> had to be repaired by hand. Any future retirement invoking this waiver as precedent must
+> demonstrate the loadability property; a fail-loud on the retired name forfeits it.
+
 **The deprecation notice rides the event spine.** Per `.agents/skills/event-spine/SKILL.md`, a
 deprecated step running is an *occurrence in time* that consumers need to see: an operator asking why
 a step does nothing reads the daemon log, which renders from the bus, and a bare `log()` call would be
