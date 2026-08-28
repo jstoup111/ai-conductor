@@ -112,6 +112,7 @@ import {
   getStepStatus,
   stepSatisfied,
   markDownstreamStale,
+  filterRestageChanges,
   extractPrUrl,
 } from './state.js';
 import type {
@@ -5818,7 +5819,11 @@ export class Conductor {
         const navigationIndex = await this.navigateStateBack(state, 'build', steps);
         // markDownstreamStale only restages `done` steps; manual_test
         // is `failed` here, so restage it explicitly for the tail.
-        await this.commitStateChanges(state, 'restage manual_test after BUILD kickback', { manual_test: 'stale' });
+        await this.commitStateChanges(
+          state,
+          'restage manual_test after BUILD kickback',
+          filterRestageChanges(state, { manual_test: 'stale' }),
+        );
         return { action: 'continue', nextIndex: navigationIndex - 1 }; // for-loop i++ lands on build
       }
       const reason =
