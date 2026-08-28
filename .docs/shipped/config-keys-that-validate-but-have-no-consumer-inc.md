@@ -4,6 +4,17 @@ spec_hash: 730db44cbfe7a99864b102f66d0188d43bc4a5b6769887ade7efec915ac709c5
 pr: https://github.com/jstoup111/ai-conductor/pull/1957
 shipped: 2026-08-28
 engine_version: 20260828T131723Z-347b11891a69
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/resolved-config.ts (deleted lines) — Task 7 named only `resolveMergeableAutoresolve` + its result interface; the diff also deletes the exported `DEFAULT_MERGEABLE_AUTORESOLVE_ENABLED` / `DEFAULT_MERGEABLE_AUTORESOLVE_COOLDOWN_MINUTES` constants"
+    accepted: true
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.2
+    summary: "src/conductor/test/engine/config-template.test.ts:116-149 — the user-template regression test was re-pointed from `loadConfig` to `validateConfig(loadYaml(...))`, a change no plan task lists"
+    accepted: true
 ---
 
 ## Cost
