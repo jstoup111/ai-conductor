@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-08-27
+## [1.0.0] - 2026-08-28
 
 ### Added
 
@@ -63,6 +63,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Ensure OpenTelemetry exports from daemon-dispatched builds include stable feature and run identity. ([implementation PR #1973](https://github.com/jstoup111/ai-conductor/pull/1973)).
 - Remediation planner keys each gap by the auditor's finding id, so autonomously-remediable findings route instead of halting on an id mismatch. ([implementation PR #1977](https://github.com/jstoup111/ai-conductor/pull/1977)).
 - daemon-triage classifies plan-gap halts instead of reporting them as mechanical, and the stalled-feature runbook carries the amend-reseal-rewind recovery. ([implementation PR #1980](https://github.com/jstoup111/ai-conductor/pull/1980)).
+- The build_review testQuality preflight creates the parent directory when restoring a merge-base file whose directory the diff deleted, so a deletion no longer fails the preflight. ([implementation PR #1982](https://github.com/jstoup111/ai-conductor/pull/1982)).
 
 ## Migration
 
