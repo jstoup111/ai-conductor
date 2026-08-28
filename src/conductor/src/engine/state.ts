@@ -327,3 +327,13 @@ export function markDownstreamStale(
 
   return updated;
 }
+
+/** Preserve only restages whose current state is not skipped. */
+export function filterRestageChanges(
+  state: ConductState,
+  changes: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(changes).filter(([field]) => (state as Record<string, unknown>)[field] !== 'skipped'),
+  );
+}
