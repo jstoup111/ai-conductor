@@ -108,13 +108,13 @@ describe('daemon setup-triage prepare wiring', () => {
       1,
       '/worktrees/after-quarantine',
       log,
-      { verbose: true, force: true, baseSha, events },
+      { verbose: true, force: true, baseSha, events, dispatchStart: true },
     );
     expect(prepare).toHaveBeenNthCalledWith(
       2,
       '/worktrees/after-fix',
       log,
-      { verbose: true, force: true, baseSha, events },
+      { verbose: true, force: true, baseSha, events, dispatchStart: true },
     );
   });
 

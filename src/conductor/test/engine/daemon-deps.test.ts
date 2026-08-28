@@ -186,7 +186,7 @@ describe('engine/daemon-deps', () => {
     expect(prepareWorktree).toHaveBeenCalledWith(
       join(dir, 'feature'),
       undefined,
-      expect.objectContaining({ baseSha: 'base-sha', events, dispatchStartTimeoutSeconds: 7 }),
+      expect.objectContaining({ baseSha: 'base-sha', events, dispatchStart: true, dispatchStartTimeoutSeconds: 7 }),
     );
   });
 

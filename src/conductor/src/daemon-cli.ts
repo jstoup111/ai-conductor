@@ -598,7 +598,7 @@ export function createForcedSetupPrepare(
 ): (worktreePath: string) => Promise<void> {
   return async (worktreePath) => {
     const baseSha = await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
-    await prepare(worktreePath, log, { verbose, force: true, baseSha, events: base.events });
+    await prepare(worktreePath, log, { verbose, force: true, baseSha, events: base.events, dispatchStart: true });
   };
 }
 

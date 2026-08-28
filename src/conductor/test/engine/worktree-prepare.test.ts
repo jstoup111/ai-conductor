@@ -309,13 +309,21 @@ require('node:fs').writeFileSync('dispatch-start.json', JSON.stringify({ ci: pro
       expect(log).toHaveBeenLastCalledWith(expect.stringContaining('dispatch-start: failed'));
     });
 
-    it('runs on every prepare, including marker-valid setup skips', async () => {
+    it('does not run during default preparation for resolve worktrees', async () => {
+      await writeDispatchStart('#!/usr/bin/env bash\necho dispatch >> dispatch-count\n');
+
+      await prepareWorktree(dir);
+
+      await expect(access(join(dir, 'dispatch-count'))).rejects.toThrow();
+    });
+
+    it('runs on every opted-in prepare, including marker-valid setup skips', async () => {
       const baseSha = await initGitRepo();
       await writeSetup('#!/usr/bin/env bash\ntrue\n');
       await writeDispatchStart('#!/usr/bin/env bash\necho dispatch >> dispatch-count\n');
 
-      await prepareWorktree(dir, undefined, { baseSha });
-      await prepareWorktree(dir, undefined, { baseSha });
+      await prepareWorktree(dir, undefined, { baseSha, dispatchStart: true });
+      await prepareWorktree(dir, undefined, { baseSha, dispatchStart: true });
 
       expect((await readFile(join(dir, 'dispatch-count'), 'utf-8')).trim().split('\n')).toHaveLength(2);
     });

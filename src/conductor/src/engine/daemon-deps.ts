@@ -128,6 +128,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         verbose: cfg.verbose ?? false,
         baseSha,
         events,
+        dispatchStart: true,
         dispatchStartTimeoutSeconds: cfg.dispatchStartTimeoutSeconds,
       });
     },

@@ -216,6 +216,11 @@ export interface SessionHookRepairOutcome {
  *   successful setup's output is dependency-manager chatter, and it dominated
  *   the daemon log (55% of lines) at no diagnostic value. Failures are
  *   unaffected: `SetupFailureError` still carries a 50-line output tail.
+ * @param opts.dispatchStart Opt in to the per-dispatch lifecycle hook. This is
+ *   restricted to daemon dispatch and setup-triage preparation by
+ *   adr-2026-08-26 decision 7; resolve worktrees retain preparation without it.
+ * @param opts.dispatchStartTimeoutSeconds Paired with `dispatchStart` and read
+ *   only when it is true, so resolve worktrees cannot acquire hook behavior.
  */
 export async function prepareWorktree(
   worktreePath: string,
@@ -225,6 +230,7 @@ export async function prepareWorktree(
     baseSha?: string;
     force?: boolean;
     events?: ConductorEventEmitter;
+    dispatchStart?: boolean;
     dispatchStartTimeoutSeconds?: number;
   },
 ): Promise<void> {
@@ -265,10 +271,12 @@ export async function prepareWorktree(
       );
     }
   }
-  await runDispatchStart(worktreePath, log, {
-    verbose: opts?.verbose,
-    timeoutSeconds: opts?.dispatchStartTimeoutSeconds,
-  });
+  if (opts?.dispatchStart) {
+    await runDispatchStart(worktreePath, log, {
+      verbose: opts.verbose,
+      timeoutSeconds: opts.dispatchStartTimeoutSeconds,
+    });
+  }
 }
 
 type SetupDecision = Extract<ConductorEvent, { type: 'project_setup' }>;
