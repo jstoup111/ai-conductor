@@ -120,7 +120,7 @@ import type {
   NamedAtomicStateMutationBatch,
   StateMutation,
 } from './conduct-state-store.js';
-import { resolveConductorStateStore } from './conductor-deps.js';
+import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import {
   ALL_STEPS,
   OUT_OF_BAND_STEPS,
@@ -3055,7 +3055,30 @@ export class Conductor {
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
-    this.stateStore = resolveConductorStateStore(this.stateFilePath, opts.stateStore);
+    this.stateStore = opts.stateStore ?? createFilesystemConductStateStore(
+      this.stateFilePath,
+      undefined,
+      {
+        writer: 'conductor',
+        emit: (diagnostic) => {
+          if (
+            diagnostic.disposition === 'resolved'
+            && diagnostic.current.kind === 'string'
+            && diagnostic.current.length === 'skipped'.length
+            && diagnostic.next.kind === 'string'
+            && diagnostic.next.length === 'stale'.length
+          ) {
+            void this.events.emit({
+              type: 'step_status_write_refused',
+              field: diagnostic.field,
+              expected: 'skipped',
+              requested: 'stale',
+              intent: diagnostic.intent,
+            });
+          }
+        },
+      },
+    );
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
     this.featureSlug = opts.featureSlug;

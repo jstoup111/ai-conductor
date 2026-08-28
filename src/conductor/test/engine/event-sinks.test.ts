@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:6
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_completed',
   'step_failed',
   'step_refused',
+  'step_status_write_refused',
   'provider_attempt',
   'scratch_cleanup_reclaimed',
   'scratch_cleanup_retained',
@@ -146,6 +147,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'loop_halt',
   'step_completed',
   'step_refused',
+  'step_status_write_refused',
   'halt_cleared',
   'operator_rewind',
 ] satisfies Array<ConductorEvent['type']>;
@@ -159,6 +161,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'step_completed',
   'step_failed',
   'step_refused',
+  'step_status_write_refused',
   'step_retry',
   'rate_limit',
   'session_reset',

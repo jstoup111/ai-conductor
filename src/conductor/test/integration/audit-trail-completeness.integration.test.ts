@@ -1,3 +1,4 @@
+// Covers: task:6
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -77,6 +78,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // sink registry entry carries `audit: true` — the declaration and the writer
   // must agree.
   step_refused: 'friction-mapped',
+  step_status_write_refused: 'friction-mapped',
   provider_attempt: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
   scratch_cleanup_reclaimed: 'not-audited-by-design',
@@ -217,6 +219,13 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     step: 'build',
     kind: 'needs-human',
     reason: 'operator judgement required',
+  },
+  step_status_write_refused: {
+    type: 'step_status_write_refused',
+    field: 'manual_test',
+    expected: 'skipped',
+    requested: 'stale',
+    intent: 'restage ship tail after build kickback',
   },
   provider_attempt: {
     type: 'provider_attempt',

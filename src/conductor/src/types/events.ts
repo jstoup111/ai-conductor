@@ -301,6 +301,14 @@ export type ConductorEvent =
       kind: 'seal' | 'needs-human' | 'validation-verdict';
       reason: string;
     }
+  | {
+      /** A domain rule refused a conductor-owned step status write. */
+      type: 'step_status_write_refused';
+      field: string;
+      expected: 'skipped';
+      requested: 'stale';
+      intent: string;
+    }
   | ProviderAttemptEvent
   | ProviderStreamProgressEvent
   | {

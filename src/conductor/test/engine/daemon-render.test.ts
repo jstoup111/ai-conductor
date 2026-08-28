@@ -1,3 +1,4 @@
+// Covers: task:6
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -76,6 +77,13 @@ describe('renderDaemonEvent', () => {
       kind: 'needs-human',
       reason: 'operator judgement required',
     })).toEqual(['· ✋ build refused (needs-human): operator judgement required']);
+    expect(lines({
+      type: 'step_status_write_refused',
+      field: 'manual_test',
+      expected: 'skipped',
+      requested: 'stale',
+      intent: 'restage ship tail after build kickback',
+    })).toEqual(['· ✋ manual_test status write refused: skipped → stale (restage ship tail after build kickback)']);
   });
 
   it('renders exact operator park boundaries without lifecycle semantics', () => {
@@ -415,6 +423,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       { type: 'step_completed', step: 'build', status: 'done' },
       { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
       { type: 'step_refused', step: 'build', kind: 'seal', reason: 'protected artifact changed' },
+      { type: 'step_status_write_refused', field: 'manual_test', expected: 'skipped', requested: 'stale', intent: 'restage ship tail after build kickback' },
       { type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry' },
       { type: 'checkpoint_reached', step: 'build' },
       { type: 'recovery_needed', step: 'build', options: ['retry'] },
@@ -490,6 +499,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'step_completed',
       'step_failed',
       'step_refused',
+      'step_status_write_refused',
       'step_retry',
       'gate_verdict',
       'kickback',

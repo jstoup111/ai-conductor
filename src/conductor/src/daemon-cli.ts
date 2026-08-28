@@ -2180,6 +2180,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.step} refused (${event.kind}): ${event.reason}`)}`,
       );
       break;
+    case 'step_status_write_refused':
+      log(
+        `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.field} status write refused: ${event.expected} → ${event.requested} (${event.intent})`)}`,
+      );
+      break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
       const deltaFragment = delta ? ' ' + delta : '';
