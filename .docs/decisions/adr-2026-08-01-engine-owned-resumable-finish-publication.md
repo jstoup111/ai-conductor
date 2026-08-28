@@ -84,6 +84,13 @@ Each transition is observe-before-act and verify-after-write. A retry resumes at
 
 The provider session receives a bounded PR-title/body task against the already-known PR and final branch content. It does not push, finalize the changelog, create shipped evidence, or write completion markers. Existing prose-quality checks remain blocking, with their bounded fallback policy unchanged unless a later ADR explicitly changes it.
 
+> **Amended 2026-08-28 by #2006:** the escape clause above is exercised by the 2026-08-28 amendment
+> to `adr-2026-08-13-a-publication-transition-advances-only-when-it-moves-the-dimension-it-owns`:
+> the closed publication snapshot's prose vocabulary gains a `revision_required` member, derived at
+> observation time from the persisted judgment store, so a judged-deficient body routes back to the
+> authoring transition instead of deadlocking. D1's observation-derived routing is unchanged — the
+> new member widens what observation can express; no disposition steers routing.
+
 Interactive Claude conduct remains conversational: the host gathers intent and can discuss prose or blockers, while the coordinator performs only the resulting deterministic actions.
 
 ### D5 — Typed failure routing is local to FINISH unless implementation evidence is invalid
