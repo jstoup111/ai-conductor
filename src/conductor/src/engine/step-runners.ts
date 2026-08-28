@@ -2725,6 +2725,7 @@ export class DefaultStepRunner implements StepRunner {
         'You may repair only that title/body, at most once, then return exactly one JSON object: ' +
         '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
         '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
+        'For every revision_required verdict, include a concrete `detail` describing what is deficient. ' +
         'Do not create, push, merge, or ready a PR; do not alter labels, shipment evidence, or completion files. ' +
         'If the body is unauthored placeholder text, return revision_required with reason placeholder and stop: ' +
         'the coordinator owns a separate authoring pass for that, so you are never asked to write prose here. ' +

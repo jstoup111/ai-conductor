@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
 import {
   advanceFinishPublication,
   type PrProseJudgmentResult,
@@ -9,6 +10,7 @@ import {
   decodePrProseJudgment,
   parseFinishPrProseJudgment,
 } from '../../src/engine/finish-pr-prose-judgment.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 describe('FINISH PR-prose judgment adapter', () => {
   it('accepts every provider verdict documented by the finish skill', async () => {
@@ -17,9 +19,9 @@ describe('FINISH PR-prose judgment adapter', () => {
       .map(([, json]) => JSON.parse(json) as Record<string, unknown>)
       .filter((verdict) => typeof verdict.kind === 'string');
 
-    expect(documentedVerdicts).toHaveLength(5);
+    expect(documentedVerdicts).toHaveLength(7);
     expect(new Set(documentedVerdicts.map(({ kind }) => kind))).toEqual(
-      new Set(['accepted', 'revision_required', 'refused']),
+      new Set(['accepted', 'revision_required', 'timed_out', 'provider_unavailable', 'refused']),
     );
     expect(documentedVerdicts
       .filter(({ kind }) => kind === 'revision_required')
@@ -69,6 +71,38 @@ describe('FINISH PR-prose judgment adapter', () => {
       success: false,
       output: '{"kind":"accepted"}',
     })).toEqual({ kind: 'provider_unavailable' });
+  });
+
+  it('preserves the malformed, refused, timeout, and unavailable decoder routings', () => {
+    expect(decodePrProseJudgment({ success: true, output: 'The prose looks good.' }))
+      .toEqual({ kind: 'malformed_response' });
+    expect(decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'refused' },
+    })).toEqual({ kind: 'refused' });
+    expect(decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'timed_out' },
+    })).toEqual({ kind: 'timed_out' });
+    expect(decodePrProseJudgment({
+      success: false,
+      publicationDisposition: { kind: 'accepted' },
+    })).toEqual({ kind: 'provider_unavailable' });
+  });
+
+  it('asks the unattended judge to name the concrete objection on revision_required', async () => {
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn().mockResolvedValue({ success: true, output: 'done', exitCode: 0 }),
+    };
+    const runner = new DefaultStepRunner(provider, 'session', '/tmp/project', { mode: 'auto' });
+
+    await runner.run('finish', {});
+
+    const invocation = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(invocation.systemPrompt).toContain(
+      'include a concrete `detail` describing what is deficient',
+    );
   });
 
   it('accepts only the bounded JSON contract and fails closed for unstructured prose', () => {
