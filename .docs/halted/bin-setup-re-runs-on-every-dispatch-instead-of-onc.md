@@ -1,20 +1,19 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-08-28T13:17:05.192Z
+Status: halted
 Slug: bin-setup-re-runs-on-every-dispatch-instead-of-onc
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: protected-artifact
+Halting step: test_suite
+Phase: BUILD
 Branch: feat/daemon-bin-setup-re-runs-on-every-dispatch-instead-of-onc
-Head SHA: d6e223989a31c1f3afc26f1c4bf8bc3022f2729f
-Halted at: 2026-08-28T12:39:37.806Z
+Head SHA: 12bb7eeb9d06b6bdef05143663845f90fcce4b40
+Halted at: 2026-08-28T15:51:31.404Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
+Protected artifact changed: .docs/architecture/bin-setup-re-runs-on-every-dispatch-instead-of-onc.md
+Feature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.
 ```
