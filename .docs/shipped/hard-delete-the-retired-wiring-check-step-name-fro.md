@@ -4,6 +4,17 @@ spec_hash: 0a73b359fadb25b3246abf76d09069f7771c5dc11c7280db91c8abd4e42daab6
 pr: https://github.com/jstoup111/ai-conductor/pull/1942
 shipped: 2026-08-28
 engine_version: 20260828T131723Z-347b11891a69
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/package.json:15 and src/conductor/vitest.signal.config.ts (deleted) — the aggregate `npm test` script drops its second vitest pass and the single-file signal config is removed"
+    accepted: true
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.2
+    summary: "src/conductor/src/engine/group-core.ts:414 — `runNativeGroupBranch`, `NativeBranchExecutorDeps`, and `nativeBranchFailureReason` deleted; group-core.ts is named in no plan task's file list"
+    accepted: true
 ---
 
 ## Cost
