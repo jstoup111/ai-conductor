@@ -575,7 +575,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
 
   // Covers: task:6 — the retired acceptance corpus is exercised through
   // discovery as well as directly through the shared parser.
-  it('derives coherence-corpus reachability from discovery, with shipped dedup before parsing', async () => {
+  it('makes every retired-predicate acceptance visible through un-deduped discovery', async () => {
     await mkdir(join(dir, '.docs/coherence'), { recursive: true });
     await mkdir(join(dir, '.docs/complexity'), { recursive: true });
     for (const fixture of coherenceRegressionCorpus) {
@@ -587,7 +587,10 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       }
     }
 
-    const isProcessed = vi.fn(async (slug: string) => slug === 'decide-artifact-coherence-check');
+    // This explicitly disables processed dedup: the second-table fixture must
+    // reach the shared parser, rather than disappearing before its diagnostic
+    // can be surfaced to an operator.
+    const isProcessed = vi.fn(async () => false);
     const result = await discoverBacklog(
       dir,
       isProcessed,
@@ -609,19 +612,36 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       'five-wide header over six-wide separator and criterion row',
       'six-wide header over five-wide separator and legacy row',
     ]);
-    expect(result.items.map((item) => item.slug)).toEqual(
-      observations
-        .filter(({ parserAccepted }) => parserAccepted)
-        .map(({ slug }) => slug)
-        .sort(),
-    );
-    expect(result.blocked.map((item) => item.slug)).toEqual(
-      observations
-        .filter(({ slug, parserAccepted }) => slug !== 'decide-artifact-coherence-check' && !parserAccepted)
-        .map(({ slug }) => slug)
-        .sort(),
-    );
-    expect(result.blocked.map((item) => item.slug)).not.toContain('decide-artifact-coherence-check');
+    const visibility = observations
+      .filter(({ oracleAccepted }) => oracleAccepted)
+      .map(({ slug, parserAccepted }) => {
+        const blocked = result.blocked.find((item) => item.slug === slug);
+        return {
+          slug,
+          disposition: result.items.some((item) => item.slug === slug)
+            ? 'eligible'
+            : blocked?.reason === 'missing-coherence'
+              ? 'blocked-missing-coherence'
+              : 'silently-lost',
+          remedy: blocked?.remedy,
+          parserAccepted,
+        };
+      });
+
+    expect(visibility.map(({ slug, disposition, parserAccepted }) => ({ slug, disposition, parserAccepted }))).toEqual([
+      { slug: 'minimal-valid-table', disposition: 'eligible', parserAccepted: true },
+      { slug: 'ragged-mixed-rows', disposition: 'eligible', parserAccepted: true },
+      { slug: 'zero-criterion-legacy', disposition: 'eligible', parserAccepted: true },
+      { slug: 'decide-artifact-coherence-check', disposition: 'blocked-missing-coherence', parserAccepted: false },
+    ]);
+
+    for (const fixture of observations.filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)) {
+      const parsed = parseCoherenceArtifact(fixture.content);
+      if (parsed.ok || parsed.detail === undefined) throw new Error(`missing parser detail for ${fixture.slug}`);
+      const blocked = visibility.find(({ slug }) => slug === fixture.slug);
+      expect(blocked?.remedy).toContain(`line ${parsed.detail.line}`);
+      expect(blocked?.remedy).toContain(parsed.detail.message);
+    }
   });
 
   // Plan Task 19 / Covers: task:6 — a legacy coherence artifact (all five
