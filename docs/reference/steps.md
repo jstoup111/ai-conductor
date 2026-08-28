@@ -64,6 +64,24 @@ The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 
 Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 5, SHIP 6.
 
+### Engineer authoring lifecycle steps
+
+The interactive Engineer run is separate from the later implementation run, but it uses the same
+canonical names for authoring progress: `bootstrap`, `memory`, `assess`, `explore`, `complexity`,
+`prd`, `architecture_diagram`, `architecture_review`, `stories`, `conflict_check`, `plan`, and
+`coherence_check`. These names appear on `engineer_step_*` events and are validated by
+`engineer run-record`; arbitrary names are refused.
+
+Step attempts are local to one Engineer run and one step. A retry increments `stepAttempt` and appends
+history instead of overwriting it. Run retries are different: after cancellation, failure, or settlement,
+a new attempt key creates a successor `engineerRunId` with its own revision cursor and a predecessor
+link. Terminal runs never reopen.
+
+Land is the completion authority for DECIDE. It reconciles product versus technical track and the S/M/L
+skip rules from validated, idea-scoped artifacts. It can append missing `completed` or `skipped` events
+with `completion: land_reconciliation`, but it refuses a contradiction with already recorded state.
+This authoring stream does not change `ALL_STEPS`, `conduct-state.json`, or any BUILD/SHIP status.
+
 `wiring_check` is deprecated. It remains a gating, engine-native no-op solely for compatibility: it
 always succeeds, dispatches no agent, produces no evidence, and emits a deprecation notice. Static
 wiring reachability is retired. `build_review` fans out to Tautology, Scope, Root Cause, and

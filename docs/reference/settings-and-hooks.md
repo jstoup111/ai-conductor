@@ -119,6 +119,24 @@ Eight event/matcher entries are written to `~/.claude/settings.json` by `bin/ins
 
 `UserPromptSubmit`, `PreCompact`, `SubagentStop`, `SessionEnd`, and `Notification` are never used.
 
+### Engineer lifecycle evidence boundary
+
+Engineer lifecycle events are provider-neutral engine events, not Claude hook events. The Engineer
+composition root starts every registered visualizer around supported Engineer CLI commands and emits
+the `engineer_*` family through `ConductorEventEmitter`. Claude host hooks may establish that a
+structured tool or workflow started or failed. Codex and hosts without an equivalent hook use
+`engineer run-record` for the same transitions.
+
+A `PostToolUse` callback cannot prove that a DECIDE step completed. Tool return proves only that the
+tool invocation returned. `engineer_step_completed` accepts only an owning workflow's accepted result,
+deterministic artifact validation, or land-time reconciliation. The land command validates the final
+artifact set and fills any mechanically proven completion or skip events before
+`engineer_land_reconciled`.
+
+Visualizer handlers observe events and own any external projection they build. They cannot mutate the
+Engineer store, reinterpret completion, or replace replay. Start, handler, and stop failures are isolated
+so one visualizer cannot fail an Engineer command; durable persistence failures still fail the command.
+
 The merge is python3-based: read, mutate in memory, `json.dump(indent=2)` plus a trailing newline. It is
 idempotent and non-destructive — the merge unit is the entry, keyed on its command-string set, and an
 entry is appended only if it contributes at least one new command. Operator entries are never removed.

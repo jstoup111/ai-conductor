@@ -31,6 +31,8 @@ Run everything from `src/conductor` unless stated otherwise.
 | Build the engine | `cd src/conductor && npm run build` |
 | Structural integrity of the repo | `bash test/test_harness_integrity.sh` (from the repo root) |
 
+From the repository root, `make check` runs both TypeScript checks above.
+
 `npm test` expands to:
 
 ```bash

@@ -7,6 +7,21 @@ export interface SinkDeclaration {
 }
 
 export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
+  engineer_run_created: { render: false, persist: true, audit: false },
+  engineer_run_started: { render: false, persist: true, audit: false },
+  engineer_routing_selected: { render: false, persist: true, audit: false },
+  engineer_worktree_created: { render: false, persist: true, audit: false },
+  engineer_step_started: { render: false, persist: true, audit: false },
+  engineer_step_completed: { render: false, persist: true, audit: false },
+  engineer_step_failed: { render: false, persist: true, audit: false },
+  engineer_step_retried: { render: false, persist: true, audit: false },
+  engineer_step_skipped: { render: false, persist: true, audit: false },
+  engineer_land_reconciled: { render: false, persist: true, audit: false },
+  engineer_land_refused: { render: false, persist: true, audit: false },
+  engineer_spec_handoff: { render: false, persist: true, audit: false },
+  engineer_run_cancelled: { render: false, persist: true, audit: false },
+  engineer_run_failed: { render: false, persist: true, audit: false },
+  engineer_run_settled: { render: false, persist: true, audit: false },
   operator_rewind: { render: true, persist: true, audit: true },
   plan_growth: { render: true, persist: true, audit: false },
   config_deprecated_key: { render: false, persist: true, audit: false },

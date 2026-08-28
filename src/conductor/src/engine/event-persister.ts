@@ -35,6 +35,7 @@ export class EventPersister {
   private readonly emitter: ConductorEventEmitter;
   private readonly handler: EventHandler;
   private readonly clock: IntervalClock;
+  private readonly filter: ((event: ConductorEvent) => boolean) | undefined;
   private readonly openSteps = new Map<string, number>();
   private readonly openGroups = new Map<string, number>();
   private dirEnsured = false;
@@ -43,12 +44,15 @@ export class EventPersister {
     filePath: string,
     emitter: ConductorEventEmitter,
     clock: IntervalClock = epochAnchoredMonotonicClock,
+    filter?: (event: ConductorEvent) => boolean,
   ) {
     this.filePath = filePath;
     this.emitter = emitter;
     this.clock = clock;
+    this.filter = filter;
 
     this.handler = (event: ConductorEvent): void => {
+      if (this.filter && !this.filter(event)) return;
       this.persist(event);
     };
   }

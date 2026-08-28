@@ -212,6 +212,14 @@ export function runInlineVisualizerLifecycle<T>(
   return withRegisteredVisualizers(registry, emitter, run, builtIns);
 }
 
+export function runEngineerVisualizerLifecycle<T>(
+  registry: PluginRegistry,
+  emitter: ConductorEventEmitter,
+  run: () => Promise<T>,
+): Promise<T> {
+  return withRegisteredVisualizers(registry, emitter, run);
+}
+
 /**
  * Build the options object passed into `runDaemonMode` for a `daemon` CLI
  * invocation (FR-9 wiring). Wires the self-restart callback when this daemon
@@ -592,7 +600,20 @@ async function main(): Promise<void> {
   // lessons. Dispatched before parseArgs, mirroring registry subcommand pattern.
   const engineerCmd = detectEngineerCommand(process.argv);
   if (engineerCmd) {
-    const code = await dispatchEngineer(engineerCmd);
+    const events = new ConductorEventEmitter();
+    const registry = new PluginRegistry();
+    const projectRoot = process.cwd();
+    await discoverPlugins(
+      join(process.env.HOME || '', '.ai-conductor', 'plugins'),
+      join(projectRoot, '.ai-conductor', 'plugins'),
+      registry,
+    );
+    registry.markInitialized();
+    const code = await runEngineerVisualizerLifecycle(
+      registry,
+      events,
+      () => dispatchEngineer(engineerCmd, { events }),
+    );
     process.exit(code);
   }
 
