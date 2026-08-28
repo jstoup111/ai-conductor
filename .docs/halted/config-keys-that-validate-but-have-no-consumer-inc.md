@@ -2,17 +2,23 @@
 
 Status: halted
 Slug: config-keys-that-validate-but-have-no-consumer-inc
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-config-keys-that-validate-but-have-no-consumer-inc
-Head SHA: 0d4b894acb63b7c72ebaf7c9b4e8629b555ac5e4
-Halted at: 2026-08-28T12:54:55.854Z
+Head SHA: be864f54bd76c5cecdf4106195ae9491adfa8060
+Halted at: 2026-08-28T14:26:13.977Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
+Self-host release gate HALT: retained draft PR has absent or malformed release disposition (Error: Invalid release disposition: Migration).
+
+Harness self-build gate HALT — the daemon never merges (ADR-005/ADR-010).
+Resume procedure:
+  1. Address the gate reason above.
+  2. Re-install the harness (bin/install --update) and run /verify.
+  3. rm .pipeline/HALT, then merge the PR yourself.
 ```
