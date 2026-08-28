@@ -279,9 +279,9 @@ that I never choose between waiting around and corrupting a build.
 #### Happy Path
 - Given an idle or paused daemon, when restarted, then the swap happens immediately.
 - Given a daemon mid-feature, when restarted, then the command returns at once
-  reporting the restart is queued and which feature it is waiting on; when that
-  feature finishes or parks, the daemon restarts itself at the idle boundary with no
-  further operator action.
+  reporting the restart is queued and the feature(s) it is waiting on (the full drain
+  set when concurrency is above 1); when those features finish or park, the daemon
+  restarts itself at the drained boundary with no further operator action.
 
 #### Negative Paths
 - Given a queued restart, when the daemon crashes before the idle boundary, then the

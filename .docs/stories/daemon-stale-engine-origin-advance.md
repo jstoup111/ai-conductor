@@ -35,9 +35,12 @@ exercised without me running pull + rebuild + restart.
   `current`, and no restart fires (no spurious restart on non-engine merges).
 
 #### Negative Paths
-- Given a build is in flight (`inFlight` non-empty), when a quiescent-boundary check is
-  evaluated, then no fetch, rebuild, or restart occurs — the refresh chain never runs
-  mid-build.
+- Given a build is in flight (`inFlight` non-empty), when a boundary check is evaluated,
+  then no engine rebuild or restart occurs — rebuild/restart fire only at a drained
+  boundary (no build running). A fetch/root fast-forward may run while builds are in
+  flight only under the pinned-base dispatch contract of
+  adr-2026-08-27-daemon-dispatcher-executor-seam (in-flight builds are never re-based by
+  it); absent that contract, no fetch runs mid-build either.
 - Given the fetch fails (origin unreachable), when the quiescent refresh runs, then the
   failure is logged, the daemon continues on its current engine, no restart fires, and the
   daemon loop does not crash.

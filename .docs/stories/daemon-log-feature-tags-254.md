@@ -17,7 +17,7 @@ As an operator monitoring or reviewing daemon output, I want lines belonging to 
 #### Negative Paths
 
 - Given the daemon emits repository-global output while no feature owns the line, when the line is rendered, then it retains the existing `[daemon]` prefix and gains no fabricated or stale feature tag.
-- Given an unrelated process-wide diagnostic is emitted outside the feature-owned logging boundary while a feature is active, when the line is rendered, then it remains repository-global and is not required to carry that feature's tag.
+- Given a process-wide diagnostic with no attributable owning feature is emitted while a feature is active, when the line is rendered, then it remains repository-global with the `[daemon]` prefix and gains no fabricated feature tag; when central attribution machinery can determine the owning feature (per adr-2026-08-27-daemon-dispatcher-executor-seam D8), the line carries that feature's tag and never another feature's.
 - Given feature-owned content already contains text resembling `[daemon]` or a feature tag, when the outer daemon logger renders it, then exactly one daemon prefix and exactly one active-feature tag are added; content is not parsed into a second contextual prefix.
 - Given two feature loggers emit lines during overlapping execution, when their output is persisted, then each line carries its own logger's feature tag and never the other feature's tag.
 

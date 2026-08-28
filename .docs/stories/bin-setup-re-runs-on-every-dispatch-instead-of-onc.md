@@ -32,7 +32,7 @@ As an operator, I want setup to re-run when the worktree was re-provisioned, the
 #### Happy Path
 - Given a worktree recreated from its branch (no marker present), when the daemon dispatches, then `bin/setup` runs and the event reason is `no-marker`
 - Given a prepared worktree whose `bin/setup` content or mode changed since the marker was written, when the daemon dispatches, then `bin/setup` runs and the event reason is `script-changed`
-- Given a prepared worktree whose resolved base SHA moved (engine rebase or re-kick advanced the base), when the daemon dispatches, then `bin/setup` runs and the event reason is `base-moved`
+- Given a prepared worktree whose base SHA moved — the feature's dispatched base (its work order's pinned base SHA under adr-2026-08-27-daemon-dispatcher-executor-seam, otherwise the resolved base) advanced via engine rebase or re-kick — when the daemon dispatches, then `bin/setup` runs and the event reason is `base-moved`; a root fast-forward that does not change the feature's own dispatched base does not re-trigger setup
 - Given `bin/setup` completes successfully, when the marker is written, then it is written atomically to `«worktree»/.daemon/setup-ok.json` with the script hash and base SHA as identity and the commit as provenance only
 
 #### Negative Paths

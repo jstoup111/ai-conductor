@@ -225,27 +225,32 @@ spec so that the new work gets picked up — without stealing a session a human 
 
 ---
 
-## Story: A daemon builds one feature at a time
+## Story: A daemon builds one feature at a time by default
 
 **Requirement:** FR-13
 
-As an operator, I want a daemon to build a single feature at a time so that when I
-connect I see exactly the one feature currently in progress.
+As an operator, I want the daemon to build a single feature at a time unless I explicitly
+raise its concurrency, so that the default remains simple and a connect shows the one
+feature in progress.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a daemon with multiple ready features, when it runs, then it builds them serially
-  (one in progress at any moment), so a connect shows that single feature.
+- Given a daemon with multiple ready features and no explicit concurrency configuration,
+  when it runs, then it builds them serially (one in progress at any moment), so a connect
+  shows that single feature.
+- Given the operator explicitly configures a higher concurrency, when the daemon runs,
+  then it builds up to that many features at once with every log line attributable to its
+  feature (see the stories of enable-single-repo-daemon-concurrency-un-clamp-the).
 
 #### Negative Paths
-- Given a request to run the daemon with more than one concurrent worker, when it starts,
-  then concurrency is clamped to one and a clear log line explains that multi-build
-  concurrency is out of scope (pointing at the plan).
+- Given no explicit concurrency configuration, when the daemon starts, then the effective
+  concurrency is exactly 1 — never inferred, raised, or auto-tuned.
 
 ### Done When
-- [ ] Daemon concurrency is forced to 1 regardless of a higher requested value.
-- [ ] A `>1` concurrency request emits the explanatory clamp log line.
+- [ ] With no operator opt-in, daemon concurrency resolves to 1 and behavior matches the
+      serial daemon.
+- [ ] Raising concurrency requires an explicit operator-set flag or config key.
 
 ---
 
