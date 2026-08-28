@@ -4,7 +4,7 @@
  * FR-6: service.name, conductor.run.id, conductor.feature, conductor.project.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { chmod, mkdtemp, readFile, rm, writeFile, mkdir } from 'fs/promises';
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildResource } from '../../../src/engine/otel/resource.js';
@@ -156,20 +156,38 @@ describe('buildResource', () => {
     ]);
   });
 
-  it('pinning: returns a non-empty instance id when the pipeline directory is unwritable', async () => {
-    await chmod(pipelineDir, 0o500);
+  it('pinning: never throws for an unwritable pipeline path and retains the composed instance id', async () => {
+    const unusablePipelineDir = join(tempDir, 'not-a-directory');
+    await writeFile(unusablePipelineDir, 'not a directory', 'utf-8');
 
-    const resource = buildResource({ pipelineDir, feature: 'f', project: 'p' });
+    let resource: ReturnType<typeof buildResource>;
+    expect(() => {
+      resource = buildResource({
+        pipelineDir: unusablePipelineDir,
+        feature: 'feature-a',
+        project: '/workspace/project-a',
+        projectName: 'project-a',
+      });
+    }).not.toThrow();
 
-    expect(resource.attributes['service.instance.id']).toMatch(/\S/);
+    expect(resource!.attributes['service.instance.id']).toBe('project-a/feature-a');
+    expect(resource!.attributes['conductor.run.id']).toMatch(/\S/);
   });
 
-  it('pinning: mints a non-empty instance id for a whitespace-only session id', async () => {
+  it('pinning: mints a run id for a whitespace-only session id without changing the composed instance id', async () => {
     await writeFile(join(pipelineDir, 'conduct-session-id'), '  \n\t ', 'utf-8');
 
-    const resource = buildResource({ pipelineDir, feature: 'f', project: 'p' });
+    const resource = buildResource({
+      pipelineDir,
+      feature: 'feature-b',
+      project: '/workspace/project-b',
+      projectName: 'project-b',
+    });
+    const runId = resource.attributes['conductor.run.id'] as string;
 
-    expect(resource.attributes['service.instance.id']).toMatch(/\S/);
+    expect(runId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(resource.attributes['service.instance.id']).toBe('project-b/feature-b');
+    expect(resource.attributes['service.instance.id']).not.toContain(runId);
   });
 
   it('conductor.feature defaults to "unknown" when not supplied', () => {
