@@ -1038,8 +1038,12 @@ export function validateConfig(
       return errVal('conflict_check must be an object');
     }
     const conflictCheck = obj.conflict_check as Record<string, unknown>;
+    // Read the accepted key set from the shared source, as every other block
+    // does. A hardcoded literal here left registry totality unable to cover a
+    // future accepted key: the key set would grow and this check would not.
+    const knownConflictCheckKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.conflict_check);
     for (const key of Object.keys(conflictCheck)) {
-      if (key !== 'adr_corpus') {
+      if (!knownConflictCheckKeys.has(key)) {
         return errVal(`Unknown key in conflict_check: "${key}"`);
       }
     }
