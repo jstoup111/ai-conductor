@@ -43,7 +43,7 @@ describe('manual_test FAIL kickback restage', () => {
       architecture_diagram: 'done', architecture_review: 'done', acceptance_specs: 'done',
       build: 'done', build_review: 'done', wiring_check: 'skipped', test_suite: 'done',
       manual_test: 'pending', prd_audit: 'skipped', architecture_review_as_built: 'skipped',
-      retro: 'skipped', rebase: 'skipped', finish: 'pending', track: 'technical',
+      rebase: 'skipped', finish: 'pending', track: 'technical',
     } as ConductState);
 
     const runner: StepRunner = {
@@ -131,7 +131,7 @@ describe('validation-group kickback restages', () => {
       architecture_diagram: 'done', architecture_review: 'done', acceptance_specs: 'done',
       build: 'done', build_review: 'done', wiring_check: 'skipped', test_suite: 'done',
       manual_test: 'pending', prd_audit: 'pending', architecture_review_as_built: 'pending',
-      retro: 'skipped', rebase: 'skipped', finish: 'pending', track: 'product', complexity_tier: 'M',
+      rebase: 'skipped', finish: 'pending', track: 'product', complexity_tier: 'M',
     } as ConductState);
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
