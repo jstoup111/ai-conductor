@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-28T01:24:49.403Z
 Slug: fix-otel-step-duration-histogram-bucket-saturation
 Class: needs-human
 Halting step: unknown
