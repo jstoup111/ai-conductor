@@ -1,4 +1,4 @@
-import { describe, it, expect, expectTypeOf, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   makeVerdictOutcome,
   makeNoVerdictOutcome,
@@ -6,14 +6,12 @@ import {
   classifyOutcome,
   runWithConcurrency,
   runGroupBranch,
-  runNativeGroupBranch,
   runAuxiliaryGroupBranch,
   runAuxiliaryGroupBranches,
   type BranchOutcome,
   type GroupMember,
   type GroupMemberStepEvent,
   type GroupResult,
-  type NativeBranchExecutorDeps,
 } from "../../src/engine/group-core.js";
 import type { StepRunResult, StepRunOptions } from "../../src/engine/conductor.js";
 import type { StepName, ConductState } from "../../src/types/index.js";
@@ -241,101 +239,6 @@ describe("group-core: runWithConcurrency (capped fan-out semaphore)", () => {
     await expect(
       runWithConcurrency([makeThunk("a", 5), makeThunk("b", 1, true), makeThunk("c", 5)], 3),
     ).rejects.toThrow("b failed");
-  });
-});
-
-describe("group-core: runNativeGroupBranch", () => {
-  it("accepts only an injected executor and member-event dependency", () => {
-    expectTypeOf<Parameters<typeof runNativeGroupBranch>[1]>().toEqualTypeOf<
-      () => Promise<StepRunResult>
-    >();
-    expectTypeOf<NativeBranchExecutorDeps>().toEqualTypeOf<{
-      onMemberEvent?: (event: GroupMemberStepEvent) => void | Promise<void>;
-    }>();
-  });
-
-  it("maps injected native results into ordered member-attributed outcomes", async () => {
-    const events: Array<Pick<GroupMemberStepEvent, "member" | "phase" | "outcome">> = [];
-    const members: GroupMember[] = [
-      { name: "manual_test", skill: "", outcome: makeSkippedOutcome() },
-      { name: "test_suite", skill: "", outcome: makeSkippedOutcome() },
-    ];
-
-    const outcomes = await runWithConcurrency(
-      [
-        () => runNativeGroupBranch(members[0]!, async () => ({ success: true }), {
-          onMemberEvent: ({ member, phase, outcome }) => {
-            events.push({ member, phase, outcome });
-          },
-        }),
-        () => runNativeGroupBranch(members[1]!, async () => ({ success: false, output: "suite failed" }), {
-          onMemberEvent: ({ member, phase, outcome }) => {
-            events.push({ member, phase, outcome });
-          },
-        }),
-      ],
-      2,
-    );
-
-    expect({ outcomes, events }).toEqual({
-      outcomes: [
-        { kind: "verdict", verdict: "pass" },
-        { kind: "no-verdict", reason: "suite failed" },
-      ],
-      events: [
-        { member: "manual_test", phase: "dispatch" },
-        { member: "test_suite", phase: "dispatch" },
-        { member: "manual_test", phase: "result", outcome: "verdict:pass" },
-        { member: "test_suite", phase: "result", outcome: "no-verdict" },
-      ],
-    });
-  });
-
-  it("maps a throwing native executor to no-verdict after started sibling work settles", async () => {
-    let settleSibling!: (value: string) => void;
-    const sibling = new Promise<string>((resolve) => {
-      settleSibling = resolve;
-    });
-    let siblingSettled = false;
-    const members: GroupMember[] = [
-      { name: "manual_test", skill: "", outcome: makeSkippedOutcome() },
-      { name: "test_suite", skill: "", outcome: makeSkippedOutcome() },
-    ];
-    const events: Array<Pick<GroupMemberStepEvent, "member" | "phase" | "outcome">> = [];
-
-    const groupPromise = runWithConcurrency(
-      [
-        () => runNativeGroupBranch(members[0]!, async () => {
-          throw new Error("manual test crashed");
-        }, {
-          onMemberEvent: ({ member, phase, outcome }) => {
-            events.push({ member, phase, outcome });
-          },
-        }),
-        async () => {
-          const result = await sibling;
-          siblingSettled = true;
-          return runNativeGroupBranch(members[1]!, async () => ({ success: true, output: result }));
-        },
-      ],
-      2,
-    );
-
-    await Promise.resolve();
-    settleSibling("suite settled");
-    const outcomes = await groupPromise;
-
-    expect({ outcomes, siblingSettled, events }).toEqual({
-      outcomes: [
-        { kind: "no-verdict", reason: "manual test crashed" },
-        { kind: "verdict", verdict: "pass" },
-      ],
-      siblingSettled: true,
-      events: [
-        { member: "manual_test", phase: "dispatch" },
-        { member: "manual_test", phase: "result", outcome: "no-verdict" },
-      ],
-    });
   });
 });
 
