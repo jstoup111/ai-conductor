@@ -233,16 +233,11 @@ Baseline knobs applied to every step that does not override them. Validated by
 | `defaults.effort` | string | `low`, `medium`, `high`, `xhigh`, `max` | provider policy per step | Sets `CLAUDE_CODE_EFFORT_LEVEL` for the dispatch |
 | `defaults.max_retries` | number | any number, no range check | `DEFAULT_STEP_RETRIES[step]` | Attempt budget before a step fails |
 | `defaults.escalate` | boolean | `true`, `false` | `true` | Whether retries climb the escalation ladder |
-| `defaults.by_tier` | object | keys `S`, `M`, `L`; each `{ model?, effort?, max_retries? }` | none | Accepted by the validator, never read |
 
 `defaults.max_retries` interacts with [`build_progress_halt.attempt_ceiling`](#build_progress_halt):
 raising it above an **explicitly set** ceiling makes the config fail to load.
 
-> **Known limitation.** `defaults.by_tier` validates but has no consumer. `DefaultsConfig`
-> (`src/conductor/src/types/config.ts:189-195`) does not declare the field, and
-> `resolveProviderNativeStepConfig` reads `by_tier` only from `steps.*` and `phases.*`
-> (`src/conductor/src/engine/resolved-config.ts:236-237, 348-349`). Put tier overrides on a phase or a
-> step. Tracked in [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
+Tier overrides belong on a phase or step; `defaults.by_tier` is rejected.
 
 ## phases
 
@@ -288,7 +283,7 @@ other key declares a custom step. `steps` must be an object, and each value must
 
 ### Per-step keys
 
-14 keys are allow-listed (`knownStepKeys`, `config.ts`). An unknown key is a hard error
+16 keys are allow-listed (`knownStepKeys`, `config.ts`). An unknown key is a hard error
 `Unknown key in steps.<name>: "<k>"`.
 
 | Key | Type | Validation | Default | Consumer |
@@ -307,6 +302,8 @@ other key declares a custom step. `steps` must be an object, and each value must
 | `after` | string | **Custom steps only** — a built-in step with `after` is a hard error (`config.ts:529-531`) | required for custom steps | `steps.ts:561` |
 | `enforcement` | string | **Custom steps only** (`config.ts:532-534`); `structural`\|`advisory`\|`gating` | `advisory` | `steps.ts:599` |
 | `completion_artifact` | string | **Custom steps only** (`config.ts:535-537`); 7 constraints below | none | `src/conductor/src/engine/artifacts.ts:3086-3135` |
+| `gate` | boolean | **Custom steps only**; a built-in step is a hard error | inherits the `after` target | `steps.ts:605` |
+| `kickback_target` | boolean | **Custom steps only**; a built-in step is a hard error | `false` | `steps.ts:606` |
 
 `steps.<name>.hooks` takes two sub-keys, `before` and `after`, each a project-relative script path.
 
@@ -403,7 +400,7 @@ Any `steps.<name>` key that is not a built-in step name declares a custom step
 `indexOf(after) + 1` using an iterative fixed-point loop, so chains of custom steps resolve
 (`steps.ts:578-620`). Siblings sharing an `after` target keep config-file order.
 
-Six fields are available to a custom step:
+Six fields are custom-step-only:
 
 | Field | Required | Effect |
 | --- | --- | --- |
@@ -411,8 +408,12 @@ Six fields are available to a custom step:
 | `skill` | Yes | Path to the `SKILL.md` to dispatch. Missing: `Custom step "<n>" requires 'skill: <path-to-SKILL.md>'`. The file must exist relative to the project root, else `Custom step "<n>" skill file not found: <path>` (`config.ts:511-525`) |
 | `enforcement` | No | `structural`, `advisory`, or `gating`. Defaults to `advisory` (`steps.ts:563`) |
 | `completion_artifact` | No | Path the step must write to be considered done; see below |
-| `disable` | No | Boolean; custom steps bypass the `configDisableAllowed` check entirely |
-| `when` / `parallel` / `model` / `effort` / `max_retries` / `escalate` / `hooks` / `by_tier` / `llm_provider` | No | Same semantics as for built-in steps |
+| `gate` | No | Boolean. Overrides loop-gate membership; when omitted, inherits the `after` target's membership |
+| `kickback_target` | No | Boolean. Makes this step reopenable by a downstream kickback; defaults to `false` |
+
+`disable`, `when`, `parallel`, `model`, `effort`, `max_retries`, `escalate`, `hooks`, `by_tier`, and
+`llm_provider` use the same semantics as for built-in steps. Custom steps bypass the
+`configDisableAllowed` check.
 
 The derived `StepDefinition` (`steps.ts:595-609`) sets `label = name`, inherits `phase` from the `after`
 target, sets `prerequisites = [after]`, `skippableForTiers = []`, `isCheckpoint = false`, and takes
@@ -448,27 +449,14 @@ its `mtimeMs` must be at or above the attempt or session freshness floor; a stal
 `… is stale — <step> must rewrite it during this attempt`, and a missing floor reports that completion
 `cannot be verified without an attempt or session freshness floor`.
 
-> **Known limitation.** `steps.<custom>.gate` and `steps.<custom>.kickback_target` are declared with full
-> semantics in `src/conductor/src/types/config.ts:134-146` and read by `buildStepRegistry`
-> (`steps.ts:607-608`), but neither is in `knownStepKeys` (`config.ts:334-350`). Setting either fails
-> the load with `Unknown key in steps.<n>: "gate"` / `"kickback_target"`. The legacy adapter
-> `customStepEntries()` (`config.ts:1765-1785`) also drops both fields. A custom step's loop-gate
-> membership can only be inherited from its `after` target, and it can never be a kickback target.
-> Tracked in
-> [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
-
 This repo's own custom step is documented in [self-hosting](../guides/self-hosting.md).
 
 ## complexity
 
 | Key | Type | Allowed | Default | Consumer |
 | --- | --- | --- | --- | --- |
-| `complexity.default_tier` | string | `S`, `M`, `L` (`config.ts:565`) | none | none |
 
-> **Known limitation.** `complexity.default_tier` validates and is echoed back unchanged, but no engine
-> code reads it — the only two references in the repo are the type declaration
-> (`src/conductor/src/types/config.ts:409-411`) and the validator. Setting it does not preselect a tier.
-> Tracked in [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
+The block remains reserved; any key inside it is rejected.
 
 For what does resolve a tier, see
 [where the tier comes from](steps.md#where-the-tier-comes-from).
@@ -478,7 +466,8 @@ For what does resolve a tier, see
 The sole update-check configuration surface. `bin/install` and the update flow read and write the
 user-level `conductor:` block in `~/.ai-conductor/config.yml`; it is validated by
 `validateConductorBlock` (`config.ts:1133-1165`), and an unknown key inside the block is a hard
-error.
+error. A project `.ai-conductor/config.yml` that contains `conductor` is rejected; move the block
+to the user configuration so one repository cannot override another operator's update settings.
 
 | Key | Type | Allowed | Written by |
 | --- | --- | --- | --- |
@@ -507,11 +496,6 @@ still worked.
 Fresh installs default to `stable`, whose branch advances only after release CI publishes the matching
 semver tag and GitHub Release. `tagged` retains semver tag checkout behavior, and `main` follows every
 merge. Existing configured channels and version pins are preserved by installer updates.
-
-> **Known limitation.** `src/conductor/src/types/config.ts:198-201` states "Project configs should not
-> override this block — it's per-user, not per-repo," but nothing enforces it. Unlike `spec_owner`, a
-> `conductor` block in a project config loads and wins the merge. Tracked in
-> [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
 
 ## markdown_viewer and mermaid_renderer
 
@@ -812,7 +796,6 @@ any omitted field, yields auto-detection with every gate enabled.
 | Key | Type | Allowed | Default | Effect |
 | --- | --- | --- | --- | --- |
 | `activation` | string | `auto`, `force_on`, `force_off` | `auto` | `auto` compares the build root's realpath against the harness root; `force_on` treats any repo as a self-build; `force_off` never self-hosts |
-| `skill_relink_preflight` | boolean | — | `true` | Intended to gate the pre-dispatch `bin/install --update` relink |
 | `sandbox_build_env` | boolean | — | `true` | Runs the self-build under a throwaway `CLAUDE_CONFIG_DIR` |
 | `live_containment` | boolean | — | `true` | Proves the live checkout is read-only to each self-host dispatch with `bwrap`. If `false`, skips containment and restores fail-closed live-boundary behavior. |
 | `version_approval_gate` | boolean | — | `true` | Halts for operator VERSION-bump approval before `finish` |
@@ -851,12 +834,7 @@ write a single file, so the dispatch burns its whole budget making no progress. 
 itself on such hosts with `containment unavailable: the wrap denies the provider its own nested
 sandbox namespace` rather than wrapping a dispatch that cannot work.
 
-> **Known limitation.** `skill_relink_preflight` is resolved into `skillRelinkPreflight`
-> (`resolved-config.ts:562`) but has no consumer outside `resolved-config.ts`. The relink runs
-> unconditionally inside the self-host bundle (`src/conductor/src/daemon-cli.ts:1295`, called at
-> `daemon-cli.ts:359` and `src/conductor/src/engine/daemon.ts:1159`). Setting it to `false` does not
-> disable the relink — and that relink also re-merges `~/.claude/settings.json` permissions and hooks.
-> Tracked in [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
+The skill relink preflight is always on.
 
 Operating this repo under these guardrails is covered in [self-hosting](../guides/self-hosting.md).
 
@@ -932,10 +910,6 @@ Draft PRs are never dispatched for auto-resolution. A CONFLICTING draft is logge
 `skipping resolve for <url> (draft PR)` and left alone; its `mergeable` label handling is
 unchanged, and no attempt counter is burned.
 
-> **Known limitation.** `resolveMergeableAutoresolve` (`resolved-config.ts:597-604`) exists but has no
-> callers; the daemon reads the raw config directly. Nothing breaks, but the resolver is not the
-> authority the name implies. Tracked in
-> [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
 
 ## conflict_check
 
@@ -1283,27 +1257,6 @@ treated as stranded. It governs claim-time auto-heal and the default window for
 `conduct-ts engineer requeue --stale`; `--older-than` overrides it for one invocation.
 
 The default is `24` hours. Non-positive and non-numeric values fall back to that default.
-
-## Keys the type declares but the loader rejects
-
-These fields exist in `src/conductor/src/types/config.ts` with documented semantics and, in some cases,
-live consumers — but they are absent from the loader's allow-lists, so writing them into a config file
-fails the load.
-
-| Key | Declared at | Rejected with |
-| --- | --- | --- |
-| `auth_park_timeout_minutes` (top level) | `types/config.ts:546-553` | `Unknown top-level key: "auth_park_timeout_minutes"` |
-| `steps.<custom>.gate` | `types/config.ts:134-140` | `Unknown key in steps.<n>: "gate"` |
-| `steps.<custom>.kickback_target` | `types/config.ts:141-146` | `Unknown key in steps.<n>: "kickback_target"` |
-
-> **Known limitation.** Top-level `auth_park_timeout_minutes` is declared and has a resolver,
-> `resolveAuthParkTimeoutMinutes` (`resolved-config.ts:463-480`), which throws on non-numeric or
-> non-finite input — and has no callers anywhere in `src/`. The key is also rejected at load. Use the
-> nested [`harness_self_host.auth_park_timeout_minutes`](#harness_self_host) instead; note its bad-value
-> contract differs, silently falling back to 60 rather than throwing. The two declarations also disagree
-> on what `0` means: `types/config.ts:551` says it polls indefinitely, while `types/config.ts:374` and
-> `resolved-config.ts:446-447` say it halts immediately. The nested key's behavior is the immediate halt.
-> Tracked in [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
 
 ## Full example
 

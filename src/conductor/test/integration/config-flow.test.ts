@@ -7,6 +7,7 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { buildStepRegistry, ALL_STEPS } from '../../src/engine/steps.js';
+import { validateConfig } from '../../src/engine/config.js';
 import { resolveSkill } from '../../src/engine/skill-resolver.js';
 import { runWithHooks } from '../../src/engine/hooks.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -140,6 +141,48 @@ describe('Integration: config flow', () => {
 
     // Registry length = ALL_STEPS count + 1 custom
     expect(registry).toHaveLength(ALL_STEPS.length + 1);
+  });
+
+  // Covers: task:2
+  it('flows validated custom gate and kickback settings into the step registry', () => {
+    const validated = validateConfig({
+      steps: {
+        custom_gate_and_kickback: {
+          after: 'build',
+          skill: 'custom-gate-and-kickback',
+          gate: false,
+          kickback_target: true,
+        },
+        custom_gate_only: {
+          after: 'build',
+          skill: 'custom-gate-only',
+          gate: false,
+        },
+        custom_inherits_target_gate: {
+          after: 'build',
+          skill: 'custom-inherits-target-gate',
+        },
+      },
+    });
+
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) return;
+
+    const registry = buildStepRegistry(validated.config);
+    const step = (name: string) => registry.find((candidate) => candidate.name === name);
+
+    expect(step('custom_gate_and_kickback')).toMatchObject({
+      loopGate: false,
+      kickbackTarget: true,
+    });
+    expect(step('custom_gate_only')).toMatchObject({
+      loopGate: false,
+      kickbackTarget: false,
+    });
+    expect(step('custom_inherits_target_gate')).toMatchObject({
+      loopGate: true,
+      kickbackTarget: false,
+    });
   });
 
   it('custom step after a reordered step (plan) inserts correctly', () => {

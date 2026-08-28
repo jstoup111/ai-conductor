@@ -346,8 +346,6 @@ export type SelfHostActivation = 'auto' | 'force_on' | 'force_off';
 export interface HarnessSelfHostConfig {
   /** Activation strategy. Omitted → 'auto'. */
   activation?: SelfHostActivation;
-  /** Relink harness skills before dispatch (TR-4). Omitted → true. */
-  skill_relink_preflight?: boolean;
   /** Run the self-build under a throwaway CLAUDE_CONFIG_DIR (TR-5/6). Omitted → true. */
   sandbox_build_env?: boolean;
   /** Contain the dispatch from the live checkout with bubblewrap. Omitted → true. */
@@ -405,9 +403,7 @@ export interface HarnessConfig {
    * and custom steps (new entries with `after` + `skill`).
    */
   steps?: Record<string, StepConfig>;
-  complexity?: {
-    default_tier?: ComplexityTier;
-  };
+  complexity?: Record<string, never>;
   /** User-level global state — loaded from ~/.ai-conductor/config.yml. */
   conductor?: ConductorConfig;
   /** Preferred markdown viewer — user-level default, project can override. */
@@ -545,14 +541,6 @@ export interface HarnessConfig {
    * array → no fallback. Each entry must be a non-empty string.
    */
   model_fallback_ladder?: string[];
-  /**
-   * Timeout in minutes for OAuth token park-and-poll recovery (TR-5).
-   * Default: 60 (one hour). When the daemon detects an expired operator
-   * OAuth token, it parks the build and polls for token refresh until this
-   * timeout elapses. 0 disables the timeout (polls indefinitely). Negative or
-   * non-numeric values fall back to 60.
-   */
-  auth_park_timeout_minutes?: number;
   /**
    * Deprecated legacy compatibility key. It is accepted so older configs
    * continue to load, but it has no termination or lifecycle authority and is

@@ -177,14 +177,12 @@ reconciled with one another — the path in play decides which fallback you get.
 | --- | --- | --- |
 | Daemon dispatch | `.docs/complexity/<slug>.md` on the base-branch tree, via the `Tier: <S\|M\|L>` line; a dated slug falls back once to the date-stripped stem when that stem is unambiguous | `M` — the daemon's own fallback for an absent or garbled marker, logged once per slug with the paths tried |
 | `conduct-ts inline --interactive`, and the default run mode | The persisted tier, else the `complexity` step's assessment, confirmed by the operator | `L`, when the assessment fails and there is no prompt to fall back on |
-| `complexity.default_tier` in `.ai-conductor/config.yml` | Nowhere — the key validates but no engine code reads it | Not applicable; the key never contributes a tier |
 
 The marker file is the only durable carrier. A tier chosen in an interactive run reaches a later
 daemon build only if the `complexity` step committed `.docs/complexity/<slug>.md` under the plan stem —
 or under its date-stripped form, the one relaxation the daemon allows
 ([undated-stem fallback](artifacts.md#the-undated-stem-fallback)) — because that file is the only thing
-the daemon looks at. To pin a tier for a daemon build, commit the marker — `complexity.default_tier`
-will not do it. See [configuration](configuration.md#complexity) for that key's known limitation, and
+the daemon looks at. To pin a tier for a daemon build, commit the marker. See
 [artifacts](artifacts.md) for the marker's format.
 
 ## Track skips

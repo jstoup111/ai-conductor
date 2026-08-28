@@ -21,6 +21,3 @@ build_review:
 #   explore:
 #     model: haiku
 #     effort: low
-
-# complexity:
-#   default_tier: M

@@ -60,21 +60,41 @@ if [ ! -f "$conductor_schema_file" ]; then
 fi
 
 # The allowlist is deliberately constrained to validateConductorBlock's
-# declaration. Matching exactly one non-empty literal Set keeps a changed
-# validator shape from silently turning this guard into a no-op.
+# declaration. Matching exactly one Set construction keeps a changed validator
+# shape from silently turning this guard into a no-op.
+#
+# The validator no longer inlines its own literal: every block now builds its
+# allow-list from the single accepted-key source, CONFIG_CONSUMER_KEY_SETS, so
+# the keys are resolved in two hops — confirm the validator delegates to that
+# source, then read the block's key list from it. Both hops fail closed.
 conductor_allowed_line=$(awk '
   /^function validateConductorBlock\(/ { in_validator = 1 }
-  in_validator && /const allowed = new Set\(\[[^]]*\]\);/ { print; count++ }
+  in_validator && /const allowed = new Set<string>\(CONFIG_CONSUMER_KEY_SETS\.conductor\);/ { print; count++ }
   in_validator && /^}/ { exit }
   END { if (count != 1) exit 1 }
 ' "$conductor_schema_file" 2>/dev/null || true)
-conductor_allowed_keys=$(printf '%s\n' "$conductor_allowed_line" \
+
+# Exactly one `conductor:` entry inside CONFIG_CONSUMER_KEY_SETS; a duplicated
+# or reshaped entry must fail rather than silently pick the first.
+conductor_key_set_line=$(awk '
+  /^export const CONFIG_CONSUMER_KEY_SETS = \{/ { in_sets = 1 }
+  in_sets && /^  conductor: \[[^]]*\],/ { print; count++ }
+  in_sets && /^\} as const;/ { exit }
+  END { if (count != 1) exit 1 }
+' "$conductor_schema_file" 2>/dev/null || true)
+
+conductor_allowed_keys=$(printf '%s\n' "$conductor_key_set_line" \
   | grep -oE "'[A-Za-z][A-Za-z0-9_]*'" \
   | tr -d "'" \
   | sort -u || true)
 
-if [ -z "$conductor_allowed_line" ] || [ -z "$conductor_allowed_keys" ]; then
+if [ -z "$conductor_allowed_line" ]; then
   echo "Cannot determine allowed conductor keys from ${conductor_schema_file}:validateConductorBlock"
+  exit 1
+fi
+
+if [ -z "$conductor_key_set_line" ] || [ -z "$conductor_allowed_keys" ]; then
+  echo "Cannot resolve conductor keys from ${conductor_schema_file}:CONFIG_CONSUMER_KEY_SETS.conductor"
   exit 1
 fi
 

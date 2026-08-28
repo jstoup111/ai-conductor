@@ -1,4 +1,5 @@
 // Covers: task:2
+// Covers: task:1, task:3
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -13,7 +14,7 @@ import {
   resolveMemoryProvider,
   resolveValidationConcurrency,
 } from '../../src/engine/config.js';
-import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import * as resolvedConfig from '../../src/engine/resolved-config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
 describe('config', () => {
@@ -122,8 +123,6 @@ steps:
     model: haiku
   architecture_diagram:
     disable: true
-complexity:
-  default_tier: M
 `;
       await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), configYaml);
 
@@ -137,7 +136,6 @@ complexity:
       expect(result.config.phases?.UNDERSTAND?.effort).toBe('low');
       expect(result.config.steps?.memory?.model).toBe('haiku');
       expect(result.config.steps?.architecture_diagram?.disable).toBe(true);
-      expect(result.config.complexity?.default_tier).toBe('M');
       expect(result.warnings).toEqual([]);
     });
 
@@ -644,6 +642,27 @@ complexity:
       expect(result.error.message).toContain('unknown_key');
     });
 
+    it('removes the obsolete top-level auth-park resolver and rejects stray config', () => {
+      // This assertion protects the actual removal. The validator rejected
+      // this top-level key before the cleanup, so rejection alone would not
+      // distinguish a restored dead resolver from the intended API surface.
+      expect(resolvedConfig).not.toHaveProperty('resolveAuthParkTimeoutMinutes');
+
+      const result = validateConfig({ auth_park_timeout_minutes: 15 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toBe('Unknown top-level key: "auth_park_timeout_minutes"');
+    });
+
+    it('rejects defaults.by_tier but keeps phase and step tier overrides valid', () => {
+      const rejected = validateConfig({ defaults: { by_tier: { S: {} } } });
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.message).toBe('Unknown key in defaults: "by_tier"');
+
+      expect(validateConfig({ phases: { BUILD: { by_tier: { S: {} } } } }).ok).toBe(true);
+      expect(validateConfig({ steps: { build: { by_tier: { S: {} } } } }).ok).toBe(true);
+    });
+
     it('rejects unknown step-level keys (fail-fast)', () => {
       const result = validateConfig({
         steps: { memory: { model: 'haiku', bogus_key: 1 } },
@@ -661,6 +680,16 @@ complexity:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toBe('Unknown step: retro');
+    });
+
+    it('accepts an empty complexity block and rejects its removed default tier as an unknown key', () => {
+      expect(validateConfig({ complexity: {} }).ok).toBe(true);
+
+      const result = validateConfig({ complexity: { default_tier: 'M' } });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toBe('Unknown key in complexity: "default_tier"');
     });
 
     it('rejects the removed TDD model configuration as an unknown step-level key', () => {
@@ -802,6 +831,54 @@ complexity:
         'accepted',
         'steps.memory.completion_artifact is not valid for built-in steps',
       ]);
+    });
+
+    it('accepts gate and kickback_target for a custom step', () => {
+      const result = validateConfig({
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            gate: false,
+            kickback_target: true,
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects gate and kickback_target for built-in steps', () => {
+      const result = validateConfig({
+        steps: { plan: { gate: false, kickback_target: true } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('plan');
+      expect(result.error.message).toContain('custom steps only');
+    });
+
+    it('rejects a non-boolean custom-step gate', () => {
+      const result = validateConfig({
+        steps: { lint: { after: 'build', skill: 'custom-lint', gate: 'loop' } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('gate');
+      expect(result.error.message).toContain('boolean');
+    });
+
+    it('rejects a non-boolean custom-step kickback_target', () => {
+      const result = validateConfig({
+        steps: { lint: { after: 'build', skill: 'custom-lint', kickback_target: 'yes' } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('kickback_target');
+      expect(result.error.message).toContain('boolean');
     });
 
     it('rejects built-in step setting `after` (fail-fast)', () => {
@@ -969,6 +1046,16 @@ complexity:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toMatch(/boolean/);
+    });
+
+    it('rejects a conductor block from project source and accepts it after merge', () => {
+      const project = validateConfig({ conductor: {} }, '/repo', { source: 'project' });
+      expect(project.ok).toBe(false);
+      if (!project.ok) {
+        expect(project.error.message).toMatch(/\.ai-conductor\/config\.yml/);
+        expect(project.error.message).toMatch(/Move.*~\/.ai-conductor\/config\.yml/);
+      }
+      expect(validateConfig({ conductor: {} }, '/repo', { source: 'merged' }).ok).toBe(true);
     });
   });
 

@@ -15,7 +15,6 @@ describe('config — harness_self_host validation (TR-11)', () => {
     const raw: HarnessConfig = {
       harness_self_host: {
         activation: 'auto',
-        skill_relink_preflight: true,
         sandbox_build_env: true,
         version_approval_gate: false,
         release_artifact_gate: true,
@@ -75,6 +74,15 @@ describe('config — harness_self_host validation (TR-11)', () => {
     expect(result.error.message).toContain('sandbox_buld_env');
   });
 
+  it('rejects the removed skill_relink_preflight key as unknown', () => {
+    const result = validateConfig({
+      harness_self_host: { skill_relink_preflight: false },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.message).toBe('Unknown key in harness_self_host: "skill_relink_preflight"');
+  });
+
   it('rejects a non-object harness_self_host block', () => {
     const result = validateConfig({ harness_self_host: 'on' as never });
     expect(result.ok).toBe(false);
@@ -108,7 +116,6 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
     const resolved = resolveSelfHostConfig();
     expect(resolved).toEqual({
       activation: 'auto',
-      skillRelinkPreflight: true,
       sandboxBuildEnv: true,
       liveContainment: true,
       versionApprovalGate: true,
@@ -123,7 +130,6 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
   it('config without the block → all gates ON', () => {
     const resolved = resolveSelfHostConfig({ defaults: { model: 'sonnet' } });
     expect(resolved.activation).toBe('auto');
-    expect(resolved.skillRelinkPreflight).toBe(true);
     expect(resolved.sandboxBuildEnv).toBe(true);
     expect(resolved.versionApprovalGate).toBe(true);
     expect(resolved.releaseArtifactGate).toBe(true);
@@ -134,7 +140,6 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
       harness_self_host: { activation: 'force_on' },
     });
     expect(resolved.activation).toBe('force_on');
-    expect(resolved.skillRelinkPreflight).toBe(true);
     expect(resolved.sandboxBuildEnv).toBe(true);
     expect(resolved.versionApprovalGate).toBe(true);
     expect(resolved.releaseArtifactGate).toBe(true);

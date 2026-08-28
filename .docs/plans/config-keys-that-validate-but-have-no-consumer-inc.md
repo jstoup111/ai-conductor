@@ -262,11 +262,37 @@ None — no migrations, packages, or services.
 
 **Dependencies:** Task 9
 
+### Task 11: One key-set source — the validator's nested allow-lists feed the registry
+**Story:** Story 5
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing tests: a probe key added to any nested block's accepted set (start with `test_suite`, `prd_audit`, `assess`, `build_progress`) fails the registry coverage test as undeclared; and a both-direction diff over the full accepted universe reports zero gaps for the shipped registry.
+2. Verify RED — today the shipped `CONFIG_CONSUMER_KEY_SETS` (`config.ts:92-116`) covers only `top`, `defaults`, `phases`, `steps`, `conductor`, `harness_self_host`, `harness_self_host_build_auth`, and `mergeable_autoresolve`, so a probe key in a nested block leaves the test at 5/5 passing.
+3. Hoist every remaining nested-block allow-list the validator enforces through a local `new Set([...])` into `CONFIG_CONSUMER_KEY_SETS`, and have each validator read its keys from that constant instead of its inline literal — one source, per adr-2026-08-26 decision 4's totality requirement and Task 9's "never a hand-copied list".
+4. Cover at minimum the blocks the audit enumerated: `test_suite`, `prd_audit`, `architecture_review_as_built`, `assess`, `build_progress`, `build_progress_halt`, `gate_code_validity`, `retry_routing`, `conflict_check`, `markdown_viewer`, `mermaid_renderer`, `build_review`, `ci_watch`, `wiring`, `kickback_escalation`, `provider_stream`, and every other block whose validator holds its own allow-list — enumerate them from `config.ts`, do not trust this list to be exhaustive.
+5. Add a `ConsumerDeclaration` for every newly-covered key: a production module path, or `none` with a reason.
+6. Verify GREEN, including the probe tests from step 1 and every pre-existing config test unmodified.
+7. Commit: "feat(config): validator allow-lists and the consumer registry share one key-set source".
+
+**Done when:**
+- [ ] Every nested block the validator gates by an allow-list draws its accepted keys from `CONFIG_CONSUMER_KEY_SETS`, with no surviving inline `new Set([...])` allow-list in a validator.
+- [ ] A probe key added to any nested block's set fails the coverage test by name (S5.3), demonstrated for at least four distinct blocks.
+- [ ] Every key in the widened universe carries exactly one declaration, and every `none` carries a non-empty reason (S5.1).
+- [ ] The both-direction diff reports zero undeclared and zero orphaned keys against the shipped registry.
+
+**Files likely touched:**
+- src/conductor/src/engine/config.ts — hoist nested allow-lists into the shared constant
+- src/conductor/src/engine/config-consumer-registry.ts — declarations for the widened universe
+- src/conductor/test/engine/config-consumer-registry.test.ts — probe and diff tests
+
+**Dependencies:** Task 9; Task 10
+
 ## Task Dependency Graph
 
 ```
 Task 1 ──> Task 2
-Task 1, Task 3, Task 4, Task 5, Task 6 ──> Task 9 ──> Task 10
+Task 1, Task 3, Task 4, Task 5, Task 6 ──> Task 9 ──> Task 10 ──> Task 11
 Task 7 (independent)   Task 8 (independent)
 ```
 

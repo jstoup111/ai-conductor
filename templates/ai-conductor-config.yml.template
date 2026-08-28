@@ -59,5 +59,3 @@ markdown_viewer:
 # steps:
 #   explore:
 #     model: haiku
-# complexity:
-#   default_tier: M
