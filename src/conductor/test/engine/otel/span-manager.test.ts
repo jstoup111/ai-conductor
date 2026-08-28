@@ -107,7 +107,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
     expect(roots[0].name).toBe('conductor.run');
   });
 
-  it('feature_complete closes the run span with OK status', async () => {
+  it('feature_complete closes the run span with complete outcome and OK status', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
@@ -117,7 +117,18 @@ describe('T10: run span lifecycle — one trace per run', () => {
     await vis.stop();
 
     const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
+    expect(roots[0].attributes['conductor.run.outcome']).toBe('complete');
     expect(roots[0].status.code).toBe(1 /* OK */);
+  });
+
+  it('bare feature_complete exports no spans and does not throw', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await expect(emitter.emit({ type: 'feature_complete' })).resolves.toBeUndefined();
+    await vis.stop();
+
+    expect(spanExporter.getFinishedSpans()).toHaveLength(0);
   });
 
   it('run ending without feature_complete closes run span on flush (forceCloseAll)', async () => {

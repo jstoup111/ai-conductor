@@ -39,6 +39,7 @@ export class SpanManager {
   private runSpan: Span | null = null;
   private runCtx: Context = ROOT_CONTEXT;
   private runStarted = false;
+  private runOutcome: string | null = null;
   private readonly openSteps: Map<string, StepState> = new Map();
 
   constructor(
@@ -55,6 +56,16 @@ export class SpanManager {
       this.runSpan = this.tracer.startSpan('conductor.run');
       this.runCtx = trace.setSpan(ROOT_CONTEXT, this.runSpan);
     }
+  }
+
+  private closeRunSpan(outcome: string): void {
+    if (!this.runSpan) return;
+
+    this.runOutcome = outcome;
+    this.runSpan.setAttribute('conductor.run.outcome', this.runOutcome);
+    this.runSpan.setStatus({ code: SpanStatusCode.OK });
+    this.runSpan.end();
+    this.runSpan = null;
   }
 
   // ── Step-span open/close ───────────────────────────────────────────────────
@@ -250,12 +261,7 @@ export class SpanManager {
     }
     this.openSteps.clear();
 
-    // Close the run span OK.
-    if (this.runSpan) {
-      this.runSpan.setStatus({ code: SpanStatusCode.OK });
-      this.runSpan.end();
-      this.runSpan = null;
-    }
+    this.closeRunSpan('complete');
   }
 
   // ── Flush / force-close (FR-9) ─────────────────────────────────────────────
