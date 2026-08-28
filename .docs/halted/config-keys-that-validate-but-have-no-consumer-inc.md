@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-08-28T12:13:18.982Z
+Status: halted
 Slug: config-keys-that-validate-but-have-no-consumer-inc
 Class: protected-artifact
 Halting step: test_suite
 Phase: BUILD
 Branch: feat/daemon-config-keys-that-validate-but-have-no-consumer-inc
-Head SHA: 62b3279b97b4cda7cff3db6307222eb0402ec36b
-Halted at: 2026-08-28T11:54:28.481Z
+Head SHA: 6bcc76bbd73848f885b4d07250b3c8c24c11feaf
+Halted at: 2026-08-28T12:13:51.504Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
