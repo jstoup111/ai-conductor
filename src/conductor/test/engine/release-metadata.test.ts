@@ -270,6 +270,114 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
     });
   });
 
+  describe('Migration section that opens with operator prose (#1957)', () => {
+    // Observed on PR #1957: `## Migration` is the last heading, opens with a
+    // sentence telling the operator what the block does, then the runnable
+    // fence, then `Closes …`, then the Release-* block. `docs/contributing/releases.md`
+    // defines a migration as a fence *inside* a `## Migration` section and
+    // `bin/migrate` reads exactly the fences, so nothing about that body is
+    // wrong — but the whole section was handed to `isRunnableMigrationBlock`,
+    // whose anchors demand the content BE the fence, and the required
+    // release-metadata check failed with "Invalid release disposition: Migration".
+    const fence = '```bash migration\n./bin/install --update\n```';
+    const prose = 'Remove the retired keys from every configuration file that exists.';
+    const fields = [
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: Correct a defect.',
+    ].join('\n');
+    const pr1957 =
+      `## Why\n\nBecause.\n\n## Migration\n\n${prose}\n\n${fence}\n\n` +
+      `Closes owner/repo#1025\n\n${fields}\n`;
+
+    it("reads only the fence as the migration in PR #1957's exact body shape", () => {
+      expect(parseReleaseDisposition(pr1957)).toEqual({
+        disposition: 'note',
+        category: 'Fixed',
+        semver: 'patch',
+        note: 'Correct a defect.',
+        migration: fence,
+      });
+    });
+
+    it('ignores prose that follows the fence as well', () => {
+      expect(
+        parseReleaseDisposition(
+          `${fields}\n\n## Migration\n\n${fence}\n\nRerun the installer afterwards.\n`,
+        ),
+      ).toMatchObject({ migration: fence });
+    });
+
+    it('keeps the section prose in the snapshot, verbatim', () => {
+      expect(snapshotReleaseMetadataBlock(pr1957)).toBe(
+        `${fields}\n\n## Migration\n\n${prose}\n\n${fence}`,
+      );
+    });
+
+    it('re-snapshots its own output unchanged, so a restore can be verified', () => {
+      const block = snapshotReleaseMetadataBlock(pr1957);
+      expect(block).not.toBeNull();
+      expect(snapshotReleaseMetadataBlock(block!)).toBe(block);
+    });
+
+    it('merges without leaving the prose-form section behind', () => {
+      const block = snapshotReleaseMetadataBlock(pr1957);
+      expect(block).not.toBeNull();
+      const merged = mergeReleaseMetadataBlock(pr1957, block!)!;
+      expect(merged.match(/## Migration/g)).toHaveLength(1);
+      expect(snapshotReleaseMetadataBlock(merged)).toBe(block);
+    });
+
+    it('verifies a restore onto a body whose Migration section carries prose', () => {
+      // The FINISH restore loop: the block was captured while the body carried
+      // the fence alone, and the body being restored over carries the authored
+      // prose form. The merge-time strip only recognised the fence-alone shape,
+      // so the prose section survived, the appended snapshot made a SECOND
+      // `## Migration`, the re-read parsed as duplicate sections, and
+      // `restoreFinishReleaseMetadata` threw "release metadata restore could not
+      // be verified" on every one of its six retries.
+      const block = snapshotReleaseMetadataBlock(`${fields}\n\n## Migration\n\n${fence}`)!;
+      const merged = mergeReleaseMetadataBlock(pr1957, block)!;
+      expect(merged.match(/## Migration/g)).toHaveLength(1);
+      expect(snapshotReleaseMetadataBlock(merged)).toBe(block);
+    });
+
+    it('still rejects a second Migration section that opens with prose', () => {
+      expect(() =>
+        parseReleaseDisposition(`${pr1957}\n\n## Migration\n\n${prose}\n\n${fence}\n`),
+      ).toThrow('Invalid release disposition: Migration');
+    });
+
+    it.each([
+      ['a fence that bin/migrate will not run', '```bash\n./bin/install --update\n```'],
+      ['an unterminated runnable fence', '```bash migration\n./bin/install --update'],
+    ])('still rejects prose followed by %s', (_scenario, body) => {
+      expect(() =>
+        parseReleaseDisposition(`${fields}\n\n## Migration\n\n${prose}\n\n${body}\n`),
+      ).toThrow('Invalid release disposition: Migration');
+    });
+
+    it('still reads a prose-wrapped "none" section as no migration', () => {
+      expect(
+        parseReleaseDisposition(`${fields}\n\n## Migration\n\nnone\n\nCloses owner/repo#1025\n`),
+      ).toEqual({
+        disposition: 'note',
+        category: 'Fixed',
+        semver: 'patch',
+        note: 'Correct a defect.',
+      });
+    });
+
+    it('still rejects a no-note disposition whose prose section carries a fence', () => {
+      expect(() =>
+        parseReleaseDisposition(
+          `Release-Disposition: no-note\n\n## Migration\n\n${prose}\n\n${fence}\n`,
+        ),
+      ).toThrow('Invalid release disposition: Migration');
+    });
+  });
+
   describe('pre-finish snapshot of a body the parser already accepts', () => {
     // Every producer in this repo — the PR template, the release-disposition
     // skill, and the CHANGELOG renderer — writes a blank line between the
