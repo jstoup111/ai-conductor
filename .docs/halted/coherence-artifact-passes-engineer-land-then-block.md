@@ -1,21 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-08-28T00:39:35.106Z
+Status: halted
 Slug: coherence-artifact-passes-engineer-land-then-block
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-coherence-artifact-passes-engineer-land-then-block
-Head SHA: f4b7373365de1ef2ea5879472417e88dffd791b2
-Halted at: 2026-08-28T00:00:20.011Z
+Head SHA: a741fdb7c0b6dd30c4ea0d845cec971b5ab8d4a8
+Halted at: 2026-08-28T01:26:46.639Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review cumulative kickback cap exceeded (cumulative 6, cap 5): [testQuality] test-insensitive
-[testQuality] test-insensitive
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED — shipped code violates an approved architecture decision
+
+Blocking findings:
+AB-3 (DESIGN; adr-2026-08-26-shared-coherence-parser-at-discovery decision 4): The committed corpus permits an old-predicate acceptance to become parser-rejected and dedup-skipped or visibly blocked, while the unsuperseded ADR requires every old-accepted fixture to remain eligible.
 ```
