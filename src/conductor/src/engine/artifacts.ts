@@ -296,7 +296,6 @@ export const STEP_ARTIFACT_CONTRACTS = {
   ].map((pattern) => ({ pattern, scope: 'repository' as const })),
   build: [{ pattern: '.pipeline/task-status.json', scope: 'run' }],
   build_review: [{ pattern: '.pipeline/build-review.json', scope: 'run' }],
-  wiring_check: [],
   test_suite: [{ pattern: FULL_SUITE_EVIDENCE_PATH, scope: 'run' }],
   manual_test: [{ pattern: '.pipeline/manual-test-results.md', scope: 'run' }],
   prd_audit: [{ pattern: '.pipeline/prd-audit.md', scope: 'run' }],
@@ -3536,10 +3535,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       verdictFreshness: await verdictFreshnessFor(path, ctx, 'rewritten'),
     };
   },
-
-  // Retained solely for topology compatibility. Wiring is evaluated by the
-  // build_review rubric; this step must never inspect plans, diffs, or evidence.
-  wiring_check: async (): Promise<CompletionResult> => ({ done: true }),
 
   test_suite: async (dir, ctx): Promise<CompletionResult> => {
     let inspection: FullSuiteInspectionResult;

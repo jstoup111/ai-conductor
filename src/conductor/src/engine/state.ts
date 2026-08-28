@@ -301,10 +301,6 @@ export async function markFeatureComplete(
  * Mark all 'done' steps after targetStep as 'stale'.
  * Pending, failed, and skipped steps are unchanged.
  *
- * A deprecated no-op step is never staled: it has no work to redo, so
- * re-opening it only burns a selection lap each round and lets a retired step
- * become the gate named in a selection-cap HALT — masking the gate that
- * actually failed (adr-2026-08-11-deprecated-no-op-step-retirement).
  */
 export function markDownstreamStale(
   state: ConductState,
@@ -319,7 +315,6 @@ export function markDownstreamStale(
   for (let i = targetIndex + 1; i < allStepNames.length; i++) {
     const step = allStepNames[i];
     if (preserveSet.has(step)) continue;
-    if (getStepDefinition(step).deprecated) continue;
     if (updated[step] === 'done') {
       (updated as Record<string, unknown>)[step] = 'stale';
     }

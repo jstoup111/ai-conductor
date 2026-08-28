@@ -527,10 +527,8 @@ conduct-ts daemon logs | grep 'BUILD member .* settled:'
 
 The daemon writes `BUILD member test_suite settled: reuse (<basis>)` or `... recompute (<basis>)`.
 `reuse (fingerprint-match)` reports still-valid full-suite evidence. A recompute line reports a
-closed reason such as `fingerprint-mismatch` or `fresh-evidence-required`. `wiring_check` remains
-in the group only as a deprecated no-op and emits a deprecation notice; it has no evidence to reuse.
-A prior passing suite result on disk is not a reason to skip the member, and the round join decides
-satisfaction.
+closed reason such as `fingerprint-mismatch` or `fresh-evidence-required`. A prior passing suite
+result on disk is not a reason to skip the verifier; its current result decides satisfaction.
 
 **Recovery:** do not create an operator park for the historical terminal-less stale-verdict path;
 it is retired. The common stale-proof case re-dispatches `test_suite` automatically, so let the
@@ -546,8 +544,8 @@ conduct-ts rewind --to test_suite
 the feature to `test_suite`. It refuses a target that is not earlier than the recorded step. Do not
 hand-edit `conduct-state.json`, gate files, `HALT`, or `HALT.class`.
 
-**Verification:** the log contains the `wiring_check` deprecation notice and one `test_suite` settle
-line, followed by the normal group join or an explicit HALT. After a rewind, confirm it also prints
+**Verification:** the log contains one `test_suite` settle line, followed by `build_review` or an
+explicit HALT. After a rewind, confirm it also prints
 `Rewound to test_suite.` and that the next dispatch starts at `test_suite`.
 
 #### Setup failures

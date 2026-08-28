@@ -588,13 +588,11 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   by an approved decision, the output is a conformance finding, not a patch. Three failed fixes escalate
   to the operator.
 
-`test-suite` and `wiring-check` have no `SKILL.md` — both `test_suite` (index 14) and `wiring_check`
-(index 13) are **engine-native** BUILD steps. `test_suite` obtains a current result from the
-repository-configured aggregate verifier. `wiring_check` is a deprecated no-op retained for compatibility.
+`test-suite` has no `SKILL.md`: `test_suite` is an **engine-native** BUILD verifier that obtains a
+current result from the repository-configured aggregate verifier.
 `build_review` dispatches the engine-managed test-quality rubric
-skills; their raw verdicts are joined before effective dispositions are applied. The two names remain in `build_verification` (see
-[The build verification group](steps.md#the-build-verification-group)); it fans out after `build` and
-joins before `build_review`.
+skills; their raw verdicts are joined before effective dispositions are applied. `test_suite` runs
+after `build` and before `build_review`.
 
 ## SHIP-phase skills
 
@@ -890,7 +888,7 @@ definition, never the SKILL.md.
 > `skippableForTiers: []` and is `structural`, so it can be neither tier-skipped nor config-disabled;
 > `code-review` is not an engine step at all, and the engine's separate `build_review` step is likewise
 > never tier-skipped. The same file's "Small flow" summary also omits `complexity`, `worktree`,
-> `build_review`, `wiring_check`, `test_suite`, and `rebase`, all of which run at tier S. The
+> `build_review`, `test_suite`, and `rebase`, all of which run at tier S. The
 > authoritative tier-S skip set is the 8 steps listed in [steps](steps.md). Tracked in
 > [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
 

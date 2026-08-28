@@ -2090,11 +2090,6 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       ranManualTest: false,
     });
 
-    // wiring_check is retained as a deprecated no-op, so rebasing no longer
-    // writes a verdict for it. Its stable step identity still lets existing
-    // state/config references resolve.
-    expect(await readVerdict(dir, 'wiring_check')).toBeNull();
-
     // build_review is 'feature-codetest': the base advance added src/sibling.ts,
     // which is outside the feature's surface and so cannot change the diff
     // build_review graded. Its verdict survives rather than paying for another

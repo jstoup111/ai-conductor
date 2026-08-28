@@ -48,7 +48,7 @@ function containsToken(text: string, token: string): boolean {
 
 describe('STEP_RATIONALE completeness (TS-1)', () => {
   it('classifies only the deterministic BUILD gates as model-free engine machinery', () => {
-    expect(MODEL_FREE_ENGINE_STEPS).toEqual(['wiring_check', 'test_suite']);
+    expect(MODEL_FREE_ENGINE_STEPS).toEqual(['test_suite']);
   });
 
   it('describes current explore and prd defaults with provider-neutral high-effort policy language', () => {
@@ -91,19 +91,13 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
 
     expect(missing).toEqual([]);
     expect(empty).toEqual([]);
-    expect(policySteps.size).toBe(25);
+    expect(policySteps.size).toBe(24);
   });
 
   it('describes deterministic BUILD gates as engine machinery rather than generative review', () => {
-    expect({
-      wiring_check: STEP_RATIONALE.wiring_check,
-      test_suite: STEP_RATIONALE.test_suite,
-    }).toEqual({
-      wiring_check: expect.stringMatching(/deprecated/i),
-      test_suite: expect.stringMatching(
-        /mechanical.*(?:aggregate|full).*test.*(?:verifier|proof)/i,
-      ),
-    });
+    expect(STEP_RATIONALE.test_suite).toMatch(
+      /mechanical.*(?:aggregate|full).*test.*(?:verifier|proof)/i,
+    );
   });
 
   it('type-checks as a complete Record<StepName, string>', () => {

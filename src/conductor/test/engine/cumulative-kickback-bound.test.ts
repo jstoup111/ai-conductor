@@ -64,7 +64,7 @@ describe('cumulative build-review kickback bound', () => {
         worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
         conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
         architecture_review: 'skipped', acceptance_specs: 'skipped',
-        wiring_check: 'skipped', test_suite: 'done',
+        test_suite: 'done',
       });
 
       const runner: StepRunner = {
@@ -220,7 +220,7 @@ describe('cumulative build-review kickback bound', () => {
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
       conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
       architecture_review: 'skipped', acceptance_specs: 'skipped',
-      wiring_check: 'skipped', test_suite: 'done',
+      test_suite: 'done',
     });
     let mixedBuildReviewRuns = 0;
     await new Conductor({

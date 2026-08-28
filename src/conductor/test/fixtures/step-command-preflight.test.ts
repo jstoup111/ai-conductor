@@ -40,7 +40,6 @@ describe('dispatchableStepCommands', () => {
 
     expect(commands).toEqual(expected);
     expect(commands.map(({ step }) => step)).not.toContain('build_review');
-    expect(commands.map(({ step }) => step)).not.toContain('wiring_check');
     expect(commands.map(({ step }) => step)).not.toContain('test_suite');
     expect(commands.map(({ step }) => step)).not.toContain('attribution_verify');
   });
@@ -111,7 +110,6 @@ describe('dispatchableStepCommands', () => {
       }));
 
       expect(STEP_SKILL_INVOCATIONS.build).toBeDefined();
-      expect(STEP_SKILL_INVOCATIONS).not.toHaveProperty('wiring_check');
       const build = STEP_SKILL_INVOCATIONS.build!;
       const rendered = providers.map((provider) => renderSkillInvocation(build, provider));
       expect(new Set(rendered)).toHaveLength(providers.length);

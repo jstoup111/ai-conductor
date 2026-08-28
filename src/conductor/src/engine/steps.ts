@@ -153,19 +153,6 @@ export const ALL_STEPS: StepDefinition[] = [
     treeAttestingCompletion: true,
   },
   {
-    // Deprecated topology-compatibility no-op. build_review owns wiring
-    // judgement, but existing state and prerequisite contracts retain this
-    // slot until the scheduled retirement removes it deliberately.
-    name: 'wiring_check',
-    label: 'Wiring Check',
-    phase: 'BUILD',
-    enforcement: 'gating',
-    prerequisites: ['build'],
-    skippableForTiers: [],
-    isCheckpoint: false,
-    deprecated: { adr: 'adr-2026-08-11-wiring-judged-in-build-review' },
-  },
-  {
     // Native aggregate verification is the other deterministic BUILD branch.
     // Task 16 wires execution through FullSuiteVerifier.
     name: 'test_suite',
@@ -180,13 +167,13 @@ export const ALL_STEPS: StepDefinition[] = [
     treeAttestingCompletion: true,
   },
   {
-    // Judgement begins only after the deterministic BUILD group joins, so a
+    // Judgement begins only after deterministic suite verification, so a
     // mechanically invalid build never spends model-review tokens.
     name: 'build_review',
     label: 'Build Review',
     phase: 'BUILD',
     enforcement: 'gating',
-    prerequisites: ['wiring_check', 'test_suite'],
+    prerequisites: ['test_suite'],
     skippableForTiers: [],
     isCheckpoint: false,
     loopGate: true,
@@ -332,16 +319,6 @@ export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
 };
 
 /**
- * Deterministic BUILD verification: the retained no-op wiring_check and
- * test_suite run after build and join before the semantic build_review gate.
- * Wiring judgement itself belongs to build_review.
- */
-export const BUILD_VERIFICATION_GROUP: StepGroup = {
-  name: 'build_verification',
-  members: ['wiring_check', 'test_suite'],
-};
-
-/**
  * The SHIP-tail validation group (adr-2026-07-10-validation-group-join.md,
  * Decision-1): manual_test, prd_audit, architecture_review_as_built, in that
  * order, positioned immediately after build_review. This is a WRAPPER over
@@ -361,7 +338,6 @@ export const VALIDATION_GROUP: StepGroup = {
  * the members of a declared group appear in `stepToGroupMap` below.
  */
 export const STEP_GROUPS: Record<string, StepGroup> = {
-  [BUILD_VERIFICATION_GROUP.name]: BUILD_VERIFICATION_GROUP,
   [VALIDATION_GROUP.name]: VALIDATION_GROUP,
 };
 

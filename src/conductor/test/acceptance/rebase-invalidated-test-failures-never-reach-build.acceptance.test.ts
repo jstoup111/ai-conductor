@@ -202,11 +202,6 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
         message: 'ENOENT agents/planner.md',
         observedAt,
       });
-      await record(root, 'wiring_check', {
-        reason: 'missing_coverage',
-        message: 'test/obsolete.test.ts was deleted by the advanced base',
-        observedAt: observedAt + 1,
-      });
       await record(root, 'test_suite', {
         reason: 'test_failure',
         message: 'ENOENT agents/planner.md',
@@ -219,15 +214,11 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
       });
 
       const repairs = await remediation.readTestSuiteRemediations(root);
-      expect(repairs).toHaveLength(2);
+      expect(repairs).toHaveLength(1);
       expect(repairs).toEqual(expect.arrayContaining([
         expect.objectContaining({
           gate: 'test_suite',
           diagnostic: expect.stringContaining('agents/planner.md'),
-        }),
-        expect.objectContaining({
-          gate: 'wiring_check',
-          diagnostic: expect.stringContaining('test/obsolete.test.ts'),
         }),
       ]));
       expect(repairs.some((repair) => repair.diagnostic.includes('unrelated.test.ts'))).toBe(false);
@@ -264,11 +255,6 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
         message: 'ENOENT agents/planner.md',
         observedAt,
       });
-      await record(root, 'wiring_check', {
-        reason: 'missing_coverage',
-        message: 'test/obsolete.test.ts disappeared after the base advance',
-        observedAt: observedAt + 1,
-      });
 
       // An invalidated aggregate proof is a BUILD boundary: repair context
       // cannot dispatch to grading until the current replacement exists.
@@ -287,13 +273,13 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
       });
       expect(proofInspections).toBe(1);
       expect(inputs.testSuiteProof).toMatchObject({ provenanceHeadSha: 'fixture-head', outcome: 'PASS' });
-      expect(inputs.repairContext).toHaveLength(2);
+      expect(inputs.repairContext).toHaveLength(1);
       // The provenance the conductor persists as `build_review_repair_context`.
       // Its emission leg (StepRunResult -> conductor -> ledger) is pinned by
       // test/integration/gate-loop.test.ts's "build_review grading provenance".
       expect(inputs.repairProvenance).toEqual({
         disposition: 'context_available',
-        repairCount: 2,
+        repairCount: 1,
       });
     } finally {
       persister.stop();

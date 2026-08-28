@@ -26,7 +26,7 @@ import {
 const priorOutcome = (overrides: Partial<BuildOutcomeRecord> = {}): BuildOutcomeRecord => ({
   outcome: 'no-movement',
   terminalOutcome: 'done',
-  gate: 'wiring_check',
+  gate: 'build_review',
   treeBefore: 'tree-0',
   treeAfter: 'tree-1',
   headBefore: 'head-0',
@@ -60,7 +60,7 @@ describe('classifyBuildSettle', () => {
   it.each([
     ['matches a prior no-movement outcome', priorOutcome(), true],
     ['rejects a different tree', priorOutcome({ treeAfter: 'tree-2' }), false],
-    ['rejects a different gate', priorOutcome({ gate: 'test_suite' }), false],
+    ['rejects a different gate', priorOutcome({ gate: 'manual_test' }), false],
     ['rejects a different verdict', priorOutcome({ verdict: true }), false],
     ['rejects a different rung', priorOutcome({ rung: { model: 'gpt-5.6-terra', effort: 'high' } }), false],
     ['rejects a prior moved outcome', priorOutcome({ outcome: 'moved' }), false],
@@ -68,7 +68,7 @@ describe('classifyBuildSettle', () => {
   ] as const)('%s', (_description, prior, expected) => {
     expect(
       sameNoOpCycle(prior, {
-        gate: 'wiring_check',
+        gate: 'build_review',
         treeHash: 'tree-1',
         verdict: false,
         rung: { model: 'gpt-5.6-terra', effort: 'medium' },
@@ -89,7 +89,7 @@ describe('classifyBuildSettle', () => {
   ] as const)('rejects %s', (_description, prior, treeHash, rung) => {
     expect(
       sameNoOpCycle(prior, {
-        gate: 'wiring_check',
+        gate: 'build_review',
         treeHash,
         verdict: false,
         rung,
@@ -184,7 +184,7 @@ describe('build outcome category', () => {
     'is advisory: %s leaves exact-cycle refusal unchanged',
     (category) => {
       expect(sameNoOpCycle(priorOutcome({ category }), {
-        gate: 'wiring_check', treeHash: 'tree-1', verdict: false,
+        gate: 'build_review', treeHash: 'tree-1', verdict: false,
         rung: { model: 'gpt-5.6-terra', effort: 'medium' },
       })).toBe(true);
     },
@@ -195,7 +195,7 @@ describe('build outcome category', () => {
     (category) => {
       const record = priorOutcome({ category, note: ['the gate is stale'] });
       const escalation = sameNoOpCycle(record, {
-        gate: 'wiring_check',
+        gate: 'build_review',
         treeHash: 'tree-1',
         verdict: false,
         rung: { model: 'gpt-5.6-terra', effort: 'medium' },
@@ -203,13 +203,13 @@ describe('build outcome category', () => {
       const outcomes = JSON.stringify({
         refusal: escalation,
         escalation: { halt: escalation },
-        haltDisposition: composeBuildOutcomeHaltReason(record, 'wiring_check'),
+        haltDisposition: composeBuildOutcomeHaltReason(record, 'build_review'),
       });
 
       expect(outcomes).toBe(JSON.stringify({
         refusal: true,
         escalation: { halt: true },
-        haltDisposition: 'wiring_check kickback-to-build refused: the build made no tree change ' +
+        haltDisposition: 'build_review kickback-to-build refused: the build made no tree change ' +
           '(tree tree-1 unchanged). Investigate the unchanged build before retrying.\n' +
           'Build note: the gate is stale',
       }));
@@ -219,7 +219,7 @@ describe('build outcome category', () => {
   it('names the operator decision and keeps a multi-line note below the reason line', () => {
     const reason = composeBuildOutcomeHaltReason(priorOutcome({
       category: 'belongs-to-decide', note: ['the finding is stale', 'return to DECIDE'],
-    }), 'wiring_check');
+    }), 'build_review');
     expect(reason.split('\n')[0]).toContain('Investigate the unchanged build before retrying.');
     expect(reason).toContain('return to DECIDE');
   });

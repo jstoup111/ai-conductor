@@ -88,7 +88,6 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'finish_publication_blocked',
   'finish_publication_disposition',
   'kickback',
-  'deprecated_step',
   'rebase_changed',
   'rebase_gate_invalidated',
   'build_review_repair_context',
@@ -201,7 +200,6 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'finish_publication_transition',
   'finish_publication_blocked',
   'finish_publication_disposition',
-  'deprecated_step',
   ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -374,7 +372,7 @@ describe('event sink subscriptions', () => {
     const auditTrail = new AuditTrailWriter(projectRoot);
     const kickback = {
       type: 'kickback' as const,
-      from: 'wiring_check' as const,
+      from: 'test_suite' as const,
       to: 'build' as const,
       evidence: 'Task 1: replace stale anchor.',
       count: 1,
@@ -394,7 +392,7 @@ describe('event sink subscriptions', () => {
         auditRecord: {
           origin: 'build',
           event: 'kickback',
-          cause: 'wiring_check evidence: Task 1: replace stale anchor.',
+          cause: 'test_suite evidence: Task 1: replace stale anchor.',
         },
       });
     } finally {
@@ -409,13 +407,13 @@ describe('event sink subscriptions', () => {
 
     try {
       persister.start();
-      await events.emit({ type: 'kickback', from: 'wiring_check', to: 'build', count: 1 });
+      await events.emit({ type: 'kickback', from: 'test_suite', to: 'build', count: 1 });
       persister.stop();
 
       const record = JSON.parse((await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')).trim());
       expect(record).toEqual({
         type: 'kickback',
-        from: 'wiring_check',
+        from: 'test_suite',
         to: 'build',
         count: 1,
         ts: expect.any(String),

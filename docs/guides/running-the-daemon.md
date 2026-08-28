@@ -306,8 +306,7 @@ There is no configuration for this; the timing is fixed.
 ## Provider preparation timeout and activity telemetry
 
 `daemon.log` records step boundaries, provider activity, build progress, and verdict-freshness
-decisions. The deterministic BUILD group retains the `wiring_check` and `test_suite` names before
-`build_review`; `wiring_check` logs its deprecation notice and `test_suite` logs its verification.
+decisions. The deterministic BUILD verification path runs `test_suite` before `build_review`.
 For
 `build_review`, `prd_audit`, `architecture_review_as_built`, and preserved
 `manual_test` evidence, the freshness line names the step and artifact:
@@ -324,9 +323,8 @@ the gate must run again. For SHIP-tail gates, a stale verdict can mean that the 
 an earlier dispatch; the daemon treats it as no verdict, retries within the existing step budget,
 and never routes its findings. `rewritten` means the current judging attempt produced the artifact.
 
-After a BUILD repair, the group still runs its non-skipped members. `wiring_check` remains an
-observable compatibility no-op; `test_suite` is the active verifier, and a prior evidence file does
-not skip it. The suite member logs its settle decision after the join evaluates current evidence:
+After a BUILD repair, `test_suite` still runs. A prior evidence file does not skip it. The suite
+verifier logs its settle decision after it evaluates current evidence:
 
 ```text
 · BUILD member test_suite settled: reuse (fingerprint-match)

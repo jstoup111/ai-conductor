@@ -177,7 +177,6 @@ describe('conductor build-outcome baseline capture', () => {
     expect(started).toContainEqual(expect.objectContaining({ step: 'build' }));
     expect(dispatched).toContain('build_review');
     expect(dispatched.indexOf('build_review')).toBeGreaterThan(dispatched.indexOf('test_suite'));
-    expect(dispatched).not.toContain('wiring_check');
     expect(failed).not.toContainEqual(expect.objectContaining({ step: 'test_suite' }));
     expect(failed).not.toContainEqual(expect.objectContaining({ step: 'build' }));
     expect(completed).toContainEqual(expect.objectContaining({ step: 'build', status: 'done' }));

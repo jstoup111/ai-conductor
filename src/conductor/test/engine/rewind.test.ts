@@ -62,7 +62,7 @@ describe('rewindState', () => {
     worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', prd: 'done',
     architecture_diagram: 'done', architecture_review: 'done', stories: 'done',
     conflict_check: 'done', plan: 'done', coherence_check: 'done', acceptance_specs: 'done',
-    build: 'done', wiring_check: 'done', test_suite: 'done', build_review: 'done',
+    build: 'done', test_suite: 'done', build_review: 'done',
     manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
     rebase: 'done', finish: 'done', last_step: 'finish',
   };
@@ -110,7 +110,7 @@ describe('rewindState', () => {
     const config: HarnessConfig = {
       steps: { lint: { after: 'build', skill: 'lint', enforcement: 'gating' } },
     };
-    const state = { ...completeState, lint: 'done', wiring_check: 'skipped', last_step: 'finish' } as ConductState;
+    const state = { ...completeState, lint: 'done', last_step: 'finish' } as ConductState;
 
     const result = await rewindState({ state, config, target: 'lint', store, readCurrentState: async () => state });
 
@@ -269,6 +269,29 @@ describe('rewindState', () => {
         origin: 'operator', event: 'operator_rewind', reason: 'rewound to build',
       }));
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a retired operator target by name without changing state bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-retired-target-'));
+    const statePath = join(root, '.pipeline/conduct-state.json');
+    const original = `${JSON.stringify(completeState, null, 2)}\n`;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(statePath, original);
+      await writeFile(join(root, '.pipeline/HALT'), 'operator action required\n');
+      await writeFile(join(root, '.pipeline/HALT.class'), 'needs-human\n');
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'wiring_check' }, root))
+        .resolves.toBe(1);
+
+      expect(error).toHaveBeenCalledWith(expect.stringMatching(/wiring_check.*Valid steps:/s));
+      expect(await readFile(statePath, 'utf-8')).toBe(original);
+    } finally {
+      error.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });

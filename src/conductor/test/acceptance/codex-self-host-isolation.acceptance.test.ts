@@ -64,7 +64,6 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
     await writeState(stateFilePath, {
       ...DONE_TO_BUILD,
       build_review: 'done',
-      wiring_check: 'done',
       test_suite: 'done',
       manual_test: 'done',
       prd_audit: 'done',
@@ -119,7 +118,6 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
     const finishState = {
       ...DONE_TO_BUILD,
       build: 'done',
-      wiring_check: 'done',
       build_review: 'done',
       test_suite: 'done',
       manual_test: 'done',
@@ -174,7 +172,6 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       await writeState(stateFilePath, {
         ...DONE_TO_BUILD,
         build_review: 'done',
-        wiring_check: 'done',
         test_suite: 'done',
         manual_test: 'done',
         prd_audit: 'done',

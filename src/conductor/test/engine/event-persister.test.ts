@@ -144,7 +144,7 @@ describe('EventPersister', () => {
     });
     await emitter.emit({
       type: 'build_member_evidence_recomputed',
-      member: 'wiring_check',
+      member: 'test_suite',
       decision: 'recompute',
       basis: 'recorded-head-versus-current-head',
     });
@@ -165,7 +165,7 @@ describe('EventPersister', () => {
       },
       {
         type: 'build_member_evidence_recomputed',
-        member: 'wiring_check',
+        member: 'test_suite',
         decision: 'recompute',
         basis: 'recorded-head-versus-current-head',
       },

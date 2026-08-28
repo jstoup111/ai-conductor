@@ -14,8 +14,8 @@
  *   in test/wiring-gate-loop.test.ts; this file adds the new stamp assertion
  *   while driving that same moving-but-unfixed flow.
  * - Story 7's malformed/read/write cases are single-operation store contracts
- *   owned by plan Tasks 5–6. Its story-level fail-open path is exercised here
- *   by the first wiring kickback, where no prior sidecar exists and build must
+ *   owned by plan Tasks 5–6. Its story-level fail-open path is exercised by
+ *   the first review kickback, where no prior sidecar exists and build must
  *   dispatch.
  *
  * Correctness-critical production call sites exercised:
@@ -68,7 +68,7 @@ function frontDone(): ConductState {
   return {
     complexity_tier: 'M',
     track: 'technical',
-    feature_desc: 'build-agent-disputing-a-wiring-check-kickback-in-p',
+    feature_desc: 'build-agent-disputing-a-review-kickback',
     worktree: 'done',
     memory: 'done',
     explore: 'done',
@@ -112,11 +112,8 @@ describe('#1336 disputed wiring kickback build outcome', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  /** The kickback vehicle. `wiring_check` was #1336's original gate; it is now
-   * a deprecated no-op that never kicks back
-   * (adr-2026-08-11-wiring-judged-in-build-review), so the same
-   * gate -> build -> gate dispute flow is driven through `build_review`, whose
-   * non-completeness rubric FAIL routes straight back to `build`. */
+  /** build_review drives the gate -> build -> gate dispute flow; its
+   * non-completeness rubric FAIL routes straight back to build. */
   async function writeReviewFail(): Promise<void> {
     await writeFile(
       join(projectRoot, '.pipeline', 'build-review.json'),
@@ -199,7 +196,6 @@ describe('#1336 disputed wiring kickback build outcome', () => {
     await writeState(stateFilePath, {
       ...frontDone(),
       build: 'done',
-      wiring_check: 'done',
       test_suite: 'done',
       build_review: 'pending',
     });

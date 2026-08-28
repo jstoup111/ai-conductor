@@ -89,7 +89,7 @@ describe('Conductor FINISH publication routing', () => {
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
       'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
       'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
-      'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
+      'test_suite', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'rebase',
     ] satisfies StepName[]) {
       state[step] = 'done';
@@ -746,7 +746,7 @@ describe('Conductor FINISH publication routing', () => {
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
       'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
       'worktree', 'acceptance_specs', 'build', 'build_review',
-      'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
+      'test_suite', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
     // The as-built review now runs even without an upstream DECIDE review.
@@ -834,7 +834,7 @@ describe('Conductor FINISH publication routing', () => {
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
       'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
       'worktree', 'acceptance_specs', 'build', 'build_review',
-      'wiring_check', 'test_suite', 'architecture_review_as_built', 'rebase',
+      'test_suite', 'architecture_review_as_built', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
     // The as-built review runs independently of an upstream DECIDE review.
     state.architecture_review = 'skipped';

@@ -255,7 +255,7 @@ describe('build_review: code-validity preserves a passed verdict across re-dispa
     expect(result.done).toBe(false);
   });
 
-  it('invalidates a stale stamped PASS for build_review without consulting the retired wiring_check gate', async () => {
+  it('invalidates a stale stamped PASS for build_review', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
     const baseline = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
@@ -266,7 +266,6 @@ describe('build_review: code-validity preserves a passed verdict across re-dispa
 
     expect(result.done).toBe(false);
     expect(ALL_STEPS.find((step) => step.name === 'build_review')?.loopGate).toBe(true);
-    expect(ALL_STEPS.find((step) => step.name === 'wiring_check')?.loopGate).not.toBe(true);
   });
 });
 

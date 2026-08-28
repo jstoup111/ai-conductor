@@ -221,7 +221,7 @@ describe('boundary-aware operator parking acceptance', () => {
     });
   });
 
-  it('FR-8: inventories configured, SHIP, and deterministic BUILD groups through the shared scheduler registry', () => {
+  it('FR-8: inventories configured and SHIP groups through the shared scheduler registry', () => {
     const groups = Object.values(STEP_GROUPS).map((group) => group.members);
 
     expect(groups).toContainEqual([
@@ -229,7 +229,6 @@ describe('boundary-aware operator parking acceptance', () => {
       'prd_audit',
       'architecture_review_as_built',
     ]);
-    expect(groups).toContainEqual(['wiring_check', 'test_suite']);
   });
 
   it.each([
@@ -253,21 +252,6 @@ describe('boundary-aware operator parking acceptance', () => {
       ] as StepName[],
       expectedGroup: 'validation',
       later: 'rebase' as StepName,
-    },
-    {
-      label: 'BUILD',
-      pending: [
-        'wiring_check',
-        'test_suite',
-        'build_review',
-      ] as StepName[],
-      expectedMembers: ['wiring_check', 'test_suite'] as StepName[],
-      // wiring_check is a deprecated no-op: it is still a group member and
-      // still settles 'done' at the join, but it settles in-process and never
-      // reaches a dispatch.
-      expectedCalls: ['test_suite'] as StepName[],
-      expectedGroup: 'build_verification',
-      later: 'build_review' as StepName,
     },
   ])('FR-8: $label built-in group joins before the accepted park boundary', async ({
     pending,
@@ -502,7 +486,6 @@ describe('boundary-aware operator parking acceptance', () => {
     for (const step of resolvedBeforeBuild) state[step] = 'done';
     state.acceptance_specs = 'failed';
     state.build = 'stale';
-    state.wiring_check = 'skipped';
     await writeState(statePath, state);
 
     const calls: StepName[] = [];
@@ -523,7 +506,6 @@ describe('boundary-aware operator parking acceptance', () => {
     expect(calls[0]).toBe('acceptance_specs');
     expect(calls).toContain('build');
     expect(calls).not.toContain('memory');
-    expect(calls).not.toContain('wiring_check');
   });
 
   it('FR-9: an interactive run ignores the same repo-root park marker and preserves its ordinary sequence', async () => {

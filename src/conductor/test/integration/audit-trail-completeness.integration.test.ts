@@ -71,7 +71,6 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_outer_verdict: 'not-audited-by-design',
   build_review_stale_aggregate: 'not-audited-by-design',
   step_started: 'not-audited-by-design',
-  deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
   // adr-2026-08-24 D3 declares the refusal audited at introduction, and its
@@ -208,11 +207,6 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_review_outer_verdict: { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
   build_review_stale_aggregate: { type: 'build_review_stale_aggregate', storedLapId: 'lap-old', currentLapId: 'lap-new' },
   step_started: { type: 'step_started', step: 'build', index: 0 },
-  deprecated_step: {
-    type: 'deprecated_step',
-    step: 'wiring_check',
-    adr: 'adr-2026-08-11-wiring-judged-in-build-review',
-  },
   step_completed: { type: 'step_completed', step: 'build', status: 'done' },
   step_failed: { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
   step_refused: {
@@ -420,7 +414,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   build_member_evidence_recomputed: {
     type: 'build_member_evidence_recomputed',
-    member: 'wiring_check',
+    member: 'test_suite',
     decision: 'recompute',
     basis: 'recorded-head-versus-current-head',
   },
@@ -578,10 +572,6 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     writer.subscribe(events);
 
     const stepsRun: StepName[] = [];
-    const deprecatedSteps: Array<Extract<ConductorEvent, { type: 'deprecated_step' }>> = [];
-    events.on('deprecated_step', (event) => {
-      if (event.type === 'deprecated_step') deprecatedSteps.push(event);
-    });
     const runner: StepRunner = {
       run: async (step: StepName): Promise<StepRunResult> => {
         stepsRun.push(step);
@@ -597,19 +587,10 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
 
     await conductor.run();
 
-    expect(deprecatedSteps).toEqual([
-      {
-        type: 'deprecated_step',
-        step: 'wiring_check',
-        adr: 'adr-2026-08-11-wiring-judged-in-build-review',
-      },
-    ]);
-
     expect(stepsRun).not.toContain('conflict_check');
     expect(stepsRun).not.toContain('architecture_diagram');
 
     const records = await readRecords(dir);
-    expect(records.some((record) => record.event === 'deprecated_step')).toBe(false);
     const recordedSteps = new Set(records.map((r) => r.origin));
 
     // executed ⊆ recorded

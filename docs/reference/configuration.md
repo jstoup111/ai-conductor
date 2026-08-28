@@ -272,7 +272,7 @@ Per-step overrides, keyed by step name. A key matching a built-in step name over
 other key declares a custom step. `steps` must be an object, and each value must be an object
 (`config.ts:303-330`).
 
-"Built-in" here means a member of `ALL_STEPS` — the 22 sequential steps. The four out-of-band steps
+"Built-in" here means a member of `ALL_STEPS` — the 21 sequential steps. The four out-of-band steps
 (`bootstrap`, `assess`, `remediate`, `attribution_verify`) live in `OUT_OF_BAND_STEPS`
 (`src/conductor/src/engine/steps.ts:304-345`) and are not part of that set. See [steps](steps.md).
 
@@ -1110,8 +1110,9 @@ that tree-hash witness and reverts to re-kicking until the cap. It does not disa
 per-gate cap, which still bounds unchanged cross-dispatch loops; the `planRemediation` guard is
 also not gated by this flag (`src/conductor/src/types/config.ts:302-308`).
 
-The flag applies to active build kickbacks only. `wiring_check` is a deprecated compatibility no-op
-and never produces a kickback. See [`.pipeline/build-outcome.json`](artifacts.md#core-state).
+The flag applies to active build kickbacks only. A leftover configuration entry using the removed
+step name is rejected as an ordinary unknown custom step (it lacks the required `after:` field).
+See [`.pipeline/build-outcome.json`](artifacts.md#core-state).
 
 ## cumulative_kickback_bound
 

@@ -31,7 +31,6 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_review_stale_aggregate: { render: false, persist: true, audit: false, otel: false },
   step_started: { render: true, persist: true, audit: false, otel: true },
   containment_check_unresolved: { render: false, persist: true, audit: false, otel: false },
-  deprecated_step: { render: true, persist: true, audit: false, otel: false },
   step_completed: { render: true, persist: true, audit: true, otel: true },
   step_failed: { render: true, persist: true, audit: false, otel: true },
   step_refused: { render: true, persist: true, audit: true, otel: false },

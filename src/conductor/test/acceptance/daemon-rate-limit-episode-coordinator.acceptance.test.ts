@@ -171,7 +171,6 @@ describe('acceptance: the exact observed session-limit message routes to a coord
   const BUILD_ONLY_READY_STATE: ConductState = {
     ...READY_STATE,
     build_review: 'done',
-    wiring_check: 'done',
     manual_test: 'done',
     prd_audit: 'done',
     architecture_review_as_built: 'done',

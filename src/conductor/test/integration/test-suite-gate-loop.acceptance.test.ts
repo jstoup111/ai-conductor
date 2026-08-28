@@ -86,19 +86,6 @@ describe('test_suite native gate loop', () => {
     const runner: StepRunner = {
       run: async (step: StepName) => {
         timeline.push(step);
-        if (step === 'wiring_check') {
-          await writeFile(
-            join(projectRoot, '.pipeline/wiring-evidence.json'),
-            JSON.stringify({
-              schema: 1,
-              base: 'base-sha',
-              head: 'head-sha',
-              layer2: { applicable: false, reason: 'no TypeScript project' },
-              waivers: [],
-              tasks: [],
-            }),
-          );
-        }
         if (step === 'manual_test') return { success: false, output: 'stop after ordering proof' };
         return { success: true };
       },
@@ -109,7 +96,7 @@ describe('test_suite native gate loop', () => {
       events: new ConductorEventEmitter(),
       projectRoot,
       mode: 'auto',
-      fromStep: 'wiring_check',
+      fromStep: 'test_suite',
       maxRetries: 1,
       verifyArtifacts: true,
       fullSuiteVerifier: { ensure, inspect },
@@ -117,8 +104,6 @@ describe('test_suite native gate loop', () => {
 
     const run = conductor.run();
     await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(1));
-    // wiring_check is a deprecated no-op that settles in-process without a
-    // provider dispatch, so test_suite is the group's only timeline entry.
     expect(timeline).toEqual(['test_suite']);
     expect(timeline).not.toContain('manual_test');
     expect(timeline).not.toContain('prd_audit');
@@ -142,13 +127,12 @@ describe('test_suite native gate loop', () => {
     expect(ensure).toHaveBeenCalledTimes(1);
   });
 
-  it('reuses a current suite proof once and retains the joined pass through finish', async () => {
+  it('reuses a current suite proof once and retains the serial pass through finish', async () => {
     await writeState(stateFilePath, {
       ...FRONT_DONE,
       build_review: 'pending',
     });
     const timeline: string[] = [];
-    const joined: string[][] = [];
     const ensure = vi.fn(async () => {
       timeline.push('test_suite');
       return {
@@ -159,9 +143,6 @@ describe('test_suite native gate loop', () => {
     });
     const inspect = vi.fn(async () => ({ status: 'CURRENT', evidence: PASS_EVIDENCE } as const));
     const events = new ConductorEventEmitter();
-    events.on('parallel_completed', (event) => {
-      if (event.type === 'parallel_completed') joined.push(event.branches);
-    });
     const conductor = new Conductor({
       stateFilePath,
       stepRunner: {
@@ -176,7 +157,7 @@ describe('test_suite native gate loop', () => {
       events,
       projectRoot,
       mode: 'auto',
-      fromStep: 'wiring_check',
+      fromStep: 'test_suite',
       maxRetries: 1,
       verifyArtifacts: false,
       config: { validation_concurrency: 2 },
@@ -194,13 +175,11 @@ describe('test_suite native gate loop', () => {
     expect({
       ensureCalls: ensure.mock.calls.length,
       inspectCalls: inspect.mock.calls.length,
-      buildJoin: joined.find((branches) => branches.includes('test_suite')),
       reachedFinish: timeline.at(-1),
       retainedSuiteState: finalState.test_suite,
     }).toEqual({
       ensureCalls: 1,
       inspectCalls: 1,
-      buildJoin: ['wiring_check', 'test_suite'],
       reachedFinish: 'finish',
       retainedSuiteState: 'done',
     });
@@ -209,7 +188,6 @@ describe('test_suite native gate loop', () => {
   it('emits stale native verification freshness before executing the verifier', async () => {
     await writeState(stateFilePath, {
       ...FRONT_DONE,
-      wiring_check: 'done',
       test_suite: 'pending',
       manual_test: 'pending',
       prd_audit: 'pending',
@@ -265,11 +243,6 @@ describe('test_suite native gate loop', () => {
     message: string;
   }>([
     {
-      label: 'non-zero exit',
-      reason: 'nonzero_exit',
-      message: 'unit/auth.test.ts failed; credential=[REDACTED]',
-    },
-    {
       label: 'missing config',
       reason: 'missing_config',
       message: 'Project config must declare test_suite',
@@ -290,11 +263,10 @@ describe('test_suite native gate loop', () => {
       message: 'Unable to fingerprint declared test input',
     },
   ])(
-    'routes persistent $label evidence through BUILD twice, then halts at the shared cap',
+    'preserves persistent $label infrastructure evidence without charging a BUILD kickback',
     async ({ reason, message }) => {
       await writeState(stateFilePath, {
         ...FRONT_DONE,
-        wiring_check: 'done',
         test_suite: 'pending',
         manual_test: 'pending',
         prd_audit: 'pending',
@@ -346,8 +318,8 @@ describe('test_suite native gate loop', () => {
       const finalState = persisted.ok ? persisted.value : {};
       const haltMarker = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf-8');
       const haltClass = await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf-8');
-      const routedEvidence =
-        `full-suite verification failed (${reason}): ${message}\n` +
+      const infrastructureEvidence =
+        `test_suite infrastructure failure (${reason}): ${message}\n` +
         'Evidence: .pipeline/test-suite-evidence.json';
       expect({
         ensureCalls: ensure.mock.calls.length,
@@ -363,25 +335,14 @@ describe('test_suite native gate loop', () => {
         finalGateState: finalState.test_suite,
         restagedDownstreamState: finalState.rebase,
       }).toEqual({
-        ensureCalls: 3,
-        relevantTimeline: ['test_suite', 'build', 'test_suite', 'build', 'test_suite'],
+        ensureCalls: 1,
+        relevantTimeline: ['test_suite'],
         shipDispatches: [],
-        kickbacks: [
-          { evidence: routedEvidence, count: 1 },
-          { evidence: routedEvidence, count: 2 },
-        ],
-        // Both rounds take the serial path: wiring_check is a deprecated no-op
-        // that settles once and is never re-staled, so test_suite is the only
-        // live BUILD-verification member and the group never fans out.
-        buildRetryReasons: [
-          `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
-          `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
-        ],
-        haltReason:
-          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}`,
-        haltMarker:
-          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}\n`,
-        haltClass: 'mechanical',
+        kickbacks: [],
+        buildRetryReasons: [],
+        haltReason: infrastructureEvidence,
+        haltMarker: `${infrastructureEvidence}\n`,
+        haltClass: 'needs-human',
         finalGateState: 'failed',
         restagedDownstreamState: undefined,
       });

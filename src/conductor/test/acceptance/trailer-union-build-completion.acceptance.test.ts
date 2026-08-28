@@ -153,23 +153,7 @@ describe('#859 trailer-union build completion (real Conductor.run() loop)', () =
       runInteractive: ReturnType<typeof vi.fn>;
       run: ReturnType<typeof vi.fn>;
     } = {
-      run: vi.fn().mockImplementation(async (step: StepName) => {
-        if (step === 'wiring_check') {
-          const { stdout: head } = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
-          await writeFile(
-            join(dir, '.pipeline/wiring-evidence.json'),
-            JSON.stringify({
-              schema: 1,
-              base: 'fixture-base',
-              head: head.trim(),
-              layer2: { applicable: false },
-              waivers: [],
-              tasks: [{ id: 'fixture', contract: 'none (fixture)', gaps: [] }],
-            }),
-          );
-        }
-        return { success: true };
-      }),
+      run: vi.fn().mockResolvedValue({ success: true }),
       runInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const stallEvents: Array<{ reason: string }> = [];

@@ -106,7 +106,7 @@ describe('recordTestSuiteRemediation', () => {
 
     const record = await recordTestSuiteRemediation(
       dir,
-      'wiring_check',
+      'test_suite',
       {
         reason: 'missing_coverage',
         message: 'agents/planner.md has an invalid reference',
@@ -119,14 +119,14 @@ describe('recordTestSuiteRemediation', () => {
       message: 'agents/planner.md has no matching test',
       observedAt: Date.parse('2026-08-13T10:03:00.000Z'),
     });
-    await recordTestSuiteRemediation(dir, 'wiring_check', {
+    await recordTestSuiteRemediation(dir, 'test_suite', {
       reason: 'missing_coverage',
       message: 'agents/planner.md has an invalid reference',
       observedAt: Date.parse('2026-08-13T10:04:00.000Z'),
     });
 
     expect([record, await readTestSuiteRemediations(dir)]).toEqual([
-      expect.objectContaining({ gate: 'wiring_check' }),
+      expect.objectContaining({ gate: 'test_suite' }),
       expect.arrayContaining([
         expect.objectContaining({ diagnostic: 'agents/planner.md has an invalid reference' }),
         expect.objectContaining({ diagnostic: 'agents/planner.md has no matching test' }),
@@ -181,7 +181,7 @@ describe('recordTestSuiteRemediation', () => {
       recordTestSuiteRemediation(dir, 'test_suite', {
         reason: 'missing_test', message: 'agents/planner.md has no matching test', observedAt,
       }),
-      recordTestSuiteRemediation(dir, 'wiring_check', {
+      recordTestSuiteRemediation(dir, 'test_suite', {
         reason: 'missing_coverage', message: 'agents/evaluator.md has no coverage', observedAt,
       }),
     ]);

@@ -703,7 +703,6 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       await conductor.run();
 
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
-      expect(calls).not.toContain('wiring_check');
       const verdict = JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'));
       expect(verdict.findings.testQuality).toContain('changed test does not observe the new behavior');
       expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
@@ -731,7 +730,6 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       await conductor.run();
 
       expect(calls.filter((s) => s === 'build').length).toBeGreaterThan(0);
-      expect(calls).not.toContain('wiring_check');
     });
   });
 

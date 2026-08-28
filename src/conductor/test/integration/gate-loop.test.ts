@@ -18,7 +18,6 @@ import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
-import { currentCommitSha } from '../../src/engine/project-prelude.js';
 
 // Drives the gate-driven tail (build…finish) with verifyArtifacts on. The front
 // half is pre-marked done and the loop is started at `build` (fromStep), so each
@@ -127,27 +126,6 @@ describe('integration/gate-loop', () => {
         JSON.stringify({
           verdict: 'PASS',
           rubric: { testQuality: false },
-        }),
-      );
-    } else if (step === 'wiring_check') {
-      // The wiring-reachability gate (Task 9) requires a fresh, valid,
-      // zero-gap evidence artifact at .pipeline/wiring-evidence.json (see
-      // WIRING_EVIDENCE/validateWiringEvidence in artifacts.ts). The
-      // predicate compares evidence.head against ctx.getHeadSha(), which
-      // shells out to `git rev-parse HEAD` in `dir` — null (no comparison)
-      // when `dir` isn't a real git repo, a real sha for the suites below
-      // that do `initRepo()`. Resolve it dynamically so both cases match.
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      const head = (await currentCommitSha(dir)) ?? '2'.repeat(40);
-      await writeFile(
-        join(dir, '.pipeline/wiring-evidence.json'),
-        JSON.stringify({
-          schema: 1,
-          base: '1'.repeat(40),
-          head,
-          layer2: { applicable: false },
-          waivers: [],
-          tasks: [],
         }),
       );
     } else if (step === 'manual_test') {
@@ -1394,7 +1372,6 @@ describe('integration/gate-loop', () => {
       expect(result.buildRuns).toBe(2); // initial + one kickback rebuild
       expect(result.retryReasons.join('\n')).toContain('tautological test padding');
       expect(result.ran.filter((step) => step === 'build_review')).toHaveLength(2);
-      expect(result.ran).not.toContain('wiring_check');
       expect(result.completed).toBe(true);
     });
 
@@ -1409,10 +1386,9 @@ describe('integration/gate-loop', () => {
 
       expect(result.completed).toBe(false);
       expect(result.ran).toContain('build_review');
-      expect(result.ran).not.toContain('wiring_check');
     });
 
-    it('routes a completeness finding through build_review\'s ordinary FAIL kickback, without dispatching wiring_check', async () => {
+    it('routes a completeness finding through build_review\'s ordinary FAIL kickback', async () => {
       const result = await runWithGraderVerdicts([
         {
           verdict: 'FAIL',
@@ -1425,7 +1401,6 @@ describe('integration/gate-loop', () => {
 
       expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
       expect(result.retryReasons.join('\n')).toContain('[testQuality] changed test does not observe the new behavior');
-      expect(result.ran).not.toContain('wiring_check');
       expect(result.completed).toBe(true);
     });
 

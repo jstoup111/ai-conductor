@@ -125,7 +125,6 @@ describe('engine/gates', () => {
       // prerequisite evaluation. checkGate must preserve its state-only D4
       // contract and let build_review's already-done prerequisites pass.
       const state: ConductState = {
-        wiring_check: 'done',
         test_suite: 'done',
         build_review: 'failed',
       };

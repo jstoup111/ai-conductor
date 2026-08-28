@@ -523,7 +523,6 @@ describe('integration/retry-classify (#646)', () => {
     // than consuming the generic kickback cap.
     await seedTailAt(statePath, 'architecture_review_as_built', {
       build_review: 'skipped',
-      wiring_check: 'skipped',
       manual_test: 'skipped',
       prd_audit: 'skipped',
     });

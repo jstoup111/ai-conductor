@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "gates": {
+    "wiring_check": {
+      "count": 1,
+      "cumulative": 1,
+      "treeHash": "legacy-tree",
+      "lastReason": "legacy wiring verdict",
+      "priorVerdict": true,
+      "resolvedBefore": 2
+    },
+    "test_suite": {
+      "count": 1,
+      "cumulative": 1,
+      "treeHash": "current-tree",
+      "lastReason": "current suite verdict",
+      "priorVerdict": true,
+      "resolvedBefore": 3
+    }
+  }
+}

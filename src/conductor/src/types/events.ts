@@ -265,12 +265,6 @@ export type ConductorEvent =
       ts: number;
     }
   | {
-      /** A retained compatibility step ran as a deprecated no-op. */
-      type: 'deprecated_step';
-      step: StepName;
-      adr: string;
-    }
-  | {
       type: 'step_completed';
       step: StepName;
       status: StepStatus;
@@ -689,7 +683,7 @@ export type ConductorEvent =
        * that declares the member satisfied for the round.
        */
       type: 'build_member_evidence_reused';
-      member: 'wiring_check' | 'test_suite';
+      member: 'test_suite';
       decision: 'reuse';
       basis: 'fingerprint-match';
     }
@@ -700,7 +694,7 @@ export type ConductorEvent =
        * evidence, command output, credentials, or host paths.
        */
       type: 'build_member_evidence_recomputed';
-      member: 'wiring_check' | 'test_suite';
+      member: 'test_suite';
       decision: 'recompute';
       basis:
         | 'recorded-head-versus-current-head'
