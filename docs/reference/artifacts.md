@@ -671,7 +671,7 @@ those:
 `verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_stall`, `build_progress`,
 `build_no_progress`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
 `parallel_failure`, `build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
-`loop_halt`, `halt_marker_write_failed`, `rebase_changed`, `rebase_gate_invalidated`,
+`loop_halt`, `halt_marker_write_failed`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_invalidated`,
 `rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`, and `acceptance_red`.
 
 `contained_live_checkout_drift` and `self_host_containment_verdict` are the containment boundary's
@@ -680,6 +680,12 @@ change once a dispatch is proven contained, and the verdict event records whethe
 succeeded for each completed self-host dispatch. Both render to the terminal and daemon log and
 persist to this file; see [`live_containment`](configuration.md#harness_self_host) and the
 [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only).
+
+`step_status_write_refused` records a non-fatal state invariant: a step already marked `skipped`
+cannot be restaged as `stale`. It carries the status field, expected `skipped`, requested `stale`,
+and the write intent. The conductor keeps the on-disk and in-memory value as `skipped` and continues
+the run; operators can use this event to identify a caller that bypassed the normal skip-preserving
+restage filter.
 
 `build_review_disposition_accepted` and `build_review_disposition_refused` are declared `persist:
 false` deliberately: they are written by the external build-review CLI to its own pipeline-owned

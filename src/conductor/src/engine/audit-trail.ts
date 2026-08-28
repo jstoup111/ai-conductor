@@ -256,6 +256,13 @@ export class AuditTrailWriter {
           reason: event.reason,
           cause: event.kind,
         };
+      case 'step_status_write_refused':
+        return {
+          origin: 'build',
+          event: event.type,
+          reason: `${event.field}: expected ${event.expected}, requested ${event.requested}`,
+          cause: event.intent,
+        };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict
         // (e.g. early-exit steps). If a gate_verdict was already recorded

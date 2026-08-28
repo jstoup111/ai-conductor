@@ -120,7 +120,10 @@ import {
 import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
-import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
+import {
+  createStepStatusWriteRefusalDiagnostics,
+  resolveConductorStateStore,
+} from './engine/conductor-deps.js';
 import {
   deriveDaemonBaseState,
   persistDaemonBaseState,
@@ -1008,7 +1011,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // conservatively to L when it evaluates step eligibility.
     const baseState = deriveDaemonBaseState(observedState, item, preseedStepStatuses);
 
-    const stateStore = createFilesystemConductStateStore(stateFilePath);
+    const stateStore = resolveConductorStateStore(
+      stateFilePath,
+      undefined,
+      createStepStatusWriteRefusalDiagnostics(featureEvents),
+    );
     await persistDaemonBaseState(stateFilePath, observedState, baseState, stateStore);
 
     const stepRunner = new DefaultStepRunner(
@@ -2178,6 +2185,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'step_refused':
       log(
         `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.step} refused (${event.kind}): ${event.reason}`)}`,
+      );
+      break;
+    case 'step_status_write_refused':
+      log(
+        `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.field} status write refused: ${event.expected} → ${event.requested} (${event.intent})`)}`,
       );
       break;
     case 'step_retry': {

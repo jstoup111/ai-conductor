@@ -1,3 +1,4 @@
+// Covers: task:5
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -17,6 +18,32 @@ type ConflictCase = {
 };
 
 describe('evaluateConductStateMutation', () => {
+  it('refuses skipped-to-stale mutations before matching their expected value', async () => {
+    const diagnostics: StateMutationDiagnostic[] = [];
+    const result = await evaluateConductStateMutation('skipped', {
+      field: 'manual_test',
+      expected: 'skipped',
+      intent: 'restage ship tail after build kickback',
+      next: 'stale',
+    }, {
+      writer: 'conductor',
+      emit: (diagnostic) => { diagnostics.push(diagnostic); },
+    });
+
+    expect({ result, diagnostics }).toEqual({
+      result: { kind: 'resolved' },
+      diagnostics: [{
+        field: 'manual_test',
+        writer: 'conductor',
+        intent: 'restage ship tail after build kickback',
+        disposition: 'resolved',
+        expected: { kind: 'string', length: 7, redacted: true, truncated: false },
+        current: { kind: 'string', length: 7, redacted: true, truncated: false },
+        next: { kind: 'string', length: 5, redacted: true, truncated: false },
+      }],
+    });
+  });
+
   it.each<ConflictCase>([
     {
       name: 'applies when the expected value still matches current state',
@@ -52,6 +79,39 @@ describe('evaluateConductStateMutation', () => {
       disposition: 'resolved',
     },
     {
+      name: 'applies a done-to-stale step restage',
+      currentValue: 'done',
+      mutation: {
+        field: 'manual_test',
+        expected: 'done',
+        intent: 'restage ship tail after build kickback',
+        next: 'stale',
+      },
+      disposition: 'applied',
+    },
+    {
+      name: 'applies a failed-to-stale step restage',
+      currentValue: 'failed',
+      mutation: {
+        field: 'manual_test',
+        expected: 'failed',
+        intent: 'restage ship tail after build kickback',
+        next: 'stale',
+      },
+      disposition: 'applied',
+    },
+    {
+      name: 'applies a skipped-to-done step decision',
+      currentValue: 'skipped',
+      mutation: {
+        field: 'manual_test',
+        expected: 'skipped',
+        intent: 'run newly applicable manual test',
+        next: 'done',
+      },
+      disposition: 'applied',
+    },
+    {
       name: 'applies an explicit done-to-stale invalidation when done is expected',
       currentValue: 'done',
       mutation: {
@@ -84,8 +144,8 @@ describe('evaluateConductStateMutation', () => {
       },
       disposition: 'conflict',
     },
-  ])('$name', ({ currentValue, mutation, disposition }) => {
-    const result = evaluateConductStateMutation(currentValue, mutation);
+  ])('$name', async ({ currentValue, mutation, disposition }) => {
+    const result = await evaluateConductStateMutation(currentValue, mutation);
 
     if (disposition === 'conflict') {
       expect(result).toMatchObject({ kind: 'conflict' });
@@ -100,17 +160,41 @@ describe('evaluateConductStateMutation', () => {
 });
 
 describe('state mutation diagnostics', () => {
-  it('emits a structured, redacted conflict diagnostic without raw unbounded values', () => {
+  it('waits for asynchronous diagnostics before resolving a refused mutation', async () => {
+    let releaseDiagnostic!: () => void;
+    const diagnosticBlocked = new Promise<void>((resolve) => {
+      releaseDiagnostic = resolve;
+    });
+    const mutation = evaluateConductStateMutation('skipped', {
+      field: 'manual_test',
+      expected: 'skipped',
+      intent: 'restage ship tail after build kickback',
+      next: 'stale',
+    }, {
+      writer: 'conductor',
+      emit: async () => diagnosticBlocked,
+    });
+
+    let settled = false;
+    void mutation.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseDiagnostic();
+    await expect(mutation).resolves.toEqual({ kind: 'resolved' });
+  });
+
+  it('emits a structured, redacted conflict diagnostic without raw unbounded values', async () => {
     const diagnostics: StateMutationDiagnostic[] = [];
     const secret = `Bearer ${'s'.repeat(2_048)}`;
-    const result = evaluateConductStateMutation('existing description', {
+    const result = await evaluateConductStateMutation('existing description', {
       field: 'feature_desc',
       expected: secret,
       intent: 'record feature description',
       next: 'replacement description',
     }, {
       writer: 'conductor',
-      emit: (diagnostic) => diagnostics.push(diagnostic),
+      emit: (diagnostic) => { diagnostics.push(diagnostic); },
     });
 
     expect(result).toMatchObject({ kind: 'conflict' });
@@ -127,16 +211,16 @@ describe('state mutation diagnostics', () => {
     expect(JSON.stringify(diagnostics)).not.toContain('Bearer');
   });
 
-  it('emits the same safe diagnostic shape when terminal completion resolves a mutation', () => {
+  it('emits the same safe diagnostic shape when terminal completion resolves a mutation', async () => {
     const diagnostics: StateMutationDiagnostic[] = [];
-    const result = evaluateConductStateMutation('complete', {
+    const result = await evaluateConductStateMutation('complete', {
       field: 'feature_status',
       expected: undefined,
       intent: 'clear stale feature status',
       next: undefined,
     } as unknown as StateMutation<ConductState>, {
       writer: 'filesystem-conduct-state-store',
-      emit: (diagnostic) => diagnostics.push(diagnostic),
+      emit: (diagnostic) => { diagnostics.push(diagnostic); },
     });
 
     expect(result).toEqual({ kind: 'resolved' });

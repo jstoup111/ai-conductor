@@ -4,6 +4,24 @@ import type { StateMutation, StateMutationResult } from './conduct-state-store.j
 
 const MAX_DIAGNOSTIC_STRING_LENGTH = 256;
 
+type DomainRulePhase = 'beforeExpected' | 'afterIdempotent';
+
+type ConductStateDomainRule = {
+  phase: DomainRulePhase;
+  matches(currentValue: unknown, mutation: StateMutation<ConductState>): boolean;
+};
+
+const CONDUCT_STATE_DOMAIN_RULES: readonly ConductStateDomainRule[] = [
+  {
+    phase: 'beforeExpected',
+    matches: (currentValue, mutation) => currentValue === 'skipped' && mutation.next === 'stale',
+  },
+  {
+    phase: 'afterIdempotent',
+    matches: (currentValue, mutation) => mutation.field === 'feature_status' && currentValue === 'complete',
+  },
+];
+
 export type StateMutationValueSummary =
   | { kind: 'undefined' }
   | { kind: 'null' }
@@ -29,7 +47,7 @@ export interface StateMutationDiagnostic {
 /** Injected by callers that own the log or error surface for state mutations. */
 export interface StateMutationDiagnostics {
   writer: string;
-  emit(diagnostic: StateMutationDiagnostic): void;
+  emit(diagnostic: StateMutationDiagnostic): void | Promise<void>;
 }
 
 /** Persisted object fields are re-parsed on every store read, so identity alone is not a stable expectation. */
@@ -75,13 +93,13 @@ function summarizeStateMutationValue(value: unknown): StateMutationValueSummary 
   return { kind: 'object' };
 }
 
-function emitDiagnostic(
+async function emitDiagnostic(
   diagnostics: StateMutationDiagnostics | undefined,
   disposition: StateMutationDiagnostic['disposition'],
   currentValue: unknown,
   mutation: StateMutation<ConductState>,
-): void {
-  diagnostics?.emit({
+): Promise<void> {
+  await diagnostics?.emit({
     field: mutation.field,
     writer: diagnostics.writer,
     intent: mutation.intent,
@@ -92,15 +110,30 @@ function emitDiagnostic(
   });
 }
 
+function matchesDomainRule(
+  phase: DomainRulePhase,
+  currentValue: unknown,
+  mutation: StateMutation<ConductState>,
+): boolean {
+  return CONDUCT_STATE_DOMAIN_RULES.some(
+    (rule) => rule.phase === phase && rule.matches(currentValue, mutation),
+  );
+}
+
 /**
  * Determines the outcome of a single intent-bearing state mutation without
  * performing persistence.
  */
-export function evaluateConductStateMutation(
+export async function evaluateConductStateMutation(
   currentValue: unknown,
   mutation: StateMutation<ConductState>,
   diagnostics?: StateMutationDiagnostics,
-): StateMutationResult {
+): Promise<StateMutationResult> {
+  if (matchesDomainRule('beforeExpected', currentValue, mutation)) {
+    await emitDiagnostic(diagnostics, 'resolved', currentValue, mutation);
+    return { kind: 'resolved' };
+  }
+
   if (stateMutationValuesEqual(currentValue, mutation.expected)) {
     return { kind: 'applied' };
   }
@@ -109,12 +142,12 @@ export function evaluateConductStateMutation(
     return { kind: 'idempotent' };
   }
 
-  if (mutation.field === 'feature_status' && currentValue === 'complete') {
-    emitDiagnostic(diagnostics, 'resolved', currentValue, mutation);
+  if (matchesDomainRule('afterIdempotent', currentValue, mutation)) {
+    await emitDiagnostic(diagnostics, 'resolved', currentValue, mutation);
     return { kind: 'resolved' };
   }
 
-  emitDiagnostic(diagnostics, 'conflict', currentValue, mutation);
+  await emitDiagnostic(diagnostics, 'conflict', currentValue, mutation);
   return {
     kind: 'conflict',
     message: `Expected ${mutation.field} to match before ${mutation.intent}`,

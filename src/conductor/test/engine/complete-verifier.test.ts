@@ -1,3 +1,4 @@
+// Covers: task:8
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -116,6 +117,25 @@ describe('engine/complete-verifier', () => {
       expect(result.reasons[0]).toMatch(/manual-test-results\.md/);
       expect(result.reasons[1]).toMatch(/finish-choice/);
     }
+  });
+
+  it('omits skipped steps but retains a done step with missing evidence as a gap', async () => {
+    await writeState({
+      feature_status: 'complete',
+      feature_desc: 'add foo',
+      manual_test: 'skipped',
+      finish: 'done',
+    });
+    await mkdir(join(dir, '.docs/retros'), { recursive: true });
+    await writeFile(join(dir, '.docs/retros/2026-05-01-add-foo.md'), '# Retro\n');
+
+    const result = await verifyWithCurrentSuite();
+
+    expect(result).toEqual({
+      ok: false,
+      failedSteps: ['finish'],
+      reasons: ['.pipeline/finish-choice is missing — the finish skill must record the chosen outcome (pr | merge-local | keep | discard)'],
+    });
   });
 
   it('reports test_suite as stale-complete when its PASS is no longer current', async () => {

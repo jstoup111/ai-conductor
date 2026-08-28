@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
@@ -25,6 +26,7 @@ import {
   savePrUrl,
   markFeatureComplete,
   markDownstreamStale,
+  filterRestageChanges,
 } from '../../src/engine/state.js';
 
 class RecordingConductStateStore implements ConductStateStore<ConductState> {
@@ -539,6 +541,40 @@ describe('engine/state', () => {
       expect(result.explore).toBe('done');
       expect(result.complexity).toBe('done');
       expect(result.stories).toBe('done');
+    });
+  });
+
+  // --- filterRestageChanges ---
+
+  describe('filterRestageChanges', () => {
+    it('drops skipped fields while retaining restages for other states', () => {
+      expect(filterRestageChanges(
+        {
+          manual_test: 'skipped',
+          build: 'done',
+          build_review: 'failed',
+          rebase: 'stale',
+        },
+        {
+          manual_test: 'stale',
+          build: 'stale',
+          build_review: 'stale',
+          rebase: 'stale',
+          finish: 'stale',
+        },
+      )).toEqual({
+        build: 'stale',
+        build_review: 'stale',
+        rebase: 'stale',
+        finish: 'stale',
+      });
+    });
+
+    it('returns an empty record when every requested restage is skipped', () => {
+      expect(filterRestageChanges(
+        { manual_test: 'skipped', prd_audit: 'skipped' },
+        { manual_test: 'stale', prd_audit: 'stale' },
+      )).toEqual({});
     });
   });
 

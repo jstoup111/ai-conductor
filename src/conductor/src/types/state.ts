@@ -128,7 +128,7 @@ export interface PrivilegedStateCorrection<State extends object> {
 }
 
 export type StateMutationOutcome =
-  | { kind: 'applied' }
+  | { kind: 'applied'; resolvedFields?: readonly string[] }
   | { kind: 'idempotent' }
   | { kind: 'resolved' };
 

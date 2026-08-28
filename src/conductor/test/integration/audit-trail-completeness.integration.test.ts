@@ -1,3 +1,4 @@
+// Covers: task:6
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -77,6 +78,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // sink registry entry carries `audit: true` — the declaration and the writer
   // must agree.
   step_refused: 'friction-mapped',
+  step_status_write_refused: 'friction-mapped',
   provider_attempt: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
   scratch_cleanup_reclaimed: 'not-audited-by-design',
@@ -217,6 +219,13 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     step: 'build',
     kind: 'needs-human',
     reason: 'operator judgement required',
+  },
+  step_status_write_refused: {
+    type: 'step_status_write_refused',
+    field: 'manual_test',
+    expected: 'skipped',
+    requested: 'stale',
+    intent: 'restage ship tail after build kickback',
   },
   provider_attempt: {
     type: 'provider_attempt',
@@ -673,6 +682,18 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
           after,
           `expected event type "${type}" (classified friction-mapped) to append a record — the writer's allowlist no longer matches this test's classification`,
         ).toBeGreaterThan(before);
+
+        if (type === 'step_status_write_refused') {
+          expect(
+            (await readRecords(dir)).at(-1),
+            'the skipped-to-stale refusal must preserve its operator-actionable audit fields',
+          ).toMatchObject({
+            origin: 'build',
+            event: 'step_status_write_refused',
+            reason: 'manual_test: expected skipped, requested stale',
+            cause: 'restage ship tail after build kickback',
+          });
+        }
       } else {
         expect(
           after,

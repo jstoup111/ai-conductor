@@ -112,14 +112,19 @@ import {
   getStepStatus,
   stepSatisfied,
   markDownstreamStale,
+  filterRestageChanges,
   extractPrUrl,
 } from './state.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
   StateMutation,
+  StateMutationResult,
 } from './conduct-state-store.js';
-import { resolveConductorStateStore } from './conductor-deps.js';
+import {
+  createStepStatusWriteRefusalDiagnostics,
+  resolveConductorStateStore,
+} from './conductor-deps.js';
 import {
   ALL_STEPS,
   OUT_OF_BAND_STEPS,
@@ -2790,16 +2795,18 @@ export class Conductor {
    */
   private async applyStateBatch(
     batch: NamedAtomicStateMutationBatch<ConductState>,
-  ): Promise<void> {
+  ): Promise<StateMutationResult> {
     const result = await this.stateStore.applyBatch(batch);
     if ('message' in result) throw new Error(result.message);
-    this.recordPersistedFields(batch.mutations);
+    const resolved = new Set(result.kind === 'applied' ? result.resolvedFields : []);
+    this.recordPersistedFields(batch.mutations.filter((mutation) => !resolved.has(mutation.field)));
+    return result;
   }
 
   private async applyStateMutation(mutation: StateMutation<ConductState>): Promise<void> {
     const result = await this.stateStore.apply(mutation);
     if ('message' in result) throw new Error(result.message);
-    this.recordPersistedFields([mutation]);
+    if (result.kind !== 'resolved') this.recordPersistedFields([mutation]);
   }
 
   /**
@@ -2854,8 +2861,12 @@ export class Conductor {
       });
     if (mutations.length === 0) return;
 
-    await this.applyStateBatch({ name, mutations });
-    Object.assign(current, changes);
+    const result = await this.applyStateBatch({ name, mutations });
+    const resolved = new Set(result.kind === 'applied' ? result.resolvedFields : []);
+    Object.assign(
+      current,
+      Object.fromEntries(Object.entries(changes).filter(([field]) => !resolved.has(field))),
+    );
     this.persistedStateSnapshot = { ...state };
   }
 
@@ -2882,7 +2893,9 @@ export class Conductor {
     }
     if (mutations.length === 0) return;
 
-    await this.applyStateBatch({ name, mutations });
+    const result = await this.applyStateBatch({ name, mutations });
+    const resolved = new Set(result.kind === 'applied' ? result.resolvedFields : []);
+    for (const field of resolved) after[field] = before[field];
     this.persistedStateSnapshot = { ...state };
   }
 
@@ -2895,6 +2908,7 @@ export class Conductor {
     await this.restoreMissingStateFile(state);
     const result = await saveStepStatus(this.stateFilePath, step, status, this.stateStore);
     requireStateMutation(result, `Conductor step-status update for ${step}`);
+    if (result.kind === 'applied' && result.resolvedFields?.includes(step)) return;
     state[step] = status;
     state.last_step = step;
     this.persistedStateSnapshot = { ...state };
@@ -3054,7 +3068,11 @@ export class Conductor {
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
-    this.stateStore = resolveConductorStateStore(this.stateFilePath, opts.stateStore);
+    this.stateStore = resolveConductorStateStore(
+      this.stateFilePath,
+      opts.stateStore,
+      createStepStatusWriteRefusalDiagnostics(opts.events),
+    );
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
     this.featureSlug = opts.featureSlug;
@@ -5818,7 +5836,11 @@ export class Conductor {
         const navigationIndex = await this.navigateStateBack(state, 'build', steps);
         // markDownstreamStale only restages `done` steps; manual_test
         // is `failed` here, so restage it explicitly for the tail.
-        await this.commitStateChanges(state, 'restage manual_test after BUILD kickback', { manual_test: 'stale' });
+        await this.commitStateChanges(
+          state,
+          'restage manual_test after BUILD kickback',
+          filterRestageChanges(state, { manual_test: 'stale' }),
+        );
         return { action: 'continue', nextIndex: navigationIndex - 1 }; // for-loop i++ lands on build
       }
       const reason =
@@ -7359,7 +7381,11 @@ export class Conductor {
                   for (const name of gapMemberNamesForMerge) {
                     staleChanges[name] = 'stale';
                   }
-                  await this.commitStateChanges(state, 'restage validation group after kickback', staleChanges);
+                  await this.commitStateChanges(
+                    state,
+                    'restage validation group after kickback',
+                    filterRestageChanges(state, staleChanges),
+                  );
                   i = navigationIndex - 1; // for-loop i++ lands on the merged target
                   continue;
                 }
@@ -7503,7 +7529,11 @@ export class Conductor {
                   for (const name of gapMemberNames) {
                     staleChanges[name] = 'stale';
                   }
-                  await this.commitStateChanges(state, 'restage validation gaps after kickback', staleChanges);
+                  await this.commitStateChanges(
+                    state,
+                    'restage validation gaps after kickback',
+                    filterRestageChanges(state, staleChanges),
+                  );
                   i = navigationIndex - 1; // for-loop i++ lands on the target step
                   continue;
                 }
@@ -10170,9 +10200,11 @@ export class Conductor {
                   // markDownstreamStale only restages `done` steps; build_review
                   // is `failed` here, so restage it (and manual_test) explicitly
                   // for the tail.
-                  await this.commitStateChanges(state, 'restage BUILD review after kickback', {
-                    build_review: 'stale', manual_test: 'stale',
-                  });
+                  await this.commitStateChanges(
+                    state,
+                    'restage BUILD review after kickback',
+                    filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
+                  );
                   i = navigationIndex - 1; // for-loop i++ lands on the rework target
                   continue;
                 }

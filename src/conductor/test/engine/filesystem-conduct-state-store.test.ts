@@ -383,7 +383,7 @@ describe('filesystem conduct state store', () => {
       persistenceWritesToDisk([]),
       {
         writer: 'test-client',
-        emit: (diagnostic) => diagnostics.push(diagnostic),
+        emit: (diagnostic) => { diagnostics.push(diagnostic); },
       },
     );
 

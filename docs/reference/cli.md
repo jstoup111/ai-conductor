@@ -189,7 +189,7 @@ run exits 1.
 | `--from <step>` | string | — | must be a step name | Sets the start index to that step. Also suppresses auto-resume. An unrecognized step name exits 1, printing the invalid value and every valid step name (built-ins plus any config-declared custom steps). |
 | `--cleanup` | boolean | `false` | — | Scans resumable features, reads `pr_url` from each `conduct-state.json`, checks whether the PR merged, and prompts `Remove merged worktree "<name>"? [y/n]` per merged feature. Prints a count. |
 | `--reset` | boolean | `false` | — | Writes an empty state object, prints `State cleared.`, and returns. |
-| `--diagnose` | boolean | `false` | — | Non-mutating. Resolves the worktree, then verifies state completeness. State OK prints `State OK…` and exits 0; gaps print a gap report plus remediation text to stderr and exit 1; an orphaned state exits 1. |
+| `--diagnose` | boolean | `false` | — | Non-mutating. Resolves the worktree, then verifies state completeness. SHIP-gating steps recorded as `skipped` are satisfied without an artifact check; steps that ran still require their normal evidence. State OK prints `State OK…` and exits 0; gaps print a gap report plus remediation text to stderr and exit 1; an orphaned state exits 1. |
 | `--report` | boolean | `false` | — | Read-only. Renders `.pipeline/events.jsonl` as step durations, retry hotspots, and token spend, then exits 0. A report error exits 1. No provider session. |
 | `--cooldown <seconds>` | integer | `10` | no range check | Seconds to pause between steps. A non-numeric value parses to `NaN`. |
 | `--model <name>` | string | — | alias or full model ID | Overrides the model for every step. Beats every configured source. See [models](models.md). |
