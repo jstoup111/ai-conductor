@@ -211,6 +211,7 @@ export async function prepareWorktree(
   const decision = await setupDecision(worktreePath, opts?.baseSha, opts?.force ?? false);
   if (opts?.events) await opts.events.emit({ type: 'project_setup', ran: decision.ran, reason: decision.reason });
   else log?.(`project setup ${decision.ran ? 'running' : 'skipped'} (${decision.reason})`);
+  if (decision.reason === 'no-script') log?.('no bin/setup — skipping project setup');
   let setupRan = false;
   if (decision.ran) {
     await rm(join(worktreePath, SETUP_MARKER_PATH), { force: true });
@@ -245,7 +246,20 @@ async function setupMarkerExists(worktreePath: string): Promise<boolean> {
   }
 }
 
+/** A present but unreadable setup path is distinct from an absent script. */
+async function setupScriptExists(worktreePath: string): Promise<boolean> {
+  try {
+    await lstat(join(worktreePath, SETUP_SCRIPT));
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
 async function setupDecision(worktreePath: string, baseSha: string | undefined, force: boolean): Promise<SetupDecision> {
+  if (!await setupScriptExists(worktreePath)) {
+    return { type: 'project_setup', ran: false, reason: 'no-script' };
+  }
   if (force) return { type: 'project_setup', ran: true, reason: 'forced' };
   if (!baseSha) return { type: 'project_setup', ran: true, reason: 'no-marker' };
   const [marker, setupScriptHash] = await Promise.all([

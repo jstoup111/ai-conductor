@@ -164,6 +164,12 @@ describe('renderDaemonEvent', () => {
     })).toEqual(['↶ REWIND: build (operator; demoted build, test_suite, build_review)']);
   });
 
+  it('renders a scriptless project setup as skipped', () => {
+    expect(lines({ type: 'project_setup', ran: false, reason: 'no-script' })).toEqual([
+      '· project setup skipped (no-script)',
+    ]);
+  });
+
   it('renders plan-growth counts with each gate and the current cap', () => {
     expect(lines({
       type: 'plan_growth',

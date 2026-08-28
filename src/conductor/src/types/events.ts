@@ -175,7 +175,7 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 
 export type ConductorEvent =
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
-  | { type: 'project_setup'; ran: boolean; reason: 'marker-valid' | 'no-marker' | 'script-changed' | 'base-moved' | 'marker-invalid' | 'forced' }
+  | { type: 'project_setup'; ran: boolean; reason: 'marker-valid' | 'no-marker' | 'no-script' | 'script-changed' | 'base-moved' | 'marker-invalid' | 'forced' }
   | {
       /** Durable plan-task growth accounting after a remediation append. */
       type: 'plan_growth';

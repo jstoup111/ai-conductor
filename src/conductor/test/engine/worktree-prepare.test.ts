@@ -203,6 +203,41 @@ describe('engine/worktree-prepare', () => {
       expect((await readFile(join(dir, 'setup-count'), 'utf-8')).trim().split('\n')).toHaveLength(2);
       expect(seen).toEqual([{ type: 'project_setup', ran: true, reason: 'forced' }]);
     });
+
+    it.each([
+      ['without a marker or base SHA', {}],
+      ['without a marker with a base SHA', { baseSha: 'base-a' }],
+      ['when forced', { baseSha: 'base-a', force: true }],
+    ])('reports no-script %s', async (_shape, setupOpts) => {
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      const log: string[] = [];
+      events.on('project_setup', (event) => { seen.push(event); });
+
+      await prepareWorktree(dir, (message) => log.push(message), { ...setupOpts, events });
+
+      expect(seen).toEqual([{ type: 'project_setup', ran: false, reason: 'no-script' }]);
+      expect(log).toContain('no bin/setup — skipping project setup');
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+    });
+
+    it('keeps an unreadable-but-present setup script distinct from no-script', async () => {
+      await mkdir(join(dir, SETUP_SCRIPT), { recursive: true });
+      await writeSetupMarker(dir, {
+        version: 1,
+        setupScriptHash: 'old-hash',
+        baseSha: 'base-a',
+        preparedAtCommit: 'old',
+      });
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('project_setup', (event) => { seen.push(event); });
+
+      await expect(prepareWorktree(dir, undefined, { baseSha: 'base-a', events }))
+        .rejects.toBeInstanceOf(SetupFailureError);
+
+      expect(seen).toEqual([{ type: 'project_setup', ran: true, reason: 'script-changed' }]);
+    });
   });
 
   describe('runDispatchStart', () => {
