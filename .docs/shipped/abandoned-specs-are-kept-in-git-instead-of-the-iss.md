@@ -4,6 +4,12 @@ spec_hash: 234ca054bb9d66e31b46fb004f140e942e1ee82152a94d7bafb5c14a7045b43c
 pr: https://github.com/jstoup111/ai-conductor/pull/1956
 shipped: 2026-08-28
 engine_version: 20260828T051725Z-80907eaa21b5
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "docs/runbooks/index.md:11-20 — Task 1 authorized \"add a row\"; the diff creates the index's first runbook table and populates it with all eight runbooks, seven of them unrelated to this feature"
+    accepted: true
 ---
 
 ## Cost
