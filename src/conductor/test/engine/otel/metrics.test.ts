@@ -182,6 +182,44 @@ describe('Task 4: step-duration overflow and zero observations', () => {
   });
 });
 
+// ── Task 5: closeout-duration overflow observation ─────────────────────────
+
+describe('Task 5: closeout-duration overflow observation', () => {
+  it('keeps a closeout overflow observation in the bucket above the largest finite boundary', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter })],
+    });
+
+    try {
+      const recorder = new MetricsRecorder(provider.getMeter('task-5'));
+      const closeout = {
+        type: 'pipeline_closeout',
+        obligation: 'summary',
+        startedAt: 1_000,
+        endedAt: 2_001_000,
+        ts: 2_001_000,
+      } as const;
+
+      expect(() => recorder.onPipelineCloseout(closeout)).not.toThrow();
+      await provider.forceFlush();
+
+      const metric = findMetric(exporter, 'conductor.pipeline.closeout.duration');
+      const point = (metric as HistogramMetricData | undefined)?.dataPoints.find(
+        (dataPoint) => dataPoint.attributes['obligation'] === 'summary',
+      );
+
+      expect(point).toBeDefined();
+      expect(point?.value.count).toBe(1);
+      expect(point?.value.sum).toBe(2_000_000);
+      expect(point?.value.buckets.boundaries.at(-1)).toBe(DURATION_BUCKET_BOUNDARIES_MS.at(-1));
+      expect(point?.value.buckets.counts.at(-1)).toBe(1);
+    } finally {
+      await provider.shutdown();
+    }
+  });
+});
+
 // ── T15: Duration histogram and retries counter ───────────────────────────────
 
 describe('T15: step duration histogram and retries counter', () => {
