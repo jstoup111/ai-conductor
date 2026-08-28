@@ -194,4 +194,76 @@ describe('buildResource', () => {
     const resource = buildResource({ pipelineDir, project: 'p' });
     expect(resource.attributes['conductor.feature']).toBe('unknown');
   });
+
+  // Story 2: the metric Resource is feature-stable. Prometheus folds the whole
+  // resource attribute set into `target_info`'s label set, so a run-varying
+  // attribute here mints a series per run exactly as a data-point attribute
+  // would. The trace Resource has no such constraint.
+  describe('signal scope', () => {
+    const ctx = () => ({
+      pipelineDir,
+      feature: 'feature-a',
+      project: '/workspace/project-a',
+      projectName: 'project-a',
+      branch: 'feat/thing',
+      engineVersion: '20260828T000000Z-abc',
+      runId: 'run-1',
+    });
+
+    it('the metric scope carries exactly the feature-stable attribute set', () => {
+      const resource = buildResource(ctx(), 'metrics');
+
+      // Exact set, not a subset: an added run-varying attribute must fail here.
+      expect(Object.keys(resource.attributes).sort()).toEqual([
+        'conductor.branch',
+        'conductor.feature',
+        'conductor.project',
+        'service.instance.id',
+        'service.name',
+      ]);
+    });
+
+    it('the trace scope adds the run id and the engine version', () => {
+      const resource = buildResource(ctx(), 'traces');
+
+      expect(resource.attributes['conductor.run.id']).toBe('run-1');
+      expect(resource.attributes['conductor.engine.version']).toBe('20260828T000000Z-abc');
+    });
+
+    it('both scopes carry the same service.instance.id and service.name', () => {
+      const metrics = buildResource(ctx(), 'metrics');
+      const traces = buildResource(ctx(), 'traces');
+
+      expect(metrics.attributes['service.instance.id']).toBe('project-a/feature-a');
+      expect(traces.attributes['service.instance.id']).toBe(metrics.attributes['service.instance.id']);
+      expect(metrics.attributes['service.name']).toBe('ai-conductor');
+      expect(traces.attributes['service.name']).toBe('ai-conductor');
+    });
+
+    it('the metric scope omits the run id even when a session file supplies one', async () => {
+      await writeFile(join(pipelineDir, 'conduct-session-id'), 'session-run-id', 'utf-8');
+      const { runId: _drop, ...withoutOverride } = ctx();
+
+      const resource = buildResource(withoutOverride, 'metrics');
+
+      expect(Object.values(resource.attributes)).not.toContain('session-run-id');
+      expect(resource.attributes['conductor.run.id']).toBeUndefined();
+    });
+
+    it('two engine versions yield an identical metric attribute set, so target_info gains no series', () => {
+      const first = buildResource({ ...ctx(), engineVersion: 'v1' }, 'metrics');
+      const second = buildResource({ ...ctx(), engineVersion: 'v2' }, 'metrics');
+
+      expect(first.attributes).toEqual(second.attributes);
+    });
+
+    it('an unwritable pipeline directory still builds both scopes without throwing', () => {
+      const unwritable = join(tempDir, 'no', 'such', 'dir');
+      const broken = { ...ctx(), pipelineDir: unwritable, runId: undefined };
+
+      expect(() => buildResource(broken, 'metrics')).not.toThrow();
+      expect(() => buildResource(broken, 'traces')).not.toThrow();
+      expect(buildResource(broken, 'metrics').attributes['service.instance.id']).toBe('project-a/feature-a');
+    });
+  });
 });

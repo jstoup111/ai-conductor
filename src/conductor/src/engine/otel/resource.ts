@@ -26,6 +26,16 @@ export interface ResourceContext {
 }
 
 /**
+ * Which signal a Resource is being built for. Metric backends fold the whole
+ * resource attribute set into `target_info`'s label set, so a run-varying
+ * attribute on the metric Resource mints a series per run exactly as a
+ * data-point attribute would. Traces carry no such cost — each trace is unique
+ * already — so the run id and the engine version ride the trace scope only.
+ * See adr-014's 2026-08-28 amendment.
+ */
+export type ResourceSignal = 'metrics' | 'traces';
+
+/**
  * Build an OTel Resource with conductor-specific attributes (FR-6).
  *
  * `conductor.run.id` resolution order:
@@ -36,22 +46,29 @@ export interface ResourceContext {
  * This function is synchronous and NEVER throws — missing session-id file results
  * in a generated id.
  */
-export function buildResource(ctx: ResourceContext): Resource {
-  const runId = ctx.runId ?? resolveRunId(ctx.pipelineDir);
+export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'traces'): Resource {
   const feature = ctx.feature ?? 'unknown';
   const project = ctx.project ?? 'unknown';
   const projectName = ctx.projectName ?? 'unknown';
   const branch = ctx.branch ?? 'unknown';
-  const engineVersion = ctx.engineVersion ?? 'unknown';
 
-  return resourceFromAttributes({
+  const featureStable = {
     'service.name': SERVICE_NAME,
     'service.instance.id': `${projectName}/${feature}`,
-    'conductor.run.id': runId,
     'conductor.feature': feature,
     'conductor.project': project,
     'conductor.branch': branch,
-    'conductor.engine.version': engineVersion,
+  };
+  // Every value above is fixed for a feature's lifetime, so `target_info` holds
+  // one row per feature rather than one per run. Resolving the run id is also
+  // skipped here: it writes the session-id file as a side effect, and the
+  // metric scope has no use for the value.
+  if (signal === 'metrics') return resourceFromAttributes(featureStable);
+
+  return resourceFromAttributes({
+    ...featureStable,
+    'conductor.run.id': ctx.runId ?? resolveRunId(ctx.pipelineDir),
+    'conductor.engine.version': ctx.engineVersion ?? 'unknown',
   });
 }
 

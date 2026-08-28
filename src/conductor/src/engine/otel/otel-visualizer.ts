@@ -425,7 +425,7 @@ export class OtelVisualizer implements VisualizerPlugin {
   private initializeProviders(context: VisualizerStartContext): void {
     if (this.tracerProvider || this.meterProvider || this.spanManager || this.metricsRecorder) return;
 
-    const resource = buildResource({
+    const resourceContext = {
       pipelineDir: context.pipelineDir ?? '',
       runId: context.runId,
       feature: context.feature,
@@ -433,16 +433,21 @@ export class OtelVisualizer implements VisualizerPlugin {
       projectName: this.projectNameOverride ?? (context.project ? basename(context.project) : undefined),
       branch: context.branch,
       engineVersion: context.engineVersion,
-    });
+    };
+    // Two scopes, one context: the meter provider must not carry run-varying
+    // attributes, because the backend turns the metric Resource into
+    // `target_info`'s label set (adr-014, 2026-08-28 amendment).
+    const traceResource = buildResource(resourceContext, 'traces');
+    const metricResource = buildResource(resourceContext, 'metrics');
     this.tracerProvider = new BasicTracerProvider({
-      resource,
+      resource: traceResource,
       spanProcessors: [new BatchSpanProcessor(this.spanExporter, { exportTimeoutMillis: this.exportTimeoutMillis })],
     });
     const reader = new PeriodicExportingMetricReader({
       exporter: this.metricExporter,
       exportIntervalMillis: METRIC_EXPORT_INTERVAL_MS,
     });
-    this.meterProvider = new MeterProvider({ resource, readers: [reader] });
+    this.meterProvider = new MeterProvider({ resource: metricResource, readers: [reader] });
     const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
     const meter = this.meterProvider.getMeter('conductor', '1.0.0');
     this.metricsRecorder = new MetricsRecorder(meter, {

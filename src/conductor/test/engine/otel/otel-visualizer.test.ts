@@ -332,6 +332,23 @@ describe('Task 5: visualizer identity wiring', () => {
     });
   });
 
+  it('exports a feature-stable metric resource while the span resource keeps the run id', async () => {
+    const exported = await exportStepMetric('nested-feature');
+
+    // The backend copies the metric Resource into `target_info`'s label set, so
+    // a run-varying attribute here mints one series per run — the defect the
+    // 2026-08-28 as-built review caught after `service.instance.id` was re-keyed.
+    expect(Object.keys(exported.metricResource.attributes).sort()).toEqual([
+      'conductor.branch',
+      'conductor.feature',
+      'conductor.project',
+      'service.instance.id',
+      'service.name',
+    ]);
+    expect(Object.values(exported.metricResource.attributes)).not.toContain('shared-resource-run-id');
+    expect(exported.span.resource.attributes['conductor.run.id']).toBe('shared-resource-run-id');
+  });
+
   it('passes an unknown feature through to metric data points', async () => {
     const exported = await exportStepMetric('unknown');
 
