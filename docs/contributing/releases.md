@@ -204,6 +204,16 @@ A ```` ```bash migration ```` fence inside a `## Migration` (or `### Migration`)
 `bin/migrate`'s own regexes, so "runnable" means exactly what `bin/migrate` will execute when a consumer
 updates past this version.
 
+The fence is the migration; the rest of the section is prose. A sentence telling the operator what the
+block does may sit above it, below it, or between two fences, and `bin/migrate`, the release gate, and
+`ReleaseDisposition.migration` all read only the fences. A section carrying no fence must say exactly
+`none`.
+
+The `## Migration` section and the `Release-*` block may appear in either order, with or without a
+`---` between them, and either may be the last thing in the body — the `Closes owner/repo#N` trailer
+that `injectIssueRef` appends below them is not part of the section. The renderer normalises the order
+when it snapshots the body; nothing in the authored body depends on it.
+
 #### Block authoring contract
 
 Every runnable block must sit under a versioned `## [x.y.z]` release entry. `bin/migrate` runs it from
