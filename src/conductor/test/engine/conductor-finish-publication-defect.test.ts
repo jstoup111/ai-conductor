@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, access } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -26,6 +27,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
+import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
@@ -151,5 +153,63 @@ describe('conductor/finish publication defect', () => {
     expect(await markerExists(dir, '.pipeline/pr-body-regen-attempt.json')).toBe(true);
     expect(await markerExists(dir, '.pipeline/HALT')).toBe(false);
     expect(await markerExists(dir, '.pipeline/DONE')).toBe(true);
+  });
+
+  it('re-enters authoring for a persisted structurally-incomplete verdict instead of deadlocking in retry reconciliation (#2006)', async () => {
+    await seedShipTail();
+    const authored = {
+      title: 'feat: make publication retries converge',
+      body: 'This pull request improves the FINISH publication retry path.',
+    };
+    const revision = `${PR_URL}\u0000${JSON.stringify([authored.title, authored.body])}`;
+    const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+    await writeFile(
+      join(dir, '.pipeline/prose-judgment.json'),
+      JSON.stringify({
+        version: 1,
+        records: {
+          [digest]: {
+            kind: 'revision_required',
+            reason: 'structurally_incomplete',
+            detail: 'The body does not explain the reader-facing outcome.',
+          },
+        },
+      }),
+    );
+    const pr = { ...authored, isDraft: true };
+    const dispatchAuthoring = vi.fn(async () => {
+      pr.body = 'This pull request makes persisted deficient prose return to one bounded authoring pass.';
+      return { success: true };
+    });
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      baseBranch: 'main',
+      git: pushedGit(),
+      gh: async (args) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ url: PR_URL, labels: [], ...pr }) };
+        }
+        throw new Error(`unexpected gh command: ${args.join(' ')}`);
+      },
+      observeReleaseReadiness: async () => 'present',
+    });
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('seeded state was not readable');
+
+    const result = await coordinator.advance({
+      state: persisted.value,
+      mode: 'auto',
+      daemon: true,
+      dispatchJudgment: vi.fn(),
+      dispatchAuthoring,
+      emit: async () => {},
+    });
+
+    expect(dispatchAuthoring).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+    expect(result).not.toEqual(expect.objectContaining({
+      kind: 'human_required', reason: 'publication_transition_unmoved',
+    }));
   });
 });
