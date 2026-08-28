@@ -1,4 +1,7 @@
-import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   materializeTautologyPreflight,
@@ -648,5 +651,130 @@ describe('build-review test-quality preflight', () => {
     });
 
     expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'cleanup-failed' });
+  });
+  // #1961: a diff that DELETES a directory leaves the counterfactual checkout
+  // without a parent for the merge-base file being restored. The real
+  // filesystem is the boundary under test here, so these exercise the actual
+  // default write path rather than a mocked one.
+  describe('restores merge-base content into directories the diff deleted', () => {
+    let workdir = '';
+
+    beforeEach(async () => { workdir = await mkdtemp(join(tmpdir(), 'tautology-preflight-')); });
+    afterEach(async () => { await rm(workdir, { recursive: true, force: true }); });
+
+    async function materializeOnDisk(options: {
+      readonly diff: string;
+      readonly mergeBase: Readonly<Record<string, string>>;
+      readonly seedCheckout?: (checkout: string) => Promise<void>;
+    }) {
+      const checkout = join(workdir, '.pipeline', 'build-review-preflight', 'head');
+      const result = await materializeTautologyPreflight({
+        scopedWorkingDirectory: workdir, mergeBase: 'base', headSha: 'head', diff: options.diff,
+        createCheckout: async (path) => {
+          await mkdir(path, { recursive: true });
+          await options.seedCheckout?.(path);
+        },
+        readMergeBaseFile: async (path) => options.mergeBase[path],
+        writeFile: async (path, content) => { await writeFile(path, content); },
+        removeFile: async (path) => { await rm(path, { force: true }); },
+        runScoped: async () => ({ kind: 'nonzero-exit' as const, exitCode: 1, stdout: 'RED', stderr: '' }),
+        // Retained so the materialized tree can be asserted; production
+        // cleanup is covered by the checkout-lifecycle tests above.
+        removeCheckout: async () => {},
+      });
+      return { result, checkout };
+    }
+
+    it('materializes a changed production file whose parent directory the diff deleted', async () => {
+      const { result, checkout } = await materializeOnDisk({
+        diff: [
+          'diff --git a/skills/retro/SKILL.md b/skills/retro/SKILL.md',
+          'diff --git a/test/a.test.ts b/test/a.test.ts',
+        ].join('\n'),
+        mergeBase: { 'skills/retro/SKILL.md': 'BASE skill' },
+      });
+
+      expect(result).toMatchObject({ classification: 'red' });
+      expect(await readFile(join(checkout, 'skills/retro/SKILL.md'), 'utf-8')).toBe('BASE skill');
+    });
+
+    it('creates every missing intermediate directory for a deeply nested restore', async () => {
+      const { result, checkout } = await materializeOnDisk({
+        diff: [
+          'diff --git a/src/a/b/c/d/deep.ts b/src/a/b/c/d/deep.ts',
+          'diff --git a/test/a.test.ts b/test/a.test.ts',
+        ].join('\n'),
+        mergeBase: { 'src/a/b/c/d/deep.ts': 'BASE deep' },
+      });
+
+      expect(result).toMatchObject({ classification: 'red' });
+      expect(await readFile(join(checkout, 'src/a/b/c/d/deep.ts'), 'utf-8')).toBe('BASE deep');
+    });
+
+    it('reverts a rename whose old path directory does not exist in the checkout', async () => {
+      const { result, checkout } = await materializeOnDisk({
+        diff: [
+          'diff --git a/skills/retro/SKILL.md b/skills/kept/SKILL.md',
+          'similarity index 100%',
+          'rename from skills/retro/SKILL.md',
+          'rename to skills/kept/SKILL.md',
+          'diff --git a/test/a.test.ts b/test/a.test.ts',
+        ].join('\n'),
+        mergeBase: { 'skills/retro/SKILL.md': 'BASE renamed-away' },
+        seedCheckout: async (path) => {
+          await mkdir(join(path, 'skills/kept'), { recursive: true });
+          await writeFile(join(path, 'skills/kept/SKILL.md'), 'HEAD skill');
+        },
+      });
+
+      expect(result).toMatchObject({
+        classification: 'red',
+        revertedProductionManifest: [{ path: 'skills/retro/SKILL.md' }],
+      });
+      expect(await readFile(join(checkout, 'skills/retro/SKILL.md'), 'utf-8')).toBe('BASE renamed-away');
+      await expect(readFile(join(checkout, 'skills/kept/SKILL.md'), 'utf-8')).rejects.toThrow();
+    });
+
+    it('leaves an existing parent directory and its unrelated contents intact', async () => {
+      const { result, checkout } = await materializeOnDisk({
+        diff: [
+          'diff --git a/src/a.ts b/src/a.ts',
+          'diff --git a/test/a.test.ts b/test/a.test.ts',
+        ].join('\n'),
+        mergeBase: { 'src/a.ts': 'BASE production' },
+        seedCheckout: async (path) => {
+          await mkdir(join(path, 'src'), { recursive: true });
+          await writeFile(join(path, 'src/a.ts'), 'HEAD production');
+          await writeFile(join(path, 'src/sibling.ts'), 'HEAD sibling');
+        },
+      });
+
+      expect(result).toMatchObject({ classification: 'red' });
+      expect(await readFile(join(checkout, 'src/a.ts'), 'utf-8')).toBe('BASE production');
+      expect(await readFile(join(checkout, 'src/sibling.ts'), 'utf-8')).toBe('HEAD sibling');
+    });
+
+    it('creates the parent through the injected seam immediately before each write', async () => {
+      const calls: string[] = [];
+      const result = await materializeTautologyPreflight({
+        scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+        diff: [
+          'diff --git a/skills/retro/SKILL.md b/skills/retro/SKILL.md',
+          'diff --git a/test/a.test.ts b/test/a.test.ts',
+        ].join('\n'),
+        createCheckout: async () => {},
+        readMergeBaseFile: async () => 'BASE skill',
+        ensureDir: async (path) => { calls.push(`ensure:${path}`); },
+        writeFile: async (path) => { calls.push(`write:${path}`); },
+        runScoped: async () => ({ kind: 'nonzero-exit' as const, exitCode: 1, stdout: 'RED', stderr: '' }),
+        removeCheckout: async () => {},
+      });
+
+      expect(result).toMatchObject({ classification: 'red' });
+      expect(calls).toEqual([
+        'ensure:/feature/.pipeline/build-review-preflight/head/skills/retro/SKILL.md',
+        'write:/feature/.pipeline/build-review-preflight/head/skills/retro/SKILL.md',
+      ]);
+    });
   });
 });

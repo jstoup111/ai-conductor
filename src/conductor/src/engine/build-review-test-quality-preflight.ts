@@ -1,5 +1,5 @@
-import { join } from 'node:path';
-import { rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { mkdir, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 export interface TautologyPathClassification {
@@ -47,6 +47,13 @@ export interface TautologyPreflightDependencies {
   readonly writeFile: (path: string, content: string) => Promise<void>;
   /** Removes an added path from the disposable HEAD checkout. */
   readonly removeFile?: (path: string) => Promise<void>;
+  /**
+   * Creates the parent directory of a path about to be written inside the
+   * disposable checkout. A diff that DELETES a directory leaves no parent for
+   * the merge-base file being restored into the counterfactual, so the bare
+   * write fails ENOENT and takes the whole preflight down (#1961).
+   */
+  readonly ensureDir?: (path: string) => Promise<void>;
   /** Executes precisely the supplied changed-test selectors; never an aggregate fallback. */
   readonly runScoped: (cwd: string, selectors: readonly string[], signal: AbortSignal) => Promise<TautologyScopedRunResult>;
   /** Removes the disposable checkout on every outcome. */
@@ -372,6 +379,12 @@ export async function materializeTautologyPreflight(
   if (classified.production.length === 0) return failure('no-production-changes', paths, classified.tests, sourceIdentities);
 
   const checkout = join(deps.scopedWorkingDirectory, '.pipeline', 'build-review-preflight', deps.headSha);
+  // Best effort by construction: the write that follows is the authority on
+  // whether a file could be materialized, and it reports the real errno.
+  // Preparing the parent must never become a failure mode of its own.
+  const ensureDir = deps.ensureDir ?? (async (target: string) => {
+    try { await mkdir(dirname(target), { recursive: true }); } catch { /* the write reports the real failure */ }
+  });
   let result: TautologyPreflightResult | undefined;
   try {
     await deps.createCheckout(checkout, deps.headSha);
@@ -400,6 +413,7 @@ export async function materializeTautologyPreflight(
             break;
           }
           manifest.push({ path: renamedFrom, mergeBaseBlobSha: gitBlobSha(oldContent) });
+          await ensureDir(join(checkout, renamedFrom));
           await deps.writeFile(join(checkout, renamedFrom), oldContent);
           await (deps.removeFile ?? ((target) => rm(target, { force: true })))(join(checkout, path));
           continue;
@@ -412,6 +426,7 @@ export async function materializeTautologyPreflight(
         continue;
       }
       manifest.push({ path, mergeBaseBlobSha: gitBlobSha(mergeBaseContent) });
+      await ensureDir(join(checkout, path));
       await deps.writeFile(join(checkout, path), mergeBaseContent);
       if (aborted(signal)) {
         result = failure('aborted', paths, classified.tests, sourceIdentities);
