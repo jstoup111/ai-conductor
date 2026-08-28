@@ -160,18 +160,31 @@ Relevant existing facts (evidence):
 >   name the data-point seam uses (`otel.project_name` when non-blank, else `basename(projectRoot)`)
 >   and `<feature>` is the feature slug. Either side falls back to `unknown` when unavailable; the
 >   value never fails a run, preserving Decision 5.
-> - The run id is **not** on the label path in any form — neither a data-point attribute nor
->   `service.instance.id`. It stays on the Resource as `conductor.run.id`, where trace backends
->   index it and Prometheus files it under `target_info` instead of the series key.
+> - The run id is **not** on any metric label path — not a data-point attribute, not
+>   `service.instance.id`, and not any other attribute of the metric Resource. `target_info`'s label
+>   set is the whole resource attribute set, so a run-varying resource attribute mints a
+>   `target_info` series per run just as surely as a data-point attribute would. The Resource is
+>   therefore signal-scoped: the metric provider receives only attributes that are stable for a
+>   feature's lifetime (`service.name`, `service.instance.id`, `conductor.project`,
+>   `conductor.feature`, `conductor.branch`), while the trace provider additionally receives
+>   `conductor.run.id` and `conductor.engine.version`. Traces are per-run by nature, so run
+>   correlation is unchanged there and nothing on the trace side is unbounded.
 > - Series growth is bounded by dimensions this design already pays for: the data-point
 >   `project`/`feature` attributes of the 2026-08-26 amendment carry the same two values that now
 >   compose the instance, so this placement adds no cardinality of its own.
 > - `target_info` becomes joinable per feature on `(job, instance)` — the goal the 2026-08-26
 >   amendment stated but did not reach, because a constant `job` with no `instance` collapses every
 >   run's `target_info` onto one match group and Prometheus refuses the join as ambiguous (verified
->   2026-08-28 against the live backend). Resource attributes that vary within a feature's lifetime
->   (`conductor.run.id`, `conductor.engine.version`) are last-writer-wins on that row: it describes
->   the most recent lap, not a history.
+>   2026-08-28 against the live backend). Because the metric Resource carries only feature-stable
+>   attributes, that row is one series per feature and does not accumulate. It answers "what is this
+>   feature", not "what happened on lap N" — run-level questions are a trace concern.
+> - **Correction, 2026-08-28.** The first draft of this amendment asserted that run-varying resource
+>   attributes were merely last-writer-wins on the `target_info` row. That is wrong, for the same
+>   reason the 2026-08-26 amendment was wrong, one level over: every resource attribute is part of
+>   `target_info`'s label set, so `conductor.run.id` on a shared Resource kept minting a series per
+>   run even after `service.instance.id` was re-keyed. Observed directly: 22 `target_info` series
+>   across 17 run ids on the live backend. The signal-scoped Resource above is the repair; the
+>   as-built gate caught the gap before it shipped.
 > - **Proof obligation.** A test asserts the exported Resource's `service.instance.id` directly. A
 >   data-point-attribute assertion cannot observe this contract and does not discharge it.
 >
@@ -188,7 +201,8 @@ Relevant existing facts (evidence):
 > **Unchanged.** The `MetricsRecorder` constructor-injected identity seam and its `project` and
 > `feature` data-point attributes are untouched, so concurrent features inheriting that seam need no
 > rework. The worktree-isolation claim below continues to hold: traces separate by
-> `conductor.run.id`, and metrics now separate by the `instance` label rather than depending on it.
+> `conductor.run.id` on the trace Resource, and metrics separate by the `instance` label rather than
+> depending on it.
 
 ## Consequences
 
