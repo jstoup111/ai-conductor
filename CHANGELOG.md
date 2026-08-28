@@ -34,6 +34,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Removed ineffective TDD RED/GREEN model configuration keys; configured tdd blocks are now rejected as unknown step settings. ([implementation PR #1910](https://github.com/jstoup111/ai-conductor/pull/1910)).
 - Retire the retrospective skill, command, and delivery-time closeout obligations. ([implementation PR #1946](https://github.com/jstoup111/ai-conductor/pull/1946)).
+- Removes the unattended inline --auto one-shot and directs unattended runs to the daemon, and fixes an intake-ledger lease failure when a lease was released while another process probed the owner's liveness. ([implementation PR #1974](https://github.com/jstoup111/ai-conductor/pull/1974)).
 
 ### Fixed
 
