@@ -68,6 +68,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - daemon-triage classifies plan-gap halts instead of reporting them as mechanical, and the stalled-feature runbook carries the amend-reseal-rewind recovery. ([implementation PR #1980](https://github.com/jstoup111/ai-conductor/pull/1980)).
 - The build_review testQuality preflight creates the parent directory when restoring a merge-base file whose directory the diff deleted, so a deletion no longer fails the preflight. ([implementation PR #1982](https://github.com/jstoup111/ai-conductor/pull/1982)).
 - Provides explicit OpenTelemetry duration buckets through 30 minutes for step and closeout histograms. ([implementation PR #1985](https://github.com/jstoup111/ai-conductor/pull/1985)).
+- Skipped SHIP steps now remain skipped when a build kickback restages downstream work. ([implementation PR #2003](https://github.com/jstoup111/ai-conductor/pull/2003)).
 
 ## Migration
 
