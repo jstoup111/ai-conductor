@@ -12,10 +12,10 @@ output: 164651
 cache_read: 41543830
 cache_creation: 1011172
 cost_usd: 31.1583
-dispatches: 22
+dispatches: 23
 retries: 2
 halts: 3
-unmetered: count: 6, duration_ms: 0
+unmetered: count: 7, duration_ms: 0
 cost_unmetered: count: 0
 providers:
   codex: input: 1381346, output: 109029, cache_read: 29256448, cache_creation: 0, cost_usd: 13.5112, dispatches: 11, cost_unmetered: 0
@@ -23,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:build_review,step:finish
+reason: open-executions:step:build_review
 
 ## Build Review
 laps_to_pass: 2
