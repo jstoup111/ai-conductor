@@ -86,7 +86,7 @@ export type PublicationPullRequest =
   | {
       identity: 'one';
       url: string;
-      prose: 'accepted' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
       /** A machine-readable `needs-remediation` signal, distinct from prose judgment. */
       halted?: true;
       ready: boolean;
@@ -125,7 +125,7 @@ export type PullRequestObservation =
   | {
       state: 'one';
       url: string;
-      prose: 'accepted' | 'stale' | 'placeholder' | 'halt';
+      prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt';
       /** The observer found a `needs-remediation` title, label, or body marker. */
       halted?: true;
       ready: boolean;
@@ -1393,6 +1393,7 @@ function publicationTransitionDimensionValue(
 function publicationPrProse(snapshot: PublicationSnapshot):
   | PublicationPullRequest['identity']
   | 'accepted'
+  | 'revision_required'
   | 'stale'
   | 'placeholder'
   | 'halt'

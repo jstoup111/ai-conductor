@@ -166,8 +166,8 @@ function prProse(
   title: unknown,
   body: unknown,
   halted: boolean,
-  acceptedRevision: boolean,
-): 'accepted' | 'stale' | 'placeholder' | 'halt' {
+  verdict: 'accepted' | 'deficient' | 'none',
+): 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
   const text = `${prTitle}\n${prBody}`.trim();
@@ -187,7 +187,9 @@ function prProse(
   // authored that exact revision or received an accepted judgment for it.
   // The PR remains the observation authority; this cache only records the
   // bounded provider work performed by this coordinator lifetime.
-  return acceptedRevision ? 'accepted' : 'stale';
+  if (verdict === 'accepted') return 'accepted';
+  if (verdict === 'deficient') return 'revision_required';
+  return 'stale';
 }
 
 /**
@@ -412,7 +414,7 @@ export function createProductionFinishPublicationCoordinator(
                   proseRevisionByPr.set(pr.url, revision);
                   await seedJudgmentStore();
                   if (authoredProsePendingByPr.delete(pr.url) && !halted) {
-                    const observedProse = prProse(pr.title, pr.body, false, false);
+                    const observedProse = prProse(pr.title, pr.body, false, 'none');
                     if (observedProse !== 'placeholder') {
                       // The authoring pass, not an independently observed
                       // reader-facing revision, owns this exact replacement.
@@ -424,14 +426,22 @@ export function createProductionFinishPublicationCoordinator(
                       await persistJudgmentStore();
                     }
                   }
-                  if (judgmentByRevision.get(revisionDigest(revision))?.kind === 'accepted') {
+                  const judgment = judgmentByRevision.get(revisionDigest(revision));
+                  if (judgment?.kind === 'accepted') {
                     acceptedProseRevisionByPr.set(pr.url, revision);
                   }
+                  const verdict =
+                    acceptedProseRevisionByPr.get(pr.url) === revision || judgment?.kind === 'accepted'
+                      ? 'accepted' as const
+                      : judgment?.kind === 'revision_required' &&
+                          (judgment.reason === 'placeholder' || judgment.reason === 'structurally_incomplete')
+                        ? 'deficient' as const
+                        : 'none' as const;
                   const prose = prProse(
                     pr.title,
                     pr.body,
                     halted,
-                    acceptedProseRevisionByPr.get(pr.url) === revision,
+                    verdict,
                   );
                   return {
                       state: 'one' as const,
