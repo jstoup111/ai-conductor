@@ -69,8 +69,10 @@ skip the park check.
 - **Given** the set of build-start call sites derived by grepping the daemon source for `\.runFeature(`
   and the re-kick resume dispatch (`resumeRebaseFirst`),
 - **When** the enumeration test runs,
-- **Then** the derived set equals the known-guarded set {pool `guardedDispatch`, rekick sweep, rekick
-  resume}, and each is asserted to be preceded by an `isOperatorParked`/`deps.isParked` check.
+- **Then** the derived set equals the current known-guarded set — pool `guardedDispatch`, rekick
+  sweep, rekick resume, and any later-added dispatch entry point (e.g. the dispatcher claim path of
+  adr-2026-08-27-daemon-dispatcher-executor-seam) — and each is asserted to be preceded by an
+  `isOperatorParked`/`deps.isParked` check.
 
 ### Negative Path — an unguarded new call site fails the test
 
