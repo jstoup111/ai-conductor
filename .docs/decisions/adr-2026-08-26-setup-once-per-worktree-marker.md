@@ -71,6 +71,12 @@ Option A, with these binding sub-decisions:
 2. **Gate predicate (read-only re-check at every dispatch).** Setup is skipped iff the marker
    exists, parses at the current version, its `setupScriptHash` equals the freshly recomputed
    hash of the current `bin/setup`, and its `baseSha` equals the currently resolved base SHA.
+
+   > **Amended 2026-08-27 by #568:** with pinned-base work orders
+   > (`adr-2026-08-27-daemon-dispatcher-executor-seam` D4), "the currently resolved base SHA"
+   > for a dispatched feature is **its work order's pinned base SHA**, not the root's advancing
+   > tip — so a dispatcher-side fetch/fast-forward while the pool is busy does not re-trigger
+   > setup for in-flight worktrees. Every other re-run trigger stays fail-closed as written.
    Anything else — absent/corrupt/version-mismatched marker, script drift, base moved
    (rebase/re-kick), unreadable inputs — re-runs setup, fail-closed. Task commits made by the
    build advance HEAD but not the resolved base, so they do not re-trigger setup; an engine

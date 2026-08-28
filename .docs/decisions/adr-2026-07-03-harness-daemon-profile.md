@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-03
 **Status:** APPROVED
-**Amended by:** adr-2026-07-03-daemon-auto-restart-stale-engine (narrow: gated stale-engine auto-restart at an idle boundary may also bring new code live, in addition to `bin/install`)
+**Amended by:** adr-2026-07-03-daemon-auto-restart-stale-engine (narrow: gated stale-engine auto-restart at an idle boundary may also bring new code live, in addition to `bin/install`); adr-2026-08-27-daemon-dispatcher-executor-seam (narrower still: under N-worker concurrency that idle boundary is the drained-pool boundary)
 **Deciders:** James Stoup (operator), engineer session for jstoup111/ai-conductor#174
 
 ## Context

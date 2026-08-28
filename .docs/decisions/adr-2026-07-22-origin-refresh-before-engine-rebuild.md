@@ -65,6 +65,11 @@ verified, ~95%.
 
 ## Invariants preserved (checked against existing APPROVED ADRs)
 
+- > **Amended 2026-08-27 by #568:** fetch/fast-forward may now run while executors are busy —
+  > in-flight work orders are pinned to their claimed base SHA
+  > (`adr-2026-08-27-daemon-dispatcher-executor-seam` D4/D5), which preserves this invariant's
+  > intent (no in-flight build is ever re-based mid-run). The engine **rebuild** half remains
+  > drained-boundary-only, and the minimum-interval rate limit below stays in force.
 - **Quiescent-only, never mid-build** (adr-2026-07-03): the refresh runs inside the existing
   `inFlight.size === 0` guard; no new restart points.
 - **Fail-closed** (adr-2026-07-03): fetch/rebuild/stamp failures degrade to the current

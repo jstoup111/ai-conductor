@@ -66,6 +66,11 @@ Four coordinated changes, plus the config re-enable:
    (dead-pid pidfile → successor stale-reclaims, existing tested semantics). The
    **trigger-failure path is unchanged**: log, stay alive, retry at a later idle boundary
    (stale-but-alive beats down-and-blocked, preserved verbatim from the 2026-07-06 ADR).
+> **Amended 2026-08-27 by #568:** the "idle boundary" hosting this trigger becomes the
+> **drained boundary** under N-worker concurrency
+> (`adr-2026-08-27-daemon-dispatcher-executor-seam` D5): claim-stop, drain, then the one-shot
+> trigger fires exactly as decided below.
+
 2. **The idle-boundary trigger becomes one-shot per firing.** `requestRestart` reports whether
    the trigger actually fired; on a fired trigger the idle branch **breaks** the loop with
    `stopReason: 'engine_restart'` (mirroring the existing dispatch-boundary break) instead of

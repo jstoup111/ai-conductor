@@ -49,6 +49,10 @@ signature — only its implementation changes). The respawn-in-place pattern
   itself created. Operator-created extra windows in the session are untouched.
 - **Gating:** restart proceeds only when the daemon is idle or paused (busy semantics
   are ADR `pending-restart-queue`'s subject). Not-running + session absent → this is a
+
+  > **Amended 2026-08-27 by #568:** "idle" here is the drained pool under N-worker
+  > concurrency (`adr-2026-08-27-daemon-dispatcher-executor-seam` D5); no executor is
+  > running when the respawn fires, preserving FR-9.
   `start` (FR-12/21); not-running + dead pane present (remain-on-exit corpse) →
   respawn revives it.
 - **Pidfile handoff (adr-010 preserved):** `respawn-pane -k` terminates the old pane
