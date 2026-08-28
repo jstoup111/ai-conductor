@@ -15,6 +15,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
+import { createOtelVisualizer } from '../../../src/engine/otel/create-otel-visualizer.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
@@ -285,19 +286,26 @@ describe('Task 5: visualizer identity wiring', () => {
       { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', project_name: projectName } },
       identityPipelineDir,
     );
-    const vis = new OtelVisualizer(resolved, {
+    const vis = createOtelVisualizer(
+      resolved,
+      {
+        spanExporter: identitySpanExporter,
+        metricExporter: identityMetricExporter,
+      },
+      identityEmitter,
+    );
+    expect(vis).not.toBeNull();
+    vis!.start(identityEmitter, {
       runId: 'shared-resource-run-id',
       feature,
       project,
-      spanExporter: identitySpanExporter,
-      metricExporter: identityMetricExporter,
+      pipelineDir: identityPipelineDir,
     });
-    vis.start(identityEmitter);
 
     await identityEmitter.emit({ type: 'step_started', step: 'build', index: 0 });
     await identityEmitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
     await identityEmitter.emit({ type: 'feature_complete' });
-    await vis.stop();
+    await vis!.stop();
 
     const durationMetric = identityMetricExporter
       .getMetrics()
