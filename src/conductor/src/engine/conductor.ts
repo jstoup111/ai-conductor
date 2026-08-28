@@ -121,7 +121,10 @@ import type {
   StateMutation,
   StateMutationResult,
 } from './conduct-state-store.js';
-import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
+import {
+  createStepStatusWriteRefusalDiagnostics,
+  resolveConductorStateStore,
+} from './conductor-deps.js';
 import {
   ALL_STEPS,
   OUT_OF_BAND_STEPS,
@@ -2803,7 +2806,7 @@ export class Conductor {
   private async applyStateMutation(mutation: StateMutation<ConductState>): Promise<void> {
     const result = await this.stateStore.apply(mutation);
     if ('message' in result) throw new Error(result.message);
-    this.recordPersistedFields([mutation]);
+    if (result.kind !== 'resolved') this.recordPersistedFields([mutation]);
   }
 
   /**
@@ -2890,7 +2893,9 @@ export class Conductor {
     }
     if (mutations.length === 0) return;
 
-    await this.applyStateBatch({ name, mutations });
+    const result = await this.applyStateBatch({ name, mutations });
+    const resolved = new Set(result.kind === 'applied' ? result.resolvedFields : []);
+    for (const field of resolved) after[field] = before[field];
     this.persistedStateSnapshot = { ...state };
   }
 
@@ -2903,6 +2908,7 @@ export class Conductor {
     await this.restoreMissingStateFile(state);
     const result = await saveStepStatus(this.stateFilePath, step, status, this.stateStore);
     requireStateMutation(result, `Conductor step-status update for ${step}`);
+    if (result.kind === 'applied' && result.resolvedFields?.includes(step)) return;
     state[step] = status;
     state.last_step = step;
     this.persistedStateSnapshot = { ...state };
@@ -3062,29 +3068,10 @@ export class Conductor {
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
-    this.stateStore = opts.stateStore ?? createFilesystemConductStateStore(
+    this.stateStore = resolveConductorStateStore(
       this.stateFilePath,
-      undefined,
-      {
-        writer: 'conductor',
-        emit: (diagnostic) => {
-          if (
-            diagnostic.disposition === 'resolved'
-            && diagnostic.current.kind === 'string'
-            && diagnostic.current.length === 'skipped'.length
-            && diagnostic.next.kind === 'string'
-            && diagnostic.next.length === 'stale'.length
-          ) {
-            void this.events.emit({
-              type: 'step_status_write_refused',
-              field: diagnostic.field,
-              expected: 'skipped',
-              requested: 'stale',
-              intent: diagnostic.intent,
-            });
-          }
-        },
-      },
+      opts.stateStore,
+      createStepStatusWriteRefusalDiagnostics(opts.events),
     );
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;

@@ -671,7 +671,7 @@ those:
 `verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_stall`, `build_progress`,
 `build_no_progress`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
 `parallel_failure`, `build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
-`loop_halt`, `halt_marker_write_failed`, `rebase_changed`, `rebase_gate_invalidated`,
+`loop_halt`, `halt_marker_write_failed`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_invalidated`,
 `rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`, and `acceptance_red`.
 
 `contained_live_checkout_drift` and `self_host_containment_verdict` are the containment boundary's

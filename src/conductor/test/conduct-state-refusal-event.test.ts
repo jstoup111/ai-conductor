@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { Conductor } from './test-conductor.js';
 import { EventPersister } from '../src/engine/event-persister.js';
+import {
+  createStepStatusWriteRefusalDiagnostics,
+  resolveConductorStateStore,
+} from '../src/engine/conductor-deps.js';
 import { writeState } from '../src/engine/state.js';
 import type { StepRunner } from '../src/engine/conductor.js';
 import type { ConductState } from '../src/types/index.js';
@@ -56,5 +60,42 @@ describe('skipped-to-stale state-write refusal event', () => {
         intent: 'restage ship tail after build kickback',
       })],
     });
+  });
+
+  it('persists one refusal event from the daemon-composed store', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-conduct-state-refusal-event-'));
+    directories.push(projectRoot);
+    const stateFilePath = join(projectRoot, '.pipeline', 'conduct-state.json');
+    await writeState(stateFilePath, { manual_test: 'skipped' } as ConductState);
+
+    const featureEvents = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), featureEvents);
+    persister.start();
+    const stateStore = resolveConductorStateStore(
+      stateFilePath,
+      undefined,
+      createStepStatusWriteRefusalDiagnostics(featureEvents),
+    );
+
+    await expect(stateStore.apply({
+      field: 'manual_test',
+      expected: 'skipped',
+      intent: 'restage ship tail after build kickback',
+      next: 'stale',
+    })).resolves.toEqual({ kind: 'resolved' });
+    persister.stop();
+
+    const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records.filter((record) => record.type === 'step_status_write_refused')).toEqual([
+      expect.objectContaining({
+        field: 'manual_test',
+        expected: 'skipped',
+        requested: 'stale',
+        intent: 'restage ship tail after build kickback',
+      }),
+    ]);
   });
 });

@@ -120,7 +120,10 @@ import {
 import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
-import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
+import {
+  createStepStatusWriteRefusalDiagnostics,
+  resolveConductorStateStore,
+} from './engine/conductor-deps.js';
 import {
   deriveDaemonBaseState,
   persistDaemonBaseState,
@@ -1008,7 +1011,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // conservatively to L when it evaluates step eligibility.
     const baseState = deriveDaemonBaseState(observedState, item, preseedStepStatuses);
 
-    const stateStore = createFilesystemConductStateStore(stateFilePath);
+    const stateStore = resolveConductorStateStore(
+      stateFilePath,
+      undefined,
+      createStepStatusWriteRefusalDiagnostics(featureEvents),
+    );
     await persistDaemonBaseState(stateFilePath, observedState, baseState, stateStore);
 
     const stepRunner = new DefaultStepRunner(
