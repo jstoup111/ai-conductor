@@ -123,7 +123,13 @@ describe('Deterministic BUILD verification flow', () => {
       step: 'manual_test',
       branches: expect.arrayContaining(['manual_test', 'prd_audit', 'architecture_review_as_built']),
     }));
-    expect(parallelStarted.filter((event) => event.branches.includes('test_suite'))).toEqual([]);
+    // The serial BUILD path emits neither the former group identity nor a
+    // fan-out that contains its only remaining member. SHIP's validation
+    // group above is intentionally unrelated and still observable.
+    const buildVerificationEvents = parallelStarted.filter((event) =>
+      event.step === 'build' || event.branches.includes('test_suite'),
+    );
+    expect(buildVerificationEvents).toEqual([]);
     expect(timeline.indexOf('manual_test')).toBeGreaterThan(
       timeline.indexOf('build_review'),
     );
