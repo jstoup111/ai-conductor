@@ -106,7 +106,6 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     ['.docs/decisions/adr-001.md', 'x'],
     ['spec/acceptance/feature_spec.rb', 'x'],
     ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
-    ['.docs/retros/2026-07-12-retro.md', 'x'],
   ];
   for (const [rel, content] of artifacts) {
     const full = join(dir, rel);

@@ -78,7 +78,6 @@ not a tuning knob.
 | `manual_test` | sonnet | gpt-5.6-terra | medium | 3 | auto |
 | `prd_audit` | opus | gpt-5.6-sol | high | 3 | conditional |
 | `architecture_review_as_built` | opus | gpt-5.6-sol | high | 3 | conditional |
-| `retro` | sonnet | gpt-5.6-terra | medium | 3 | manual |
 | `rebase` | opus | gpt-5.6-terra | high | 1 | auto |
 | `finish` | sonnet | gpt-5.6-terra | medium | 6 | auto |
 | `remediate` | opus | gpt-5.6-sol | medium | 3 | auto |

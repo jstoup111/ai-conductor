@@ -54,7 +54,6 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   prd_audit: 'Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR.',
   architecture_review_as_built:
     'The SHIP --as-built compliance review compares shipped code with approved architecture and wiring contracts; missed drift can invalidate the release, so it uses a high-capability model and HIGH effort.',
-  retro: 'Structured analysis from concrete data; Part C (context efficiency) is checklist-based.',
   rebase:
     'Semantic conflict resolution reasons over both sides of a hunk; a wrong merge can silently revert completed work, so rebase uses a capable provider-native model with HIGH effort.',
   finish: 'Coordinates final test, status, and coverage evidence with MEDIUM effort so completion claims remain grounded.',

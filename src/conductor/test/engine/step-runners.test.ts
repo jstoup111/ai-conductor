@@ -1951,7 +1951,6 @@ describe('DefaultStepRunner', () => {
       { step: 'manual_test', prompt: '$manual-test' },
       { step: 'prd_audit', prompt: '$prd-audit' },
       { step: 'architecture_review_as_built', prompt: '$architecture-review --as-built' },
-      { step: 'retro', prompt: '$retro' },
       { step: 'finish', prompt: '$finish' },
     ] satisfies ReadonlyArray<{ step: StepName; prompt: string }>;
     const codexBoundary = vi.fn(
@@ -3406,11 +3405,10 @@ TIER: M`,
       expect(opts2.interactive).toBe(true);
     });
 
-    it('complexity-adjacent one-shot steps stay print-mode even in default mode', async () => {
+    it('dispatchable one-shot steps stay print-mode even in default mode', async () => {
       const oneShotSteps: StepName[] = [
         'conflict_check',
         'architecture_diagram',
-        'retro',
       ];
       for (const step of oneShotSteps) {
         const provider = createMockProvider();
@@ -3425,12 +3423,10 @@ TIER: M`,
       }
     });
 
-    // Verify that one-shot steps stay print-mode even in interactive mode
-    it('one-shot steps stay print-mode even in interactive mode', async () => {
+    it('surviving one-shot steps stay print-mode even in interactive mode', async () => {
       const oneShotSteps: StepName[] = [
         'conflict_check',
         'architecture_diagram',
-        'retro',
       ];
       for (const step of oneShotSteps) {
         const provider = createMockProvider();

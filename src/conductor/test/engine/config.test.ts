@@ -628,6 +628,16 @@ complexity:
       expect(result.error.message).toContain('bogus_key');
     });
 
+    it('rejects a stale retro step configuration by its unknown name', () => {
+      const result = validateConfig({
+        steps: { retro: { model: 'gpt-5.6-terra' } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toBe('Unknown step: retro');
+    });
+
     it('rejects the removed TDD model configuration as an unknown step-level key', () => {
       const result = validateConfig({
         llm_provider: 'codex',

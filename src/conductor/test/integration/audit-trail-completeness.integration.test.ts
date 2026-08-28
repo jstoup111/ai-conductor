@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
-// .docs/stories/audit-trail-write-completeness-for-retro-under-fre.md).
+// .docs/stories/audit-trail-write-completeness.md).
 //
 // `src/conductor/src/engine/audit-trail.ts` (`AuditTrailWriter`) does not exist
 // yet — every test below dynamically imports it so a missing module RREDs only
@@ -98,7 +98,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rate_limit: 'not-audited-by-design',
   session_reset: 'not-audited-by-design',
   credentials_park: 'not-audited-by-design',
-  // Durable event-log telemetry, but deliberately outside the retro friction schema.
+  // Durable event-log telemetry, deliberately outside the tested event schema.
   credentials_park_progress: 'not-audited-by-design',
   finish_publication_transition: 'not-audited-by-design',
   finish_publication_blocked: 'not-audited-by-design',

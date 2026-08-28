@@ -95,16 +95,6 @@ if grep -qiE '(daemon|auto(matic)?).*(PR|pull request).*(retain|keep|leave).*(fe
 else
   fail 'finish retains PR worktrees, engine-owned cleanup, and bounded prose repair authority'
 fi
-require_pattern 'retro uses provider-neutral subagent delegation language' \
-  '(selected host|selected provider).{0,100}(subagent|delegat)|(subagent|delegat).{0,100}(selected host|selected provider)' \
-  "$HARNESS_DIR/skills/retro/SKILL.md"
-require_pattern 'retro scopes Claude model examples to Claude' \
-  'Claude.{0,100}(Opus|Sonnet)|(Opus|Sonnet).{0,100}Claude' \
-  "$HARNESS_DIR/skills/retro/SKILL.md"
-require_pattern 'retro preserves memory follow-up' \
-  'Persist learnings to `?\.memory/' \
-  "$HARNESS_DIR/skills/retro/SKILL.md"
-
 # Assessment and review delegation has to remain usable by either built-in
 # host. The shared rule selects the host's subagent facility; the existing
 # Claude Agent-tool and model details stay explicitly Claude-scoped.
@@ -334,7 +324,6 @@ for provider_contract_file in \
   "$HARNESS_DIR/skills/engineer/SKILL.md" \
   "$HARNESS_DIR/skills/finish/SKILL.md" \
   "$HARNESS_DIR/skills/pipeline/SKILL.md" \
-  "$HARNESS_DIR/skills/retro/SKILL.md" \
   "$HARNESS_DIR/skills/tdd/SKILL.md"; do
   expect_audit "provider audit accepts $(basename "$(dirname "$provider_contract_file")")" 0 "$provider_contract_file"
 done

@@ -223,7 +223,6 @@ describe('conductor auth-park: daemon-token mode', () => {
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     });
@@ -846,7 +845,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     await writeState(statePath, {
       ...READY_STATE,
       build: 'done', build_review: 'done', wiring_check: 'done',
-      retro: 'done', rebase: 'done', finish: 'done',
+      rebase: 'done', finish: 'done',
     });
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex', source: 'cached-login', state: 'probe-failed',
@@ -901,7 +900,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     await writeState(statePath, {
       ...READY_STATE,
       build: 'done', build_review: 'done', wiring_check: 'done',
-      retro: 'done', rebase: 'done', finish: 'done',
+      rebase: 'done', finish: 'done',
     });
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex', source: 'cached-login', state: 'probe-failed',
@@ -951,7 +950,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     await writeState(statePath, {
       ...READY_STATE,
       build: 'done', build_review: 'done', wiring_check: 'done',
-      retro: 'done', rebase: 'done', finish: 'done',
+      rebase: 'done', finish: 'done',
     });
     const readiness = vi.fn()
       .mockResolvedValueOnce({
@@ -1012,7 +1011,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     await writeState(statePath, {
       ...READY_STATE,
       build: 'done', build_review: 'done', wiring_check: 'done',
-      retro: 'done', rebase: 'done', finish: 'done',
+      rebase: 'done', finish: 'done',
     });
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex', source: 'cached-login', state: 'probe-failed',
@@ -1058,7 +1057,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     await writeState(statePath, {
       ...READY_STATE,
       build: 'done', build_review: 'done', wiring_check: 'done',
-      retro: 'done', rebase: 'done', finish: 'done',
+      rebase: 'done', finish: 'done',
     });
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex', source: 'cached-login', state: 'probe-failed',
@@ -1866,7 +1865,6 @@ describe('conductor auth-park: daemon-token mode', () => {
       manual_test: 'done',
       prd_audit: 'done',
       architecture_review_as_built: 'done',
-      retro: 'done',
       rebase: 'done',
       finish: 'done',
     } as ConductState);

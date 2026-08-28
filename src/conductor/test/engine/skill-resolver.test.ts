@@ -56,7 +56,7 @@ describe('engine/skill-resolver', () => {
     it('returns default path when overrides exist but not for this step', () => {
       const config: HarnessConfig = {
         steps: {
-          retro: { skill: '.ai-conductor/skills/retro/SKILL.md' },
+          memory: { skill: '.ai-conductor/skills/memory/SKILL.md' },
         },
       };
 
@@ -149,17 +149,17 @@ describe('engine/skill-resolver', () => {
     });
 
     it('accepts enforcement override for non-gating step', () => {
-      writeSkillFile(path.join(tmpDir, '.ai-conductor', 'skills', 'retro'), {
-        name: 'retro',
+      writeSkillFile(path.join(tmpDir, '.ai-conductor', 'skills', 'memory'), {
+        name: 'memory',
         enforcement: 'gating',
         phase: 'SHIP',
       });
 
       const config: HarnessConfig = {
-        steps: { retro: { skill: '.ai-conductor/skills/retro/SKILL.md' } },
+        steps: { memory: { skill: '.ai-conductor/skills/memory/SKILL.md' } },
       };
 
-      const result = resolveSkill('retro', config, tmpDir);
+      const result = resolveSkill('memory', config, tmpDir);
       expect(result.enforcement).toBe('gating');
       expect(result.isOverride).toBe(true);
     });

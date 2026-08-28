@@ -245,7 +245,7 @@ export function createProviderStreamThrottle<T>(
 // produce a pr_url or write `.pipeline/finish-choice` before passing.
 //
 // Other non-autonomous steps (complexity, conflict_check, architecture_diagram,
-// retro) are one-shot by design: they generate an artifact from existing
+// rebase) are one-shot by design: they generate an artifact from existing
 // context without needing user input, so print mode is the right dispatch
 // for them even outside auto mode.
 const INTERACTIVE_STEPS: Set<StepName> = new Set([
@@ -871,7 +871,7 @@ export class DefaultStepRunner implements StepRunner {
     if (this.mode === 'interactive') {
       // In interactive mode, open REPL for all conversational steps except
       // one-shot steps that generate artifacts without user input
-      const oneShotSteps = new Set(['complexity', 'conflict_check', 'architecture_diagram', 'retro', 'rebase']);
+      const oneShotSteps = new Set(['complexity', 'conflict_check', 'architecture_diagram', 'rebase']);
       interactive = !oneShotSteps.has(step);
     } else if (this.mode === 'auto') {
       interactive = false;

@@ -114,9 +114,8 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
     // This spec covers ONLY the SHIP-tail validation group boundary
     // (manual_test/prd_audit/architecture_review_as_built) — everything
     // downstream is pre-seeded done so the run converges right after that
-    // group, instead of continuing into retro/rebase/finish (which this
+    // group, instead of continuing into rebase/finish (which this
     // fixture's fake StepRunner does not implement).
-    state.retro = 'done';
     state.rebase = 'done';
     state.finish = 'done';
     state.complexity_tier = 'M';

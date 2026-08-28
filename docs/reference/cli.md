@@ -184,7 +184,7 @@ run exits 1.
 | `--resume` | boolean | `false` | — | With a feature description, honored by the auto-resume gate and clamps the start index. Without one, cleans up merged worktrees, scans `.worktrees/`, and shows a selection menu (exit 1 when no features are found), then repoints `projectRoot`, `pipelineDir`, and the state file at the selected worktree. |
 | `--fresh` | boolean | `false` | — | Suppresses auto-resume detection so an existing worktree for the same slug is not silently reused. This is its only effect; it is never passed to the engine's conductor object. |
 | `--auto` | boolean | `false` | deprecated; mutually exclusive with `--interactive` | Prints `Error: --auto is deprecated. Use \`conduct-ts daemon start\` instead.` and exits 1 before starting the inline pipeline. Use the daemon for unattended execution and retained logs. |
-| `--interactive` | boolean | `false` | mutually exclusive with `--auto` | Run mode `interactive`: opens a Claude REPL for every conversational step except `complexity`, `conflict_check`, `architecture_diagram`, `retro`, and `rebase`. `dangerouslySkipPermissions` stays off, so a human approves each action. |
+| `--interactive` | boolean | `false` | mutually exclusive with `--auto` | Run mode `interactive`: opens a Claude REPL for every conversational step except `complexity`, `conflict_check`, `architecture_diagram`, and `rebase`. `dangerouslySkipPermissions` stays off, so a human approves each action. |
 | `--status` | boolean | `false` | — | Prints `## Conductor State` and the state file as pretty JSON, then returns. No provider session. |
 | `--from <step>` | string | — | must be a step name | Sets the start index to that step. Also suppresses auto-resume. An unrecognized step name exits 1, printing the invalid value and every valid step name (built-ins plus any config-declared custom steps). |
 | `--cleanup` | boolean | `false` | — | Scans resumable features, reads `pr_url` from each `conduct-state.json`, checks whether the PR merged, and prompts `Remove merged worktree "<name>"? [y/n]` per merged feature. Prints a count. |
@@ -972,7 +972,7 @@ conduct-ts closeout-event <obligation> <started-at> <ended-at>
 ```
 
 Records one pipeline closeout timing event. `<obligation>` must be one of `evaluator`,
-`simplify`, `architecture-diagram`, `micro-retro`, `memory`, `summary`; `<started-at>` and
+`simplify`, `architecture-diagram`, `memory`, `summary`; `<started-at>` and
 `<ended-at>` are millisecond epoch timestamps. An unrecognized obligation prints the valid list
 to stderr and exits 1; otherwise it appends a `pipeline_closeout` event to the pipeline-owned
 sibling ledger, `.pipeline/pipeline-events.jsonl`, and exits 0.

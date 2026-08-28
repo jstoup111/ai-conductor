@@ -52,7 +52,6 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   manual_test: 3,
   prd_audit: 3,
   architecture_review_as_built: 3,
-  retro: 3,
   rebase: 1,
   // FINISH makes one verified publication transition per attempt, then
   // re-observes authoritatively before declaring completion.
@@ -83,7 +82,6 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
   architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED
-  retro: 'manual',
   rebase: 'auto',
   finish: 'auto',
   remediate: 'auto',       // conductor routes deterministically from remediation.json

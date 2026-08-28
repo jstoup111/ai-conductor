@@ -64,7 +64,7 @@ describe('rewindState', () => {
     conflict_check: 'done', plan: 'done', coherence_check: 'done', acceptance_specs: 'done',
     build: 'done', wiring_check: 'done', test_suite: 'done', build_review: 'done',
     manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
-    retro: 'done', rebase: 'done', finish: 'done', last_step: 'finish',
+    rebase: 'done', finish: 'done', last_step: 'finish',
   };
 
   it('keeps the rewind command boundary reachable only from the CLI entry module', () => {
@@ -114,7 +114,7 @@ describe('rewindState', () => {
 
     const result = await rewindState({ state, config, target: 'lint', store, readCurrentState: async () => state });
 
-    expect(result).toEqual({ target: 'lint', demoted: ['lint', 'test_suite', 'build_review', 'manual_test', 'prd_audit', 'architecture_review_as_built', 'retro', 'rebase', 'finish'] });
+    expect(result).toEqual({ target: 'lint', demoted: ['lint', 'test_suite', 'build_review', 'manual_test', 'prd_audit', 'architecture_review_as_built', 'rebase', 'finish'] });
     expect(store.batches).toEqual([{
       name: 'operator rewind state',
       mutations: [
@@ -124,7 +124,6 @@ describe('rewindState', () => {
         { field: 'manual_test', expected: 'done', intent: 'operator rewind to lint', next: 'stale' },
         { field: 'prd_audit', expected: 'done', intent: 'operator rewind to lint', next: 'stale' },
         { field: 'architecture_review_as_built', expected: 'done', intent: 'operator rewind to lint', next: 'stale' },
-        { field: 'retro', expected: 'done', intent: 'operator rewind to lint', next: 'stale' },
         { field: 'rebase', expected: 'done', intent: 'operator rewind to lint', next: 'stale' },
         { field: 'finish', expected: 'done', intent: 'operator rewind to lint', next: 'stale' },
         { field: 'last_step', expected: 'finish', intent: 'operator rewind to lint', next: 'build' },

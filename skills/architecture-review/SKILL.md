@@ -382,8 +382,8 @@ echo "verdict: APPROVED_WITH_CONDITIONS, new ADRs: 2" > .pipeline/review-require
 
 Invoked at **SHIP** as `/architecture-review --as-built`, a member of the concurrent
 validation group — fanned out alongside `/manual-test` and `/prd-audit` in daemon/auto
-runs; in interactive runs it runs serially, after `/prd-audit` and before `/retro` and
-`/finish`. It runs for **every feature**, including Small features and features whose DECIDE-time
+runs; in interactive runs it runs serially, after `/prd-audit` and before `/finish`.
+It runs for **every feature**, including Small features and features whose DECIDE-time
 architecture review was skipped. This is the final architectural drift sweep. It is lightweight —
 it does **no** new design or feasibility/complexity assessment, and reuses the drift logic of §10
 (Recurring Review) and the ADR lifecycle of §7b.
@@ -448,7 +448,7 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   deliberately cheap.
 
 **Verdict:**
-- **APPROVED** — shipped code matches the approved architecture. Proceed to retro/finish.
+- **APPROVED** — shipped code matches the approved architecture. Proceed to finish.
 - **APPROVED WITH DRIFT NOTES** — minor, non-violating drift (e.g. a diagram is now slightly stale,
   a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR only
   when it makes or changes a structural decision; otherwise no ADR is needed, and it does not block.

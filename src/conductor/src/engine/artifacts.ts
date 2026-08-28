@@ -303,13 +303,6 @@ export const STEP_ARTIFACT_CONTRACTS = {
   architecture_review_as_built: [
     { pattern: '.pipeline/architecture-review-as-built.md', scope: 'run' },
   ],
-  retro: [
-    {
-      pattern: '.docs/retros/*.md',
-      scope: 'feature',
-      identity: { strategy: 'normalized-stem', stripDatePrefix: true },
-    },
-  ],
   rebase: [],
   finish: [],
   remediate: [],
@@ -1132,7 +1125,7 @@ export interface CompletionContext {
    * resume, and backstop completion checks.
    */
   attemptRunId?: string;
-  /** Used by the retro predicate to prefer slug-matched filenames. */
+  /** Used by feature-aware completion predicates and artifact resolution. */
   featureDesc?: string;
   /** Prepared once by callers that need feature-aware generic artifact resolution. */
   artifactResolution?: Pick<
@@ -3066,7 +3059,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // every functional-requirement (FR-N) row is ALIGNED — or an un-ALIGNED row is
   // explicitly marked ACCEPTED (a human-accepted intended divergence). A
   // MISSING / PARTIAL / DIVERGED row that is not ACCEPTED blocks the gate, so the
-  // selector cannot advance to retro/finish until the gap is closed (BUILD) or
+  // selector cannot advance to finish until the gap is closed (BUILD) or
   // the PRD is amended (DECIDE) and the audit re-run. Mirrors manual_test:
   // presence + freshness + no blocking rows.
   prd_audit: async (dir, ctx): Promise<CompletionResult> => {
@@ -3570,51 +3563,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     return {
       done: false,
       reason: `full-suite completion inspection failed (${inspection.reason}): ${inspection.message}`,
-    };
-  },
-
-  // Retro passes when a fresh retro file exists for THIS feature. Filename
-  // should contain the slug per skills/retro/SKILL.md ("Save to
-  // .docs/retros/YYYY-MM-DD-<feature-name>.md"). Falls back to "any retro
-  // fresh in this session" when no feature_desc is available.
-  retro: async (dir, ctx): Promise<CompletionResult> => {
-    const allFiles = await findArtifactFiles(dir, 'retro');
-    if (allFiles.length === 0) {
-      return {
-        done: false,
-        reason: 'no .docs/retros/*.md present (retro skill must save a report)',
-      };
-    }
-    const slug = ctx.featureDesc ? slugify(ctx.featureDesc) : null;
-    if (slug) {
-      const matched = allFiles.filter(
-        (f) => f.endsWith(`-${slug}.md`) || f.endsWith(`/${slug}.md`),
-      );
-      if (matched.length > 0) {
-        for (const f of matched) {
-          if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) return { done: true };
-        }
-        return {
-          done: false,
-          reason: `slug-matched retro exists but is stale (mtime predates this session) — retro must re-run`,
-        };
-      }
-      // No slug match — accept any retro file fresh in this session as a
-      // fallback (covers very long feature_desc, slug truncation, etc.).
-      for (const f of allFiles) {
-        if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) return { done: true };
-      }
-      return {
-        done: false,
-        reason: `no retro found for current feature (expected .docs/retros/*-${slug}.md OR a retro file with mtime >= session start)`,
-      };
-    }
-    for (const f of allFiles) {
-      if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) return { done: true };
-    }
-    return {
-      done: false,
-      reason: 'retro files exist but none are fresh for this session',
     };
   },
 

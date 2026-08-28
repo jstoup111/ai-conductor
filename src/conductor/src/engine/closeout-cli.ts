@@ -4,7 +4,6 @@ const CLOSEOUT_OBLIGATIONS = [
   'evaluator',
   'simplify',
   'architecture-diagram',
-  'micro-retro',
   'memory',
   'summary',
 ] as const satisfies readonly PipelineCloseoutEvent['obligation'][];

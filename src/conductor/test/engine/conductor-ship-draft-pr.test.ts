@@ -435,7 +435,7 @@ describe('the retained SHIP PR is presentable before the first SHIP consumer', (
         steps: {
           'release-disposition': customShipStep(
             '.agents/skills/release-disposition/SKILL.md',
-            'retro',
+            'rebase',
           ),
         },
       } as never,
@@ -481,7 +481,7 @@ describe('the retained SHIP PR is presentable before the first SHIP consumer', (
       projectRoot: dir,
       config: {
         steps: {
-          'compliance-attest': customShipStep('.agents/skills/compliance-attest/SKILL.md', 'retro'),
+          'compliance-attest': customShipStep('.agents/skills/compliance-attest/SKILL.md', 'rebase'),
         },
       } as never,
       fromStep: 'manual_test',
@@ -516,7 +516,7 @@ describe('the retained SHIP PR is presentable before the first SHIP consumer', (
         steps: {
           'release-disposition': customShipStep(
             '.agents/skills/release-disposition/SKILL.md',
-            'retro',
+            'rebase',
           ),
         },
       } as never,

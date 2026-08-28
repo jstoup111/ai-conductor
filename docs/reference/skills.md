@@ -58,9 +58,9 @@ activation boundary: the active lifecycle/caller state that qualifies, plus near
 not. A generic feature, change, plan, review, bug, or question is not sufficient by itself. Explicit
 operator invocation remains available regardless of these implicit-selection boundaries.
 
-The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `conduct`,
+The 17 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `conduct`,
 `daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
-`remediate`, `retro`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
+`remediate`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
 `write-tests`.
 
@@ -120,9 +120,8 @@ policy across both catalogs and both host metadata formats.
 | `manual-test` | gating | ship | — | `manual_test` (16) | Blocking |
 | `prd-audit` | gating | ship | opus | `prd_audit` (17) | Blocking |
 | `remediate` | gating | ship | — | `remediate` (out-of-band) | Advisory — it is the unblocker |
-| `retro` | advisory | ship | — | `retro` (19) | Advisory |
-| `rebase` | advisory | ship | — | `rebase` (20) — on conflict only | Blocking via the structural step |
-| `finish` | gating | ship | — | `finish` (21) | Blocking |
+| `rebase` | advisory | ship | — | `rebase` (19) — on conflict only | Blocking via the structural step |
+| `finish` | gating | ship | — | `finish` (20) | Blocking |
 | `pr` | advisory | ship | — | none — operator-invoked; `/finish` inlines it rather than calling it | Neither |
 | `maintain-documentation` | (none) | (none) | — | custom step after `rebase` | Blocking, this repository only |
 | `release-disposition` | (none) | (none) | — | custom step after `maintain-documentation` | Blocking, this repository only |
@@ -470,7 +469,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Inputs** — the plan's task dependency graph, file sets, and dependency lines;
   `.pipeline/task-status.json`; story acceptance criteria; prior batch reviews; ADRs and the approved
   PRD for the design-conformance check.
-- **Outputs** — `.pipeline/audit-trail/batch-N/review.json` and the batch retro and simplification
+- **Outputs** — `.pipeline/audit-trail/batch-N/review.json` and the batch simplification
   records; `.pipeline/progress.log`; `.pipeline/summary.json`; `.pipeline/halt-user-input-required` and
   `.pipeline/HALT` on a stall; at least one `.memory/` entry per batch; a `pipeline_closeout` record in
   `.pipeline/pipeline-events.jsonl` per completed evaluator gate, written via `conduct-ts
@@ -623,7 +622,7 @@ joins before `build_review`.
 
 ### prd-audit
 
-> Use at SHIP, after manual-test and before retro/finish. Audits the shipped implementation against the feature stories' acceptance criteria, using PRD functional requirements as intent context when a PRD exists; produces graded, criterion-level findings and never implements or routes work itself.
+> Use at SHIP, after manual-test and before rebase/finish. Audits the shipped implementation against the feature stories' acceptance criteria, using PRD functional requirements as intent context when a PRD exists; produces graded, criterion-level findings and never implements or routes work itself.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, `model: opus`.
@@ -669,30 +668,13 @@ joins before `build_review`.
   `build` disposition is not dispatchable work.
 - **Dispatches** — `agents/remediation-planner.md`.
 
-### retro
-
-> Use after finishing a feature or at any natural milestone. Dual retrospective analyzing both the harness workflow (tool) and the application code produced (product). Generates concrete improvement proposals.
-
-- **Frontmatter** — `enforcement: advisory`, `phase: ship`, `standalone: true`, `requires: []`, no model
-  pin.
-- **Engine step** — `retro` (index 19, SHIP, prerequisite `architecture_review_as_built`, skipped at
-  tier S). Loop gate.
-- **Inputs** — `.pipeline/audit-trail/events.jsonl` as the primary gate and rework source, explicitly
-  not `.pipeline/gates/`; `.pipeline/task-status.json`; raw `.pipeline/events.jsonl` for retry history;
-  `.memory/gotchas/`; `.docs/conflicts/`; `.docs/stories/`; the feature diff; the `## Cost` block of the
-  shipped record.
-- **Outputs** — `.docs/retros/<date>-<feature-name>.md`; `.memory/` writes; new debt stories.
-- **Gate role** — advisory. Two internal honesty rules: a missing or empty events log is reported as
-  `INCOMPLETE`, never read as a clean run; a missing Cost block is written as `unmetered/absent`, never
-  fabricated. The completion predicate requires a feature-slug-matched, session-fresh retro file.
-
 ### rebase
 
 > Resolve an in-progress paused rebase conflict, stage fixes, and drive git rebase --continue to completion; invoked by the conductor's finish-time rebase step or by an operator running /rebase.
 
 - **Frontmatter** — `enforcement: advisory`, `phase: ship`, `standalone: true`, `requires: []`, no model
   pin.
-- **Engine step** — `rebase` (index 20, SHIP, prerequisite `retro`). Engine enforcement is
+- **Engine step** — `rebase` (index 19, SHIP, prerequisite `architecture_review_as_built`). Engine enforcement is
   `structural`. The engine rebases natively and dispatches this skill **only on conflict**.
 - **Inputs** — live git state only: status, the rebase-merge or rebase-apply path, the unmerged file
   list, and the conflicted files.

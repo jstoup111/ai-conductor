@@ -88,7 +88,7 @@ async function seedPreRebaseState(statePath: string): Promise<void> {
   const state: ConductState = {};
   for (const s of ALL_STEPS) {
     if (s.name === 'rebase') break;
-    (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
+    (state as Record<string, unknown>)[s.name] = 'done';
   }
   // The acceptance subject is the real rebase call site and its translation
   // artifacts. Keeping finish pending would exercise unrelated SHIP validation

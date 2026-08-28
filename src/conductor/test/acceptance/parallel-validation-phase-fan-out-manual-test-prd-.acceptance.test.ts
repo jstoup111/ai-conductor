@@ -205,7 +205,6 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     try {
       await seedToValidators(dir, statePath, {
         architecture_review_as_built: 'done',
-        retro: 'done',
         rebase: 'done',
         finish: 'done',
       });
@@ -250,7 +249,6 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     const t = 50;
     try {
       await seedToValidators(dir, statePath, {
-        retro: 'done',
         rebase: 'done',
         finish: 'done',
       });
@@ -1110,7 +1108,6 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     try {
       await seedToValidators(dir, statePath, {
         architecture_review_as_built: 'done',
-        retro: 'done',
         rebase: 'done',
         finish: 'done',
       });
@@ -1223,7 +1220,6 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     const statePath = join(dir, 'conduct-state.json');
     try {
       await seedToValidators(dir, statePath, {
-        retro: 'done',
         rebase: 'done',
         finish: 'done',
       });
@@ -1271,7 +1267,6 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     const statePath = join(dir, 'conduct-state.json');
     try {
       await seedToValidators(dir, statePath, {
-        retro: 'done',
         rebase: 'done',
         finish: 'done',
       });

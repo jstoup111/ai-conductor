@@ -289,7 +289,7 @@ export async function resolveFreshBase(
     // behavior) over `localBase` (the current branch) — using the current
     // branch as the merge-base ref makes merge-base(ref, HEAD) === HEAD,
     // handing the grader an empty diff (build-review-grades-plan-vs-diff-
-    // against-a-stale-o retro).
+    // against a stale base).
     const fallbackBranch = (await localDefaultBranch(git)) ?? localBase;
     return {
       ref: fallbackBranch,

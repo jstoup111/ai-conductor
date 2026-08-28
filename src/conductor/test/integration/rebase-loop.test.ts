@@ -53,7 +53,7 @@ vi.mock('execa', async (importOriginal) => {
 // gate-loop.test.ts. We start the loop at `build` with complexity tier 'M' so
 // the gate-driven tail runs manual_test (S-tier now legitimately skips
 // manual_test per D5 — see steps.ts skippableForTiers):  build → manual_test →
-// retro → [rebase, once implemented] → finish.
+// validation group → rebase → finish.
 //
 // The `rebase` loopGate step is NOT yet implemented, so the tail today is
 // build → manual_test → finish with no rebase. Every assertion below encodes a
@@ -230,7 +230,7 @@ describe('integration/rebase-loop', () => {
     prospectiveMergeFixture.forceIndeterminate = true;
   }
 
-  function conductorWith(runner: StepRunner, fromStep: 'build' | 'retro' = 'build'): Conductor {
+  function conductorWith(runner: StepRunner, fromStep: 'build' | 'rebase' = 'build'): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
         ? { stdout: 'refs/remotes/origin/feature/x\n' }
@@ -263,7 +263,7 @@ describe('integration/rebase-loop', () => {
       const done = await access(join(dir, '.pipeline/DONE')).then(() => true).catch(() => false);
       const halted = await access(join(dir, '.pipeline/HALT')).then(() => true).catch(() => false);
       if (done || halted) return;
-      await conductorWith(runner, 'retro').run();
+      await conductorWith(runner, 'rebase').run();
     }
   }
 

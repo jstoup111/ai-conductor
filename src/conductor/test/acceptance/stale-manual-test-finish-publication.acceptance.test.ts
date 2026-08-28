@@ -93,7 +93,6 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       manual_test: manualTestState,
       prd_audit: 'skipped',
       architecture_review_as_built: 'skipped',
-      retro: 'skipped',
       rebase: 'done',
       // The custom documentation-maintenance tail commit lands after rebase.
       // It leaves manual_test's pre-tail code stamp behind the current run.
@@ -296,7 +295,6 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       manual_test: 'stale',
       prd_audit: 'skipped',
       architecture_review_as_built: 'skipped',
-      retro: 'skipped',
       rebase: 'done',
     });
     await writeState(stateFilePath, state as ConductState);

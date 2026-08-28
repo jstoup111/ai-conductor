@@ -44,7 +44,7 @@ const BUILD_ONLY: ConductState = {
   stories: 'done', conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
   architecture_review: 'done', acceptance_specs: 'done', test_suite: 'done',
   build_review: 'done', wiring_check: 'done', manual_test: 'done', prd_audit: 'done',
-  architecture_review_as_built: 'done', retro: 'done', rebase: 'done', finish: 'done',
+  architecture_review_as_built: 'done', rebase: 'done', finish: 'done',
   complexity_tier: 'M', track: 'technical', feature_desc: 'live-boundary-deferral',
 } as ConductState;
 

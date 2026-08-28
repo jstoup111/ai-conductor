@@ -117,13 +117,9 @@ export interface FeatureRunnerDeps {
   /** Persist that a slug shipped (with its PR url, when opened) so
    *  discoverBacklog skips it next poll and the startup dashboard can link it. */
   markProcessed: (slug: string, prUrl?: string) => Promise<void>;
-  /**
-   * Daemon mode. When true, emit a structured engineer signal + narrative to the
-   * cross-project engineer store on completion (Phase 9.1). Manual `/conduct` runs
-   * pass false — they keep writing repo `.docs/retros/` and emit nothing.
-   */
+  /** Daemon mode. When true, emit a structured engineer signal on completion. */
   daemon: boolean;
-  /** Legacy narrative provider when provider-aware feature execution is absent. */
+  /** Optional provider adapter retained for completion-emission compatibility. */
   provider?: LLMProvider;
   /** Fresh provider routing state allocated once for each feature run. */
   providerExecution?: () => ProviderExecutionContext;
@@ -411,14 +407,13 @@ export function makeRunFeature(
       }
       const outcome = await deps.readOutcome(worktree);
 
-      // Phase 9.1: on daemon completion, emit a structured signal + narrative to
-      // the cross-project engineer store. Runs AFTER readOutcome and BEFORE any
-      // teardown (the worktree context is still present for the retro). Manual
-      // runs (daemon=false) emit nothing and keep their repo `.docs/retros/`.
+      // Phase 9.1: on daemon completion, emit a structured signal to the
+      // cross-project engineer store. Runs AFTER readOutcome and BEFORE any
+      // teardown. Manual runs (daemon=false) emit nothing.
       // Best-effort inside emitEngineerSignal — never throws, so it cannot affect
       // the feature outcome or teardown discipline below.
       if (deps.daemon) {
-        await emitDaemonSignal(deps, worktree, item, outcome, providerExecution, featureLog);
+        await emitDaemonSignal(deps, worktree, item, outcome, featureLog);
       }
 
       if (outcome.done) {
@@ -725,7 +720,7 @@ export async function terminateFeature({
  * Emit one engineer signal for a completed daemon feature. Maps the worktree
  * outcome to a `FeatureOutcome`, resolves the engineer dir from the environment
  * (`$AI_CONDUCTOR_ENGINEER_DIR`), reads the worktree's `.pipeline/events.jsonl`,
- * derives a fresh runId, and detects whether the retro step was tier-skipped.
+ * and derives a fresh runId.
  * Best-effort: `emitEngineerSignal` swallows all errors, so this never throws.
  */
 async function emitDaemonSignal(
@@ -733,7 +728,6 @@ async function emitDaemonSignal(
   worktree: FeatureWorktree,
   item: BacklogItem,
   outcome: WorktreeOutcome,
-  providerExecution?: ProviderExecutionContext,
   log?: (message: string) => void,
 ): Promise<void> {
   const featureOutcome: FeatureOutcome = {
@@ -744,7 +738,6 @@ async function emitDaemonSignal(
     costTokens: outcome.costTokens,
   };
   const eventsPath = join(worktree.path, '.pipeline', 'events.jsonl');
-  const tierSkippedRetro = await retroTierSkipped(eventsPath);
   await emitEngineerSignal({
     engineerDir: resolveEngineerDir(),
     eventsPath,
@@ -752,35 +745,7 @@ async function emitDaemonSignal(
     project: deps.project,
     feature: item.slug,
     runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
-    worktreePath: worktree.path,
     provider: deps.provider,
-    providerExecution,
-    tierSkippedRetro,
     log,
   });
-}
-
-
-/**
- * True if the feature's events show the `retro` step was tier-skipped, so the
- * emission produces a signal without a narrative (no narrative source to use).
- * Tolerant of a missing/malformed log (returns false).
- */
-async function retroTierSkipped(eventsPath: string): Promise<boolean> {
-  try {
-    const raw = await readFile(eventsPath, 'utf-8');
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const evt = JSON.parse(trimmed) as { type?: string; step?: string };
-        if (evt.type === 'tier_skip' && evt.step === 'retro') return true;
-      } catch {
-        // skip malformed lines
-      }
-    }
-  } catch {
-    // no log / unreadable → not tier-skipped (best-effort)
-  }
-  return false;
 }

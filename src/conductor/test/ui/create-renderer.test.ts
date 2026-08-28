@@ -71,7 +71,7 @@ describe('createRenderer', () => {
   });
 
   it('renders dashboard on config_skip', async () => {
-    await renderer({ type: 'config_skip', step: 'retro' });
+    await renderer({ type: 'config_skip', step: 'rebase' });
     expect(stream.output()).toContain('Conductor: Add login');
   });
 

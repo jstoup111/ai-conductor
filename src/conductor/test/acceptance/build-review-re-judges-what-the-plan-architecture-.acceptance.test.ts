@@ -242,9 +242,6 @@ function fakeRunner(fixture: Fixture, calls: StepName[], options: RunnerOptions 
           join(fixture.pipelineDir, 'architecture-review-as-built.md'),
           options.asBuilt === 'plan-gap' ? AS_BUILT_PLAN_GAP : AS_BUILT_APPROVED,
         );
-      } else if (step === 'retro') {
-        await mkdir(join(fixture.root, '.docs', 'retros'), { recursive: true });
-        await writeFile(join(fixture.root, '.docs', 'retros', `${fixture.slug}.md`), '# Retro\n');
       } else if (step === 'finish') {
         await writeFile(join(fixture.pipelineDir, 'finish-choice'), 'keep\n');
       }
@@ -291,7 +288,7 @@ describe('Covers: FR-21, FR-22, S16.1, S16.2 — pre-change features remain ship
       tier: 'L',
       track: 'product',
       legacyPlan: true,
-      downstream: { retro: 'skipped', rebase: 'done' },
+      downstream: { rebase: 'done' },
     });
     await writeFile(
       join(fixture.pipelineDir, 'build-review-dispositions.json'),
@@ -342,7 +339,7 @@ describe('Covers: FR-2 — a plan-conformant feature traverses BUILD to SHIP', (
       fromStep: 'build',
       tier: 'L',
       track: 'product',
-      downstream: { retro: 'skipped', rebase: 'done' },
+      downstream: { rebase: 'done' },
     });
     const calls: StepName[] = [];
 
@@ -364,12 +361,12 @@ describe('Covers: FR-2 — a plan-conformant feature traverses BUILD to SHIP', (
 });
 
 describe('Covers: FR-16, FR-17, S13.1 — a delivered as-built PLAN_GAP is non-blocking', () => {
-  it('records the PLAN_GAP verdict and advances to retro without a BUILD or remediation route', async () => {
+  it('records the PLAN_GAP verdict and advances to finish without a BUILD or remediation route', async () => {
     const fixture = await seedFixture({
       fromStep: 'prd_audit',
       tier: 'L',
       track: 'product',
-      downstream: { retro: 'pending', rebase: 'done', finish: 'pending' },
+      downstream: { rebase: 'done', finish: 'pending' },
     });
     const calls: StepName[] = [];
 
@@ -380,15 +377,14 @@ describe('Covers: FR-16, FR-17, S13.1 — a delivered as-built PLAN_GAP is non-b
     );
 
     // The validation fan-out completes one dispatch before its linear tail;
-    // resume from retro exactly as the daemon does on the next dispatch.
+    // Resume from the remaining SHIP tail exactly as the daemon does on the next dispatch.
     await runFixture(
       fixture,
       fakeRunner(fixture, calls, { prdAudit: 'pass', asBuilt: 'plan-gap' }),
-      { fromStep: 'retro', verifyArtifacts: false, daemon: false },
+      { fromStep: 'finish', verifyArtifacts: false, daemon: false },
     );
 
     expect(calls).toContain('architecture_review_as_built');
-    expect(calls).toContain('retro');
     expect(calls).toContain('finish');
     expect(calls).not.toContain('build');
     expect(calls).not.toContain('remediate');
@@ -416,7 +412,6 @@ describe('Covers: FR-8, S7.1 — S-tier technical work is still audited', () => 
       track: 'technical',
       downstream: {
         manual_test: 'skipped',
-        retro: 'skipped',
         rebase: 'done',
         finish: 'pending',
       },

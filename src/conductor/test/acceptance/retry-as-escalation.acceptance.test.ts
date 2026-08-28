@@ -522,7 +522,7 @@ describe('#188 retry-as-escalation — S3 budgets', () => {
   });
 });
 
-// ── S4: escalation is logged and aggregated for retro Part C ──────────────────
+// ── S4: escalation is logged and aggregated for the terminal scenario ─────────
 
 describe('#188 retry-as-escalation — S4 logging', () => {
   let dir: string;

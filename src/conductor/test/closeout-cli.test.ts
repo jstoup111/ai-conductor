@@ -8,6 +8,14 @@ import {
   dispatchCloseoutEventCommand,
 } from '../src/engine/closeout-cli.js';
 
+const SURVIVING_CLOSEOUT_OBLIGATIONS = [
+  'evaluator',
+  'simplify',
+  'architecture-diagram',
+  'memory',
+  'summary',
+] as const;
+
 describe('closeout-event CLI', () => {
   const directories: string[] = [];
 
@@ -18,7 +26,7 @@ describe('closeout-event CLI', () => {
     })));
   });
 
-  it('appends a valid obligation timing through the closeout appender', async () => {
+  it.each(SURVIVING_CLOSEOUT_OBLIGATIONS)('appends the %s obligation timing through the closeout appender', async (obligation) => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'closeout-cli-'));
     directories.push(projectRoot);
 
@@ -26,25 +34,25 @@ describe('closeout-event CLI', () => {
       'node',
       'conduct-ts',
       'closeout-event',
-      'evaluator',
+      obligation,
       '100',
       '140',
     ]);
 
     expect(command).toEqual({
       kind: 'closeout-event',
-      obligation: 'evaluator',
+      obligation,
       startedAt: 100,
       endedAt: 140,
     });
     await expect(dispatchCloseoutEventCommand(command!, projectRoot, () => 140)).resolves.toBe(0);
     await expect(readFile(join(projectRoot, '.pipeline/pipeline-events.jsonl'), 'utf8'))
       .resolves.toBe(
-        '{"type":"pipeline_closeout","obligation":"evaluator","startedAt":100,"endedAt":140,"ts":140}\n',
+        `{\"type\":\"pipeline_closeout\",\"obligation\":\"${obligation}\",\"startedAt\":100,\"endedAt\":140,\"ts\":140}\n`,
       );
   });
 
-  it.each(['not-a-closeout-obligation', ''])(
+  it.each(['not-a-closeout-obligation', '', 'micro-retro'])(
     'rejects the %j obligation before either ledger is written',
     async (obligation) => {
       const projectRoot = await mkdtemp(join(tmpdir(), 'closeout-cli-'));
@@ -61,7 +69,7 @@ describe('closeout-event CLI', () => {
       expect({ result, errors }).toEqual({
         result: 1,
         errors: [
-          'closeout-event: obligation must be one of evaluator, simplify, architecture-diagram, micro-retro, memory, summary',
+          'closeout-event: obligation must be one of evaluator, simplify, architecture-diagram, memory, summary',
         ],
       });
       await expect(readFile(join(projectRoot, '.pipeline/pipeline-events.jsonl'), 'utf8'))

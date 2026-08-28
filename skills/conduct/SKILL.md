@@ -18,7 +18,7 @@ Does NOT run other skills internally — it assesses state and directs. The user
 
 ### Session Model
 
-**Fresh LLM session per executed step.** Every step — design through retro —
+**Fresh LLM session per executed step.** Every step — design through finish —
 starts without prior-step conversational context and reads its inputs from the
 persisted artifacts. The session ID/marker under `.pipeline/` supports the
 current step only; it is reset at the next step boundary.
@@ -28,7 +28,7 @@ current step only; it is reset at the next step boundary.
 - **Build phase** (pipeline): The conductor drives the task loop. The selected host agent orchestrates
   each task by dispatching subagents. Subagent context is isolated and discarded —
   only a ~2-3 line summary returns to the orchestrator per task. No context compaction needed.
-- **Ship phase** (finish → retro): Lightweight steps, context stays bounded.
+- **Ship phase** (manual-test → finish): Lightweight steps, context stays bounded.
 
 Retries within the same step resume that step's session so partial work and
 failure context are retained. A later step never resumes it. With per-step
@@ -59,8 +59,7 @@ Step 14: /manual-test           → SHIP (validate stories, bug loop via /tdd �
        ── CHECKPOINT ──         → User reviews test results, can go back or continue
 Step 15: /prd-audit             → SHIP (PRODUCT track only — audit shipped impl vs PRD FRs; GATE; skipped on technical)
 Step 16: /architecture-review --as-built → SHIP (shipped code vs APPROVED ADRs; GATE — BLOCKED on an ADR violation)
-Step 17: /retro                 → SHIP
-Step 18: /finish                → SHIP (verify, review changes, present options, and commit the durable shipped record before completion)
+Step 17: /finish                → SHIP (verify, review changes, present options, and commit the durable shipped record before completion)
 ```
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
@@ -94,8 +93,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 13. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.pipeline/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
 | 14. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
 | 15. architecture-review-as-built | Fresh as-built review with a clean APPROVED verdict, OR skipped (Small tier / architecture_review skipped) | Glob `.pipeline/architecture-review-as-built.md` — **fail-closed**: step is satisfied only when the `Verdict:` line is `APPROVED` or `APPROVED WITH DRIFT NOTES`; `BLOCKED`, a missing verdict, or any unrecognized verdict means pending. Auto-skipped when `architecture_review` was skipped (no ADRs to audit). |
-| 16. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
-| 17. finish | User chose a completion option and durable shipment evidence exists | Step is "done" in state (`pr_url` saved if Option 2 chosen). For PR or merge-local, `.docs/shipped/<plan-stem>.md` must be committed on the shipping branch; for PR, the record commit must also be pushed to the PR head. |
+| 16. finish | User chose a completion option and durable shipment evidence exists | Step is "done" in state (`pr_url` saved if Option 2 chosen). For PR or merge-local, `.docs/shipped/<plan-stem>.md` must be committed on the shipping branch; for PR, the record commit must also be pushed to the PR head. |
 
 **Feature completion:** After all steps finish and PR is created, `feature_status` is set to
 `"complete"` in `conduct-state.json`. Do not mark a PR or merge-local outcome complete until
@@ -125,7 +123,6 @@ Present a clear status dashboard:
 | BUILD | tdd/pipeline | ⬚ Pending | — |
 | BUILD | code-review | ⬚ Pending | — |
 | SHIP | manual-test | ⬚ Pending | — |
-| SHIP | retro | ⬚ Pending | — |
 | SHIP | finish/pr | ⬚ Pending | — |
 
 ### Next Step
@@ -210,9 +207,8 @@ Store the tier in `.pipeline/conduct-state.json` as `"complexity_tier": "S"` (or
 | writing-system-tests | **Skip** (request specs in TDD suffice) | Run | Run |
 | pipeline | **Skip** (use direct /tdd) | Run | Run |
 | code-review | **Skip** (domain review in TDD suffices) | Run | Run |
-| retro | **Skip** | Run | Run |
 
-**Small flow:** explore → [prd if product] → stories → plan → direct /tdd → finish (skip retro)
+**Small flow:** explore → [prd if product] → stories → plan → direct /tdd → finish
 
 ### 3. Gate Enforcement
 
@@ -270,7 +266,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
   unclassifiable row) HALTs immediately for a human, since the DECIDE amendment can't be made
   autonomously. Consult the repository's daemon PRD-audit routing documentation.
 
-**After architecture-review --as-built (before suggesting retro):**
+**After architecture-review --as-built (before suggesting finish):**
 - This gate is **skipped** when `architecture_review` was skipped (Small tier, or a config/`when:`
   skip) — no APPROVED ADRs means nothing to audit. Don't run or block on it in that case.
 - Otherwise open the as-built report (`.pipeline/architecture-review-as-built.md`). The gate is
@@ -319,7 +315,6 @@ Consult the repository's daemon PR-labeling documentation.
 | prd-audit | No (gating) | Shipped impl must be verified against the PRD's FRs before ship |
 | architecture-review-as-built | Auto-skip only | Gating when it runs, but auto-skipped when `architecture_review` was skipped (Small tier / config / `when:`) — no APPROVED ADRs to audit. Cannot be skipped manually otherwise. |
 | finish | No (gating) | Fresh verification required |
-| retro | Tier-dependent | Skip for Small, recommended for Medium/Large |
 
 If the user asks to skip a gating step, say: "[Step] is a gating step — it cannot be skipped because [reason]."
 
@@ -354,15 +349,14 @@ All phases finished. Artifacts:
 - Conflicts: .docs/conflicts/...
 - Plan: .docs/plans/...
 - Architecture: .docs/architecture/...
-- Retro: .docs/retros/...
 
-Harness test complete. Review the retro for improvement findings.
+Harness test complete. Review the shipped artifacts and open any follow-up work separately.
 ```
 
 ## Verification
 
 - [ ] Correctly identifies current step from artifact state
-- [ ] Status dashboard shows all 17 steps with correct status
+- [ ] Status dashboard shows all 16 steps with correct status
 - [ ] Gate enforcement blocks progression when quality gates not met
 - [ ] Skippable vs non-skippable steps correctly enforced
 - [ ] Re-entry works (picks up from current state, doesn't restart)

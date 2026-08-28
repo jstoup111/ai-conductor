@@ -594,7 +594,6 @@ export type ConductorEvent =
         | 'evaluator'
         | 'simplify'
         | 'architecture-diagram'
-        | 'micro-retro'
         | 'memory'
         | 'summary';
       /** Epoch milliseconds when the obligation began. */

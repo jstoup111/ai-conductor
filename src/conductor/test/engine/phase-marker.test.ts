@@ -69,14 +69,6 @@ describe('phase-marker', () => {
     expect(() => removePhaseMarker(root)).not.toThrow();
   });
 
-  it('resolveDocsAllowlist merges always-allowed with per-step entries for retro', () => {
-    expect(resolveDocsAllowlist('retro')).toEqual([
-      '.docs/release-waivers/',
-      '.docs/retros/',
-      '.docs/stories/',
-    ]);
-  });
-
   it('resolveDocsAllowlist grants remediate the plan directory', () => {
     expect(resolveDocsAllowlist('remediate')).toEqual([
       '.docs/release-waivers/',

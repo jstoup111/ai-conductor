@@ -83,7 +83,7 @@ The tier is a cost dial with exactly one setting that does anything:
 | L | skips nothing |
 
 M and L are identical in flow. The tier exists to let genuinely small work — a one-file fix, a copy change —
-avoid paying for architecture diagrams, conflict analysis, traceability mapping, and a retrospective. It
+avoid paying for architecture diagrams, conflict analysis, and traceability mapping. It
 never *adds* ceremony to large work; L features and M features run the same step list.
 
 Which steps tier S skips, and why each is safe to drop, is enumerated in [steps](../reference/steps.md).
@@ -110,7 +110,7 @@ deliberately narrow — it changes three things and nothing else.
 | land-time coherence `fr` layer | required | not required |
 
 Everything else is identical: explore, complexity, worktree, architecture, stories, conflict-check, plan,
-coherence-check, the whole of BUILD, manual test, as-built review, retro, rebase, finish.
+coherence-check, the whole of BUILD, manual test, as-built review, rebase, finish.
 
 The split is narrow because it answers one question — *does this work have enumerated product requirements
 to trace against?* — and only the steps that consume those requirements can differ. A refactor has no

@@ -19,7 +19,7 @@ import type {
   BuildProgressConfig,
 } from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
-import { ALL_STEPS, OUT_OF_BAND_STEPS } from './steps.js';
+import { ALL_STEPS, OUT_OF_BAND_STEPS, getStepDefinition } from './steps.js';
 import { readUserConfig } from './user-config.js';
 import { VALID_MARKDOWN_VIEWER_MODES } from './md-viewer-presets.js';
 import { VALID_MERMAID_RENDERER_MODES } from './mermaid-renderer-presets.js';
@@ -505,6 +505,18 @@ export function validateConfig(
         };
       }
       const cfg = value as Record<string, unknown>;
+
+      // `retro` was a built-in step before its removal. Reserve that retired
+      // name so old routing config reaches the registry's normal unknown-step
+      // diagnostic instead of being reinterpreted as a malformed custom step.
+      if (name === 'retro') {
+        try {
+          getStepDefinition(name as StepName);
+        } catch (error) {
+          return errVal(error instanceof Error ? error.message : `Unknown step: ${name}`);
+        }
+      }
+
       const knownStepKeys = new Set([
         'llm_provider',
         'model',

@@ -55,7 +55,6 @@ const EXPECTED_INVOCATIONS = {
     skillName: 'architecture-review',
     arguments: ['--as-built'],
   },
-  retro: { kind: 'skill', skillName: 'retro', arguments: [] },
   rebase: { kind: 'skill', skillName: 'rebase', arguments: [] },
   finish: { kind: 'skill', skillName: 'finish', arguments: [] },
   remediate: { kind: 'skill', skillName: 'remediate', arguments: [] },

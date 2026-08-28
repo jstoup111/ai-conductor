@@ -1394,7 +1394,7 @@ async function main(): Promise<void> {
 
   // Wire AuditTrailWriter: appends friction/positive-evidence records to
   // .pipeline/audit-trail/events.jsonl, rooted at the resolved projectRoot
-  // (never process.cwd()) so retro can reconstruct this run's history.
+  // (never process.cwd()) so the audit trail preserves this run's history.
   const auditWriter = new AuditTrailWriter(projectRoot);
   auditWriter.subscribe(events);
 

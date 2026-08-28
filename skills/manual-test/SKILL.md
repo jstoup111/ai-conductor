@@ -21,7 +21,7 @@ report it as untested rather than presenting an assumption as a result.
 
 **Runs at SHIP as a member of the concurrent validation group — fanned out alongside
 `/prd-audit` and `/architecture-review --as-built` in daemon/auto runs. In interactive
-runs it runs serially, AFTER `/finish` and BEFORE `/retro`, with its post-step
+runs it stays in the configured SHIP sequence, with its post-step
 checkpoint unchanged.**
 
 ## Practices
@@ -121,7 +121,7 @@ Use browser automation (Chrome MCP if configured, otherwise manual Capybara-styl
 1. Navigate to each page referenced in stories
 2. Perform the actions described in Given/When/Then
 3. Verify visible output matches expected behavior
-4. Take screenshots of key states for the retro
+4. Take screenshots of key states as manual-test evidence
 
 ### 5. Display Results
 
@@ -233,10 +233,10 @@ genuinely self-evident from the failure.
 3. Commit
 4. Re-run the manual test for that story to verify
 
-**Do NOT proceed to `/retro` with known bugs.** The manual test gate must be clean.
+**Do NOT proceed to `/finish` with known bugs.** The manual test gate must be clean.
 
 ```
-/finish → /manual-test → bugs found? → /debugging (discover cause, if not obvious) → /tdd (fix each bug) → /manual-test (re-verify) → /retro
+/manual-test → bugs found? → /debugging (discover cause, if not obvious) → /tdd (fix each bug) → /manual-test (re-verify) → /finish
 ```
 
 The loop continues until all stories pass manual testing.

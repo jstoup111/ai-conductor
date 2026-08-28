@@ -23,7 +23,7 @@ whether the step can be skipped and whether it can be disabled by config.
 
 | Level | Can be skipped | Can be config-disabled | Used by |
 | --- | --- | --- | --- |
-| `advisory` | Yes | Yes | `memory`, `explore`, `complexity`, `architecture_diagram`, `architecture_review`, `retro`, and all four out-of-band steps |
+| `advisory` | Yes | Yes | `memory`, `explore`, `complexity`, `architecture_diagram`, `architecture_review`, and all four out-of-band steps |
 | `gating` | No | Only with `configDisableAllowed` | `prd`, `stories`, `conflict_check`, `plan`, `coherence_check`, `acceptance_specs`, `build_review`, `wiring_check`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
 | `structural` | No | Never — the flag is ignored entirely | `worktree`, `build`, `rebase` |
 | `mechanical` | — | — | Nothing. The level is declared in the type union but no step definition uses it. |
@@ -58,9 +58,8 @@ The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 | 16 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
 | 17 | `prd_audit` | SHIP | gating | `manual_test` | — (runs at every tier and on both tracks; trivially passes when a feature has no acceptance criteria to grade) | `/prd-audit` |
 | 18 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | — (runs at every tier; individual checks are conditional on tier and artifact presence, see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict)) | `/architecture-review --as-built` |
-| 19 | `retro` | SHIP | advisory | `architecture_review_as_built` | tier S | `/retro` |
-| 20 | `rebase` | SHIP | structural | `retro` | — | native; `/rebase` only on conflict |
-| 21 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
+| 19 | `rebase` | SHIP | structural | `architecture_review_as_built` | — | native; `/rebase` only on conflict |
+| 20 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
 
 Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 5, SHIP 6.
 
@@ -159,7 +158,7 @@ Tier S skips 7 steps. Tiers M and L skip none.
 
 | Tier | Steps skipped |
 | --- | --- |
-| S | `architecture_diagram`, `architecture_review`, `conflict_check`, `coherence_check`, `acceptance_specs`, `manual_test`, `retro` |
+| S | `architecture_diagram`, `architecture_review`, `conflict_check`, `coherence_check`, `acceptance_specs`, `manual_test` |
 | M | none |
 | L | none |
 
@@ -245,7 +244,6 @@ detail.
 | `manual_test` | `.pipeline/manual-test-results.md` | no | The latest attempt section has no FAIL rows and is fresh. `WARN` rows record unavailable browser capability without blocking. After a recorded FAIL, HEAD must have moved before a later FAIL-free attempt is accepted |
 | `prd_audit` | `.pipeline/prd-audit.md` | no | Fresh audit with exactly one graded verdict row — `PASS`, `FIXABLE`, `PLAN_GAP`, or `OVER_SCOPE` — for every acceptance criterion across the feature's stories; a `FIXABLE` row must name its owning plan task. A no-owner finding belongs in `## Findings without an owning criterion` as one unique `NC.<n>` `OVER_SCOPE` row; an `outside-visible` finding blocks until the operator decides it, and that decision binds to its evidence summary. A missing, invalid, or duplicate row blocks with a diagnostic. Verdict rows are read only from the `## Verdict Table` section when the report carries that heading, so a narrative table elsewhere (e.g. a prior-cycle history table) cannot be read as a current verdict; a report without the heading is scanned whole. An unresolvable or unreadable criterion set blocks fail-closed |
 | `architecture_review_as_built` | `.pipeline/architecture-review-as-built.md` | no | A `Verdict:` line reading `APPROVED`, `APPROVED WITH DRIFT NOTES`, or `PLAN_GAP` with `Outcome delivered: yes`. A `BLOCKED` report must carry one `## Blocking Findings` table (`Finding`, `Class`, `Governing clause`, `Summary`): an all-`REMEDIABLE` table may take the enabled bounded remediation route; `DESIGN`, malformed, disabled, or exhausted routes halt needs-human. `PLAN_GAP` with `Outcome delivered: no`, missing, or unrecognized evidence also blocks |
-| `retro` | `.docs/retros/*.md` | yes | A retro file matching this feature's slug, fresh this session |
 | `rebase` | — | — | Computed from live git state, not a file |
 | `finish` | `.pipeline/finish-choice` | no | A fresh final-outcome marker. Interactive intent is acquired by the foreground prompt host before publication; the coordinator writes `pr` or `keep` through `finish-record` only after the corresponding evidence is coherent. Legacy `merge-local` and `discard` markers remain readable but are never synthesized by unattended FINISH |
 | `bootstrap`, `remediate`, `attribution_verify` | — | — | No completion glob. `remediate`'s output, `.pipeline/remediation.json`, is read directly by the engine to route |
@@ -257,10 +255,9 @@ unsatisfied. Durable verdicts are written to `.pipeline/gates/<step>.json`.
 A step the engine resolves by *skipping* never runs its predicate, but it still writes a verdict:
 `{"satisfied": true, "reason": "skipped: <cause>"}`. The `skipped: ` prefix marks a gate that was
 deliberately not run, so it is never mistaken for evidence that passed. This covers every skip —
-tier, track, bootstrap mode, upstream skip, `disable: true`, a false `when:`, the daemon's in-loop
-`retro` skip, and an advisory step auto-skipped after a failed completion check (whose reason carries
-the failure). It matters most for `retro`, which is advisory, tier-S-skippable, and skipped on every
-daemon run: it previously left no verdict at all. See [gates](../explanation/gates.md#what-a-gate-is).
+tier, track, bootstrap mode, upstream skip, `disable: true`, a false `when:`, and an advisory step
+auto-skipped after a failed completion check (whose reason carries the failure). See
+[gates](../explanation/gates.md#what-a-gate-is).
 
 ## Starting from a step
 

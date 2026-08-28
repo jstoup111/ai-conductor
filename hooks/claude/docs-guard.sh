@@ -75,8 +75,8 @@ case "$TARGET" in
     # targets that start with that literal prefix string. Prefixes are
     # written with a trailing slash (see writePhaseMarker), so a plain
     # `case`-glob prefix match is already directory-segment-boundary-safe:
-    # '.docs/retros-evil/x.md' does not start with the literal string
-    # '.docs/retros/', so it does not false-match the '.docs/retros/' allow.
+    # '.docs/plans-archive/x.md' does not start with the literal string
+    # '.docs/plans/', so it does not false-match the '.docs/plans/' allow.
     while IFS= read -r ALLOW_PREFIX; do
       case "$TARGET" in
         "$ALLOW_PREFIX"*)

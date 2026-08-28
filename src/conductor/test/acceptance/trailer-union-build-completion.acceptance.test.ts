@@ -84,7 +84,6 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
         intentRationale: 'The fixture records an executed, failing feature acceptance spec.',
       }),
     ],
-    ['.docs/retros/2026-07-23-retro.md', 'x'],
   ];
   for (const [rel, content] of artifacts) {
     const full = join(dir, rel);

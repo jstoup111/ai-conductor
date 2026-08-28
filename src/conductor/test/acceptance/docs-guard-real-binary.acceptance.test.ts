@@ -165,51 +165,6 @@ describe('acceptance (real-binary): phase-scoped .docs write-guard (#788)', () =
     });
   });
 
-  describe('with a real SHIP-step (retro) marker carrying per-step allowlist prefixes', () => {
-    beforeAll(async () => {
-      await writeMarker(repoRoot, {
-        step: 'retro',
-        phase: 'SHIP',
-        allow: ['.docs/release-waivers/', '.docs/retros/', '.docs/stories/'],
-      });
-    });
-
-    afterAll(async () => {
-      await removeMarker(repoRoot);
-    });
-
-    it('allows a Write to the retro-allowlisted .docs/retros/ prefix', async () => {
-      const { exitCode } = await runGuard({
-        tool_name: 'Write',
-        tool_input: { file_path: join(repoRoot, '.docs', 'retros', '2026-07-22-x.md') },
-      });
-      expect(exitCode).toBe(0);
-    });
-
-    it('allows a Write to the retro-allowlisted .docs/stories/ prefix', async () => {
-      const { exitCode } = await runGuard({
-        tool_name: 'Write',
-        tool_input: { file_path: join(repoRoot, '.docs', 'stories', 'new-story.md') },
-      });
-      expect(exitCode).toBe(0);
-    });
-
-    it('still blocks .docs/plans/ under the same retro marker (per-prefix, not per-step-blanket)', async () => {
-      const { exitCode } = await runGuard({
-        tool_name: 'Edit',
-        tool_input: { file_path: join(repoRoot, '.docs', 'plans', 'x.md') },
-      });
-      expect(exitCode).toBe(2);
-    });
-
-    it('blocks a Write to a sibling-prefix directory mimicking .docs/retros/', async () => {
-      const { exitCode } = await runGuard({
-        tool_name: 'Write',
-        tool_input: { file_path: join(repoRoot, '.docs', 'retros-evil', 'x.md') },
-      });
-      expect(exitCode).toBe(2);
-    });
-  });
 
   describe('with no marker present (guard inert)', () => {
     it('allows a Write to .docs/stories/ when no BUILD/SHIP step is active', async () => {

@@ -557,7 +557,7 @@ conduct-ts daemon unpark <slug>
 ### 3. Re-verify SHIP evidence with `--diagnose`
 
 `--diagnose` re-runs the SHIP-gating completion predicates — `test_suite`, `manual_test`,
-`retro`, `finish` — against the on-disk evidence and reports which ones cannot reproduce a pass.
+`finish` — against the on-disk evidence and reports which ones cannot reproduce a pass.
 It does not modify feature state.
 
 ```bash

@@ -214,7 +214,7 @@ async function seedPreRebaseState(statePath: string): Promise<void> {
   const state: ConductState = { feature_desc: FEATURE } as ConductState;
   for (const step of ALL_STEPS) {
     if (step.name === 'rebase') break;
-    (state as Record<string, unknown>)[step.name] = step.name === 'retro' ? 'skipped' : 'done';
+    (state as Record<string, unknown>)[step.name] = 'done';
   }
   state.finish = 'done';
   await writeState(statePath, state);

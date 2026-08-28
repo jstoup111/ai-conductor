@@ -845,7 +845,6 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       manual_test: 'done',
       prd_audit: 'skipped',
       architecture_review_as_built: 'done',
-      retro: 'skipped',
       rebase: 'skipped',
       finish: 'pending',
     });

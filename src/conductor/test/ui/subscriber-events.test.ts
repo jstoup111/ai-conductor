@@ -28,7 +28,7 @@ describe('TerminalSubscriber event forwarding', () => {
   });
 
   it('forwards config_skip events', async () => {
-    const event: ConductorEvent = { type: 'config_skip', step: 'retro' };
+    const event: ConductorEvent = { type: 'config_skip', step: 'rebase' };
     await emitter.emit(event);
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
