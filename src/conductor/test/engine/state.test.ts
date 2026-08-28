@@ -553,19 +553,19 @@ describe('engine/state', () => {
           manual_test: 'skipped',
           build: 'done',
           build_review: 'failed',
-          retro: 'stale',
+          rebase: 'stale',
         },
         {
           manual_test: 'stale',
           build: 'stale',
           build_review: 'stale',
-          retro: 'stale',
+          rebase: 'stale',
           finish: 'stale',
         },
       )).toEqual({
         build: 'stale',
         build_review: 'stale',
-        retro: 'stale',
+        rebase: 'stale',
         finish: 'stale',
       });
     });
