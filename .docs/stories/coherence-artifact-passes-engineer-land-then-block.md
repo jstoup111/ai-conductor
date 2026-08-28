@@ -47,7 +47,7 @@ at land so that no spec can land and then be unbuildable.
 
 ### Done When
 - [ ] `hasCoherenceTableDataRow` is gone and discovery's non-S coherence branch calls the shared parser
-- [ ] A no-regression test runs discovery over fixtures under both predicates and asserts every old-accepted fixture stays eligible, and that the only divergences are new-predicate acceptances (condition C-A)
+- [ ] A no-regression test runs discovery over fixtures under both predicates and asserts no old-accepted fixture is silently dropped: each is either eligible, or blocked with `missing-coherence` carrying a remedy that names the offending line and the parser's message
 - [ ] The zero-criterion-rows discovery test from adr-2026-08-23 is updated to pin the same behavior through the shared parser, not deleted
 - [ ] A regression fixture reproducing the #1881 artifact shape dispatches successfully
 
