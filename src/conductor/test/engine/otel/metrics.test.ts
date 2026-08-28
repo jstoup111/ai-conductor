@@ -1,5 +1,5 @@
 /**
- * Covers: task:1, task:2, task:3
+ * Covers: task:1, task:2, task:3, task:4
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
  *
  * Tests T15–T16 using OtelVisualizer + InMemoryMetricExporter:
@@ -16,7 +16,13 @@ import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
 import { DURATION_BUCKET_BOUNDARIES_MS, MetricsRecorder } from '../../../src/engine/otel/metrics.js';
 import type { Meter } from '@opentelemetry/api';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
-import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+  type HistogramMetricData,
+} from '@opentelemetry/sdk-metrics';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -140,6 +146,39 @@ describe('Task 3: closeout-duration histogram advice and descriptions', () => {
       stepDescription: expect.stringContaining('quantiles saturate above 30 min (largest finite bucket boundary)'),
       closeoutDescription: expect.stringContaining('quantiles saturate above 30 min (largest finite bucket boundary)'),
     });
+  });
+});
+
+// ── Task 4: step-duration overflow and zero observations ───────────────────
+
+describe('Task 4: step-duration overflow and zero observations', () => {
+  it('keeps overflow and zero observations in their exact histogram buckets', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter })],
+    });
+
+    try {
+      const recorder = new MetricsRecorder(provider.getMeter('task-4'));
+      recorder.onStepClose('overflow-and-zero', 2_000_000, 0);
+      recorder.onStepClose('overflow-and-zero', 0, 0);
+
+      await provider.forceFlush();
+
+      const metric = findMetric(exporter, 'conductor.step.duration');
+      const point = (metric as HistogramMetricData | undefined)?.dataPoints.find(
+        (dataPoint) => dataPoint.attributes['step'] === 'overflow-and-zero',
+      );
+
+      expect(point).toBeDefined();
+      expect(point?.value.count).toBe(2);
+      expect(point?.value.sum).toBe(2_000_000);
+      expect(point?.value.buckets.boundaries.at(-1)).toBe(DURATION_BUCKET_BOUNDARIES_MS.at(-1));
+      expect(point?.value.buckets.counts.at(-1)).toBe(1);
+      expect(point?.value.buckets.counts[0]).toBe(1);
+    } finally {
+      await provider.shutdown();
+    }
   });
 });
 
