@@ -1,20 +1,24 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-08-28T10:55:53.575Z
+Status: halted
 Slug: exported-telemetry-carries-no-cost-signal-so-spend
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-exported-telemetry-carries-no-cost-signal-so-spend
-Head SHA: 6bc86728540cfc17c67e448184476efa2af3b244
-Halted at: 2026-08-27T17:47:35.331Z
+Head SHA: c9c322a18855ed65da44154d433d0fca37a318ff
+Halted at: 2026-08-28T10:57:39.498Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings. Missing: AB-1.
+feature errored — will re-dispatch on the next scan
+Daemon base-state update failed (persistence): Unknown step: retro
+
+Resume procedure:
+  1. Fix the cause of the error above (project setup / config / environment / a crashed step).
+  2. rm .pipeline/HALT
+  3. Re-queue the feature (restart the daemon if it was excluded this run).
 ```
