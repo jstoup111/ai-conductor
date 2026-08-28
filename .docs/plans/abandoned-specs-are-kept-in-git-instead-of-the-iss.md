@@ -144,13 +144,13 @@ for tone and structure; `docs/runbooks/index.md` lists every runbook and must ga
 **Steps:**
 1. Run the backlog scan's enumeration on the branch (`git ls-tree --name-only HEAD:.docs/plans` filtered to `*.md`, the same non-recursive listing `daemon-backlog.ts` performs) and on the merge-base; diff the two lists.
 2. Assert none of the nine retired stems appear in either list, and that the two lists are identical except for this feature's own plan file.
-3. Run the shipment audit's recursive enumeration (`git ls-tree -r --name-only HEAD -- .docs/plans`) and assert no retired stem appears.
+3. Run the shipment audit's ACTUAL historical enumeration -- `git log --pretty=format: --name-only <ref> -- .docs/plans .docs/specs`, the source `src/conductor/src/engine/shipment-audit.ts:138-142` uses -- for `<ref>` = HEAD and `<ref>` = the merge-base, and assert the two source sets are identical. The nine retired stems are already historical sources at the merge-base (they lived under `.docs/plans/` before an earlier change moved them to `.docs/retired/`), so this migration neither adds nor removes an audit source; the engine surfacing them at all is issue #1964, out of scope here.
 4. Confirm `git diff --stat <merge-base>...HEAD -- src/` is empty (no engine change).
 5. Record the four observations in an empty commit with trailers `Task: 6` and `Evidence: skipped verification produced no diff; observations in this message`.
 
 **Done when:**
 - The branch's plans listing contains no retired stem and differs from the merge-base only by this feature's own artifacts
-- The recursive audit enumeration contains no retired stem
+- The shipment audit's historical source set is byte-identical between HEAD and the merge-base (zero added, zero removed)
 - The diff against the merge-base touches no path under src/
 - An empty commit records these observations
 
@@ -176,3 +176,11 @@ Task 4 ──> Task 5 ──> Task 6
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a Done when block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s13-1: docs/reference/artifacts.md:40 — correct the `.docs/` inventory sentence so it matches the table at :44-63 it describes: change "Nineteen entries" to "Twenty entries" (the table has exactly 20 rows) and "the five with no code reference" to "the four with no code reference" (only `audit/`, `manual-test-results.md`, `observation/`, and `phase7-daemon-validation.md` still carry the **no code reference** marker after the `retired/` row removal). Edit both halves of that one sentence together — they are the matched counterpart of the same table — change no table row and no other line, then re-run test/test_harness_integrity.sh and confirm it still exits 0.
+**Gate:** prd-audit
+**Rationale:** docs/reference/artifacts.md:40 reads "Nineteen entries. Alphabetized; the five with no code reference are marked." while the `.docs/` table it describes at :44-63 holds 20 rows of which only 4 carry the **no code reference** marker (:45 `audit/`, :55 `manual-test-results.md`, :56 `observation/`, :57 `phase7-daemon-validation.md`) — removing the `retired/` row in this diff dropped the fifth marked row and left the page's own inventory sentence false; this is conforming documentation drift that preserves the approved architecture, not a planning miss, and approved plan Task 3 step 1 already admits the repair ("decrement any entry count the page states above the table, if present"), so no new plan task is needed and no architectural decision is at stake. Sibling sweep: line 40 is the only inventory sentence governing this table — the two other cardinal-number sentences in the file (:85 "Exactly two entries get a relaxed second lookup", :495 "Two constants named `HALT_MARKER`") describe unrelated mechanisms and are correct, so they are found-and-excluded; no other page states a `.docs/` entry count (verified by grep across the file). The count sentence and the table are the matched pair, so both halves of the sentence are corrected together against the table as it now stands, including the pre-existing off-by-one in the entry count (21 rows under "Twenty" at the merge-base, now 20 rows under "Nineteen"), which sits in the same sentence inside the same admitted step and would otherwise be the next audit lap's finding. The task removes, replaces, or relaxes no code, test, or assertion — it is a two-word prose correction inside the artifact plan Task 3 itself delivers, and Task 3's Done-when conditions (no `retired/` row, no link into the retired directory, the runbook link present at :67, integrity suite exits 0) all remain satisfied afterwards.
+**Criterion:** S1.3
+**Parent task:** 3
+**Done when:**
+- S1.3 is satisfied by this task.

@@ -31,8 +31,17 @@ conventions.
 
 ## Story 2: The nine retired plans migrate to closed issues and the register is gone
 
-As the repository operator, I want the existing .docs/retired/ contents to reach the same end
-state as any future abandonment so that no grandfathered register remains to drift.
+As the repository operator, I want the existing .docs/retired/ register migrated to closed issues
+and deleted, so that no grandfathered register remains to drift.
+
+**Out of scope.** Removing the abandoned stems' *other* DECIDE artifacts (their `.docs/architecture/`,
+`.docs/coherence/`, `.docs/complexity/`, `.docs/conflicts/`, `.docs/stories/`, and `.docs/track/`
+entries) is deliberately not part of this feature. Those paths are covered by the protected-artifact
+seal, and the seal's deletion check admits no tolerance — no `reseal` (which requires every path to
+resolve at the current commit) and no rotation (refused as `same-history-ancestor`) can admit a
+deletion performed on a feature branch, so no feature branch can deliver it. That cleanup ships as a
+separate main-based change. This story's end state is the register: closed issues plus an absent
+`.docs/retired/`.
 
 ### Acceptance Criteria
 
@@ -62,7 +71,7 @@ abandoned slug never resurfaces and real blocked work stays visible.
 - Given a plan that is blocked but still wanted remains under .docs/plans/, when the backlog scan runs, then it is still reported (as blocked or pending) — presence in .docs/plans remains the wanted/abandoned discriminator
 
 #### Negative Paths
-- Given the shipment audit's recursive plan enumeration, when it runs on the branch after migration, then no retired plan stem appears as an audit source and the audit exits with the same status as on the base branch
+- Given the shipment audit's historical plan enumeration, when it runs on the branch after migration, then its source set and exit status are identical to the base branch's (all nine retired stems already appear as historical sources there, and the engine surfacing them is tracked by #1964, out of scope for this docs-only migration)
 
 ### Done When
 - [ ] Backlog scan output on the branch contains none of the 9 retired stems and is otherwise identical to the base branch's
