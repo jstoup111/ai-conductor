@@ -545,6 +545,34 @@ to the daemon prefix and explains the next action for every nonzero outcome, for
 [daemon][parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=7 refused=2 skipped=56; refusals: unmerged-commits=2; next: 1 deferred awaits shipped-record repair; 2 refusals requires resolving unmerged-commits; 7 parked remain parked; 56 skipped retry when merge/issue evidence is available
 ```
 
+## Project setup runs once per worktree
+
+When the daemon prepares a worktree it runs the project's `bin/setup`, and a **successful** run
+records a marker at `<worktree>/.daemon/setup-ok.json`. The marker names the `bin/setup` that ran
+(a content-and-mode fingerprint) and the base SHA the worktree was prepared against, plus the
+commit the worktree was actually at — provenance for reading the record, never part of the skip
+decision.
+
+A later dispatch re-reads the marker and skips setup **only** when the recorded fingerprint and the
+recorded base SHA both still match what it resolves now. Everything else re-runs setup: no marker,
+a marker that cannot be read or is from an older format, an edited `bin/setup`, or a base moved by
+a rebase or re-kick — which is exactly when migrations and dependency changes arrive. Task commits
+made by the build move the worktree's `HEAD` but not its base, so they never re-run setup. A failed
+setup leaves no marker, and the marker is deleted before each re-run, so a broken setup can never
+be skipped.
+
+Setup-failure triage never trusts the marker: its verification re-runs are forced, so they always
+execute `bin/setup` for real, and a forced run that succeeds records a fresh marker — a project
+repaired by triage skips setup on its next dispatch instead of paying for it again.
+
+Under the daemon each decision is emitted as a `project_setup` event, persisted in the feature's
+`.pipeline/events.jsonl` and rendered into the daemon log, so the log says whether setup ran and
+what made it run.
+
+The marker lives with the worktree and dies with it: a worktree recreated from its branch has no
+marker and re-provisions from scratch. To force a single re-run by hand, delete
+`<worktree>/.daemon/setup-ok.json`.
+
 ## Project teardown hook
 
 To clean project-owned resources before the daemon removes a feature worktree, add an executable

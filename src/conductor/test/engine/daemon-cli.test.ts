@@ -17,6 +17,11 @@ import { access, chmod, mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+const execFileAsync = promisify(execFile);
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
@@ -58,30 +63,79 @@ class RecordingConductStateStore implements ConductStateStore<ConductState> {
 }
 
 describe('daemon setup-triage prepare wiring', () => {
-  it('constructs a marker-bypassing prepare callback', async () => {
+  // Real local Git: the base SHA the forced prepare stamps into the setup
+  // marker is resolved from the project root's refs, so the resolution itself
+  // is the boundary under test. No third party is reachable.
+  let projectRoot: string;
+
+  async function git(...args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['-C', projectRoot, ...args]);
+    return stdout.trim();
+  }
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'forced-setup-prepare-'));
+    await execFileAsync('git', ['init', '-b', 'main', projectRoot]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await git('commit', '--allow-empty', '-m', 'base');
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('binds the resolved base SHA and the feature emitter into the forced prepare', async () => {
     const prepare = vi.fn(async () => {});
     const log = vi.fn();
+    const events = new ConductorEventEmitter();
     const runPrepare = createForcedSetupPrepare(
       prepare as typeof prepareWorktree,
       log,
       true,
+      { projectRoot, baseBranch: 'main', events },
     );
 
     await runPrepare('/worktrees/after-quarantine');
     await runPrepare('/worktrees/after-fix');
 
+    const baseSha = await git('rev-parse', 'main');
+    // Both triage stages share this callback, and each run must carry the base
+    // (so a success rewrites the marker) and the emitter (so `forced` rides the
+    // spine) — not just `force`.
     expect(prepare).toHaveBeenNthCalledWith(
       1,
       '/worktrees/after-quarantine',
       log,
-      { verbose: true, force: true },
+      { verbose: true, force: true, baseSha, events },
     );
     expect(prepare).toHaveBeenNthCalledWith(
       2,
       '/worktrees/after-fix',
       log,
-      { verbose: true, force: true },
+      { verbose: true, force: true, baseSha, events },
     );
+  });
+
+  it('re-resolves the base on every verification run', async () => {
+    const prepare = vi.fn(async () => {});
+    const runPrepare = createForcedSetupPrepare(
+      prepare as typeof prepareWorktree,
+      undefined,
+      false,
+      { projectRoot, baseBranch: 'main' },
+    );
+
+    await runPrepare('/worktrees/before-advance');
+    const firstBase = await git('rev-parse', 'main');
+    await git('commit', '--allow-empty', '-m', 'base advances mid-triage');
+    await runPrepare('/worktrees/after-advance');
+    const secondBase = await git('rev-parse', 'main');
+
+    expect(secondBase).not.toBe(firstBase);
+    expect(prepare.mock.calls.map((call) => (call as unknown as [string, unknown, { baseSha?: string }])[2].baseSha))
+      .toEqual([firstBase, secondBase]);
   });
 });
 

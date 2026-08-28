@@ -54,6 +54,25 @@ describe('engine/worktree-prepare', () => {
     await chmod(path, mode);
   }
 
+  /**
+   * A real local Git repository in the temp worktree. The marker's
+   * `preparedAtCommit` is resolved from the worktree's own HEAD, so Git is the
+   * boundary under test for every spec that expects a marker write.
+   */
+  async function initGitRepo(): Promise<string> {
+    await execFileAsync('git', ['init', '-b', 'main', dir]);
+    await execFileAsync('git', ['-C', dir, 'config', 'user.email', 'test@example.com']);
+    await execFileAsync('git', ['-C', dir, 'config', 'user.name', 'Test']);
+    await execFileAsync('git', ['-C', dir, 'config', 'commit.gpgsign', 'false']);
+    return commitEmpty('base');
+  }
+
+  async function commitEmpty(message: string): Promise<string> {
+    await execFileAsync('git', ['-C', dir, 'commit', '--allow-empty', '-q', '-m', message]);
+    const { stdout } = await execFileAsync('git', ['-C', dir, 'rev-parse', 'HEAD']);
+    return stdout.trim();
+  }
+
   async function writeDispatchStart(body: string, mode = 0o755): Promise<void> {
     await mkdir(join(dir, 'bin'), { recursive: true });
     const path = join(dir, DISPATCH_START_SCRIPT);
@@ -145,21 +164,49 @@ describe('engine/worktree-prepare', () => {
     });
 
     it('writes a marker only after successful setup and clears a stale marker before a forced failure', async () => {
+      const baseSha = await initGitRepo();
       await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
 
-      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+      await prepareWorktree(dir, undefined, { baseSha });
 
       const marker = await readSetupMarker(dir);
-      expect(marker).toMatchObject({ baseSha: 'base-a', setupScriptHash: await hashSetupScript(dir) });
+      expect(marker).toMatchObject({ baseSha, setupScriptHash: await hashSetupScript(dir) });
 
       await writeSetup('#!/usr/bin/env bash\necho broken >&2\nexit 1\n');
-      await expect(prepareWorktree(dir, undefined, { baseSha: 'base-a', force: true }))
+      await expect(prepareWorktree(dir, undefined, { baseSha, force: true }))
         .rejects.toBeInstanceOf(SetupFailureError);
       await expect(readSetupMarker(dir)).resolves.toBeNull();
 
       await writeSetup('#!/usr/bin/env bash\necho reran >> setup-count\n');
-      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+      await prepareWorktree(dir, undefined, { baseSha });
       expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('reran');
+    });
+
+    it('stamps the marker with the worktree HEAD as provenance, never a copy of the base', async () => {
+      // Decision 1: `baseSha` is the identity the gate compares; the prepared
+      // commit is the separate fact of WHERE setup ran — which, once a build
+      // has made task commits, is ahead of the base it was cut from.
+      const baseSha = await initGitRepo();
+      await writeSetup('#!/usr/bin/env bash\ntrue\n');
+      const headSha = await commitEmpty('task: build progress past the base');
+
+      await prepareWorktree(dir, undefined, { baseSha });
+
+      expect(headSha).not.toBe(baseSha);
+      expect(await readSetupMarker(dir)).toMatchObject({ baseSha, preparedAtCommit: headSha });
+    });
+
+    it('writes no marker when the prepared commit cannot be resolved', async () => {
+      // Fail closed: without provenance the marker would assert a code state it
+      // cannot name, so setup simply re-runs on the next dispatch.
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      const log: string[] = [];
+
+      await prepareWorktree(dir, (message) => log.push(message), { baseSha: 'base-a' });
+
+      expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('ran');
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+      expect(log).toContainEqual(expect.stringContaining('setup marker not written'));
     });
 
     it.each([
@@ -260,11 +307,12 @@ require('node:fs').writeFileSync('dispatch-start.json', JSON.stringify({ ci: pro
     });
 
     it('runs on every prepare, including marker-valid setup skips', async () => {
+      const baseSha = await initGitRepo();
       await writeSetup('#!/usr/bin/env bash\ntrue\n');
       await writeDispatchStart('#!/usr/bin/env bash\necho dispatch >> dispatch-count\n');
 
-      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
-      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+      await prepareWorktree(dir, undefined, { baseSha });
+      await prepareWorktree(dir, undefined, { baseSha });
 
       expect((await readFile(join(dir, 'dispatch-count'), 'utf-8')).trim().split('\n')).toHaveLength(2);
     });

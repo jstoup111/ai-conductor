@@ -63,7 +63,33 @@ export interface SetupMarker {
   version: typeof SETUP_MARKER_VERSION;
   setupScriptHash: string;
   baseSha: string;
+  /**
+   * The worktree's own HEAD when setup succeeded — provenance only
+   * (adr-2026-08-26-setup-once-per-worktree-marker, decision 1). It is
+   * deliberately NOT `baseSha`: the base is the resolved identity the gate
+   * compares, while HEAD carries the task commits the build has made on top of
+   * it, so the pair answers "prepared against which base, at which commit".
+   * Never read by `setupDecision`, and never used as a timing source.
+   */
   preparedAtCommit: string;
+}
+
+/**
+ * Resolve the commit the worktree is actually being prepared at (its HEAD).
+ *
+ * Null when HEAD cannot be resolved (not a repository, unborn branch, git
+ * unavailable). The caller then declines to write the marker, which fails
+ * closed toward re-running setup on the next dispatch — the marker is only ever
+ * an assertion that a *known* code state was provisioned.
+ */
+async function resolvePreparedAtCommit(worktreePath: string): Promise<string | null> {
+  try {
+    const { stdout } = await execa('git', ['-C', worktreePath, 'rev-parse', 'HEAD']);
+    const sha = stdout.trim();
+    return sha.length > 0 ? sha : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Return a content-and-mode fingerprint for the project setup script. */
@@ -218,14 +244,21 @@ export async function prepareWorktree(
     setupRan = await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
   }
   if (setupRan && opts?.baseSha) {
-    const setupScriptHash = await hashSetupScript(worktreePath);
-    if (setupScriptHash) {
+    const [setupScriptHash, preparedAtCommit] = await Promise.all([
+      hashSetupScript(worktreePath),
+      resolvePreparedAtCommit(worktreePath),
+    ]);
+    if (setupScriptHash && preparedAtCommit) {
       await writeSetupMarker(worktreePath, {
         version: SETUP_MARKER_VERSION,
         setupScriptHash,
         baseSha: opts.baseSha,
-        preparedAtCommit: opts.baseSha,
+        preparedAtCommit,
       });
+    } else {
+      log?.(
+        `setup marker not written (${setupScriptHash ? 'unresolved HEAD' : 'unreadable bin/setup'}) — setup re-runs next dispatch`,
+      );
     }
   }
   await runDispatchStart(worktreePath, log, {

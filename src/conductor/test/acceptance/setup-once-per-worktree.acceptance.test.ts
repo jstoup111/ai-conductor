@@ -50,16 +50,9 @@ describe('acceptance: setup once per worktree and forced triage verification (#1
     return stdout.trim();
   }
 
-  async function initialiseRepo(): Promise<string> {
-    await execFileAsync('git', ['init', '-b', 'main', worktree]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
-    await git('config', 'commit.gpgsign', 'false');
-    await writeFile(join(worktree, '.gitignore'), '.env\n.pipeline/\n.daemon/\n', 'utf8');
-    await mkdir(join(worktree, 'bin'), { recursive: true });
-    await writeFile(
-      join(worktree, SETUP_SCRIPT),
-      `#!/usr/bin/env bash
+  /** Counts invocations; fails from the second one on, proving a real re-run. */
+  function failingOnRerunSetup(): string {
+    return `#!/usr/bin/env bash
 count=0
 if [ -f "${counterPath}" ]; then count=$(<"${counterPath}"); fi
 count=$((count + 1))
@@ -69,13 +62,46 @@ if [ "$count" -gt 1 ]; then
   exit 1
 fi
 exit 0
-`,
-      'utf8',
-    );
+`;
+  }
+
+  /** Counts invocations and always succeeds — the repaired-project fixture. */
+  function passingSetup(): string {
+    return `#!/usr/bin/env bash
+count=0
+if [ -f "${counterPath}" ]; then count=$(<"${counterPath}"); fi
+echo "$((count + 1))" > "${counterPath}"
+exit 0
+`;
+  }
+
+  async function initialiseRepo(body: string = failingOnRerunSetup()): Promise<string> {
+    await execFileAsync('git', ['init', '-b', 'main', worktree]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await writeFile(join(worktree, '.gitignore'), '.env\n.pipeline/\n.daemon/\n', 'utf8');
+    await mkdir(join(worktree, 'bin'), { recursive: true });
+    await writeFile(join(worktree, SETUP_SCRIPT), body, 'utf8');
     await chmod(join(worktree, SETUP_SCRIPT), 0o755);
     await git('add', '-A');
     await git('commit', '-m', 'fixture: add stateful setup');
     return git('rev-parse', 'HEAD');
+  }
+
+  /**
+   * The production forced-prepare callback, constructed exactly as
+   * `daemon-cli`'s `runSetupTriage` constructs it: the real `prepareWorktree`,
+   * the feature's project root and base branch, and the feature emitter. No
+   * option is hand-passed here — a spec that patched `baseSha`/`events` in
+   * around the factory would pass while production omitted them.
+   */
+  function forcedPrepare(events?: ConductorEventEmitter): (path: string) => Promise<void> {
+    return createForcedSetupPrepare(prepareWorktree, undefined, false, {
+      projectRoot: worktree,
+      baseBranch: 'main',
+      events,
+    });
   }
 
   function prepareOptions(
@@ -191,15 +217,7 @@ exit 0
         worktree,
         'setup-once-fix',
         async () => {},
-        createForcedSetupPrepare(
-          (path, log, options) => prepareWorktree(
-            path,
-            log,
-            { ...options, baseSha, events },
-          ),
-          undefined,
-          false,
-        ),
+        forcedPrepare(events),
       );
 
       expect(outcome).toMatchObject({
@@ -211,6 +229,49 @@ exit 0
       await expect(readFile(join(worktree, SETUP_MARKER), 'utf8')).rejects.toMatchObject({
         code: 'ENOENT',
       });
+      expect(await persistedEvents()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'project_setup', ran: true, reason: 'forced' }),
+        ]),
+      );
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('S4.4: a forced verification that succeeds rewrites the marker with the prepared commit and persists the forced reason', async () => {
+    const baseSha = await initialiseRepo(passingSetup());
+    await prepareWorktree(worktree, undefined, prepareOptions(baseSha));
+    const staleMarker = JSON.parse(await readFile(join(worktree, SETUP_MARKER), 'utf8'));
+    // A feature branch moves HEAD without moving the base — the state every
+    // build is in by the time triage runs.
+    await git('checkout', '-q', '-b', 'feat/setup-once-forced');
+    await writeFile(join(worktree, 'task.txt'), 'task commit\n', 'utf8');
+    await git('add', '-A');
+    await git('commit', '-m', 'task: build progress on top of the base');
+    const headSha = await git('rev-parse', 'HEAD');
+
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      const outcome = await fixSession(
+        makeGitRunner(worktree),
+        worktree,
+        'setup-once-forced',
+        async () => {},
+        forcedPrepare(events),
+      );
+
+      expect(outcome).toMatchObject({ kind: 'fixed-pass' });
+      expect(await invocationCount()).toBe(2);
+      // The repaired setup is now recorded for the NEXT dispatch: same base
+      // identity the dispatch path resolves, provenance at the commit the
+      // verification actually ran against — never a copy of the base.
+      const marker = JSON.parse(await readFile(join(worktree, SETUP_MARKER), 'utf8'));
+      expect(marker).toMatchObject({ version: 1, baseSha, preparedAtCommit: headSha });
+      expect(marker.preparedAtCommit).not.toBe(marker.baseSha);
+      expect(marker.preparedAtCommit).not.toBe(staleMarker.preparedAtCommit);
       expect(await persistedEvents()).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ type: 'project_setup', ran: true, reason: 'forced' }),
@@ -236,15 +297,7 @@ exit 0
         worktree,
         'setup-once-quarantine',
         new SetupFailureError('prior setup failure', 'PRIOR_FAILURE'),
-        createForcedSetupPrepare(
-          (path, log, options) => prepareWorktree(
-            path,
-            log,
-            { ...options, baseSha, events },
-          ),
-          undefined,
-          false,
-        ),
+        forcedPrepare(events),
       );
 
       expect(outcome).toMatchObject({

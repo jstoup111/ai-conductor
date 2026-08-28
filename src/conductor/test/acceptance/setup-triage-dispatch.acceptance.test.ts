@@ -197,10 +197,17 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
           callee,
         )
       ) {
+        // Per-callee argument slot for the context this spec tracks:
+        // `runConductor` takes the provider execution context at index 2, and
+        // `runSetupTriage` takes the feature log at index 4 (its trailing
+        // argument is the feature event emitter, asserted separately in
+        // daemon-runner.test.ts).
         const contextArgument =
           callee === 'deps.runConductor'
             ? node.arguments[2]
-            : node.arguments.at(-1);
+            : callee === 'deps.runSetupTriage'
+              ? node.arguments[4]
+              : node.arguments.at(-1);
         contextFlow.push(
           `${callee}:${contextArgument?.getText(runnerFile)}`,
         );

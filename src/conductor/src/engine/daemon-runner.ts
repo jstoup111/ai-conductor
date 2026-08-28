@@ -195,6 +195,7 @@ export interface FeatureRunnerDeps {
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
     log?: (message: string) => void,
+    events?: ConductorEventEmitter,
   ) => Promise<TriageOutcome>;
   /**
    * Task 14 (TS-5): Surface quarantine evidence to the resuming build agent.
@@ -361,12 +362,17 @@ export function makeRunFeature(
             deps.runSetupTriage
           ) {
             // Daemon mode with triage handler: classify and route the failure
+            // The feature emitter travels with the log: triage's forced setup
+            // re-runs emit `project_setup` onto this feature's own spine
+            // (adr-2026-08-26-setup-once-per-worktree-marker, decision 3), so
+            // the reason is persisted and rendered rather than log-only.
             const triageOutcome = await deps.runSetupTriage(
               prepareErr as SetupFailureError,
               worktree,
               item,
               providerExecution,
               featureLog,
+              featureRun?.events,
             );
             if (triageOutcome.kind === 'park') {
               // Triage returned park: error outcome, worktree kept
