@@ -9,7 +9,7 @@ nav_order: 8
 The complete step vocabulary the engine executes: names, order, phase, enforcement, skip rules,
 artifacts, and the skill each step dispatches. These names are what `conduct-ts inline --from <step>` accepts.
 
-There are 25 step names: 21 sequential steps in `ALL_STEPS` and 4 out-of-band steps in
+There are 24 step names: 20 sequential steps in `ALL_STEPS` and 4 out-of-band steps in
 `OUT_OF_BAND_STEPS`. `validation` and `build_verification` are step *groups* wrapping existing steps,
 not steps themselves — neither can be passed to `--from`.
 
@@ -149,7 +149,7 @@ not consume retry or kickback budget.
 
 ## Tier skips
 
-Tier S skips 7 steps. Tiers M and L skip none.
+Tier S skips 6 steps. Tiers M and L skip none.
 
 | Tier | Steps skipped |
 | --- | --- |
@@ -262,7 +262,7 @@ registry:
 conduct-ts inline "<feature description>" --from build
 ```
 
-Accepted values are the 21 sequential step names above, in underscore form, plus any custom step name
+Accepted values are the 20 sequential step names above, in underscore form, plus any custom step name
 inserted through the `steps` config key. There is no dash normalization in the engine — `--from
 conflict-check` is not the same string as `conflict_check`.
 
