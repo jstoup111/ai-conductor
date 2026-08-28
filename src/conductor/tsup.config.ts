@@ -9,6 +9,7 @@ assertPublishWrapperEnv(process.env);
 
 export default defineConfig({
   entry: ['src/index.ts'],
+  tsconfig: 'tsconfig.build.json',
   format: ['esm'],
   target: 'node26',
   clean: true,

@@ -51,9 +51,13 @@ export class EventPersister {
     this.clock = clock;
     this.filter = filter;
 
-    this.handler = (event: ConductorEvent): void => {
+    this.handler = (event: ConductorEvent): ReturnType<EventHandler> => {
       if (this.filter && !this.filter(event)) return;
-      this.persist(event);
+      // The emitter can only enforce durable-before-success semantics when the
+      // subscriber returns the persistence operation it started. The current
+      // file appender is synchronous, but retaining this return is required for
+      // asynchronous appenders and test adapters.
+      return this.persist(event);
     };
   }
 

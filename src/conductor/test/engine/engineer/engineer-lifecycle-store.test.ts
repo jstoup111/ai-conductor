@@ -2,7 +2,7 @@ import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ENGINEER_LIFECYCLE_CAPABILITY,
@@ -10,6 +10,8 @@ import {
   EngineerRunStore,
   type EngineerRunSnapshot,
 } from '../../../src/engine/engineer/run-store.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
+import type { EngineerLifecycleEvent } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 describe('EngineerRunStore', () => {
@@ -65,6 +67,87 @@ describe('EngineerRunStore', () => {
       capability: 'engineerLifecycleEventsV1',
     });
     expect(await store().replay(first.engineerRunId, 0)).toHaveLength(1);
+  });
+
+  it('does not report create success before asynchronous journal persistence completes', async () => {
+    type PersistTarget = {
+      persist: (event: EngineerLifecycleEvent) => void | Promise<void>;
+    };
+    const target = EventPersister.prototype as unknown as PersistTarget;
+    const originalPersist = target.persist;
+    let releasePersistence!: () => void;
+    let persistenceStarted!: () => void;
+    const blocked = new Promise<void>((resolve) => { releasePersistence = resolve; });
+    const started = new Promise<void>((resolve) => { persistenceStarted = resolve; });
+    const persistSpy = vi.spyOn(target, 'persist').mockImplementation(function persistAfterRelease(
+      this: PersistTarget,
+      event,
+    ) {
+      persistenceStarted();
+      return blocked.then(() => originalPersist.call(this, event));
+    });
+
+    try {
+      const durableStore = new EngineerRunStore({
+        engineerDir,
+        events,
+        id: () => 'engineer-run-fixed',
+      });
+      const creation = durableStore.create({
+        repoRoot,
+        idea: 'Add a health check',
+        correlationId: 'corr-async',
+        attemptKey: 'launch-async',
+      });
+      await started;
+
+      const stateBeforeRelease = await Promise.race([
+        creation.then(() => 'settled', () => 'settled'),
+        new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 50)),
+      ]);
+      expect(stateBeforeRelease).toBe('pending');
+
+      releasePersistence();
+      await expect(creation).resolves.toMatchObject({
+        engineerRunId: 'engineer-run-fixed',
+        eventRevision: 1,
+      });
+    } finally {
+      releasePersistence();
+      persistSpy.mockRestore();
+    }
+  });
+
+  it('propagates asynchronous journal persistence failures without advancing durable state', async () => {
+    const durableStore = store();
+    const run = await durableStore.create({
+      repoRoot,
+      idea: 'Add a health check',
+      correlationId: 'corr-persist-failure',
+      attemptKey: 'launch-persist-failure',
+    });
+    type PersistTarget = {
+      persist: (event: EngineerLifecycleEvent) => void | Promise<void>;
+    };
+    const target = EventPersister.prototype as unknown as PersistTarget;
+    const persistenceError = new Error('async journal append failed');
+    const persistSpy = vi.spyOn(target, 'persist').mockImplementation(async () => {
+      await Promise.resolve();
+      throw persistenceError;
+    });
+
+    try {
+      await expect(durableStore.record(run.engineerRunId, { kind: 'run_started' }))
+        .rejects.toBe(persistenceError);
+    } finally {
+      persistSpy.mockRestore();
+    }
+
+    expect(await durableStore.replay(run.engineerRunId, 0)).toHaveLength(1);
+    expect(await durableStore.inspectRun(run.engineerRunId)).toMatchObject({
+      eventRevision: 1,
+      state: 'created',
+    });
   });
 
   it('refuses attempt-key input drift, cross-repository correlation reuse, and a second live attempt', async () => {
