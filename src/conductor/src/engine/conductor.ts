@@ -1303,6 +1303,12 @@ export interface StepRunOptions {
    */
   finishProsePass?: 'author' | 'judge';
   /**
+   * Concrete objection from the prior judgment of the retained PR revision.
+   * Present only for a bounded authoring revision lap; omitted when the body
+   * has not been authored yet.
+   */
+  revisionGuidance?: string;
+  /**
    * Concurrent-group branch dispatch only: whether this branch dispatch
    * should resume `sessionId` above (true on retry) or start it fresh
    * (false on the branch's first attempt). Absent for ordinary serial-loop
@@ -2746,8 +2752,14 @@ export class Conductor {
       // mandate: the step runner selects the authoring instruction block, so
       // the provider is told to write the prose from the diff rather than to
       // grade prose that was never written.
-      dispatchAuthoring: async (_request) =>
-        this.stepRunner.run('finish', state, { ...options, finishProsePass: 'author' }),
+      dispatchAuthoring: async (request) =>
+        this.stepRunner.run('finish', state, {
+          ...options,
+          finishProsePass: 'author',
+          ...(request.revisionGuidance === undefined
+            ? {}
+            : { revisionGuidance: request.revisionGuidance }),
+        }),
       emit: async (event) => this.events.emit(event),
     });
     return {
