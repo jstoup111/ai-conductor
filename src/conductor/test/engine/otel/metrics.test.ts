@@ -12,6 +12,7 @@ import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
+import { DURATION_BUCKET_BOUNDARIES_MS } from '../../../src/engine/otel/metrics.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
 
@@ -66,6 +67,28 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
+});
+
+// ── Task 1: duration bucket boundaries ──────────────────────────────────────
+
+describe('Task 1: duration bucket boundaries', () => {
+  it('are strictly increasing and span 10 ms through 30 minutes', () => {
+    expect(DURATION_BUCKET_BOUNDARIES_MS.every(
+      (boundary, index) => index === 0 || boundary > DURATION_BUCKET_BOUNDARIES_MS[index - 1],
+    )).toBe(true);
+    expect(DURATION_BUCKET_BOUNDARIES_MS[0]).toBeLessThanOrEqual(10);
+    expect(DURATION_BUCKET_BOUNDARIES_MS.at(-1)).toBeGreaterThanOrEqual(1_800_000);
+    expect(DURATION_BUCKET_BOUNDARIES_MS.some((boundary) => boundary >= 252_464)).toBe(true);
+  });
+
+  it('resolves representative durations to four distinct buckets', () => {
+    const resolvedBoundaries = [240, 4_000, 90_000, 600_000].map((durationMs) =>
+      DURATION_BUCKET_BOUNDARIES_MS.find((boundary) => boundary >= durationMs),
+    );
+
+    expect(resolvedBoundaries).not.toContain(undefined);
+    expect(new Set(resolvedBoundaries).size).toBe(4);
+  });
 });
 
 // ── T15: Duration histogram and retries counter ───────────────────────────────

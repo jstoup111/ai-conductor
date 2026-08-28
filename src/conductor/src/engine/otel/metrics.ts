@@ -14,6 +14,12 @@ import type { Meter, Counter, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
 
+/** Explicit duration histogram boundaries, from 10 ms through 30 minutes. */
+export const DURATION_BUCKET_BOUNDARIES_MS = [
+  10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000,
+  30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+] as const;
+
 export class MetricsRecorder {
   private readonly durationHistogram: Histogram;
   private readonly retriesCounter: Counter;
