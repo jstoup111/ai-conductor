@@ -9,6 +9,11 @@
  *  - Orphan events (no open span): warn + no-op, never throw (FR-3 negatives).
  *  - Step re-run (second step_started same step): closes old span, opens new one (FR-3).
  *  - Force-close of all open spans on flush (FR-9).
+ *  - Run outcome taxonomy: `complete` from `feature_complete`; `halted` from
+ *    `loop_halt`; `terminated` is the force-close default. Rebase-conflict
+ *    halts arrive via `loop_halt`; the park lifecycle (`auto_park`,
+ *    `credentials_park`, and `operator_park_boundary`) intentionally uses the
+ *    `terminated` default.
  *
  * All methods are synchronous — they only call OTel span APIs that enqueue
  * to the BatchSpanProcessor. No await, no network call (R1).
@@ -302,12 +307,9 @@ export class SpanManager {
     }
     this.openSteps.clear();
 
-    // Close run span (OK — the problem is incomplete steps, not the run itself).
-    if (this.runSpan) {
-      this.runSpan.setStatus({ code: SpanStatusCode.OK });
-      this.runSpan.end();
-      this.runSpan = null;
-    }
+    // The run itself ends cleanly; its default terminal outcome is terminated.
+    // closeRunSpan preserves a prior complete or halted outcome.
+    this.closeRunSpan('terminated');
   }
 
   // ── Internal helpers ───────────────────────────────────────────────────────

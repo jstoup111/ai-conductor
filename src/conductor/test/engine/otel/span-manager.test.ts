@@ -229,17 +229,40 @@ describe('T10: run span lifecycle — one trace per run', () => {
     expect(roots[0].attributes['conductor.run.outcome']).toBe('complete');
   });
 
-  it('run ending without feature_complete closes run span on flush (forceCloseAll)', async () => {
+  it('forceCloseAll defaults the root outcome to terminated while an open step remains incomplete', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
-    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-    // No feature_complete — simulate abrupt termination
+    // No step_completed / feature_complete — simulate abrupt termination.
     await vis.stop();
 
     const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
-    expect(roots).toHaveLength(1); // closed on flush
+    expect(roots).toHaveLength(1);
+    expect(roots[0].attributes['conductor.run.outcome']).toBe('terminated');
+    expect(roots[0].status.code).toBe(1 /* OK */);
+
+    const step = spanExporter.getFinishedSpans().find((s) => s.name === 'bootstrap')!;
+    expect(step.status.code).toBe(2 /* ERROR */);
+    expect(step.attributes['conductor.incomplete']).toBe(true);
+  });
+
+  it('forceCloseAll preserves a prior halted root outcome', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const { spanManager } = vis as unknown as {
+      spanManager: {
+        onLoopHalt(event: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'loop_halt' }>): void;
+      };
+    };
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    spanManager.onLoopHalt({ type: 'loop_halt', reason: 'missing task evidence' });
+    await vis.stop();
+
+    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
+    expect(roots).toHaveLength(1);
+    expect(roots[0].attributes['conductor.run.outcome']).toBe('halted');
   });
 
   it('two early events create only one root span (not duplicated)', async () => {
