@@ -21,7 +21,7 @@ concurrent features') series never merge silently.
 - Given two project roots that share a directory name and a distinct non-blank `otel.project_name` configured for each, when each records a step-close metric, then their exported data points carry those configured values as `project` and are therefore distinguishable
 
 #### Negative Paths
-- Given a run recording metrics, when its data points are exported, then no data-point attribute set contains the run id (series growth per metric stays bounded as runs accumulate)
+- Given a run recording metrics, when its exported label path is inspected, then neither a data-point attribute nor the Resource identity attribute `service.instance.id` contains the run id (backend series growth stays bounded as runs accumulate)
 - Given a config with no `otel.project_name` key, or one whose value is blank or whitespace-only, when a metric data point is exported, then its `project` attribute falls back to the basename of the project root and the run proceeds without error
 - Given a config whose `otel.project_name` is set to a non-blank value, when the exported Resource is inspected, then `service.name` is still exactly `ai-conductor` and `conductor.project` is still the absolute project root — the override changes only the data-point attribute
 - Given the existing pre-identity attribute expectations in the metrics test suite, when identity attributes are added, then pre-existing attributes are unchanged in name and value (additive only — no rename, no removal)
@@ -36,26 +36,29 @@ concurrent features') series never merge silently.
 - [ ] A test asserts absent, blank, and whitespace-only `otel.project_name` each fall back to the basename with no error raised
 - [ ] A test asserts a configured `otel.project_name` leaves `service.name` and the Resource `conductor.project` unchanged
 
-## Story 2: Run identity on the resource ties traces and metrics and makes target_info joinable
+## Story 2: Resource identity keys target_info per feature and keeps the run id off the label path
 
-As an operator correlating a trace with the metrics of the same run, I want the resolved run id
-exported as `service.instance.id` on the OTel Resource, so that the metric backend's
-`target_info` series is joinable and a single run is identifiable end-to-end.
+As an operator correlating a feature's traces with its metrics, I want `service.instance.id` to be
+the feature's stable `<project>/<feature>` identity rather than the run id, so that `target_info` is
+joinable per feature and no new metric series is minted per run.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a resource built with an explicit run id, when the resource attributes are inspected, then `service.instance.id` equals that run id and `conductor.run.id` still equals it (existing attribute preserved)
-- Given a run exporting both spans and metrics, when the span resource and metric resource are inspected, then both carry the same `service.instance.id`, tying the trace to the run's `target_info`
-- Given no runId override and a `.pipeline/conduct-session-id` file with content, when the resource is built, then `service.instance.id` equals the file's trimmed content (the conduct feature-run id, per the existing source chain)
+- Given a resource built for a project and a feature, when the resource attributes are inspected, then `service.instance.id` equals the project and feature joined by a slash, using the same resolved project name the data-point seam uses, and `conductor.run.id` still carries the resolved run id
+- Given a run exporting both spans and metrics, when the span resource and the metric resource are inspected, then both carry the same `service.instance.id`, so the feature's traces and its `target_info` row share one key
+- Given a non-blank `otel.project_name` configured, when the resource is built, then the project half of `service.instance.id` is that configured value and equals the data-point `project` attribute exactly
+- Given no runId override and a `.pipeline/conduct-session-id` file with content, when the resource is built, then `conductor.run.id` equals the file's trimmed content and that value appears nowhere in `service.instance.id`
 
 #### Negative Paths
-- Given no runId override and no session-id file, when the resource is built, then a non-empty id is minted, persisted, and set as `service.instance.id` without throwing (existing never-throws contract preserved)
-- Given the resolved resource, when its attributes are inspected, then `service.name` is exactly the constant `ai-conductor` — project identity is never folded into the service name
-- Given an unwritable pipeline directory, when the resource is built, then construction still succeeds with an in-process id and no exception reaches the caller
+- Given a resource built for any run, when its exported attributes are inspected, then no value on the label path — data-point attribute or `service.instance.id` — contains the run id (backend series growth stays bounded as runs accumulate)
+- Given an absent project name or an absent feature, when the resource is built, then the missing half of `service.instance.id` is `unknown` and construction does not throw (the never-fails contract is preserved)
+- Given the resolved resource, when its attributes are inspected, then `service.name` is exactly the constant `ai-conductor` — project identity is never folded into the service name nor into the backend's derived `job` label
+- Given an unwritable pipeline directory, when the resource is built, then construction still succeeds and no exception reaches the caller
 
 ### Done When
-- [ ] Resource tests assert `service.instance.id` presence and equality with the resolved run id for override, file, and minted paths
+- [ ] Resource tests assert `service.instance.id` equals the composed project-and-feature value for the configured-name, basename, and absent-value paths
+- [ ] A test asserts the resolved run id appears in no Resource identity attribute and in no data-point attribute
 - [ ] A test asserts `service.name === 'ai-conductor'` and unchanged `conductor.run.id`/`conductor.feature`/`conductor.project` attributes
 - [ ] The unwritable-directory test passes with no throw
 

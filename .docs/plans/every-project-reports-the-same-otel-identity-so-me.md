@@ -21,9 +21,12 @@ instruments added concurrently (#1941's cost/dispatch counters) inherit them aut
   and one private helper that merges it into a per-point attribute object; every
   `record()`/`add()` call site passes through that helper. No call site constructs its attribute
   object inline after this change — that is what makes the seam single.
-- `buildResource` (`src/conductor/src/engine/otel/resource.ts`) adds
-  `'service.instance.id': runId` to the returned attributes. The run-id resolution chain, the
-  never-throws contract, and all four existing `conductor.*` attributes are untouched.
+- `buildResource` (`src/conductor/src/engine/otel/resource.ts`) adds `service.instance.id`,
+  composed from the resolved project name and the feature (`unknown` for either missing half).
+  The run id is deliberately not that value: metric backends translate `service.instance.id` into
+  a per-series `instance` label, so a per-run value would mint a series set per run. The run-id
+  resolution chain, the never-throws contract, and all four existing `conductor.*` attributes are
+  untouched, and `conductor.run.id` remains the run's carrier.
 - `OtelVisualizer` computes `identityAttrs` from its context — `project: basename(ctx.project)`
   (node:path) and `feature: ctx.feature` — and passes it to `MetricsRecorder`. `ctx.project`
   continues to receive the project root from the single production construction site
@@ -51,42 +54,44 @@ None — all touched modules exist on main; no new dependencies.
 
 ## Tasks
 
-### Task 1: service.instance.id on the Resource
+### Task 1: service.instance.id is the feature's stable identity
 **Story:** Story 2
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests in the existing resource test file: explicit-runId build yields `service.instance.id` equal to the override while `conductor.run.id` still equals it; session-file path yields the file's trimmed content as `service.instance.id`; minted path (no file) yields a non-empty `service.instance.id`; `service.name` remains exactly `ai-conductor`; `conductor.feature`/`conductor.project` unchanged.
+1. Write failing tests in the existing resource test file: a build with a project name and a feature yields `service.instance.id` equal to the two joined by a slash; a configured project name is used as the project half; an absent project or feature yields `unknown` in that half; `conductor.run.id` still equals the resolved run id and appears nowhere in `service.instance.id`; `service.name` remains exactly `ai-conductor`; `conductor.feature`/`conductor.project` unchanged.
 2. Verify tests fail (RED).
-3. Implement: add `'service.instance.id': runId` to the attribute object in `buildResource`.
+3. Implement: add the resolved project name to `ResourceContext` (resolved identically to the data-point seam — `otel.project_name` when non-blank, else the project-root basename) and set `service.instance.id` from the project name and feature, defaulting either half to `unknown`.
 4. Verify tests pass (GREEN), including all pre-existing resource tests unmodified.
-5. Commit: "Export run id as service.instance.id on the OTel Resource".
+5. Commit: "Key service.instance.id on project and feature, not the run id".
 
 **Done when:**
-- The named assertions pass in the resource test file for override, file, and minted paths.
+- The named assertions pass in the resource test file for the configured-name, basename, and absent-value paths.
+- A passing assertion pins that the resolved run id appears in no Resource identity attribute.
 - A passing assertion pins `service.name === 'ai-conductor'` and the four pre-existing `conductor.*` attributes byte-unchanged.
 - All pre-existing resource tests pass unmodified.
 
 **Files:**
-- src/conductor/src/engine/otel/resource.ts — add service.instance.id attribute
+- src/conductor/src/engine/otel/resource.ts — projectName on ResourceContext + service.instance.id composition
+- src/conductor/src/engine/otel/otel-visualizer.ts — pass the already-resolved project name into buildResource
 - src/conductor/test/engine/otel/resource.test.ts — instance-id tests
 
 **Dependencies:** none
 
-### Task 2: Resource robustness negatives preserved with instance id
+### Task 2: Resource robustness negatives preserved with the composed instance id
 **Story:** Story 2
 **Type:** negative-path
 
 **Steps:**
-1. Write failing (or pinning) tests: with an unwritable pipeline directory, `buildResource` still returns a resource whose `service.instance.id` is non-empty and no exception reaches the caller; a whitespace-only session file falls through to a minted non-empty id.
+1. Write failing (or pinning) tests: with an unwritable pipeline directory, `buildResource` still returns a resource whose `service.instance.id` is the composed project-and-feature value and no exception reaches the caller; a whitespace-only session file still yields a minted `conductor.run.id` while `service.instance.id` is untouched by the run-id path.
 2. Verify RED/pinning status honestly (the existing never-throws implementation may already satisfy a case — keep it as pinning coverage).
 3. Implement any gap.
 4. Verify tests pass (GREEN).
-5. Commit: "Pin never-throws and minted-id semantics for service.instance.id".
+5. Commit: "Pin never-throws semantics for the composed service.instance.id".
 
 **Done when:**
-- The unwritable-directory test passes with no throw and a non-empty `service.instance.id`.
-- The whitespace-file test passes with a minted non-empty id.
+- The unwritable-directory test passes with no throw and a composed non-empty `service.instance.id`.
+- The whitespace-file test passes with a minted `conductor.run.id` and an unchanged `service.instance.id`.
 
 **Files:** same
 
@@ -197,8 +202,9 @@ Task 3 ─▶ Task 5 ─▶ Task 6
 
 - After Task 6: the exported `project` dimension is operator-controllable, so two roots sharing a
   directory name are distinguishable from harness exports alone.
-- After Task 5: full identity observable end-to-end — resource instance id (Task 1) + data-point
-  identity (Task 3) through the real construction path.
+- After Task 5: full identity observable end-to-end — the per-feature resource instance id
+  (Task 1) + data-point identity (Task 3) through the real construction path, with the run id
+  reachable only through `conductor.run.id` on `target_info` and on traces.
 
 ## Verification
 
