@@ -681,6 +681,12 @@ succeeded for each completed self-host dispatch. Both render to the terminal and
 persist to this file; see [`live_containment`](configuration.md#harness_self_host) and the
 [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only).
 
+`step_status_write_refused` records a non-fatal state invariant: a step already marked `skipped`
+cannot be restaged as `stale`. It carries the status field, expected `skipped`, requested `stale`,
+and the write intent. The conductor keeps the on-disk and in-memory value as `skipped` and continues
+the run; operators can use this event to identify a caller that bypassed the normal skip-preserving
+restage filter.
+
 `build_review_disposition_accepted` and `build_review_disposition_refused` are declared `persist:
 false` deliberately: they are written by the external build-review CLI to its own pipeline-owned
 ledger and tailed onto the live bus, so re-persisting them here would duplicate the same occurrence.
