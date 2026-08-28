@@ -682,6 +682,18 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
           after,
           `expected event type "${type}" (classified friction-mapped) to append a record — the writer's allowlist no longer matches this test's classification`,
         ).toBeGreaterThan(before);
+
+        if (type === 'step_status_write_refused') {
+          expect(
+            (await readRecords(dir)).at(-1),
+            'the skipped-to-stale refusal must preserve its operator-actionable audit fields',
+          ).toMatchObject({
+            origin: 'build',
+            event: 'step_status_write_refused',
+            reason: 'manual_test: expected skipped, requested stale',
+            cause: 'restage ship tail after build kickback',
+          });
+        }
       } else {
         expect(
           after,
