@@ -115,7 +115,10 @@ describe('Task 2: step-duration histogram advice', () => {
       ([name]) => name === 'conductor.step.duration',
     );
     expect(stepDurationCall?.[1]?.advice?.explicitBucketBoundaries)
-      .toBe(DURATION_BUCKET_BOUNDARIES_MS);
+      .toEqual([
+        10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000,
+        30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+      ]);
   });
 });
 
