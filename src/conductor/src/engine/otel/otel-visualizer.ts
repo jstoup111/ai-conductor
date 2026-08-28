@@ -430,6 +430,7 @@ export class OtelVisualizer implements VisualizerPlugin {
       runId: context.runId,
       feature: context.feature,
       project: context.project,
+      projectName: this.projectNameOverride ?? (context.project ? basename(context.project) : undefined),
       branch: context.branch,
       engineVersion: context.engineVersion,
     });

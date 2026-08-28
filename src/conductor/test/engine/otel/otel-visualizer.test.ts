@@ -319,8 +319,8 @@ describe('Task 5: visualizer identity wiring', () => {
       metricInstanceId: exported.metricResource.attributes['service.instance.id'],
     }).toEqual({
       dataPoint: { step: 'build', project: 'nested-project', feature: 'nested-feature' },
-      spanInstanceId: 'shared-resource-run-id',
-      metricInstanceId: 'shared-resource-run-id',
+      spanInstanceId: 'nested-project/nested-feature',
+      metricInstanceId: 'nested-project/nested-feature',
     });
   });
 

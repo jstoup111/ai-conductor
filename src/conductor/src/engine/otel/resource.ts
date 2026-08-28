@@ -12,6 +12,8 @@ export interface ResourceContext {
   feature?: string;
   /** Project name. Defaults to 'unknown'. */
   project?: string;
+  /** Resolved project identity for service.instance.id. Defaults to 'unknown'. */
+  projectName?: string;
   /** Git branch for the active run. Defaults to 'unknown'. */
   branch?: string;
   /** Harness engine version for the active run. Defaults to 'unknown'. */
@@ -38,12 +40,13 @@ export function buildResource(ctx: ResourceContext): Resource {
   const runId = ctx.runId ?? resolveRunId(ctx.pipelineDir);
   const feature = ctx.feature ?? 'unknown';
   const project = ctx.project ?? 'unknown';
+  const projectName = ctx.projectName ?? 'unknown';
   const branch = ctx.branch ?? 'unknown';
   const engineVersion = ctx.engineVersion ?? 'unknown';
 
   return resourceFromAttributes({
     'service.name': SERVICE_NAME,
-    'service.instance.id': runId,
+    'service.instance.id': `${projectName}/${feature}`,
     'conductor.run.id': runId,
     'conductor.feature': feature,
     'conductor.project': project,

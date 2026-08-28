@@ -88,36 +88,68 @@ describe('buildResource', () => {
     expect(resource.attributes['conductor.run.id']).toBe('fixed-id');
   });
 
-  it('uses the resolved run id as service.instance.id while retaining resource attributes', async () => {
-    const explicit = buildResource({
+  it('uses the resolved project and feature as service.instance.id while retaining resource attributes', async () => {
+    const configured = buildResource({
       pipelineDir,
       feature: 'explicit-feature',
-      project: 'explicit-project',
+      project: '/workspace/explicit-project',
+      projectName: 'configured-project',
       runId: 'explicit-run-id',
     });
     await writeFile(join(pipelineDir, 'conduct-session-id'), 'persisted-run-id\n', 'utf-8');
-    const persisted = buildResource({
+    const basename = buildResource({
       pipelineDir,
       feature: 'persisted-feature',
-      project: 'persisted-project',
+      project: '/workspace/persisted-project',
+      projectName: 'persisted-project',
+    });
+    const missingProjectName = buildResource({ pipelineDir, feature: 'f', project: 'p', runId: 'run-1' });
+    const missingFeature = buildResource({
+      pipelineDir,
+      project: 'p',
+      projectName: 'resolved-project',
+      runId: 'run-2',
     });
 
-    expect([explicit.attributes, persisted.attributes]).toEqual([
+    expect([
+      configured.attributes,
+      basename.attributes,
+      missingProjectName.attributes,
+      missingFeature.attributes,
+    ]).toEqual([
       {
         'service.name': 'ai-conductor',
-        'service.instance.id': 'explicit-run-id',
+        'service.instance.id': 'configured-project/explicit-feature',
         'conductor.run.id': 'explicit-run-id',
         'conductor.feature': 'explicit-feature',
-        'conductor.project': 'explicit-project',
+        'conductor.project': '/workspace/explicit-project',
         'conductor.branch': 'unknown',
         'conductor.engine.version': 'unknown',
       },
       {
         'service.name': 'ai-conductor',
-        'service.instance.id': 'persisted-run-id',
+        'service.instance.id': 'persisted-project/persisted-feature',
         'conductor.run.id': 'persisted-run-id',
         'conductor.feature': 'persisted-feature',
-        'conductor.project': 'persisted-project',
+        'conductor.project': '/workspace/persisted-project',
+        'conductor.branch': 'unknown',
+        'conductor.engine.version': 'unknown',
+      },
+      {
+        'service.name': 'ai-conductor',
+        'service.instance.id': 'unknown/f',
+        'conductor.run.id': 'run-1',
+        'conductor.feature': 'f',
+        'conductor.project': 'p',
+        'conductor.branch': 'unknown',
+        'conductor.engine.version': 'unknown',
+      },
+      {
+        'service.name': 'ai-conductor',
+        'service.instance.id': 'resolved-project/unknown',
+        'conductor.run.id': 'run-2',
+        'conductor.feature': 'unknown',
+        'conductor.project': 'p',
         'conductor.branch': 'unknown',
         'conductor.engine.version': 'unknown',
       },
