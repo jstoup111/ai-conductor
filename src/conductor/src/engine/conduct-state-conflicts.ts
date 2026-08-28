@@ -47,7 +47,7 @@ export interface StateMutationDiagnostic {
 /** Injected by callers that own the log or error surface for state mutations. */
 export interface StateMutationDiagnostics {
   writer: string;
-  emit(diagnostic: StateMutationDiagnostic): void;
+  emit(diagnostic: StateMutationDiagnostic): void | Promise<void>;
 }
 
 /** Persisted object fields are re-parsed on every store read, so identity alone is not a stable expectation. */
@@ -93,13 +93,13 @@ function summarizeStateMutationValue(value: unknown): StateMutationValueSummary 
   return { kind: 'object' };
 }
 
-function emitDiagnostic(
+async function emitDiagnostic(
   diagnostics: StateMutationDiagnostics | undefined,
   disposition: StateMutationDiagnostic['disposition'],
   currentValue: unknown,
   mutation: StateMutation<ConductState>,
-): void {
-  diagnostics?.emit({
+): Promise<void> {
+  await diagnostics?.emit({
     field: mutation.field,
     writer: diagnostics.writer,
     intent: mutation.intent,
@@ -124,13 +124,13 @@ function matchesDomainRule(
  * Determines the outcome of a single intent-bearing state mutation without
  * performing persistence.
  */
-export function evaluateConductStateMutation(
+export async function evaluateConductStateMutation(
   currentValue: unknown,
   mutation: StateMutation<ConductState>,
   diagnostics?: StateMutationDiagnostics,
-): StateMutationResult {
+): Promise<StateMutationResult> {
   if (matchesDomainRule('beforeExpected', currentValue, mutation)) {
-    emitDiagnostic(diagnostics, 'resolved', currentValue, mutation);
+    await emitDiagnostic(diagnostics, 'resolved', currentValue, mutation);
     return { kind: 'resolved' };
   }
 
@@ -143,11 +143,11 @@ export function evaluateConductStateMutation(
   }
 
   if (matchesDomainRule('afterIdempotent', currentValue, mutation)) {
-    emitDiagnostic(diagnostics, 'resolved', currentValue, mutation);
+    await emitDiagnostic(diagnostics, 'resolved', currentValue, mutation);
     return { kind: 'resolved' };
   }
 
-  emitDiagnostic(diagnostics, 'conflict', currentValue, mutation);
+  await emitDiagnostic(diagnostics, 'conflict', currentValue, mutation);
   return {
     kind: 'conflict',
     message: `Expected ${mutation.field} to match before ${mutation.intent}`,

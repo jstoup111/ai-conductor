@@ -14,7 +14,7 @@ export function createStepStatusWriteRefusalDiagnostics(
 ): StateMutationDiagnostics {
   return {
     writer: 'conductor',
-    emit: (diagnostic) => {
+    async emit(diagnostic) {
       if (
         diagnostic.disposition === 'resolved'
         && diagnostic.current.kind === 'string'
@@ -22,7 +22,7 @@ export function createStepStatusWriteRefusalDiagnostics(
         && diagnostic.next.kind === 'string'
         && diagnostic.next.length === 'stale'.length
       ) {
-        void events.emit({
+        await events.emit({
           type: 'step_status_write_refused',
           field: diagnostic.field,
           expected: 'skipped',

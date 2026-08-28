@@ -156,7 +156,7 @@ export function createFilesystemConductStateStore(
 
         const state = current.value;
         const currentValue = (state as Record<string, unknown>)[mutation.field];
-        const result = evaluateConductStateMutation(currentValue, mutation, diagnostics);
+        const result = await evaluateConductStateMutation(currentValue, mutation, diagnostics);
         if (result.kind !== 'applied') {
           return result;
         }
@@ -195,7 +195,7 @@ export function createFilesystemConductStateStore(
         const resolvedFields: string[] = [];
         const appliedMutations: StateMutation<ConductState>[] = [];
         for (const mutation of batch.mutations) {
-          const result = evaluateConductStateMutation(
+          const result = await evaluateConductStateMutation(
             (state as Record<string, unknown>)[mutation.field],
             mutation,
             diagnostics,
