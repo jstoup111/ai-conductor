@@ -123,12 +123,25 @@ examples_fixture_setup
 trap examples_fixture_teardown EXIT
 examples_fixture_set_mode hang
 
-INLINE_SCRIPT="$EXAMPLES_DIR/inline.sh"
+ENGINEER_SCRIPT="$EXAMPLES_DIR/engineer.sh"
+SYSTEM_TIMEOUT="$(command -v timeout)"
 
-if [ -x "$INLINE_SCRIPT" ]; then
+# engineer.sh's production timeout is 60s. Keep this negative fixture bounded
+# while exercising the same common.sh timeout seam end-to-end.
+cat > "$EXAMPLES_FIXTURE_BIN/timeout" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "60" ]; then
+  shift
+  exec "$SYSTEM_TIMEOUT" 10 "\$@"
+fi
+exec "$SYSTEM_TIMEOUT" "\$@"
+EOF
+chmod +x "$EXAMPLES_FIXTURE_BIN/timeout"
+
+if [ -x "$ENGINEER_SCRIPT" ]; then
   START=$(date +%s)
   set +e
-  TIMEOUT_OUT=$(timeout 20 "$INLINE_SCRIPT" small 2>&1 </dev/null)
+  TIMEOUT_OUT=$(timeout 20 "$ENGINEER_SCRIPT" small 2>&1 </dev/null)
   TIMEOUT_STATUS=$?
   set -e
   END=$(date +%s)
@@ -136,21 +149,21 @@ if [ -x "$INLINE_SCRIPT" ]; then
 
   assert "a wedged flow is killed well before the outer 20s test timeout (per-example timeout enforced)" \
     "$([ "$ELAPSED" -lt 15 ] && echo 0 || echo 1)"
-  assert "inline.sh exits non-zero when the flow is killed for wedging" \
+  assert "engineer.sh exits non-zero when the flow is killed for wedging" \
     "$([ "$TIMEOUT_STATUS" -ne 0 ] && echo 0 || echo 1)"
   case "$TIMEOUT_OUT" in
-    *"FAIL inline/small: timeout"*)
-      assert "prints 'FAIL inline/small: timeout'" 0
+    *"FAIL engineer/small: timeout"*)
+      assert "prints 'FAIL engineer/small: timeout'" 0
       ;;
     *)
       echo "$TIMEOUT_OUT"
-      assert "prints 'FAIL inline/small: timeout'" 1
+      assert "prints 'FAIL engineer/small: timeout'" 1
       ;;
   esac
 else
   assert "a wedged flow is killed well before the outer 20s test timeout (per-example timeout enforced)" 1
-  assert "inline.sh exits non-zero when the flow is killed for wedging" 1
-  assert "prints 'FAIL inline/small: timeout'" 1
+  assert "engineer.sh exits non-zero when the flow is killed for wedging" 1
+  assert "prints 'FAIL engineer/small: timeout'" 1
 fi
 
 echo ""

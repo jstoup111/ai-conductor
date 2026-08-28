@@ -6,9 +6,8 @@ set -uo pipefail
 #
 # Story 1 happy path is verified against examples/README.md directly (a
 # static-content check, not a flow run). The negative path drives
-# examples/inline.sh --help and an unknown-tier invocation — chosen as the
-# representative script per the story's own example ("examples/inline.sh
-# --help (or an unknown tier like examples/inline.sh xl)").
+# examples/interactive.sh --help and an unknown-tier invocation — chosen as
+# the surviving representative tiered flow.
 #
 # Usage: ./test/test_examples_readme_and_usage.sh
 
@@ -42,37 +41,37 @@ echo "=== Story 1 negative path: usage on --help / unknown tier ==="
 examples_fixture_setup
 trap examples_fixture_teardown EXIT
 
-INLINE_SCRIPT="$EXAMPLES_DIR/inline.sh"
+INTERACTIVE_SCRIPT="$EXAMPLES_DIR/interactive.sh"
 
 set +e
-HELP_OUT=$("$INLINE_SCRIPT" --help 2>&1 </dev/null)
+HELP_OUT=$("$INTERACTIVE_SCRIPT" --help 2>&1 </dev/null)
 HELP_STATUS=$?
 set -e
 
-assert "inline.sh --help exits non-zero" "$([ "$HELP_STATUS" -ne 0 ] && echo 0 || echo 1)"
+assert "interactive.sh --help exits non-zero" "$([ "$HELP_STATUS" -ne 0 ] && echo 0 || echo 1)"
 case "$HELP_OUT" in
   *"s"*"m"*"l"*|*"small"*"medium"*"large"*)
-    assert "inline.sh --help prints usage naming valid tiers (s|m|l)" 0
+    assert "interactive.sh --help prints usage naming valid tiers (s|m|l)" 0
     ;;
   *)
     echo "$HELP_OUT"
-    assert "inline.sh --help prints usage naming valid tiers (s|m|l)" 1
+    assert "interactive.sh --help prints usage naming valid tiers (s|m|l)" 1
     ;;
 esac
 
 set +e
-BAD_TIER_OUT=$("$INLINE_SCRIPT" xl 2>&1 </dev/null)
+BAD_TIER_OUT=$("$INTERACTIVE_SCRIPT" xl 2>&1 </dev/null)
 BAD_TIER_STATUS=$?
 set -e
 
-assert "inline.sh xl (unknown tier) exits non-zero" "$([ "$BAD_TIER_STATUS" -ne 0 ] && echo 0 || echo 1)"
+assert "interactive.sh xl (unknown tier) exits non-zero" "$([ "$BAD_TIER_STATUS" -ne 0 ] && echo 0 || echo 1)"
 case "$BAD_TIER_OUT" in
   *"s"*"m"*"l"*|*"small"*"medium"*"large"*)
-    assert "inline.sh xl prints usage naming valid tiers (s|m|l)" 0
+    assert "interactive.sh xl prints usage naming valid tiers (s|m|l)" 0
     ;;
   *)
     echo "$BAD_TIER_OUT"
-    assert "inline.sh xl prints usage naming valid tiers (s|m|l)" 1
+    assert "interactive.sh xl prints usage naming valid tiers (s|m|l)" 1
     ;;
 esac
 

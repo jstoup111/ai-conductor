@@ -1,5 +1,6 @@
+// Covers: task:1
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { deriveMode } from '../../src/index.js';
+import { deriveMode, parseArgs } from '../../src/index.js';
 
 describe('RunMode derivation', () => {
   afterEach(() => {
@@ -19,8 +20,10 @@ describe('RunMode derivation', () => {
     });
 
     let thrown: unknown;
+    let pipelineConstructed = false;
     try {
       deriveMode({ auto: true, interactive: false });
+      pipelineConstructed = true;
     } catch (error) {
       thrown = error;
     }
@@ -29,10 +32,14 @@ describe('RunMode derivation', () => {
       thrown,
       exitCode: exitSpy.mock.calls[0]?.[0],
       notice: errorSpy.mock.calls[0]?.[0],
+      pipelineConstructed,
     }).toEqual({
       thrown: exitSentinel,
       exitCode: 1,
-      notice: expect.stringMatching(/--auto.*deprecated.*conduct-ts daemon start/i),
+      notice: expect.stringMatching(
+        /--auto.*deprecated.*conduct-ts daemon start.*docs\/guides\/running-the-daemon\.md/i,
+      ),
+      pipelineConstructed: false,
     });
   });
 
@@ -54,5 +61,11 @@ describe('RunMode derivation', () => {
     expect(errorMsg).toMatch(/--auto/);
     expect(errorMsg).toMatch(/--interactive/);
     expect(errorMsg).toMatch(/mutually exclusive/);
+  });
+
+  it('preserves Commander\'s unknown-option rejection', () => {
+    expect(() => parseArgs(['node', 'conduct', 'inline', 'x', '--bogus'])).toThrow(
+      /unknown option '--bogus'/i,
+    );
   });
 });

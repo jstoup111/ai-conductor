@@ -59,12 +59,12 @@ echo ""
 echo "=== assert_checkpoint: passing predicate ==="
 
 set +e
-OUT=$(assert_checkpoint "inline" "small" "[ -e /dev/null ]")
+OUT=$(assert_checkpoint "daemon" "small" "[ -e /dev/null ]")
 STATUS=$?
 set -e
 case "$OUT" in
-  "PASS inline/small") assert "prints 'PASS inline/small'" 0 ;;
-  *) echo "$OUT"; assert "prints 'PASS inline/small'" 1 ;;
+  "PASS daemon/small") assert "prints 'PASS daemon/small'" 0 ;;
+  *) echo "$OUT"; assert "prints 'PASS daemon/small'" 1 ;;
 esac
 assert "assert_checkpoint exits 0 for a passing predicate" \
   "$([ "$STATUS" -eq 0 ] && echo 0 || echo 1)"
@@ -73,12 +73,12 @@ echo ""
 echo "=== assert_checkpoint: failing predicate ==="
 
 set +e
-OUT=$(assert_checkpoint "inline" "small" "[ -e /nonexistent/path/for/test ]" "checkpoint not found")
+OUT=$(assert_checkpoint "daemon" "small" "[ -e /nonexistent/path/for/test ]" "checkpoint not found")
 STATUS=$?
 set -e
 case "$OUT" in
-  "FAIL inline/small: checkpoint not found") assert "prints 'FAIL inline/small: checkpoint not found'" 0 ;;
-  *) echo "$OUT"; assert "prints 'FAIL inline/small: checkpoint not found'" 1 ;;
+  "FAIL daemon/small: checkpoint not found") assert "prints 'FAIL daemon/small: checkpoint not found'" 0 ;;
+  *) echo "$OUT"; assert "prints 'FAIL daemon/small: checkpoint not found'" 1 ;;
 esac
 assert "assert_checkpoint exits non-zero for a failing predicate" \
   "$([ "$STATUS" -ne 0 ] && echo 0 || echo 1)"
@@ -87,12 +87,12 @@ echo ""
 echo "=== assert_checkpoint: timeout ==="
 
 set +e
-OUT=$(assert_checkpoint "inline" "small" "sleep 5" "" 1)
+OUT=$(assert_checkpoint "daemon" "small" "sleep 5" "" 1)
 STATUS=$?
 set -e
 case "$OUT" in
-  "FAIL inline/small: timeout") assert "prints 'FAIL inline/small: timeout' when the predicate command times out" 0 ;;
-  *) echo "$OUT"; assert "prints 'FAIL inline/small: timeout' when the predicate command times out" 1 ;;
+  "FAIL daemon/small: timeout") assert "prints 'FAIL daemon/small: timeout' when the predicate command times out" 0 ;;
+  *) echo "$OUT"; assert "prints 'FAIL daemon/small: timeout' when the predicate command times out" 1 ;;
 esac
 assert "assert_checkpoint exits non-zero on timeout" \
   "$([ "$STATUS" -ne 0 ] && echo 0 || echo 1)"

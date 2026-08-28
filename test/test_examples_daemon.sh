@@ -5,8 +5,8 @@ set -uo pipefail
 # (.docs/stories/flow-examples.md, "daemon flow example (headless, seeded
 # fixture)") and the examples/fixtures/daemon/ fixture (plan Task 8).
 #
-# conduct-ts is stubbed at the PATH boundary (see test_examples_inline.sh for
-# the rationale) so the drain-once run completes fast and deterministically.
+# conduct-ts is stubbed at the PATH boundary so the drain-once run completes
+# fast and deterministically without a real credentialed provider session.
 #
 # Usage: ./test/test_examples_daemon.sh
 

@@ -18,10 +18,12 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
     process.exit(1);
   }
   if (opts.auto) {
-    console.error('Error: --auto is deprecated. Use `conduct-ts daemon start` instead.');
+    console.error(
+      'Error: --auto is deprecated. Use `conduct-ts daemon start` instead; see docs/guides/running-the-daemon.md.',
+    );
     process.exit(1);
   }
-  return opts.auto ? 'auto' : opts.interactive ? 'interactive' : 'default';
+  return opts.interactive ? 'interactive' : 'default';
 }
 
 import { dirname, join, resolve as resolvePath } from 'node:path';
@@ -1040,6 +1042,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Reject the retired unattended inline mode before creating any pipeline
+  // state or initializing provider-facing runtime.
+  const mode = deriveMode(opts);
+
   let projectRoot = process.cwd();
   let pipelineDir = join(projectRoot, '.pipeline');
   let stateFilePath = join(pipelineDir, 'conduct-state.json');
@@ -1324,7 +1330,6 @@ async function main(): Promise<void> {
   } catch {
     sessionId = uuidv4();
   }
-  const mode = deriveMode(opts);
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
   const rendererOpts = {

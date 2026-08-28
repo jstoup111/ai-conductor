@@ -5,9 +5,9 @@ set -uo pipefail
 # (.docs/stories/flow-examples.md, "interactive flow example (guided
 # launcher)").
 #
-# conduct-ts is stubbed at the PATH boundary for the happy path (same
-# rationale as test_examples_inline.sh) so the exec + argv wiring can be
-# verified without a real, credentialed Claude Code session. The negative
+# conduct-ts is stubbed at the PATH boundary for the happy path so the run
+# completes fast and deterministically without a real credentialed provider
+# session. The exec + argv wiring can be verified without one. The negative
 # path drives the real absence of conduct-ts from PATH (no stub involved —
 # that IS the scenario under test).
 #
