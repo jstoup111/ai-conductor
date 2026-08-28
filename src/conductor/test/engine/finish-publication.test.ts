@@ -1,3 +1,4 @@
+// Covers: task:7
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1294,6 +1295,67 @@ describe('advancedPublicationTransition', () => {
 });
 
 describe('advanceFinishPublication unmoved transition dimensions', () => {
+  it('halts human-required when authoring leaves a judged revision byte-identical', async () => {
+    const revisionRequired = readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'revision_required',
+        ready: false,
+      },
+    });
+    const authorProse = vi.fn(async () => undefined);
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(revisionRequired)
+        // The post-effect observer keys the same judged revision digest and
+        // therefore still classifies it as revision_required.
+        .mockResolvedValueOnce(revisionRequired),
+      effects: {
+        authorProse,
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: 'The author_pr_prose transition left pr.prose unchanged at revision_required.',
+    });
+
+    expect(authorProse).toHaveBeenCalledOnce();
+  });
+
+  it('advances when authoring rewrites a judged revision to a newly stale body', async () => {
+    const revisionRequired = readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'revision_required',
+        ready: false,
+      },
+    });
+    const rewrittenRevision = readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        // A new body digest has no cached verdict, so it is stale and should
+        // advance to the fresh judgment pass rather than false-halt.
+        prose: 'stale',
+        ready: false,
+      },
+    });
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(revisionRequired)
+        .mockResolvedValueOnce(rewrittenRevision),
+      effects: {
+        authorProse: async () => undefined,
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+  });
+
   it('halts human-required when judgment completes but PR prose remains halt', async () => {
     await expect(
       advanceFinishPublication({
