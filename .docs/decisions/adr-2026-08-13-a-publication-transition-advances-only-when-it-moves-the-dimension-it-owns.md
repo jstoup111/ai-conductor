@@ -140,6 +140,38 @@ did not move.
 > every retry reason, including ones not yet authored, rather than special-casing the one verdict
 > pair that happened to be observed.
 
+> **Amended 2026-08-28 by #2006:** production experience surfaced a new force the 2026-08-13
+> amendment created: for authored-but-judged-deficient prose, the retry-path rule converts Cycle A
+> from a livelock into a deterministic `human_required` deadlock. The observation vocabulary has no
+> way to express "authored, judged, found deficient" — such prose observes as `stale`, the selector
+> names `judge_pr_prose`, the judgment's persisted `revision_required` verdict emits a retry naming
+> `author_pr_prose`, and the retry-path rule above correctly reports the mismatch — forever, at
+> zero provider cost, because the persisted verdict short-circuits every re-dispatch. The designed
+> `authoring_required_after_judgment` repair lap is unreachable in production
+> (issue #2006; first stuck feature `remove-retrospectives-full-and-micro-from-feature-`).
+>
+> **Option C is therefore adopted in a narrowed form.** The full collapse (one prose model deriving
+> both vocabularies) stays rejected on its original blast-radius grounds. The narrowed form adds one
+> member to the observer's prose classification — `revision_required`, derived at observation time
+> from the persisted judgment store (`.pipeline/prose-judgment.json`) when the observed revision's
+> digest carries a `revision_required` verdict with reason `placeholder` or
+> `structurally_incomplete` — and routes it to `author_pr_prose` in `nextFinishPublicationTransition`.
+> Observation remains the sole routing authority (Option B stays rejected: no disposition's named
+> transition is ever honored over a fresh observation); the retry-path rule above stays in force
+> verbatim and simply stops firing for this cycle by construction, because the fresh observation now
+> selects the same transition the retry names. Classification precedence is explicit:
+> `halt` (via `hasHaltSignal`) strictly precedes `revision_required`, so a halted PR still resolves
+> `human_required` before any authoring or judgment dispatch, and a `revision_required` verdict with
+> reason `halt` keeps its `judgment_halt_prose` human-required routing. In the dimension map,
+> `author_pr_prose` continues to own `pr.prose`: a successful authoring pass moves
+> `revision_required` → `stale` (a new revision digest with no persisted verdict), so the
+> advance-path guard still catches an authoring pass that leaves the revision byte-identical. The
+> bounded progress allowance is still retained unchanged as the termination backstop for
+> non-converging author→judge laps; its "no provider dispatch except judgment" cheapness premise now
+> also admits the authoring dispatch, accepted because both are bounded by the same allowance.
+> `skills/finish/SKILL.md`'s documented verdict contract moves with this vocabulary, as this ADR's
+> Option C analysis anticipated.
+
 The dimension map is total over `PublicationTransition`:
 
 | Transition | Dimension it owns |
