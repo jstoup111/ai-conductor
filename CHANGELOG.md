@@ -69,6 +69,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The build_review testQuality preflight creates the parent directory when restoring a merge-base file whose directory the diff deleted, so a deletion no longer fails the preflight. ([implementation PR #1982](https://github.com/jstoup111/ai-conductor/pull/1982)).
 - Provides explicit OpenTelemetry duration buckets through 30 minutes for step and closeout histograms. ([implementation PR #1985](https://github.com/jstoup111/ai-conductor/pull/1985)).
 - Skipped SHIP steps now remain skipped when a build kickback restages downstream work. ([implementation PR #2003](https://github.com/jstoup111/ai-conductor/pull/2003)).
+- The post-FINISH shipment audit no longer refuses a ship when the engine's own post-finish cost/time commit has moved the branch past the head GitHub still reports. ([implementation PR #2010](https://github.com/jstoup111/ai-conductor/pull/2010)).
+- Build-review compatibility checks now prevent retired-rubric enumerations from drifting across engine and documentation representations. ([implementation PR #2004](https://github.com/jstoup111/ai-conductor/pull/2004)).
 
 ## Migration
 
