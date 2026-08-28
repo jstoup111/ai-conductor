@@ -2291,6 +2291,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'halt_record_push_failed':
       log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`halt record push failed: ${event.path} — ${event.reason}`)}`);
       break;
+    case 'shipment_evidence_refused':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(
+          `shipment evidence refused: ${event.code} — expected ${event.expected}, observed ${event.observed ?? 'none'} (${event.pr})`,
+        )}`,
+      );
+      break;
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);
       break;

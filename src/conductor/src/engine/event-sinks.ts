@@ -95,6 +95,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   halt_record_written: { render: true, persist: true, audit: true, otel: false },
   halt_record_write_failed: { render: true, persist: true, audit: true, otel: false },
   halt_record_push_failed: { render: true, persist: true, audit: true, otel: false },
+  shipment_evidence_refused: { render: true, persist: true, audit: true, otel: false },
   loop_converged: { render: true, persist: false, audit: false, otel: false },
   rebase_noop: { render: false, persist: false, audit: false, otel: false },
   rebase_mergeable_skip: { render: true, persist: false, audit: false, otel: false },

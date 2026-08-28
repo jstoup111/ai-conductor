@@ -782,6 +782,24 @@ export type ConductorEvent =
       reason: string;
     }
   | {
+      /**
+       * The post-FINISH shipment audit refused a candidate ship. Carries the
+       * two commits the durable-evidence evaluator compared, so an operator
+       * can tell WHICH heads disagreed instead of re-deriving them from the
+       * refusal code alone.
+       */
+      type: 'shipment_evidence_refused';
+      slug: string;
+      /** The implementation PR the audit bound the candidate to. */
+      pr: string;
+      /** The evaluator's typed refusal code. */
+      code: string;
+      /** What the evaluator required — the implementation head for a reachability refusal. */
+      expected: string;
+      /** What it observed — the audited candidate commit for a reachability refusal. */
+      observed: string | null;
+    }
+  | {
       /** The gate loop reached a fully-satisfied state (.pipeline/DONE). */
       type: 'loop_converged';
     }

@@ -107,6 +107,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'halt_record_written',
   'halt_record_write_failed',
   'halt_record_push_failed',
+  'shipment_evidence_refused',
   'rebase_conflict_halt',
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -620,6 +621,7 @@ describe('event sink subscriptions', () => {
       'halt_record_written',
       'halt_record_write_failed',
       'halt_record_push_failed',
+      'shipment_evidence_refused',
       'build_review_disposition_version_invalidated',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
@@ -633,6 +635,7 @@ describe('event sink subscriptions', () => {
       'halt_record_written',
       'halt_record_write_failed',
       'halt_record_push_failed',
+      'shipment_evidence_refused',
     ]));
   });
 });
