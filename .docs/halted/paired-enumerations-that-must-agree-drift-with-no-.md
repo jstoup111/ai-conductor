@@ -3,19 +3,22 @@
 Status: halted
 Slug: paired-enumerations-that-must-agree-drift-with-no-
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-paired-enumerations-that-must-agree-drift-with-no-
-Head SHA: 546e966d42008e2dd186a42ce6583168a5d1bda4
-Halted at: 2026-08-28T08:46:50.383Z
+Head SHA: 6e58eea9947e27540672db5f25c0d7ae3c5b4ca0
+Halted at: 2026-08-28T12:12:41.207Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED — shipped code violates an approved architecture decision
+feature errored — will re-dispatch on the next scan
+durable shipment evidence refused ship: shipment-candidate-not-on-implementation-head
 
-Blocking findings:
-AB-1 (DESIGN; none): `MATCHED_PAIR_REGISTRY` is exported from production source but has no caller reachable from a production entry point.
+Resume procedure:
+  1. Fix the cause of the error above (project setup / config / environment / a crashed step).
+  2. rm .pipeline/HALT
+  3. Re-queue the feature (restart the daemon if it was excluded this run).
 ```
