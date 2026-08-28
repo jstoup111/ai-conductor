@@ -7364,7 +7364,11 @@ export class Conductor {
                   for (const name of gapMemberNamesForMerge) {
                     staleChanges[name] = 'stale';
                   }
-                  await this.commitStateChanges(state, 'restage validation group after kickback', staleChanges);
+                  await this.commitStateChanges(
+                    state,
+                    'restage validation group after kickback',
+                    filterRestageChanges(state, staleChanges),
+                  );
                   i = navigationIndex - 1; // for-loop i++ lands on the merged target
                   continue;
                 }
@@ -7508,7 +7512,11 @@ export class Conductor {
                   for (const name of gapMemberNames) {
                     staleChanges[name] = 'stale';
                   }
-                  await this.commitStateChanges(state, 'restage validation gaps after kickback', staleChanges);
+                  await this.commitStateChanges(
+                    state,
+                    'restage validation gaps after kickback',
+                    filterRestageChanges(state, staleChanges),
+                  );
                   i = navigationIndex - 1; // for-loop i++ lands on the target step
                   continue;
                 }

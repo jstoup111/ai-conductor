@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -11,6 +11,17 @@ import type { ConductState, StepName } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 
 const MANUAL_TEST_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+const MANUAL_TEST_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+const PRD_AUDIT_GAP = [
+  '| FR | Verdict | Gap-class | Evidence | Accepted? |',
+  '|--|--|--|--|--|',
+  '| FR-1 | MISSING | impl-gap | feature.ts:1 | no |',
+].join('\n');
+const PRD_AUDIT_PASS = [
+  '| FR | Verdict | Gap-class | Evidence | Accepted? |',
+  '|--|--|--|--|--|',
+  '| FR-1 | ALIGNED | | feature.ts:1 | yes |',
+].join('\n');
 
 describe('manual_test FAIL kickback restage', () => {
   const dirs: string[] = [];
@@ -81,5 +92,128 @@ describe('manual_test FAIL kickback restage', () => {
 
   it('preserves a skipped manual_test at the same FAIL kickback restage site', async () => {
     expect((await runFailKickback('skipped')).manual_test).toBe('skipped');
+  });
+});
+
+describe('validation-group kickback restages', () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  async function runValidationKickback(input: {
+    manualTest: 'FAIL' | 'PASS';
+    gapMembers: StepName[];
+    skippedAfterNavigation?: StepName;
+  }): Promise<ConductState> {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-kickback-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', prd: 'done',
+      stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'done',
+      architecture_diagram: 'done', architecture_review: 'done', acceptance_specs: 'done',
+      build: 'done', build_review: 'done', wiring_check: 'skipped', test_suite: 'done',
+      manual_test: 'pending', prd_audit: 'pending', architecture_review_as_built: 'pending',
+      retro: 'skipped', rebase: 'skipped', finish: 'pending', track: 'product', complexity_tier: 'M',
+    } as ConductState);
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    const planPath = join(dir, '.docs', 'plans', 'validation-kickback.md');
+    await Promise.all([
+      writeFile(planPath, '### Task 1: Repair the validation gap\n\n**Criterion:** S1.1\n'),
+      writeFile(join(dir, '.docs', 'stories', 'validation-kickback.md'), '## Story 1\n\n### Happy Path\n\n- The repair succeeds.\n'),
+      writeFile(join(dir, '.docs', 'specs', 'validation-kickback.md'), '## Functional Requirements\n\n- **FR-1:** The repair succeeds.\n'),
+      writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath })),
+    ]);
+
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        if (step === 'manual_test') {
+          await writeFile(
+            join(dir, '.pipeline', 'manual-test-results.md'),
+            input.manualTest === 'FAIL' ? MANUAL_TEST_FAIL : MANUAL_TEST_PASS,
+          );
+        } else if (step === 'prd_audit') {
+          await writeFile(
+            join(dir, '.pipeline', 'prd-audit.md'),
+            input.gapMembers.includes('prd_audit') ? PRD_AUDIT_GAP : PRD_AUDIT_PASS,
+          );
+        } else if (step === 'architecture_review_as_built') {
+          await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+            '# As-Built Architecture Review', '',
+            input.gapMembers.includes('architecture_review_as_built') ? 'Verdict: BLOCKED\n\n## Blocking Findings\n| Finding | Class | Governing clause | Summary |\n| --- | --- | --- | --- |\n| ARCH-1 | REMEDIABLE | Task 1 | Missing guard |' : '**Verdict:** APPROVED',
+          ].join('\n'));
+        } else if (step === 'build') {
+          return { success: false, error: 'stop after restage observation' };
+        }
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+
+    (conductor as any).planRemediation = async () => ({
+      kind: 'route', target: 'build', evidence: 'validated gap', hint: 'repair the gap',
+    });
+    const originalNavigate = (conductor as any).navigateStateBack.bind(conductor);
+    (conductor as any).navigateStateBack = async (...args: unknown[]) => {
+      const index = await originalNavigate(...args);
+      const state = args[0] as ConductState;
+      if (input.skippedAfterNavigation) {
+        state[input.skippedAfterNavigation] = 'skipped';
+        await writeState(statePath, state);
+        (conductor as any).persistedStateSnapshot = { ...state };
+      }
+      return index;
+    };
+    let restagedState: ConductState | undefined;
+    const restageName = input.manualTest === 'FAIL'
+      ? 'restage validation group after kickback'
+      : 'restage validation gaps after kickback';
+    const originalCommit = (conductor as any).commitStateChanges.bind(conductor);
+    (conductor as any).commitStateChanges = async (...args: unknown[]) => {
+      await originalCommit(...args);
+      if (args[1] === restageName) {
+        restagedState = { ...(args[0] as ConductState) };
+      }
+    };
+
+    await conductor.run();
+    if (!restagedState) throw new Error('validation kickback restage must occur');
+    return restagedState;
+  }
+
+  it('preserves the skipped manual-test member while restaging the done gap member after a consolidated kickback', async () => {
+    const state = await runValidationKickback({
+      manualTest: 'FAIL', gapMembers: ['prd_audit'], skippedAfterNavigation: 'manual_test',
+    });
+    expect([state.manual_test, state.prd_audit]).toEqual(['skipped', 'stale']);
+  });
+
+  it('restages the ran validation gap member', async () => {
+    const state = await runValidationKickback({
+      manualTest: 'PASS', gapMembers: ['prd_audit'],
+    });
+    expect(state.prd_audit).toBe('stale');
+  });
+
+  it('preserves a skipped validation gap member', async () => {
+    const state = await runValidationKickback({
+      manualTest: 'PASS', gapMembers: ['prd_audit'], skippedAfterNavigation: 'prd_audit',
+    });
+    expect(state.prd_audit).toBe('skipped');
   });
 });
