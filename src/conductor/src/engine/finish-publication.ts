@@ -87,6 +87,8 @@ export type PublicationPullRequest =
       identity: 'one';
       url: string;
       prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      /** The persisted objection for this exact judged-deficient revision, when available. */
+      revisionGuidance?: string;
       /** A machine-readable `needs-remediation` signal, distinct from prose judgment. */
       halted?: true;
       ready: boolean;
@@ -1004,6 +1006,8 @@ export type PrProseAuthoringRequest = {
   pullRequestUrl: string;
   authoringScope: readonly ['title', 'body'];
   maximumPasses: 1;
+  /** Concrete objection from the prior judgment of this exact PR revision. */
+  revisionGuidance?: string;
 };
 
 /**
@@ -1077,6 +1081,7 @@ function prProseAuthoringRequest(pr: PrWithAuthoringNeeded): PrProseAuthoringReq
     pullRequestUrl: pr.url,
     authoringScope: ['title', 'body'],
     maximumPasses: 1,
+    ...(pr.revisionGuidance === undefined ? {} : { revisionGuidance: pr.revisionGuidance }),
   };
 }
 

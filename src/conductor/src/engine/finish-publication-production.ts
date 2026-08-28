@@ -437,6 +437,10 @@ export function createProductionFinishPublicationCoordinator(
                           (judgment.reason === 'placeholder' || judgment.reason === 'structurally_incomplete')
                         ? 'deficient' as const
                         : 'none' as const;
+                  const revisionGuidance =
+                    verdict === 'deficient' && judgment?.kind === 'revision_required'
+                      ? judgment.detail
+                      : undefined;
                   const prose = prProse(
                     pr.title,
                     pr.body,
@@ -448,6 +452,7 @@ export function createProductionFinishPublicationCoordinator(
                       url: pr.url,
                       prose,
                       ...(halted ? { halted: true as const } : {}),
+                      ...(revisionGuidance === undefined ? {} : { revisionGuidance }),
                       ready: !pr.isDraft,
                     };
                 }

@@ -1,3 +1,4 @@
+// Covers: task:5
 import { describe, expect, it, vi } from 'vitest';
 
 /**
@@ -112,6 +113,59 @@ describe('FINISH authors PR prose before it judges it', () => {
     expect(dispatchJudgment).not.toHaveBeenCalled();
     // A prose halt must stay recoverable: no dedup evidence is committed yet.
     expect(createShippedRecord).not.toHaveBeenCalled();
+  });
+
+  it('passes the persisted judge objection to the revision authoring pass', async () => {
+    let prose: 'revision_required' | 'accepted' = 'revision_required';
+    const authorProse = vi.fn(async () => {
+      prose = 'accepted';
+    });
+
+    await expect(
+      advance({
+        observe: async () => snapshot({
+          pr: {
+            identity: 'one',
+            url: PR_URL,
+            prose,
+            ready: false,
+            revisionGuidance: 'Explain the user-visible recovery behavior.',
+          },
+        }),
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), authorProse },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+
+    expect(authorProse).toHaveBeenCalledWith({
+      kind: 'finish_pr_prose_authoring',
+      pullRequestUrl: PR_URL,
+      authoringScope: ['title', 'body'],
+      maximumPasses: 1,
+      revisionGuidance: 'Explain the user-visible recovery behavior.',
+    });
+  });
+
+  it('still dispatches a detail-less revision authoring pass without guidance', async () => {
+    let prose: 'revision_required' | 'accepted' = 'revision_required';
+    const authorProse = vi.fn(async () => {
+      prose = 'accepted';
+    });
+
+    await expect(
+      advance({
+        observe: async () => snapshot({
+          pr: { identity: 'one', url: PR_URL, prose, ready: false },
+        }),
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), authorProse },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+
+    expect(authorProse).toHaveBeenCalledWith({
+      kind: 'finish_pr_prose_authoring',
+      pullRequestUrl: PR_URL,
+      authoringScope: ['title', 'body'],
+      maximumPasses: 1,
+    });
   });
 
   it('halts when a completed authoring pass left the body unauthored', async () => {
