@@ -241,10 +241,13 @@ export async function prepareWorktree(
   await ensureSessionHooks(worktreePath, log);
   await excludeEngineArtifacts(worktreePath, log);
   const decision = await setupDecision(worktreePath, opts?.baseSha, opts?.force ?? false);
+  // The setup decision reaches the operator as a rendered `project_setup`
+  // event and nothing else. adr-2026-08-26 decision 3 forbids a parallel raw
+  // log write here: two channels for one fact drift, and only the event is
+  // visible to the persisted ledger every other consumer reads. The daemon log
+  // line is produced by the event's render sink, so removing these writes
+  // loses no operator-visible output.
   await opts?.events?.emit({ type: 'project_setup', ran: decision.ran, reason: decision.reason });
-  if (decision.reason === 'no-script') {
-    log?.('no bin/setup — skipping project setup');
-  }
   let setupRan = false;
   if (decision.ran) {
     await rm(join(worktreePath, SETUP_MARKER_PATH), { force: true });
