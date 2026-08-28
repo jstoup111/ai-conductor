@@ -283,7 +283,7 @@ other key declares a custom step. `steps` must be an object, and each value must
 
 ### Per-step keys
 
-14 keys are allow-listed (`knownStepKeys`, `config.ts`). An unknown key is a hard error
+16 keys are allow-listed (`knownStepKeys`, `config.ts`). An unknown key is a hard error
 `Unknown key in steps.<name>: "<k>"`.
 
 | Key | Type | Validation | Default | Consumer |
@@ -302,6 +302,8 @@ other key declares a custom step. `steps` must be an object, and each value must
 | `after` | string | **Custom steps only** — a built-in step with `after` is a hard error (`config.ts:529-531`) | required for custom steps | `steps.ts:561` |
 | `enforcement` | string | **Custom steps only** (`config.ts:532-534`); `structural`\|`advisory`\|`gating` | `advisory` | `steps.ts:599` |
 | `completion_artifact` | string | **Custom steps only** (`config.ts:535-537`); 7 constraints below | none | `src/conductor/src/engine/artifacts.ts:3086-3135` |
+| `gate` | boolean | **Custom steps only**; a built-in step is a hard error | inherits the `after` target | `steps.ts:605` |
+| `kickback_target` | boolean | **Custom steps only**; a built-in step is a hard error | `false` | `steps.ts:606` |
 
 `steps.<name>.hooks` takes two sub-keys, `before` and `after`, each a project-relative script path.
 
@@ -398,7 +400,7 @@ Any `steps.<name>` key that is not a built-in step name declares a custom step
 `indexOf(after) + 1` using an iterative fixed-point loop, so chains of custom steps resolve
 (`steps.ts:578-620`). Siblings sharing an `after` target keep config-file order.
 
-Six fields are available to a custom step:
+Six fields are custom-step-only:
 
 | Field | Required | Effect |
 | --- | --- | --- |
@@ -406,8 +408,12 @@ Six fields are available to a custom step:
 | `skill` | Yes | Path to the `SKILL.md` to dispatch. Missing: `Custom step "<n>" requires 'skill: <path-to-SKILL.md>'`. The file must exist relative to the project root, else `Custom step "<n>" skill file not found: <path>` (`config.ts:511-525`) |
 | `enforcement` | No | `structural`, `advisory`, or `gating`. Defaults to `advisory` (`steps.ts:563`) |
 | `completion_artifact` | No | Path the step must write to be considered done; see below |
-| `disable` | No | Boolean; custom steps bypass the `configDisableAllowed` check entirely |
-| `when` / `parallel` / `model` / `effort` / `max_retries` / `escalate` / `hooks` / `by_tier` / `llm_provider` | No | Same semantics as for built-in steps |
+| `gate` | No | Boolean. Overrides loop-gate membership; when omitted, inherits the `after` target's membership |
+| `kickback_target` | No | Boolean. Makes this step reopenable by a downstream kickback; defaults to `false` |
+
+`disable`, `when`, `parallel`, `model`, `effort`, `max_retries`, `escalate`, `hooks`, `by_tier`, and
+`llm_provider` use the same semantics as for built-in steps. Custom steps bypass the
+`configDisableAllowed` check.
 
 The derived `StepDefinition` (`steps.ts:595-609`) sets `label = name`, inherits `phase` from the `after`
 target, sets `prerequisites = [after]`, `skippableForTiers = []`, `isCheckpoint = false`, and takes
@@ -443,8 +449,6 @@ its `mtimeMs` must be at or above the attempt or session freshness floor; a stal
 `… is stale — <step> must rewrite it during this attempt`, and a missing floor reports that completion
 `cannot be verified without an attempt or session freshness floor`.
 
-Custom steps may set boolean `gate` and `kickback_target`; built-in steps reject both keys.
-
 This repo's own custom step is documented in [self-hosting](../guides/self-hosting.md).
 
 ## complexity
@@ -462,7 +466,8 @@ For what does resolve a tier, see
 The sole update-check configuration surface. `bin/install` and the update flow read and write the
 user-level `conductor:` block in `~/.ai-conductor/config.yml`; it is validated by
 `validateConductorBlock` (`config.ts:1133-1165`), and an unknown key inside the block is a hard
-error.
+error. A project `.ai-conductor/config.yml` that contains `conductor` is rejected; move the block
+to the user configuration so one repository cannot override another operator's update settings.
 
 | Key | Type | Allowed | Written by |
 | --- | --- | --- | --- |
@@ -491,11 +496,6 @@ still worked.
 Fresh installs default to `stable`, whose branch advances only after release CI publishes the matching
 semver tag and GitHub Release. `tagged` retains semver tag checkout behavior, and `main` follows every
 merge. Existing configured channels and version pins are preserved by installer updates.
-
-> **Known limitation.** `src/conductor/src/types/config.ts:198-201` states "Project configs should not
-> override this block — it's per-user, not per-repo," but nothing enforces it. Unlike `spec_owner`, a
-> `conductor` block in a project config loads and wins the merge. Tracked in
-> [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
 
 ## markdown_viewer and mermaid_renderer
 
