@@ -51,6 +51,14 @@ Approach B (operator-selected over A "keep advisory" and C "gate-hardening only"
    > continues available `curl` criteria. Once a browser launches, observed story mismatches
    > remain `FAIL` and retain this ADR's BUILD routing and anti-whitewash behavior.
 
+   > **Amended 2026-08-27 by #1987:** "restaging manual_test as `stale`" applies only to a
+   > manual_test that actually ran and FAILED. A manual_test whose status is `skipped`
+   > (tier / track / feature-type / bootstrap-mode selector) keeps that status through every
+   > kickback, per adr-2026-08-19-operator-step-rewind-through-the-mutation-port D3 — a
+   > kickback is not a re-decision of what applies to the feature. Restage sites route
+   > through a skip-preserving helper; a `skipped → stale` write is refused and reported by
+   > the mutation port.
+
 3. **Fix-evidence (anti-whitewash) gate.** The manual_test completion gate records
    `.pipeline/manual-test-fail-evidence.json` (`headSha`, `observedAt`, fail excerpt) when it
    observes FAIL rows. A subsequent FAIL-free results file is accepted only when `HEAD` has

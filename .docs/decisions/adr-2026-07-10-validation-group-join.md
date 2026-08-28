@@ -57,6 +57,13 @@ With a correct concurrent core available, the SHIP tail's three validators —
    Member skip rules are evaluated exactly as today (tier/track/feature-type/
    `skipWhenSkipped`); skipped members simply don't dispatch. A group whose effective
    width is ≤1 degrades to today's serial behavior with no semantic change.
+
+   > **Amended 2026-08-27 by #1987:** the consolidated-kickback restage of group members
+   > honors these same skip rules on the way back: a member whose status is `skipped`
+   > never dispatched, so a kickback restage never overwrites it to `stale`. Kickback
+   > restage sites route through a skip-preserving helper, and the mutation port refuses
+   > and reports any `skipped → stale` write (adr-2026-08-19 D3; adr-2026-07-26-rebase-tail
+   > D3/D5 already applies this exclusion at the finish fence).
 2. **Join policy: verdicts join, infra fails fast.** All dispatched branches run to a
    verdict; the join then evaluates the union. A no-verdict branch (its retries
    exhausted without its completion marker) fails the group → the existing step-failure
