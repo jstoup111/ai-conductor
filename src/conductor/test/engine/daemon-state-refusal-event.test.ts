@@ -8,6 +8,25 @@ const fixture = vi.hoisted(() => ({
   worktreePath: '',
 }));
 
+// `runDaemonMode` gates dispatch on the daemon's own build credential
+// (`isBuildAuthMissing` → `readDaemonBuildToken`), which defaults to the
+// OPERATOR's real `~/.ai-conductor/build-auth`. Without a fake at that
+// boundary the test passes only on a machine that happens to have a minted
+// token and gates dispatch everywhere else (CI has no such file) — the daemon
+// then never runs the feature, so no event is ever persisted and the
+// assertion below dies as a bare ENOENT on `events.jsonl`. Fake it the same
+// way daemon-otel-wiring.test.ts does, so the credential state is the test's
+// to declare rather than the host's.
+vi.mock('../../src/engine/self-host/daemon-build-token.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../../src/engine/self-host/daemon-build-token.js')
+  >();
+  return {
+    ...actual,
+    readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
+  };
+});
+
 vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/ci-fix.js')>();
   return {
