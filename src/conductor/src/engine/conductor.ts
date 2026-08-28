@@ -7614,6 +7614,7 @@ export class Conductor {
         let progressAttempts = 0;
         let publicationProgressAttempts = 0;
         let lastPublicationTransition: PublicationTransition | undefined;
+        let lastPublicationRetryDetail: string | undefined;
         // HEAD sha captured at build-step entry for per-attempt liveness
         // telemetry and stall classification.
         const [headShaBeforeBuild, treeHashBeforeBuild]: [string | null, string | null] =
@@ -8378,7 +8379,10 @@ export class Conductor {
                 const reason =
                   `FINISH publication progress allowance exhausted after ` +
                   `${publicationProgressAttempts} transition(s); last transition: ` +
-                  `${lastPublicationTransition}. Human review required.`;
+                  `${lastPublicationTransition}. Human review required.` +
+                  (lastPublicationRetryDetail === undefined
+                    ? ''
+                    : ` Detail: ${lastPublicationRetryDetail}`);
                 await this.saveConductorStepStatus(state, 'finish', 'failed');
                 await this.haltSerialExecution({
                   reason,
@@ -8394,6 +8398,7 @@ export class Conductor {
             }
             if (route.kind === 'retry_finish') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_finish' });
+              lastPublicationRetryDetail = route.detail;
               lastError = `FINISH publication retry: ${route.reason}`;
               retryHint = `${lastError}. Retry only the incomplete publication transition.`;
 

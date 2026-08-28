@@ -452,7 +452,12 @@ export type HumanRequiredReason =
 export type PublicationDisposition =
   | { kind: 'complete' }
   | { kind: 'publication_progress'; transition: PublicationTransition }
-  | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
+  | {
+      kind: 'publication_retry';
+      transition: PublicationTransition;
+      reason: string;
+      detail?: string;
+    }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | { kind: 'implementation_invalid'; evidence: string }
   | { kind: 'human_required'; reason: HumanRequiredReason; detail?: string };
@@ -461,7 +466,7 @@ export type PublicationDisposition =
 export type FinishPublicationRoute =
   | { kind: 'complete' }
   | { kind: 'progress_finish'; transition: PublicationTransition }
-  | { kind: 'retry_finish'; reason: string }
+  | { kind: 'retry_finish'; reason: string; detail?: string }
   | { kind: 'retry_build'; evidence: string }
   | { kind: 'halt'; reason: string };
 
@@ -710,6 +715,7 @@ export function routeFinishPublicationDisposition(
       return {
         kind: 'retry_finish',
         reason: disposition.reason,
+        ...(disposition.detail === undefined ? {} : { detail: disposition.detail }),
       };
     case 'implementation_invalid':
       return {
@@ -741,6 +747,15 @@ function isExactDisposition(
           isPublicationTransition(value.transition) &&
           typeof value.reason === 'string' &&
           PUBLICATION_RETRY_REASONS[value.transition].includes(value.reason)
+        );
+      }
+      if (hasOnly('kind', 'transition', 'reason', 'detail')) {
+        return (
+          isPublicationTransition(value.transition) &&
+          typeof value.reason === 'string' &&
+          PUBLICATION_RETRY_REASONS[value.transition].includes(value.reason) &&
+          typeof value.detail === 'string' &&
+          value.detail.trim().length > 0
         );
       }
       return (
@@ -1152,6 +1167,7 @@ export type AdvanceFinishPublicationResult =
       kind: 'publication_retry';
       transition: PublicationTransition;
       reason: string;
+      detail?: string;
     }
   | {
       kind: 'publication_retry';
@@ -1214,7 +1230,7 @@ async function coalescePublicationEffect(
   }
 }
 
-function mapPrProseJudgmentResult(
+export function mapPrProseJudgmentResult(
   result: PrProseJudgmentResult,
 ): AdvanceFinishPublicationResult {
   switch (result.kind) {
@@ -1264,6 +1280,7 @@ function mapPrProseJudgmentResult(
             kind: 'publication_retry',
             transition: 'author_pr_prose',
             reason: 'authoring_required_after_judgment',
+            ...(result.detail === undefined ? {} : { detail: result.detail }),
           };
       }
   }

@@ -69,6 +69,17 @@ async function routeFinishPublicationDisposition(disposition: unknown) {
   return route(disposition);
 }
 
+async function mapPrProseJudgmentResult(result: unknown) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const map = mod.mapPrProseJudgmentResult;
+  if (typeof map !== 'function') {
+    throw new Error(
+      'expected export "mapPrProseJudgmentResult" to map PR prose judgment outcomes (not yet implemented)',
+    );
+  }
+  return map(result);
+}
+
 async function nonRetryablePublicationReason(reason: string) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
   const classify = mod.nonRetryablePublicationReason;
@@ -724,6 +735,20 @@ describe('FINISH publication disposition routing', () => {
       { kind: 'retry_finish', reason: 'outcome_record_write_failed' },
     ],
     [
+      'transition-based publication retry with detail',
+      {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'authoring_required_after_judgment',
+        detail: 'The body is missing its validation section.',
+      },
+      {
+        kind: 'retry_finish',
+        reason: 'authoring_required_after_judgment',
+        detail: 'The body is missing its validation section.',
+      },
+    ],
+    [
       'condition-based publication retry',
       {
         kind: 'publication_retry',
@@ -781,6 +806,19 @@ describe('FINISH publication disposition routing', () => {
     ['a missing reason', { kind: 'human_required', detail: 'x' }],
   ])('rejects a human-required disposition with %s through exact validation', async (_shape, disposition) => {
     await expect(routeFinishPublicationDisposition(disposition)).resolves.toEqual({
+      kind: 'halt',
+      reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
+    });
+  });
+
+  it('rejects a transition retry with an unknown fifth key through exact validation', async () => {
+    await expect(routeFinishPublicationDisposition({
+      kind: 'publication_retry',
+      transition: 'author_pr_prose',
+      reason: 'authoring_required_after_judgment',
+      detail: 'The body is missing its validation section.',
+      extra: 'unknown',
+    })).resolves.toEqual({
       kind: 'halt',
       reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
     });
@@ -1288,6 +1326,68 @@ describe('advancedPublicationTransition', () => {
       await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).resolves.toContain(
         'FINISH publication retry exhausted: publication_transition_indeterminate',
       );
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['with the last revision objection', 'The body is missing its validation section.'],
+    ['without a revision objection', undefined],
+  ] as const)('includes publication-retry detail in the progress-allowance halt %s', async (_caseName, detail) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'finish-publication-progress-allowance-'));
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    const state: Record<string, unknown> = {
+      complexity_tier: 'S',
+      feature_desc: 'finish-publication-progress-allowance',
+    };
+    for (const step of [
+      'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
+      'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
+      'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+      'test_suite', 'manual_test', 'prd_audit',
+      'architecture_review_as_built', 'rebase',
+    ] satisfies StepName[]) {
+      state[step] = 'done';
+    }
+    await writeState(stateFilePath, state as ConductState);
+
+    const retry = {
+      kind: 'publication_retry' as const,
+      transition: 'author_pr_prose' as const,
+      reason: 'authoring_required_after_judgment',
+      ...(detail === undefined ? {} : { detail }),
+    };
+    const advance = vi.fn(async () => {
+      const call = advance.mock.calls.length;
+      return call % 2 === 1
+        ? retry
+        : { kind: 'publication_progress' as const, transition: 'author_pr_prose' as const };
+    });
+
+    try {
+      await new Conductor({
+        stateFilePath,
+        stepRunner: { run: vi.fn(async () => ({ success: true })) },
+        finishPublication: { advance: advance as never },
+        events: new ConductorEventEmitter(),
+        projectRoot,
+        fromStep: 'finish',
+        mode: 'auto',
+        maxRetries: 20,
+        git: async () => ({ stdout: '' }),
+        gh: async () => ({ stdout: '' }),
+        runGh: async () => ({ stdout: '' }),
+      }).run();
+
+      const halt = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8');
+      expect(halt).toContain('FINISH publication progress allowance exhausted');
+      if (detail === undefined) {
+        expect(halt).not.toContain('Detail:');
+        expect(halt).not.toContain('undefined');
+      } else {
+        expect(halt).toContain(`Detail: ${detail}`);
+      }
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -2228,6 +2328,31 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
 
   it.each([
     [
+      'placeholder prose',
+      { kind: 'revision_required', reason: 'placeholder', detail: 'The title and body are placeholders.' },
+      {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'authoring_required_after_judgment',
+        detail: 'The title and body are placeholders.',
+      },
+    ],
+    [
+      'structurally incomplete prose',
+      { kind: 'revision_required', reason: 'structurally_incomplete', detail: 'The body is missing its validation section.' },
+      {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'authoring_required_after_judgment',
+        detail: 'The body is missing its validation section.',
+      },
+    ],
+  ] as const)('preserves detail when mapping %s to an authoring retry', async (_label, judgment, expected) => {
+    await expect(mapPrProseJudgmentResult(judgment)).resolves.toEqual(expected);
+  });
+
+  it.each([
+    [
       'refusal',
       { kind: 'refused', detail: 'The provider declined the requested prose judgment.' },
       { kind: 'human_required', reason: 'judgment_refused', detail: 'The provider declined the requested prose judgment.' },
@@ -2235,12 +2360,22 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
     [
       'placeholder prose',
       { kind: 'revision_required', reason: 'placeholder', detail: 'The title and body are placeholders.' },
-      { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' },
+      {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'authoring_required_after_judgment',
+        detail: 'The title and body are placeholders.',
+      },
     ],
     [
       'structurally incomplete prose',
       { kind: 'revision_required', reason: 'structurally_incomplete', detail: 'The body is missing its validation section.' },
-      { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' },
+      {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'authoring_required_after_judgment',
+        detail: 'The body is missing its validation section.',
+      },
     ],
   ] as const)(
     'reconciles the %s judgment result without allowing an unselectable publication retry',
