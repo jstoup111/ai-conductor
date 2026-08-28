@@ -85,6 +85,8 @@ type PublicationSnapshot = import('../../src/engine/finish-publication.js').Publ
 type PublicationTransition = import('../../src/engine/finish-publication.js').PublicationTransition;
 type PublicationTransitionDimensions =
   import('../../src/engine/finish-publication.js').PublicationTransitionDimensions;
+type PrProseAuthoringRequest =
+  import('../../src/engine/finish-publication.js').PrProseAuthoringRequest;
 
 type Assert<T extends true> = T;
 type PublicationTransitionDimensionsAreTotal = Assert<
@@ -146,6 +148,7 @@ interface AdvanceFinishPublicationInput {
   emit?(event: unknown): void | Promise<void>;
   effects: {
     dispatchJudgment(...args: unknown[]): Promise<unknown>;
+    authorProse?: (request: PrProseAuthoringRequest) => Promise<void>;
     /**
      * The final recorder owns its existing absolute-path guard and marker-last
      * write order. The coordinator supplies only the authorized outcome after
@@ -574,6 +577,9 @@ describe('finish-publication domain types', () => {
     ['placeholder PR prose', readyPublicationSnapshot({
       pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'placeholder', ready: true },
     }), 'author_pr_prose'],
+    ['revision-required PR prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'revision_required', ready: true },
+    }), 'author_pr_prose'],
     ['halt PR prose', readyPublicationSnapshot({
       pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'halt', ready: true },
     }), 'judge_pr_prose'],
@@ -593,6 +599,32 @@ describe('finish-publication domain types', () => {
     ) => typeof expected;
 
     expect(nextFinishPublicationTransition(snapshot)).toBe(expected);
+  });
+
+  it('routes revision-required prose to authoring without constructing a judgment request', async () => {
+    const authorProse = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' as const }));
+    const snapshot = readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'revision_required',
+        ready: false,
+      },
+    });
+
+    await advanceFinishPublication({
+      observe: async () => snapshot,
+      effects: { authorProse, dispatchJudgment },
+    });
+
+    expect(authorProse).toHaveBeenCalledWith({
+      kind: 'finish_pr_prose_authoring',
+      pullRequestUrl: snapshot.pr.identity === 'one' ? snapshot.pr.url : '',
+      authoringScope: ['title', 'body'],
+      maximumPasses: 1,
+    });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
   });
 
   it('rejects a PR outcome record without an external PR identity', async () => {

@@ -407,7 +407,10 @@ export function nextFinishPublicationTransition(
   // carries the engine's own body-floor marker and "not yet authored" sections.
   // Nothing can judge prose that was never written, so author it FIRST. The
   // judgment transition therefore only ever sees authored prose.
-  if (snapshot.pr.prose === 'placeholder') {
+  if (
+    snapshot.pr.prose === 'placeholder' ||
+    snapshot.pr.prose === 'revision_required'
+  ) {
     return 'author_pr_prose';
   }
 
@@ -1037,27 +1040,35 @@ type PrWithJudgmentNeeded = Extract<PublicationPullRequest, { identity: 'one' }>
 };
 
 type PrWithAuthoringNeeded = Extract<PublicationPullRequest, { identity: 'one' }> & {
-  prose: 'placeholder';
+  prose: 'placeholder' | 'revision_required';
 };
 
 /**
  * A typed predicate protects the expensive boundary: accepted observed prose
  * is final for this pass, while a stale or incomplete observation earns one
- * request. A placeholder body is excluded — it has no prose to judge and is
- * routed to the authoring transition instead. The predicate performs no
+ * request. Placeholder and already-revision-required bodies are excluded —
+ * they need authoring, not another judgment. The predicate performs no
  * provider work itself.
  */
 function isPrProseJudgmentNeeded(
   pr: PublicationPullRequest,
 ): pr is PrWithJudgmentNeeded {
-  return pr.identity === 'one' && pr.prose !== 'accepted' && pr.prose !== 'placeholder';
+  return (
+    pr.identity === 'one' &&
+    pr.prose !== 'accepted' &&
+    pr.prose !== 'placeholder' &&
+    pr.prose !== 'revision_required'
+  );
 }
 
-/** The deterministic complement: an unauthored body needs an authoring pass. */
+/** The deterministic complement: unauthored or judged-deficient prose needs authoring. */
 function isPrProseAuthoringNeeded(
   pr: PublicationPullRequest,
 ): pr is PrWithAuthoringNeeded {
-  return pr.identity === 'one' && pr.prose === 'placeholder';
+  return (
+    pr.identity === 'one' &&
+    (pr.prose === 'placeholder' || pr.prose === 'revision_required')
+  );
 }
 
 function prProseAuthoringRequest(pr: PrWithAuthoringNeeded): PrProseAuthoringRequest {
