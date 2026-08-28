@@ -33,6 +33,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Removed
 
 - Removed ineffective TDD RED/GREEN model configuration keys; configured tdd blocks are now rejected as unknown step settings. ([implementation PR #1910](https://github.com/jstoup111/ai-conductor/pull/1910)).
+- Retire the retrospective skill, command, and delivery-time closeout obligations. ([implementation PR #1946](https://github.com/jstoup111/ai-conductor/pull/1946)).
 
 ### Fixed
 
@@ -102,6 +103,10 @@ ASDF_NODEJS_VERSION=26.7.0 "${HARNESS_DIR}/bin/install" --update
 
 ```bash migration
 "${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
+```
+
+```bash migration
+printf "%s\n" "The retro command and skill are retired. Remove retro invocations and steps.retro entries from your automation and configuration before upgrading."
 ```
 
 ## [0.104.0] - 2026-08-22
