@@ -65,6 +65,26 @@ behavior while replacing the mechanism; the 08-23 ADR carries an amendment note 
    (the #1881 shape asserted eligible explicitly), plus the 08-23 pin — an artifact with zero
    `criterion` rows still passes discovery.
 
+> **Amended 2026-08-28 by #1945:** decision 4's obligation is restated. "Every old-accepted fixture
+> stays eligible" is not a property the shared parser provides, and the corpus measurement below
+> already records why: the parser rejects an artifact carrying a second markdown table beneath the
+> mapping table, a shape the retired triple-scan accepted. The obligation is therefore restated as
+> **no silent loss**: every artifact the retired predicate accepted is either eligible at discovery,
+> or blocked with reason `missing-coherence` carrying a remedy that names the offending line and the
+> parser's message (`daemon-backlog.ts:983-995`). Nothing the old predicate accepted may disappear
+> from discovery without an operator-visible, actionable diagnostic.
+>
+> This is a narrowing of the guarantee, not a downgrade of its purpose: the #1881 stranding class
+> that motivated this ADR was precisely a spec that vanished from discovery with no usable
+> diagnostic, and the restated obligation still forbids exactly that. The corpus test enumerates
+> each divergence and asserts its direction — new-predicate acceptances explicitly, and each
+> old-accepted / parser-rejected shape with the blocked remedy it produces. Dedup skipping a
+> counterexample before it reaches the parser does not discharge the obligation; the shape must be
+> exercised in an un-deduped run.
+>
+> Widening the parser to tolerate trailing tables — which would restore the original superset
+> property — is tracked separately as jstoup111/ai-conductor#1979 and deliberately not decided here.
+
 ### Corpus blast radius (measured 2026-08-26, 107 landed artifacts on main)
 
 - 100 accepted by both predicates.
