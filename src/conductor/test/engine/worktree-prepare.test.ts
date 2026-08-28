@@ -309,6 +309,33 @@ require('node:fs').writeFileSync('dispatch-start.json', JSON.stringify({ ci: pro
       expect(log).toHaveBeenLastCalledWith(expect.stringContaining('dispatch-start: failed'));
     });
 
+    it('kills a hanging hook at the explicit timeout, logs it, and lets the dispatch proceed', async () => {
+      // The hook records its own pid, then hangs far longer than any bounded
+      // test would tolerate. Node terminates on the default SIGTERM action, so
+      // the pid is reaped by the time execa's timeout rejection settles.
+      await writeDispatchStart(`#!/usr/bin/env node
+require('node:fs').writeFileSync('dispatch-start.pid', String(process.pid));
+setTimeout(() => {}, 600000);
+`);
+      const log = vi.fn();
+
+      const startedAt = Date.now();
+      await expect(runDispatchStart(dir, log, { timeoutSeconds: 0.5 })).resolves.toBeUndefined();
+      const elapsedMs = Date.now() - startedAt;
+
+      // Resolved on the explicit bound, not on some other (larger) timeout.
+      expect(elapsedMs).toBeLessThan(10_000);
+
+      // The child is gone: signalling a reaped pid throws ESRCH.
+      const pid = Number((await readFile(join(dir, 'dispatch-start.pid'), 'utf-8')).trim());
+      expect(Number.isInteger(pid)).toBe(true);
+      expect(() => process.kill(pid, 0)).toThrow();
+
+      // The log names the timeout (not a generic failure) and its bound.
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining('dispatch-start: timed out'));
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining('0.5 second(s)'));
+    });
+
     it('does not run during default preparation for resolve worktrees', async () => {
       await writeDispatchStart('#!/usr/bin/env bash\necho dispatch >> dispatch-count\n');
 
@@ -940,6 +967,85 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
         .split('\n')
         .some((line) => / M .*settings\.local\.json/.test(line));
       expect(trackedModifiedLocalSettings).toBe(false);
+    });
+  });
+
+  // Task 7 (adr-2026-08-26-setup-once-per-worktree-marker): the engine's own
+  // bookkeeping must never reach `git status --porcelain`. setup-triage
+  // classifies a worktree's tree from porcelain output, so a `.daemon/` entry
+  // there would mis-classify every prepared worktree as dirty and engage
+  // quarantine machinery on the marker the engine just wrote. These run in a
+  // REAL linked git worktree because `info/exclude` lives in the shared common
+  // dir, which is exactly the resolution `excludeEngineArtifacts` performs.
+  describe('engine artifact exclusion (Task 7)', () => {
+    let repoRoot: string;
+    let worktreeDir: string;
+
+    beforeEach(async () => {
+      repoRoot = await mkdtemp(join(tmpdir(), 'wt-prepare-exclude-repo-'));
+      await execFileAsync('git', ['init', '-b', 'main', repoRoot]);
+      await execFileAsync('git', ['-C', repoRoot, 'config', 'user.email', 'test@example.com']);
+      await execFileAsync('git', ['-C', repoRoot, 'config', 'user.name', 'Test']);
+      await execFileAsync('git', ['-C', repoRoot, 'config', 'commit.gpgsign', 'false']);
+      await writeFile(join(repoRoot, 'README.md'), '# scratch\n', 'utf-8');
+      await execFileAsync('git', ['-C', repoRoot, 'add', '.']);
+      await execFileAsync('git', ['-C', repoRoot, 'commit', '-q', '-m', 'chore: initial commit']);
+
+      worktreeDir = join(tmpdir(), `wt-prepare-exclude-wt-${Math.random().toString(36).slice(2)}`);
+      await execFileAsync('git', ['-C', repoRoot, 'worktree', 'add', '-q', worktreeDir, '-b', 'feature']);
+    });
+
+    afterEach(async () => {
+      await execFileAsync('git', ['-C', repoRoot, 'worktree', 'remove', '--force', worktreeDir])
+        .catch(() => undefined);
+      await rm(worktreeDir, { recursive: true, force: true });
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+
+    /** Locate the worktree's exclude file the same way git itself resolves it. */
+    async function excludeFilePath(): Promise<string> {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', worktreeDir, 'rev-parse', '--git-path', 'info/exclude'],
+      );
+      const rel = stdout.trim();
+      return rel.startsWith('/') ? rel : join(worktreeDir, rel);
+    }
+
+    async function writeWorktreeSetup(): Promise<void> {
+      await mkdir(join(worktreeDir, 'bin'), { recursive: true });
+      const script = join(worktreeDir, SETUP_SCRIPT);
+      await writeFile(script, '#!/usr/bin/env bash\ntrue\n', 'utf-8');
+      await chmod(script, 0o755);
+    }
+
+    it('leaves no .daemon/ entry in git status --porcelain after a marker is written', async () => {
+      await writeWorktreeSetup();
+      const { stdout: head } = await execFileAsync('git', ['-C', worktreeDir, 'rev-parse', 'HEAD']);
+
+      await prepareWorktree(worktreeDir, undefined, { baseSha: head.trim() });
+
+      // Guard against a vacuous assertion: the marker must actually exist, or
+      // porcelain has nothing to hide.
+      expect(await readSetupMarker(worktreeDir)).not.toBeNull();
+
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreeDir });
+      const daemonEntries = stdout.split('\n').filter((line) => line.includes('.daemon'));
+      expect(daemonEntries).toEqual([]);
+    });
+
+    it('appends each exclusion exactly once across repeated prepares', async () => {
+      await prepareWorktree(worktreeDir);
+      await prepareWorktree(worktreeDir);
+
+      const lines = (await readFile(await excludeFilePath(), 'utf-8'))
+        .split('\n')
+        .map((line) => line.trim());
+
+      // Both members of the exclusion set are pinned: a later edit that drops
+      // or duplicates either one is a porcelain regression.
+      expect(lines.filter((line) => line === '.daemon/')).toHaveLength(1);
+      expect(lines.filter((line) => line === '.claude/')).toHaveLength(1);
     });
   });
 

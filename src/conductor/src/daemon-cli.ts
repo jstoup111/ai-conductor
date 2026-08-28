@@ -594,11 +594,27 @@ export function createForcedSetupPrepare(
     projectRoot: string;
     baseBranch: string;
     events?: ConductorEventEmitter;
+    /**
+     * The other half of the `dispatchStart` contract. `dispatchStart` and
+     * `dispatchStartTimeoutSeconds` are a matched pair: opting in without the
+     * resolved timeout drops the project's configured
+     * `dispatch_start_timeout_seconds` and silently bounds the hook at
+     * `worktree-prepare.ts`'s hardcoded default instead. Bound here so both
+     * triage stages share one value with the ordinary dispatch path.
+     */
+    dispatchStartTimeoutSeconds?: number;
   },
 ): (worktreePath: string) => Promise<void> {
   return async (worktreePath) => {
     const baseSha = await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
-    await prepare(worktreePath, log, { verbose, force: true, baseSha, events: base.events, dispatchStart: true });
+    await prepare(worktreePath, log, {
+      verbose,
+      force: true,
+      baseSha,
+      events: base.events,
+      dispatchStart: true,
+      dispatchStartTimeoutSeconds: base.dispatchStartTimeoutSeconds,
+    });
   };
 }
 
@@ -1244,7 +1260,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       prepareWorktree,
       featureLog,
       config?.daemon_verbose ?? false,
-      { projectRoot, baseBranch, events: featureEvents },
+      {
+        projectRoot,
+        baseBranch,
+        events: featureEvents,
+        // Same resolved value the ordinary dispatch path threads into
+        // makeFeatureRunnerDeps below, so triage's hook and dispatch's hook
+        // can never be bounded differently.
+        dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
+      },
     );
 
     // Triage stage 1: run-triage (TS-2/TS-3)

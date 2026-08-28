@@ -94,7 +94,7 @@ describe('daemon setup-triage prepare wiring', () => {
       prepare as typeof prepareWorktree,
       log,
       true,
-      { projectRoot, baseBranch: 'main', events },
+      { projectRoot, baseBranch: 'main', events, dispatchStartTimeoutSeconds: 300 },
     );
 
     await runPrepare('/worktrees/after-quarantine');
@@ -104,17 +104,24 @@ describe('daemon setup-triage prepare wiring', () => {
     // Both triage stages share this callback, and each run must carry the base
     // (so a success rewrites the marker) and the emitter (so `forced` rides the
     // spine) — not just `force`.
+    //
+    // `dispatchStartTimeoutSeconds` is the other half of the `dispatchStart`
+    // hook contract: without it `runDispatchStart` silently falls back to the
+    // hardcoded 120s default and the project's configured value never reaches
+    // the setup-triage path. 300 is deliberately NOT the default, so a
+    // regression that drops the forwarding fails here instead of passing on a
+    // coincidental match.
     expect(prepare).toHaveBeenNthCalledWith(
       1,
       '/worktrees/after-quarantine',
       log,
-      { verbose: true, force: true, baseSha, events, dispatchStart: true },
+      { verbose: true, force: true, baseSha, events, dispatchStart: true, dispatchStartTimeoutSeconds: 300 },
     );
     expect(prepare).toHaveBeenNthCalledWith(
       2,
       '/worktrees/after-fix',
       log,
-      { verbose: true, force: true, baseSha, events, dispatchStart: true },
+      { verbose: true, force: true, baseSha, events, dispatchStart: true, dispatchStartTimeoutSeconds: 300 },
     );
   });
 
