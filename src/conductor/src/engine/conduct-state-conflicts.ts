@@ -4,6 +4,24 @@ import type { StateMutation, StateMutationResult } from './conduct-state-store.j
 
 const MAX_DIAGNOSTIC_STRING_LENGTH = 256;
 
+type DomainRulePhase = 'beforeExpected' | 'afterIdempotent';
+
+type ConductStateDomainRule = {
+  phase: DomainRulePhase;
+  matches(currentValue: unknown, mutation: StateMutation<ConductState>): boolean;
+};
+
+const CONDUCT_STATE_DOMAIN_RULES: readonly ConductStateDomainRule[] = [
+  {
+    phase: 'beforeExpected',
+    matches: (currentValue, mutation) => currentValue === 'skipped' && mutation.next === 'stale',
+  },
+  {
+    phase: 'afterIdempotent',
+    matches: (currentValue, mutation) => mutation.field === 'feature_status' && currentValue === 'complete',
+  },
+];
+
 export type StateMutationValueSummary =
   | { kind: 'undefined' }
   | { kind: 'null' }
@@ -92,6 +110,16 @@ function emitDiagnostic(
   });
 }
 
+function matchesDomainRule(
+  phase: DomainRulePhase,
+  currentValue: unknown,
+  mutation: StateMutation<ConductState>,
+): boolean {
+  return CONDUCT_STATE_DOMAIN_RULES.some(
+    (rule) => rule.phase === phase && rule.matches(currentValue, mutation),
+  );
+}
+
 /**
  * Determines the outcome of a single intent-bearing state mutation without
  * performing persistence.
@@ -101,6 +129,11 @@ export function evaluateConductStateMutation(
   mutation: StateMutation<ConductState>,
   diagnostics?: StateMutationDiagnostics,
 ): StateMutationResult {
+  if (matchesDomainRule('beforeExpected', currentValue, mutation)) {
+    emitDiagnostic(diagnostics, 'resolved', currentValue, mutation);
+    return { kind: 'resolved' };
+  }
+
   if (stateMutationValuesEqual(currentValue, mutation.expected)) {
     return { kind: 'applied' };
   }
@@ -109,7 +142,7 @@ export function evaluateConductStateMutation(
     return { kind: 'idempotent' };
   }
 
-  if (mutation.field === 'feature_status' && currentValue === 'complete') {
+  if (matchesDomainRule('afterIdempotent', currentValue, mutation)) {
     emitDiagnostic(diagnostics, 'resolved', currentValue, mutation);
     return { kind: 'resolved' };
   }

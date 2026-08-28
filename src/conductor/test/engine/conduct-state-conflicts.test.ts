@@ -1,3 +1,4 @@
+// Covers: task:5
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -17,6 +18,32 @@ type ConflictCase = {
 };
 
 describe('evaluateConductStateMutation', () => {
+  it('refuses skipped-to-stale mutations before matching their expected value', () => {
+    const diagnostics: StateMutationDiagnostic[] = [];
+    const result = evaluateConductStateMutation('skipped', {
+      field: 'manual_test',
+      expected: 'skipped',
+      intent: 'restage ship tail after build kickback',
+      next: 'stale',
+    }, {
+      writer: 'conductor',
+      emit: (diagnostic) => diagnostics.push(diagnostic),
+    });
+
+    expect({ result, diagnostics }).toEqual({
+      result: { kind: 'resolved' },
+      diagnostics: [{
+        field: 'manual_test',
+        writer: 'conductor',
+        intent: 'restage ship tail after build kickback',
+        disposition: 'resolved',
+        expected: { kind: 'string', length: 7, redacted: true, truncated: false },
+        current: { kind: 'string', length: 7, redacted: true, truncated: false },
+        next: { kind: 'string', length: 5, redacted: true, truncated: false },
+      }],
+    });
+  });
+
   it.each<ConflictCase>([
     {
       name: 'applies when the expected value still matches current state',
@@ -50,6 +77,39 @@ describe('evaluateConductStateMutation', () => {
         next: undefined,
       } as unknown as StateMutation<ConductState>,
       disposition: 'resolved',
+    },
+    {
+      name: 'applies a done-to-stale step restage',
+      currentValue: 'done',
+      mutation: {
+        field: 'manual_test',
+        expected: 'done',
+        intent: 'restage ship tail after build kickback',
+        next: 'stale',
+      },
+      disposition: 'applied',
+    },
+    {
+      name: 'applies a failed-to-stale step restage',
+      currentValue: 'failed',
+      mutation: {
+        field: 'manual_test',
+        expected: 'failed',
+        intent: 'restage ship tail after build kickback',
+        next: 'stale',
+      },
+      disposition: 'applied',
+    },
+    {
+      name: 'applies a skipped-to-done step decision',
+      currentValue: 'skipped',
+      mutation: {
+        field: 'manual_test',
+        expected: 'skipped',
+        intent: 'run newly applicable manual test',
+        next: 'done',
+      },
+      disposition: 'applied',
     },
     {
       name: 'applies an explicit done-to-stale invalidation when done is expected',
