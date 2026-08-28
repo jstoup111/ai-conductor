@@ -28,7 +28,7 @@ export class MetricsRecorder {
 
   constructor(meter: Meter) {
     this.durationHistogram = meter.createHistogram('conductor.step.duration', {
-      description: 'Duration of conductor steps in milliseconds',
+      description: 'Duration of conductor steps in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
       unit: 'ms',
       advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS },
     });
@@ -39,8 +39,9 @@ export class MetricsRecorder {
       description: 'Token usage per conductor step',
     });
     this.closeoutDurationHistogram = meter.createHistogram('conductor.pipeline.closeout.duration', {
-      description: 'Duration of pipeline closeout obligations in milliseconds',
+      description: 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
       unit: 'ms',
+      advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS },
     });
   }
 

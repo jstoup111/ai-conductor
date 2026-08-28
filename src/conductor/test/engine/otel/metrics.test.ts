@@ -1,4 +1,5 @@
 /**
+ * Covers: task:1, task:2, task:3
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
  *
  * Tests T15–T16 using OtelVisualizer + InMemoryMetricExporter:
@@ -109,6 +110,36 @@ describe('Task 2: step-duration histogram advice', () => {
     );
     expect(stepDurationCall?.[1]?.advice?.explicitBucketBoundaries)
       .toBe(DURATION_BUCKET_BOUNDARIES_MS);
+  });
+});
+
+// ── Task 3: closeout-duration histogram advice and descriptions ─────────────
+
+describe('Task 3: closeout-duration histogram advice and descriptions', () => {
+  it('shares duration advice and declares the 30-minute saturation bound for both duration instruments', () => {
+    const createHistogram = vi.fn();
+    const meter = {
+      createHistogram,
+      createCounter: vi.fn(),
+    } as unknown as Meter;
+
+    new MetricsRecorder(meter);
+
+    const durationOptions = Object.fromEntries(createHistogram.mock.calls) as Record<string, {
+      advice?: { explicitBucketBoundaries?: number[] };
+      description?: string;
+    }>;
+
+    expect({
+      closeoutAdvice: durationOptions['conductor.pipeline.closeout.duration']?.advice
+        ?.explicitBucketBoundaries,
+      stepDescription: durationOptions['conductor.step.duration']?.description,
+      closeoutDescription: durationOptions['conductor.pipeline.closeout.duration']?.description,
+    }).toEqual({
+      closeoutAdvice: DURATION_BUCKET_BOUNDARIES_MS,
+      stepDescription: expect.stringContaining('quantiles saturate above 30 min (largest finite bucket boundary)'),
+      closeoutDescription: expect.stringContaining('quantiles saturate above 30 min (largest finite bucket boundary)'),
+    });
   });
 });
 
