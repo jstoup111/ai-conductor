@@ -159,33 +159,6 @@ for tone and structure; `docs/runbooks/index.md` lists every runbook and must ga
 
 **Dependencies:** 5
 
-### Task 7: Delete the four abandoned specs' associated DECIDE artifacts
-**Story:** Story 2
-**Type:** happy-path
-
-**Steps:**
-1. Enumerate what survives: `git ls-files '.docs/*/<stem>.md'` for each of the four stems whose plans Task 5 removed and whose issues Task 4 closed — `satisfied-by-forged-citation-validation`, `intake-issues-get-contradictory-duplicate-priority`, `trim-skill-frontmatter-descriptions-and-de-accrete`, `the-engine-cannot-detect-its-own-spinning-operator`. Print the list before deleting; re-derive it rather than trusting the enumeration below.
-2. Delete the DECIDE artifacts the runbook's end state removes — `.docs/architecture/`, `.docs/coherence/`, `.docs/complexity/`, `.docs/conflicts/`, `.docs/stories/`, and `.docs/track/` entries for those stems (16 files at the reviewed HEAD). Name every path explicitly on the `git rm` command line; per `docs/runbooks/abandoning-a-spec.md:48`, no recursive or globbed deletion.
-3. Keep each stem's `.docs/intake/` artifact: it records why the work was raised, which the closed issue references, and the runbook's end state removes the decision records, not the origin.
-4. Commit the removals together in one commit whose message maps each stem to its closed issue number, per `docs/runbooks/abandoning-a-spec.md:45-57`.
-5. Verify no orphan survives: for each stem, `git ls-files '.docs/*/<stem>.md'` returns only the `.docs/intake/` path.
-6. Run `test/test_harness_integrity.sh`.
-
-**Done when:**
-- [ ] For each of the four stems, no `.docs/architecture/`, `.docs/coherence/`, `.docs/complexity/`, `.docs/conflicts/`, `.docs/stories/`, or `.docs/track/` artifact remains on the branch.
-- [ ] Each stem's `.docs/intake/` artifact is untouched.
-- [ ] One commit carries every removal and names each stem's closed issue number.
-- [ ] Every deleted path was named explicitly — the commit contains no recursive or globbed removal.
-- [ ] test/test_harness_integrity.sh exits 0.
-
-**Files likely touched:**
-- .docs/complexity/satisfied-by-forged-citation-validation.md, .docs/conflicts/satisfied-by-forged-citation-validation.md, .docs/stories/satisfied-by-forged-citation-validation.md, .docs/track/satisfied-by-forged-citation-validation.md — deleted
-- .docs/architecture/intake-issues-get-contradictory-duplicate-priority.md, .docs/complexity/intake-issues-get-contradictory-duplicate-priority.md, .docs/stories/intake-issues-get-contradictory-duplicate-priority.md, .docs/track/intake-issues-get-contradictory-duplicate-priority.md — deleted
-- .docs/complexity/trim-skill-frontmatter-descriptions-and-de-accrete.md, .docs/stories/trim-skill-frontmatter-descriptions-and-de-accrete.md, .docs/track/trim-skill-frontmatter-descriptions-and-de-accrete.md — deleted
-- .docs/architecture/the-engine-cannot-detect-its-own-spinning-operator.md, .docs/coherence/the-engine-cannot-detect-its-own-spinning-operator.md, .docs/complexity/the-engine-cannot-detect-its-own-spinning-operator.md, .docs/stories/the-engine-cannot-detect-its-own-spinning-operator.md, .docs/track/the-engine-cannot-detect-its-own-spinning-operator.md — deleted
-
-**Dependencies:** 4; 5
-
 ## Task Dependency Graph
 ```
 Task 1 ──> Task 2

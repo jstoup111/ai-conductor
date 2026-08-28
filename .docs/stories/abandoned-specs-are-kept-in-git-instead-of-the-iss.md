@@ -31,8 +31,17 @@ conventions.
 
 ## Story 2: The nine retired plans migrate to closed issues and the register is gone
 
-As the repository operator, I want the existing .docs/retired/ contents to reach the same end
-state as any future abandonment so that no grandfathered register remains to drift.
+As the repository operator, I want the existing .docs/retired/ register migrated to closed issues
+and deleted, so that no grandfathered register remains to drift.
+
+**Out of scope.** Removing the abandoned stems' *other* DECIDE artifacts (their `.docs/architecture/`,
+`.docs/coherence/`, `.docs/complexity/`, `.docs/conflicts/`, `.docs/stories/`, and `.docs/track/`
+entries) is deliberately not part of this feature. Those paths are covered by the protected-artifact
+seal, and the seal's deletion check admits no tolerance — no `reseal` (which requires every path to
+resolve at the current commit) and no rotation (refused as `same-history-ancestor`) can admit a
+deletion performed on a feature branch, so no feature branch can deliver it. That cleanup ships as a
+separate main-based change. This story's end state is the register: closed issues plus an absent
+`.docs/retired/`.
 
 ### Acceptance Criteria
 
