@@ -1,19 +1,28 @@
 /**
+ * Covers: task:1, task:2, task:3, task:4
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
  *
  * Tests T15–T16 using OtelVisualizer + InMemoryMetricExporter:
  *   T15: Duration histogram and retries counter
  *   T16: Token metrics — skip when absent, record only present kinds
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
+import { DURATION_BUCKET_BOUNDARIES_MS, MetricsRecorder } from '../../../src/engine/otel/metrics.js';
+import type { Meter } from '@opentelemetry/api';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
-import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+  type HistogramMetricData,
+} from '@opentelemetry/sdk-metrics';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -66,6 +75,152 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
+});
+
+// ── Task 1: duration bucket boundaries ──────────────────────────────────────
+
+describe('Task 1: duration bucket boundaries', () => {
+  it('are strictly increasing and span 10 ms through 30 minutes', () => {
+    expect(DURATION_BUCKET_BOUNDARIES_MS.every(
+      (boundary, index) => index === 0 || boundary > DURATION_BUCKET_BOUNDARIES_MS[index - 1],
+    )).toBe(true);
+    expect(DURATION_BUCKET_BOUNDARIES_MS[0]).toBeLessThanOrEqual(10);
+    expect(DURATION_BUCKET_BOUNDARIES_MS.at(-1)).toBeGreaterThanOrEqual(1_800_000);
+    expect(DURATION_BUCKET_BOUNDARIES_MS.some((boundary) => boundary >= 252_464)).toBe(true);
+  });
+
+  it('resolves representative durations to four distinct buckets', () => {
+    const resolvedBoundaries = [240, 4_000, 90_000, 600_000].map((durationMs) =>
+      DURATION_BUCKET_BOUNDARIES_MS.find((boundary) => boundary >= durationMs),
+    );
+
+    expect(resolvedBoundaries).not.toContain(undefined);
+    expect(new Set(resolvedBoundaries).size).toBe(4);
+  });
+});
+
+// ── Task 2: step-duration histogram advice ─────────────────────────────────
+
+describe('Task 2: step-duration histogram advice', () => {
+  it('passes the shared duration boundaries as advice when creating conductor.step.duration', () => {
+    const createHistogram = vi.fn();
+    const meter = {
+      createHistogram,
+      createCounter: vi.fn(),
+    } as unknown as Meter;
+
+    new MetricsRecorder(meter);
+
+    const stepDurationCall = createHistogram.mock.calls.find(
+      ([name]) => name === 'conductor.step.duration',
+    );
+    expect(stepDurationCall?.[1]?.advice?.explicitBucketBoundaries)
+      .toEqual([
+        10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000,
+        30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+      ]);
+  });
+});
+
+// ── Task 3: closeout-duration histogram advice and descriptions ─────────────
+
+describe('Task 3: closeout-duration histogram advice and descriptions', () => {
+  it('shares duration advice and declares the 30-minute saturation bound for both duration instruments', () => {
+    const createHistogram = vi.fn();
+    const meter = {
+      createHistogram,
+      createCounter: vi.fn(),
+    } as unknown as Meter;
+
+    new MetricsRecorder(meter);
+
+    const durationOptions = Object.fromEntries(createHistogram.mock.calls) as Record<string, {
+      advice?: { explicitBucketBoundaries?: number[] };
+      description?: string;
+    }>;
+
+    expect({
+      closeoutAdvice: durationOptions['conductor.pipeline.closeout.duration']?.advice
+        ?.explicitBucketBoundaries,
+      stepDescription: durationOptions['conductor.step.duration']?.description,
+      closeoutDescription: durationOptions['conductor.pipeline.closeout.duration']?.description,
+    }).toEqual({
+      closeoutAdvice: DURATION_BUCKET_BOUNDARIES_MS,
+      stepDescription: expect.stringContaining('quantiles saturate above 30 min (largest finite bucket boundary)'),
+      closeoutDescription: expect.stringContaining('quantiles saturate above 30 min (largest finite bucket boundary)'),
+    });
+  });
+});
+
+// ── Task 4: step-duration overflow and zero observations ───────────────────
+
+describe('Task 4: step-duration overflow and zero observations', () => {
+  it('keeps overflow and zero observations in their exact histogram buckets', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter })],
+    });
+
+    try {
+      const recorder = new MetricsRecorder(provider.getMeter('task-4'));
+      recorder.onStepClose('overflow-and-zero', 2_000_000, 0);
+      recorder.onStepClose('overflow-and-zero', 0, 0);
+
+      await provider.forceFlush();
+
+      const metric = findMetric(exporter, 'conductor.step.duration');
+      const point = (metric as HistogramMetricData | undefined)?.dataPoints.find(
+        (dataPoint) => dataPoint.attributes['step'] === 'overflow-and-zero',
+      );
+
+      expect(point).toBeDefined();
+      expect(point?.value.count).toBe(2);
+      expect(point?.value.sum).toBe(2_000_000);
+      expect(point?.value.buckets.boundaries.at(-1)).toBe(DURATION_BUCKET_BOUNDARIES_MS.at(-1));
+      expect(point?.value.buckets.counts.at(-1)).toBe(1);
+      expect(point?.value.buckets.counts[0]).toBe(1);
+    } finally {
+      await provider.shutdown();
+    }
+  });
+});
+
+// ── Task 5: closeout-duration overflow observation ─────────────────────────
+
+describe('Task 5: closeout-duration overflow observation', () => {
+  it('keeps a closeout overflow observation in the bucket above the largest finite boundary', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter })],
+    });
+
+    try {
+      const recorder = new MetricsRecorder(provider.getMeter('task-5'));
+      const closeout = {
+        type: 'pipeline_closeout',
+        obligation: 'summary',
+        startedAt: 1_000,
+        endedAt: 2_001_000,
+        ts: 2_001_000,
+      } as const;
+
+      expect(() => recorder.onPipelineCloseout(closeout)).not.toThrow();
+      await provider.forceFlush();
+
+      const metric = findMetric(exporter, 'conductor.pipeline.closeout.duration');
+      const point = (metric as HistogramMetricData | undefined)?.dataPoints.find(
+        (dataPoint) => dataPoint.attributes['obligation'] === 'summary',
+      );
+
+      expect(point).toBeDefined();
+      expect(point?.value.count).toBe(1);
+      expect(point?.value.sum).toBe(2_000_000);
+      expect(point?.value.buckets.boundaries.at(-1)).toBe(DURATION_BUCKET_BOUNDARIES_MS.at(-1));
+      expect(point?.value.buckets.counts.at(-1)).toBe(1);
+    } finally {
+      await provider.shutdown();
+    }
+  });
 });
 
 // ── T15: Duration histogram and retries counter ───────────────────────────────

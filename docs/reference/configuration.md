@@ -681,6 +681,9 @@ handling lives in `resolveOtelConfig` (`src/conductor/src/engine/otel/otel-confi
 throws. When enabled, it exports interactive runs and each daemon-dispatched feature independently;
 the daemon resource identifies the feature, project, and durable dispatch run id.
 
+The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
+duration buckets through 30 minutes; quantiles saturate above that largest finite bucket boundary.
+
 | Key | Type | Required | Allowed | Default |
 | --- | --- | --- | --- | --- |
 | `otel` | object | No | — | absent means `{ enabled: false }` |
