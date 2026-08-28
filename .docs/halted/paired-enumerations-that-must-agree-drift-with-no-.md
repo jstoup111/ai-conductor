@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-28T12:22:44.571Z
 Slug: paired-enumerations-that-must-agree-drift-with-no-
 Class: needs-human
 Halting step: unknown
