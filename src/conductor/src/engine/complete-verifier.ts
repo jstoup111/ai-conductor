@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import type { ConductState, StepName } from '../types/index.js';
 import { checkStepCompletion } from './artifacts.js';
 import type { FullSuiteInspectionResult } from './full-suite-verifier.js';
-import { readState } from './state.js';
+import { getStepStatus, readState } from './state.js';
 
 /** Steps re-checked when a feature is marked complete on resume. */
 const SHIP_GATING_STEPS: StepName[] = ['test_suite', 'manual_test', 'finish'];
@@ -59,6 +59,8 @@ export async function verifyCompleteState(
   const reasons: string[] = [];
 
   for (const step of SHIP_GATING_STEPS) {
+    if (getStepStatus(state, step) === 'skipped') continue;
+
     const result = await checkStepCompletion(worktreePath, step, ctx);
     if (!result.done) {
       failedSteps.push(step);
