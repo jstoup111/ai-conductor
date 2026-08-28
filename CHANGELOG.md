@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Adds a guided workflow for safely removing obsolete code and verifying remaining references. ([implementation PR #1899](https://github.com/jstoup111/ai-conductor/pull/1899)).
 - Daemon runs now route wholly remediable as-built architecture-review findings through one bounded build remediation lap, while design findings halt for human input. ([implementation PR #1908](https://github.com/jstoup111/ai-conductor/pull/1908)).
 - Adds configurable visualizer plugins that receive Conductor event streams. ([implementation PR #1958](https://github.com/jstoup111/ai-conductor/pull/1958)).
+- OpenTelemetry traces distinguish completed, halted, and terminated conductor runs. ([implementation PR #1997](https://github.com/jstoup111/ai-conductor/pull/1997)).
 
 ### Changed
 
