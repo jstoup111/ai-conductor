@@ -32,7 +32,7 @@ describe('manual_test FAIL kickback restage', () => {
 
   async function runFailKickback(
     restageState: 'failed' | 'skipped',
-  ): Promise<ConductState> {
+  ): Promise<{ state: ConductState; restageChanges: Record<string, unknown> }> {
     const dir = await mkdtemp(join(tmpdir(), 'manual-test-kickback-'));
     dirs.push(dir);
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -80,18 +80,32 @@ describe('manual_test FAIL kickback restage', () => {
       return index;
     };
 
+    let restageChanges: Record<string, unknown> | undefined;
+    const originalCommit = (conductor as any).commitStateChanges.bind(conductor);
+    (conductor as any).commitStateChanges = async (...args: unknown[]) => {
+      if (args[1] === 'restage manual_test after BUILD kickback') {
+        restageChanges = { ...(args[2] as Record<string, unknown>) };
+      }
+      return originalCommit(...args);
+    };
+
     await conductor.run();
     const state = await readState(statePath);
     if (!state.ok) throw new Error('kickback state must be readable');
-    return state.value;
+    if (!restageChanges) throw new Error('manual_test kickback restage must occur');
+    return { state: state.value, restageChanges };
   }
 
   it('restages a failed manual_test after its FAIL kickback', async () => {
-    expect((await runFailKickback('failed')).manual_test).toBe('stale');
+    const result = await runFailKickback('failed');
+    expect(result.restageChanges).toMatchObject({ manual_test: 'stale' });
+    expect(result.state.manual_test).toBe('stale');
   });
 
   it('preserves a skipped manual_test at the same FAIL kickback restage site', async () => {
-    expect((await runFailKickback('skipped')).manual_test).toBe('skipped');
+    const result = await runFailKickback('skipped');
+    expect(result.restageChanges).not.toHaveProperty('manual_test');
+    expect(result.state.manual_test).toBe('skipped');
   });
 });
 
@@ -106,7 +120,7 @@ describe('validation-group kickback restages', () => {
     manualTest: 'FAIL' | 'PASS';
     gapMembers: StepName[];
     skippedAfterNavigation?: StepName;
-  }): Promise<ConductState> {
+  }): Promise<{ state: ConductState; restageChanges: Record<string, unknown> }> {
     const dir = await mkdtemp(join(tmpdir(), 'validation-kickback-'));
     dirs.push(dir);
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -180,11 +194,15 @@ describe('validation-group kickback restages', () => {
       return index;
     };
     let restagedState: ConductState | undefined;
+    let restageChanges: Record<string, unknown> | undefined;
     const restageName = input.manualTest === 'FAIL'
       ? 'restage validation group after kickback'
       : 'restage validation gaps after kickback';
     const originalCommit = (conductor as any).commitStateChanges.bind(conductor);
     (conductor as any).commitStateChanges = async (...args: unknown[]) => {
+      if (args[1] === restageName) {
+        restageChanges = { ...(args[2] as Record<string, unknown>) };
+      }
       await originalCommit(...args);
       if (args[1] === restageName) {
         restagedState = { ...(args[0] as ConductState) };
@@ -193,28 +211,33 @@ describe('validation-group kickback restages', () => {
 
     await conductor.run();
     if (!restagedState) throw new Error('validation kickback restage must occur');
-    return restagedState;
+    if (!restageChanges) throw new Error('validation kickback restage changes must be captured');
+    return { state: restagedState, restageChanges };
   }
 
   it('preserves the skipped manual-test member while restaging the done gap member after a consolidated kickback', async () => {
-    const state = await runValidationKickback({
+    const result = await runValidationKickback({
       manualTest: 'FAIL', gapMembers: ['prd_audit'], skippedAfterNavigation: 'manual_test',
     });
-    expect([state.manual_test, state.prd_audit]).toEqual(['skipped', 'stale']);
+    expect(result.restageChanges).toMatchObject({ prd_audit: 'stale' });
+    expect(result.restageChanges).not.toHaveProperty('manual_test');
+    expect([result.state.manual_test, result.state.prd_audit]).toEqual(['skipped', 'stale']);
   });
 
   it('restages the ran validation gap member', async () => {
-    const state = await runValidationKickback({
+    const result = await runValidationKickback({
       manualTest: 'PASS', gapMembers: ['prd_audit'],
     });
-    expect(state.prd_audit).toBe('stale');
+    expect(result.restageChanges).toMatchObject({ prd_audit: 'stale' });
+    expect(result.state.prd_audit).toBe('stale');
   });
 
   it('preserves a skipped validation gap member', async () => {
-    const state = await runValidationKickback({
+    const result = await runValidationKickback({
       manualTest: 'PASS', gapMembers: ['prd_audit'], skippedAfterNavigation: 'prd_audit',
     });
-    expect(state.prd_audit).toBe('skipped');
+    expect(result.restageChanges).not.toHaveProperty('prd_audit');
+    expect(result.state.prd_audit).toBe('skipped');
   });
 });
 
@@ -225,7 +248,9 @@ describe('build_review kickback restage', () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  async function runBuildReviewKickback(manualTest: 'skipped' | 'done'): Promise<ConductState> {
+  async function runBuildReviewKickback(
+    manualTest: 'skipped' | 'done',
+  ): Promise<{ state: ConductState; restageChanges: Record<string, unknown> }> {
     const dir = await mkdtemp(join(tmpdir(), 'build-review-kickback-'));
     dirs.push(dir);
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -285,23 +310,36 @@ describe('build_review kickback restage', () => {
       },
     } as never);
 
+    let restageChanges: Record<string, unknown> | undefined;
+    const originalCommit = (conductor as any).commitStateChanges.bind(conductor);
+    (conductor as any).commitStateChanges = async (...args: unknown[]) => {
+      if (args[1] === 'restage BUILD review after kickback') {
+        restageChanges = { ...(args[2] as Record<string, unknown>) };
+      }
+      return originalCommit(...args);
+    };
+
     await conductor.run().catch((error: unknown) => {
       if (!(error instanceof Error) || error.message !== 'stop after build_review restage') throw error;
     });
     const state = await readState(statePath);
     if (!state.ok) throw new Error('build_review kickback state must be readable');
-    return state.value;
+    if (!restageChanges) throw new Error('build_review kickback restage must occur');
+    return { state: state.value, restageChanges };
   }
 
   it('preserves skipped manual_test while restaging build_review through its kickback site', async () => {
-    const state = await runBuildReviewKickback('skipped');
+    const result = await runBuildReviewKickback('skipped');
 
-    expect(state).toMatchObject({ build_review: 'stale', manual_test: 'skipped' });
+    expect(result.restageChanges).toMatchObject({ build_review: 'stale' });
+    expect(result.restageChanges).not.toHaveProperty('manual_test');
+    expect(result.state).toMatchObject({ build_review: 'stale', manual_test: 'skipped' });
   });
 
   it('restages a ran manual_test through the same build_review kickback site', async () => {
-    const state = await runBuildReviewKickback('done');
+    const result = await runBuildReviewKickback('done');
 
-    expect(state).toMatchObject({ build_review: 'stale', manual_test: 'stale' });
+    expect(result.restageChanges).toMatchObject({ build_review: 'stale', manual_test: 'stale' });
+    expect(result.state).toMatchObject({ build_review: 'stale', manual_test: 'stale' });
   });
 });
