@@ -271,6 +271,11 @@ export class SpanManager {
   }
 
   onLoopHalt(event: Extract<ConductorEvent, { type: 'loop_halt' }>): void {
+    // A terminal event may arrive after feature_complete has already closed the
+    // root span. Preserve that authoritative outcome without treating it as an
+    // orphan (which is reserved for a halt before any run started).
+    if (this.runOutcome !== null) return;
+
     if (!this.runSpan) {
       this.warn('loop_halt received but no run span exists — ignoring');
       return;

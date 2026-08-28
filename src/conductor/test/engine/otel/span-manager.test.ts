@@ -210,7 +210,10 @@ describe('T10: run span lifecycle — one trace per run', () => {
   });
 
   it('late loop_halt after feature_complete preserves the complete root span', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
+      warnings.push(message),
+    );
     vis.start(emitter);
     const { spanManager } = vis as unknown as {
       spanManager: {
@@ -227,6 +230,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
     const roots = spanExporter.getFinishedSpans().filter((span) => !span.parentSpanContext);
     expect(roots).toHaveLength(1);
     expect(roots[0].attributes['conductor.run.outcome']).toBe('complete');
+    expect(warnings).toEqual([]);
   });
 
   it('forceCloseAll defaults the root outcome to terminated while an open step remains incomplete', async () => {
