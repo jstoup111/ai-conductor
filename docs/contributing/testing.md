@@ -39,7 +39,7 @@ are missing or stale, then runs both TypeScript checks above.
 
 ```bash
 node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 &&
-node --import tsx --test test/engineer-lifecycle-cli.test.ts &&
+npm run test:node &&
 node scripts/run-vitest.mjs run --config vitest.signal.config.ts --reporter=dot --slowTestThreshold=1800000 &&
 echo 'AGGREGATE_TEST_SUITE_PASS'
 ```

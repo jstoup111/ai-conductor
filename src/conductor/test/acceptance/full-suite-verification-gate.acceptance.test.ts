@@ -288,7 +288,9 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
       timeout_seconds: 1800,
     });
     expect(template).toMatch(/test_suite:[\s\S]*command:[^\n]*npm test[\s\S]*working_directory:/i);
-    const testScript = JSON.parse(packageJson).scripts.test as string;
+    const scripts = JSON.parse(packageJson).scripts as Record<string, string>;
+    const testScript = scripts.test;
+    const nodeTestScript = scripts['test:node'];
     // Signal simulation needs a thread worker, so it runs in its own process
     // after the fork-pool batch. Running both Vitest processes concurrently
     // can terminate the aggregate shell with SIGHUP before it emits the
@@ -303,6 +305,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     expect(testScript).not.toContain('wait "$ordinary"');
     expect(testScript).not.toContain('wait "$signals"');
     expect(testScript).toMatch(/vitest\.signal\.config\.ts --reporter=dot(?! --silent)/);
+    expect(testScript).toContain('npm run test:node');
 
     // The no-argument branch is the aggregate gate's command. Any positional
     // path passed there narrows the run to those paths, silently dropping
@@ -313,8 +316,8 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     const defaultBranch = testScript.slice(testScript.indexOf('else'), testScript.indexOf('fi &&'));
     expect(defaultBranch).not.toMatch(/(^|\s)(\.\/)?test\//);
 
-    // Whatever `vitest.config.ts` excludes for pool reasons must be run by the
-    // signal config instead, so the two commands still cover the include set.
+    // Every test excluded from the main Vitest pool must be covered by either
+    // the signal-specific Vitest process or the dedicated Node test process.
     const signalConfig = await readFile(join(CONDUCTOR_ROOT, 'vitest.signal.config.ts'), 'utf8');
     const excludeBlock = vitestConfig.match(/exclude:\s*\[([\s\S]*?)\]/)?.[1] ?? '';
     const poolExcluded = [...excludeBlock.matchAll(/'(test\/[^'*]*\.test\.ts)'/g)].map(
@@ -322,7 +325,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     );
     expect(poolExcluded.length).toBeGreaterThan(0);
     for (const excluded of poolExcluded) {
-      expect(signalConfig).toContain(excluded);
+      expect(signalConfig.includes(excluded) || nodeTestScript.includes(excluded)).toBe(true);
     }
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);

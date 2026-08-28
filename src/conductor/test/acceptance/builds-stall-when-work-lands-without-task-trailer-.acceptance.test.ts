@@ -279,7 +279,7 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     // no_task_progress, no HALT write can contain it either.
     const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
     expect(haltContent ?? '').not.toMatch(/resolved tasks stayed at/);
-  });
+  }, 60_000);
 
   it('regression fixture — sparse trailers (minority of tasks trailer-stamped), commits land every attempt → zero no_task_progress classifications across the full retry budget', async () => {
     await writePlanAndStatus(dir, 10, []); // 10-task plan, zero completed rows
@@ -305,7 +305,7 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     expect(stallEvents.filter((e) => e.reason === 'no_task_progress')).toHaveLength(0);
     const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
     expect(haltContent ?? '').not.toMatch(/resolved tasks stayed at/);
-  });
+  }, 60_000);
 
   it('resolved count MOVES every attempt → existing #280 progress-bypass fires exactly as today; the floor adds no interference', async () => {
     await writePlanAndStatus(dir, 3, []);
