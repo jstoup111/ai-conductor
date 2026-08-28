@@ -1,22 +1,22 @@
+import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 
 import {
   detectEngineerCommand,
   dispatchEngineer,
   persistEngineerHandoffBeforeCleanup,
-} from '../../../src/engine/engineer-cli.js';
+} from '../src/engine/engineer-cli.js';
 import {
   readEngineerRunMarker,
   writeEngineerRunMarker,
-} from '../../../src/engine/engineer/run-marker.js';
-import { EngineerRunStore } from '../../../src/engine/engineer/run-store.js';
-import { ConductorEventEmitter } from '../../../src/ui/events.js';
+} from '../src/engine/engineer/run-marker.js';
+import { EngineerRunStore } from '../src/engine/engineer/run-store.js';
+import { ConductorEventEmitter } from '../src/ui/events.js';
 
-describe('Engineer lifecycle CLI', () => {
+void describe('Engineer lifecycle CLI', () => {
   let engineerDir: string;
   let repoRoot: string;
   let output: string[];
@@ -36,11 +36,11 @@ describe('Engineer lifecycle CLI', () => {
 
   function parse(argv: string[]) {
     const command = detectEngineerCommand(['node', 'conduct-ts', 'engineer', ...argv]);
-    expect(command).not.toBeNull();
-    return command!;
+    assert.ok(command);
+    return command;
   }
 
-  async function dispatch(argv: string[]): Promise<{ code: number; json?: any }> {
+  async function dispatch(argv: string[]): Promise<{ code: number; json?: Record<string, unknown> }> {
     const code = await dispatchEngineer(parse(argv), {
       engineerDir,
       events: new ConductorEventEmitter(),
@@ -51,7 +51,17 @@ describe('Engineer lifecycle CLI', () => {
     return { code, ...(last ? { json: JSON.parse(last) } : {}) };
   }
 
-  it('creates, inspects, replays, records, fails, and retries runs as JSON', async () => {
+  function requireJson(result: { json?: Record<string, unknown> }): Record<string, unknown> {
+    assert.ok(result.json);
+    return result.json;
+  }
+
+  function requireString(value: unknown): string {
+    assert.equal(typeof value, 'string');
+    return value as string;
+  }
+
+  void it('creates, inspects, replays, records, fails, and retries runs as JSON', async () => {
     const created = await dispatch([
       'run-create',
       '--repo-root', repoRoot,
@@ -59,37 +69,40 @@ describe('Engineer lifecycle CLI', () => {
       '--correlation-id', 'commission-1',
       '--attempt-key', 'launch-1',
     ]);
-    expect(created).toMatchObject({ code: 0, json: { schemaVersion: 1, attempt: 1, eventRevision: 1 } });
-    const runId = created.json.engineerRunId as string;
+    assert.partialDeepStrictEqual(created, {
+      code: 0,
+      json: { schemaVersion: 1, attempt: 1, eventRevision: 1 },
+    });
+    const runId = requireString(requireJson(created).engineerRunId);
 
     output = [];
-    expect(await dispatch(['run-record', '--run-id', runId, '--transition', 'run_started'])).toMatchObject({
+    assert.partialDeepStrictEqual(await dispatch(['run-record', '--run-id', runId, '--transition', 'run_started']), {
       code: 0,
       json: { engineerRunId: runId, state: 'authoring', eventRevision: 2 },
     });
     output = [];
-    expect(await dispatch([
+    assert.partialDeepStrictEqual(await dispatch([
       'run-record', '--run-id', runId, '--transition', 'step_started', '--step', 'explore', '--provider', 'codex',
-    ])).toMatchObject({ code: 0, json: { eventRevision: 3 } });
+    ]), { code: 0, json: { eventRevision: 3 } });
     output = [];
-    expect(await dispatch([
+    assert.partialDeepStrictEqual(await dispatch([
       'run-record', '--run-id', runId, '--transition', 'step_completed', '--step', 'explore', '--completion', 'accepted_result',
-    ])).toMatchObject({ code: 0, json: { steps: { explore: { status: 'completed' } } } });
+    ]), { code: 0, json: { steps: { explore: { status: 'completed' } } } });
 
     output = [];
-    expect(await dispatch(['run-replay', '--run-id', runId, '--after-revision', '2'])).toMatchObject({
+    assert.partialDeepStrictEqual(await dispatch(['run-replay', '--run-id', runId, '--after-revision', '2']), {
       code: 0,
       json: { engineerRunId: runId, afterRevision: 2, events: [{ revision: 3 }, { revision: 4 }] },
     });
 
     output = [];
-    expect(await dispatch(['run-inspect', '--run-id', runId])).toMatchObject({
+    assert.partialDeepStrictEqual(await dispatch(['run-inspect', '--run-id', runId]), {
       code: 0,
       json: { engineerRunId: runId, eventRevision: 4 },
     });
 
     output = [];
-    expect(await dispatch(['run-fail', '--run-id', runId, '--error', 'host exited'])).toMatchObject({
+    assert.partialDeepStrictEqual(await dispatch(['run-fail', '--run-id', runId, '--error', 'host exited']), {
       code: 0,
       json: { state: 'failed', eventRevision: 5 },
     });
@@ -102,14 +115,14 @@ describe('Engineer lifecycle CLI', () => {
       '--correlation-id', 'commission-1',
       '--attempt-key', 'launch-2',
     ]);
-    expect(successor).toMatchObject({
+    assert.partialDeepStrictEqual(successor, {
       code: 0,
       json: { attempt: 2, previousEngineerRunId: runId, eventRevision: 1 },
     });
   });
 
-  it('prints one capability JSON object and rejects unknown lifecycle flags', async () => {
-    expect(await dispatch(['capabilities'])).toEqual({
+  void it('prints one capability JSON object and rejects unknown lifecycle flags', async () => {
+    assert.deepEqual(await dispatch(['capabilities']), {
       code: 0,
       json: { schemaVersion: 1, engineerLifecycleEventsV1: true },
     });
@@ -118,15 +131,15 @@ describe('Engineer lifecycle CLI', () => {
     const result = await dispatch([
       'run-create', '--repo-root', repoRoot, '--idea', 'x', '--unknown', 'value',
     ]);
-    expect(result.code).toBe(1);
-    expect(errors.join('\n')).toContain("unknown flag '--unknown'");
+    assert.equal(result.code, 1);
+    assert.match(errors.join('\n'), /unknown flag '--unknown'/);
   });
 
-  it('reserves land reconciliation completion evidence for the land path', async () => {
+  void it('reserves land reconciliation completion evidence for the land path', async () => {
     const created = await dispatch([
       'run-create', '--repo-root', repoRoot, '--idea', 'x', '--attempt-key', 'a1',
     ]);
-    const runId = created.json.engineerRunId as string;
+    const runId = requireString(requireJson(created).engineerRunId);
     output = [];
     await dispatch(['run-record', '--run-id', runId, '--transition', 'run_started']);
     output = [];
@@ -139,27 +152,30 @@ describe('Engineer lifecycle CLI', () => {
       '--completion', 'land_reconciliation',
     ]);
 
-    expect(result.code).toBe(1);
-    expect(errors.join('\n')).toContain('land_reconciliation is reserved for verified land evidence');
-    expect(JSON.parse(errors.at(-1)!)).toMatchObject({
+    assert.equal(result.code, 1);
+    assert.match(errors.join('\n'), /land_reconciliation is reserved for verified land evidence/);
+    assert.partialDeepStrictEqual(JSON.parse(errors.at(-1)!), {
       schemaVersion: 1,
       error: 'invalid_completion_evidence',
     });
   });
 
-  it('inspects ordered correlation lineage without sharing revision cursors', async () => {
+  void it('inspects ordered correlation lineage without sharing revision cursors', async () => {
     const first = await dispatch([
       'run-create', '--repo-root', repoRoot, '--idea', 'x', '--correlation-id', 'corr', '--attempt-key', 'a1',
     ]);
     output = [];
-    await dispatch(['run-fail', '--run-id', first.json.engineerRunId, '--error', 'retry']);
+    await dispatch([
+      'run-fail', '--run-id', requireString(requireJson(first).engineerRunId), '--error', 'retry',
+    ]);
     output = [];
     await dispatch([
       'run-create', '--repo-root', repoRoot, '--idea', 'x', '--correlation-id', 'corr', '--attempt-key', 'a2',
     ]);
     output = [];
     const lineage = await dispatch(['run-inspect', '--repo-root', repoRoot, '--correlation-id', 'corr']);
-    expect(lineage.json.runs.map((run: any) => [run.attempt, run.eventRevision])).toEqual([[1, 2], [2, 1]]);
+    const runs = requireJson(lineage).runs as Array<{ attempt: number; eventRevision: number }>;
+    assert.deepEqual(runs.map((run) => [run.attempt, run.eventRevision]), [[1, 2], [2, 1]]);
 
     const otherRepo = await mkdtemp(join(tmpdir(), 'engineer-lifecycle-cli-other-repo-'));
     try {
@@ -167,13 +183,13 @@ describe('Engineer lifecycle CLI', () => {
       const mismatched = await dispatch([
         'run-inspect', '--repo-root', otherRepo, '--correlation-id', 'corr',
       ]);
-      expect(mismatched).toMatchObject({ code: 0, json: { runs: [] } });
+      assert.partialDeepStrictEqual(mismatched, { code: 0, json: { runs: [] } });
     } finally {
       await rm(otherRepo, { recursive: true, force: true });
     }
   });
 
-  it('writes and recovers an exact run marker without relying on the worktree name', async () => {
+  void it('writes and recovers an exact run marker without relying on the worktree name', async () => {
     const worktree = join(repoRoot, '.worktrees', 'arbitrary-name');
     await mkdir(worktree, { recursive: true });
     await writeEngineerRunMarker(worktree, {
@@ -184,33 +200,36 @@ describe('Engineer lifecycle CLI', () => {
       branch: 'spec/health-check',
     });
 
-    expect(await readEngineerRunMarker(worktree)).toEqual({
+    assert.deepEqual(await readEngineerRunMarker(worktree), {
       schemaVersion: 1,
       engineerRunId: 'run-123',
       repoRoot,
       planSlug: 'health-check',
       branch: 'spec/health-check',
     });
-    expect(JSON.parse(await readFile(join(worktree, '.pipeline', 'engineer-run.json'), 'utf-8'))).toMatchObject({
-      engineerRunId: 'run-123',
-    });
+    assert.partialDeepStrictEqual(
+      JSON.parse(await readFile(join(worktree, '.pipeline', 'engineer-run.json'), 'utf-8')),
+      {
+        engineerRunId: 'run-123',
+      },
+    );
   });
 
-  it('refuses malformed and schema-incompatible worktree markers', async () => {
+  void it('refuses malformed and schema-incompatible worktree markers', async () => {
     await mkdir(join(repoRoot, '.pipeline'), { recursive: true });
     await writeFile(join(repoRoot, '.pipeline', 'engineer-run.json'), '{broken', 'utf-8');
-    await expect(readEngineerRunMarker(repoRoot)).rejects.toThrow(/malformed/i);
+    await assert.rejects(readEngineerRunMarker(repoRoot), /malformed/i);
     await writeFile(join(repoRoot, '.pipeline', 'engineer-run.json'), JSON.stringify({ schemaVersion: 2 }), 'utf-8');
-    await expect(readEngineerRunMarker(repoRoot)).rejects.toThrow(/schema/i);
+    await assert.rejects(readEngineerRunMarker(repoRoot), /schema/i);
   });
 
-  it('retains old uncommissioned worktrees with no marker as a supported path', async () => {
-    expect(await readEngineerRunMarker(repoRoot)).toBeNull();
+  void it('retains old uncommissioned worktrees with no marker as a supported path', async () => {
+    assert.equal(await readEngineerRunMarker(repoRoot), null);
     const store = new EngineerRunStore({ engineerDir, events: new ConductorEventEmitter() });
-    await expect(store.inspectCorrelation({ repoRoot, correlationId: 'missing' })).resolves.toEqual([]);
+    assert.deepEqual(await store.inspectCorrelation({ repoRoot, correlationId: 'missing' }), []);
   });
 
-  it('persists exact handoff and terminal events before worktree cleanup', async () => {
+  void it('persists exact handoff and terminal events before worktree cleanup', async () => {
     const events = new ConductorEventEmitter();
     const store = new EngineerRunStore({ engineerDir, events });
     const run = await store.create({ repoRoot, idea: 'x' });
@@ -241,7 +260,7 @@ describe('Engineer lifecycle CLI', () => {
       outcome: 'pr_opened',
       cleanup: async () => {
         const replay = await store.replay(run.engineerRunId, 0);
-        expect(replay.slice(-2).map((event) => event.type)).toEqual([
+        assert.deepEqual(replay.slice(-2).map((event) => event.type), [
           'engineer_spec_handoff',
           'engineer_run_settled',
         ]);
@@ -250,11 +269,14 @@ describe('Engineer lifecycle CLI', () => {
       },
     });
 
-    expect(result.cleanupError).toBeNull();
-    expect(result.persistenceError).toBeNull();
-    expect(persistedBeforeCleanup).toBe(true);
-    await expect(readFile(worktree, 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await store.inspectRun(run.engineerRunId)).toMatchObject({
+    assert.equal(result.cleanupError, null);
+    assert.equal(result.persistenceError, null);
+    assert.equal(persistedBeforeCleanup, true);
+    await assert.rejects(
+      readFile(worktree, 'utf-8'),
+      (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT',
+    );
+    assert.partialDeepStrictEqual(await store.inspectRun(run.engineerRunId), {
       state: 'settled',
       handoff: {
         planSlug: 'exact-plan',
@@ -265,7 +287,7 @@ describe('Engineer lifecycle CLI', () => {
     });
   });
 
-  it('retains the worktree and resumes an interrupted durable handoff finalization', async () => {
+  void it('retains the worktree and resumes an interrupted durable handoff finalization', async () => {
     const store = new EngineerRunStore({ engineerDir, events: new ConductorEventEmitter() });
     const run = await store.create({ repoRoot, idea: 'x' });
     await store.record(run.engineerRunId, { kind: 'run_started' });
@@ -283,10 +305,10 @@ describe('Engineer lifecycle CLI', () => {
       planSlug: 'exact-plan',
       branch: 'spec/exact-plan',
     };
-    const cleanup = vi.fn(async () => {});
+    const cleanup = mock.fn(async () => {});
     const originalRecord = store.record.bind(store);
     let recordCalls = 0;
-    const recordSpy = vi.spyOn(store, 'record').mockImplementation(async (...args) => {
+    const recordSpy = mock.method(store, 'record', async (...args: Parameters<EngineerRunStore['record']>) => {
       recordCalls += 1;
       if (recordCalls === 2) throw new Error('durable store unavailable');
       return originalRecord(...args);
@@ -299,15 +321,16 @@ describe('Engineer lifecycle CLI', () => {
       outcome: 'pr_opened',
       cleanup,
     });
-    expect(interrupted.persistenceError).toMatchObject({ message: 'durable store unavailable' });
-    expect(interrupted.cleanupError).toBeNull();
-    expect(cleanup).not.toHaveBeenCalled();
-    expect(await store.inspectRun(run.engineerRunId)).toMatchObject({
+    assert.ok(interrupted.persistenceError instanceof Error);
+    assert.equal(interrupted.persistenceError.message, 'durable store unavailable');
+    assert.equal(interrupted.cleanupError, null);
+    assert.equal(cleanup.mock.callCount(), 0);
+    assert.partialDeepStrictEqual(await store.inspectRun(run.engineerRunId), {
       state: 'awaiting_spec_merge',
       handoff: { planSlug: 'exact-plan', branch: 'spec/exact-plan' },
     });
 
-    recordSpy.mockRestore();
+    recordSpy.mock.restore();
     const resumed = await persistEngineerHandoffBeforeCleanup({
       store,
       marker,
@@ -315,8 +338,8 @@ describe('Engineer lifecycle CLI', () => {
       outcome: 'pr_opened',
       cleanup,
     });
-    expect(resumed).toEqual({ persistenceError: null, cleanupError: null });
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(await store.inspectRun(run.engineerRunId)).toMatchObject({ state: 'settled' });
+    assert.deepEqual(resumed, { persistenceError: null, cleanupError: null });
+    assert.equal(cleanup.mock.callCount(), 1);
+    assert.partialDeepStrictEqual(await store.inspectRun(run.engineerRunId), { state: 'settled' });
   });
 });

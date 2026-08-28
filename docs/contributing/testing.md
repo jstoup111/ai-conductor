@@ -21,7 +21,8 @@ Run everything from `src/conductor` unless stated otherwise.
 | --- | --- |
 | Install dependencies | `cd src/conductor && npm ci` |
 | Full suite (what CI runs) | `cd src/conductor && npm test` |
-| One file while authoring | `cd src/conductor && npm test -- test/<path>.test.ts` |
+| One Vitest file while authoring | `cd src/conductor && npm test -- test/<path>.test.ts` |
+| Engineer lifecycle CLI (`node:test`) | `cd src/conductor && npm run test:node` |
 | Watch mode | `cd src/conductor && npm run test:watch` |
 | Type check (`src/` only) | `cd src/conductor && npm run typecheck` |
 | Type check including `test/` | `cd src/conductor && npm run typecheck:test` |
@@ -31,18 +32,27 @@ Run everything from `src/conductor` unless stated otherwise.
 | Build the engine | `cd src/conductor && npm run build` |
 | Structural integrity of the repo | `bash test/test_harness_integrity.sh` (from the repo root) |
 
-From the repository root, `make check` runs both TypeScript checks above.
+From the repository root, `make check` installs the lockfile-pinned Conductor dependencies when they
+are missing or stale, then runs both TypeScript checks above.
 
 `npm test` expands to:
 
 ```bash
-node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'
+node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 &&
+npm run test:node &&
+node scripts/run-vitest.mjs run --config vitest.signal.config.ts --reporter=dot --slowTestThreshold=1800000 &&
+echo 'AGGREGATE_TEST_SUITE_PASS'
 ```
 
 `AGGREGATE_TEST_SUITE_PASS` is a human-readable shell success indicator. The pre-SHIP `test_suite`
 gate classifies the aggregate command's exit code and records its evidence; it does not inspect this
 sentinel. The package script is also the containment boundary that creates the run-scoped temp root
 before Vitest loads, so use `npm test -- <selectors>` rather than invoking `vitest run` directly.
+
+New Engineer lifecycle CLI behavior tests use `node:test` with `node:assert/strict` and live directly
+under `test/`. `vitest.config.ts` excludes that file to prevent dual discovery, while the no-argument
+`npm test` aggregate runs it between the main Vitest suite and the signal suite. Use `npm run test:node`
+for a focused run.
 
 ### The engine-dist guard
 
@@ -161,9 +171,9 @@ failing in groups but passing in isolation.
 
 ## Test tiers
 
-585 `*.test.ts` files under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` and excludes
-`test/smoke/**` and `**/*.smoke.test.ts` (`src/conductor/vitest.config.ts:5-6`), so every tier below
-except smoke runs under a bare `npm test`.
+Test files live under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` except smoke paths and
+the flat `node:test` Engineer lifecycle CLI suite. The aggregate `npm test` command runs both test
+runners, so every tier below except smoke remains part of the default gate.
 
 | Directory | Files | Covers | Run just this tier |
 | --- | --- | --- | --- |
