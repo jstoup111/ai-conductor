@@ -391,6 +391,9 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'feature_complete':
         this.spanManager.onFeatureComplete(event);
         break;
+      case 'loop_halt':
+        this.spanManager.onLoopHalt(event);
+        break;
       case 'build_progress':
         this.spanManager.onBuildProgress(event);
         break;
