@@ -40,6 +40,12 @@ function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & { owner: string 
     return Object.assign(new Error(`missing ${path}`), { code: 'ENOENT' });
   }
 
+  // A real filesystem refuses to create a file inside a directory that does not
+  // exist. Modelling that is what makes a lease released mid-recovery observable.
+  function requireParentDirectory(path: string): void {
+    if (!directories.has(path.slice(0, path.lastIndexOf('/')))) throw missing(path);
+  }
+
   return {
     get owner(): string | undefined {
       return [...files.entries()].find(([path]) => path.endsWith('/owner.json'))?.[1];
@@ -49,6 +55,7 @@ function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & { owner: string 
       directories.add(path);
     },
     async writeOwner(path, contents): Promise<void> {
+      requireParentDirectory(path);
       if (files.has(path)) throw alreadyExists();
       files.set(path, contents);
     },
@@ -58,6 +65,7 @@ function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & { owner: string 
       return owner;
     },
     async writeRecoveryClaim(path, contents): Promise<void> {
+      requireParentDirectory(path);
       if (files.has(path)) throw alreadyExists();
       files.set(path, contents);
     },
@@ -152,6 +160,49 @@ describe('conduct-state lease', () => {
       ownerPid: 101,
     }]);
     if (recovered.ok) await expect(recovered.handle.release()).resolves.toEqual({ ok: true });
+  });
+
+  it('retries a lease its owner released while recovery was probing liveness', async () => {
+    const statePath = '/worktree/vanishing/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'departing-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    // The owner finishes and removes the lease directory in the window between
+    // the recovering process reading owner.json and writing its recovery claim,
+    // by which time that owner's pid no longer resolves. Two concurrent intake
+    // ledger writers produce exactly this ordering under load.
+    let ownerHasReleased = false;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async readOwner(path): Promise<string> {
+        const owner = await shared.readOwner(path);
+        if (!ownerHasReleased) {
+          ownerHasReleased = true;
+          await held.handle.release();
+        }
+        return owner;
+      },
+    };
+    const diagnostics: unknown[] = [];
+
+    const acquired = await createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      pid: 202,
+      newToken: () => 'next-owner',
+      processIsLive: () => false,
+      onRecoveryDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    }).acquire();
+
+    expect(acquired).toMatchObject({ ok: true });
+    expect(shared.owner).toContain('next-owner');
+    expect(diagnostics).toEqual([]);
+    if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
   });
 
   it('names a labelled store in acquire failures and recovery diagnostics', async () => {
