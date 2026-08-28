@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-28T02:01:01.386Z
 Slug: coherence-artifact-passes-engineer-land-then-block
 Class: needs-human
 Halting step: prd_audit
