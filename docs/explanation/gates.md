@@ -124,7 +124,6 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `build` | tasks reported complete without work — task rows are re-seeded and re-derived from the plan each evaluation, so a forged row fails; a task carrying `Done when:` checks additionally must show each check true before it closes, and a check the approved plan cannot make true is reported as a plan gap rather than repaired off-plan |
 | `acceptance_specs` | acceptance specs that never ran — proof is required that this feature's specs executed *and failed*, so a collection error or a skipped spec cannot pass for RED |
 | `build_review` | an incomplete build — a container of individually opt-in rubrics (currently only `testQuality`, off by default) judged from the diff rather than self-reports; an empty rubric set is a PASS with nothing dispatched |
-| `wiring_check` | no active check — a deprecated compatibility step retained so existing state, config, and prerequisites continue to resolve |
 | `test_suite` | a stale green — the fingerprint is re-inspected every time, so the evidence file's existence can never satisfy it |
 | `manual_test` | a whitewashed retest — after a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
 | `prd_audit` | a partial or malformed audit report passing as complete — exactly one graded verdict row (`PASS`, `FIXABLE`, `PLAN_GAP`, or `OVER_SCOPE`) is required for every acceptance criterion across the feature's stories; a `FIXABLE` naming no plan task blocks. A finding without an owning criterion is a unique `NC.<n>` `OVER_SCOPE` row in `## Findings without an owning criterion`; its visible-scope operator decision is valid only for the same evidence summary. Invalid or duplicate rows are rejected individually while valid siblings remain routable, but any rejected row blocks with its diagnostic. Only the `## Verdict Table` section's story rows count as verdicts, so a prior-cycle history table cannot block an all-`PASS` audit. An unresolvable or unreadable criterion set also blocks fail-closed |
@@ -167,11 +166,9 @@ the ordinary fast path for a current proof.
 
 ### BUILD-verification round authority
 
-`wiring_check` and `test_suite` remain the BUILD-verification group for topology compatibility.
-`wiring_check` is a deprecated no-op; only `test_suite` performs an active verification. After BUILD
-is repaired, the next round re-dispatches every non-skipped member; a satisfied gate verdict on disk
-never skips a member by itself. The group's current join is the sole authority that marks a member
-satisfied for that round.
+`test_suite` is the sole BUILD verifier. After BUILD is repaired, it re-inspects the current suite
+evidence; a satisfied gate verdict on disk never skips that verification by itself. Its current
+result is the sole authority that marks the verifier satisfied for that round.
 
 ### Land-time gates
 

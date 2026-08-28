@@ -9,7 +9,7 @@ nav_order: 8
 The complete step vocabulary the engine executes: names, order, phase, enforcement, skip rules,
 artifacts, and the skill each step dispatches. These names are what `conduct-ts inline --from <step>` accepts.
 
-There are 26 step names: 22 sequential steps in `ALL_STEPS` and 4 out-of-band steps in
+There are 25 step names: 21 sequential steps in `ALL_STEPS` and 4 out-of-band steps in
 `OUT_OF_BAND_STEPS`. `validation` and `build_verification` are step *groups* wrapping existing steps,
 not steps themselves — neither can be passed to `--from`.
 
@@ -24,7 +24,7 @@ whether the step can be skipped and whether it can be disabled by config.
 | Level | Can be skipped | Can be config-disabled | Used by |
 | --- | --- | --- | --- |
 | `advisory` | Yes | Yes | `memory`, `explore`, `complexity`, `architecture_diagram`, `architecture_review`, and all four out-of-band steps |
-| `gating` | No | Only with `configDisableAllowed` | `prd`, `stories`, `conflict_check`, `plan`, `coherence_check`, `acceptance_specs`, `build_review`, `wiring_check`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
+| `gating` | No | Only with `configDisableAllowed` | `prd`, `stories`, `conflict_check`, `plan`, `coherence_check`, `acceptance_specs`, `build_review`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
 | `structural` | No | Never — the flag is ignored entirely | `worktree`, `build`, `rebase` |
 | `mechanical` | — | — | Nothing. The level is declared in the type union but no step definition uses it. |
 
@@ -34,7 +34,7 @@ mechanism and apply to gating steps too. For what a gate *is* and why it fails c
 
 ## Sequential steps
 
-The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track exclusions; see
+The 20 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track exclusions; see
 [Tier skips](#tier-skips) and [Track skips](#track-skips).
 
 | # | Step | Phase | Enforcement | Prerequisites | Skips | Dispatches |
@@ -52,21 +52,19 @@ The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 | 10 | `coherence_check` | DECIDE | gating | `plan` | tier S | `/coherence-check` |
 | 11 | `acceptance_specs` | BUILD | gating | `plan` | tier S | `/writing-system-tests` |
 | 12 | `build` | BUILD | structural | `plan` | — | `/pipeline` |
-| 13 | `wiring_check` | BUILD | gating | `build` | — | engine-native |
-| 14 | `test_suite` | BUILD | gating | `build` | — | engine-native |
-| 15 | `build_review` | BUILD | gating | `wiring_check`, `test_suite` | — | engine-native |
-| 16 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
-| 17 | `prd_audit` | SHIP | gating | `manual_test` | — (runs at every tier and on both tracks; trivially passes when a feature has no acceptance criteria to grade) | `/prd-audit` |
-| 18 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | — (runs at every tier; individual checks are conditional on tier and artifact presence, see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict)) | `/architecture-review --as-built` |
-| 19 | `rebase` | SHIP | structural | `architecture_review_as_built` | — | native; `/rebase` only on conflict |
-| 20 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
+| 13 | `test_suite` | BUILD | gating | `build` | — | engine-native |
+| 14 | `build_review` | BUILD | gating | `test_suite` | — | engine-native |
+| 15 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
+| 16 | `prd_audit` | SHIP | gating | `manual_test` | — (runs at every tier and on both tracks; trivially passes when a feature has no acceptance criteria to grade) | `/prd-audit` |
+| 17 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | — (runs at every tier; individual checks are conditional on tier and artifact presence, see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict)) | `/architecture-review --as-built` |
+| 18 | `rebase` | SHIP | structural | `architecture_review_as_built` | — | native; `/rebase` only on conflict |
+| 19 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
 
-Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 5, SHIP 6.
+Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 4, SHIP 5.
 
-`wiring_check` is deprecated. It remains a gating, engine-native no-op solely for compatibility: it
-always succeeds, dispatches no agent, produces no evidence, and emits a deprecation notice. Static
-wiring reachability is retired. `build_review` fans out to Tautology, Scope, Root Cause, and
-Completeness, then computes effective dispositions from their raw verdicts.
+`test_suite` is the sole engine-native BUILD verifier. Static wiring reachability is retired.
+`build_review` fans out to Tautology, Scope, Root Cause, and Completeness, then computes effective
+dispositions from their raw verdicts.
 
 ### Retiring a step safely
 
@@ -145,12 +143,9 @@ only the loop thread does, after every branch settles.
 
 ## The build verification group
 
-`build_verification` is a `StepGroup` over `wiring_check` and `test_suite`. It retains both names so
-existing state and prerequisites resolve, but only `test_suite` is active: `wiring_check` is the
-deprecated no-op described above. The members fan out after `build` and join before `build_review`.
-After a BUILD repair, the next round dispatches every non-skipped member; `test_suite` reuses a
-matching content fingerprint or derives a fresh suite result. Reuse does not consume retry or
-kickback budget.
+`test_suite` is the sole BUILD verifier. It runs after `build` and before `build_review`. After a
+BUILD repair, it reuses a matching content fingerprint or derives a fresh suite result. Reuse does
+not consume retry or kickback budget.
 
 ## Tier skips
 
@@ -165,7 +160,7 @@ Tier S skips 7 steps. Tiers M and L skip none.
 Tier S additionally disengages the land-time coherence gate entirely.
 
 Steps that are **not** tier-skippable at any tier include the whole BUILD spine — `build`,
-`build_review`, `wiring_check`, `test_suite` — plus `plan`, `stories`, `prd`, `rebase`, `finish`,
+`build_review`, `test_suite` — plus `plan`, `stories`, `prd`, `rebase`, `finish`,
 `prd_audit`, and `architecture_review_as_built`. The latter two used to tier-skip at S; they now run at
 every tier, with only their individual checks (as-built) or applicability (whether any acceptance
 criterion changed, `prd_audit`) conditional — see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict).
@@ -239,7 +234,6 @@ detail.
 | `acceptance_specs` | spec files in the project's test dirs, plus `.pipeline/acceptance-specs-red.json` | specs yes, evidence no | At least one spec file **and** RED evidence proving the feature's own specs ran and failed. A spec that was skipped, deselected, or hit a collection error does not establish RED |
 | `build` | `.pipeline/task-status.json` | no | No `.pipeline/halt-user-input-required` marker, every task completed or skipped, **and** a clean working tree whenever the status probe establishes one. The post-rebase closure applies the same conjunct: a reapplied autostash blocks BUILD until the named paths are committed or discarded. An absent or failed probe fails open to the legacy behavior. Task status is re-seeded and re-derived on each evaluation, so forged rows fail |
 | `build_review` | `.pipeline/build-review.json` | no | A fresh, valid `PASS` verdict from the enabled rubric set (currently only `testQuality`, off by default — an empty enabled set is a vacuous `PASS`). Missing, prior-session, malformed, or effective `FAIL` all block. Raw outcomes remain recorded; effective dispositions control routing. |
-| `wiring_check` | — | no | Deprecated no-op; always satisfied for compatibility and emits a deprecation notice. It does not inspect plans, diffs, or evidence. |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | no | A live re-inspection returning `CURRENT`. File presence alone can never satisfy this gate |
 | `manual_test` | `.pipeline/manual-test-results.md` | no | The latest attempt section has no FAIL rows and is fresh. `WARN` rows record unavailable browser capability without blocking. After a recorded FAIL, HEAD must have moved before a later FAIL-free attempt is accepted |
 | `prd_audit` | `.pipeline/prd-audit.md` | no | Fresh audit with exactly one graded verdict row — `PASS`, `FIXABLE`, `PLAN_GAP`, or `OVER_SCOPE` — for every acceptance criterion across the feature's stories; a `FIXABLE` row must name its owning plan task. A no-owner finding belongs in `## Findings without an owning criterion` as one unique `NC.<n>` `OVER_SCOPE` row; an `outside-visible` finding blocks until the operator decides it, and that decision binds to its evidence summary. A missing, invalid, or duplicate row blocks with a diagnostic. Verdict rows are read only from the `## Verdict Table` section when the report carries that heading, so a narrative table elsewhere (e.g. a prior-cycle history table) cannot be read as a current verdict; a report without the heading is scanned whole. An unresolvable or unreadable criterion set blocks fail-closed |
@@ -268,7 +262,7 @@ registry:
 conduct-ts inline "<feature description>" --from build
 ```
 
-Accepted values are the 22 sequential step names above, in underscore form, plus any custom step name
+Accepted values are the 21 sequential step names above, in underscore form, plus any custom step name
 inserted through the `steps` config key. There is no dash normalization in the engine — `--from
 conflict-check` is not the same string as `conflict_check`.
 
@@ -281,11 +275,10 @@ conflict-check` is not the same string as `conflict_check`.
 Dispatch reads a single map keyed by step name. That map is the authority for what a step invokes; the
 `skillName` field on the step definition is not consulted at dispatch time.
 
-Four steps dispatch no skill at all and run entirely in the engine: `build_review`, `wiring_check`,
-`test_suite`, and `attribution_verify`. Of these, `build_review` dispatches its registered rubric set
-(currently only `testQuality`) and `attribution_verify` dispatches its own attribution-audit logic, both
-from engine code; `test_suite` is a deterministic aggregate verifier; and `wiring_check` is a deprecated
-compatibility no-op.
+Three steps dispatch no skill at all and run entirely in the engine: `build_review`, `test_suite`,
+and `attribution_verify`. Of these, `build_review` dispatches its registered rubric set (currently
+only `testQuality`) and `attribution_verify` dispatches its own attribution-audit logic, both from
+engine code; `test_suite` is a deterministic aggregate verifier.
 
 Two steps dispatch the `conduct` skill with an argument rather than a skill of their own name:
 `worktree` runs `/conduct worktree` and `complexity` runs `/conduct complexity`.

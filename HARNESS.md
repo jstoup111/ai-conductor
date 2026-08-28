@@ -54,7 +54,7 @@ UNDERSTAND → DECIDE → BUILD(engine-native configured-verifier gate) → ✓c
 
 In daemon/auto runs the three SHIP validators (manual-test, prd-audit,
 architecture-review --as-built) execute as one **concurrent validation group** after the
-build gates (deprecated `wiring_check` + test_suite → build_review), fan-out capped by `validation_concurrency`
+build gates (`test_suite` → build_review), fan-out capped by `validation_concurrency`
 with a single-writer join; interactive runs keep the serial sequence and checkpoints
 shown above.
 

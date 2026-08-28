@@ -283,7 +283,6 @@ Every pattern declares one lifecycle scope:
 | `acceptance_specs` | 15 stack-convention test globs — `spec/acceptance/**/*`, `spec/requests/**/*`, `spec/system/**/*`, `test/acceptance/**/*`, `test/**/*`, `tests/**/*`, `__tests__/**/*`, and `*.{test,spec}.{js,ts,jsx,tsx}` — plus any `acceptance_spec_globs` the project declares | repository |
 | `build` | `.pipeline/task-status.json` | run |
 | `build_review` | `.pipeline/build-review.json` | run |
-| `wiring_check` | *(none; deprecated compatibility no-op)* | — |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | run |
 | `manual_test` | `.pipeline/manual-test-results.md` | run |
 | `prd_audit` | `.pipeline/prd-audit.md` | run |
@@ -316,7 +315,7 @@ corpus for callers that explicitly want it, and the primitive `resolveArtifactFi
 internally. See `adr-2026-07-28-feature-aware-artifact-resolution` for the full design rationale.
 
 The SHIP-tail verdict artifacts (`manual_test`, `prd_audit`, `architecture_review_as_built`,
-`build_review`, `wiring_check`, `test_suite`) live in gitignored `.pipeline/` deliberately. They are
+`build_review`, `test_suite`) live in gitignored `.pipeline/` deliberately. They are
 regenerated every run; committing them caused date-stamp sprawl, rebase and merge conflicts, and
 dirty-tree HALTs at the finish-time rebase.
 
@@ -434,9 +433,8 @@ Agent-authored, engine-validated. Alphabetized.
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
 | `test-suite-evidence.json` | Version 3. PASS: `{ version, outcome: 'PASS', reason: 'exit_zero', fingerprint, categoryFingerprints, provenanceHeadSha, worktreeClean?: boolean, command, workingDirectory, startedAt, endedAt, durationMs, exitCode: 0, stdout, stderr }`. FAIL adds a `signal` discriminant and one of nine `reason` values. Diagnostics truncate at 16384 bytes | `full-suite-evidence.ts` |
 | `version-signal.json` | `{ verdict, level, files, classifiedAt }` — the PATCH auto-pass audit | `self-host/version-gate.ts` |
-In a post-repair BUILD-verification round, `wiring_check` still runs only to preserve compatibility
-and emits its deprecation notice. The active `test_suite` member reuses only matching content
-fingerprints; the round join, not a file left on disk, decides whether it is satisfied.
+In a post-repair BUILD-verification round, `test_suite` reuses only matching content fingerprints;
+the current verifier result, not a file left on disk, decides whether it is satisfied.
 
 All of these are ephemeral. Losing one re-runs its step; none of them is the durable record of anything.
 
