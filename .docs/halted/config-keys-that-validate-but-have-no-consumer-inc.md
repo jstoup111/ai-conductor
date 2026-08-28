@@ -1,21 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-08-28T12:31:59.591Z
+Status: halted
 Slug: config-keys-that-validate-but-have-no-consumer-inc
-Class: protected-artifact
-Halting step: test_suite
-Phase: BUILD
+Class: plan-gap
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-config-keys-that-validate-but-have-no-consumer-inc
-Head SHA: 6bcc76bbd73848f885b4d07250b3c8c24c11feaf
-Halted at: 2026-08-28T12:13:51.504Z
+Head SHA: 0d4b894acb63b7c72ebaf7c9b4e8629b555ac5e4
+Halted at: 2026-08-28T12:54:55.854Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Protected artifact changed: .docs/architecture/config-keys-that-validate-but-have-no-consumer-inc.md
-Feature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.
+Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
 ```
