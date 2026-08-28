@@ -48,7 +48,7 @@ import {
   planStem,
   validateFeatureArtifactStems,
 } from '../artifacts.js';
-import type { StepName } from '../../types/index.js';
+import type { ComplexityTier, StepName, Track } from '../../types/index.js';
 import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
@@ -90,12 +90,16 @@ export interface LandSpecOptions {
    * browser.
    */
   renderDeps?: Pick<RenderDeps, 'hasTool' | 'runMmdc' | 'writeTemp'>;
+  /** Require the track and tier markers needed for exact lifecycle reconciliation. */
+  requireLifecycleReconciliation?: boolean;
 }
 
 export interface LandSpecResult {
   slug: string;
   branch: string;
   repoPath: string;
+  track: Track;
+  tier?: ComplexityTier;
 }
 
 // ── Implementation ────────────────────────────────────────────────────────────
@@ -215,6 +219,11 @@ export async function landSpec(
   const trackDir = join(worktreePath, '.docs', 'track');
   const trackFile = await pickIdeaFile(trackDir, ideaFiles);
   const track = parseTrack(trackFile ? await readFile(trackFile, 'utf-8') : null) ?? 'product';
+  if (opts.requireLifecycleReconciliation && !trackFile) {
+    throw new Error(
+      'landSpec: lifecycle-enabled Engineer run requires an idea-scoped track marker before landing',
+    );
+  }
   const specRequired = track === 'product';
 
   // 4. C2: require stories + plan always; spec only on the product track.
@@ -315,6 +324,11 @@ export async function landSpec(
   const tier = complexityFile
     ? parseComplexityTier(await readFile(complexityFile, 'utf-8'))
     : undefined;
+  if (opts.requireLifecycleReconciliation && !tier) {
+    throw new Error(
+      'landSpec: lifecycle-enabled Engineer run requires a valid idea-scoped complexity tier before landing',
+    );
+  }
 
   let conflictsFile: string | null = null;
   if (tier && tier !== 'S') {
@@ -495,7 +509,7 @@ export async function landSpec(
     { cwd: worktreePath, env: withEngineCommitEnv() },
   );
 
-  return { slug, branch, repoPath: worktreePath };
+  return { slug, branch, repoPath: worktreePath, track, ...(tier ? { tier } : {}) };
 }
 
 // ── Idea-scoped attribution (foundational helper; wired in later tasks) ───────

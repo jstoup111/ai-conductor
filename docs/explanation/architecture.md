@@ -24,6 +24,19 @@ The split that matters most: **the engine decides whether a step is done; the ho
 work should be.** A host agent writes an artifact; the engine reads that artifact off disk and computes the
 verdict itself. It does not ask the agent how it went. See [evidence-model](evidence-model.md) for why.
 
+### One event spine, two durable run scopes
+
+Implementation runs retain their existing event path and worktree journal:
+`ConductorEventEmitter` to `EventPersister` to `<worktree>/.pipeline/events.jsonl`, with registered
+visualizers observing the same emitter. Engineer authoring uses the same event types, emitter,
+persister, and visualizer lifecycle, but routes its journal to durable Engineer state at
+`$AI_CONDUCTOR_ENGINEER_DIR/lifecycle/runs/<engineerRunId>/events.jsonl`. The separate storage scope is
+required because successful spec handoff removes the authoring worktree.
+
+This is one telemetry spine, not a second event bus. Product integrations consume the generic event
+family and own their projections outside core. Core does not know task ids, UI state, HTTP routes, or a
+consumer's correlation meaning. Existing BUILD and SHIP events are unchanged.
+
 ## What the engine owns
 
 The engine is a state machine over an ordered step list, plus a gate loop. Concretely it owns:

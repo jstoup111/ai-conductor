@@ -8,7 +8,7 @@
 // loadConfig → landSpec) with an injected gh (no network) and assert the marker.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -18,7 +18,10 @@ import {
   type DispatchEngineerOpts,
 } from '../../../src/engine/engineer-cli.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import { writeEngineerRunMarker } from '../../../src/engine/engineer/run-marker.js';
+import { EngineerRunStore } from '../../../src/engine/engineer/run-store.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCb);
 
@@ -323,6 +326,52 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     expect(marker).toContain('Owner: bob');
 
     await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('keeps a committed land successful and actionable when lifecycle reconciliation fails afterward', async () => {
+    await writeFile(join(repoPath, '.git', 'info', 'exclude'), '.pipeline/\n');
+    const worktree = await seedWorktree();
+    await mkdir(join(worktree, '.docs', 'track'), { recursive: true });
+    await mkdir(join(worktree, '.docs', 'complexity'), { recursive: true });
+    await writeFile(join(worktree, '.docs', 'track', 'dep-bump.md'), '# Track\n\nTrack: product\n');
+    await writeFile(join(worktree, '.docs', 'complexity', 'dep-bump.md'), '# Complexity\n\nTier: S\n');
+
+    const store = new EngineerRunStore({ engineerDir, events: new ConductorEventEmitter() });
+    const run = await store.create({ repoRoot: repoPath, idea: 'dep bump', attemptKey: 'land-attempt' });
+    await store.record(run.engineerRunId, { kind: 'run_started' });
+    await store.record(run.engineerRunId, { kind: 'run_failed', error: 'host stopped before reconciliation' });
+    await writeEngineerRunMarker(worktree, {
+      schemaVersion: 1,
+      engineerRunId: run.engineerRunId,
+      repoRoot: repoPath,
+      planSlug: 'dep-bump',
+      branch: 'spec/dep-bump',
+    });
+    const headBefore = await git(['rev-parse', 'HEAD'], worktree);
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+
+    try {
+      await withHome(fakeHome, async () => {
+        const { out, err, opts } = captureOpts({
+          gh: async () => ({ stdout: 'bob\n' }),
+        });
+
+        const code = await dispatchEngineer(
+          { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
+          opts,
+        );
+
+        expect(code, err.join('\n')).toBe(0);
+        expect(JSON.parse(out.at(-1)!)).toMatchObject({ slug: 'dep-bump', branch: 'spec/dep-bump' });
+        expect(await git(['rev-parse', 'HEAD'], worktree)).not.toBe(headBefore);
+        await expect(access(worktree)).resolves.toBeUndefined();
+        expect(err.join('\n')).toContain('Spec artifacts were committed to spec/dep-bump');
+        expect(err.join('\n')).toContain(`worktree "${worktree}" was retained`);
+        expect(err.join('\n')).toContain('rerun engineer land before handoff');
+      });
+    } finally {
+      await rm(fakeHome, { recursive: true, force: true });
+    }
   });
 
   // REMOVED: Interim test for un-owned stamp behavior (now throws fail-closed per Story 2).

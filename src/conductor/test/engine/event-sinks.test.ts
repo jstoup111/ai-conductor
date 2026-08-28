@@ -61,6 +61,24 @@ const BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES = [
   'build_member_evidence_recomputed',
 ] satisfies Array<ConductorEvent['type']>;
 
+const ENGINEER_LIFECYCLE_EVENT_TYPES = [
+  'engineer_run_created',
+  'engineer_run_started',
+  'engineer_routing_selected',
+  'engineer_worktree_created',
+  'engineer_step_started',
+  'engineer_step_completed',
+  'engineer_step_failed',
+  'engineer_step_retried',
+  'engineer_step_skipped',
+  'engineer_land_reconciled',
+  'engineer_land_refused',
+  'engineer_spec_handoff',
+  'engineer_run_cancelled',
+  'engineer_run_failed',
+  'engineer_run_settled',
+] satisfies Array<ConductorEvent['type']>;
+
 const REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES = [
   'remediation_sealed_artifact_redirect',
 ] satisfies Array<ConductorEvent['type']>;
@@ -110,6 +128,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 // This is deliberately an exact set rather than a volume count: a newly-persisted
 // non-halt event must update this contract explicitly.
 const PINNED_PERSISTED_EVENT_TYPES = [
+  ...ENGINEER_LIFECYCLE_EVENT_TYPES,
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'operator_rewind',

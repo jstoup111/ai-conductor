@@ -35,6 +35,7 @@ export class EventPersister {
   private readonly emitter: ConductorEventEmitter;
   private readonly handler: EventHandler;
   private readonly clock: IntervalClock;
+  private readonly filter: ((event: ConductorEvent) => boolean) | undefined;
   private readonly openSteps = new Map<string, number>();
   private readonly openGroups = new Map<string, number>();
   private dirEnsured = false;
@@ -43,13 +44,20 @@ export class EventPersister {
     filePath: string,
     emitter: ConductorEventEmitter,
     clock: IntervalClock = epochAnchoredMonotonicClock,
+    filter?: (event: ConductorEvent) => boolean,
   ) {
     this.filePath = filePath;
     this.emitter = emitter;
     this.clock = clock;
+    this.filter = filter;
 
-    this.handler = (event: ConductorEvent): void => {
-      this.persist(event);
+    this.handler = (event: ConductorEvent): ReturnType<EventHandler> => {
+      if (this.filter && !this.filter(event)) return;
+      // The emitter can only enforce durable-before-success semantics when the
+      // subscriber returns the persistence operation it started. The current
+      // file appender is synchronous, but retaining this return is required for
+      // asynchronous appenders and test adapters.
+      return this.persist(event);
     };
   }
 

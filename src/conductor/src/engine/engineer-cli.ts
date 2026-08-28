@@ -37,6 +37,15 @@ import {
   removeEngineerWorktree,
 } from './engineer/worktree-authoring.js';
 import { recordAuthoredKey } from './engineer/authored-ledger.js';
+import {
+  ENGINEER_LIFECYCLE_CAPABILITY,
+  EngineerLifecycleError,
+  EngineerRunStore,
+  type EngineerTransition,
+} from './engineer/run-store.js';
+import { ConductorEventEmitter } from '../ui/events.js';
+import type { EngineerStepName } from '../types/index.js';
+import { readEngineerRunMarker, writeEngineerRunMarker } from './engineer/run-marker.js';
 import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter — the
 // engineer loop must NOT import a concrete adapter (FR-13), but the CLI must.
@@ -105,9 +114,28 @@ export type EngineerDispatch =
   | { kind: 'launch'; idea?: string }
   | { kind: 'guide' }
   | { kind: 'projects' }
-  | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
+  | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string; engineerRunId?: string }
   | { kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
+  | { kind: 'capabilities' }
+  | { kind: 'run-create'; repoRoot: string; idea: string; correlationId?: string; attemptKey?: string }
+  | { kind: 'run-inspect'; runId?: string; repoRoot?: string; correlationId?: string }
+  | { kind: 'run-replay'; runId: string; afterRevision: number }
+  | {
+      kind: 'run-record';
+      runId: string;
+      transition: string;
+      step?: string;
+      completion?: string;
+      provider?: string;
+      model?: string;
+      project?: string;
+      reason?: string;
+      error?: string;
+      artifactPaths?: string[];
+    }
+  | { kind: 'run-cancel'; runId: string; reason: string }
+  | { kind: 'run-fail'; runId: string; error: string }
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string }
@@ -121,7 +149,8 @@ export type EngineerDispatch =
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
   'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
-  'resolve', 'migrate-issue-deps',
+  'resolve', 'migrate-issue-deps', 'capabilities', 'run-create', 'run-inspect', 'run-replay',
+  'run-record', 'run-cancel', 'run-fail',
 ] as const;
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
@@ -173,6 +202,91 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     return { kind: 'projects' };
   }
 
+  if (subCmd === 'capabilities') {
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'capabilities', flag: unk };
+    return { kind: 'capabilities' };
+  }
+
+  if (subCmd === 'run-create') {
+    const repoRoot = parseFlag(argv, '--repo-root');
+    const idea = parseFlag(argv, '--idea');
+    if (!repoRoot || !idea) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--repo-root', '--idea', '--correlation-id', '--attempt-key']);
+    if (unk) return { kind: 'reject', sub: 'run-create', flag: unk };
+    return {
+      kind: 'run-create',
+      repoRoot,
+      idea,
+      correlationId: parseFlag(argv, '--correlation-id') ?? undefined,
+      attemptKey: parseFlag(argv, '--attempt-key') ?? undefined,
+    };
+  }
+
+  if (subCmd === 'run-inspect') {
+    const runId = parseFlag(argv, '--run-id') ?? undefined;
+    const repoRoot = parseFlag(argv, '--repo-root') ?? undefined;
+    const correlationId = parseFlag(argv, '--correlation-id') ?? undefined;
+    if (!runId && !(repoRoot && correlationId)) return { kind: 'guide' };
+    if (runId && (repoRoot || correlationId)) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--run-id', '--repo-root', '--correlation-id']);
+    if (unk) return { kind: 'reject', sub: 'run-inspect', flag: unk };
+    return { kind: 'run-inspect', runId, repoRoot, correlationId };
+  }
+
+  if (subCmd === 'run-replay') {
+    const runId = parseFlag(argv, '--run-id');
+    const rawRevision = parseFlag(argv, '--after-revision');
+    const afterRevision = rawRevision === null ? Number.NaN : Number(rawRevision);
+    if (!runId || !Number.isInteger(afterRevision) || afterRevision < 0) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--run-id', '--after-revision']);
+    if (unk) return { kind: 'reject', sub: 'run-replay', flag: unk };
+    return { kind: 'run-replay', runId, afterRevision };
+  }
+
+  if (subCmd === 'run-record') {
+    const runId = parseFlag(argv, '--run-id');
+    const transition = parseFlag(argv, '--transition');
+    if (!runId || !transition) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, [
+      '--run-id', '--transition', '--step', '--completion', '--provider', '--model', '--project',
+      '--reason', '--error', '--artifact-paths',
+    ]);
+    if (unk) return { kind: 'reject', sub: 'run-record', flag: unk };
+    const rawArtifactPaths = parseFlag(argv, '--artifact-paths');
+    return {
+      kind: 'run-record',
+      runId,
+      transition,
+      step: parseFlag(argv, '--step') ?? undefined,
+      completion: parseFlag(argv, '--completion') ?? undefined,
+      provider: parseFlag(argv, '--provider') ?? undefined,
+      model: parseFlag(argv, '--model') ?? undefined,
+      project: parseFlag(argv, '--project') ?? undefined,
+      reason: parseFlag(argv, '--reason') ?? undefined,
+      error: parseFlag(argv, '--error') ?? undefined,
+      artifactPaths: rawArtifactPaths?.split(',').map((path) => path.trim()).filter(Boolean),
+    };
+  }
+
+  if (subCmd === 'run-cancel') {
+    const runId = parseFlag(argv, '--run-id');
+    const reason = parseFlag(argv, '--reason');
+    if (!runId || !reason) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--run-id', '--reason']);
+    if (unk) return { kind: 'reject', sub: 'run-cancel', flag: unk };
+    return { kind: 'run-cancel', runId, reason };
+  }
+
+  if (subCmd === 'run-fail') {
+    const runId = parseFlag(argv, '--run-id');
+    const error = parseFlag(argv, '--error');
+    if (!runId || !error) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--run-id', '--error']);
+    if (unk) return { kind: 'reject', sub: 'run-fail', flag: unk };
+    return { kind: 'run-fail', runId, error };
+  }
+
   if (subCmd === 'worktree') {
     // `conduct-ts engineer worktree --project <n> --idea "<i>"` — create the per-idea
     // worktree for authoring; prints `{ slug, branch, worktreePath, reconcile }`.
@@ -187,9 +301,10 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     // Absent for human-typed ideas (no staging, no error — Story 1 negative path).
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
     const body = parseFlag(argv, '--body') ?? undefined;
-    const unk = findUnknownFlag(argv, ['--project', '--idea', '--source-ref', '--body']);
+    const engineerRunId = parseFlag(argv, '--engineer-run-id') ?? undefined;
+    const unk = findUnknownFlag(argv, ['--project', '--idea', '--source-ref', '--body', '--engineer-run-id']);
     if (unk) return { kind: 'reject', sub: 'worktree', flag: unk };
-    return { kind: 'worktree', project, idea, sourceRef, body };
+    return { kind: 'worktree', project, idea, sourceRef, body, engineerRunId };
   }
 
   if (subCmd === 'land') {
@@ -437,6 +552,125 @@ function parseFlag(argv: string[], flag: string): string | null {
   return val;
 }
 
+function parseLifecycleTransition(
+  dispatch: Extract<EngineerDispatch, { kind: 'run-record' }>,
+): EngineerTransition {
+  const requireField = (value: string | undefined, flag: string): string => {
+    if (!value?.trim()) {
+      throw new EngineerLifecycleError(
+        'invalid_transition',
+        `Engineer transition ${dispatch.transition} requires ${flag}`,
+      );
+    }
+    return value;
+  };
+  const step = (): EngineerStepName => requireField(dispatch.step, '--step') as EngineerStepName;
+  switch (dispatch.transition) {
+    case 'run_started':
+      return { kind: 'run_started' };
+    case 'routing_selected':
+      return { kind: 'routing_selected', project: requireField(dispatch.project, '--project') };
+    case 'step_started':
+      return {
+        kind: 'step_started',
+        step: step(),
+        ...(dispatch.provider ? { provider: dispatch.provider } : {}),
+        ...(dispatch.model ? { model: dispatch.model } : {}),
+      };
+    case 'step_completed': {
+      const completion = requireField(dispatch.completion, '--completion');
+      if (completion !== 'accepted_result' && completion !== 'artifact_validation') {
+        throw new EngineerLifecycleError(
+          'invalid_completion_evidence',
+          'External Engineer step completion accepts accepted_result or artifact_validation; land_reconciliation is reserved for verified land evidence',
+        );
+      }
+      return {
+        kind: 'step_completed',
+        step: step(),
+        completion,
+        ...(dispatch.artifactPaths ? { artifactPaths: dispatch.artifactPaths } : {}),
+      };
+    }
+    case 'step_failed':
+      return { kind: 'step_failed', step: step(), error: requireField(dispatch.error, '--error') };
+    case 'step_retried':
+      return { kind: 'step_retried', step: step(), reason: requireField(dispatch.reason, '--reason') };
+    case 'step_skipped':
+      return { kind: 'step_skipped', step: step(), reason: requireField(dispatch.reason, '--reason') };
+    case 'run_settled':
+      return { kind: 'run_settled', outcome: 'awaiting_spec_merge' };
+    default:
+      throw new EngineerLifecycleError(
+        'invalid_transition',
+        `Unknown externally recordable Engineer transition ${JSON.stringify(dispatch.transition)}`,
+      );
+  }
+}
+
+function lifecycleLandDisposition(
+  track: 'product' | 'technical',
+  tier: 'S' | 'M' | 'L',
+): { completed: EngineerStepName[]; skipped: EngineerStepName[] } {
+  const completed: EngineerStepName[] = ['explore', 'complexity'];
+  const skipped: EngineerStepName[] = [];
+  if (track === 'product') completed.push('prd');
+  else skipped.push('prd');
+  if (tier === 'S') {
+    skipped.push('architecture_diagram', 'architecture_review', 'conflict_check', 'coherence_check');
+  } else {
+    completed.push('architecture_diagram', 'architecture_review', 'conflict_check');
+  }
+  completed.push('stories', 'plan');
+  if (tier !== 'S') completed.push('coherence_check');
+  return { completed, skipped };
+}
+
+export async function persistEngineerHandoffBeforeCleanup(input: {
+  store: EngineerRunStore;
+  marker: Awaited<ReturnType<typeof readEngineerRunMarker>> & {};
+  prUrl: string | null;
+  outcome: 'pr_opened' | 'local_commit';
+  cleanup: () => Promise<void>;
+}): Promise<{ persistenceError: unknown | null; cleanupError: unknown | null }> {
+  try {
+    let snapshot = await input.store.inspectRun(input.marker.engineerRunId);
+    if (snapshot.handoff === null) {
+      snapshot = await input.store.record(input.marker.engineerRunId, {
+        kind: 'spec_handoff',
+        planSlug: input.marker.planSlug,
+        branch: input.marker.branch,
+        prUrl: input.prUrl,
+        outcome: input.outcome,
+      });
+    } else if (
+      snapshot.handoff.planSlug !== input.marker.planSlug
+      || snapshot.handoff.branch !== input.marker.branch
+      || snapshot.handoff.prUrl !== input.prUrl
+      || snapshot.handoff.outcome !== input.outcome
+    ) {
+      throw new EngineerLifecycleError(
+        'identity_mismatch',
+        `Engineer run ${input.marker.engineerRunId} already records a different spec handoff identity`,
+      );
+    }
+    if (snapshot.state !== 'settled') {
+      await input.store.record(input.marker.engineerRunId, {
+        kind: 'run_settled',
+        outcome: 'awaiting_spec_merge',
+      });
+    }
+  } catch (error) {
+    return { persistenceError: error, cleanupError: null };
+  }
+  try {
+    await input.cleanup();
+    return { persistenceError: null, cleanupError: null };
+  } catch (error) {
+    return { persistenceError: null, cleanupError: error };
+  }
+}
+
 // ── Optional IO/deps injection (for tests) ────────────────────────────────────
 
 /**
@@ -449,6 +683,8 @@ export interface DispatchEngineerOpts {
   registryPath?: string;
   /** Override the engineer dir (for tests). */
   engineerDir?: string;
+  /** Existing event spine used by Engineer lifecycle persistence and visualizers. */
+  events?: ConductorEventEmitter;
   /** Print to stdout (default: process.stdout.write). */
   print?: (s: string) => void;
   /** Print to stderr (default: process.stderr.write). */
@@ -572,6 +808,27 @@ function parseGhRepo(remote: string): string | null {
  * maintenance ops).
  */
 export const SUBCOMMAND_HELP = {
+  capabilities:
+    'engineer capabilities - print machine-readable Engineer lifecycle capabilities.\n' +
+    'Flags: none.\nMutates: nothing (read-only).\nLoop fit: provider capability negotiation.',
+  'run-create':
+    'engineer run-create --repo-root <path> --idea "<text>" [--correlation-id <id>] [--attempt-key <key>] - reserve an Engineer run.\n' +
+    'Mutates: durable Engineer lifecycle metadata and event journal.\nLoop fit: before host launch or worktree creation.',
+  'run-inspect':
+    'engineer run-inspect --run-id <id> OR --repo-root <path> --correlation-id <id> - inspect one run or ordered lineage.\n' +
+    'Mutates: only a recoverable compact snapshot.\nLoop fit: diagnostics and restart recovery.',
+  'run-replay':
+    'engineer run-replay --run-id <id> --after-revision <n> - replay durable events strictly after a run-local revision.\n' +
+    'Mutates: nothing (read-only).\nLoop fit: consumer restart recovery.',
+  'run-record':
+    'engineer run-record --run-id <id> --transition <name> [transition flags] - record a validated host or step transition.\n' +
+    'Mutates: the exact run journal and compact snapshot.\nLoop fit: supported host lifecycle reporting.',
+  'run-cancel':
+    'engineer run-cancel --run-id <id> --reason <text> - terminally cancel one Engineer run.\n' +
+    'Mutates: the exact run journal and compact snapshot.\nLoop fit: operator cancellation.',
+  'run-fail':
+    'engineer run-fail --run-id <id> --error <text> - terminally fail one Engineer run.\n' +
+    'Mutates: the exact run journal and compact snapshot.\nLoop fit: established host failure.',
   projects:
     'engineer projects — list the registered projects from the project registry.\n' +
     'Flags: none.\n' +
@@ -742,6 +999,10 @@ export async function dispatchEngineer(
   const git = opts.git ?? makeProductionGit();
   const registryPath = opts.registryPath;
   const engineerDir = opts.engineerDir;
+  const lifecycleStore = new EngineerRunStore({
+    engineerDir: engineerDir ?? resolveEngineerDir({}),
+    events: opts.events ?? new ConductorEventEmitter(),
+  });
 
   const reportCorruptLedger = (error: CorruptLedgerError): number => {
     const quarantineLocation = error.quarantinePath ?? error.quarantineDiagnostic ?? 'unavailable';
@@ -754,6 +1015,73 @@ export async function dispatchEngineer(
 
   try {
     switch (dispatch.kind) {
+    case 'capabilities': {
+      print(JSON.stringify({ schemaVersion: 1, [ENGINEER_LIFECYCLE_CAPABILITY]: true }));
+      return 0;
+    }
+
+    case 'run-create': {
+      print(JSON.stringify(await lifecycleStore.create({
+        repoRoot: dispatch.repoRoot,
+        idea: dispatch.idea,
+        correlationId: dispatch.correlationId,
+        attemptKey: dispatch.attemptKey,
+      })));
+      return 0;
+    }
+
+    case 'run-inspect': {
+      if (dispatch.runId) {
+        print(JSON.stringify(await lifecycleStore.inspectRun(dispatch.runId)));
+      } else {
+        print(JSON.stringify({
+          schemaVersion: 1,
+          capability: ENGINEER_LIFECYCLE_CAPABILITY,
+          repoRoot: dispatch.repoRoot,
+          correlationId: dispatch.correlationId,
+          runs: await lifecycleStore.inspectCorrelation({
+            repoRoot: dispatch.repoRoot!,
+            correlationId: dispatch.correlationId!,
+          }),
+        }));
+      }
+      return 0;
+    }
+
+    case 'run-replay': {
+      print(JSON.stringify({
+        schemaVersion: 1,
+        engineerRunId: dispatch.runId,
+        afterRevision: dispatch.afterRevision,
+        events: await lifecycleStore.replay(dispatch.runId, dispatch.afterRevision),
+      }));
+      return 0;
+    }
+
+    case 'run-record': {
+      print(JSON.stringify(await lifecycleStore.record(
+        dispatch.runId,
+        parseLifecycleTransition(dispatch),
+      )));
+      return 0;
+    }
+
+    case 'run-cancel': {
+      print(JSON.stringify(await lifecycleStore.record(dispatch.runId, {
+        kind: 'run_cancelled',
+        reason: dispatch.reason,
+      })));
+      return 0;
+    }
+
+    case 'run-fail': {
+      print(JSON.stringify(await lifecycleStore.record(dispatch.runId, {
+        kind: 'run_failed',
+        error: dispatch.error,
+      })));
+      return 0;
+    }
+
     // ── launch ──────────────────────────────────────────────────────────────────
     // Bare `conduct-ts engineer`: drop the operator into the interactive /engineer loop.
     case 'launch': {
@@ -878,7 +1206,7 @@ export async function dispatchEngineer(
     // makes zero mutation to the primary tree and returns exit 1. Prints
     // `{ slug, branch, worktreePath, reconcile }` on success.
     case 'worktree': {
-      const { project: projectName, idea, sourceRef, body } = dispatch;
+      const { project: projectName, idea, sourceRef, body, engineerRunId } = dispatch;
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -906,14 +1234,65 @@ export async function dispatchEngineer(
         resolvedBody = record?.body ?? undefined;
       }
 
+      let lifecycle = engineerRunId
+        ? await lifecycleStore.inspectRun(engineerRunId)
+        : await lifecycleStore.create({ repoRoot: target.canonicalPath, idea });
+      if (lifecycle.repoRoot !== target.canonicalPath || lifecycle.idea !== idea.trim()) {
+        throw new EngineerLifecycleError(
+          'identity_mismatch',
+          `Engineer run ${lifecycle.engineerRunId} does not match the resolved repository and idea`,
+        );
+      }
+      if (lifecycle.state === 'created') {
+        lifecycle = await lifecycleStore.record(lifecycle.engineerRunId, { kind: 'run_started' });
+      }
+      if (lifecycle.state !== 'authoring') {
+        throw new EngineerLifecycleError(
+          'invalid_transition',
+          `Engineer run ${lifecycle.engineerRunId} is ${lifecycle.state}, not authoring`,
+        );
+      }
+      if (lifecycle.project === null) {
+        lifecycle = await lifecycleStore.record(lifecycle.engineerRunId, {
+          kind: 'routing_selected',
+          project: target.name,
+        });
+      } else if (lifecycle.project !== target.name) {
+        throw new EngineerLifecycleError(
+          'identity_mismatch',
+          `Engineer run ${lifecycle.engineerRunId} routed to ${lifecycle.project}, not ${target.name}`,
+        );
+      }
+
       try {
         const wt = await createEngineerWorktree(target.canonicalPath, idea, (m) => printErr(m), {
           sourceRef,
           body: resolvedBody,
         });
-        print(JSON.stringify({ kind: 'worktree', ...wt }));
+        await writeEngineerRunMarker(wt.worktreePath, {
+          schemaVersion: 1,
+          engineerRunId: lifecycle.engineerRunId,
+          repoRoot: target.canonicalPath,
+          planSlug: wt.slug,
+          branch: wt.branch,
+        });
+        lifecycle = await lifecycleStore.record(lifecycle.engineerRunId, {
+          kind: 'worktree_created',
+          worktreePath: wt.worktreePath,
+          branch: wt.branch,
+          planSlug: wt.slug,
+        });
+        print(JSON.stringify({ kind: 'worktree', engineerRunId: lifecycle.engineerRunId, ...wt }));
         return 0;
       } catch (err: unknown) {
+        try {
+          await lifecycleStore.record(lifecycle.engineerRunId, {
+            kind: 'run_failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        } catch {
+          // Preserve the original worktree failure; lifecycle diagnostics are best effort here.
+        }
         printErr(`engineer worktree: ${err instanceof Error ? err.message : String(err)}`);
         return 1;
       }
@@ -937,6 +1316,13 @@ export async function dispatchEngineer(
         const msg = err instanceof Error ? err.message : String(err);
         printErr(`engineer land: ${msg}`);
         return 1;
+      }
+      const marker = await readEngineerRunMarker(worktree);
+      if (marker && marker.repoRoot !== target.canonicalPath) {
+        throw new EngineerLifecycleError(
+          'identity_mismatch',
+          `Engineer worktree marker belongs to ${marker.repoRoot}, not ${target.canonicalPath}`,
+        );
       }
 
       // Owner-gate (adr-2026-06-30-*): the daemon that later builds this spec
@@ -969,15 +1355,51 @@ export async function dispatchEngineer(
           idea,
           worktree,
           sourceRef,
-          { ownerConfig, gh },
+          { ownerConfig, gh, requireLifecycleReconciliation: marker !== null },
         );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (marker) {
+          try {
+            await lifecycleStore.record(marker.engineerRunId, { kind: 'land_refused', reason: msg });
+          } catch {
+            // The original land refusal remains authoritative and the worktree stays intact.
+          }
+        }
         // Keep-on-failure (FR-6): the per-idea worktree is retained for inspection —
         // report WHERE it is so retention is actionable, not silent clutter.
         printErr(`engineer land: ${msg}`);
         printErr(`engineer land: worktree kept for inspection at "${worktree}".`);
         return 1;
+      }
+
+      let reconciliationError: unknown | null = null;
+      if (marker) {
+        try {
+          if (result.slug !== marker.planSlug || result.branch !== marker.branch) {
+            throw new EngineerLifecycleError(
+              'identity_mismatch',
+              `Landed plan identity ${result.slug}/${result.branch} does not match the Engineer worktree marker`,
+            );
+          }
+          const disposition = lifecycleLandDisposition(result.track, result.tier!);
+          await lifecycleStore.reconcileLand(marker.engineerRunId, {
+            planSlug: result.slug,
+            track: result.track,
+            tier: result.tier!,
+            ...disposition,
+          });
+        } catch (error) {
+          reconciliationError = error;
+        }
+      }
+      if (reconciliationError !== null) {
+        printErr(
+          `Spec artifacts were committed to ${result.branch}, but Engineer lifecycle reconciliation failed: `
+            + `${reconciliationError instanceof Error ? reconciliationError.message : String(reconciliationError)}. `
+            + `The worktree "${worktree}" was retained for recovery. `
+            + 'Repair durable Engineer state and rerun engineer land before handoff.',
+        );
       }
 
       // Intake write-back (FR-36): when this idea originated from a github issue,
@@ -1015,6 +1437,15 @@ export async function dispatchEngineer(
         printErr(`engineer handoff: ${msg}`);
         return 1;
       }
+      const marker = await readEngineerRunMarker(worktree);
+      if (marker) {
+        if (marker.repoRoot !== target.canonicalPath || marker.branch !== branch) {
+          throw new EngineerLifecycleError(
+            'identity_mismatch',
+            `Engineer handoff identity does not match the worktree marker for ${marker.engineerRunId}`,
+          );
+        }
+      }
 
       let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
       try {
@@ -1034,6 +1465,13 @@ export async function dispatchEngineer(
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (marker) {
+          try {
+            await lifecycleStore.record(marker.engineerRunId, { kind: 'run_failed', error: msg });
+          } catch {
+            // Keep the original handoff failure and its retained worktree actionable.
+          }
+        }
         printErr(`engineer handoff: PR open failed: ${msg}`);
         // Handoff FAILED (e.g. no PR URL parsed): keep the worktree for inspection
         // (FR-6) — do NOT remove it. Work is preserved on the branch; report the
@@ -1072,12 +1510,33 @@ export async function dispatchEngineer(
       // The PR opened (or was skipped on no-remote) — the cycle succeeded, so remove
       // the per-idea worktree (FR-5). The spec/<slug> branch + commit persist; a
       // removal failure is REPORTED, never swallowed (FR-5 negative).
-      try {
-        await removeEngineerWorktree(target.canonicalPath, worktree);
-      } catch (err: unknown) {
+      const cleanup = () => removeEngineerWorktree(target.canonicalPath, worktree);
+      const finalization = marker
+        ? (await persistEngineerHandoffBeforeCleanup({
+            store: lifecycleStore,
+            marker,
+            prUrl: handoffResult.kind === 'pr-opened' ? handoffResult.url : null,
+            outcome: handoffResult.kind === 'pr-opened' ? 'pr_opened' : 'local_commit',
+            cleanup,
+          }))
+        : {
+            persistenceError: null,
+            cleanupError: await cleanup().then(() => null, (error: unknown) => error),
+          };
+      if (finalization.persistenceError !== null) {
+        printErr(
+          `Spec delivered, but Engineer lifecycle finalization failed: `
+            + `${finalization.persistenceError instanceof Error
+              ? finalization.persistenceError.message
+              : String(finalization.persistenceError)}. `
+            + `The worktree "${worktree}" was retained for recovery. Repair durable Engineer state and rerun engineer handoff.`,
+        );
+      } else if (finalization.cleanupError !== null) {
         printErr(
           `⚠ Spec delivered, but the per-idea worktree "${worktree}" could not be removed: ` +
-            `${err instanceof Error ? err.message : String(err)}. Remove it manually.`,
+            `${finalization.cleanupError instanceof Error
+              ? finalization.cleanupError.message
+              : String(finalization.cleanupError)}. Remove it manually.`,
         );
       }
 
@@ -1554,6 +2013,14 @@ export async function dispatchEngineer(
     }
   } catch (error: unknown) {
     if (error instanceof CorruptLedgerError) return reportCorruptLedger(error);
+    if (error instanceof EngineerLifecycleError) {
+      printErr(JSON.stringify({
+        schemaVersion: 1,
+        error: error.code,
+        message: error.message,
+      }));
+      return 1;
+    }
     throw error;
   }
 }

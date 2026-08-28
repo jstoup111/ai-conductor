@@ -13,6 +13,38 @@ daemon can build.
 The engineer loop never builds and never merges. It opens a spec PR; you merge it; the daemon
 picks it up from the default branch afterwards.
 
+## Durable lifecycle and replay
+
+Every newly created Engineer worktree belongs to an opaque `engineerRunId`. An integration can reserve
+that identity first with `conduct-ts engineer run-create`; a direct legacy flow that starts at
+`engineer worktree` receives an engine-minted uncorrelated run automatically. The worktree records the
+exact association in `.pipeline/engineer-run.json`. The marker carries repository, plan slug, and branch
+identity, so consumers never infer identity from a worktree directory name.
+
+The events are durable under
+`$AI_CONDUCTOR_ENGINEER_DIR/lifecycle/runs/<engineerRunId>/events.jsonl`, outside the authoring
+worktree. `engineer run-inspect` reduces that journal to a compact snapshot and repairs a missing compact
+snapshot. `engineer run-replay --run-id <id> --after-revision <n>` restores every later event after a
+missed live delivery or consumer restart. Each successor run has an independent revision sequence.
+Attempt and correlation identities use durable hashed indexes, so creating a run does not scan historical
+run metadata. Locks are scoped to the affected attempt, correlation, or run, so unrelated repositories and
+runs do not block one another.
+
+The lifecycle does not claim spec merge. After the land gate validates track, tier, and the exact DECIDE
+artifact set, handoff records `engineer_spec_handoff` with the final plan slug, spec branch, PR URL or
+local-commit outcome, and `awaiting_spec_merge`. It then records `engineer_run_settled` and only then
+removes the authoring worktree. If durable finalization fails after delivery, the command reports the
+failure and retains the worktree for a retry. The durable journal and spec branch remain after cleanup.
+The later daemon run keeps its existing `.pipeline/events.jsonl` and BUILD/SHIP semantics.
+
+Land commits the validated artifacts before recording lifecycle reconciliation. If that durable recording
+fails, the commit remains a successful land result, the worktree is retained, and the command reports the
+recovery step. Repair the durable Engineer state and rerun `engineer land` before handoff.
+
+Registered visualizers receive the same `engineer_*` events from the existing event spine. A visualizer
+is an observer and transport boundary only. It owns any projection it creates, and its live delivery does
+not replace replay.
+
 ## Prerequisites
 
 | Requirement | Check |

@@ -173,7 +173,77 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
   ts: string;
 };
 
+export type EngineerStepName =
+  | 'bootstrap'
+  | 'memory'
+  | 'assess'
+  | 'explore'
+  | 'complexity'
+  | 'prd'
+  | 'architecture_diagram'
+  | 'architecture_review'
+  | 'stories'
+  | 'conflict_check'
+  | 'plan'
+  | 'coherence_check';
+
+export type EngineerStepCompletionEvidence =
+  | 'accepted_result'
+  | 'artifact_validation'
+  | 'land_reconciliation';
+
+export interface EngineerEventBase {
+  schemaVersion: 1;
+  engineerRunId: string;
+  correlationId: string | null;
+  attemptKey: string;
+  attempt: number;
+  previousEngineerRunId: string | null;
+  repoRoot: string;
+  revision: number;
+  ts: string;
+}
+
+export type EngineerLifecycleEvent = EngineerEventBase & (
+  | { type: 'engineer_run_created'; idea: string }
+  | { type: 'engineer_run_started' }
+  | { type: 'engineer_routing_selected'; project: string }
+  | { type: 'engineer_worktree_created'; worktreePath: string; branch: string; planSlug: string }
+  | { type: 'engineer_step_started'; step: EngineerStepName; stepAttempt: number; provider?: string; model?: string }
+  | {
+      type: 'engineer_step_completed';
+      step: EngineerStepName;
+      stepAttempt: number;
+      completion: EngineerStepCompletionEvidence;
+      artifactPaths?: string[];
+    }
+  | { type: 'engineer_step_failed'; step: EngineerStepName; stepAttempt: number; error: string }
+  | { type: 'engineer_step_retried'; step: EngineerStepName; stepAttempt: number; reason: string }
+  | { type: 'engineer_step_skipped'; step: EngineerStepName; stepAttempt: number; reason: string }
+  | {
+      type: 'engineer_land_reconciled';
+      planSlug: string;
+      track: 'product' | 'technical';
+      tier: ComplexityTier;
+      completed: EngineerStepName[];
+      skipped: EngineerStepName[];
+    }
+  | { type: 'engineer_land_refused'; reason: string }
+  | {
+      type: 'engineer_spec_handoff';
+      planSlug: string;
+      branch: string;
+      prUrl: string | null;
+      outcome: 'pr_opened' | 'local_commit';
+      state: 'awaiting_spec_merge';
+    }
+  | { type: 'engineer_run_cancelled'; reason: string }
+  | { type: 'engineer_run_failed'; error: string }
+  | { type: 'engineer_run_settled'; outcome: 'awaiting_spec_merge' }
+);
+
 export type ConductorEvent =
+  | EngineerLifecycleEvent
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | {
       /** Durable plan-task growth accounting after a remediation append. */
