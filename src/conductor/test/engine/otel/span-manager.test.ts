@@ -188,6 +188,47 @@ describe('T10: run span lifecycle — one trace per run', () => {
     expect(Object.prototype.hasOwnProperty.call(root.attributes, 'conductor.run.halt.class')).toBe(false);
   });
 
+  it('orphan loop_halt warns once, returns safely, and exports no spans', async () => {
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
+      warnings.push(message),
+    );
+    vis.start(emitter);
+    const { spanManager } = vis as unknown as {
+      spanManager: {
+        onLoopHalt(event: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'loop_halt' }>): void;
+      };
+    };
+
+    expect(() =>
+      spanManager.onLoopHalt({ type: 'loop_halt', reason: 'missing task evidence' }),
+    ).not.toThrow();
+    await vis.stop();
+
+    expect(warnings).toHaveLength(1);
+    expect(spanExporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it('late loop_halt after feature_complete preserves the complete root span', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const { spanManager } = vis as unknown as {
+      spanManager: {
+        onLoopHalt(event: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'loop_halt' }>): void;
+      };
+    };
+
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    spanManager.onLoopHalt({ type: 'loop_halt', reason: 'late arrival' });
+    await vis.stop();
+
+    const roots = spanExporter.getFinishedSpans().filter((span) => !span.parentSpanContext);
+    expect(roots).toHaveLength(1);
+    expect(roots[0].attributes['conductor.run.outcome']).toBe('complete');
+  });
+
   it('run ending without feature_complete closes run span on flush (forceCloseAll)', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);

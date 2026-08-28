@@ -59,6 +59,7 @@ export class SpanManager {
   }
 
   private closeRunSpan(outcome: string): void {
+    if (this.runOutcome !== null) return;
     if (!this.runSpan) return;
 
     this.runOutcome = outcome;
@@ -265,7 +266,10 @@ export class SpanManager {
   }
 
   onLoopHalt(event: Extract<ConductorEvent, { type: 'loop_halt' }>): void {
-    if (!this.runSpan) return;
+    if (!this.runSpan) {
+      this.warn('loop_halt received but no run span exists — ignoring');
+      return;
+    }
 
     if (event.step !== undefined) {
       this.runSpan.setAttribute('conductor.run.halt.step', event.step);
