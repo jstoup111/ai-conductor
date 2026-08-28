@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:2, task:3, task:4
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -215,5 +215,93 @@ describe('validation-group kickback restages', () => {
       manualTest: 'PASS', gapMembers: ['prd_audit'], skippedAfterNavigation: 'prd_audit',
     });
     expect(state.prd_audit).toBe('skipped');
+  });
+});
+
+describe('build_review kickback restage', () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  async function runBuildReviewKickback(manualTest: 'skipped' | 'done'): Promise<ConductState> {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-kickback-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeState(statePath, {
+      run_started_at: 1,
+      complexity_tier: 'S',
+      track: 'technical',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'skipped',
+      plan: 'done',
+      architecture_diagram: 'skipped',
+      architecture_review: 'skipped',
+      acceptance_specs: 'skipped',
+      build: 'done',
+      wiring_check: 'skipped',
+      test_suite: 'done',
+      build_review: 'pending',
+      manual_test: manualTest,
+    } as ConductState);
+    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: '1', status: 'completed' }],
+    }));
+
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build_review') {
+          await writeFile(join(dir, '.pipeline', 'build-review.json'), JSON.stringify({
+            verdict: 'FAIL',
+            rubric: { testQuality: true },
+            findings: { testQuality: ['restage required'] },
+          }));
+          return { success: true };
+        }
+        if (step === 'build') throw new Error('stop after build_review restage');
+        throw new Error(`unexpected dispatch: ${step}`);
+      },
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'build_review',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      config: {
+        build_review: { enabled: true },
+        kickback_escalation: { enabled: false },
+        cumulative_kickback_bound: { enabled: false },
+      },
+    } as never);
+
+    await conductor.run().catch((error: unknown) => {
+      if (!(error instanceof Error) || error.message !== 'stop after build_review restage') throw error;
+    });
+    const state = await readState(statePath);
+    if (!state.ok) throw new Error('build_review kickback state must be readable');
+    return state.value;
+  }
+
+  it('preserves skipped manual_test while restaging build_review through its kickback site', async () => {
+    const state = await runBuildReviewKickback('skipped');
+
+    expect(state).toMatchObject({ build_review: 'stale', manual_test: 'skipped' });
+  });
+
+  it('restages a ran manual_test through the same build_review kickback site', async () => {
+    const state = await runBuildReviewKickback('done');
+
+    expect(state).toMatchObject({ build_review: 'stale', manual_test: 'stale' });
   });
 });

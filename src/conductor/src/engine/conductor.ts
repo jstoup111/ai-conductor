@@ -10183,9 +10183,11 @@ export class Conductor {
                   // markDownstreamStale only restages `done` steps; build_review
                   // is `failed` here, so restage it (and manual_test) explicitly
                   // for the tail.
-                  await this.commitStateChanges(state, 'restage BUILD review after kickback', {
-                    build_review: 'stale', manual_test: 'stale',
-                  });
+                  await this.commitStateChanges(
+                    state,
+                    'restage BUILD review after kickback',
+                    filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
+                  );
                   i = navigationIndex - 1; // for-loop i++ lands on the rework target
                   continue;
                 }
