@@ -26,6 +26,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeRunFeature, type FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { fixSession, runTriage } from '../../src/engine/setup-triage.js';
 import {
@@ -151,11 +153,23 @@ exit 0
     let conductorCalls = 0;
     const deps: FeatureRunnerDeps = {
       createWorktree: async () => ({ path: worktree, branch: 'feat/setup-once' }),
-      prepareWorktree: async (featureWorktree) => {
+      beginFeatureRun: () => ({
+        events,
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        stop: () => {},
+      }),
+      // The feature runner owns the event emitter. Accept and forward its
+      // third prepare argument so this assertion fails if runner-side event
+      // propagation is removed.
+      prepareWorktree: async (featureWorktree, _log, featureEvents) => {
         await prepareWorktree(
           featureWorktree.path,
           undefined,
-          prepareOptions(baseSha, events),
+          prepareOptions(baseSha, featureEvents),
         );
       },
       runConductor: async () => {
