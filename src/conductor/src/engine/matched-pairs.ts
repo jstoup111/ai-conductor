@@ -12,6 +12,7 @@ interface MatchedPairSide {
   readonly name: string;
   readonly file: string;
   readonly enumeration: string;
+  readonly markdownAnchor?: string;
 }
 
 interface CheckedMatchedPairDeclaration {
@@ -61,6 +62,7 @@ export const MATCHED_PAIR_REGISTRY = {
       name: 'configuration documentation',
       file: 'docs/reference/configuration.md',
       enumeration: 'retired build-review rubric ids',
+      markdownAnchor: 'Every other id ever accepted',
     },
   },
 } satisfies Record<MatchedPairId, MatchedPairDeclaration>;

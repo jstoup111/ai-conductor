@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { MATCHED_PAIR_REGISTRY } from '../../src/engine/matched-pairs.js';
 
 const conductorRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
+const repositoryRoot = join(conductorRoot, '../..');
 
 interface DerivationDeclaration {
   readonly derivingModule: string;
@@ -76,6 +77,59 @@ function sourceFile(path: string, contents: string): ts.SourceFile {
   return ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true);
 }
 
+interface CheckedSide {
+  readonly name: string;
+  readonly file: string;
+  readonly enumeration: string;
+  readonly markdownAnchor?: string;
+}
+
+function extractDocumentedIds(id: string, side: CheckedSide, contents: string): Set<string> {
+  const line = contents.split('\n').find((candidate) =>
+    side.markdownAnchor !== undefined && candidate.includes(side.markdownAnchor),
+  );
+  if (!line) {
+    throw new Error(`matched-pair ${id}: empty extraction on ${side.name} side (${side.file})`);
+  }
+  const anchorIndex = line.indexOf(side.markdownAnchor ?? '');
+  const members = [...line.slice(anchorIndex + (side.markdownAnchor?.length ?? 0)).matchAll(/`([^`]+)`/g)]
+    .map((match) => match[1]);
+  if (members.length === 0) {
+    throw new Error(`matched-pair ${id}: empty extraction on ${side.name} side (${side.file})`);
+  }
+  return new Set(members);
+}
+
+function assertMatchingMembers(
+  id: string,
+  authoritative: CheckedSide,
+  authoritativeMembers: ReadonlySet<string>,
+  compared: CheckedSide,
+  comparedMembers: ReadonlySet<string>,
+): void {
+  if (authoritativeMembers.size === 0) {
+    throw new Error(`matched-pair ${id}: empty extraction on ${authoritative.name} side (${authoritative.file})`);
+  }
+  if (comparedMembers.size === 0) {
+    throw new Error(`matched-pair ${id}: empty extraction on ${compared.name} side (${compared.file})`);
+  }
+  const missingFromCompared = [...authoritativeMembers].filter((member) => !comparedMembers.has(member));
+  const unexpectedInCompared = [...comparedMembers].filter((member) => !authoritativeMembers.has(member));
+  if (missingFromCompared.length > 0 || unexpectedInCompared.length > 0) {
+    throw new Error(
+      `matched-pair ${id}: member mismatch between ${authoritative.name} (${authoritative.file}) and ${compared.name} (${compared.file}); missing from ${compared.name}: ${missingFromCompared.join(', ') || 'none'}; unexpected in ${compared.name}: ${unexpectedInCompared.join(', ') || 'none'}`,
+    );
+  }
+}
+
+async function readDeclaredFile(id: string, side: CheckedSide): Promise<string> {
+  try {
+    return await readFile(join(repositoryRoot, side.file), 'utf8');
+  } catch {
+    throw new Error(`matched-pair ${id}: unreadable declared file on ${side.name} side (${side.file})`);
+  }
+}
+
 describe('matched-pair derivation links', () => {
   it('verifies every derivation declaration against its real source module', async () => {
     for (const [id, declaration] of Object.entries(MATCHED_PAIR_REGISTRY)) {
@@ -122,5 +176,64 @@ describe('matched-pair derivation links', () => {
       declaration.derivingModule,
       "import { RETIRED_IDS } from './config.js';",
     ))).toThrow(/fixture-missing-reference: missing reference outside import.*deriving\.ts.*config\.ts/);
+  });
+});
+
+describe('matched-pair checked enumerations', () => {
+  it('verifies every checked declaration against the executed engine export and documentation', async () => {
+    const config = await import('../../src/engine/config.js');
+    for (const [id, declaration] of Object.entries(MATCHED_PAIR_REGISTRY)) {
+      if (declaration.mode !== 'checked') continue;
+      const authoritativeMembers = config[declaration.authoritative.enumeration as keyof typeof config];
+      if (!Array.isArray(authoritativeMembers) || !authoritativeMembers.every((member) => typeof member === 'string')) {
+        throw new Error(`matched-pair ${id}: empty extraction on ${declaration.authoritative.name} side (${declaration.authoritative.file})`);
+      }
+      const contents = await readDeclaredFile(id, declaration.compared);
+      assertMatchingMembers(
+        id,
+        declaration.authoritative,
+        new Set(authoritativeMembers),
+        declaration.compared,
+        extractDocumentedIds(id, declaration.compared, contents),
+      );
+    }
+  });
+
+  const fixtureAuthoritative = {
+    name: 'engine',
+    file: 'src/conductor/src/engine/config.ts',
+    enumeration: 'RETIRED_IDS',
+  };
+  const fixtureDocumentation = {
+    name: 'configuration documentation',
+    file: 'docs/reference/configuration.md',
+    enumeration: 'retired ids',
+    markdownAnchor: 'Retired ids:',
+  };
+
+  it('accepts matching documented members', () => {
+    const documented = extractDocumentedIds(
+      'fixture-matching-members', fixtureDocumentation, 'Retired ids: `scope`, `wiring`',
+    );
+    expect(() => assertMatchingMembers(
+      'fixture-matching-members', fixtureAuthoritative, new Set(['scope', 'wiring']),
+      fixtureDocumentation, documented,
+    )).not.toThrow();
+  });
+
+  it('rejects a documented member omission with both locations and the missing member', () => {
+    const documented = extractDocumentedIds(
+      'fixture-member-mismatch', fixtureDocumentation, 'Retired ids: `scope`',
+    );
+    expect(() => assertMatchingMembers(
+      'fixture-member-mismatch', fixtureAuthoritative, new Set(['scope', 'wiring']),
+      fixtureDocumentation, documented,
+    )).toThrow(/fixture-member-mismatch: member mismatch.*config\.ts.*configuration\.md.*missing from configuration documentation: wiring/);
+  });
+
+  it('rejects a docs excerpt with no extractable members', () => {
+    expect(() => extractDocumentedIds(
+      'fixture-empty-documentation', fixtureDocumentation, 'Retired ids: none',
+    )).toThrow(/fixture-empty-documentation: empty extraction on configuration documentation side.*configuration\.md/);
   });
 });
