@@ -5,14 +5,15 @@
  *   T15: Duration histogram and retries counter
  *   T16: Token metrics — skip when absent, record only present kinds
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
-import { DURATION_BUCKET_BOUNDARIES_MS } from '../../../src/engine/otel/metrics.js';
+import { DURATION_BUCKET_BOUNDARIES_MS, MetricsRecorder } from '../../../src/engine/otel/metrics.js';
+import type { Meter } from '@opentelemetry/api';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
 
@@ -88,6 +89,26 @@ describe('Task 1: duration bucket boundaries', () => {
 
     expect(resolvedBoundaries).not.toContain(undefined);
     expect(new Set(resolvedBoundaries).size).toBe(4);
+  });
+});
+
+// ── Task 2: step-duration histogram advice ─────────────────────────────────
+
+describe('Task 2: step-duration histogram advice', () => {
+  it('passes the shared duration boundaries as advice when creating conductor.step.duration', () => {
+    const createHistogram = vi.fn();
+    const meter = {
+      createHistogram,
+      createCounter: vi.fn(),
+    } as unknown as Meter;
+
+    new MetricsRecorder(meter);
+
+    const stepDurationCall = createHistogram.mock.calls.find(
+      ([name]) => name === 'conductor.step.duration',
+    );
+    expect(stepDurationCall?.[1]?.advice?.explicitBucketBoundaries)
+      .toBe(DURATION_BUCKET_BOUNDARIES_MS);
   });
 });
 

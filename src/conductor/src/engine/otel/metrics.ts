@@ -18,7 +18,7 @@ import type { ConductorEvent } from '../../types/events.js';
 export const DURATION_BUCKET_BOUNDARIES_MS = [
   10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000,
   30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
-] as const;
+];
 
 export class MetricsRecorder {
   private readonly durationHistogram: Histogram;
@@ -30,6 +30,7 @@ export class MetricsRecorder {
     this.durationHistogram = meter.createHistogram('conductor.step.duration', {
       description: 'Duration of conductor steps in milliseconds',
       unit: 'ms',
+      advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS },
     });
     this.retriesCounter = meter.createCounter('conductor.step.retries', {
       description: 'Number of retries per conductor step',
