@@ -1,4 +1,5 @@
 import type { BuildReviewRubricId } from '../types/config.js';
+import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
@@ -19,6 +20,7 @@ import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-i
 
 const AGGREGATE_VERSION = 'v1' as const;
 const RUBRICS = ['testQuality'] as const;
+const RETIRED_REASON_PREFIX = new RegExp(`^\\[(${DEPRECATED_BUILD_REVIEW_RUBRIC_IDS.join('|')})\\]`);
 
 type Coverage = 'judged' | 'skipped' | 'infrastructure-failure';
 type RubricFlags = Record<BuildReviewRubricId, boolean>;
@@ -212,7 +214,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     // A retired Wiring member also contributed legacy reason strings.  Drop
     // those alongside its derived maps before validating the four-rubric view.
     return [key, carriedRetiredRubric && key === 'reasons' && Array.isArray(entry)
-      ? entry.filter((reason) => typeof reason !== 'string' || !/^\[(scope|rootCause|causalIntegrity|completeness|wiring)\]/.test(reason))
+      ? entry.filter((reason) => typeof reason !== 'string' || !RETIRED_REASON_PREFIX.test(reason))
       : carriedRetiredRubric && memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => !isRetiredBuildReviewRubric(member))) : entry];
   }));
   if (!source || !exactKeys(source, [
