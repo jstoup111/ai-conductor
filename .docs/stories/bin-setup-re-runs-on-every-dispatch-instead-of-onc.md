@@ -32,13 +32,16 @@ As an operator, I want setup to re-run when the worktree was re-provisioned, the
 #### Happy Path
 - Given a worktree recreated from its branch (no marker present), when the daemon dispatches, then `bin/setup` runs and the event reason is `no-marker`
 - Given a prepared worktree whose `bin/setup` content or mode changed since the marker was written, when the daemon dispatches, then `bin/setup` runs and the event reason is `script-changed`
-- Given a prepared worktree whose base SHA moved — the feature's dispatched base (its work order's pinned base SHA under adr-2026-08-27-daemon-dispatcher-executor-seam, otherwise the resolved base) advanced via engine rebase or re-kick — when the daemon dispatches, then `bin/setup` runs and the event reason is `base-moved`; a root fast-forward that does not change the feature's own dispatched base does not re-trigger setup
+- Given a prepared worktree whose resolved base SHA moved (engine rebase or re-kick advanced the base), when the daemon dispatches, then `bin/setup` runs and the event reason is `base-moved`
 - Given `bin/setup` completes successfully, when the marker is written, then it is written atomically to `«worktree»/.daemon/setup-ok.json` with the script hash and base SHA as identity and the commit as provenance only
 
 #### Negative Paths
 - Given `bin/setup` exits non-zero, when the dispatch fails, then no marker is written and a subsequent dispatch runs `bin/setup` again
 - Given task commits made by the build advanced the worktree HEAD but the resolved base is unchanged, when the daemon re-dispatches, then setup is still skipped (HEAD movement alone never invalidates)
 - Given the marker file exists under `«worktree»/.daemon/`, when any porcelain-based consumer inspects the worktree (build-completion floor, triage tree classifier), then the marker never appears as an untracked file because `.daemon/` is in the worktree's `info/exclude`
+
+#### Out of Scope
+- A **per-feature pinned dispatched base** is not delivered here. An earlier draft of the base-moved criterion required that a root fast-forward leaving a feature's own dispatched base unchanged must not re-trigger setup. Nothing in this source can express that: `BacklogItem` carries no base identity, and the preparation seam receives only the worktree, log, and emitter — so the gate has only the freshly resolved base to compare, which is exactly what approved `adr-2026-08-26-setup-once-per-worktree-marker` decision 2 specifies. The pinned-base identity belongs to the dispatcher/executor work order, whose ADR (`adr-2026-08-27-daemon-dispatcher-executor-seam`) does not exist in this repository at this HEAD despite being cited by this and three other stories. Until that seam lands, a root base advance re-runs `bin/setup` for an otherwise unchanged worktree — a redundant run, never an incorrect skip, so the fail-closed direction is preserved.
 
 ### Done When
 - [ ] Each invalidation cause (`no-marker`, `script-changed`, `base-moved`, `marker-invalid`) is covered by a test asserting both the setup re-run and the emitted reason
