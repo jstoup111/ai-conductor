@@ -35,6 +35,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Removed ineffective TDD RED/GREEN model configuration keys; configured tdd blocks are now rejected as unknown step settings. ([implementation PR #1910](https://github.com/jstoup111/ai-conductor/pull/1910)).
 - Retire the retrospective skill, command, and delivery-time closeout obligations. ([implementation PR #1946](https://github.com/jstoup111/ai-conductor/pull/1946)).
 - Removes the unattended inline --auto one-shot and directs unattended runs to the daemon, and fixes an intake-ledger lease failure when a lease was released while another process probed the owner's liveness. ([implementation PR #1974](https://github.com/jstoup111/ai-conductor/pull/1974)).
+- Removes the retired `wiring_check` BUILD step and its configuration key. ([implementation PR #1942](https://github.com/jstoup111/ai-conductor/pull/1942)).
 
 ### Fixed
 
@@ -71,6 +72,9 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Skipped SHIP steps now remain skipped when a build kickback restages downstream work. ([implementation PR #2003](https://github.com/jstoup111/ai-conductor/pull/2003)).
 - The post-FINISH shipment audit no longer refuses a ship when the engine's own post-finish cost/time commit has moved the branch past the head GitHub still reports. ([implementation PR #2010](https://github.com/jstoup111/ai-conductor/pull/2010)).
 - Build-review compatibility checks now prevent retired-rubric enumerations from drifting across engine and documentation representations. ([implementation PR #2004](https://github.com/jstoup111/ai-conductor/pull/2004)).
+- Harness configuration now rejects settings without runtime consumers and accepts supported custom-step controls. ([implementation PR #1957](https://github.com/jstoup111/ai-conductor/pull/1957)).
+- A PR whose Migration section explains the migration in prose alongside its runnable fence is no longer rejected by the release-metadata gate, and no longer loops the FINISH release-metadata restore. ([implementation PR #2012](https://github.com/jstoup111/ai-conductor/pull/2012)).
+- Prevent non-S daemon candidates with malformed coherence mappings from being silently lost and report actionable parse details. ([implementation PR #1945](https://github.com/jstoup111/ai-conductor/pull/1945)).
 
 ## Migration
 
@@ -111,6 +115,26 @@ ASDF_NODEJS_VERSION=26.7.0 "${HARNESS_DIR}/bin/install" --update
 
 ```bash migration
 printf "%s\n" "The retro command and skill are retired. Remove retro invocations and steps.retro entries from your automation and configuration before upgrading."
+```
+
+```bash migration
+config=.ai-conductor/config.yml
+[ -f "$config" ] || exit 0
+tmp=$(mktemp)
+awk '
+  /^steps:[[:space:]]*$/ { in_steps = 1 }
+  in_steps && /^  wiring_check:[[:space:]]*$/ { dropping = 1; next }
+  dropping && /^  [^[:space:]]/ { dropping = 0 }
+  !dropping { print }
+' "$config" > "$tmp"
+mv "$tmp" "$config"
+```
+
+```bash migration
+for config in ~/.ai-conductor/config.yml .ai-conductor/config.yml; do
+  [ -f "$config" ] || continue
+  yq -i 'del(.defaults.by_tier, .complexity.default_tier, .harness_self_host.skill_relink_preflight, .auth_park_timeout_minutes)' "$config"
+done
 ```
 
 ## [0.104.0] - 2026-08-22
