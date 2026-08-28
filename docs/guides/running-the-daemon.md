@@ -42,9 +42,12 @@ merged spec is blocked while any ADR's first declared status is not `APPROVED` o
 (including an ADR with no status declaration at all) — approving the offending ADR unblocks every
 spec the next pass, with no daemon restart. The third rejects a plan without a task dependency
 tree. The fourth applies only outside tier S: author a parseable `.docs/coherence/<stem>.md` on the
-default branch, or verify that the feature is correctly classified as tier S. Fix the indicated
-artifact on the default branch; the next discovery pass replaces the blocked snapshot, clearing a
-repaired spec without manual cleanup. Each reason is logged once per slug (the ADR reason once per
+default branch, or verify that the feature is correctly classified as tier S. For a structural
+parse failure, the `BLOCKED` remedy and skip line append `Detail: line <n>: <message>`; correct that
+row or table separator in the committed artifact. Missing, empty, and table-less artifacts have no
+source row, so they do not report a line number. Fix the indicated artifact on the default branch;
+the next discovery pass replaces the blocked snapshot, clearing a repaired spec without manual
+cleanup. Each reason is logged once per slug (the ADR reason once per
 pass for the whole corpus) through `.daemon/warned/<slug>`; the marker suppresses repeated poll
 warnings until the spec is fixed.
 

@@ -23,6 +23,7 @@ import { listShippedRecords, parseShippedRecord, specHash } from './shipped-reco
 import type { BacklogTreeSource } from './backlog-tree-source.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { isOperatorParked as readOperatorParkMarker } from './park-marker.js';
+import { parseCoherenceArtifact } from './coherence-parse.js';
 import {
   healPlan,
   enumerateCandidates,
@@ -682,52 +683,6 @@ export function undatedStem(stem: string): string {
   return stem.replace(/^\d{4}-\d{2}-\d{2}-(?=.)/, '');
 }
 
-/**
- * Discovery deliberately performs only the shallow coherence-artifact check:
- * a Markdown table needs a header, separator, and at least one data row. Deep
- * coverage and claim validation belongs to `coherence-validator` at land.
- */
-function hasCoherenceTableDataRow(content: string | null): boolean {
-  if (content === null || content.trim().length === 0) return false;
-
-  const rows = content.split(/\r?\n/).map((line) => {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
-    return trimmed
-      .slice(1, -1)
-      .split('|')
-      .map((cell) => cell.trim());
-  });
-
-  // A data row's cell count is deliberately NOT compared to the header's: the
-  // coherence schema is mixed-arity — `criterion` rows carry a sixth
-  // diff-locality cell, every legacy row class carries five — so a real L-tier
-  // artifact legitimately opens with a five-cell `outcome` row under a
-  // six-column header. Requiring equality here rejected valid artifacts that
-  // the canonical parser (`parseCoherenceArtifact`) accepts, blocking the
-  // feature at discovery with a "missing or unparseable" warning. Per-row arity
-  // is that parser's job, at land.
-  for (let index = 0; index + 2 < rows.length; index += 1) {
-    const header = rows[index];
-    const separator = rows[index + 1];
-    const data = rows[index + 2];
-    if (
-      header === null ||
-      separator === null ||
-      data === null ||
-      header.length === 0 ||
-      header.length !== separator.length ||
-      data.length === 0 ||
-      !separator.every((cell) => /^:?-{2,}:?$/.test(cell))
-    ) {
-      continue;
-    }
-    return true;
-  }
-
-  return false;
-}
-
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
@@ -1020,24 +975,25 @@ export async function discoverBacklog(
       continue;
     }
 
-    // The coherence artifact is mandatory for every non-S tier. This remains
-    // intentionally shallow: discovery has only the base-branch tree, while
-    // the semantic validator needs a change set and runs at land.
+    // The coherence artifact is mandatory for every non-S tier. Discovery
+    // shares the structural parser with land; semantic validation still needs
+    // a change set and runs at land.
     const coherenceContent = await tree.readFile(`.docs/coherence/${slug}.md`);
-    if (
-      tier !== 'S' &&
-      !hasCoherenceTableDataRow(coherenceContent)
-    ) {
+    const coherence = parseCoherenceArtifact(coherenceContent);
+    if (tier !== 'S' && !coherence.ok) {
+      const detail = coherence.detail
+        ? ` Detail: line ${coherence.detail.line}: ${coherence.detail.message}.`
+        : '';
       blockedItems.push({
         slug,
         reason: 'missing-coherence',
-        remedy: `Author a valid coherence table in .docs/coherence/${slug}.md on the default branch.`,
+        remedy: `Author a valid coherence table in .docs/coherence/${slug}.md on the default branch.${detail}`,
       });
       await warnOnce(
         slug,
         `skip ${slug}: merged spec cannot build — missing or unparseable coherence artifact ` +
           `(.docs/coherence/${slug}.md) required for tier ${tier ?? 'unresolved'}. ` +
-          'Author it on the default branch; logged once.',
+          `Author it on the default branch; logged once.${detail}`,
       );
       continue;
     }

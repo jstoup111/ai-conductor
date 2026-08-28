@@ -1,3 +1,4 @@
+// Covers: task:4
 // Test: coherence artifact parser (coherence-validator.ts)
 //
 // Covers parseCoherenceArtifact(text | null):
@@ -246,7 +247,11 @@ Ship the widget with arrival tracking.
 | --- | --- | --- | --- | --- | --- |
 | criterion | Given a widget, when shipped, then it arrives. |  | covered | "Task 2 ships the widget." | diff-local |
 `),
-    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+    ).toEqual({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: 'criterion row must cite at least one task id' },
+    });
   });
 
   it.each(['covered', 'gap', 'fail'] as const)(
@@ -279,7 +284,11 @@ Ship the widget with arrival tracking.
 | --- | --- | --- | --- | --- | --- |
 | criterion | Given a widget, when shipped, then it arrives. | task-1 | probably-covered | "Task 1 owns the widget." | diff-local |
 `),
-    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+    ).toMatchObject({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: expect.stringContaining('probably-covered') },
+    });
   });
 
   it('keeps legacy rows affirmative-by-default for an unknown verdict', () => {
@@ -308,7 +317,11 @@ Ship the widget with arrival tracking.
 | --- | --- | --- | --- | --- |
 | decision | adr-2026-08-10 | story-1 | covered | "records the decision" |
 `),
-    ).toEqual({ ok: false, reason: 'unparseable-coherence-artifact' });
+    ).toMatchObject({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: { line: 3, message: expect.stringContaining('decision') },
+    });
   });
 
   it('rejects a missing file (null input) as missing-coherence-artifact', () => {
@@ -1891,7 +1904,11 @@ Cover the two acceptance variants: created and updated.
 | --- | --- | --- | --- | --- | --- |
 | criterion | ${criterion} | task-1 | covered | "Ship the widget with arrival tracking." | maybe-local |
 `),
-    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+    ).toMatchObject({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: expect.stringContaining('maybe-local') },
+    });
   });
 
   // Plan Task 17 — the #1799 census regression, using the real criterion text
@@ -2088,14 +2105,26 @@ Grounded quote evidence.
     ],
   ])('keeps malformed criterion rows non-waivable: %s', (_label, row) => {
     // S3.5 and S5.3 require malformed values to be refused rather than defaulted.
-    expect(
-      parseCoherenceArtifact(
-        `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+    const result = parseCoherenceArtifact(
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
 | --- | --- | --- | --- | --- | --- |
 ${row}
 `,
-      ),
-    ).toEqual({ ok: false, reason: 'unparseable-criterion-row' });
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'unparseable-criterion-row' });
+    if (result.ok) return;
+
+    if (_label === 'wrong cell count') {
+      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('expected 6 and actual 5') });
+    } else if (_label === 'unknown verdict') {
+      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('probably-covered') });
+    } else if (_label === 'out-of-vocabulary disposition') {
+      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('maybe-local') });
+    } else if (_label === 'empty criterion') {
+      expect(result.detail).toEqual({ line: 3, message: 'criterion text must not be empty' });
+    } else {
+      expect(result.detail).toEqual({ line: 3, message: 'criterion row must cite at least one task id' });
+    }
   });
 
   it('keeps unparseable story criteria as a fail-closed check result, not a waiver-compatible gap', () => {
@@ -2289,6 +2318,83 @@ Return requests are accepted.
 });
 
 describe('runCoherenceGate criterion fail-closed guard', () => {
+  it('carries an empty criterion row reason, line, and disagreement text through land', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-empty-criterion-'));
+    temporaryRepositories.push(worktreePath);
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | | task:1 | covered | evidence | diff-local |
+`,
+    );
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath: worktreePath,
+        tier: 'M',
+        track: 'technical',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: null,
+        planText: null,
+        prdText: null,
+        outcomeBullets: [],
+        ideaFiles: new Set(['.docs/coherence/idea.md']),
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).rejects.toThrow(/unparseable-criterion-row.*line 3.*criterion text must not be empty/is);
+  });
+
+  it('rejects a malformed coherence artifact before a waiver can bypass its parse failure', async () => {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-parse-waiver-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(canonicalPath, 'README.md'), '# fixture\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed fixture']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await mkdir(join(worktreePath, '.docs/coherence-waivers'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget, when shipped, then it arrives. | task-1 | covered | "Task 1 builds the widget." |
+`,
+    );
+    await writeFile(
+      join(worktreePath, '.docs/coherence-waivers/idea.md'),
+      'Waives: unparseable-criterion-row\nRationale: parsing failures must remain non-waivable.\n',
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'add malformed coherence artifact and waiver']);
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath,
+        tier: 'M',
+        track: 'technical',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: null,
+        planText: null,
+        prdText: null,
+        outcomeBullets: [],
+        ideaFiles: new Set(['.docs/coherence/idea.md', '.docs/coherence-waivers/idea.md']),
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).rejects.toThrow(/unparseable-criterion-row.*line 3.*expected 6 and actual 5/is);
+  });
+
   it('rejects unparseable story criteria even when a fresh waiver names criterion:stories-unparseable', async () => {
     const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-criterion-unparseable-'));
     temporaryRepositories.push(canonicalPath);

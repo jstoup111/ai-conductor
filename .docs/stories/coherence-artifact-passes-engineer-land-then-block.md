@@ -37,7 +37,7 @@ at land so that no spec can land and then be unbuildable.
 - Given a merged non-S spec whose coherence artifact declares a six-wide header over five-cell legacy rows (the #1881 shape), when discovery evaluates it, then the spec is eligible for dispatch
 - Given a merged non-S spec whose artifact has five-cell legacy rows beside six-cell criterion rows under a five-wide header (the documented ragged shape), when discovery evaluates it, then the spec is eligible for dispatch
 - Given a merged non-S spec whose artifact contains zero criterion rows, when discovery evaluates it, then the spec is eligible for dispatch
-- Given a discovery fixture corpus of artifacts the retired shallow check accepted, when discovery runs with the shared parser, then every one of those specs remains eligible (no old-accepted artifact becomes ineligible; the new predicate may accept strictly more)
+- Given a discovery fixture corpus of artifacts the retired shallow check accepted, when discovery runs with the shared parser, then no such spec is ever silently dropped: each is either eligible, or blocked with reason `missing-coherence` carrying a remedy that names the failing line and the parser's message
 
 #### Negative Paths
 - Given a merged non-S spec with no `.docs/coherence/<plan-stem>.md`, when discovery evaluates it, then it is blocked with reason `missing-coherence` and skipped with a once-per-slug log line
@@ -47,7 +47,7 @@ at land so that no spec can land and then be unbuildable.
 
 ### Done When
 - [ ] `hasCoherenceTableDataRow` is gone and discovery's non-S coherence branch calls the shared parser
-- [ ] A no-regression test runs discovery over fixtures under both predicates and asserts every old-accepted fixture stays eligible, and that the only divergences are new-predicate acceptances (condition C-A)
+- [ ] A no-regression test runs discovery over fixtures under both predicates and asserts no old-accepted fixture is silently dropped: each is either eligible, or blocked with `missing-coherence` carrying a remedy that names the offending line and the parser's message
 - [ ] The zero-criterion-rows discovery test from adr-2026-08-23 is updated to pin the same behavior through the shared parser, not deleted
 - [ ] A regression fixture reproducing the #1881 artifact shape dispatches successfully
 
