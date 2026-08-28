@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-28T12:19:38.964Z
 Slug: bin-setup-re-runs-on-every-dispatch-instead-of-onc
 Class: needs-human
 Halting step: prd_audit
