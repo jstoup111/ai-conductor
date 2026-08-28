@@ -33,11 +33,7 @@ function currentAggregate() {
 }
 
 describe('build-review raw aggregate', () => {
-  // `tautology` is a retired id too, but the reasons filter in
-  // parseBuildReviewAggregate does not strip `[tautology] ...` strings, so a
-  // tautology-carrying aggregate with legacy reasons still fails the
-  // cross-check; it is deliberately absent from this case.
-  it.each(['wiring', 'scope', 'rootCause', 'completeness', 'causalIntegrity'] as const)(
+  it.each(['wiring', 'scope', 'rootCause', 'completeness', 'causalIntegrity', 'tautology'] as const)(
     'tolerates an in-flight aggregate whose FAIL verdict derives only from the retired %s member',
     (retired) => {
       const aggregate = currentAggregate();
