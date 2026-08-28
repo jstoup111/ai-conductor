@@ -774,9 +774,16 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       );
       await execFile('git', ['add', '.'], { cwd: wt });
       await execFile('git', ['commit', '-m', 'test: add local durable shipment record'], { cwd: wt });
+      const { stdout: localHeadStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt });
+      const localHead = localHeadStdout.trim();
 
       const rec: TestRecorder = {};
       const ghCalls: string[][] = [];
+      const events = new ConductorEventEmitter();
+      const refusals: unknown[] = [];
+      events.on('shipment_evidence_refused', (event) => {
+        refusals.push(event);
+      });
       const run = makeRunFeature({
         ...deps(
           {
@@ -789,6 +796,15 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         ),
         createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
         shipmentEvidence: undefined,
+        beginFeatureRun: () => ({
+          events,
+          providerExecution: {
+            configuredProviders: ['claude'],
+            runtimes: new ProviderRuntimeSet([]),
+            sessions: new ProviderSessionStore(),
+          },
+          stop: () => {},
+        }),
         runGh: async (args) => {
           ghCalls.push(args);
           return { stdout: JSON.stringify({ url: prUrl, headRefOid: remoteHead }) };
@@ -797,20 +813,103 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
       const out = await run(ITEM);
 
+      // #2008: the two commits the refusal compared must survive the halt.
+      // The branch moves on afterwards, so a bare refusal code leaves an
+      // operator with nothing to re-derive them from.
       expect({
         status: out.status,
         reason: out.reason,
         ghCalls,
+        refusals,
         processedCalls: rec.processedCalls,
         enrollCalls: rec.enrollCalls,
         teardownKeep: rec.teardownKeep,
       }).toEqual({
         status: 'halted',
-        reason: 'durable shipment evidence refused ship: shipment-candidate-not-on-implementation-head',
+        reason:
+          'durable shipment evidence refused ship: shipment-candidate-not-on-implementation-head'
+          + ` (expected ${remoteHead}, observed ${localHead})`,
         ghCalls: [['pr', 'view', prUrl, '--json', 'url,headRefOid']],
+        refusals: [
+          {
+            type: 'shipment_evidence_refused',
+            slug: ITEM.slug,
+            pr: prUrl,
+            code: 'shipment-candidate-not-on-implementation-head',
+            expected: remoteHead,
+            observed: localHead,
+          },
+        ],
         processedCalls: [],
         enrollCalls: [],
         teardownKeep: true,
+      });
+      await expect(readFile(join(wt, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(
+        `(expected ${remoteHead}, observed ${localHead})`,
+      );
+    } finally {
+      await rm(wt, { recursive: true, force: true });
+    }
+  });
+
+  // #2008. The incident: FINISH published the PR at the record-bearing commit,
+  // the conductor's post-finish cost refresh committed a second shipped-record
+  // commit, and the audit read `headRefOid` ~1s after that push — before
+  // GitHub had reflected it. The worktree was legitimately ahead of the head
+  // the PR reported, and the ship was real.
+  it('ships a candidate that advanced past the head the PR still reports', async () => {
+    const wt = await mkdtemp(join(tmpdir(), 'wt-durable-post-finish-refresh-'));
+    const prUrl = 'https://github.com/owner/repo/pull/2004';
+    try {
+      await initTestRepo(wt);
+      await mkdir(join(wt, '.docs/plans'), { recursive: true });
+      await mkdir(join(wt, '.docs/shipped'), { recursive: true });
+      const plan = '# Durable daemon evidence\n';
+      const recordPath = join(wt, `.docs/shipped/${ITEM.slug}.md`);
+      const record = renderShippedRecord({
+        slug: ITEM.slug,
+        specHash: specHash(Buffer.from(plan), null).digest,
+        pr: prUrl,
+        shipped: '2026-08-28',
+      });
+      await writeFile(join(wt, `.docs/plans/${ITEM.slug}.md`), plan, 'utf-8');
+      await writeFile(recordPath, `${record}\n## Time\nstate: partial\n`, 'utf-8');
+      await execFile('git', ['add', '.'], { cwd: wt });
+      await execFile('git', ['commit', '-m', `shipped record: ${ITEM.slug}`], { cwd: wt });
+      const { stdout: publishedStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt });
+      const publishedHead = publishedStdout.trim();
+
+      await writeFile(recordPath, `${record}\n## Time\nstate: measured\n`, 'utf-8');
+      await execFile('git', ['add', '.'], { cwd: wt });
+      await execFile('git', ['commit', '-m', `shipped record: ${ITEM.slug}`], { cwd: wt });
+
+      const rec: TestRecorder = {};
+      const run = makeRunFeature({
+        ...deps({ done: true, halted: false, finishChoice: 'pr', prUrl }, rec),
+        createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        shipmentEvidence: undefined,
+        cleanupHaltPresentation: async () => 'confirmed' as const,
+        runGh: async () => ({
+          stdout: JSON.stringify({ url: prUrl, headRefOid: publishedHead }),
+        }),
+      });
+
+      const out = await run(ITEM);
+
+      expect({
+        status: out.status,
+        reason: out.reason,
+        processedCalls: rec.processedCalls,
+        enrollCalls: rec.enrollCalls,
+        teardownKeep: rec.teardownKeep,
+      }).toEqual({
+        status: 'done',
+        reason: undefined,
+        processedCalls: [{ slug: ITEM.slug, prUrl }],
+        enrollCalls: [{ slug: ITEM.slug, prUrl }],
+        // A PR ship retains the worktree until the human merge — teardown is
+        // never called on this path.
+        teardownKeep: undefined,
       });
     } finally {
       await rm(wt, { recursive: true, force: true });

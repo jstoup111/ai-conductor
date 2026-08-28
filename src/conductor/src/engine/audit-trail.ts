@@ -207,6 +207,14 @@ export class AuditTrailWriter {
           path: event.path,
           reason: event.reason,
         };
+      case 'shipment_evidence_refused':
+        return {
+          origin: 'finish',
+          event: event.type,
+          reason:
+            `${event.code} for ${event.slug} on ${event.pr}` +
+            ` (expected ${event.expected}, observed ${event.observed ?? 'none'})`,
+        };
       case 'halt_cleared':
         return {
           origin: event.step ?? 'build',

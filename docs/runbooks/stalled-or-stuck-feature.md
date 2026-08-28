@@ -372,6 +372,35 @@ resumes to a recorded ship](#a-cleared-finish-halt-resumes-to-a-recorded-ship) f
 does next and how to confirm it. Never repair a halted FINISH by hand — an operator-opened PR is not
 a harness finish, and the daemon has no way to learn about it.
 
+#### The post-FINISH shipment audit refused the ship
+
+**Symptom:** the daemon logs
+`✋ <slug> false-ship halted — worktree kept (durable shipment evidence refused ship: <code> (expected <sha>, observed <sha>))`,
+and `.pipeline/HALT` plus `.docs/halted/<slug>.md` carry the same sentence. The audit runs after
+FINISH converges: it re-proves the durable `.docs/shipped/<slug>.md` record against the commit the
+implementation PR will merge, and refuses every terminal ship side effect when that proof fails.
+
+**Diagnosis:** the parenthesised pair is the whole diagnosis. `expected` is the head the PR reported
+(`gh pr view <url> --json headRefOid`); `observed` is the commit the audit validated. The same pair
+is on the event spine as `shipment_evidence_refused` and in
+`.pipeline/audit-trail/events.jsonl`, so it stays readable after the branch moves on. For
+`shipment-candidate-not-on-implementation-head` the two commits are unreachable from each other,
+or the head's own tree carries no valid record — most often a record that was committed but never
+pushed. Confirm with:
+
+```bash
+git -C .worktrees/<slug> show <expected-sha>:.docs/shipped/<slug>.md
+```
+
+A local branch that is merely *ahead* of the reported head is not a refusal on its own: the
+conductor's post-finish cost refresh commits and pushes after publication, and GitHub updates a
+pull request's head asynchronously, so the audit accepts that shape whenever the head it names
+carries the record itself.
+
+**Recovery:** push the record-bearing commit to the PR branch, then clear the HALT using [the resume
+procedure](#clear-a-halt-and-let-the-feature-resume). Never open or repair the PR by hand — see
+[the manual-PR warning](#a-cleared-finish-halt-resumes-to-a-recorded-ship).
+
 #### `draft_pr_lease-rejected`
 
 **Symptom:** `.pipeline/HALT` reads

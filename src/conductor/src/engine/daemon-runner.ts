@@ -253,6 +253,7 @@ async function shipmentFailureReason(
   item: BacklogItem,
   outcome: WorktreeOutcome,
   gh: GhRunner,
+  events?: ConductorEventEmitter,
 ): Promise<string | null> {
   if (!isVerifiedShip(outcome)) return failureReasonForFalseShip(outcome);
 
@@ -271,8 +272,27 @@ async function shipmentFailureReason(
             resolveImplementationPrBinding(gh, worktree.path, implementationPr),
         });
     if (verdict.kind === 'valid') return null;
-    const detail = verdict.kind === 'refusal' ? verdict.code : verdict.reason;
-    return `durable shipment evidence refused ship: ${detail}`;
+    if (verdict.kind !== 'refusal') {
+      return `durable shipment evidence refused ship: ${verdict.reason}`;
+    }
+    // The refusal's two commits are the whole diagnosis when a reachability
+    // check fails, and a reason string alone forces the operator to re-derive
+    // them from a branch that has since moved. Put them on the spine and in
+    // the halt text the same refusal produces.
+    await events
+      ?.emit({
+        type: 'shipment_evidence_refused',
+        slug: item.slug,
+        pr: outcome.prUrl!,
+        code: verdict.code,
+        expected: verdict.expected,
+        observed: verdict.observed,
+      })
+      .catch(() => {});
+    return (
+      `durable shipment evidence refused ship: ${verdict.code}` +
+      ` (expected ${verdict.expected}, observed ${verdict.observed ?? 'none'})`
+    );
   } catch (error) {
     return `durable shipment evidence check failed: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -417,7 +437,14 @@ export function makeRunFeature(
       }
 
       if (outcome.done) {
-        const shipmentFailure = await shipmentFailureReason(deps, worktree, item, outcome, gh);
+        const shipmentFailure = await shipmentFailureReason(
+          deps,
+          worktree,
+          item,
+          outcome,
+          gh,
+          featureRun?.events,
+        );
         if (shipmentFailure === null) {
           // Happy path: outcome is a verified ship (done=true, finishChoice='pr', prUrl != null).
           // Run the existing ship side effects.

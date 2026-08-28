@@ -115,6 +115,100 @@ describe('evaluateShipmentEvidence', () => {
     });
   });
 
+  // #2008. FINISH publishes the PR at the commit that carries the durable
+  // record, and the conductor's post-finish cost refresh then commits and
+  // pushes a second shipped-record commit. The daemon audits ~1s later, so the
+  // candidate is that refresh commit while the PR object still reports the
+  // pre-refresh head — the branch is legitimately AHEAD of the reported head.
+  // The ship is real, and what proves it is that the commit the PR merges
+  // carries the record. The negative half of this pair is the `it.each` case
+  // "a committed candidate not pushed to the implementation head": same
+  // ahead-of-head shape, no record on the head, still refused.
+  it('accepts a candidate that advanced past the reported head when that head carries the record', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-post-finish-refresh-'));
+    scratchDirs.push(repoDir);
+    const slug = 'durable-evidence';
+    const pr = 'https://github.com/acme/conductor/pull/2004';
+    const plan = '# Durable evidence\n';
+    const hash = specHash(Buffer.from(plan), null).digest;
+    const recordPath = join(repoDir, `.docs/shipped/${slug}.md`);
+    const record = renderShippedRecord({ slug, specHash: hash, pr, shipped: '2026-08-28' });
+
+    await initTestRepo(repoDir);
+    await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
+    await mkdir(join(repoDir, '.docs/shipped'), { recursive: true });
+    await writeFile(join(repoDir, `.docs/plans/${slug}.md`), plan);
+    await writeFile(recordPath, `${record}\n## Time\nstate: partial\n`);
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', `shipped record: ${slug}`], { cwd: repoDir });
+    const { stdout: publishedStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    const publishedHead = publishedStdout.trim();
+
+    // The post-finish refresh rewrites only the measured cost/time block; the
+    // frontmatter the evaluator hashes is byte-identical.
+    await writeFile(recordPath, `${record}\n## Time\nstate: measured\nactive_ms: 3935009\n`);
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', `shipped record: ${slug}`], { cwd: repoDir });
+    const { stdout: refreshedStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    const candidateCommit = refreshedStdout.trim();
+
+    await expect(
+      evaluateShipmentEvidence(
+        { repoDir, slug, implementationPr: pr, candidateCommit },
+        { githubRunner: async () => ({ url: pr, headRefOid: publishedHead }) },
+      ),
+    ).resolves.toEqual({
+      kind: 'valid',
+      slug,
+      pr,
+      recordPath: `.docs/shipped/${slug}.md`,
+      hash,
+      commit: publishedHead,
+    });
+  });
+
+  it('refuses a candidate that advanced past a head whose record binds a different PR', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-head-record-foreign-'));
+    scratchDirs.push(repoDir);
+    const slug = 'durable-evidence';
+    const pr = 'https://github.com/acme/conductor/pull/2004';
+    const otherPr = 'https://github.com/acme/conductor/pull/1999';
+    const plan = '# Durable evidence\n';
+    const hash = specHash(Buffer.from(plan), null).digest;
+    const recordPath = join(repoDir, `.docs/shipped/${slug}.md`);
+
+    await initTestRepo(repoDir);
+    await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
+    await mkdir(join(repoDir, '.docs/shipped'), { recursive: true });
+    await writeFile(join(repoDir, `.docs/plans/${slug}.md`), plan);
+    await writeFile(
+      recordPath,
+      renderShippedRecord({ slug, specHash: hash, pr: otherPr, shipped: '2026-08-28' }),
+    );
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', 'test: record binding a foreign PR'], { cwd: repoDir });
+    const { stdout: headStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    const publishedHead = headStdout.trim();
+
+    await writeFile(recordPath, renderShippedRecord({ slug, specHash: hash, pr, shipped: '2026-08-28' }));
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', 'test: rebind the record locally'], { cwd: repoDir });
+    const { stdout: candidateStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    const candidateCommit = candidateStdout.trim();
+
+    await expect(
+      evaluateShipmentEvidence(
+        { repoDir, slug, implementationPr: pr, candidateCommit },
+        { githubRunner: async () => ({ url: pr, headRefOid: publishedHead }) },
+      ),
+    ).resolves.toEqual({
+      kind: 'refusal',
+      code: 'shipment-candidate-not-on-implementation-head',
+      expected: publishedHead,
+      observed: candidateCommit,
+    });
+  });
+
   it('refuses a candidate when the implementation PR binding reports a different head', async () => {
     const repoDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-pr-head-mismatch-'));
     scratchDirs.push(repoDir);

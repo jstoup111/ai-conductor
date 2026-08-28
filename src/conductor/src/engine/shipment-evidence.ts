@@ -59,9 +59,24 @@ export interface ImplementationPrBinding {
 }
 
 export interface ShipmentEvidenceDependencies {
-  readFile?: (path: string) => Promise<Buffer | null>;
+  /**
+   * Read a repository-relative path out of a committed tree. The commit is an
+   * explicit argument because the evaluator may have to inspect more than one
+   * tree: the caller's candidate, and — when the branch has legitimately
+   * advanced past the head the PR reports — the implementation head itself.
+   * Callers that only ever serve one tree may ignore the second parameter.
+   */
+  readFile?: (path: string, commit: string) => Promise<Buffer | null>;
   gitRunner?: (args: string[]) => Promise<string>;
   githubRunner?: (pr: string) => Promise<ImplementationPrBinding>;
+}
+
+/** The durable record proven against one committed tree. */
+interface ValidatedShipmentRecord {
+  slug: string;
+  pr: string;
+  recordPath: string;
+  hash: string;
 }
 
 /**
@@ -102,127 +117,142 @@ export async function evaluateShipmentEvidence(
     );
   }
 
-  const readFile = dependencies.readFile ?? ((path: string) => showAtCommit(repoDir, candidateCommit, path));
+  const readFile: (path: string, commit: string) => Promise<Buffer | null> =
+    dependencies.readFile ?? ((path: string, commit: string) => showAtCommit(repoDir, commit, path));
   const gitRunner = dependencies.gitRunner ?? ((args: string[]) => runGit(repoDir, args));
-  const exactPlanPath = `.docs/plans/${slug}.md`;
-  const exactRecordPath = `.docs/shipped/${slug}.md`;
-  // Preserve the strict verifier's established record-first failure surface
-  // for ordinary (exact-stem) plans. Date-prefixed fallback only engages when
-  // the exact plan is absent, so an I/O failure reading the expected record is
-  // never hidden by a later plan lookup.
-  const exactRecordContent = await readEvidenceFile(readFile, exactRecordPath);
-  if (isRefusal(exactRecordContent)) return exactRecordContent;
-  let planBytes = await readEvidenceFile(readFile, exactPlanPath);
-  if (isRefusal(planBytes)) return planBytes;
 
-  let identity;
-  let recordContent;
-  if (planBytes === null) {
-    let planPaths: string[];
-    try {
-      planPaths = await listPlanPathsAtCommit(gitRunner, candidateCommit);
-    } catch (error) {
-      // The ordinary record is already absent. The dated fallback is an
-      // optional identity extension, never a reason to obscure that
-      // established missing-record failure surface when the candidate tree
-      // cannot be enumerated (as in the daemon's synthetic false-ship test).
-      if (exactRecordContent === null) {
-        return refusal('shipped-record-missing', exactRecordPath, null);
-      }
-      return unavailable('shipment-evidence-git-unavailable', 'committed plan identity', error);
-    }
-    const resolution = resolveShipmentIdentity(slug, planPaths);
-    if (resolution.kind === 'missing') {
-      return refusal('shipment-plan-missing', resolution.expected, null);
-    }
-    if (resolution.kind === 'ambiguous') {
-      return refusal('shipment-plan-ambiguous', resolution.expected, resolution.candidates.join(', '));
-    }
-    identity = resolution.identity;
-    planBytes = await readEvidenceFile(readFile, identity.planPath);
+  /**
+   * Prove the durable record, its identity, and its spec hash from exactly one
+   * committed tree. Working-tree files are deliberately never considered.
+   */
+  const validateRecordAtCommit = async (
+    commit: string,
+  ): Promise<ValidatedShipmentRecord | ShipmentEvidenceRefusal> => {
+    const exactPlanPath = `.docs/plans/${slug}.md`;
+    const exactRecordPath = `.docs/shipped/${slug}.md`;
+    // Preserve the strict verifier's established record-first failure surface
+    // for ordinary (exact-stem) plans. Date-prefixed fallback only engages when
+    // the exact plan is absent, so an I/O failure reading the expected record is
+    // never hidden by a later plan lookup.
+    const exactRecordContent = await readEvidenceFile(readFile, exactRecordPath, commit);
+    if (isRefusal(exactRecordContent)) return exactRecordContent;
+    let planBytes = await readEvidenceFile(readFile, exactPlanPath, commit);
     if (isRefusal(planBytes)) return planBytes;
-    if (planBytes === null) return refusal('shipment-plan-missing', identity.planPath, null);
-    recordContent = await readEvidenceFile(readFile, identity.recordPath);
-    if (isRefusal(recordContent)) return recordContent;
-  } else {
-    const resolution = resolveShipmentIdentity(slug, [exactPlanPath]);
-    if (resolution.kind !== 'resolved') {
-      return refusal('shipment-plan-missing', exactPlanPath, null);
-    }
-    identity = resolution.identity;
-    recordContent = exactRecordContent;
-  }
 
-  const { recordPath } = identity;
-  if (recordContent === null) {
-    const workingTreeRecord = await existsInWorkingTree(repoDir, recordPath);
-    if (isRefusal(workingTreeRecord)) return workingTreeRecord;
-    if (workingTreeRecord) {
-      return refusal(
-        'shipped-record-not-in-candidate',
-        candidateCommit,
-        'working-tree-only',
-      );
+    let identity;
+    let recordContent;
+    if (planBytes === null) {
+      let planPaths: string[];
+      try {
+        planPaths = await listPlanPathsAtCommit(gitRunner, commit);
+      } catch (error) {
+        // The ordinary record is already absent. The dated fallback is an
+        // optional identity extension, never a reason to obscure that
+        // established missing-record failure surface when the candidate tree
+        // cannot be enumerated (as in the daemon's synthetic false-ship test).
+        if (exactRecordContent === null) {
+          return refusal('shipped-record-missing', exactRecordPath, null);
+        }
+        return unavailable('shipment-evidence-git-unavailable', 'committed plan identity', error);
+      }
+      const resolution = resolveShipmentIdentity(slug, planPaths);
+      if (resolution.kind === 'missing') {
+        return refusal('shipment-plan-missing', resolution.expected, null);
+      }
+      if (resolution.kind === 'ambiguous') {
+        return refusal('shipment-plan-ambiguous', resolution.expected, resolution.candidates.join(', '));
+      }
+      identity = resolution.identity;
+      planBytes = await readEvidenceFile(readFile, identity.planPath, commit);
+      if (isRefusal(planBytes)) return planBytes;
+      if (planBytes === null) return refusal('shipment-plan-missing', identity.planPath, null);
+      recordContent = await readEvidenceFile(readFile, identity.recordPath, commit);
+      if (isRefusal(recordContent)) return recordContent;
+    } else {
+      const resolution = resolveShipmentIdentity(slug, [exactPlanPath]);
+      if (resolution.kind !== 'resolved') {
+        return refusal('shipment-plan-missing', exactPlanPath, null);
+      }
+      identity = resolution.identity;
+      recordContent = exactRecordContent;
     }
-    return refusal(
-      'shipped-record-missing',
-      recordPath,
-      null,
-    );
-  }
 
-  const recordText = recordContent.toString('utf8');
-  const rawFields = readFrontmatterFields(recordText);
-  if (rawFields === null) {
-    return refusal(
-      'shipped-record-malformed',
-      'parseable shipped record',
-      'malformed',
-    );
-  }
-  for (const field of ['slug', 'spec_hash', 'pr', 'shipped'] as const) {
-    if (!rawFields[field]) {
+    const { recordPath } = identity;
+    if (recordContent === null) {
+      const workingTreeRecord = await existsInWorkingTree(repoDir, recordPath);
+      if (isRefusal(workingTreeRecord)) return workingTreeRecord;
+      if (workingTreeRecord) {
+        return refusal(
+          'shipped-record-not-in-candidate',
+          commit,
+          'working-tree-only',
+        );
+      }
       return refusal(
-        'shipped-record-incomplete',
-        field,
+        'shipped-record-missing',
+        recordPath,
         null,
       );
     }
-  }
 
-  const record = parseShippedRecord(recordText);
-  if ('malformed' in record) {
-    return refusal(
-      'shipped-record-malformed',
-      'parseable shipped record',
-      'malformed',
-    );
-  }
-  if (record.slug !== identity.slug) {
-    return refusal(
-      'shipped-record-slug-mismatch',
-      identity.slug,
-      record.slug,
-    );
-  }
-  if (record.pr !== implementationPr) {
-    return refusal(
-      'shipped-record-pr-mismatch',
-      implementationPr,
-      record.pr,
-    );
-  }
+    const recordText = recordContent.toString('utf8');
+    const rawFields = readFrontmatterFields(recordText);
+    if (rawFields === null) {
+      return refusal(
+        'shipped-record-malformed',
+        'parseable shipped record',
+        'malformed',
+      );
+    }
+    for (const field of ['slug', 'spec_hash', 'pr', 'shipped'] as const) {
+      if (!rawFields[field]) {
+        return refusal(
+          'shipped-record-incomplete',
+          field,
+          null,
+        );
+      }
+    }
 
-  const storiesBytes = await readStoriesBytes(readFile, identity.slug, planBytes);
-  if (isRefusal(storiesBytes)) return storiesBytes;
-  const hash = specHash(planBytes, storiesBytes).digest;
-  if (record.specHash !== hash) {
-    return refusal(
-      'shipped-record-hash-mismatch',
-      hash,
-      record.specHash,
-    );
-  }
+    const record = parseShippedRecord(recordText);
+    if ('malformed' in record) {
+      return refusal(
+        'shipped-record-malformed',
+        'parseable shipped record',
+        'malformed',
+      );
+    }
+    if (record.slug !== identity.slug) {
+      return refusal(
+        'shipped-record-slug-mismatch',
+        identity.slug,
+        record.slug,
+      );
+    }
+    if (record.pr !== implementationPr) {
+      return refusal(
+        'shipped-record-pr-mismatch',
+        implementationPr,
+        record.pr,
+      );
+    }
+
+    const storiesBytes = await readStoriesBytes(readFile, identity.slug, planBytes, commit);
+    if (isRefusal(storiesBytes)) return storiesBytes;
+    const hash = specHash(planBytes, storiesBytes).digest;
+    if (record.specHash !== hash) {
+      return refusal(
+        'shipped-record-hash-mismatch',
+        hash,
+        record.specHash,
+      );
+    }
+
+    return { slug: identity.slug, pr: record.pr, recordPath, hash };
+  };
+
+  const candidateRecord = await validateRecordAtCommit(candidateCommit);
+  if (isRefusal(candidateRecord)) return candidateRecord;
 
   let binding: ImplementationPrBinding;
   try {
@@ -257,11 +287,48 @@ export async function evaluateShipmentEvidence(
     return unavailable('shipment-evidence-git-unavailable', 'candidate-tree/head reachability', error);
   }
   if (candidateOnHead.trim() !== 'true') {
-    return refusal(
+    const notOnHead = refusal(
       'shipment-candidate-not-on-implementation-head',
       implementationHead,
       candidateCommit,
     );
+
+    // The branch can legitimately be AHEAD of the head the PR reports. The
+    // conductor's post-finish shipped-record refresh commits and pushes after
+    // FINISH has already published, and GitHub updates a pull request's
+    // `headRefOid` asynchronously after accepting the ref update — so a local
+    // checkout ahead of the reported head is an ordering artefact of the ship,
+    // not evidence of one. What makes the ship real is unchanged: the commit
+    // the pull request will merge must itself carry the durable record. Prove
+    // that directly instead of trusting either snapshot's timing.
+    //
+    // This never softens the guard. A record that was committed but never
+    // pushed leaves the same "candidate ahead of head" shape, and the head's
+    // own tree has no valid record — so it still refuses. Divergent histories
+    // (neither commit reachable from the other) refuse without a second look.
+    let headOnCandidate: string;
+    try {
+      headOnCandidate = await gitRunner([
+        'merge-base',
+        '--is-ancestor',
+        implementationHead,
+        candidateCommit,
+      ]);
+    } catch {
+      return notOnHead;
+    }
+    if (headOnCandidate.trim() !== 'true') return notOnHead;
+
+    const headRecord = await validateRecordAtCommit(implementationHead);
+    if (isRefusal(headRecord)) return notOnHead;
+    return {
+      kind: 'valid',
+      slug: headRecord.slug,
+      pr: headRecord.pr,
+      recordPath: headRecord.recordPath,
+      hash: headRecord.hash,
+      commit: implementationHead,
+    };
   }
 
   let resolvedHead: string;
@@ -276,10 +343,10 @@ export async function evaluateShipmentEvidence(
 
   return {
     kind: 'valid',
-    slug: identity.slug,
-    pr: record.pr,
-    recordPath,
-    hash,
+    slug: candidateRecord.slug,
+    pr: candidateRecord.pr,
+    recordPath: candidateRecord.recordPath,
+    hash: candidateRecord.hash,
     commit: candidateCommit,
   };
 }
@@ -316,7 +383,7 @@ function unavailable(
 }
 
 function isRefusal(
-  value: Buffer | null | boolean | ShipmentEvidenceRefusal,
+  value: Buffer | null | boolean | ValidatedShipmentRecord | ShipmentEvidenceRefusal,
 ): value is ShipmentEvidenceRefusal {
   return value !== null && typeof value !== 'boolean' && 'kind' in value;
 }
@@ -336,26 +403,28 @@ function readFrontmatterFields(content: string): Record<string, string> | null {
 }
 
 async function readStoriesBytes(
-  readFile: (path: string) => Promise<Buffer | null>,
+  readFile: (path: string, commit: string) => Promise<Buffer | null>,
   slug: string,
   planBytes: Buffer,
+  commit: string,
 ): Promise<Buffer | null | ShipmentEvidenceRefusal> {
   const planContent = planBytes.toString('utf8');
   const reference = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im)?.[1];
   if (reference && !isAbsolute(reference)) {
-    const stories = await readEvidenceFile(readFile, reference);
+    const stories = await readEvidenceFile(readFile, reference, commit);
     if (isRefusal(stories)) return stories;
     if (stories !== null) return stories;
   }
-  return readEvidenceFile(readFile, `.docs/stories/${slug}.md`);
+  return readEvidenceFile(readFile, `.docs/stories/${slug}.md`, commit);
 }
 
 async function readEvidenceFile(
-  readFile: (path: string) => Promise<Buffer | null>,
+  readFile: (path: string, commit: string) => Promise<Buffer | null>,
   path: string,
+  commit: string,
 ): Promise<Buffer | null | ShipmentEvidenceRefusal> {
   try {
-    return await readFile(path);
+    return await readFile(path, commit);
   } catch (error) {
     return unavailable('shipment-evidence-file-unavailable', path, error);
   }
