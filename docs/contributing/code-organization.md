@@ -22,7 +22,7 @@ notice and links the required branch, validation, documentation, and release-met
 | Path | Contents |
 | --- | --- |
 | `src/conductor/src/` | Engine source. Five directories plus seven entry-point files. |
-| `src/conductor/test/` | Vitest suite. See [testing](testing.md). |
+| `src/conductor/test/` | TypeScript test suites using Vitest and flat `node:test` behavior tests. See [testing](testing.md). |
 | `src/conductor/scripts/` | `publish-engine.mjs` (the build), `publish-guard.mjs`, `intake-label-sync-apply.mts`. |
 | `src/conductor/bin/` | `intake-file` — a `tsx` shebang wrapper over `src/intake-file-cli.ts`. |
 | `bin/` | Repo-root bash wrappers: `conduct-ts`, `install`, `setup`, `update`, `migrate`, `generate-model-table`, `generate-docs-guard-hook`, `intake-file`, `intake-backfill`, `quarantine-engineer-signals`. |

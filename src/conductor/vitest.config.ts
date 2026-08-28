@@ -20,6 +20,7 @@ export default defineConfig({
       'test/smoke/**',
       '**/*.smoke.test.ts',
       'test/engine/deterministic-build-verification-group.test.ts',
+      'test/engineer-lifecycle-cli.test.ts',
     ],
     environment: 'node',
     // Global guards (see test/setup.ts): never spawn a real build daemon, and
