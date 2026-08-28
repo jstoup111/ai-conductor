@@ -3,7 +3,7 @@ import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';
 import {
   assertRegistryCovers,
   configConsumerRegistry,
-} from './config-consumer-registry.js';
+} from '../../src/engine/config-consumer-registry.js';
 
 describe('config consumer registry', () => {
   it('is total over validator-accepted keys', () => {
@@ -44,15 +44,18 @@ describe('config consumer registry', () => {
     ]));
   });
 
-  it('rejects a newly accepted nested key until it declares a consumer', () => {
-    const extendedSets = {
-      ...CONFIG_CONSUMER_KEY_SETS,
-      test_suite: [...CONFIG_CONSUMER_KEY_SETS.test_suite, 'new_probe_key'],
-    };
-    expect(() => assertRegistryCovers(extendedSets, configConsumerRegistry)).toThrow(
-      'Config key is undeclared: test_suite.new_probe_key',
-    );
-  });
+  it.each(['test_suite', 'prd_audit', 'assess', 'build_progress'] as const)(
+    'rejects a newly accepted %s key until it declares a consumer',
+    (block) => {
+      const extendedSets = {
+        ...CONFIG_CONSUMER_KEY_SETS,
+        [block]: [...CONFIG_CONSUMER_KEY_SETS[block], 'new_probe_key'],
+      };
+      expect(() => assertRegistryCovers(extendedSets, configConsumerRegistry)).toThrow(
+        `Config key is undeclared: ${block}.new_probe_key`,
+      );
+    },
+  );
 
   it('requires an explained reason for every none declaration', () => {
     for (const [key, declaration] of Object.entries(configConsumerRegistry)) {
