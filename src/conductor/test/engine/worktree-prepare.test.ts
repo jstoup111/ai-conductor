@@ -264,7 +264,10 @@ describe('engine/worktree-prepare', () => {
       await prepareWorktree(dir, (message) => log.push(message), { ...setupOpts, events });
 
       expect(seen).toEqual([{ type: 'project_setup', ran: false, reason: 'no-script' }]);
-      expect(log).toContain('no bin/setup — skipping project setup');
+      // adr-2026-08-26 decision 3: the reason rides the spine and nothing else
+      // reports it. A raw log write alongside the event is a second channel the
+      // ledger cannot see, so assert its absence rather than its content.
+      expect(log).not.toContain('no bin/setup — skipping project setup');
       await expect(readSetupMarker(dir)).resolves.toBeNull();
     });
 
@@ -738,8 +741,12 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
     // No bin/setup must resolve cleanly without any special markers.
     const log: string[] = [];
     await expect(prepareWorktree(dir, (m) => log.push(m))).resolves.toBeUndefined();
-    // Should have written the namespace but not mentioned running setup.
-    expect(log.some((l) => l.includes('skipping project setup'))).toBe(true);
+    // adr-2026-08-26 decision 3: the setup decision is reported only as a
+    // rendered `project_setup` event. With no emitter supplied there is no
+    // second channel to fall back to, so the absent script is silent here —
+    // the emitted-reason path is covered where an emitter is injected.
+    expect(log.some((l) => l.includes('skipping project setup'))).toBe(false);
+    expect(log.some((l) => l.includes(`running ${SETUP_SCRIPT}`))).toBe(false);
     // .env should exist with the namespace.
     const env = await readFile(join(dir, '.env'), 'utf-8');
     expect(env).toContain(NAMESPACE_VAR);
