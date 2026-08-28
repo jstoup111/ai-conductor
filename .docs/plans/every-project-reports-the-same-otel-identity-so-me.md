@@ -213,3 +213,11 @@ Task 3 ─▶ Task 5 ─▶ Task 6
 - [ ] No task exceeds 5 minutes
 - [ ] Every task has falsifiable Done-when checks
 - [ ] Dependencies explicit and acyclic
+
+### Task rem-prd-audit-rem-fr-s31-1: src/conductor/test/engine/otel/otel-visualizer.test.ts:277,296 — rebuild the Task 5 identity fixture to construct via `createOtelVisualizer(resolved, ctx)` (src/conductor/src/engine/otel/create-otel-visualizer.ts:19-29) instead of `new OtelVisualizer(...)`, and pass a real VisualizerStartContext to `start(identityEmitter, ctx)` so the deprecated legacyStartContext fallback at otel-visualizer.ts:282 is not exercised. Keep every existing identity assertion in that block byte-for-byte (basename derivation :313, distinct roots :337, feature fallback :327) — this changes only the construction path, never what is asserted.
+**Gate:** prd-audit
+**Rationale:** Evidence gap, not a defect (audit confidence 90%, verified): src/conductor/test/engine/otel/otel-visualizer.test.ts:277 builds the identity fixture with `new OtelVisualizer(resolved, {...})` and :296 calls `vis.start(identityEmitter)` with no VisualizerStartContext, so the assertions run through the `legacyStartContext` fallback at src/conductor/src/engine/otel/otel-visualizer.ts:282 whose backing fields are marked @deprecated for identity (:130-136), while production constructs through createOtelVisualizer at src/conductor/src/engine/plugin-loader.ts:244. Plan Task 5 (.docs/plans/every-project-reports-the-same-otel-identity-so-me.md:142) already owns this — its step 1 specifies driving `createOtelVisualizer` and its Done-when requires the assertions to pass through the production construction path — so the repair is inside an existing task's contract, not a planning omission. This strengthens an existing test rather than removing coverage: every current identity assertion is preserved and merely re-driven through the production entry point, so Task 5's delivered coverage survives intact. Class sweep: the same legacy-construction shape is the only identity driver in this file; the other createOtelVisualizer drivers at src/conductor/test/daemon-otel-wiring.test.ts:321,364 assert renderer errors and teardown and carry no identity assertions to restate, so they are named found-and-excluded rather than edited.
+**Criterion:** S3.1
+**Parent task:** 5
+**Done when:**
+- S3.1 is satisfied by this task.
