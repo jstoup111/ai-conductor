@@ -109,6 +109,8 @@ describe('buildResource', () => {
         'conductor.run.id': 'explicit-run-id',
         'conductor.feature': 'explicit-feature',
         'conductor.project': 'explicit-project',
+        'conductor.branch': 'unknown',
+        'conductor.engine.version': 'unknown',
       },
       {
         'service.name': 'ai-conductor',
@@ -116,6 +118,8 @@ describe('buildResource', () => {
         'conductor.run.id': 'persisted-run-id',
         'conductor.feature': 'persisted-feature',
         'conductor.project': 'persisted-project',
+        'conductor.branch': 'unknown',
+        'conductor.engine.version': 'unknown',
       },
     ]);
   });

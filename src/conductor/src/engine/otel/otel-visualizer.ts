@@ -445,8 +445,11 @@ export class OtelVisualizer implements VisualizerPlugin {
     const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
     const meter = this.meterProvider.getMeter('conductor', '1.0.0');
     this.metricsRecorder = new MetricsRecorder(meter, {
-      project: this.projectNameOverride ?? basename(context.project),
-      feature: context.feature,
+      // Identity is optional on the start context, and MetricsRecorder's own
+      // default for an absent value is 'unknown'. Mirror it here rather than
+      // emitting an empty attribute, which reads as a real identity downstream.
+      project: this.projectNameOverride ?? (context.project ? basename(context.project) : 'unknown'),
+      feature: context.feature ?? 'unknown',
     });
     this.spanManager = new SpanManager(tracer, this.onWarning, {
       onStepClose: (step, durationMs, retryCount) => {
