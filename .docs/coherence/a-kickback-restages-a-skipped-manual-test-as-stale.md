@@ -1,0 +1,43 @@
+# Coherence Mapping: Kickback preserves skipped step status (#1987)
+
+Technical track (no PRD — fr row class omitted). Intake outcomes staged from
+jstoup111/ai-conductor#1987. Tier M. Verdicts confirmed against the real artifact files.
+
+| Row class | Cited id(s) | Counterpart id(s) | Verdict | Quote / Notes | Disposition |
+|---|---|---|---|---|---|
+| outcome | outcome-1 | story-1, story-2 | covered | Story 1 keeps `skipped` through every kickback; story 2 refuses the write at the port for any other caller |
+| outcome | outcome-2 | story-1 | covered | Skipped-manual_test feature reaches FINISH with ship evidence present after a kickback |
+| outcome | outcome-3 | story-2 | covered | Divergence refused and reported at the write, on the spine, at the point it is introduced |
+| outcome | outcome-4 | story-3 | covered | `--diagnose` reports a skipped step as skipped; fail-closed for ran steps preserved |
+| adr | adr-2026-07-06-manual-test-fail-routing | story-1 | covered | Amended 2026-08-27; D2 restage narrowed to a manual_test that ran and FAILED |
+| adr | adr-2026-07-10-validation-group-join | story-1 | covered | Amended 2026-08-27; kickback restage honors member skip rules on the way back |
+| story | story-1 | task-1, task-2, task-3, task-4 | covered | Filter helper plus all four kickback sites routed through it |
+| story | story-2 | task-5, task-6, task-7 | covered | Port rule, spine event + sinks, refusal-aware adoption |
+| story | story-3 | task-8 | covered | Skip-aware verifyCompleteState, reporting-only |
+| task | task-1 | story-1 | covered | Infrastructure: the skip-preserving filter itself |
+| task | task-2 | story-1 | covered | manual_test FAIL kickback site routed |
+| task | task-3 | story-1 | covered | Validation group + gaps sites routed |
+| task | task-4 | story-1 | covered | build_review kickback site (incident) routed |
+| task | task-5 | story-2 | covered | Port domain rule before the applied branch |
+| task | task-6 | story-2 | covered | Refusal event declared in all three sinks |
+| task | task-7 | story-2 | covered | Refused fields not adopted into memory/snapshot |
+| task | task-8 | story-3 | covered | Skip short-circuit in complete-verifier |
+| criterion | Story 1 happy: Given a feature whose `manual_test` status is `skipped`, when a `build_review` kickback restages the SHIP tail, then `manual_test` remains `skipped` in conduct-state and only steps that actually ran are marked `stale` | task-4 | covered | asserts `manual_test: 'skipped'` survives in the persisted state | diff-local |
+| criterion | Story 1 happy: Given a feature whose `manual_test` status is `skipped` and a validation-group member fails, when the consolidated kickback restages the group, then `manual_test` and every other skipped member remain `skipped` | task-3 | covered | skipped member untouched, ran member staled, in one restage | diff-local |
+| criterion | Story 1 happy: Given a feature whose `manual_test` status is `skipped` that has taken a kickback, when the run reaches the FINISH preflight, then ship evidence reports present and publication proceeds without `ship_evidence_invalid` | task-4 | covered | asserts ship evidence evaluates present afterward via the `stepDone` predicate pair | diff-local |
+| criterion | Story 1 happy: Given a `manual_test` that ran and FAILED, when its FAIL kickback routes back to build, then `manual_test` is restaged `stale` exactly as before | task-2 | covered | a failed manual_test is still restaged `stale` by this site | diff-local |
+| criterion | Story 1 negative: Given a feature whose `manual_test` status is `skipped`, when two successive kickbacks occur before FINISH, then `manual_test` is still `skipped` after both and the FINISH preflight passes | task-4 | covered | two successive kickbacks leave `manual_test` still `skipped` | diff-local |
+| criterion | Story 1 negative: Given a kickback whose stale set names both a `done` step and a `skipped` step, when the restage commits, then the `done` step becomes `stale` while the `skipped` step is untouched — the filter is per-field, not all-or-nothing | task-1 | covered | a `skipped` field is dropped while `done` and `failed` fields survive in the same record | diff-local |
+| criterion | Story 1 negative: Given a kickback whose stale set is emptied entirely by the skip filter, when the restage runs, then no state write occurs and the kickback's routing target, retry hints, and kickback-ledger budget are unchanged | task-3 | covered | an emptied stale set performs no state write and leaves the kickback ledger file unchanged | diff-local |
+| criterion | Story 1 negative: Given a step whose status is `failed`, when a kickback restages it, then it becomes `stale` — the filter preserves only `skipped`, never blocking legitimate restage of ran steps | task-2 | covered | a failed manual_test is still restaged `stale` by this site | diff-local |
+| criterion | Story 2 happy: Given a state mutation batch containing `manual_test: skipped → stale`, when the mutation port applies the batch, then that field's write is refused, every other field in the batch applies normally, and the persisted state keeps `manual_test: 'skipped'` | task-5, task-7 | covered | returns `resolved` (not `applied`) with a diagnostic naming field and intent | diff-local |
+| criterion | Story 2 happy: Given a refused skipped-to-stale write, when the refusal occurs, then a conductor event naming the field, expected value, requested value, and mutation intent is emitted on the existing event spine and lands in `.pipeline/events.jsonl` | task-6 | covered | the refusal event appears in `.pipeline/events.jsonl` with field, expected `skipped`, requested `stale` | diff-local |
+| criterion | Story 2 happy: Given a refused skipped-to-stale write during a live run, when the refusal is reported, then the run continues (no throw out of the conductor loop, no halt) with the skipped status preserved | task-7 | covered | the conductor loop continues (no throw, no halt) after the refusal | diff-local |
+| criterion | Story 2 negative: Given a mutation batch writing `done → stale` or `failed → stale`, when the port applies it, then the write succeeds — the domain rule matches only a `skipped` expected value | task-5 | covered | prove `done`→`stale`, `failed`→`stale`, and `skipped`→`done` all still return `applied` | diff-local |
+| criterion | Story 2 negative: Given a mutation batch writing `skipped → done` (a step legitimately re-decided and run), when the port applies it, then the write succeeds — only the `stale` requested value is refused | task-5 | covered | prove `done`→`stale`, `failed`→`stale`, and `skipped`→`done` all still return `applied` | diff-local |
+| criterion | Story 2 negative: Given a restage-shaped call site that bypasses the shared helper, when it attempts `skipped → stale`, then the port refusal still protects the state — the invariant does not depend on callers using the helper | task-7 | covered | a call site bypassing the helper (direct `commitStateChanges` with skipped→stale) is protected end to end | diff-local |
+| criterion | Story 2 negative: Given the new refusal event member, when the sink registry compiles, then render, persist, and audit sinks each declare a handler — a missing declaration is a compile error, not a silent drop | task-6 | covered | compiles only with all sink declarations present (registry exhaustiveness) | diff-local |
+| criterion | Story 3 happy: Given a complete-marked worktree whose state records `manual_test` and `finish` as `skipped`, when `--diagnose` runs, then neither step appears as an evidence gap and the command reports the state as consistent | task-8 | covered | skipped steps produce no gap entries while the report stays ok | diff-local |
+| criterion | Story 3 happy: Given a complete-marked worktree with one `skipped` step and one genuinely missing artifact for a `done` step, when `--diagnose` runs, then only the `done` step is reported as a gap | task-8 | covered | the ran step's gap is reported with unchanged reason text | diff-local |
+| criterion | Story 3 negative: Given a complete-marked worktree whose `test_suite` is `done` but its evidence artifact is missing, when `--diagnose` runs, then the gap is still reported and the exit code is still non-zero — skip-awareness loosens nothing for ran steps | task-8 | covered | the caller still exits non-zero | diff-local |
+| criterion | Story 3 negative: Given a worktree whose step status is absent (pending) with no evidence, when `--diagnose` runs, then the step is still reported as a gap — only an explicit `skipped` status short-circuits the artifact check | task-8 | covered | a step with no status (pending) and no evidence is still a gap | diff-local |
