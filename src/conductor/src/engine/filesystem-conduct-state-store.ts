@@ -192,7 +192,22 @@ export function createFilesystemConductStateStore(
           }
         }
 
-        const nextState = batch.mutations.reduce<ConductState>((updated, mutation) => ({
+        const resolvedFields: string[] = [];
+        const appliedMutations: StateMutation<ConductState>[] = [];
+        for (const mutation of batch.mutations) {
+          const result = evaluateConductStateMutation(
+            (state as Record<string, unknown>)[mutation.field],
+            mutation,
+            diagnostics,
+          );
+          if (result.kind === 'resolved') {
+            resolvedFields.push(mutation.field);
+          } else {
+            appliedMutations.push(mutation);
+          }
+        }
+
+        const nextState = appliedMutations.reduce<ConductState>((updated, mutation) => ({
           ...updated,
           [mutation.field]: mutation.next,
         }), state);
@@ -201,7 +216,7 @@ export function createFilesystemConductStateStore(
         } catch (error) {
           return { kind: 'persistence', message: `Failed to persist state: ${error}` };
         }
-        return { kind: 'applied' };
+        return resolvedFields.length > 0 ? { kind: 'applied', resolvedFields } : { kind: 'applied' };
       });
     },
 

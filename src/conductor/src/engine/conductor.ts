@@ -119,6 +119,7 @@ import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
   StateMutation,
+  StateMutationResult,
 } from './conduct-state-store.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import {
@@ -2791,10 +2792,12 @@ export class Conductor {
    */
   private async applyStateBatch(
     batch: NamedAtomicStateMutationBatch<ConductState>,
-  ): Promise<void> {
+  ): Promise<StateMutationResult> {
     const result = await this.stateStore.applyBatch(batch);
     if ('message' in result) throw new Error(result.message);
-    this.recordPersistedFields(batch.mutations);
+    const resolved = new Set(result.kind === 'applied' ? result.resolvedFields : []);
+    this.recordPersistedFields(batch.mutations.filter((mutation) => !resolved.has(mutation.field)));
+    return result;
   }
 
   private async applyStateMutation(mutation: StateMutation<ConductState>): Promise<void> {
@@ -2855,8 +2858,12 @@ export class Conductor {
       });
     if (mutations.length === 0) return;
 
-    await this.applyStateBatch({ name, mutations });
-    Object.assign(current, changes);
+    const result = await this.applyStateBatch({ name, mutations });
+    const resolved = new Set(result.kind === 'applied' ? result.resolvedFields : []);
+    Object.assign(
+      current,
+      Object.fromEntries(Object.entries(changes).filter(([field]) => !resolved.has(field))),
+    );
     this.persistedStateSnapshot = { ...state };
   }
 
