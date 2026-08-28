@@ -1,4 +1,6 @@
 /**
+ * Covers: task:1
+ *
  * span-manager.test.ts — unit tests for SpanManager via OtelVisualizer.
  *
  * Tests T10–T14 using OtelVisualizer + InMemorySpanExporter (same pattern as
@@ -64,6 +66,33 @@ afterEach(async () => {
 // ── T10: Run span lifecycle ───────────────────────────────────────────────────
 
 describe('T10: run span lifecycle — one trace per run', () => {
+  it('exports completed step spans while the root remains open before a terminal event', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+      await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+      await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
+
+      // Flush completed children without ending the still-open root span.
+      const { tracerProvider } = vis as unknown as {
+        tracerProvider: { forceFlush(): Promise<void> };
+      };
+      await tracerProvider.forceFlush();
+
+      const finishedSpans = spanExporter.getFinishedSpans();
+      expect(finishedSpans.filter((span) => span.parentSpanContext)).toHaveLength(2);
+      expect(finishedSpans.filter((span) => span.name === 'conductor.run')).toHaveLength(0);
+      expect(
+        finishedSpans.filter((span) => 'conductor.run.outcome' in span.attributes),
+      ).toHaveLength(0);
+    } finally {
+      await vis.stop();
+    }
+  });
+
   it('first event opens exactly one root span', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
