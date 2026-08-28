@@ -13,7 +13,7 @@ As an operator, I want a re-dispatched feature to start the conductor without re
 
 #### Happy Path
 - Given a worktree whose last `bin/setup` run succeeded and whose marker matches the current `bin/setup` content hash and resolved-base SHA, when the daemon dispatches the feature again, then `bin/setup` is not executed and a `project_setup` event with `ran: false, reason: marker-valid` is emitted and rendered in the daemon log
-- Given a project with no `bin/setup`, when the daemon dispatches, then behavior is unchanged from today (no setup, no marker written, existing "no bin/setup" logging preserved)
+- Given a project with no `bin/setup`, when the daemon dispatches, then no setup runs and no marker is written, and the skip is reported solely by a rendered `project_setup {reason: 'no-script'}` event with no parallel raw log write (adr-2026-08-26 decision 3, 2026-08-28 amendment)
 
 #### Negative Paths
 - Given a marker file that is missing, corrupt JSON, or carries an unknown version, when the daemon dispatches, then `bin/setup` runs (fail-closed) and the emitted `project_setup` event names the reason (`no-marker` or `marker-invalid`)

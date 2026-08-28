@@ -317,13 +317,13 @@ None — no migrations, no new dependencies.
 3. Implement: probe for the setup script first in `setupDecision` and return `{ ran: false, reason: 'no-script' }` when it is absent, ahead of the `force` and missing-`baseSha` branches — with no script there is nothing for the triage force path of Task 8 to run, so `ran: false` is the honest answer there too.
 4. Add `'no-script'` to the `project_setup` reason union (`src/conductor/src/types/events.ts:178`), keeping the union closed as Task 4 requires.
 5. Distinguish an absent script from an unreadable one: `hashSetupScript` returning null must not be read as absence at `worktree-prepare.ts:262`, where it means the script changed.
-6. Verify GREEN, including the preserved `no bin/setup — skipping project setup` log line and every pre-existing worktree-prepare and daemon-render test unmodified.
+6. Verify GREEN with the raw `no bin/setup — skipping project setup` write **removed**, not preserved: adr-2026-08-26 decision 3's 2026-08-28 amendment reports the skip solely by emitting `project_setup {reason: 'no-script'}` and rendering it, and forbids a parallel `log()` call for the same fact. Every pre-existing worktree-prepare and daemon-render test passes unmodified.
 7. Commit: "fix(setup): a project with no bin/setup reports ran:false with reason no-script".
 
 **Done when:**
 - [ ] A scriptless project emits `project_setup {ran: false, reason: 'no-script'}` for the no-marker, marker-with-baseSha, and forced entry shapes.
 - [ ] The daemon renders that event as `project setup skipped (no-script)`.
-- [ ] The `no bin/setup — skipping project setup` line is unchanged, and no marker is written for a scriptless project.
+- [ ] The raw `no bin/setup — skipping project setup` write is gone and its absence is asserted (adr-2026-08-26 decision 3, 2026-08-28 amendment), and no marker is written for a scriptless project.
 - [ ] An unreadable-but-present setup script still reports `script-changed`, not `no-script`.
 - [ ] The reason union remains closed and every pre-existing reason keeps its meaning.
 
