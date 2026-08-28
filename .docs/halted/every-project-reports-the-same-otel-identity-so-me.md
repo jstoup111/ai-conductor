@@ -1,20 +1,24 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-28T10:55:53.575Z
+Status: halted
 Slug: every-project-reports-the-same-otel-identity-so-me
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-every-project-reports-the-same-otel-identity-so-me
-Head SHA: 77ce5f30c0ec7a9254201d8d084a808bcbdfa629
-Halted at: 2026-08-27T22:27:01.611Z
+Head SHA: 890ff9b736b4b2112eb9d382ff8dfa86d7508157
+Halted at: 2026-08-28T10:57:20.702Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings. Missing: AB-1.
+feature errored — will re-dispatch on the next scan
+Daemon base-state update failed (persistence): Unknown step: retro
+
+Resume procedure:
+  1. Fix the cause of the error above (project setup / config / environment / a crashed step).
+  2. rm .pipeline/HALT
+  3. Re-queue the feature (restart the daemon if it was excluded this run).
 ```
