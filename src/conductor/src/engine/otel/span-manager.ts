@@ -264,6 +264,20 @@ export class SpanManager {
     this.closeRunSpan('complete');
   }
 
+  onLoopHalt(event: Extract<ConductorEvent, { type: 'loop_halt' }>): void {
+    if (!this.runSpan) return;
+
+    if (event.step !== undefined) {
+      this.runSpan.setAttribute('conductor.run.halt.step', event.step);
+    }
+    this.runSpan.setAttribute('conductor.run.halt.reason', event.reason);
+    if (event.haltClass !== undefined) {
+      this.runSpan.setAttribute('conductor.run.halt.class', event.haltClass);
+    }
+
+    this.closeRunSpan('halted');
+  }
+
   // ── Flush / force-close (FR-9) ─────────────────────────────────────────────
 
   /**
