@@ -9,6 +9,11 @@
  *  - Orphan events (no open span): warn + no-op, never throw (FR-3 negatives).
  *  - Step re-run (second step_started same step): closes old span, opens new one (FR-3).
  *  - Force-close of all open spans on flush (FR-9).
+ *  - Run outcome taxonomy: `complete` from `feature_complete`; `halted` from
+ *    `loop_halt`; `terminated` is the force-close default. Rebase-conflict
+ *    halts arrive via `loop_halt`; the park lifecycle (`auto_park`,
+ *    `credentials_park`, and `operator_park_boundary`) intentionally uses the
+ *    `terminated` default.
  *
  * All methods are synchronous — they only call OTel span APIs that enqueue
  * to the BatchSpanProcessor. No await, no network call (R1).
@@ -39,6 +44,7 @@ export class SpanManager {
   private runSpan: Span | null = null;
   private runCtx: Context = ROOT_CONTEXT;
   private runStarted = false;
+  private runOutcome: string | null = null;
   private readonly openSteps: Map<string, StepState> = new Map();
 
   constructor(
@@ -55,6 +61,17 @@ export class SpanManager {
       this.runSpan = this.tracer.startSpan('conductor.run');
       this.runCtx = trace.setSpan(ROOT_CONTEXT, this.runSpan);
     }
+  }
+
+  private closeRunSpan(outcome: string): void {
+    if (this.runOutcome !== null) return;
+    if (!this.runSpan) return;
+
+    this.runOutcome = outcome;
+    this.runSpan.setAttribute('conductor.run.outcome', this.runOutcome);
+    this.runSpan.setStatus({ code: SpanStatusCode.OK });
+    this.runSpan.end();
+    this.runSpan = null;
   }
 
   // ── Step-span open/close ───────────────────────────────────────────────────
@@ -250,12 +267,29 @@ export class SpanManager {
     }
     this.openSteps.clear();
 
-    // Close the run span OK.
-    if (this.runSpan) {
-      this.runSpan.setStatus({ code: SpanStatusCode.OK });
-      this.runSpan.end();
-      this.runSpan = null;
+    this.closeRunSpan('complete');
+  }
+
+  onLoopHalt(event: Extract<ConductorEvent, { type: 'loop_halt' }>): void {
+    // A terminal event may arrive after feature_complete has already closed the
+    // root span. Preserve that authoritative outcome without treating it as an
+    // orphan (which is reserved for a halt before any run started).
+    if (this.runOutcome !== null) return;
+
+    if (!this.runSpan) {
+      this.warn('loop_halt received but no run span exists — ignoring');
+      return;
     }
+
+    if (event.step !== undefined) {
+      this.runSpan.setAttribute('conductor.run.halt.step', event.step);
+    }
+    this.runSpan.setAttribute('conductor.run.halt.reason', event.reason);
+    if (event.haltClass !== undefined) {
+      this.runSpan.setAttribute('conductor.run.halt.class', event.haltClass);
+    }
+
+    this.closeRunSpan('halted');
   }
 
   // ── Flush / force-close (FR-9) ─────────────────────────────────────────────
@@ -278,12 +312,9 @@ export class SpanManager {
     }
     this.openSteps.clear();
 
-    // Close run span (OK — the problem is incomplete steps, not the run itself).
-    if (this.runSpan) {
-      this.runSpan.setStatus({ code: SpanStatusCode.OK });
-      this.runSpan.end();
-      this.runSpan = null;
-    }
+    // The run itself ends cleanly; its default terminal outcome is terminated.
+    // closeRunSpan preserves a prior complete or halted outcome.
+    this.closeRunSpan('terminated');
   }
 
   // ── Internal helpers ───────────────────────────────────────────────────────

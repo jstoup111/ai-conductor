@@ -252,6 +252,7 @@ describe('event sink subscriptions', () => {
       'step_retry',
       'gate_verdict',
       'kickback',
+      'loop_halt',
       'feature_complete',
       'build_progress',
       'unattributed_progress',

@@ -48,6 +48,7 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
   gate_verdict: [{ type: 'gate_verdict', step: 'build', satisfied: true }],
   kickback: [{ type: 'kickback', from: 'build', to: 'plan', count: 1 }],
   feature_complete: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'feature_complete', featureDesc: 'parity guard' }],
+  loop_halt: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'loop_halt', reason: 'parity guard' }],
   build_progress: [{ type: 'build_progress', step: 'build', resolved: 1, total: 2 }],
   unattributed_progress: [{ type: 'unattributed_progress', step: 'build', attempt: 1, resolvedCount: 1, headBefore: 'a', headAfter: 'b' }],
   build_no_progress: [{ type: 'build_no_progress', step: 'build', quietMinutes: 1, resolved: 1, total: 2 }],

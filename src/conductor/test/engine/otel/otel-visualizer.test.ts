@@ -123,6 +123,28 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     }
   });
 
+  it('records a bus-emitted loop_halt as the halted root span outcome', async () => {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      pipelineDir,
+    );
+    const vis = new OtelVisualizer(resolved, {
+      runId: 'test-loop-halt-outcome',
+      feature: 'test-feature',
+      project: 'test-project',
+      spanExporter,
+      metricExporter,
+    });
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'loop_halt', step: 'build', reason: 'missing task evidence' });
+    await vis.stop();
+
+    const root = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
+    expect(root.attributes['conductor.run.outcome']).toBe('halted');
+  });
+
   it('uses identity supplied to start() for exported spans', async () => {
     const resolved = resolveOtelConfig(
       { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },

@@ -684,6 +684,13 @@ the daemon resource identifies the feature, project, and durable dispatch run id
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
 duration buckets through 30 minutes; quantiles saturate above that largest finite bucket boundary.
 
+When a run opens a `conductor.run` root span, its terminal export carries
+`conductor.run.outcome`: `complete` after `feature_complete`, `halted` after `loop_halt`, or
+`terminated` when the visualizer force-closes without either terminal event. Halted roots also carry
+`conductor.run.halt.reason` and, when supplied, `conductor.run.halt.step` and
+`conductor.run.halt.class`. An in-progress root span is not exported until it reaches one of those
+terminal paths.
+
 | Key | Type | Required | Allowed | Default |
 | --- | --- | --- | --- | --- |
 | `otel` | object | No | — | absent means `{ enabled: false }` |

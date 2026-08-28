@@ -1,4 +1,6 @@
 /**
+ * Covers: task:1
+ *
  * span-manager.test.ts — unit tests for SpanManager via OtelVisualizer.
  *
  * Tests T10–T14 using OtelVisualizer + InMemorySpanExporter (same pattern as
@@ -64,6 +66,33 @@ afterEach(async () => {
 // ── T10: Run span lifecycle ───────────────────────────────────────────────────
 
 describe('T10: run span lifecycle — one trace per run', () => {
+  it('exports completed step spans while the root remains open before a terminal event', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+      await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+      await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
+
+      // Flush completed children without ending the still-open root span.
+      const { tracerProvider } = vis as unknown as {
+        tracerProvider: { forceFlush(): Promise<void> };
+      };
+      await tracerProvider.forceFlush();
+
+      const finishedSpans = spanExporter.getFinishedSpans();
+      expect(finishedSpans.filter((span) => span.parentSpanContext)).toHaveLength(2);
+      expect(finishedSpans.filter((span) => span.name === 'conductor.run')).toHaveLength(0);
+      expect(
+        finishedSpans.filter((span) => 'conductor.run.outcome' in span.attributes),
+      ).toHaveLength(0);
+    } finally {
+      await vis.stop();
+    }
+  });
+
   it('first event opens exactly one root span', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
@@ -78,7 +107,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
     expect(roots[0].name).toBe('conductor.run');
   });
 
-  it('feature_complete closes the run span with OK status', async () => {
+  it('feature_complete closes the run span with complete outcome and OK status', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
@@ -88,20 +117,156 @@ describe('T10: run span lifecycle — one trace per run', () => {
     await vis.stop();
 
     const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
+    expect(roots[0].attributes['conductor.run.outcome']).toBe('complete');
     expect(roots[0].status.code).toBe(1 /* OK */);
   });
 
-  it('run ending without feature_complete closes run span on flush (forceCloseAll)', async () => {
+  it('bare feature_complete exports no spans and does not throw', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await expect(emitter.emit({ type: 'feature_complete' })).resolves.toBeUndefined();
+    await vis.stop();
+
+    expect(spanExporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it('loop_halt closes the root as halted with halt attributes while its open step remains incomplete until flush', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    const { spanManager } = vis as unknown as {
+      spanManager: {
+        onLoopHalt(event: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'loop_halt' }>): void;
+      };
+    };
+    spanManager.onLoopHalt({
+      type: 'loop_halt',
+      step: 'build',
+      reason: 'missing task evidence',
+      haltClass: 'plan-gap',
+    });
+
+    const { tracerProvider } = vis as unknown as {
+      tracerProvider: { forceFlush(): Promise<void> };
+    };
+    await tracerProvider.forceFlush();
+
+    const root = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
+    expect(root.name).toBe('conductor.run');
+    expect(root.attributes['conductor.run.outcome']).toBe('halted');
+    expect(root.status.code).toBe(1 /* OK */);
+    expect(root.attributes['conductor.run.halt.step']).toBe('build');
+    expect(root.attributes['conductor.run.halt.reason']).toBe('missing task evidence');
+    expect(root.attributes['conductor.run.halt.class']).toBe('plan-gap');
+    expect(spanExporter.getFinishedSpans().find((span) => span.name === 'build')).toBeUndefined();
+
+    await vis.stop();
+
+    const step = spanExporter.getFinishedSpans().find((span) => span.name === 'build')!;
+    expect(step.status.code).toBe(2 /* ERROR */);
+    expect(step.attributes['conductor.incomplete']).toBe(true);
+  });
+
+  it('loop_halt omits absent optional halt attributes', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    const { spanManager } = vis as unknown as {
+      spanManager: {
+        onLoopHalt(event: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'loop_halt' }>): void;
+      };
+    };
+    spanManager.onLoopHalt({ type: 'loop_halt', reason: 'missing task evidence' });
+    await vis.stop();
+
+    const root = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
+    expect(root.attributes['conductor.run.halt.reason']).toBe('missing task evidence');
+    expect(Object.prototype.hasOwnProperty.call(root.attributes, 'conductor.run.halt.step')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(root.attributes, 'conductor.run.halt.class')).toBe(false);
+  });
+
+  it('orphan loop_halt warns once, returns safely, and exports no spans', async () => {
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
+      warnings.push(message),
+    );
+    vis.start(emitter);
+    const { spanManager } = vis as unknown as {
+      spanManager: {
+        onLoopHalt(event: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'loop_halt' }>): void;
+      };
+    };
+
+    expect(() =>
+      spanManager.onLoopHalt({ type: 'loop_halt', reason: 'missing task evidence' }),
+    ).not.toThrow();
+    await vis.stop();
+
+    expect(warnings).toHaveLength(1);
+    expect(spanExporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it('late loop_halt after feature_complete preserves the complete root span', async () => {
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
+      warnings.push(message),
+    );
+    vis.start(emitter);
+    const { spanManager } = vis as unknown as {
+      spanManager: {
+        onLoopHalt(event: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'loop_halt' }>): void;
+      };
+    };
+
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    spanManager.onLoopHalt({ type: 'loop_halt', reason: 'late arrival' });
+    await vis.stop();
+
+    const roots = spanExporter.getFinishedSpans().filter((span) => !span.parentSpanContext);
+    expect(roots).toHaveLength(1);
+    expect(roots[0].attributes['conductor.run.outcome']).toBe('complete');
+    expect(warnings).toEqual([]);
+  });
+
+  it('forceCloseAll defaults the root outcome to terminated while an open step remains incomplete', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
-    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-    // No feature_complete — simulate abrupt termination
+    // No step_completed / feature_complete — simulate abrupt termination.
     await vis.stop();
 
     const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
-    expect(roots).toHaveLength(1); // closed on flush
+    expect(roots).toHaveLength(1);
+    expect(roots[0].attributes['conductor.run.outcome']).toBe('terminated');
+    expect(roots[0].status.code).toBe(1 /* OK */);
+
+    const step = spanExporter.getFinishedSpans().find((s) => s.name === 'bootstrap')!;
+    expect(step.status.code).toBe(2 /* ERROR */);
+    expect(step.attributes['conductor.incomplete']).toBe(true);
+  });
+
+  it('forceCloseAll preserves a prior halted root outcome', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const { spanManager } = vis as unknown as {
+      spanManager: {
+        onLoopHalt(event: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'loop_halt' }>): void;
+      };
+    };
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    spanManager.onLoopHalt({ type: 'loop_halt', reason: 'missing task evidence' });
+    await vis.stop();
+
+    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
+    expect(roots).toHaveLength(1);
+    expect(roots[0].attributes['conductor.run.outcome']).toBe('halted');
   });
 
   it('two early events create only one root span (not duplicated)', async () => {
