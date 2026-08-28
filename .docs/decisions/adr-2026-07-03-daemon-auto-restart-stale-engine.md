@@ -52,6 +52,12 @@ tmux sessions or versions the dist is issue #215 and out of scope here.
    logged once.
 2. **StaleEngineCheck at the idle boundary only.** In `runDaemon`'s idle branch
    (`inFlight.size === 0` and nothing eligible), re-hash the on-disk entry and compare.
+
+   > **Amended 2026-08-27 by #568:** with N-worker concurrency
+   > (`adr-2026-08-27-daemon-dispatcher-executor-seam` D5), "idle boundary" generalizes to the
+   > **drained boundary**: the dispatcher stops claiming, in-flight executors finish, then the
+   > check/rebuild/restart runs. The mid-build invariant this decision protects is unchanged —
+   > no build is ever running when the engine is swapped.
    All gates must pass before acting: continuous mode, `selfHost` true
    (existing `classifySelfHost`), config flag `auto_restart_on_stale_engine: true`
    (new key, **default false**, read once at startup like all project config), verdict

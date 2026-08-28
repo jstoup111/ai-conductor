@@ -14,6 +14,12 @@ restart requested on a busy daemon **queue durably** (fires when idle) or does t
 operator have to **pause first and retry**? Features can build for a long time, so any
 answer must not require a human (or a foreground CLI process) to sit and poll.
 
+> **Amended 2026-08-27 by #568:** under N-worker concurrency
+> (`adr-2026-08-27-daemon-dispatcher-executor-seam` D5), "idle" in this ADR's trigger
+> ("idle ∧ marker exists") means the **drained pool** — the dispatcher stops claiming once the
+> marker exists, and the queued restart fires when the last executor finishes. FR-9's
+> never-interrupt guarantee is unchanged.
+
 ## Options Considered
 
 ### Option A: Durable pending-restart marker, fired by the daemon at its idle boundary (chosen)

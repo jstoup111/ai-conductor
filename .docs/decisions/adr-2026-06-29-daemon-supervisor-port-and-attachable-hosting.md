@@ -105,6 +105,13 @@ Key sub-decisions:
    session shows exactly the one feature building. True concurrency needs a task-handoff worker and
    is out of scope; a `>1` request is clamped with an explanatory log.
 
+   > **Amended 2026-08-27 by #568:** the unconditional clamp is retired. Concurrency is
+   > operator-configured (`daemon_concurrency`, default 1 preserves serial behavior) behind the
+   > dispatcher/executor seam of `adr-2026-08-27-daemon-dispatcher-executor-seam`. Both original
+   > rationales lapsed: per-feature slug-tagged logging landed (#254), and single-process N-worker
+   > concurrency needs no task-handoff worker. Decision 5's injected work-source seam is the
+   > boundary the new dispatcher formalizes.
+
 5. **Intake/execute work-source seam.** The run loop consumes `BacklogItem`s from an **injected
    work-source**; the local adapter is today’s inline `discoverBacklog` (no behavior change). A
    future intake/execute process split + queue is an adapter swap — seam only, not built here.
