@@ -31,7 +31,7 @@ graph TD
         Autoresolve["engine/autoresolve.ts + daemon-cli.ts<br/>(read mergeable_autoresolve raw)"]
     end
 
-    CoverageTest["NEW test: every documented key<br/>reaches ≥1 consumer"]
+    CoverageTest["NEW test: every accepted key carries<br/>a declaration; non-none paths resolve"]
 
     UserCfg --> Merge
     ProjCfg --> Merge
@@ -52,7 +52,8 @@ graph TD
   (type + validator + resolver field), `resolveMergeableAutoresolve`, top-level
   `auth_park_timeout_minutes` (type + resolver; nested variant survives).
 - **NEW** — `gate`/`kickback_target` added to `knownStepKeys`; `conductor` project-path guard;
-  key→consumer coverage test.
+  a registry coverage test proving every accepted key carries a declaration and every non-`none`
+  declaration names a production module path that resolves on disk. It does not prove runtime reachability.
 - «custom» — any operator-defined step name.
 
 ## Change Log

@@ -3,7 +3,7 @@ import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';
 import {
   assertRegistryCovers,
   configConsumerRegistry,
-} from '../../src/engine/config-consumer-registry.js';
+} from './config-consumer-registry.js';
 
 describe('config consumer registry', () => {
   it('is total over validator-accepted keys', () => {
@@ -16,6 +16,53 @@ describe('config consumer registry', () => {
         'src/conductor/src/engine/config.ts',
       );
     }
+  });
+
+  it('covers every nested validator block', () => {
+    expect(Object.keys(CONFIG_CONSUMER_KEY_SETS)).toEqual(expect.arrayContaining([
+      'steps.parallel',
+      'steps.by_tier',
+      'build_review',
+      'build_review.rubrics',
+      'ci_watch',
+      'kickback_escalation',
+      'cumulative_kickback_bound',
+      'conflict_check',
+      'prd_audit',
+      'architecture_review_as_built',
+      'architecture_review_as_built.remediation',
+      'architecture_review_as_built.checks',
+      'assess',
+      'test_suite',
+      'build_progress',
+      'provider_stream',
+      'build_progress_halt',
+      'gate_code_validity',
+      'retry_routing',
+      'markdown_viewer',
+      'mermaid_renderer',
+    ]));
+  });
+
+  it('rejects a newly accepted nested key until it declares a consumer', () => {
+    const extendedSets = {
+      ...CONFIG_CONSUMER_KEY_SETS,
+      test_suite: [...CONFIG_CONSUMER_KEY_SETS.test_suite, 'new_probe_key'],
+    };
+    expect(() => assertRegistryCovers(extendedSets, configConsumerRegistry)).toThrow(
+      'Config key is undeclared: test_suite.new_probe_key',
+    );
+  });
+
+  it('requires an explained reason for every none declaration', () => {
+    for (const [key, declaration] of Object.entries(configConsumerRegistry)) {
+      if (declaration.consumer === 'none') {
+        expect(declaration.reason?.trim(), `${key} must explain why it is inert`).toBeTruthy();
+      }
+    }
+    expect(() => assertRegistryCovers({ top: ['inert'] }, {
+      inert: { consumer: 'none' },
+    })).toThrow('Config key inert is none without a reason');
   });
 
   it('fails for an undeclared accepted key', () => {

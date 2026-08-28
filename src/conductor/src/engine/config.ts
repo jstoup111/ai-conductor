@@ -111,6 +111,27 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   harness_self_host: ['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', 'sandbox_build_env', 'live_containment', 'version_approval_gate', 'release_artifact_gate'],
   harness_self_host_build_auth: ['mode', 'token_path'],
   mergeable_autoresolve: ['enabled', 'cooldownMinutes', 'suiteCommand'],
+  'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
+  'steps.by_tier': ['model', 'effort', 'max_retries'],
+  'build_review.rubrics': ['enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate'],
+  build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'rubrics'],
+  ci_watch: ['enabled', 'cooldownMinutes'],
+  kickback_escalation: ['enabled'],
+  cumulative_kickback_bound: ['enabled'],
+  conflict_check: ['adr_corpus'],
+  prd_audit: ['max_remediation_laps', 'max_appended_tasks', 'max_appended_ratio', 'halt_on_any_plan_gap'],
+  architecture_review_as_built: ['checks', 'remediation', 'max_remediation_laps'],
+  'architecture_review_as_built.remediation': ['enabled'],
+  'architecture_review_as_built.checks': ['tiers'],
+  assess: ['stale_after_days', 'stale_after_commits'],
+  test_suite: ['command', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment'],
+  build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled'],
+  provider_stream: ['min_interval_ms'],
+  build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
+  gate_code_validity: ['enabled'],
+  retry_routing: ['enabled'],
+  markdown_viewer: ['preset', 'command', 'args', 'mode'],
+  mermaid_renderer: ['preset', 'command', 'args', 'mode'],
 } as const;
 export const DEPRECATED_BUILD_REVIEW_RUBRIC_IDS = [
   'scope',
@@ -178,15 +199,7 @@ function validateBuildReviewRubrics(
     return { type: 'validation_error', message: 'build_review.rubrics must be an object' };
   }
 
-  const allowedPolicyKeys = new Set([
-    'enabled',
-    'llm_provider',
-    'model',
-    'effort',
-    'model_fallback_ladder',
-    'max_retries',
-    'escalate',
-  ]);
+  const allowedPolicyKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS['build_review.rubrics']);
   for (const [rubricId, policy] of Object.entries(rubrics)) {
     const path = `build_review.rubrics.${rubricId}`;
     if (DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId)) {
@@ -546,7 +559,7 @@ export function validateConfig(
             return errVal(`steps.${name}.parallel[${bi}] must be an object`);
           }
           const b = branch as Record<string, unknown>;
-          const knownBranchKeys = new Set(['name', 'skill', 'model', 'effort', 'advisory']);
+          const knownBranchKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS['steps.parallel']);
           for (const bk of Object.keys(b)) {
             if (!knownBranchKeys.has(bk)) {
               return errVal(`Unknown key in steps.${name}.parallel[${bi}]: "${bk}"`);
@@ -1054,15 +1067,13 @@ export function validateConfig(
       const br = normalizeKeyedBlock(
         'build_review',
         obj.build_review,
-        [
-          { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
-          // Compatibility-only: accept every historical shape, then remove it
-          // before the resolved config can observe it.
-          { key: 'perTaskFloor', isValid: () => true },
-          { key: 'scopeContainmentEnforced', isValid: (value) => typeof value === 'boolean' },
-          { key: 'maxParallel', isValid: () => true },
-          { key: 'rubrics', isValid: () => true },
-        ],
+        CONFIG_CONSUMER_KEY_SETS.build_review.map((key) => ({
+          key,
+          isValid: (value: unknown) => {
+            if (key === 'enabled' || key === 'scopeContainmentEnforced') return typeof value === 'boolean';
+            return key === 'perTaskFloor' || key === 'maxParallel' || key === 'rubrics';
+          },
+        })),
         warnings,
       );
       if (Object.hasOwn(br, 'perTaskFloor')) {
@@ -1136,14 +1147,12 @@ export function validateConfig(
       const cw = normalizeKeyedBlock(
         'ci_watch',
         obj.ci_watch,
-        [
-          { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
-          {
-            key: 'cooldownMinutes',
-            isValid: (value) =>
-              typeof value === 'number' && Number.isFinite(value) && value >= 0,
-          },
-        ],
+        CONFIG_CONSUMER_KEY_SETS.ci_watch.map((key) => ({
+          key,
+          isValid: (value: unknown) => key === 'enabled'
+            ? typeof value === 'boolean'
+            : typeof value === 'number' && Number.isFinite(value) && value >= 0,
+        })),
         warnings,
       );
       obj.ci_watch = {
@@ -1182,7 +1191,9 @@ export function validateConfig(
   if (obj.kickback_escalation !== undefined && obj.kickback_escalation !== null) {
     if (isPlainObject(obj.kickback_escalation)) {
       const ke = obj.kickback_escalation as Record<string, unknown>;
-      const unknownKey = Object.keys(ke).find((k) => k !== 'enabled');
+      const unknownKey = Object.keys(ke).find(
+        (key) => !new Set<string>(CONFIG_CONSUMER_KEY_SETS.kickback_escalation).has(key),
+      );
       if (unknownKey !== undefined) {
         obj.kickback_escalation = { enabled: true };
       } else if (ke.enabled === undefined) {
@@ -1208,7 +1219,9 @@ export function validateConfig(
   if (obj.cumulative_kickback_bound !== undefined && obj.cumulative_kickback_bound !== null) {
     if (isPlainObject(obj.cumulative_kickback_bound)) {
       const cb = obj.cumulative_kickback_bound as Record<string, unknown>;
-      const unknownKey = Object.keys(cb).find((key) => key !== 'enabled');
+      const unknownKey = Object.keys(cb).find(
+        (key) => !new Set<string>(CONFIG_CONSUMER_KEY_SETS.cumulative_kickback_bound).has(key),
+      );
       if (unknownKey !== undefined) {
         obj.cumulative_kickback_bound = { enabled: true };
       } else if (cb.enabled === undefined) {
@@ -1348,12 +1361,7 @@ function validatePrdAuditBlock(raw: unknown): ConfigError | null {
   }
 
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set([
-    'max_remediation_laps',
-    'max_appended_tasks',
-    'max_appended_ratio',
-    'halt_on_any_plan_gap',
-  ]);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.prd_audit);
   for (const key of Object.keys(obj)) {
     if (!allowed.has(key)) {
       return { type: 'validation_error', message: `Unknown key in prd_audit: "${key}"` };
@@ -1435,7 +1443,7 @@ function validateArchitectureReviewAsBuiltBlock(raw: unknown): ConfigError | nul
 
   const obj = raw as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
-    if (key !== 'checks' && key !== 'remediation' && key !== 'max_remediation_laps') {
+    if (!new Set<string>(CONFIG_CONSUMER_KEY_SETS.architecture_review_as_built).has(key)) {
       return {
         type: 'validation_error',
         message: `Unknown key in architecture_review_as_built: "${key}"`,
@@ -1463,7 +1471,7 @@ function validateArchitectureReviewAsBuiltBlock(raw: unknown): ConfigError | nul
     }
     const remediation = obj.remediation as Record<string, unknown>;
     for (const key of Object.keys(remediation)) {
-      if (key !== 'enabled') {
+      if (!new Set<string>(CONFIG_CONSUMER_KEY_SETS['architecture_review_as_built.remediation']).has(key)) {
         return {
           type: 'validation_error',
           message: `Unknown key in architecture_review_as_built.remediation: "${key}"`,
@@ -1498,7 +1506,7 @@ function validateArchitectureReviewAsBuiltBlock(raw: unknown): ConfigError | nul
       return { type: 'validation_error', message: `${path} must be an object` };
     }
     for (const key of Object.keys(policy)) {
-      if (key !== 'tiers') {
+      if (!new Set<string>(CONFIG_CONSUMER_KEY_SETS['architecture_review_as_built.checks']).has(key)) {
         return { type: 'validation_error', message: `Unknown key in ${path}: "${key}"` };
       }
     }
@@ -1577,7 +1585,7 @@ function validateAssessBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'assess must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['stale_after_days', 'stale_after_commits']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.assess);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return { type: 'validation_error', message: `Unknown key in assess: "${k}"` };
@@ -1602,14 +1610,7 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
     return { type: 'validation_error', message: 'test_suite must be an object' };
   }
 
-  const allowed = new Set([
-    'command',
-    'scoped_command',
-    'working_directory',
-    'timeout_seconds',
-    'inputs',
-    'environment',
-  ]);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.test_suite);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) {
       return { type: 'validation_error', message: `Unknown key in test_suite: "${key}"` };
@@ -1736,7 +1737,7 @@ function validateBuildProgressBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'build_progress must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.build_progress);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return { type: 'validation_error', message: `Unknown key in build_progress: "${k}"` };
@@ -1796,7 +1797,7 @@ function validateProviderStreamBlock(raw: unknown): ConfigError | null {
   }
   const obj = raw as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
-    if (key !== 'min_interval_ms') {
+    if (!new Set<string>(CONFIG_CONSUMER_KEY_SETS.provider_stream).has(key)) {
       return { type: 'validation_error', message: `Unknown key in provider_stream: "${key}"` };
     }
   }
@@ -1832,7 +1833,7 @@ function validateBuildProgressHaltBlock(
     return { type: 'validation_error', message: 'build_progress_halt must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['enabled', 'attempt_ceiling', 'dispatch_ceiling']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.build_progress_halt);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return { type: 'validation_error', message: `Unknown key in build_progress_halt: "${k}"` };
@@ -1900,7 +1901,7 @@ function validateGateCodeValidityBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'gate_code_validity must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['enabled']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.gate_code_validity);
   for (const key of Object.keys(obj)) {
     if (!allowed.has(key)) {
       return {
@@ -1934,7 +1935,7 @@ function validateRetryRoutingBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'retry_routing must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['enabled']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.retry_routing);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return { type: 'validation_error', message: `Unknown key in retry_routing: "${k}"` };
@@ -1998,7 +1999,7 @@ function validateMarkdownViewerBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'markdown_viewer must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['preset', 'command', 'args', 'mode']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.markdown_viewer);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return {
@@ -2041,7 +2042,7 @@ function validateMermaidRendererBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'mermaid_renderer must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['preset', 'command', 'args', 'mode']);
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.mermaid_renderer);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return {
@@ -2139,7 +2140,7 @@ function validateByTier(raw: unknown, path: string): ConfigError | null {
       };
     }
     const tierCfg = value as Record<string, unknown>;
-    const allowed = new Set(['model', 'effort', 'max_retries']);
+    const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS['steps.by_tier']);
     for (const k of Object.keys(tierCfg)) {
       if (!allowed.has(k)) {
         return {
