@@ -6,7 +6,7 @@ import {
   MATCHED_PAIR_REGISTRY,
   type MatchedPairDeclaration,
   type MatchedPairId,
-} from '../../src/engine/matched-pairs.js';
+} from './matched-pairs.js';
 
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 

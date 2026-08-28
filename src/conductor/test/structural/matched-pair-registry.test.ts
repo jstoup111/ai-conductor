@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-import { MATCHED_PAIR_REGISTRY } from '../../src/engine/matched-pairs.js';
+import { MATCHED_PAIR_REGISTRY } from '../engine/matched-pairs.js';
 
 const conductorRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const repositoryRoot = join(conductorRoot, '../..');
