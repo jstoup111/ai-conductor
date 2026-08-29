@@ -1746,7 +1746,13 @@ function validateTestSuiteVerification(
   raw: unknown,
   scopedCommand: unknown,
 ): ConfigError | null {
-  if (!isPlainObject(raw)) return null;
+  if (raw === undefined) return null;
+  if (!isPlainObject(raw)) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.verification must be an object',
+    };
+  }
 
   const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS['test_suite.verification']);
   for (const key of Object.keys(raw)) {
@@ -1769,7 +1775,13 @@ function validateTestSuiteVerification(
     };
   }
 
-  if (!isPlainObject(raw.drift_budget)) return null;
+  if (raw.drift_budget === undefined) return null;
+  if (!isPlainObject(raw.drift_budget)) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.verification.drift_budget must be an object',
+    };
+  }
 
   for (const [category, bound] of Object.entries(raw.drift_budget)) {
     if (!TEST_SUITE_DRIFT_CATEGORIES.includes(category as TestSuiteDriftCategory)) {

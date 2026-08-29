@@ -1164,6 +1164,40 @@ steps:
       });
     });
 
+    it('rejects a non-object test_suite.verification block', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification: []\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite\.verification/),
+        },
+      });
+    });
+
+    it('rejects a non-object test_suite.verification.drift_budget block', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    drift_budget: []\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite\.verification\.drift_budget/),
+        },
+      });
+    });
+
     it('rejects an unknown drift_budget category and lists the valid categories', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),
