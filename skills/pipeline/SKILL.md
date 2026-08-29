@@ -97,7 +97,7 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   deletion has no failing test to write, and an absence assertion is never the subject.
                   `/code-removal` carries the survivor method, test triage, and completeness sweep; the
                   evidence is the deletion diff plus the full surviving suite green.
-3. VERIFY       — Run `conduct-ts scoped-run <selectors...>` for the scoped affected-test set (see Scoped VERIFY below) to confirm the implementer's work
+3. VERIFY       — Run `ai-conductor scoped-run <selectors...>` for the scoped affected-test set (see Scoped VERIFY below) to confirm the implementer's work
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch implementer with error context
 5. COMMIT       — Verify the implementer's commit carries the `Task: <id>` trailer with <id> as the bare plan id
                   (e.g. Task: 9, not Task: task-9). The trailer is non-authoritative routing
@@ -280,7 +280,7 @@ Scoping logic:
    files covering the modified production modules. Discover these by naming convention (e.g.,
    `src/foo/bar.ts` → `test/foo/bar.test.ts`) and by grepping test files for imports of or
    references to modified modules.
-3. The agent derives the selectors from that scoped set and runs `conduct-ts scoped-run <selectors...>`.
+3. The agent derives the selectors from that scoped set and runs `ai-conductor scoped-run <selectors...>`.
 4. Retain the named affected-test set for the batch-boundary union described below.
 
 **Broad fallback:**
@@ -371,7 +371,7 @@ atomically before advancing one single token further:
 3. Stat-check `test -s .pipeline/audit-trail/batch-N/review.json` — non-empty file must
    exist before the next batch starts
 4. Record the completed `evaluator` closeout obligation with
-   `conduct-ts closeout-event evaluator <started-at-ms> <ended-at-ms>`, then verify that
+   `ai-conductor closeout-event evaluator <started-at-ms> <ended-at-ms>`, then verify that
    `.pipeline/pipeline-events.jsonl` contains a parseable `pipeline_closeout` record whose
    `obligation` is exactly `evaluator`. An event for another obligation does not satisfy this check.
 

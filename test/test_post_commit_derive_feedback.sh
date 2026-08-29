@@ -221,15 +221,53 @@ output=$("$HOOK" 2>&1 || true)
 [ -z "$output" ]
 assert "No warning on non-numeric H9 id (rem-adr-engine-owned-task-status-1)" $?
 
+# Test 8: Without an override, the hook uses the canonical repo-local
+# ai-conductor launcher, never the deprecated conduct-ts alias or operator PATH.
+echo ""
+echo "Test 8: Hook defaults to the canonical repo-local ai-conductor launcher"
+test_repo7="$TMPDIR_ROOT/test_default_engine_launcher"
+default_harness="$TMPDIR_ROOT/default-engine-harness"
+mkdir -p "$test_repo7" "$default_harness/hooks/claude" "$default_harness/bin"
+cp "$HOOK" "$default_harness/hooks/claude/post-commit-derive-feedback.sh"
+chmod +x "$default_harness/hooks/claude/post-commit-derive-feedback.sh"
+DEFAULT_HOOK="$default_harness/hooks/claude/post-commit-derive-feedback.sh"
+
+cd "$test_repo7"
+git init -q
+git config user.email "test@example.com"
+git config user.name "Test User"
+
+echo "test" > file.txt
+git add file.txt
+git commit -q -m "Initial commit" || true
+
+echo "change" > file.txt
+git add file.txt
+git commit -q -m "Add feature"
+
+DEFAULT_STUB_LOG="$TMPDIR_ROOT/default-engine.calls"
+cat > "$default_harness/bin/ai-conductor" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$DEFAULT_STUB_LOG"
+echo '{"evidenced":false,"reason":"none"}'
+exit 1
+STUB
+chmod +x "$default_harness/bin/ai-conductor"
+
+DEFAULT_STUB_LOG="$DEFAULT_STUB_LOG" "$DEFAULT_HOOK" >/dev/null 2>&1 || true
+
+[ -f "$DEFAULT_STUB_LOG" ] && grep -q "derive-feedback" "$DEFAULT_STUB_LOG"
+assert "Hook defaults to bin/ai-conductor for derive-feedback" $?
+
 # Test 8: Hook invokes the engine derive path (AI_CONDUCTOR_ENGINE_BIN honored)
 # — point the hook at a stub "engine" binary that records its invocation
 # and asserts the sha/subcommand contract, so this test fails if the hook
 # regresses back to being pure bash regex with no engine call at all.
 echo ""
-echo "Test 8: Hook invokes the engine derive path (honors AI_CONDUCTOR_ENGINE_BIN)"
-test_repo7="$TMPDIR_ROOT/test_engine_invoke"
-mkdir -p "$test_repo7"
-cd "$test_repo7"
+echo "Test 9: Hook invokes the engine derive path (honors AI_CONDUCTOR_ENGINE_BIN)"
+test_repo8="$TMPDIR_ROOT/test_engine_invoke"
+mkdir -p "$test_repo8"
+cd "$test_repo8"
 git init -q
 git config user.email "test@example.com"
 git config user.name "Test User"
@@ -257,12 +295,12 @@ AI_CONDUCTOR_ENGINE_BIN="$STUB_BIN" STUB_CALL_LOG="$STUB_CALL_LOG" "$HOOK" >/dev
 [ -f "$STUB_CALL_LOG" ] && grep -q "derive-feedback" "$STUB_CALL_LOG"
 assert "Hook shells out to the engine derive-feedback subcommand" $?
 
-# Test 9: Engine binary missing/broken → hook still exits 0 and falls back
+# Test 10: Engine binary missing/broken → hook still exits 0 and falls back
 echo ""
-echo "Test 9: Engine binary missing → hook falls back and still exits 0"
-test_repo8="$TMPDIR_ROOT/test_engine_missing"
-mkdir -p "$test_repo8"
-cd "$test_repo8"
+echo "Test 10: Engine binary missing → hook falls back and still exits 0"
+test_repo9="$TMPDIR_ROOT/test_engine_missing"
+mkdir -p "$test_repo9"
+cd "$test_repo9"
 git init -q
 git config user.email "test@example.com"
 git config user.name "Test User"
@@ -282,19 +320,19 @@ else
 fi
 assert "Hook exits 0 when engine binary is missing" $((exit_code == 0 ? 0 : 1))
 
-commit_sha8=$(git -C "$test_repo8" rev-parse HEAD 2>/dev/null || echo "")
+commit_sha8=$(git -C "$test_repo9" rev-parse HEAD 2>/dev/null || echo "")
 output=$(AI_CONDUCTOR_ENGINE_BIN="/nonexistent/engine-binary" "$HOOK" 2>&1 || true)
 assert_output_contains "Falls back to bash check and still warns with sha" "$output" "$commit_sha8"
 
-# Test 10: Engine path-fallback (mentioned in the script's own header): a
+# Test 11: Engine path-fallback (mentioned in the script's own header): a
 # stub engine reports "evidenced via path-fallback" and the hook stays
 # silent, proving the hook trusts the path-fallback verdict from the engine
 # path (not just the bare trailer regex).
 echo ""
-echo "Test 10: Engine path-fallback verdict (evidenced:true, reason:path-fallback) → no warning"
-test_repo9="$TMPDIR_ROOT/test_path_fallback"
-mkdir -p "$test_repo9"
-cd "$test_repo9"
+echo "Test 11: Engine path-fallback verdict (evidenced:true, reason:path-fallback) → no warning"
+test_repo10="$TMPDIR_ROOT/test_path_fallback"
+mkdir -p "$test_repo10"
+cd "$test_repo10"
 git init -q
 git config user.email "test@example.com"
 git config user.name "Test User"

@@ -69,7 +69,7 @@ For every bootstrap mode, confirm the project is a git repository before continu
 as described in Step 1b. Then invoke the deterministic, idempotent project-config writer:
 
 ```bash
-conduct-ts config init
+ai-conductor config init
 ```
 
 Never hand-author `.ai-conductor/config.yml` and never copy a config from the harness checkout.
@@ -294,7 +294,7 @@ background jobs, key architecture-shaping libraries.
 
 ### 5. Set Up Project Directories
 
-**`.memory/` is set up by the harness, not by this skill.** `conduct-ts memory setup <dir>`
+**`.memory/` is set up by the harness, not by this skill.** `ai-conductor memory setup <dir>`
 runs before any bootstrap sub-step. This creates a canonical
 per-project store at `~/.ai-conductor/memory/<key>/harness/` and makes `.memory/` a symlink to
 it (adr-2026-06-29-shared-memory-store-placement-and-durability). If `.memory/` already exists as a real directory (legacy), it is migrated via
@@ -480,7 +480,7 @@ a real failure and must be surfaced.
 ## Verification
 
 - [ ] Bootstrap mode correctly determined
-- [ ] Project config initialized via `conduct-ts config init` after git exists
+- [ ] Project config initialized via `ai-conductor config init` after git exists
 - [ ] Project type detected from file indicators
 - [ ] Tech-context loaded if matching stack found
 - [ ] Existing code analyzed with inventory presented (if existing project)
