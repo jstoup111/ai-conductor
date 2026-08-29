@@ -812,7 +812,7 @@ export class ClaudeProvider implements LLMProvider {
    *
    * Every session env additionally carries the daemon-session marker
    * (CONDUCT_DAEMON_SESSION=1): any Claude session spawned through this
-   * adapter is engine-managed, and the conduct-ts entry guard uses the
+   * adapter is engine-managed, and the ai-conductor entry guard uses the
    * marker to refuse recursive conductor invocations from inside it (see
    * daemon-session.ts). Boundary enforcement, same pattern as
    * enforceFreshSessionOptions — no config off-switch.

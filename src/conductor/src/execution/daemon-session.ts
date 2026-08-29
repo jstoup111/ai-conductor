@@ -1,9 +1,9 @@
 /**
- * Deterministic daemon-session boundary enforcement for the conduct-ts CLI.
+ * Deterministic daemon-session boundary enforcement for the ai-conductor CLI.
  *
  * LLM maker sessions dispatched by the engine (daemon builds, reviews,
  * interactive-conductor steps, self-host candidates) have attempted to run
- * `conduct-ts` themselves from inside their session — recursively invoking
+ * `ai-conductor` themselves from inside their session — recursively invoking
  * daemon subcommands (park/unpark/restart), reseal, and other state-mutating
  * conductor operations that belong exclusively to the engine that dispatched
  * them. Per the repo's design principle — machinery over prompt discipline —
@@ -16,7 +16,7 @@
  *     env builders — the same adapter boundary that enforces fresh sessions
  *     (see fresh-session.ts).
  *
- *  2. **Entry guard.** The conduct-ts entry point calls
+ *  2. **Entry guard.** The ai-conductor entry point calls
  *     {@link guardDaemonSessionInvocation} before any subcommand parsing and
  *     refuses to run when the marker is present, except for the small
  *     session-sanctioned worker-command set below that the harness's own
@@ -53,7 +53,7 @@ export function withDaemonSessionMarker(
  */
 const SESSION_SANCTIONED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   // skills/tdd/SKILL.md + skills/pipeline/SKILL.md — scoped VERIFY runs the
-  // affected-test union through `conduct-ts scoped-run <selectors...>`.
+  // affected-test union through `ai-conductor scoped-run <selectors...>`.
   'scoped-run',
   // skills/plan/SKILL.md + skills/architecture-review/SKILL.md — advisory
   // overlap scan required before the plan is committed.
@@ -83,7 +83,7 @@ function firstSubcommand(argv: readonly string[]): string | undefined {
 }
 
 /**
- * Decide whether this conduct-ts invocation may proceed. Refuses everything
+ * Decide whether this ai-conductor invocation may proceed. Refuses everything
  * except the session-sanctioned worker set when the daemon-session marker is
  * present; always allows when it is absent.
  */
@@ -102,7 +102,7 @@ export function guardDaemonSessionInvocation(
   return {
     allowed: false,
     message:
-      'conduct-ts may not be invoked from inside a daemon-managed session; ' +
+      'ai-conductor may not be invoked from inside a daemon-managed session; ' +
       'the engine owns all conductor operations for this run ' +
       `(blocked subcommand: ${subcommand ?? '<none>'}).`,
   };

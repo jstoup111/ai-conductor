@@ -1,4 +1,4 @@
-// Project-level prelude: runs once at the start of every conduct-ts invocation
+// Project-level prelude: runs once at the start of every ai-conductor invocation
 // before the per-feature loop. Handles bootstrap + assess — both are
 // project-scoped concerns (not per-feature) and have their own trigger rules.
 //
@@ -62,7 +62,7 @@ export interface PreludeOptions {
   hasMigration?: (from: string, to: string) => boolean;
   /**
    * If true, bypass the "already assessed" and staleness checks and re-run
-   * assess. Used for `conduct-ts assess --force`.
+   * assess. Used for `ai-conductor assess --force`.
    */
   forceAssess?: boolean;
   /**

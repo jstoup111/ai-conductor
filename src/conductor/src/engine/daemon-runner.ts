@@ -674,14 +674,14 @@ export async function terminateFeature({
       })
     : 'not-requested';
   const haltReason = autoParkWriteOutcome === 'failed'
-    ? `${reason}\n\nAutomatic park marker write failed: ${autoParkWriteError}\nRun: conduct-ts daemon park ${slug}`
+    ? `${reason}\n\nAutomatic park marker write failed: ${autoParkWriteError}\nRun: ai-conductor daemon park ${slug}`
     : reason;
 
   const heading = autoParkWriteOutcome === 'written'
     ? 'feature parked — will not re-dispatch on the next scan'
     : autoParkWriteOutcome === 'not-requested'
       ? 'feature errored — will re-dispatch on the next scan'
-      : `feature errored — automatic park failed: ${autoParkWriteError}; run conduct-ts daemon park ${slug}`;
+      : `feature errored — automatic park failed: ${autoParkWriteError}; run ai-conductor daemon park ${slug}`;
   let note = `${heading}\n${haltReason}\n`;
 
   const triage = triageEvidence as any;
@@ -703,7 +703,7 @@ export async function terminateFeature({
     ?
       `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
       `  2. rm .pipeline/HALT\n` +
-      `  3. conduct-ts daemon unpark ${slug}\n` +
+      `  3. ai-conductor daemon unpark ${slug}\n` +
       `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`
     :
       `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +

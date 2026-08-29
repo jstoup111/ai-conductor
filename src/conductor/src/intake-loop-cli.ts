@@ -1,4 +1,4 @@
-// `conduct-ts intake-loop --continuous|--once` — production entry point for
+// `ai-conductor intake-loop --continuous|--once` — production entry point for
 // the background auto-intake loop (Task 17).
 //
 // Plan: .docs/plans/2026-06-30-background-intake-conduct-loop.md (Task 17)
@@ -38,9 +38,9 @@ export type IntakeLoopDispatch =
 
 /**
  * Parse argv for the `intake-loop` subcommand.
- *   conduct-ts intake-loop --continuous [--interval-ms <n>] → {kind:'run', once:false, ...}
- *   conduct-ts intake-loop --once       [--interval-ms <n>] → {kind:'run', once:true, ...}
- *   conduct-ts intake-loop [anything else]                  → {kind:'guide'}
+ *   ai-conductor intake-loop --continuous [--interval-ms <n>] → {kind:'run', once:false, ...}
+ *   ai-conductor intake-loop --once       [--interval-ms <n>] → {kind:'run', once:true, ...}
+ *   ai-conductor intake-loop [anything else]                  → {kind:'guide'}
  *   (any other subcommand)                                  → null
  *
  * Malformed args return `guide` (never null) — a recognized-but-misused
@@ -109,11 +109,11 @@ export async function dispatchIntakeLoop(
 ): Promise<number> {
   if (cmd.kind === 'guide') {
     console.error(
-      'conduct-ts intake-loop --continuous|--once [--interval-ms <n>]\n' +
+      'ai-conductor intake-loop --continuous|--once [--interval-ms <n>]\n' +
         '  Runs the background intake poll loop: polls registered repos for newly\n' +
         '  captured ideas, enqueues them into the durable inbox, and notifies the\n' +
         '  operator via the status surface. Never spawns claude, never opens a PR —\n' +
-        '  DECIDE/authoring still happens in an interactive `conduct-ts engineer`\n' +
+        '  DECIDE/authoring still happens in an interactive `ai-conductor engineer`\n' +
         '  session started separately.\n' +
         '  --continuous       loop forever (poll, sleep, repeat)\n' +
         '  --once             run exactly one poll tick and exit\n' +

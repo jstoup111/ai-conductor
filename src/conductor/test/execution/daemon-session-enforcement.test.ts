@@ -1,3 +1,5 @@
+// Covers: task:10
+
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -13,10 +15,10 @@ import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import { COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
 
 // Daemon-session boundary enforcement. Engine-dispatched maker sessions have
-// attempted to run conduct-ts themselves (including daemon park/unpark/
+// attempted to run ai-conductor themselves (including daemon park/unpark/
 // restart and reseal). These tests pin the two deterministic seams: every
 // provider child session env carries CONDUCT_DAEMON_SESSION=1, and the
-// conduct-ts entry guard refuses invocations carrying the marker except the
+// ai-conductor entry guard refuses invocations carrying the marker except the
 // session-sanctioned worker subcommands the harness's own skills mandate.
 
 const argvFor = (...rest: string[]): string[] => ['node', 'conduct-ts', ...rest];
@@ -40,7 +42,7 @@ describe('guardDaemonSessionInvocation', () => {
       expect(verdict.allowed).toBe(false);
       if (!verdict.allowed) {
         expect(verdict.message).toContain(
-          'conduct-ts may not be invoked from inside a daemon-managed session',
+          'ai-conductor may not be invoked from inside a daemon-managed session',
         );
         expect(verdict.message).toContain(
           'the engine owns all conductor operations for this run',

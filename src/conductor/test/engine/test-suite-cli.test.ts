@@ -1,3 +1,5 @@
+// Covers: task:10
+
 import { describe, expect, it } from 'vitest';
 
 const PASS_EVIDENCE = {
@@ -69,7 +71,7 @@ describe('test-suite CLI adapter', () => {
 
     expect({ exitCode, output, verifierInvoked }).toEqual({
       exitCode: 1,
-      output: [expect.stringMatching(/Usage: conduct-ts test-suite[\s\S]*\/tdd or \/pipeline/i)],
+      output: [expect.stringMatching(/Usage: ai-conductor test-suite[\s\S]*\/tdd or \/pipeline/i)],
       verifierInvoked: false,
     });
   });

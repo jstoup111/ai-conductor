@@ -432,7 +432,7 @@ export async function dispatchDecideGrantCommand(
   return 0;
 }
 
-/** Parse argv for `conduct-ts plan-protected-targets <path>` without I/O. */
+/** Parse argv for `ai-conductor plan-protected-targets <path>` without I/O. */
 export function detectPlanProtectedTargetsCommand(
   argv: string[],
 ): PlanProtectedTargetsDispatch | null {
