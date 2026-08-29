@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-29T01:13:38.517Z
 Slug: finish-deadlocks-when-the-prose-judge-asks-for-rev
 Class: needs-human
 Halting step: prd_audit
