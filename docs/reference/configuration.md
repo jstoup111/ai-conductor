@@ -680,6 +680,10 @@ When a run opens a `conductor.run` root span, its terminal export carries
 `conductor.run.halt.class`. An in-progress root span is not exported until it reaches one of those
 terminal paths.
 
+The `conductor.run.outcomes` counter increments once when an opened root run reaches one of those
+terminal paths. Its `outcome` attribute uses the same `complete`, `halted`, and `terminated` taxonomy,
+so dashboards can chart terminal runs without deriving counts from trace-query metrics.
+
 | Key | Type | Required | Allowed | Default |
 | --- | --- | --- | --- | --- |
 | `otel` | object | No | — | absent means `{ enabled: false }` |

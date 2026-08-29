@@ -622,3 +622,86 @@ describe('Task 4: bounded metric identity', () => {
     });
   });
 });
+
+// ── Run outcome counter ──────────────────────────────────────────────────────────────
+
+describe('run outcome counter', () => {
+  it('records a completed run as outcome=complete', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const metric = findMetric(metricExporter, 'conductor.run.outcomes');
+    expect(metric?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes: { outcome: 'complete', project: 'test-project', feature: 'test-feature' },
+        value: 1,
+      }),
+    ]);
+  });
+
+  it('records a halted run as outcome=halted', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'loop_halt', step: 'build', reason: 'needs human' });
+    await vis.stop();
+
+    const metric = findMetric(metricExporter, 'conductor.run.outcomes');
+    expect(metric?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes: { outcome: 'halted', project: 'test-project', feature: 'test-feature' },
+        value: 1,
+      }),
+    ]);
+  });
+
+  it('records an interrupted run as outcome=terminated', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await vis.stop();
+
+    const metric = findMetric(metricExporter, 'conductor.run.outcomes');
+    expect(metric?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes: { outcome: 'terminated', project: 'test-project', feature: 'test-feature' },
+        value: 1,
+      }),
+    ]);
+  });
+
+  it('does not double-count a completed run when a late halt arrives', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'feature_complete' });
+    await emitter.emit({ type: 'loop_halt', reason: 'late arrival' });
+    await vis.stop();
+
+    const metric = findMetric(metricExporter, 'conductor.run.outcomes');
+    expect(metric?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes: { outcome: 'complete', project: 'test-project', feature: 'test-feature' },
+        value: 1,
+      }),
+    ]);
+  });
+
+  it('does not record an outcome when no run span was opened', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(findMetric(metricExporter, 'conductor.run.outcomes')).toBeUndefined();
+  });
+});

@@ -465,6 +465,9 @@ export class OtelVisualizer implements VisualizerPlugin {
         this.pendingModel.delete(step);
         this.metricsRecorder?.onStepClose(step, durationMs, retryCount, tokenUsage, model);
       },
+      onRunClose: (outcome) => {
+        this.metricsRecorder?.onRunClose(outcome);
+      },
     });
   }
 }

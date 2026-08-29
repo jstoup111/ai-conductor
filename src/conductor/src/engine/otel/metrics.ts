@@ -5,6 +5,7 @@
  *  - conductor.step.duration  — Histogram (ms, per step)
  *  - conductor.step.retries   — Counter (per step, only when retryCount > 0)
  *  - conductor.step.tokens    — Counter (per step × kind, only when tokenUsage present)
+ *  - conductor.run.outcomes   — Counter (once per opened run, by terminal outcome)
  *
  * All record/add calls are synchronous (enqueue to PeriodicExportingMetricReader).
  * TokenUsage absent → no data points (no NaN / zero-fill). Partial kinds
@@ -13,6 +14,7 @@
 import type { Attributes, Meter, Counter, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
+import type { RunOutcome } from './span-manager.js';
 
 /** Explicit duration histogram boundaries, from 10 ms through 30 minutes. */
 export const DURATION_BUCKET_BOUNDARIES_MS = [
@@ -25,6 +27,7 @@ export class MetricsRecorder {
   private readonly retriesCounter: Counter;
   private readonly tokensCounter: Counter;
   private readonly closeoutDurationHistogram: Histogram;
+  private readonly runOutcomesCounter: Counter;
 
   constructor(
     meter: Meter,
@@ -48,6 +51,9 @@ export class MetricsRecorder {
       description: 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
       unit: 'ms',
       advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS },
+    });
+    this.runOutcomesCounter = meter.createCounter('conductor.run.outcomes', {
+      description: 'Number of conductor runs by terminal outcome',
     });
   }
 
@@ -88,6 +94,11 @@ export class MetricsRecorder {
     this.closeoutDurationHistogram.record(event.endedAt - event.startedAt, this.withIdentity({
       obligation: event.obligation,
     }));
+  }
+
+  /** Record the terminal outcome of an opened run exactly once. */
+  onRunClose(outcome: RunOutcome): void {
+    this.runOutcomesCounter.add(1, this.withIdentity({ outcome }));
   }
 
   /**
