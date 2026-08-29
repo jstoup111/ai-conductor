@@ -500,6 +500,195 @@ describe('engine/conductor', () => {
     expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toBe(`${expected}\n`);
   });
 
+  describe('test_suite kickback boundary', () => {
+    const preservedEvidence = {
+      version: 4 as const,
+      outcome: 'PASS' as const,
+      reason: 'exit_zero' as const,
+      fingerprint: 'sha256:preserved-within-budget',
+      categoryFingerprints: {
+        additional_inputs: 'sha256:additional-inputs',
+        dependencies: 'sha256:dependencies',
+        environment: 'sha256:environment',
+        migrations: 'sha256:migrations',
+        project_config: 'sha256:project-config',
+        source: 'sha256:source',
+        test_infrastructure: 'sha256:test-infrastructure',
+        tests: 'sha256:tests',
+      },
+      provenanceHeadSha: '0123456789abcdef0123456789abcdef01234567',
+      command: 'npm test',
+      workingDirectory: 'src/conductor',
+      startedAt: '2026-08-29T00:00:00.000Z',
+      endedAt: '2026-08-29T00:00:01.000Z',
+      durationMs: 1_000,
+      exitCode: 0 as const,
+      stdout: 'all tests passed\n',
+      stderr: '',
+    };
+
+    async function writeTestSuiteOnlyState(): Promise<void> {
+      const state = Object.fromEntries(
+        ALL_STEPS.map((step) => [step.name, step.name === 'test_suite' ? 'stale' : 'done']),
+      ) as ConductState;
+      state.complexity_tier = 'M';
+      state.feature_desc = 'test-suite-kickback-boundary';
+      // This evaluation resumes the feature that owns the pre-existing ledger.
+      // A fresh feature session correctly clears every prior feature's budget.
+      state.run_started_at = Date.now();
+      await writeState(statePath, state);
+    }
+
+    const ledgerBytes = JSON.stringify({
+      version: 1,
+      gates: {
+        test_suite: {
+          count: 1,
+          cumulative: 1,
+          mechanicalFaults: 0,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'previous suite failure',
+          priorVerdict: true,
+          resolvedBefore: 4,
+        },
+      },
+    }, null, 2) + '\n';
+
+    it('preserves the test_suite ledger bytes and emits no kickback for a within-budget reuse', async () => {
+      // Covers: task:12
+      await writeTestSuiteOnlyState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+      await writeFile(ledgerPath, ledgerBytes);
+      const before = await readFile(ledgerPath, 'utf8');
+      const beforeHash = createHash('sha256').update(before).digest('hex');
+      const kickbacks: ConductorEvent[] = [];
+      events.on('kickback', (event) => { kickbacks.push(event); });
+      const verifier = {
+        inspect: vi.fn().mockResolvedValue({
+          status: 'PRESERVED_WITHIN_BUDGET' as const,
+          evidence: preservedEvidence,
+        }),
+        ensure: vi.fn().mockResolvedValue({ status: 'REUSED' as const, evidence: preservedEvidence }),
+      };
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        mode: 'auto',
+        fromStep: 'test_suite',
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      const after = await readFile(ledgerPath, 'utf8');
+      expect(createHash('sha256').update(after).digest('hex')).toBe(beforeHash);
+      expect(after).toBe(before);
+      expect(kickbacks).toEqual([]);
+      expect(runner.run).not.toHaveBeenCalled();
+      expect(verifier.inspect).toHaveBeenCalledTimes(1);
+      expect(verifier.ensure).toHaveBeenCalledTimes(1);
+      const finalState = await readState(statePath);
+      expect(finalState.ok).toBe(true);
+      if (!finalState.ok) throw new Error(finalState.error.message);
+      expect(finalState.value.test_suite).toBe('done');
+    });
+
+    it('consumes exactly one test_suite kickback for a genuine rerun nonzero exit', async () => {
+      // Covers: task:12
+      await writeTestSuiteOnlyState();
+      const kickbacks: ConductorEvent[] = [];
+      events.on('kickback', (event) => { kickbacks.push(event); });
+      const suiteFailure = {
+        status: 'FAILED' as const,
+        reason: 'nonzero_exit' as const,
+        message: 'fixture suite failure',
+      };
+      const runner: StepRunner = {
+        run: vi.fn().mockResolvedValue({ success: false, output: 'stop after the expected kickback' }),
+      };
+      const verifier = {
+        inspect: vi.fn().mockResolvedValue(suiteFailure),
+        ensure: vi.fn().mockResolvedValue(suiteFailure),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        mode: 'auto',
+        fromStep: 'test_suite',
+        maxRetries: 1,
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
+        count: 1,
+        cumulative: 1,
+      }));
+      expect(kickbacks).toEqual([expect.objectContaining({
+        type: 'kickback',
+        from: 'test_suite',
+        to: 'build',
+        count: 1,
+      })]);
+      expect(verifier.inspect).toHaveBeenCalledTimes(1);
+      expect(verifier.ensure).toHaveBeenCalledTimes(1);
+      expect(runner.run).toHaveBeenCalledWith('build', expect.anything(), expect.anything());
+    });
+
+    it.each(['timeout', 'unlaunchable'] as const)(
+      'halts %s test_suite infrastructure failures without consuming a kickback',
+      async (reason) => {
+        // Covers: task:12
+        await writeTestSuiteOnlyState();
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+        await writeFile(ledgerPath, ledgerBytes);
+        const before = await readFile(ledgerPath, 'utf8');
+        const kickbacks: ConductorEvent[] = [];
+        events.on('kickback', (event) => { kickbacks.push(event); });
+        const suiteFailure = {
+          status: 'FAILED' as const,
+          reason,
+          message: `fixture ${reason} failure`,
+        };
+        const runner = createMockStepRunner();
+        const verifier = {
+          inspect: vi.fn().mockResolvedValue(suiteFailure),
+          ensure: vi.fn().mockResolvedValue(suiteFailure),
+        };
+        const conductor = new Conductor({
+          projectRoot: dir,
+          stateFilePath: statePath,
+          stepRunner: runner,
+          events,
+          mode: 'auto',
+          fromStep: 'test_suite',
+          maxRetries: 1,
+          fullSuiteVerifier: verifier,
+        });
+
+        await conductor.run();
+
+        expect(await readFile(ledgerPath, 'utf8')).toBe(before);
+        expect(kickbacks).toEqual([]);
+        expect(verifier.inspect).toHaveBeenCalledTimes(1);
+        expect(verifier.ensure).toHaveBeenCalledTimes(1);
+        expect(runner.run).not.toHaveBeenCalled();
+        await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+        await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+          `test_suite infrastructure failure (${reason})`,
+        );
+      },
+    );
+  });
+
   it('keeps the interactive CLI constructor free of daemon operator-park options', async () => {
     const source = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
     const constructor = source.match(

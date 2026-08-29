@@ -39,6 +39,32 @@ describe('kickback-ledger', () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
   });
 
+  it('reads a test_suite ledger without rewriting its byte representation', async () => {
+    // Covers: task:12
+    const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+    const bytes = '{\n' +
+      '  "version": 1,\n' +
+      '  "gates": {\n' +
+      '    "test_suite": {\n' +
+      '      "count": 1,\n' +
+      '      "cumulative": 1,\n' +
+      '      "treeHash": null,\n' +
+      '      "lastReason": "prior suite failure",\n' +
+      '      "priorVerdict": true,\n' +
+      '      "resolvedBefore": 4\n' +
+      '    }\n' +
+      '  }\n' +
+      '}\n';
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(ledgerPath, bytes);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { test_suite: { count: 1, cumulative: 1 } },
+    });
+
+    expect(await readFile(ledgerPath, 'utf8')).toBe(bytes);
+  });
+
   describe('plan growth', () => {
     it('persists authored and gate-added tasks, then reports the remaining cap', async () => {
       await recordGrowth(dir, {
