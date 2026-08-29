@@ -169,10 +169,12 @@ describe('build_review input isolation', () => {
       readFile(join(REPOSITORY_ROOT, 'HARNESS.md'), 'utf8'),
     ]);
 
-    for (const policy of [pipeline, tdd, harness]) {
-      expect(policy).toContain('conduct-ts scoped-run <selectors...>');
+    for (const policy of [pipeline, tdd]) {
+      expect(policy).toContain('ai-conductor scoped-run <selectors...>');
       expect(policy).toMatch(/agent derives the selectors/i);
     }
+    expect(harness).toContain('conduct-ts scoped-run <selectors...>');
+    expect(harness).toMatch(/agent derives the selectors/i);
 
     for (const trigger of BROAD_FALLBACK_TRIGGERS) {
       expect(harness).toContain(trigger);

@@ -22,7 +22,7 @@ import { basename, join, resolve } from 'node:path';
 // Constants — only place that encodes the session prefix and foreground command.
 // ─────────────────────────────────────────────────────────────────────────────
 export const SESSION_PREFIX = 'cc-daemon-';
-export const DAEMON_FOREGROUND_COMMAND = 'conduct-ts daemon --continuous';
+export const DAEMON_FOREGROUND_COMMAND = 'ai-conductor daemon --continuous';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TmuxRunner — injectable execution boundary (allows deterministic unit tests).
@@ -555,7 +555,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       const name = sessionNameForRepo(repo);
       if (!(await hasSession(name, run))) {
         throw new Error(
-          `No daemon session found for "${repo}". Run 'conduct-ts daemon start' first.`,
+          `No daemon session found for "${repo}". Run 'ai-conductor daemon start' first.`,
         );
       }
       await attachSession(name, opts, run);

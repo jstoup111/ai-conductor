@@ -38,7 +38,7 @@ export async function loadScopeCheckEnforcement(
   }
 }
 
-/** Recognize the hook-only `conduct-ts scope-check <commit-message>` command. */
+/** Recognize the hook-only `ai-conductor scope-check <commit-message>` command. */
 export function detectScopeCheckCommand(argv: string[]): ScopeCheckCommand | null {
   if (argv[2] !== 'scope-check' || !argv[3]) return null;
   return { commitMessagePath: argv[3] };

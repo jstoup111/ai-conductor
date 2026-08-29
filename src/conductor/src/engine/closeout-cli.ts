@@ -19,7 +19,7 @@ export interface CloseoutEventDispatch {
   endedAt: number;
 }
 
-/** Parse `conduct-ts closeout-event <obligation> <started-at> <ended-at>`. */
+/** Parse `ai-conductor closeout-event <obligation> <started-at> <ended-at>`. */
 export function detectCloseoutEventCommand(argv: string[]): CloseoutEventDispatch | null {
   if (argv[2] !== 'closeout-event') return null;
 

@@ -1,8 +1,8 @@
-// `conduct-ts engineer` command handler (Phase 9.3, ADR-008 conformance rework).
+// `ai-conductor engineer` command handler (Phase 9.3, ADR-008 conformance rework).
 //
 // AGENT-HOSTED EXECUTION MODEL (ADR-008):
 //   The engineer subsystem is driven by the /engineer host-agent skill in a Claude
-//   Code session. The bare `conduct-ts engineer` command is the FRONT DOOR: it launches
+//   Code session. The bare `ai-conductor engineer` command is the FRONT DOOR: it launches
 //   an INTERACTIVE `claude /engineer` session (stdio inherited, operator present),
 //   dropping the operator into the human-in-the-loop idea→spec loop. This is NOT the
 //   forbidden `claude -p` substrate — that was a headless subprocess doing autonomous
@@ -14,10 +14,10 @@
 //   routing/authoring.
 //
 // Subcommands:
-//   conduct-ts engineer               → {kind:'launch'}   — launch interactive `claude /engineer`
-//   conduct-ts engineer projects      → {kind:'projects'} — list registry to stdout as JSON
-//   conduct-ts engineer land          → {kind:'land'}     — commit pre-written artifacts to spec branch
-//   conduct-ts engineer handoff       → {kind:'handoff'}  — open spec PR + ensureRunning
+//   ai-conductor engineer               → {kind:'launch'}   — launch interactive `claude /engineer`
+//   ai-conductor engineer projects      → {kind:'projects'} — list registry to stdout as JSON
+//   ai-conductor engineer land          → {kind:'land'}     — commit pre-written artifacts to spec branch
+//   ai-conductor engineer handoff       → {kind:'handoff'}  — open spec PR + ensureRunning
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
 import { spawn } from 'node:child_process';
@@ -124,7 +124,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   const subCmd = argv[3];
 
   if (!subCmd || subCmd === '') {
-    // Bare `conduct-ts engineer` → launch the interactive host-agent loop.
+    // Bare `ai-conductor engineer` → launch the interactive host-agent loop.
     return { kind: 'launch' };
   }
 
@@ -143,7 +143,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   }
 
   if (subCmd === 'worktree') {
-    // `conduct-ts engineer worktree --project <n> --idea "<i>"` — create the per-idea
+    // `ai-conductor engineer worktree --project <n> --idea "<i>"` — create the per-idea
     // worktree for authoring; prints `{ slug, branch, worktreePath, reconcile }`.
     const project = parseFlag(argv, '--project');
     const idea = parseFlag(argv, '--idea');
@@ -192,21 +192,21 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   }
 
   if (subCmd === 'poll') {
-    // `conduct-ts engineer poll` — poll intake sources and enqueue; no routing/process.
+    // `ai-conductor engineer poll` — poll intake sources and enqueue; no routing/process.
     const unk = findUnknownFlag(argv, []);
     if (unk) return { kind: 'reject', sub: 'poll', flag: unk };
     return { kind: 'poll' };
   }
 
   if (subCmd === 'claim') {
-    // `conduct-ts engineer claim` — atomically dequeue the oldest pending idea.
+    // `ai-conductor engineer claim` — atomically dequeue the oldest pending idea.
     const unk = findUnknownFlag(argv, []);
     if (unk) return { kind: 'reject', sub: 'claim', flag: unk };
     return { kind: 'claim' };
   }
 
   if (subCmd === 'forget') {
-    // `conduct-ts engineer forget <sourceRef>` — drop a ledger entry + strip the label.
+    // `ai-conductor engineer forget <sourceRef>` — drop a ledger entry + strip the label.
     const sourceRef = argv[4];
     if (!sourceRef || sourceRef.startsWith('--')) {
       return { kind: 'guide' };
@@ -217,7 +217,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   }
 
   if (subCmd === 'unclaim') {
-    // `conduct-ts engineer unclaim <sourceRef>` — requeue a claimed ledger entry
+    // `ai-conductor engineer unclaim <sourceRef>` — requeue a claimed ledger entry
     // back to pending (single-idea recovery, FR-5).
     const sourceRef = argv[4];
     if (!sourceRef || sourceRef.startsWith('--')) {
@@ -229,7 +229,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   }
 
   if (subCmd === 'requeue') {
-    // `conduct-ts engineer requeue --stale [--older-than <dur>]` — bulk recovery
+    // `ai-conductor engineer requeue --stale [--older-than <dur>]` — bulk recovery
     // of stranded `claimed` ledger entries (FR-8). `--stale` is required to
     // invoke this mode; `--older-than` overrides the resolved stale-claim window.
     if (!argv.includes('--stale')) {
@@ -242,7 +242,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   }
 
   if (subCmd === 'resolve') {
-    // `conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <b>]` — mark
+    // `ai-conductor engineer resolve <sourceRef> --pr-url <url> [--branch <b>]` — mark
     // a claimed entry as delivered when write-back fails. Recovers from the stranded
     // state (claimed + no prUrl) by stamping prUrl + optional branch evidence.
     // The sourceRef is the first positional arg that doesn't start with --.
@@ -271,7 +271,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   }
 
   if (subCmd === 'migrate-issue-deps') {
-    // `conduct-ts engineer migrate-issue-deps [--confirm]` — one-time prose→link
+    // `ai-conductor engineer migrate-issue-deps [--confirm]` — one-time prose→link
     // migration (Task 22-25). Dry-run by default (proposal only, zero writes);
     // `--confirm` applies via the GET-before-POST writer.
     const unk = findUnknownFlag(argv, ['--confirm']);
@@ -280,7 +280,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     return { kind: 'migrate-issue-deps', confirm };
   }
 
-  // `conduct-ts engineer --idea "<text>"` — launch driving a specific idea.
+  // `ai-conductor engineer --idea "<text>"` — launch driving a specific idea.
   if (subCmd === '--idea') {
     const idea = parseFlag(argv, '--idea');
     if (!idea) return { kind: 'guide' };
@@ -288,7 +288,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   }
 
   // A bare non-flag positional is free-text idea input:
-  //   `conduct-ts engineer add a /healthz endpoint`
+  //   `ai-conductor engineer add a /healthz endpoint`
   // (Recognized subcommands are handled above, so this cannot shadow them.)
   if (!subCmd.startsWith('--')) {
     const idea = argv.slice(3).join(' ').trim();
@@ -614,25 +614,25 @@ export const SUBCOMMAND_HELP = {
 /** Print the canonical compose usage/guide text (front door + deterministic primitives). */
 function printGuide(print: (s: string) => void): void {
   print(
-    'Compose is the agent-hosted idea→spec loop. Run `conduct-ts compose` (no\n' +
+    'Compose is the agent-hosted idea→spec loop. Run `ai-conductor compose` (no\n' +
       'subcommand) to drop into an interactive `claude /engineer` session and drive it\n' +
       'with a human in the loop. `conduct-ts engineer` remains a deprecated alias. The\n' +
       'subcommands below are the deterministic primitives\n' +
       'the /engineer skill calls in-chat:\n' +
       '\n' +
-      '  conduct-ts compose                                     — launch the interactive /engineer loop (pre-polls intake)\n' +
-      '  conduct-ts compose --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
-      '  conduct-ts compose projects                            — list registered projects\n' +
-      '  conduct-ts compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
-      '  conduct-ts compose worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
-      '  conduct-ts compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
-      '  conduct-ts compose handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
-      '  conduct-ts compose resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
-      '  conduct-ts compose unclaim <owner/repo#N>              — requeue a claimed ledger entry back to pending (single-idea recovery)\n' +
-      '  conduct-ts compose requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h")\n' +
-      '  conduct-ts compose poll                                — poll github issues → enqueue new ideas\n' +
-      '  conduct-ts compose forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
-      '  conduct-ts compose migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
+      '  ai-conductor compose                                     — launch the interactive /engineer loop (pre-polls intake)\n' +
+      '  ai-conductor compose --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
+      '  ai-conductor compose projects                            — list registered projects\n' +
+      '  ai-conductor compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
+      '  ai-conductor compose worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
+      '  ai-conductor compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
+      '  ai-conductor compose handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
+      '  ai-conductor compose resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
+      '  ai-conductor compose unclaim <owner/repo#N>              — requeue a claimed ledger entry back to pending (single-idea recovery)\n' +
+      '  ai-conductor compose requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h")\n' +
+      '  ai-conductor compose poll                                — poll github issues → enqueue new ideas\n' +
+      '  ai-conductor compose forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
+      '  ai-conductor compose migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
       '(dry-run by default; --confirm writes)\n',
   );
 }
@@ -687,7 +687,7 @@ export function buildIntake(deps: {
 /**
  * Pre-poll the github-issues source and enqueue new ideas into the durable inbox,
  * returning the count enqueued. This is the launch-time half of intake: the bare
- * `conduct-ts engineer` primes the inbox here so the spawned `claude /engineer`
+ * `ai-conductor engineer` primes the inbox here so the spawned `claude /engineer`
  * session can `claim` an idea instead of starting blank. Idempotent — the ledger
  * dedups, so a re-poll enqueues nothing new. Exported for direct testing.
  */
@@ -742,7 +742,7 @@ export async function dispatchEngineer(
   try {
     switch (dispatch.kind) {
     // ── launch ──────────────────────────────────────────────────────────────────
-    // Bare `conduct-ts engineer`: drop the operator into the interactive /engineer loop.
+    // Bare `ai-conductor engineer`: drop the operator into the interactive /engineer loop.
     case 'launch': {
       const launchOne =
         opts.launchInteractive ?? ((idea?: string) => launchClaudeEngineer(process.cwd(), idea));
@@ -860,7 +860,7 @@ export async function dispatchEngineer(
     }
 
     // ── worktree ────────────────────────────────────────────────────────────────
-    // `conduct-ts engineer worktree --project <n> --idea "<i>"`: create the per-idea
+    // `ai-conductor engineer worktree --project <n> --idea "<i>"`: create the per-idea
     // isolated worktree the skill authors + lands in. Strict-abort (FR-7): a failure
     // makes zero mutation to the primary tree and returns exit 1. Prints
     // `{ slug, branch, worktreePath, reconcile }` on success.
@@ -1142,7 +1142,7 @@ export async function dispatchEngineer(
     }
 
     // ── poll ────────────────────────────────────────────────────────────────────
-    // `conduct-ts engineer poll`: poll the github-issues source across registered
+    // `ai-conductor engineer poll`: poll the github-issues source across registered
     // repos and enqueue new envelopes into the durable inbox. NO routing, NO
     // processing, NO setInterval/detached spawn — a single synchronous sweep. The
     // ledger dedups, so a double-poll enqueues nothing new.
@@ -1159,7 +1159,7 @@ export async function dispatchEngineer(
     }
 
     // ── claim ─────────────────────────────────────────────────────────────────
-    // `conduct-ts engineer claim`: atomically dequeue the oldest pending idea so the
+    // `ai-conductor engineer claim`: atomically dequeue the oldest pending idea so the
     // /engineer skill can route it. claim+ack removes it from the inbox (the ledger
     // is the durable record); the ledger advances to `claimed`. On an empty inbox,
     // reports {empty:true} — the skill then falls back to a CLI idea arg or chat.
@@ -1253,7 +1253,7 @@ export async function dispatchEngineer(
     }
 
     // ── forget ──────────────────────────────────────────────────────────────────
-    // `conduct-ts engineer forget <sourceRef>`: drop the ledger entry so the issue
+    // `ai-conductor engineer forget <sourceRef>`: drop the ledger entry so the issue
     // is re-capturable, and strip the `engineer:handled` label so poll sees it again.
     // An absent ref is reported (found:false) and is NOT an error.
     case 'forget': {
@@ -1285,7 +1285,7 @@ export async function dispatchEngineer(
     }
 
     // ── unclaim ─────────────────────────────────────────────────────────────
-    // `conduct-ts engineer unclaim <sourceRef>` — single-idea recovery (FR-5):
+    // `ai-conductor engineer unclaim <sourceRef>` — single-idea recovery (FR-5):
     // requeue a claimed ledger entry back to pending, preserving capturedAt.
     // An absent ref is reported (found:false) and is NOT an error (Story 5, FR-7).
     // A non-claimed (terminal) or already PR-delivered entry refuses and directs
@@ -1328,7 +1328,7 @@ export async function dispatchEngineer(
     }
 
     // ── requeue ───────────────────────────────────────────────────────────────
-    // `conduct-ts engineer requeue --stale [--older-than <dur>]` — bulk recovery
+    // `ai-conductor engineer requeue --stale [--older-than <dur>]` — bulk recovery
     // of the whole stranded claimed class (Story 6, FR-8). Before requeueing each
     // eligible entry, probe its GitHub issue liveness (Story 7, FR-9): closed →
     // forget (drop); open → requeueClaimed. A liveness read that errors, returns
@@ -1420,7 +1420,7 @@ export async function dispatchEngineer(
     }
 
     // ── resolve ─────────────────────────────────────────────────────────────
-    // `conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <b>]`:
+    // `ai-conductor engineer resolve <sourceRef> --pr-url <url> [--branch <b>]`:
     // mark a claimed entry as delivered when write-back fails (recovery from the
     // stranded state where the spec was authored/handed off but not recorded as done).
     // If entry doesn't exist: return {kind:'resolve', found:false} exit 0 (soft failure).
@@ -1471,7 +1471,7 @@ export async function dispatchEngineer(
     }
 
     // ── migrate-issue-deps ────────────────────────────────────────────────────
-    // `conduct-ts engineer migrate-issue-deps [--confirm]`: one-time prose→link
+    // `ai-conductor engineer migrate-issue-deps [--confirm]`: one-time prose→link
     // migration over the current repo's open issues. Scans, classifies prose
     // into deterministic edges + manual-review items, prints the full proposal,
     // and only WRITES anything when `--confirm` is passed — a bare run is a

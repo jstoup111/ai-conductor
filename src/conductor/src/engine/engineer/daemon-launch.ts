@@ -55,7 +55,7 @@ export function launchDaemon(project: string, opts: LaunchDaemonOpts = {}): void
   // Operational kill-switch (and test-isolation guard): `AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH=1`
   // suppresses auto-launching a REAL daemon — for an operator who manages daemons by hand,
   // and as the default in the test runner so the suite never spawns a real `tmux new-session
-  // -d 'conduct-ts daemon --continuous'` that would outlive the test's tmpdir. An EXPLICITLY
+  // -d 'ai-conductor daemon --continuous'` that would outlive the test's tmpdir. An EXPLICITLY
   // injected supervisor (unit tests asserting the delegation contract) is never suppressed.
   if (!opts.supervisor && process.env[NO_AUTOLAUNCH_ENV] === '1') {
     return;

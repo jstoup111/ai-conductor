@@ -1,7 +1,7 @@
-// ── Auto-update-check — conduct-ts startup wiring for `bin/update --auto` ───
+// ── Auto-update-check — ai-conductor startup wiring for `bin/update --auto` ───
 //
 // Re-homes the auto-check that used to run inside `bin/conduct`
-// (`check_harness_update`) onto `conduct-ts` startup, now that the check logic
+// (`check_harness_update`) onto `ai-conductor` startup, now that the check logic
 // itself has moved to the standalone `bin/update` script (port-self-update-flow,
 // T1-T4). Story 7: `autoCheck=true` → spawn `bin/update --auto` before the
 // pipeline boots; `autoCheck=false` is `bin/update`'s own silent no-op, not
@@ -31,7 +31,7 @@ export interface SpawnAutoUpdateCheckOptions {
 }
 
 /**
- * Spawn `bin/update --auto` at conduct-ts startup, resolved relative to the
+ * Spawn `bin/update --auto` at ai-conductor startup, resolved relative to the
  * harness root. Never throws: a missing harness root, a missing `bin/update`,
  * a spawn failure, or a non-zero exit from `bin/update` are all logged and
  * swallowed — advisory only, must never block the pipeline from booting.

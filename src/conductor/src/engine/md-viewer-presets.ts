@@ -1,5 +1,5 @@
 // Markdown viewer preset catalog — single source of truth for `bin/install`
-// prompt, bash `render_md`, and the conduct-ts artifact-review path.
+// prompt, bash `render_md`, and the ai-conductor artifact-review path.
 
 export type MarkdownViewerMode = 'inline' | 'blocking' | 'external';
 

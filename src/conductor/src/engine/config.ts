@@ -314,7 +314,7 @@ async function loadProjectConfig(
       ok: false,
       error: {
         type: 'missing',
-        message: `Config file not found: ${configPath}. Run conduct-ts config init to create it.`,
+        message: `Config file not found: ${configPath}. Run ai-conductor config init to create it.`,
       },
     };
   }
@@ -2236,7 +2236,7 @@ export async function loadMergedConfigForRead(
       ok: false,
       error: {
         type: 'missing',
-        message: `Config file not found: ${configPath}. Run conduct-ts config init to create it.`,
+        message: `Config file not found: ${configPath}. Run ai-conductor config init to create it.`,
       },
     };
   }

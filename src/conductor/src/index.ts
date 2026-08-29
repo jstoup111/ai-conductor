@@ -19,7 +19,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
   }
   if (opts.auto) {
     console.error(
-      'Error: --auto is deprecated. Use `conduct-ts daemon start` instead; see docs/guides/running-the-daemon.md.',
+      'Error: --auto is deprecated. Use `ai-conductor daemon start` instead; see docs/guides/running-the-daemon.md.',
     );
     process.exit(1);
   }

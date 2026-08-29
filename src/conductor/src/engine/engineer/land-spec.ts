@@ -127,7 +127,7 @@ export async function landSpec(
   } catch {
     throw new Error(
       `landSpec: per-idea worktree "${worktreePath}" does not exist. ` +
-        'Create the worktree (conduct-ts engineer worktree) before landing — landSpec never ' +
+        'Create the worktree (ai-conductor engineer worktree) before landing — landSpec never ' +
         'falls back to the primary checkout.',
     );
   }

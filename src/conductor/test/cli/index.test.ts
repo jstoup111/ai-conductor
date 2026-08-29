@@ -1,3 +1,5 @@
+// Covers: task:10, task:12
+
 import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
 import { join } from 'node:path';
@@ -212,6 +214,7 @@ describe('CLI', () => {
   // invisible. createProgram() is the program index.ts routes top-level help to.
   it('--help lists all subcommands including build-review', () => {
     const help = createProgram().helpInformation();
+    expect(help).toMatch(/^Usage: ai-conductor/m);
     expect(help).toMatch(/^Commands:/m);
     for (const cmd of ['inline', 'register', 'create', 'engineer', 'daemon', 'build-review']) {
       expect(help).toContain(cmd);
@@ -225,14 +228,14 @@ describe('CLI', () => {
 
     it('documents every top-level command with a titled section', () => {
       for (const path of [
-        'conduct inline',
-        'conduct register',
-        'conduct create',
-        'conduct engineer',
-        'conduct daemon',
-        'conduct build-review',
-        'conduct build-review findings',
-        'conduct build-review accept',
+        'ai-conductor inline',
+        'ai-conductor register',
+        'ai-conductor create',
+        'ai-conductor engineer',
+        'ai-conductor daemon',
+        'ai-conductor build-review',
+        'ai-conductor build-review findings',
+        'ai-conductor build-review accept',
       ]) {
         expect(help).toContain(path);
       }
@@ -240,16 +243,16 @@ describe('CLI', () => {
 
     it('documents NESTED sub-subcommands (engineer + daemon trees)', () => {
       for (const path of [
-        'conduct engineer projects',
-        'conduct engineer land',
-        'conduct engineer handoff',
-        'conduct daemon status',
-        'conduct daemon logs',
-        'conduct daemon start',
-        'conduct daemon stop',
-        'conduct daemon restart',
-        'conduct daemon connect',
-        'conduct daemon debug',
+        'ai-conductor engineer projects',
+        'ai-conductor engineer land',
+        'ai-conductor engineer handoff',
+        'ai-conductor daemon status',
+        'ai-conductor daemon logs',
+        'ai-conductor daemon start',
+        'ai-conductor daemon stop',
+        'ai-conductor daemon restart',
+        'ai-conductor daemon connect',
+        'ai-conductor daemon debug',
       ]) {
         expect(help).toContain(path);
       }
@@ -264,18 +267,18 @@ describe('CLI', () => {
     });
 
     it('omits the auto-generated `help [command]` as its own section', () => {
-      expect(help).not.toContain('conduct help');
-      expect(help).not.toContain('conduct engineer help');
+      expect(help).not.toContain('ai-conductor help');
+      expect(help).not.toContain('ai-conductor engineer help');
     });
 
     it('documents the full engineer subtree (all six runtime primitives)', () => {
       for (const path of [
-        'conduct engineer worktree',
-        'conduct engineer poll',
-        'conduct engineer claim',
-        'conduct engineer forget',
-        'conduct engineer resolve',
-        'conduct engineer migrate-issue-deps',
+        'ai-conductor engineer worktree',
+        'ai-conductor engineer poll',
+        'ai-conductor engineer claim',
+        'ai-conductor engineer forget',
+        'ai-conductor engineer resolve',
+        'ai-conductor engineer migrate-issue-deps',
       ]) {
         expect(help).toContain(path);
       }
@@ -304,7 +307,7 @@ describe('CLI', () => {
     it('documents the run flags and all sub-verbs (status/logs + management)', () => {
       expect(help).toContain('--concurrency');
       for (const verb of ['status', 'logs', 'start', 'stop', 'restart', 'connect', 'debug']) {
-        expect(help).toContain(`conduct daemon ${verb}`);
+        expect(help).toContain(`ai-conductor daemon ${verb}`);
       }
     });
   });

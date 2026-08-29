@@ -104,10 +104,10 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(COMMIT_MSG_HOOK).not.toMatch(/src\/conductor\/dist/);
       expect(COMMIT_MSG_HOOK).not.toMatch(/tasksByFile/);
       expect(COMMIT_MSG_HOOK).toMatch(
-        /CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE"/,
+        /CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" ai-conductor scope-check "\$COMMIT_MSG_FILE"/,
       );
       expect(COMMIT_MSG_HOOK).toMatch(
-        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "3" \]\]; then\n\s+echo "commit-msg: scope-check recorded ambiguity \(exit 3\); allowing commit" >&2\n\s+elif \[\[ "\$rc" != "0" \]\]; then\n\s+echo "commit-msg: scope-check abstained \(exit \$rc\); allowing commit" >&2/,
+        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" ai-conductor scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "3" \]\]; then\n\s+echo "commit-msg: scope-check recorded ambiguity \(exit 3\); allowing commit" >&2\n\s+elif \[\[ "\$rc" != "0" \]\]; then\n\s+echo "commit-msg: scope-check abstained \(exit \$rc\); allowing commit" >&2/,
       );
     });
   });
@@ -668,8 +668,8 @@ describe('git-hook-assets — embedding hook scripts', () => {
     }
 
     async function writeScopeCheck(exitCode: number): Promise<NodeJS.ProcessEnv> {
-      await writeFile(join(fakeBinDir, 'conduct-ts'), `#!/bin/sh\nexit ${exitCode}\n`, 'utf8');
-      await chmod(join(fakeBinDir, 'conduct-ts'), 0o755);
+      await writeFile(join(fakeBinDir, 'ai-conductor'), `#!/bin/sh\nexit ${exitCode}\n`, 'utf8');
+      await chmod(join(fakeBinDir, 'ai-conductor'), 0o755);
       return { ...process.env, PATH: `${fakeBinDir}:${process.env.PATH}` };
     }
 

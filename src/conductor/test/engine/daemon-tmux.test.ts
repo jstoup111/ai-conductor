@@ -139,21 +139,21 @@ describe('newDetachedSession: argv', () => {
   it('calls new-session with -d, -s <name>, -c <cwd>, <command>', async () => {
     const newDetachedSession = requireFn(await load(), 'newDetachedSession');
     const { run, calls } = spyRunner();
-    await newDetachedSession('cc-daemon-widget-ff0011', 'conduct-ts daemon --continuous', '/repo/widget', run);
+    await newDetachedSession('cc-daemon-widget-ff0011', 'ai-conductor daemon --continuous', '/repo/widget', run);
     expect(calls).toHaveLength(1);
     expect(calls[0].args).toEqual([
       'new-session',
       '-d',
       '-s', 'cc-daemon-widget-ff0011',
       '-c', '/repo/widget',
-      'conduct-ts daemon --continuous',
+      'ai-conductor daemon --continuous',
     ]);
   });
 
   it('throws when tmux exits non-zero', async () => {
     const newDetachedSession = requireFn(await load(), 'newDetachedSession');
     const { run } = spyRunner({ 'new-session': { code: 1 } });
-    await expect(newDetachedSession('cc-daemon-widget-ff0011', 'conduct-ts daemon --continuous', '/repo/widget', run))
+    await expect(newDetachedSession('cc-daemon-widget-ff0011', 'ai-conductor daemon --continuous', '/repo/widget', run))
       .rejects.toThrow();
   });
 });
@@ -294,13 +294,13 @@ describe('sendKeys: argv', () => {
   it('calls send-keys with exact-match target, the command text, and "Enter"', async () => {
     const sendKeys = requireFn(await load(), 'sendKeys');
     const { run, calls } = spyRunner();
-    await sendKeys('cc-daemon-myapp-abc123', 'conduct-ts status', run);
+    await sendKeys('cc-daemon-myapp-abc123', 'ai-conductor status', run);
     expect(calls).toHaveLength(1);
     // Pane-targeting verb: `=<session>:` (active pane), not the bare session target.
     expect(calls[0].args).toEqual([
       'send-keys',
       '-t', '=cc-daemon-myapp-abc123:',
-      'conduct-ts status',
+      'ai-conductor status',
       'Enter',
     ]);
   });
@@ -361,7 +361,7 @@ describe('respawnPane: argv and error handling', () => {
     expect(respawnCall.args[2]).toBe('-t');
     expect(respawnCall.args[3]).toBe('=cc-daemon-myapp-abc123:');
     const wrapped = respawnCall.args[4];
-    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec conduct-ts daemon --continuous$/);
+    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec ai-conductor daemon --continuous$/);
     expect(wrapped).toContain(DAEMON_FOREGROUND_COMMAND as string);
     expect(respawnCall.inherit).toBe(false);
   });
@@ -626,7 +626,7 @@ describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)'
     expect(killCall.args).toEqual(
       expect.arrayContaining([expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}$/)]),
     );
-    expect(newCall.args).toContain('conduct-ts daemon --continuous');
+    expect(newCall.args).toContain('ai-conductor daemon --continuous');
   });
 });
 

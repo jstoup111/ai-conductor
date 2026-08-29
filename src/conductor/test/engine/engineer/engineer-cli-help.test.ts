@@ -85,7 +85,7 @@ describe('compose help is canonical while engineer remains a deprecated alias', 
     );
 
     expect(code).toBe(0);
-    expect(out.join('\n')).toContain('compose');
+    expect(out.join('\n')).toContain('ai-conductor compose');
     expect(out.join('\n')).toMatch(/engineer.*deprecated/i);
   });
 
@@ -93,7 +93,7 @@ describe('compose help is canonical while engineer remains a deprecated alias', 
     const { renderCanonicalFullHelp } = await import('../../../src/index.js');
     const help = renderCanonicalFullHelp();
 
-    expect(help).toContain('conduct compose');
+    expect(help).toMatch(/\n\s+compose\b/);
     expect(help).not.toContain('\n  engineer ');
     expect(help).toMatch(/engineer.*deprecated/i);
   });
