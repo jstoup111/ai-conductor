@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-29T11:31:04.541Z
 Slug: decide-the-daemon-engine-rename-before-the-v1-0-ta
 Class: plan-gap
 Halting step: prd_audit
