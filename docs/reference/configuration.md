@@ -106,8 +106,8 @@ Rules that govern how the card is used:
   and `rate-card` for a harness estimate. A provider-reported cost is never overwritten.
 - **Cost-unmetered dispatches are visible.** The finish usage line names them explicitly
   (`N cost-unmetered (tokens counted, cost not)`), so a partial cost can never be read as a total.
-- **Refreshes are picked up live.** The card is re-read when its mtime changes; refreshing it
-  mid-run does not require a daemon restart.
+- **The card is read once per process.** Rates change rarely (a merged bot PR); a daemon or CLI
+  restart picks up the new card.
 
 ## Load order and precedence
 

@@ -276,7 +276,7 @@ describe('loadRateCard', () => {
     expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(9e-6);
   });
 
-  it('picks up a refreshed card without a restart', async () => {
+  it('memoizes per process — a rewrite applies only after clearRateCardCache (restart)', async () => {
     const path = await write(JSON.stringify({ as_of: 'x', models: { 'gpt-5.6-terra': TERRA } }));
     expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(2e-6);
     await writeFile(
@@ -284,9 +284,8 @@ describe('loadRateCard', () => {
       JSON.stringify({ as_of: 'y', models: { 'gpt-5.6-terra': { ...TERRA, input_cost_per_token: 5e-6 } } }),
       'utf-8',
     );
-    // mtime granularity: force a distinct stamp rather than sleeping.
-    const { utimesSync } = await import('node:fs');
-    utimesSync(path, new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(2e-6);
+    clearRateCardCache();
     expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(5e-6);
   });
 });
