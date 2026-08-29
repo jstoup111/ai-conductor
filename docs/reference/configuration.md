@@ -693,6 +693,12 @@ The `conductor.run.outcomes` counter increments once when an opened root run rea
 terminal paths. Its `outcome` attribute uses the same `complete`, `halted`, and `terminated` taxonomy,
 so dashboards can chart terminal runs without deriving counts from trace-query metrics.
 
+Step-level metrics include `conductor.step.cost`, a USD counter emitted only for a finite `costUsd`.
+Its attributes are `step`, `model` when known, and `source` when known (`provider` or `rate-card`);
+an absent, `NaN`, or infinite cost produces no cost point. `conductor.step.dispatches` adds one point
+for every closed step with `step` and `metering` attributes. `metering` is `fully-metered`,
+`cost-unmetered`, or `unmetered`, so the absence of a cost series is not ambiguous.
+
 | Key | Type | Required | Allowed | Default |
 | --- | --- | --- | --- | --- |
 | `otel` | object | No | — | absent means `{ enabled: false }` |

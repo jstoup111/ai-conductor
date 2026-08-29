@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:1, task:2, task:4
 /**
  * Covers: task:1, task:2, task:3, task:4
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
@@ -497,6 +497,223 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
   });
 });
 
+// ── Task 1: step cost counter ───────────────────────────────────────────────
+
+describe('Task 1: step cost counter', () => {
+  it('records provider cost with step, model, and source attributes', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      model: 'gpt-5.6-terra',
+      tokenUsage: { input: 100, output: 50, costUsd: 0.42, costSource: 'provider' },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const costMetric = findMetric(metricExporter, 'conductor.step.cost')!;
+    const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'explore');
+    expect(point?.value).toBe(0.42);
+    expect(point?.attributes).toMatchObject({
+      step: 'explore',
+      model: 'gpt-5.6-terra',
+      source: 'provider',
+      project: 'test-project',
+      feature: 'test-feature',
+    });
+  });
+
+  it('records rate-card cost with the rate-card source attribute', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'plan',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: 0.12, costSource: 'rate-card' },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const costMetric = findMetric(metricExporter, 'conductor.step.cost')!;
+    const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'plan');
+    expect(point?.attributes['source']).toBe('rate-card');
+  });
+
+  it('records an explicit zero-cost observation', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: 0, costSource: 'provider' },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const costMetric = findMetric(metricExporter, 'conductor.step.cost')!;
+    const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'build');
+    expect(point?.value).toBe(0);
+  });
+});
+
+// ── Task 2: cost counter guards ─────────────────────────────────────────────
+
+describe('Task 2: cost counter guards', () => {
+  it('omits the cost metric when costUsd is absent while retaining token metrics', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50 },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect({
+      costMetric: findMetric(metricExporter, 'conductor.step.cost'),
+      tokenMetric: findMetric(metricExporter, 'conductor.step.tokens'),
+    }).toMatchObject({ costMetric: undefined, tokenMetric: expect.anything() });
+  });
+
+  it('omits cost points for NaN costUsd', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: Number.NaN },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(findMetric(metricExporter, 'conductor.step.cost')).toBeUndefined();
+  });
+
+  it('omits cost points for infinite costUsd', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: Number.POSITIVE_INFINITY },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(findMetric(metricExporter, 'conductor.step.cost')).toBeUndefined();
+  });
+
+  it('records finite costUsd without a source attribute when costSource is absent', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: 0.42 },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const costMetric = findMetric(metricExporter, 'conductor.step.cost')!;
+    const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'explore');
+    expect({ value: point?.value, attributes: point?.attributes }).toEqual({
+      value: 0.42,
+      attributes: { step: 'explore', project: 'test-project', feature: 'test-feature' },
+    });
+  });
+});
+
+// ── Task 3: dispatch metering classification ───────────────────────────────
+
+describe('Task 3: dispatch metering classification', () => {
+  it('records one dispatch for each fully-metered, cost-unmetered, and unmetered close', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'explore',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50, costUsd: 0.42 },
+    });
+    await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'plan',
+      status: 'done',
+      tokenUsage: { input: 100, output: 50 },
+    });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const dispatches = findMetric(metricExporter, 'conductor.step.dispatches')!;
+    expect(dispatches.dataPoints.map((dataPoint) => ({
+      value: dataPoint.value,
+      attributes: dataPoint.attributes,
+    }))).toEqual([
+      { value: 1, attributes: { step: 'explore', metering: 'fully-metered', project: 'test-project', feature: 'test-feature' } },
+      { value: 1, attributes: { step: 'plan', metering: 'cost-unmetered', project: 'test-project', feature: 'test-feature' } },
+      { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', feature: 'test-feature' } },
+    ]);
+  });
+});
+
+// ── Task 4: unmetered close observability ──────────────────────────────────
+
+describe('Task 4: unmetered close observability', () => {
+  it('records an unmetered dispatch and duration, with no token or cost points', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const dispatches = findMetric(metricExporter, 'conductor.step.dispatches')!;
+    expect(dispatches.dataPoints
+      .filter((dataPoint) => dataPoint.attributes['step'] === 'build')
+      .map((dataPoint) => ({ value: dataPoint.value, attributes: dataPoint.attributes }))).toEqual([
+        { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', feature: 'test-feature' } },
+      ]);
+    expect(findMetric(metricExporter, 'conductor.step.duration')?.dataPoints).toContainEqual(
+      expect.objectContaining({ attributes: expect.objectContaining({ step: 'build' }) }),
+    );
+    expect(findMetric(metricExporter, 'conductor.step.tokens')?.dataPoints.filter(
+      (dataPoint) => dataPoint.attributes['step'] === 'build',
+    ) ?? []).toHaveLength(0);
+    expect(findMetric(metricExporter, 'conductor.step.cost')?.dataPoints.filter(
+      (dataPoint) => dataPoint.attributes['step'] === 'build',
+    ) ?? []).toHaveLength(0);
+  });
+});
+
 // ── Task 19: closeout duration histogram ────────────────────────────────────
 
 describe('Task 19: closeout duration histogram', () => {
@@ -535,6 +752,7 @@ describe('Task 3: metric identity attributes', () => {
       duration: findMetric(exporter, 'conductor.step.duration')!.dataPoints.map((point) => point.attributes),
       retries: findMetric(exporter, 'conductor.step.retries')!.dataPoints.map((point) => point.attributes),
       tokens: findMetric(exporter, 'conductor.step.tokens')!.dataPoints.map((point) => point.attributes),
+      dispatches: findMetric(exporter, 'conductor.step.dispatches')!.dataPoints.map((point) => point.attributes),
       closeout: findMetric(exporter, 'conductor.pipeline.closeout.duration')!.dataPoints.map((point) => point.attributes),
     }).toEqual({
       duration: [{ step: 'build', project: 'project-a', feature: 'feature-a' }],
@@ -543,6 +761,7 @@ describe('Task 3: metric identity attributes', () => {
         { step: 'build', kind: 'input', model: 'test-model', project: 'project-a', feature: 'feature-a' },
         { step: 'build', kind: 'output', model: 'test-model', project: 'project-a', feature: 'feature-a' },
       ],
+      dispatches: [{ step: 'build', metering: 'cost-unmetered', project: 'project-a', feature: 'feature-a' }],
       closeout: [{ obligation: 'simplify', project: 'project-a', feature: 'feature-a' }],
     });
   });
@@ -610,12 +829,14 @@ describe('Task 4: bounded metric identity', () => {
         'conductor.step.duration',
         'conductor.step.retries',
         'conductor.step.tokens',
+        'conductor.step.dispatches',
         'conductor.pipeline.closeout.duration',
       ],
       secondInstrumentNames: [
         'conductor.step.duration',
         'conductor.step.retries',
         'conductor.step.tokens',
+        'conductor.step.dispatches',
         'conductor.pipeline.closeout.duration',
       ],
       retriesTotal: 2,

@@ -15,6 +15,7 @@ import type { Attributes, Meter, Counter, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
 import type { RunOutcome } from './span-manager.js';
+import { classifyMetering } from '../metering.js';
 
 /** Explicit duration histogram boundaries, from 10 ms through 30 minutes. */
 export const DURATION_BUCKET_BOUNDARIES_MS = [
@@ -26,6 +27,8 @@ export class MetricsRecorder {
   private readonly durationHistogram: Histogram;
   private readonly retriesCounter: Counter;
   private readonly tokensCounter: Counter;
+  private readonly costCounter: Counter;
+  private readonly dispatchesCounter: Counter;
   private readonly closeoutDurationHistogram: Histogram;
   private readonly runOutcomesCounter: Counter;
 
@@ -46,6 +49,13 @@ export class MetricsRecorder {
     });
     this.tokensCounter = meter.createCounter('conductor.step.tokens', {
       description: 'Token usage per conductor step',
+    });
+    this.costCounter = meter.createCounter('conductor.step.cost', {
+      description: 'Cost per conductor step',
+      unit: 'usd',
+    });
+    this.dispatchesCounter = meter.createCounter('conductor.step.dispatches', {
+      description: 'Number of conductor step dispatches classified by metering status',
     });
     this.closeoutDurationHistogram = meter.createHistogram('conductor.pipeline.closeout.duration', {
       description: 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
@@ -82,9 +92,12 @@ export class MetricsRecorder {
       this.retriesCounter.add(retryCount, this.withIdentity({ step }));
     }
 
+    this.dispatchesCounter.add(1, this.withIdentity({ step, metering: classifyMetering(tokenUsage) }));
+
     // Tokens: only when tokenUsage is present; only present kinds recorded.
     if (tokenUsage !== undefined && tokenUsage !== null) {
       this.recordTokens(step, tokenUsage, model);
+      this.recordCost(step, tokenUsage, model);
     }
     // tokenUsage absent → no token points (no NaN / zero-fill).
   }
@@ -127,5 +140,21 @@ export class MetricsRecorder {
 
   private withIdentity(attrs: Attributes): Attributes {
     return { ...attrs, ...this.identityAttrs };
+  }
+
+  private recordCost(step: string, usage: TokenUsage, model?: string): void {
+    const { costUsd } = usage;
+    if (typeof costUsd !== 'number' || !Number.isFinite(costUsd)) {
+      return;
+    }
+
+    const attributes: Record<string, string> = { step };
+    if (model !== undefined) {
+      attributes.model = model;
+    }
+    if (usage.costSource !== undefined) {
+      attributes.source = usage.costSource;
+    }
+    this.costCounter.add(costUsd, this.withIdentity(attributes));
   }
 }
