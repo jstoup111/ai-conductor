@@ -225,6 +225,7 @@ import {
 import {
   FINISH_PUBLICATION_PROGRESS_ALLOWANCE,
   nonRetryablePublicationReason,
+  renderProseHumanRequiredDetail,
   routeFinishPublicationDisposition,
   type PublicationDisposition,
   type PublicationTransition,
@@ -7622,13 +7623,21 @@ export class Conductor {
           lastPublicationTransition = transition;
           if (publicationProgressAttempts < FINISH_PUBLICATION_PROGRESS_ALLOWANCE) return true;
 
-          const reason =
+          const baseReason =
             `FINISH publication progress allowance exhausted after ` +
             `${publicationProgressAttempts} transition(s); last transition: ` +
-            `${lastPublicationTransition}. Human review required.` +
-            (lastPublicationRetryDetail === undefined
-              ? ''
-              : ` Detail: ${lastPublicationRetryDetail}`);
+            `${lastPublicationTransition}. Human review required.`;
+          const reason = lastPublicationTransition === 'author_pr_prose' ||
+              lastPublicationTransition === 'judge_pr_prose'
+            ? renderProseHumanRequiredDetail(
+              lastPublicationTransition,
+              baseReason,
+              lastPublicationRetryDetail,
+            )
+            : baseReason +
+              (lastPublicationRetryDetail === undefined
+                ? ''
+                : ` Detail: ${lastPublicationRetryDetail}`);
           await this.saveConductorStepStatus(state, 'finish', 'failed');
           await this.haltSerialExecution({
             reason,

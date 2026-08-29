@@ -1336,12 +1336,17 @@ async function reconcileSelectablePublicationRetry(
   const selectedTransition = nextFinishPublicationTransition(freshSnapshot);
   if (selectedTransition === retry.transition) return retry;
 
+  const detail =
+    `The ${retry.transition} retry cannot run because the fresh publication ` +
+    `observation selects ${selectedTransition}.`;
   return {
     kind: 'human_required',
     reason: 'publication_transition_unmoved',
-    detail:
-      `The ${retry.transition} retry cannot run because the fresh publication ` +
-      `observation selects ${selectedTransition}.`,
+    detail: renderProseHumanRequiredDetail(
+      retry.transition,
+      detail,
+      freshSnapshot.pr.identity === 'one' ? freshSnapshot.pr.revisionGuidance : undefined,
+    ),
   };
 }
 
@@ -1392,10 +1397,15 @@ export async function advancedPublicationTransition(
   if (movement === 'unmoved') {
     const dimension = PUBLICATION_TRANSITION_DIMENSIONS[transition];
     const value = publicationTransitionDimensionValue(dimension, after);
+    const detail = `The ${transition} transition left ${dimension} unchanged at ${String(value)}.`;
     return {
       kind: 'human_required',
       reason: 'publication_transition_unmoved',
-      detail: `The ${transition} transition left ${dimension} unchanged at ${String(value)}.`,
+      detail: renderProseHumanRequiredDetail(
+        transition,
+        detail,
+        before.pr.identity === 'one' ? before.pr.revisionGuidance : undefined,
+      ),
     };
   }
 
@@ -1403,6 +1413,26 @@ export async function advancedPublicationTransition(
     type: 'finish_publication_transition', phase: 'completed', transition,
   });
   return { kind: 'advanced', transition };
+}
+
+/**
+ * Keep the three prose-specific human exits aligned: an unchanged authoring
+ * or judgment pass and the FINISH progress allowance halt all name the
+ * originating judgment when the observed revision carried one. Other
+ * publication transitions deliberately retain their existing text.
+ */
+export function renderProseHumanRequiredDetail(
+  transition: PublicationTransition,
+  detail: string,
+  revisionGuidance: string | undefined,
+): string {
+  if (
+    (transition !== 'author_pr_prose' && transition !== 'judge_pr_prose') ||
+    revisionGuidance === undefined
+  ) {
+    return detail;
+  }
+  return `${detail} Detail: ${revisionGuidance}`;
 }
 
 function publicationTransitionDimensionMovement(

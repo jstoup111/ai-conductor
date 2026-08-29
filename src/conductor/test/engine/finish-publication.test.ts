@@ -80,6 +80,21 @@ async function mapPrProseJudgmentResult(result: unknown) {
   return map(result);
 }
 
+async function renderProseHumanRequiredDetail(
+  transition: PublicationTransition,
+  detail: string,
+  revisionGuidance: string | undefined,
+) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const render = mod.renderProseHumanRequiredDetail;
+  if (typeof render !== 'function') {
+    throw new Error(
+      'expected export "renderProseHumanRequiredDetail" to add a judged objection to prose human-required exits (not yet implemented)',
+    );
+  }
+  return render(transition, detail, revisionGuidance);
+}
+
 async function nonRetryablePublicationReason(reason: string) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
   const classify = mod.nonRetryablePublicationReason;
@@ -1209,6 +1224,26 @@ describe('advancedPublicationTransition', () => {
     },
   );
 
+  it.each(['author_pr_prose', 'judge_pr_prose'] as const)(
+    'renders the originating objection for the %s prose human-required exit',
+    async (transition) => {
+      const detail = `The ${transition} transition left pr.prose unchanged at revision_required.`;
+      const objection = 'The body omits the validation evidence readers need.';
+
+      await expect(renderProseHumanRequiredDetail(transition, detail, objection)).resolves.toBe(
+        `${detail} Detail: ${objection}`,
+      );
+    },
+  );
+
+  it('leaves non-prose human-required details byte-identical', async () => {
+    const detail = 'The write_shipped_record transition left shippedRecord unchanged at missing.';
+
+    await expect(
+      renderProseHumanRequiredDetail('write_shipped_record', detail, 'The body omits the validation evidence readers need.'),
+    ).resolves.toBe(detail);
+  });
+
   it.each([
     [
       'author_pr_prose',
@@ -1403,12 +1438,14 @@ describe('advancedPublicationTransition', () => {
 
 describe('advanceFinishPublication unmoved transition dimensions', () => {
   it('halts human-required when authoring leaves a judged revision byte-identical', async () => {
+    const objection = 'The body omits the validation evidence readers need.';
     const revisionRequired = readyPublicationSnapshot({
       pr: {
         identity: 'one',
         url: 'https://github.com/acme/widget/pull/1172',
         prose: 'revision_required',
         ready: false,
+        revisionGuidance: objection,
       },
     });
     const authorProse = vi.fn(async () => undefined);
@@ -1426,10 +1463,77 @@ describe('advanceFinishPublication unmoved transition dimensions', () => {
     })).resolves.toEqual({
       kind: 'human_required',
       reason: 'publication_transition_unmoved',
-      detail: 'The author_pr_prose transition left pr.prose unchanged at revision_required.',
+      detail: `The author_pr_prose transition left pr.prose unchanged at revision_required. Detail: ${objection}`,
     });
 
     expect(authorProse).toHaveBeenCalledOnce();
+  });
+
+  it('states the originating objection when revision-progress reconciliation becomes unselectable', async () => {
+    const objection = 'The body omits the validation evidence readers need.';
+    const stale = readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'stale',
+        ready: false,
+      },
+    });
+    const freshButUnselectable = readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'stale',
+        ready: false,
+        revisionGuidance: objection,
+      },
+    });
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(stale)
+        .mockResolvedValueOnce(freshButUnselectable),
+      effects: {
+        dispatchJudgment: async () => ({
+          kind: 'revision_required',
+          reason: 'structurally_incomplete',
+          detail: objection,
+        }),
+      },
+    })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail:
+        `The author_pr_prose retry cannot run because the fresh publication observation selects judge_pr_prose. ` +
+        `Detail: ${objection}`,
+    });
+  });
+
+  it('keeps an unselectable revision-progress retry byte-identical without guidance', async () => {
+    const stale = readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'stale',
+        ready: false,
+      },
+    });
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(stale)
+        .mockResolvedValueOnce(stale),
+      effects: {
+        dispatchJudgment: async () => ({
+          kind: 'revision_required',
+          reason: 'structurally_incomplete',
+        }),
+      },
+    })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: 'The author_pr_prose retry cannot run because the fresh publication observation selects judge_pr_prose.',
+    });
   });
 
   it('advances when authoring rewrites a judged revision to a newly stale body', async () => {
