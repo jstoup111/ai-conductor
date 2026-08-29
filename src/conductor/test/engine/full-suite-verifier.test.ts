@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:7, task:8, task:9, task:10, task:13
+// Covers: task:1, task:4, task:6, task:7, task:8, task:9, task:10, task:11, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -1121,6 +1121,146 @@ describe('FullSuiteVerifier', () => {
       inspection: { status: 'STALE', reason: 'source_changed' },
       ensured: 'EXECUTED',
       launches: 1,
+    });
+  });
+
+  it('resolves absent verification as aggregate mode with all-none drift bounds', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-absent-verification-resolution-');
+    let resolvedTestSuite: unknown;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:absent-verification',
+          headSha: 'absent-verification-head',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      execute: async ({ testSuite }) => {
+        resolvedTestSuite = testSuite;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    await expect(verifier.ensure()).resolves.toMatchObject({ status: 'EXECUTED' });
+
+    expect((resolvedTestSuite as { verification: unknown }).verification).toEqual(
+      DEFAULT_TEST_SUITE_VERIFICATION,
+    );
+  });
+
+  it('reruns one source-path drift without verification using the existing stale reason', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-absent-verification-source-drift-');
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:source-drift',
+          headSha: 'source-drift-head',
+          categoryFingerprints: { ...CATEGORY_FINGERPRINTS, source: 'category:source:drifted' },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? { exitCode: 0, stdout: 'src/changed.ts\n', stderr: '' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ inspection, ensured: ensured.status, launches }).toEqual({
+      inspection: { status: 'STALE', reason: 'source_changed' },
+      ensured: 'EXECUTED',
+      launches: 1,
+    });
+  });
+
+  it('reuses fingerprint-identical evidence without executing when verification is absent', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-absent-verification-reuse-');
+    const evidence = attestedPassEvidence(projectRoot);
+    await writeFullSuiteEvidence(projectRoot, evidence);
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: evidence.fingerprint,
+          headSha: 'reused-head',
+          categoryFingerprints: evidence.categoryFingerprints,
+        },
+      }),
+      execute: async () => {
+        launches += 1;
+        throw new Error('Fingerprint-identical evidence must be reused');
+      },
+      worktreeStatus: async () => '',
+    });
+
+    await expect(verifier.ensure()).resolves.toEqual({ status: 'REUSED', evidence });
+    expect(launches).toBe(0);
+  });
+
+  it('never appends a drift-ledger entry for absent verification configuration', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-absent-verification-ledger-');
+    const evidence = attestedPassEvidence(projectRoot);
+    await writeFullSuiteEvidence(projectRoot, evidence);
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:ledger-source-drift',
+          headSha: 'ledger-source-drift-head',
+          categoryFingerprints: { ...CATEGORY_FINGERPRINTS, source: 'category:source:drifted' },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? { exitCode: 0, stdout: 'src/changed.ts\n', stderr: '' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        throw new Error('A stale inspection must not execute the suite');
+      },
+      worktreeStatus: async () => '',
+    });
+
+    await expect(verifier.inspect()).resolves.toEqual({
+      status: 'STALE',
+      reason: 'source_changed',
+    });
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({
+      usable: true,
+      evidence,
     });
   });
 
