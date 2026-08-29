@@ -1,3 +1,4 @@
+// Covers: task:1
 /**
  * Product acceptance specs for issue #940.
  *
@@ -285,6 +286,19 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
       scoped_command: './node_modules/.bin/vitest run {selectors}',
       working_directory: 'src/conductor',
       timeout_seconds: 1800,
+      verification: {
+        mode: 'aggregate',
+        drift_budget: {
+          additional_inputs: 'none',
+          dependencies: 'none',
+          environment: 'none',
+          migrations: 'none',
+          project_config: 'none',
+          source: 'none',
+          test_infrastructure: 'none',
+          tests: 'none',
+        },
+      },
     });
     expect(template).toMatch(/test_suite:[\s\S]*command:[^\n]*npm test[\s\S]*working_directory:/i);
     const testScript = JSON.parse(packageJson).scripts.test as string;

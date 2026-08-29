@@ -1,3 +1,4 @@
+// Covers: task:1
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -16,6 +17,19 @@ import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 
 const scratches: string[] = [];
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const DEFAULT_TEST_SUITE_VERIFICATION = {
+  mode: 'aggregate',
+  drift_budget: {
+    additional_inputs: 'none',
+    dependencies: 'none',
+    environment: 'none',
+    migrations: 'none',
+    project_config: 'none',
+    source: 'none',
+    test_infrastructure: 'none',
+    tests: 'none',
+  },
+} as const;
 const TSX_LOADER = join(CONDUCTOR_ROOT, 'node_modules/tsx/dist/loader.mjs');
 const CONCURRENT_ENSURE_FIXTURE = join(
   CONDUCTOR_ROOT,
@@ -239,6 +253,7 @@ describe('FullSuiteVerifier', () => {
           command: secret,
           working_directory: secret,
           environment: ['SUITE_SECRET'],
+          verification: DEFAULT_TEST_SUITE_VERIFICATION,
         });
         return {
           ok: true,
@@ -264,6 +279,7 @@ describe('FullSuiteVerifier', () => {
       command: secret,
       working_directory: secret,
       environment: ['SUITE_SECRET'],
+      verification: DEFAULT_TEST_SUITE_VERIFICATION,
     });
     expect({
       resultLeaks: JSON.stringify(result).includes(secret),
@@ -446,6 +462,7 @@ describe('FullSuiteVerifier', () => {
             working_directory: 'packages/app',
             timeout_seconds: 42,
             environment: ['SUITE_MODE'],
+            verification: DEFAULT_TEST_SUITE_VERIFICATION,
           },
           environmentValues: environment,
         },
@@ -458,6 +475,7 @@ describe('FullSuiteVerifier', () => {
             working_directory: 'packages/app',
             timeout_seconds: 42,
             environment: ['SUITE_MODE'],
+            verification: DEFAULT_TEST_SUITE_VERIFICATION,
           },
           environment,
         },
