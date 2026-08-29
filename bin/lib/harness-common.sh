@@ -63,10 +63,25 @@ conductor_cfg_get() {
     return 1
   fi
   local value
-  if ! value=$(conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>&1); then
-    warn "${value:-conduct-ts could not read conductor configuration; install or restore it, then re-run bin/install}" >&2
+  # The compatibility launcher emits its deprecation notice on stderr. Keep
+  # that diagnostic separate from scalar stdout: combining streams turns a
+  # value such as `false` or `main` into a multi-line string and makes callers
+  # take the tagged/default path. Failed reads still report their original
+  # diagnostic, while successful reads remain silent.
+  local diagnostic_file diagnostics
+  if ! diagnostic_file=$(mktemp "${TMPDIR:-/tmp}/conduct-config-read.XXXXXX"); then
+    warn "could not create a temporary file to read conductor configuration" >&2
     return 1
   fi
+  if ! value=$(conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>"$diagnostic_file"); then
+    diagnostics=$(<"$diagnostic_file")
+    rm -f "$diagnostic_file"
+    diagnostics=$(printf '%s\n%s\n' "$value" "$diagnostics" | \
+      sed '/^conduct-ts is deprecated; use ai-conductor instead$/d' | sed '/^$/d')
+    warn "${diagnostics:-conduct-ts could not read conductor configuration; install or restore it, then re-run bin/install}" >&2
+    return 1
+  fi
+  rm -f "$diagnostic_file"
   printf '%s\n' "$value"
 }
 
