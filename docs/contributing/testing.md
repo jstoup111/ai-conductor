@@ -382,6 +382,16 @@ execute smoke tests.
   suite as check 17. `test_docs_navigation.sh` in turn shells out to `test/check_docs_navigation.sh`,
   the offline contract checker it validates against fixture and real-tree cases.
 
+### ripgrep is optional, and skipping is silent
+
+`rg` is not required to run the suite, but three scripts scope their own coverage on it and say so
+only in their output: `test/test_bin_migrate_approval.sh` and
+`test/test_bin_migrate_multi_version_jump.sh` print `SKIP` and exit 0, and integrity check 12b
+records a pass while skipping `test/test_release_pr_workflow.sh`. On a checkout without ripgrep the
+suite therefore runs smaller than CI does — CI installs it (`.github/workflows/ci.yml`) — while still
+reporting green. `bin/install --check` warns when `rg` is missing; nothing the harness ships at
+runtime needs it.
+
 `test/docs_pages.smoke.test.sh` is a real, opt-in Pages probe — run it by hand after a default-branch
 deployment; it is never invoked from integrity or CI. `test/run_browsable_documentation_site_acceptance.sh`
 runs `test_docs_navigation.sh` and `test_docs_pages_smoke.sh` together as the deterministic acceptance

@@ -22,6 +22,7 @@ one is missing, so install them first.
 | Node >= 26.0.0 (repo pins 26.7.0) | building and running the engine, and reading/writing the markdown-viewer and mermaid-renderer config | `node --version` |
 | `npm` | `npm ci` + `npm run build` for the engine | `npm --version` |
 | `claude` and/or `codex` | executing steps — at least one is required | `claude --version` / `codex --version` |
+| `rg` (ripgrep) — **optional** | full shell test coverage; several tests skip themselves without it. `bin/install --check` warns, never fails | `rg --version` |
 
 Node is pinned to `26.7.0` in `.tool-versions` and `src/conductor/.tool-versions`. Install it
 with `asdf install nodejs 26.7.0` or any equivalent version manager. `bin/conduct-ts` exports
