@@ -334,6 +334,17 @@ check_installation() {
   else
     warn "puppeteer MCP server not installed"
   fi
+  # ripgrep is optional: the shell test suite prefers it and degrades without
+  # it. Some scripts skip their coverage entirely when it is absent
+  # (test/test_bin_migrate_approval.sh, test/test_bin_migrate_multi_version_jump.sh,
+  # and integrity check 12b's release-PR workflow test), so a checkout without
+  # ripgrep silently runs a smaller suite than CI does. Advisory, never fatal —
+  # nothing the harness ships at runtime needs it.
+  if command -v rg &>/dev/null; then
+    ok "ripgrep installed (full shell test coverage)"
+  else
+    warn "ripgrep not installed — some shell tests skip their coverage; install it to match CI"
+  fi
   # Summary. Return non-zero on ANY drift so `--check` is scriptable — callers
   # (e.g. the conduct-ts install-freshness guard) gate on the exit code.
   echo ""
