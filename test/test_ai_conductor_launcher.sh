@@ -212,6 +212,15 @@ else
   assert "ai-conductor stale-target output matches conduct-ts update behavior" 1
 fi
 
+if printf '%s\n' "$INSTALL_STDOUT" | grep -Fq 'ai-conductor compose --idea "your feature description"' && \
+  printf '%s\n' "$INSTALL_STDOUT" | grep -Fq 'ai-conductor daemon start' && \
+  printf '%s\n' "$INSTALL_STDOUT" | grep -Fq 'ai-conductor inline --interactive "your feature description"'; then
+  assert "install quick start names canonical compose, daemon, and inline commands" 0
+else
+  echo "$INSTALL_STDOUT"
+  assert "install quick start names canonical compose, daemon, and inline commands" 1
+fi
+
 CHECK_OUTPUT="$TMPDIR_ROOT/check-output"
 set +e
 HOME="$INSTALL_HOME" PATH="$CHECK_STUBS:$INSTALL_PATH" "$HARNESS_DIR/bin/install" \
