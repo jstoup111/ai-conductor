@@ -89,6 +89,7 @@ export const SKILL_STEP_MAP: Record<string, StepName> = {
 // compare the pin against.
 export const PIN_EXEMPT_SKILLS: readonly string[] = [
   'code-review', // dispatches an evaluator agent directly; not an engine step
+  'composer', // interactive idea→spec authoring loop; orchestrates DECIDE skills, not an engine step
   'debugging', // standalone investigation skill; not an engine step
   'engineer', // interactive idea→spec loop; orchestrates other skills/steps, isn't one itself
   'simplify', // batch-boundary gate dispatched directly; not an engine step
@@ -100,7 +101,7 @@ export const PIN_EXEMPT_SKILLS: readonly string[] = [
 // Rows for skills/agents that are NOT engine steps (no StepName / no entry in
 // CLAUDE_MODEL_POLICY.stepModels) but that HARNESS.md's model-selection table
 // still documents on the supported-host interactive path: domain-reviewer/evaluator
-// (dispatched sub-agents), code-review/debugging/simplify/engineer (skills
+// (dispatched sub-agents), code-review/composer/debugging/simplify/engineer (skills
 // with their own model pin but no engine step), conduct/pr (orchestration
 // skills), tdd-red/tdd-green (TDD sub-phases), and the 10 cto-* assess
 // specialists.
@@ -217,11 +218,18 @@ const EXTRA_MODEL_TABLE_ROW_INPUTS: Array<
     why: 'Pattern matching for duplication and complexity — structured checklist work.',
   },
   {
+    name: 'composer',
+    claudeModel: 'opus',
+    claudeEffort: '',
+    why:
+      'Canonical interactive idea→spec authoring loop: routes a raw idea through the full DECIDE phase and delivers a spec PR, so its high-stakes authoring judgement uses Claude Opus.',
+  },
+  {
     name: 'engineer',
     claudeModel: 'opus',
     claudeEffort: '',
     why:
-      'Interactive idea→spec control plane routing the real DECIDE skills. Kept on Fable for operator-driven interactive quality — this is a capability / operator-preference call, NOT a cost saving: Fable is the premium tier ($10/$50 per 1M, ~2x Opus).',
+      'Deprecated compatibility delegate for existing engineer invocations. It contributes only low-cost routing mechanics and no independent authoring loop; composer owns the canonical DECIDE workflow.',
   },
   {
     name: 'intake',
