@@ -522,6 +522,8 @@ describe('Task 1: step cost counter', () => {
       step: 'explore',
       model: 'gpt-5.6-terra',
       source: 'provider',
+      project: 'test-project',
+      feature: 'test-feature',
     });
   });
 
@@ -639,7 +641,7 @@ describe('Task 2: cost counter guards', () => {
     const point = costMetric.dataPoints.find((dataPoint) => dataPoint.attributes['step'] === 'explore');
     expect({ value: point?.value, attributes: point?.attributes }).toEqual({
       value: 0.42,
-      attributes: { step: 'explore' },
+      attributes: { step: 'explore', project: 'test-project', feature: 'test-feature' },
     });
   });
 });
@@ -675,9 +677,9 @@ describe('Task 3: dispatch metering classification', () => {
       value: dataPoint.value,
       attributes: dataPoint.attributes,
     }))).toEqual([
-      { value: 1, attributes: { step: 'explore', metering: 'fully-metered' } },
-      { value: 1, attributes: { step: 'plan', metering: 'cost-unmetered' } },
-      { value: 1, attributes: { step: 'build', metering: 'unmetered' } },
+      { value: 1, attributes: { step: 'explore', metering: 'fully-metered', project: 'test-project', feature: 'test-feature' } },
+      { value: 1, attributes: { step: 'plan', metering: 'cost-unmetered', project: 'test-project', feature: 'test-feature' } },
+      { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', feature: 'test-feature' } },
     ]);
   });
 });
@@ -698,7 +700,7 @@ describe('Task 4: unmetered close observability', () => {
     expect(dispatches.dataPoints
       .filter((dataPoint) => dataPoint.attributes['step'] === 'build')
       .map((dataPoint) => ({ value: dataPoint.value, attributes: dataPoint.attributes }))).toEqual([
-        { value: 1, attributes: { step: 'build', metering: 'unmetered' } },
+        { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', feature: 'test-feature' } },
       ]);
     expect(findMetric(metricExporter, 'conductor.step.duration')?.dataPoints).toContainEqual(
       expect.objectContaining({ attributes: expect.objectContaining({ step: 'build' }) }),
@@ -750,6 +752,7 @@ describe('Task 3: metric identity attributes', () => {
       duration: findMetric(exporter, 'conductor.step.duration')!.dataPoints.map((point) => point.attributes),
       retries: findMetric(exporter, 'conductor.step.retries')!.dataPoints.map((point) => point.attributes),
       tokens: findMetric(exporter, 'conductor.step.tokens')!.dataPoints.map((point) => point.attributes),
+      dispatches: findMetric(exporter, 'conductor.step.dispatches')!.dataPoints.map((point) => point.attributes),
       closeout: findMetric(exporter, 'conductor.pipeline.closeout.duration')!.dataPoints.map((point) => point.attributes),
     }).toEqual({
       duration: [{ step: 'build', project: 'project-a', feature: 'feature-a' }],
@@ -758,6 +761,7 @@ describe('Task 3: metric identity attributes', () => {
         { step: 'build', kind: 'input', model: 'test-model', project: 'project-a', feature: 'feature-a' },
         { step: 'build', kind: 'output', model: 'test-model', project: 'project-a', feature: 'feature-a' },
       ],
+      dispatches: [{ step: 'build', metering: 'cost-unmetered', project: 'project-a', feature: 'feature-a' }],
       closeout: [{ obligation: 'simplify', project: 'project-a', feature: 'feature-a' }],
     });
   });

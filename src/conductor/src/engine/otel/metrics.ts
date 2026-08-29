@@ -92,7 +92,7 @@ export class MetricsRecorder {
       this.retriesCounter.add(retryCount, this.withIdentity({ step }));
     }
 
-    this.dispatchesCounter.add(1, { step, metering: classifyMetering(tokenUsage) });
+    this.dispatchesCounter.add(1, this.withIdentity({ step, metering: classifyMetering(tokenUsage) }));
 
     // Tokens: only when tokenUsage is present; only present kinds recorded.
     if (tokenUsage !== undefined && tokenUsage !== null) {
@@ -155,6 +155,6 @@ export class MetricsRecorder {
     if (usage.costSource !== undefined) {
       attributes.source = usage.costSource;
     }
-    this.costCounter.add(costUsd, attributes);
+    this.costCounter.add(costUsd, this.withIdentity(attributes));
   }
 }
