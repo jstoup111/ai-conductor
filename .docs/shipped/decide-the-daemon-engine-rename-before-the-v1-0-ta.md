@@ -4,6 +4,13 @@ spec_hash: fbc6d62562faaf4348541f805c2ff7615633d5e6094b09078ab4dda170e0ccea
 pr: https://github.com/jstoup111/ai-conductor/pull/2023
 shipped: 2026-08-29
 engine_version: 20260829T124007Z-0fc0ed0e907e
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-26-music-vocabulary-player-composer-rename Decision 2"
+    outcome: remediated
+    summary: "The canonical `compose` rejection path directs operators to the deprecated `engineer` help command."
 ---
 
 ## Cost
