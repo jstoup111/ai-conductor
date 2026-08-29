@@ -1,92 +1,56 @@
-# Coherence Mapping: implement the daemon→Player and engineer→Composer rename
+# Coherence Mapping: revise the v1.0 rename — daemon stays, engineer→composer, ai-conductor CLI
 
 Technical track (no PRD, so no `fr` rows). Outcomes are the eight bullets in the committed
-intake marker, including the operator amendment. Criterion quotes are verbatim normalized
-substrings of cited plan-task bodies. Every criterion is decided by this feature's own diff.
+intake marker, including the 2026-08-26/2026-08-28 operator amendments. Criterion quotes are
+verbatim normalized substrings of cited plan-task bodies. Every criterion is decided by this
+feature's own diff.
 
 | Row class | Cited id / criterion | Counterpart / task id(s) | Verdict | Notes / verbatim quote | Disposition |
 |---|---|---|---|---|---|
-| outcome | outcome-1 | story-1, story-2 | covered | The approved ADR selects Player and Composer and the stories implement that choice. |
-| outcome | outcome-2 | story-1, story-2, story-3, story-4 | covered | The renamed CLI, skill, config, and state surfaces are implemented in this feature and sequenced with the v1 major. |
+| outcome | outcome-1 | story-1, story-2, story-3 | covered | The rewritten APPROVED ADR resolves the vocabulary question; the stories implement the selected decision. |
+| outcome | outcome-2 | story-1, story-2, story-3, story-4 | covered | The scope is enumerated (compose verb, composer skill, ai-conductor binary, internal repoint) and ships in the v1.0 major ahead of cutover PR #226. |
 | outcome | outcome-3 | story-1 | covered | Conditional branch not taken: the approved ADR selected rename rather than re-defer. |
-| outcome | outcome-4 | story-1, story-2, story-3, story-4 | covered | The complete rename is bound to this pre-v1 implementation spec and closes the originating decision. |
+| outcome | outcome-4 | story-1, story-2, story-3, story-4 | covered | The decision is bound to this pre-v1 implementation spec and closes the originating decision question. |
 | outcome | outcome-5 | story-1, story-2, story-3, story-4 | covered | The replacement stories and plan build the rename rather than a later scoping-only feature. |
-| outcome | outcome-6 | story-1, story-2 | covered | Player and Composer are canonical; Daemon and Engineer remain warning compatibility aliases. |
-| outcome | outcome-7 | story-3, story-4 | covered | Legacy config normalization and guarded old-only state migration preserve existing behavior without overwriting ambiguity. |
+| outcome | outcome-6 | story-1, story-3 | covered | `compose`/`composer` are canonical for the idea→spec loop with `engineer` a warning alias; `daemon` stays canonical per the 2026-08-28 reversal. |
+| outcome | outcome-7 | story-2, story-4 | covered | `ai-conductor` is the canonical binary with `conduct-ts` a warning alias; config keys and `.daemon/` state are untouched by every story. |
 | outcome | outcome-8 | story-1, story-2, story-3, story-4 | covered | All four stories are functional behavior; upkeep is not represented as a story or standalone task. |
-| story | story-1 | task-1, task-2, task-3, task-4, task-5, task-6, task-7, task-8, task-9, task-10 | covered | Tasks 1 through 10 cite Story 1 and implement Player CLI behavior. |
-| story | story-2 | task-11, task-12, task-13, task-14, task-15, task-16, task-17, task-18, task-19 | covered | Tasks 11 through 19 cite Story 2 and implement Composer CLI and skill behavior. |
-| story | story-3 | task-20, task-21, task-22, task-23, task-24, task-25 | covered | Tasks 20 through 25 cite Story 3 and implement config normalization. |
-| story | story-4 | task-26, task-27, task-28, task-29, task-30, task-31, task-32, task-33, task-34, task-35, task-36, task-37, task-38 | covered | Tasks 26 through 38 cite Story 4 and implement state resolution and migration. |
+| story | story-1 | task-1, task-2, task-3 | covered | Tasks 1–3 cite Story 1 and implement the compose verb boundary. |
+| story | story-2 | task-4, task-5 | covered | Tasks 4–5 cite Story 2 and implement the binary alias and installer behavior. |
+| story | story-3 | task-6, task-7, task-8 | covered | Tasks 6–8 cite Story 3 and implement the skill catalog change. |
+| story | story-4 | task-9, task-10, task-11, task-12 | covered | Tasks 9–12 cite Story 4 and implement the repoint and its guard. |
 | task | task-1 | story-1 | covered | Task 1 explicitly cites Story 1. |
 | task | task-2 | story-1 | covered | Task 2 explicitly cites Story 1. |
 | task | task-3 | story-1 | covered | Task 3 explicitly cites Story 1. |
-| task | task-4 | story-1 | covered | Task 4 explicitly cites Story 1. |
-| task | task-5 | story-1 | covered | Task 5 explicitly cites Story 1. |
-| task | task-6 | story-1 | covered | Task 6 explicitly cites Story 1. |
-| task | task-7 | story-1 | covered | Task 7 explicitly cites Story 1. |
-| task | task-8 | story-1 | covered | Task 8 explicitly cites Story 1. |
-| task | task-9 | story-1 | covered | Task 9 explicitly cites Story 1. |
-| task | task-10 | story-1 | covered | Task 10 explicitly cites Story 1. |
-| task | task-11 | story-2 | covered | Task 11 explicitly cites Story 2. |
-| task | task-12 | story-2 | covered | Task 12 explicitly cites Story 2. |
-| task | task-13 | story-2 | covered | Task 13 explicitly cites Story 2. |
-| task | task-14 | story-2 | covered | Task 14 explicitly cites Story 2. |
-| task | task-15 | story-2 | covered | Task 15 explicitly cites Story 2. |
-| task | task-16 | story-2 | covered | Task 16 explicitly cites Story 2. |
-| task | task-17 | story-2 | covered | Task 17 explicitly cites Story 2. |
-| task | task-18 | story-2 | covered | Task 18 explicitly cites Story 2. |
-| task | task-19 | story-2 | covered | Task 19 explicitly cites Story 2. |
-| task | task-20 | story-3 | covered | Task 20 explicitly cites Story 3. |
-| task | task-21 | story-3 | covered | Task 21 explicitly cites Story 3. |
-| task | task-22 | story-3 | covered | Task 22 explicitly cites Story 3. |
-| task | task-23 | story-3 | covered | Task 23 explicitly cites Story 3. |
-| task | task-24 | story-3 | covered | Task 24 explicitly cites Story 3. |
-| task | task-25 | story-3 | covered | Task 25 explicitly cites Story 3. |
-| task | task-26 | story-4 | covered | Task 26 explicitly cites Story 4. |
-| task | task-27 | story-4 | covered | Task 27 explicitly cites Story 4. |
-| task | task-28 | story-4 | covered | Task 28 explicitly cites Story 4. |
-| task | task-29 | story-4 | covered | Task 29 explicitly cites Story 4. |
-| task | task-30 | story-4 | covered | Task 30 explicitly cites Story 4. |
-| task | task-31 | story-4 | covered | Task 31 explicitly cites Story 4. |
-| task | task-32 | story-4 | covered | Task 32 explicitly cites Story 4. |
-| task | task-33 | story-4 | covered | Task 33 explicitly cites Story 4. |
-| task | task-34 | story-4 | covered | Task 34 explicitly cites Story 4. |
-| task | task-35 | story-4 | covered | Task 35 explicitly cites Story 4. |
-| task | task-36 | story-4 | covered | Task 36 explicitly cites Story 4. |
-| task | task-37 | story-4 | covered | Task 37 explicitly cites Story 4. |
-| task | task-38 | story-4 | covered | Task 38 explicitly cites Story 4. |
-| adr | adr-2026-08-26-music-vocabulary-player-composer-rename | story-1, story-2, story-3, story-4 | covered | All stories implement the approved ADR and its 2026-08-26 operator amendment. |
-| criterion | Story 1 happy: Given any currently supported worker invocation (bare run, `status`, `logs`, `park`, `unpark`, `reclaim-worktree`, `start`, `stop`, `restart`, `pause`, `resume`, `connect`, or `debug`), when `player` is used as the command name, then it reaches the same typed dispatch and runtime behavior as the corresponding pre-rename invocation. | task-1, task-2, task-3, task-4 | covered | Bare `player` and supported run flags produce the existing worker-run descriptor. | diff-local |
-| criterion | Story 1 happy: Given `conduct-ts player --help` or subcommand help, when help renders, then the full supported surface is present and operator-facing command names, headings, and examples use `player`. | task-5 | covered | The full supported surface is present in canonical Player help. | diff-local |
-| criterion | Story 1 happy: Given a valid legacy `daemon` invocation, when it is dispatched, then it forwards through the Player compatibility boundary, behaves identically, and writes exactly one deprecation warning to stderr for that invocation. | task-8 | covered | A valid legacy Daemon invocation behaves identically to Player. | diff-local |
-| criterion | Story 1 happy: Given a canonical `player` invocation, when it completes, then it emits no legacy-name deprecation warning. | task-8 | covered | canonical Player emits none. | diff-local |
-| criterion | Story 1 negative: Given an unknown `player` subcommand or malformed Player arguments, when parsing fails, then the command exits non-zero with Player help and does not start, stop, or mutate worker state. | task-9 | covered | does not start, stop, or mutate worker state. | diff-local |
-| criterion | Story 1 negative: Given an invalid legacy `daemon` invocation, when validation fails, then it returns the same validation failure as `player`, emits at most the single compatibility warning, and does not fall through to another command family. | task-9 | covered | emits at most one alias warning, and does not fall through. | diff-local |
-| criterion | Story 1 negative: Given preboot help handling before the full command tree is initialized, when the first argument is `player`, then help is recognized rather than accidentally launching the worker. | task-7 | covered | Preboot `player` help is recognized rather than accidentally launching the worker. | diff-local |
-| criterion | Story 1 negative: Given a valid Player subcommand that already prints an operational result, when invoked through the legacy alias, then the deprecation warning does not replace, duplicate, or alter that result. | task-10 | covered | The alias warning does not replace, duplicate, or alter the operational result. | diff-local |
-| criterion | Story 2 happy: Given any currently supported idea-to-spec command (`projects`, `worktree`, `land`, `handoff`, `poll`, `claim`, `forget`, `unclaim`, `requeue`, `resolve`, or `migrate-issue-deps`), when `composer` is used as the command name, then it reaches the same typed dispatch, stores, and ledger behavior as the corresponding pre-rename invocation. | task-11, task-13 | covered | Every supported deterministic command parses under `composer`. | diff-local |
-| criterion | Story 2 happy: Given `conduct-ts composer --help` or subcommand help, when help renders, then all supported deterministic commands are present and operator-facing command names, headings, and examples use `composer`. | task-12, task-14 | covered | All supported Composer help uses canonical vocabulary. | diff-local |
-| criterion | Story 2 happy: Given the bare interactive Composer launcher on a host that supports it, when launched, then it invokes the canonical `/composer` workflow; the shipped Composer skill is discoverable as `/composer` for Claude and `$composer` for Codex. | task-15, task-16 | covered | The Composer skill is discoverable as `/composer` for Claude and `$composer` for Codex. | diff-local |
-| criterion | Story 2 happy: Given a valid legacy `engineer` CLI invocation, when it is dispatched, then it forwards to the same Composer behavior and writes exactly one deprecation warning to stderr. | task-19 | covered | Engineer forwards to the same Composer behavior and writes exactly one deprecation warning. | diff-local |
-| criterion | Story 2 happy: Given an installed legacy `engineer` skill entrypoint, when a host invokes it, then the compatibility skill identifies the deprecation and delegates to the canonical Composer workflow without creating a second implementation. | task-17 | covered | identifies the deprecation and delegates to Composer. | diff-local |
-| criterion | Story 2 negative: Given an unknown Composer subcommand, malformed arguments, or help-only invocation, when parsing ends, then no claim, worktree, issue, ledger, or handoff mutation occurs. | task-14 | covered | perform no claim, worktree, issue, ledger, or handoff mutation. | diff-local |
-| criterion | Story 2 negative: Given a host without the existing persistent interactive-launch capability, when bare Composer is requested, then the command preserves the current explicit unsupported-host behavior rather than inventing a new launcher. | task-15 | covered | Unsupported hosts retain explicit unsupported behavior; no new persistent launcher is invented. | diff-local |
-| criterion | Story 2 negative: Given canonical Composer and legacy Engineer invocations for the same deterministic operation, when they run separately, then they address the same existing store and ledger rather than forking state by vocabulary. | task-19 | covered | Both names address the same existing store and ledger | diff-local |
-| criterion | Story 2 negative: Given a canonical `composer` CLI or skill invocation, when it completes, then it emits no legacy-name deprecation warning. | task-17, task-19 | covered | Canonical Composer invocation emits no legacy-name deprecation. | diff-local |
-| criterion | Story 3 happy: Given `player_verbose`, when configuration is loaded, then its existing boolean semantics control Player verbosity at every current `daemon_verbose` consumer. | task-21 | covered | `player_verbose` controls the existing boolean verbosity semantics at every current consumer. | diff-local |
-| criterion | Story 3 happy: Given `player_auto_restart_on_stale_engine`, when configuration is loaded, then its existing boolean semantics control whether the Player restarts after detecting a stale internal Conductor engine identity. | task-23 | covered | The canonical key controls whether Player restarts after detecting stale internal engine identity. | diff-local |
-| criterion | Story 3 happy: Given only legacy `daemon_verbose` or `auto_restart_on_stale_engine`, when configuration is normalized, then the equivalent canonical value is supplied and one existing `config_deprecated_key` event is emitted for each legacy key used. | task-22, task-24 | covered | Legacy-only config supplies the equivalent canonical value and emits one existing deprecation event. | diff-local |
-| criterion | Story 3 happy: Given both canonical and corresponding legacy keys, when configuration is normalized, then the canonical value wins deterministically and legacy use still emits the existing deprecation event. | task-22, task-24 | covered | Canonical values win deterministically when both forms are present. | diff-local |
-| criterion | Story 3 negative: Given an invalid canonical Player value, when validation runs, then it fails under the existing validation policy and is not rescued or overwritten by a valid legacy value. | task-25 | covered | An invalid canonical value is not rescued or overwritten by a valid legacy value. | diff-local |
-| criterion | Story 3 negative: Given an unknown Player-like config key, when configuration is loaded, then it follows the existing unknown-key policy rather than being guessed or silently normalized. | task-25 | covered | Unknown keys are not guessed | diff-local |
-| criterion | Story 3 negative: Given only canonical Player keys, when configuration is loaded, then no `config_deprecated_key` event is emitted for those keys. | task-25 | covered | canonical-only keys emit no deprecation event | diff-local |
-| criterion | Story 3 negative: Given legacy config use, when deprecation is reported, then it uses the existing event spine and does not write an ad-hoc warning file, timestamp, or parallel telemetry record. | task-25 | covered | no parallel telemetry is written | diff-local |
-| criterion | Story 4 happy: Given only a legacy `.daemon/` tree, when a mutating Player or legacy-alias command first needs state, then it atomically adopts that tree as `.player/`, preserves every child, and finalizes legacy `daemon.pid`, `daemon.log`, and `daemon.log.1` names to their Player equivalents before writing. | task-27, task-28 | covered | Mutating resolution preserves every legacy child while adopting the tree as `.player/`. | diff-local |
-| criterion | Story 4 happy: Given only a legacy `.daemon/` tree, when read-only `status` or `logs` observes it, then it reads the legacy state without renaming, creating, or modifying either directory. | task-36 | covered | Old-only status/logs reads legacy state without renaming, creating, or modifying either directory. | diff-local |
-| criterion | Story 4 happy: Given no prior state or canonical `.player/` state, when any Player path is resolved, then all new pid/log, grants, park/restore, processed/warned, blocked/gated, attribution, restart, eval, merge-watch, and registry-scaffold writes stay under `.player/`. | task-29, task-30, task-31, task-32, task-33, task-34, task-35, task-37, task-38 | covered | no direct `.daemon/` writer remains. | diff-local |
-| criterion | Story 4 happy: Given a completed migration, when the same resolver runs again, then it selects `.player/` idempotently and does not recreate `.daemon/` or repeat inner-file renames. | task-28, task-38 | covered | repeated resolution is idempotent. | diff-local |
-| criterion | Story 4 negative: Given both `.daemon/` and `.player/` exist, when any command resolves state, then it reports an explicit ambiguous-state error and overwrites, merges, or deletes neither tree. | task-26 | covered | Both-present state overwrites, merges, or deletes neither tree. | diff-local |
-| criterion | Story 4 negative: Given a partially migrated tree with conflicting legacy and canonical pid/log filenames, when migration resumes, then it fails closed with the conflicting paths and overwrites neither file. | task-28 | covered | Conflicting legacy and canonical filenames fail closed with both paths preserved. | diff-local |
-| criterion | Story 4 negative: Given an interrupted directory migration, when the next mutating invocation runs, then it either completes the one recoverable old-only→canonical transition or fails with actionable state, never creates a fresh empty tree over surviving state. | task-27, task-38 | covered | never creates a fresh empty tree over surviving state. | diff-local |
-| criterion | Story 4 negative: Given read-only observation of ambiguous or absent state, when status or logs renders, then it reports ambiguity or the existing not-running/no-log result without performing repair writes. | task-36 | covered | without repair writes. | diff-local |
+| task | task-4 | story-2 | covered | Task 4 explicitly cites Story 2. |
+| task | task-5 | story-2 | covered | Task 5 explicitly cites Story 2. |
+| task | task-6 | story-3 | covered | Task 6 explicitly cites Story 3. |
+| task | task-7 | story-3 | covered | Task 7 explicitly cites Story 3. |
+| task | task-8 | story-3 | covered | Task 8 explicitly cites Story 3. |
+| task | task-9 | story-4 | covered | Task 9 explicitly cites Story 4. |
+| task | task-10 | story-4 | covered | Task 10 explicitly cites Story 4. |
+| task | task-11 | story-4 | covered | Task 11 explicitly cites Story 4. |
+| task | task-12 | story-4 | covered | Task 12 explicitly cites Story 4. |
+| adr | adr-2026-08-26-music-vocabulary-player-composer-rename | story-1, story-2, story-3, story-4 | covered | All stories implement the ADR as rewritten 2026-08-28 (daemon stays; composer boundary; ai-conductor binary). |
+| criterion | Story 1 happy: Given the built CLI, when I run `<binary> compose projects`, then it prints the same registry JSON and exit code as `<binary> engineer projects` does today, with no deprecation warning | task-1, task-2 | covered | zero under `compose`, byte-identical stdout | diff-local |
+| criterion | Story 1 happy: Given the built CLI, when I run any existing engineer subcommand (`claim`, `worktree`, `land`, `handoff`, `projects`) under `compose` with its current flags, then it reaches the same typed dispatch and produces the same stdout contract as under `engineer` | task-1 | covered | yields identical typed descriptors under both verbs | diff-local |
+| criterion | Story 1 happy: Given the built CLI, when I run `<binary> compose <sub> --help`, then the help text for that subcommand is shown and exits 0 | task-3 | covered | `compose <sub> --help` resolves the same help topic as `engineer <sub> --help` | diff-local |
+| criterion | Story 1 negative: Given the built CLI, when I run `<binary> engineer projects`, then the command still succeeds with identical stdout JSON, and exactly one deprecation warning line naming `compose` is written to stderr (never stdout, so JSON consumers are unaffected) | task-2 | covered | one warning line under `engineer` | diff-local |
+| criterion | Story 1 negative: Given the built CLI, when I run `<binary> compose` with an unknown subcommand or unknown flag, then it is rejected with the same non-zero exit and error shape as the equivalent `engineer` invocation | task-1 | covered | unknown-flag/unknown-subcommand case yields identical typed descriptors | diff-local |
+| criterion | Story 1 negative: Given the built CLI, when I run `<binary> compose` bare, then it launches the same interactive host-agent loop path as bare `engineer` (no second implementation, no divergent behavior) | task-1 | covered | every subcommand, bare launch, help | diff-local |
+| criterion | Story 2 happy: Given a completed `bin/install` run, when I run `ai-conductor daemon status`, then it executes against the same TS dist entrypoint as `conduct-ts daemon status`, with no deprecation warning | task-4 | covered | invocation as `ai-conductor` dispatches with no warning | diff-local |
+| criterion | Story 2 happy: Given a completed `bin/install` run, when I inspect `~/.local/bin/ai-conductor`, then it is a symlink resolving to the repo's launcher script, created by the same idempotent pattern as the existing `conduct-ts` symlink | task-5 | covered | produces both `ai-conductor` and `conduct-ts` symlinks | diff-local |
+| criterion | Story 2 happy: Given an already-installed `ai-conductor` symlink pointing at a stale target, when `bin/install` re-runs, then the symlink is updated in place and reported, matching the existing conduct-ts update behavior | task-5 | covered | a stale `ai-conductor` symlink is updated in place and reported | diff-local |
+| criterion | Story 2 negative: Given a completed install, when I invoke the CLI as `conduct-ts <anything>`, then the command still succeeds with identical stdout and exit code, and exactly one deprecation warning line naming `ai-conductor` is written to stderr before execution | task-4 | covered | exactly one stderr warning naming `ai-conductor` | diff-local |
+| criterion | Story 2 negative: Given a broken or missing dist symlink, when I invoke either `ai-conductor` or `conduct-ts`, then the existing missing/broken-dist error is reported on stderr with a non-zero exit under both names | task-4 | covered | broken-dist failure under both names | diff-local |
+| criterion | Story 2 negative: Given the launcher invoked via `ai-conductor`, when its output is captured by a script parsing stdout, then no deprecation text appears on stdout under either invoked name | task-4 | covered | no warning text ever appears on stdout | diff-local |
+| criterion | Story 3 happy: Given an installed harness, when the host discovers skills, then `composer` is present with complete SKILL.md frontmatter (`name`, `description`, `enforcement`, `phase`) and carries the full engineer-loop instructions under the canonical `compose` CLI vocabulary | task-6 | covered | carries the loop instructions in `compose`/`ai-conductor` vocabulary | diff-local |
+| criterion | Story 3 happy: Given an installed harness, when the operator invokes `/engineer` (Claude) or `$engineer` (Codex), then the delegate loads and the session proceeds with composer's behavior, noting the canonical name | task-6 | covered | is a delegate with valid frontmatter and no duplicated loop content | diff-local |
+| criterion | Story 3 happy: Given the repo checkout, when `bin/generate-model-table` runs, then the model table carries rows for both `composer` and `engineer` and matches the committed HARNESS.md section | task-7 | covered | with composer and engineer rows present | diff-local |
+| criterion | Story 3 negative: Given the validation suite, when `test/test_harness_integrity.sh` runs after the catalog change, then all skill-frontmatter, cross-reference, and model-table checks pass — a missing composer model-table row or a dangling `/engineer` cross-reference fails the suite | task-6, task-7 | covered | cross-reference checks of `test/test_harness_integrity.sh` | diff-local |
+| criterion | Story 3 negative: Given the provider contract tests, when `test/test_provider_skill_contracts.sh` and `test/test_codex_skill_installation.sh` run, then both canonical and delegate names install and resolve on both hosts — a delegate that no longer resolves fails the test | task-8 | covered | composer canonical and engineer delegate resolvable on both supported hosts | diff-local |
+| criterion | Story 3 negative: Given the delegate SKILL.md, when its instructions are loaded, then it contains no second copy of the loop instructions — a content fork between engineer and composer is a test failure (single source of truth) | task-6 | covered | no duplicated loop content | diff-local |
+| criterion | Story 4 happy: Given the shipped tree, when engine code, hooks, and skill/doc text reference the CLI, then they use `ai-conductor` (the surviving references to `conduct-ts` are exactly: the alias symlink/launcher definition, the deprecation warning text, and deprecation-window documentation) | task-10, task-11 | covered | returns only allowlisted lines | diff-local |
+| criterion | Story 4 happy: Given a daemon run driven by the repointed internals, when its logs are inspected, then they contain no CLI deprecation warning lines | task-10, task-12 | covered | Every operator-facing message string in `src/conductor/src/` that names the CLI says `ai-conductor` | diff-local |
+| criterion | Story 4 negative: Given a freshly-installed environment where `bin/install` has created both symlinks, when a hook or engine spawn executes its CLI call, then it succeeds via `ai-conductor` — a call site still spelling `conduct-ts` is caught by a repo test that greps the production tree for non-allowlisted `conduct-ts` invocations and fails on any hit | task-9 | covered | fails on any hit outside the closed allowlist | diff-local |
+| criterion | Story 4 negative: Given an environment where the operator has not re-run `bin/install` (no `ai-conductor` on PATH yet), when the repo-local harness invokes its own CLI via repo-relative launcher paths, then those invocations still succeed — repo-internal spawns must not depend on the operator's PATH symlink | task-11 | covered | Hook launcher defaults reference `bin/ai-conductor` | diff-local |

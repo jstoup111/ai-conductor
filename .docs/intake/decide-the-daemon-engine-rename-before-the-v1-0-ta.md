@@ -10,12 +10,15 @@ Owner: jstoup111
 - If (b) re-defer: the decision record states why and what would reopen it, so the v1.0 tag can be cut without this blocking.
 - The decision lands before the v1.0 tag is cut and closes #227.
 
-## Operator amendment — PR #1921 review, 2026-08-26
+## Operator amendments — PR #1921 review 2026-08-26; reversal 2026-08-28
 
 - The landed spec must build the selected rename, not create a later documentation/scoping-only feature.
-- `player` and `composer` become the canonical CLI and supported-host skill names while the old
-  `daemon` and `engineer` command names remain temporary, warning compatibility aliases.
-- Existing Player configuration and durable runtime state survive the rename through deterministic
-  legacy-key normalization and `.daemon/` state resolution; ambiguous state must not be overwritten.
+- `composer` becomes the canonical supported-host skill name and `compose` the canonical CLI verb
+  for the idea→spec loop, while `engineer` remains a temporary, warning compatibility alias.
+  `daemon` is not renamed — it stays the canonical worker vocabulary (2026-08-28 reversal of the
+  player half).
+- `ai-conductor` becomes the canonical installed CLI binary with `conduct-ts` as a temporary,
+  warning compatibility alias; existing configuration keys and `.daemon/` durable state are
+  untouched by this feature.
 - Ordinary documentation updates are upkeep attached to the owning functional change, never stories
   or standalone BUILD-plan tasks.
