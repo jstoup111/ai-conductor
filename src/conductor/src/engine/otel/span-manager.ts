@@ -35,16 +35,20 @@ interface StepState {
   startTimeMs: number;
 }
 
+export type RunOutcome = 'complete' | 'halted' | 'terminated';
+
 export interface SpanManagerCallbacks {
   /** Called when a step completes; carries accumulated metrics data. */
   onStepClose?: (step: string, durationMs: number, retryCount: number) => void;
+  /** Called exactly once when an opened run span reaches a terminal outcome. */
+  onRunClose?: (outcome: RunOutcome) => void;
 }
 
 export class SpanManager {
   private runSpan: Span | null = null;
   private runCtx: Context = ROOT_CONTEXT;
   private runStarted = false;
-  private runOutcome: string | null = null;
+  private runOutcome: RunOutcome | null = null;
   private readonly openSteps: Map<string, StepState> = new Map();
 
   constructor(
@@ -63,7 +67,7 @@ export class SpanManager {
     }
   }
 
-  private closeRunSpan(outcome: string): void {
+  private closeRunSpan(outcome: RunOutcome): void {
     if (this.runOutcome !== null) return;
     if (!this.runSpan) return;
 
@@ -72,6 +76,7 @@ export class SpanManager {
     this.runSpan.setStatus({ code: SpanStatusCode.OK });
     this.runSpan.end();
     this.runSpan = null;
+    this.callbacks?.onRunClose?.(outcome);
   }
 
   // ── Step-span open/close ───────────────────────────────────────────────────
