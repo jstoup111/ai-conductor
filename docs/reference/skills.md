@@ -50,7 +50,7 @@ The 13 implicit-required shipped skills are:
 
 | Skill group | Skills | Why they cannot be explicit-only in the distributed catalog |
 | --- | --- | --- |
-| `/engineer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/engineer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
+| `/composer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/composer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
 | Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims`, `code-removal` | Called from an active skill: issue authoring, fresh debugging, batch simplification, load-bearing claim verification, or removal-shaped build work — `/pipeline` dispatches `/code-removal` in place of a RED cycle |
 
 Because these skills remain visible for same-session composition, each description carries a closed
@@ -435,7 +435,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   marker committed at land; the spec PR.
 - **Gate role** — neither as an engine step, but the land gate is hard: no idea reaches a build without
   a merged spec PR, only the operator merges, no spec lands with a DRAFT ADR, and the tier must be
-  recorded. See [engineer-loop](../guides/engineer-loop.md). The deprecated `engineer` skill is a
+  recorded. See [composer loop](../guides/engineer-loop.md). The deprecated `engineer` skill is a
   thin compatibility delegate to this canonical composer skill.
 
 ### engineer

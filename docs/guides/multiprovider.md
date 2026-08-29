@@ -38,7 +38,7 @@ regardless of the value, and the flag never writes into any config file.
 ## 2. Set the host
 
 `llm_provider` is read from the **project** config — `<project>/.ai-conductor/config.yml` — for
-both `conduct-ts inline` and `conduct-ts daemon`. The user-level `~/.ai-conductor/config.yml` is
+both `ai-conductor inline` and `ai-conductor daemon`. The user-level `~/.ai-conductor/config.yml` is
 merged only for the mermaid-renderer setting, so an `llm_provider` written there has no effect on
 step execution.
 
@@ -49,12 +49,12 @@ Create or edit the project config:
 llm_provider: codex
 ```
 
-`conduct-ts create <name>` includes this file for a new repository. In an existing Git repository,
-run `conduct-ts config init`; the command writes the project-safe template once and preserves an
+`ai-conductor create <name>` includes this file for a new repository. In an existing Git repository,
+run `ai-conductor config init`; the command writes the project-safe template once and preserves an
 existing config byte-for-byte. Every key is documented in
 [../reference/configuration.md](../reference/configuration.md).
 
-**Observable outcome:** the next `conduct-ts inline` run dispatches steps to `codex` instead of
+**Observable outcome:** the next `ai-conductor inline` run dispatches steps to `codex` instead of
 `claude`. An unknown name fails fast at startup:
 
 ```text
@@ -148,9 +148,9 @@ older install, expect harness links under `~/.codex/skills` to disappear on your
 `./bin/install`; that is the reconciliation, not a failure. `./bin/install --check` reports any
 skill present in both locations as a duplicate-discovery error and exits `1`.
 
-### The engineer loop always uses Claude
+### The composer loop always uses Claude
 
-`conduct-ts engineer` spawns `claude` directly with `/engineer` as its prompt. It does not consult
+`ai-conductor compose` spawns `claude` directly with `/composer` as its prompt. It does not consult
 `llm_provider`. Setting `llm_provider: codex` changes which host executes pipeline steps; it does
 not change the host for the interactive idea→spec loop, which still requires the `claude` CLI. See
 [engineer-loop.md](engineer-loop.md).

@@ -210,7 +210,7 @@ nothing else.
 regenerated `.sh`. Editing the `.sh` directly is drift and check 5c will fail.
 
 Hook assets must be plain bash plus inline `node -e` only, with zero references to `dist/` or
-`conduct-ts` — a generated hook has to keep working while the engine is mid-rebuild.
+`ai-conductor` — a generated hook has to keep working while the engine is mid-rebuild.
 
 ### What catches a hook mistake
 

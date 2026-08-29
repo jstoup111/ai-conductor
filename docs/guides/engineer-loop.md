@@ -1,36 +1,36 @@
 ---
-title: The engineer loop
+title: The composer loop
 parent: Guides
 nav_order: 2
 ---
 
-# The engineer loop
+# The composer loop
 
-Turn one raw idea into a merged-ready spec PR in the right repo. This guide walks the engineer loop
-(`conduct-ts engineer`) end to end, for an operator who has an idea and wants a spec the
+Turn one raw idea into a merged-ready spec PR in the right repo. This guide walks the composer loop
+(`ai-conductor compose`) end to end, for an operator who has an idea and wants a spec the
 daemon can build.
 
-The engineer loop never builds and never merges. It opens a spec PR; you merge it; the daemon
+The composer loop never builds and never merges. It opens a spec PR; you merge it; the daemon
 picks it up from the default branch afterwards.
 
 ## Prerequisites
 
 | Requirement | Check |
 | --- | --- |
-| `conduct-ts` on PATH | `conduct-ts --help` |
+| `ai-conductor` on PATH | `ai-conductor --help` |
 | `claude` on PATH (the loop launches an interactive session) | `claude --version` |
-| At least one registered project | `conduct-ts engineer projects` prints a non-empty JSON array |
+| At least one registered project | `ai-conductor compose projects` prints a non-empty JSON array |
 | `gh` authenticated, for intake and PR steps | `gh auth status` |
 
-Register a repo with `conduct-ts register <path>`, or scaffold a new one with
-`conduct-ts create <name>`. See [cli reference](../reference/cli.md) for both.
+Register a repo with `ai-conductor register <path>`, or scaffold a new one with
+`ai-conductor create <name>`. See [cli reference](../reference/cli.md) for both.
 
 ## How the loop is driven
 
 There are two surfaces and you use both:
 
-- **The front door.** Bare `conduct-ts engineer` spawns an interactive `claude` session running the
-  `/engineer` skill, with stdio inherited. The human stays in the loop.
+- **The front door.** Bare `ai-conductor compose` spawns an interactive `claude` session running the
+  `/composer` skill, with stdio inherited. The human stays in the loop.
 - **The primitives.** `projects`, `claim`, `worktree`, `land`, `handoff`, and the recovery verbs are
   deterministic CLI commands. The skill calls them from in-chat reasoning; you can also call them by
   hand.
@@ -44,10 +44,10 @@ artifact, allowing the daemon to begin at BUILD after the spec PR merges.
 ## Start a session
 
 ```bash
-conduct-ts engineer
+ai-conductor compose
 ```
 
-You should see an interactive Claude session start on the `/engineer` prompt. Before the session
+You should see an interactive Claude session start on the `/composer` prompt. Before the session
 launches, the CLI polls GitHub issues into the durable inbox and prints `Intake: N issue(s) queued.`
 when N is above zero. That pre-poll is skipped when a background brain loop is already running
 (it owns polling) and skipped when you supply an idea on the command line.
@@ -55,8 +55,8 @@ when N is above zero. That pre-poll is skipped when a background brain loop is a
 Variants:
 
 ```bash
-conduct-ts engineer --idea "<your idea>"
-conduct-ts engineer <free text idea>
+ai-conductor compose --idea "<your idea>"
+ai-conductor compose <free text idea>
 ```
 
 Both drive the first session with that idea and skip the intake pre-poll. The idea is one-shot: it
@@ -66,9 +66,9 @@ When the session exits, the launcher asks `Process another idea in a fresh sessi
 Answering yes starts a clean session — one idea per session, by design. On a non-TTY stdin the
 launcher never loops.
 
-**If you are already inside a Claude Code session**, `conduct-ts engineer` refuses to nest a second
-one. It prints `You're already inside a Claude Code session — run /engineer directly…` and exits 0.
-Run `/engineer` in that session instead.
+**If you are already inside a Claude Code session**, `ai-conductor compose` refuses to nest a second
+one. It prints `You're already inside a Claude Code session — run /composer directly…` and exits 0.
+Run `/composer` in that session instead.
 
 The permission mode of the launched session comes from `CONDUCT_ENGINEER_PERMISSION_MODE` and
 defaults to `default`. The value `plan` is rejected and coerced back to `default`, because a
@@ -80,7 +80,7 @@ read-only session cannot run the git and `gh` primitives. See
 Ask the inbox first:
 
 ```bash
-conduct-ts engineer claim
+ai-conductor compose claim
 ```
 
 Outcomes:
@@ -107,17 +107,17 @@ For what a good intake issue contains, see [filing intake issues](intake.md).
 ## Step 2 — Route to a target repo
 
 ```bash
-conduct-ts engineer projects
+ai-conductor compose projects
 ```
 
 Prints the registry as JSON. Pick the best-fit project, state the rationale, and confirm the target
 with the operator before going further. If nothing fits, scaffold a new project with
-`conduct-ts create` and continue with it.
+`ai-conductor create` and continue with it.
 
 ## Step 3 — Create the per-idea worktree
 
 ```bash
-conduct-ts engineer worktree \
+ai-conductor compose worktree \
   --project <name> \
   --idea "<idea>" \
   --source-ref <owner/repo#N>
@@ -137,8 +137,8 @@ You should see `{"kind":"worktree","slug":"…","branch":"spec/<slug>","worktree
 missing or unreadable record degrades to no staging rather than failing.
 
 > **Known limitation.** `--source-ref` and `--body` are both parsed and honoured by
-> `engineer worktree`, but neither is declared in the commander tree, so `conduct-ts --help` omits
-> them; `--body` is additionally absent from `engineer worktree --help` and from the guide text. If
+> `composer worktree`, but neither is declared in the commander tree, so `ai-conductor --help` omits
+> them; `--body` is additionally absent from `composer worktree --help` and from the guide text. If
 > you pass `--body "<text>"` it wins over the claim record, but no help output will tell you it
 > exists. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
 
@@ -166,7 +166,7 @@ the order is fixed.
 ## Step 5 — Land the spec
 
 ```bash
-conduct-ts engineer land \
+ai-conductor compose land \
   --project <name> \
   --idea "<idea>" \
   --worktree <worktreePath> \
@@ -192,18 +192,18 @@ is kept for inspection and its path is printed.
 With `--source-ref`, `land` also comments "Routed to `<repo>`" on the originating issue and advances
 the ledger to `routed`. That write-back is advisory: a `gh` failure never fails a successful land.
 
-> **Known limitation.** `conduct-ts engineer land --help` claims land will "open the spec PR" and
+> **Known limitation.** `ai-conductor compose land --help` claims land will "open the spec PR" and
 > that it "pushes the `spec/<slug>` branch, opens a PR". The code does neither: the `land` dispatch
 > arm calls only `landSpec`, which commits in the worktree and returns. The push
 > (`git push -u origin <branch>`) and `gh pr create` happen in `handoff`. The commander description,
-> the `conduct-ts engineer` guide text, and the source grammar comment all agree with the code —
+> the `ai-conductor compose` guide text, and the source grammar comment all agree with the code —
 > only the per-subcommand help text disagrees. If you stop after `land`, nothing has been pushed and
 > no PR exists. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
 
 ## Step 6 — Hand off: push, PR, daemon nudge
 
 ```bash
-conduct-ts engineer handoff \
+ai-conductor compose handoff \
   --project <name> \
   --branch <branch> \
   --worktree <worktreePath> \
@@ -231,7 +231,7 @@ The originating issue's assignees remain unchanged from claim through handoff ve
 cleanup; `engineer:handled` marks completion without changing ownership.
 
 On failure `handoff` exits 1, **keeps** the worktree, prints its path, and records branch evidence in
-the ledger so you can recover with `engineer resolve`.
+the ledger so you can recover with `composer resolve`.
 
 ## Step 7 — Deliver, then end the session
 
@@ -249,7 +249,7 @@ When `handoff`'s ledger write-back fails but the PR was opened, the entry is stu
 Stamp it by hand:
 
 ```bash
-conduct-ts engineer resolve <owner/repo#N> --pr-url <url> --branch <branch>
+ai-conductor compose resolve <owner/repo#N> --pr-url <url> --branch <branch>
 ```
 
 `--pr-url` must match `^https?://` — an invalid URL exits 1. A missing entry prints `{"found":false}`
@@ -258,7 +258,7 @@ and exits 0. `--branch` is optional; omitting it preserves any branch already re
 To put an issue back in the pool instead:
 
 ```bash
-conduct-ts engineer unclaim <owner/repo#N>
+ai-conductor compose unclaim <owner/repo#N>
 ```
 
 `unclaim` returns a `claimed` entry to pending, preserving its original capture time so the next
@@ -268,13 +268,13 @@ tells you to use `resolve` or `forget` instead. Use `forget` only when the issue
 from the ledger and made eligible for a later `poll`:
 
 ```bash
-conduct-ts engineer forget <owner/repo#N>
+ai-conductor compose forget <owner/repo#N>
 ```
 
 To recover every stale claim at once, run:
 
 ```bash
-conduct-ts engineer requeue --stale [--older-than <dur>]
+ai-conductor compose requeue --stale [--older-than <dur>]
 ```
 
 Without `--older-than`, the sweep uses `stale_claim_window_hours` (24 hours by default); the optional
@@ -287,11 +287,11 @@ Claimed entries that already have a PR are reserved for `resolve`/`forget` and a
 
 | Command | Effect |
 | --- | --- |
-| `conduct-ts engineer poll` | One synchronous sweep of the GitHub issues adapter into the durable inbox. No routing, no background process. The ledger dedups, so a double-poll enqueues nothing new. |
-| `conduct-ts engineer unclaim <sourceRef>` | Returns one claimed entry to pending so it can be claimed again. Use it for a known stranded claim. |
-| `conduct-ts engineer requeue --stale [--older-than <dur>]` | Bulk-recovers stale claimed entries. The default age is `stale_claim_window_hours` (24 hours); `--older-than` overrides it once. |
-| `conduct-ts engineer migrate-issue-deps` | One-time prose-to-structured-link dependency migration. Dry-run by default; prints the proposal and `Dry run — no links written. Re-run with --confirm to apply.` |
-| `conduct-ts engineer migrate-issue-deps --confirm` | Applies the migration and prints `N link(s) created, M already present.` |
+| `ai-conductor compose poll` | One synchronous sweep of the GitHub issues adapter into the durable inbox. No routing, no background process. The ledger dedups, so a double-poll enqueues nothing new. |
+| `ai-conductor compose unclaim <sourceRef>` | Returns one claimed entry to pending so it can be claimed again. Use it for a known stranded claim. |
+| `ai-conductor compose requeue --stale [--older-than <dur>]` | Bulk-recovers stale claimed entries. The default age is `stale_claim_window_hours` (24 hours); `--older-than` overrides it once. |
+| `ai-conductor compose migrate-issue-deps` | One-time prose-to-structured-link dependency migration. Dry-run by default; prints the proposal and `Dry run — no links written. Re-run with --confirm to apply.` |
+| `ai-conductor compose migrate-issue-deps --confirm` | Applies the migration and prints `N link(s) created, M already present.` |
 
 ## Troubleshooting
 
@@ -300,9 +300,9 @@ and `resolve`, a missing required flag or positional prints the full guide text 
 a usage error. Check the exit code is not enough — confirm you got the JSON line you expected before
 moving to the next step.
 
-**`engineer <sub>: unknown flag '<flag>'`, exit 1.** Each subcommand rejects any flag outside its own
+**`composer <sub>: unknown flag '<flag>'`, exit 1.** Each subcommand rejects any flag outside its own
 allow-list. `--help` and `-h` are checked before the subcommand's own logic, so
-`conduct-ts engineer land --help` always prints help and exits 0 with zero side effects.
+`ai-conductor compose land --help` always prints help and exits 0 with zero side effects.
 
 **`engineer: could not launch an interactive Claude session`.** The `claude` binary is not on PATH.
 The command prints the guide and exits 1.

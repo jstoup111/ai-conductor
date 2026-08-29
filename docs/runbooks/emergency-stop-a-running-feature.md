@@ -40,8 +40,8 @@ git worktree list
 ### Find out what is actually running
 
 ```bash
-conduct-ts daemon status
-conduct-ts daemon logs --lines 60
+ai-conductor daemon status
+ai-conductor daemon logs --lines 60
 ```
 
 `daemon status` sweeps the project registry and prints one badge line per repo. `● running`
@@ -63,7 +63,7 @@ precedence — a parked slug never appears anywhere else.
 ### 1. Park the feature first
 
 ```bash
-conduct-ts daemon park <slug>
+ai-conductor daemon park <slug>
 ```
 
 **What it changes:** writes `.daemon/parked/<slug>` under the *main* repo root. The command
@@ -98,7 +98,7 @@ HALT. If you must interrupt the active unit itself, continue to step 2.
 Pause when you want the loop to stand down but keep the tmux session:
 
 ```bash
-conduct-ts daemon pause
+ai-conductor daemon pause
 ```
 
 **What it changes:** writes `.daemon/PAUSED` (a JSON body carrying `pausedAt` — the body is
@@ -108,7 +108,7 @@ informational; existence is what counts). The check is fail-closed: any read err
 Stop when you are about to rewrite git state:
 
 ```bash
-conduct-ts daemon stop
+ai-conductor daemon stop
 ```
 
 **What it changes:** kills the tmux session hosting the daemon. **Blast radius:** any in-flight
@@ -116,18 +116,18 @@ build in that session is terminated where it stands; its worktree and branch are
 and its `.pipeline/` state stops at whatever step it reached.
 
 For a graceful drain instead of a kill, send SIGTERM to the daemon process. It drains in-flight
-work for up to 30 seconds before releasing its lock. `conduct-ts daemon status` prints the pid;
+work for up to 30 seconds before releasing its lock. `ai-conductor daemon status` prints the pid;
 it is also the `pid` field of the JSON in `.daemon/daemon.pid`.
 
 ```bash
 kill -TERM <pid>
 ```
 
-**How to confirm:** `conduct-ts daemon status` reports `⏸ paused` or `· stopped` for this repo.
+**How to confirm:** `ai-conductor daemon status` reports `⏸ paused` or `· stopped` for this repo.
 
 ### 3. Stopping an interactive run instead
 
-An interactive `conduct-ts inline …` run is stopped with Ctrl-C. The signal handler writes
+An interactive `ai-conductor inline …` run is stopped with Ctrl-C. The signal handler writes
 `.pipeline/conduct-state.json` before exiting with code 130, so the run is resumable. Do not
 `kill -9` it — that skips the state write and leaves the last step's status unrecorded.
 
@@ -175,7 +175,7 @@ branch after unparking, the daemon re-dispatches into the wreckage:
 Finish the git work first. Unpark last:
 
 ```bash
-conduct-ts daemon unpark <slug>
+ai-conductor daemon unpark <slug>
 ```
 
 **What it changes:** resets the no-evidence attempt counter (in `.worktrees/<slug>` when it
@@ -192,7 +192,7 @@ Work through all four:
    ```
 2. **The daemon is in the state you intended:**
    ```bash
-   conduct-ts daemon status
+   ai-conductor daemon status
    ```
    Expect `⏸ paused` or `· stopped`, and no `● running` badge for this repo.
 3. **The worktree registry is consistent** — no entry is marked `prunable`:
@@ -202,13 +202,13 @@ Work through all four:
 4. **The feature is not dispatched on the next poll.** Resume the daemon and read the startup
    dashboard: the slug must appear under PARKED and nowhere else.
    ```bash
-   conduct-ts daemon resume
-   conduct-ts daemon logs --lines 40
+   ai-conductor daemon resume
+   ai-conductor daemon logs --lines 40
    ```
 
 If the feature is dispatched anyway, the park marker is not where the daemon is looking — it is
 resolved against the main repo root, not the worktree you ran the command from. Re-run
-`conduct-ts daemon park <slug>` from the main checkout and confirm the printed marker path.
+`ai-conductor daemon park <slug>` from the main checkout and confirm the printed marker path.
 
 Related: [stalled or stuck feature](stalled-or-stuck-feature.md) for a feature that is running
 but not progressing, and [daemon recovery](daemon-recovery.md) for a daemon that will not start

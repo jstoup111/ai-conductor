@@ -233,7 +233,7 @@ source_has_guide_destination() {
 
 record "source guides have unique titles, the Guides parent, and stable order" \
   "$( source_has_guide_destination 'first-feature.md' 'Ship your first feature' 1 && \
-    source_has_guide_destination 'engineer-loop.md' 'The engineer loop' 2 && \
+    source_has_guide_destination 'engineer-loop.md' 'The composer loop' 2 && \
     source_has_guide_destination 'intake.md' 'Filing intake issues' 3 && \
     source_has_guide_destination 'multiprovider.md' 'Choose and configure the LLM host' 4 && \
     source_has_guide_destination 'running-the-daemon.md' 'Running the daemon' 5 && \

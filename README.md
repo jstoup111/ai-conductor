@@ -101,7 +101,7 @@ owns that call.
 **Guides** — task-oriented procedures
 
 - [Your first feature](docs/guides/first-feature.md) — idea → spec PR → build → implementation PR
-- [The engineer loop](docs/guides/engineer-loop.md) — the interactive idea→spec flow, including claim-time recovery of stale claims after the configurable 24-hour `stale_claim_window_hours` window and the `engineer unclaim` / `engineer requeue --stale [--older-than <dur>]` maintenance commands
+- [The composer loop](docs/guides/engineer-loop.md) — the interactive idea→spec flow, including claim-time recovery of stale claims after the configurable 24-hour `stale_claim_window_hours` window and the `compose unclaim` / `compose requeue --stale [--older-than <dur>]` maintenance commands
 - [Running the daemon](docs/guides/running-the-daemon.md) — start, park, observe, recover
 - [Intake](docs/guides/intake.md) — filing issues that seed the DECIDE phase
 - [Multiprovider](docs/guides/multiprovider.md) — Claude Code and Codex, and the fallback ladder
@@ -120,7 +120,7 @@ owns that call.
 
 **Explanation** — how and why the system is shaped this way
 
-- [Architecture](docs/explanation/architecture.md) — engine, daemon, engineer loop, operator
+- [Architecture](docs/explanation/architecture.md) — engine, daemon, composer loop, operator
 - [SDLC phases](docs/explanation/sdlc-phases.md) — the five phases, tiers, and tracks
 - [Gates](docs/explanation/gates.md) — enforcement levels, fail-closed rules, waivers
 - [Evidence model](docs/explanation/evidence-model.md) — why progress is proven, not asserted

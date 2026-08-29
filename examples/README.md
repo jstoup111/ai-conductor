@@ -1,6 +1,6 @@
 # Flow Examples
 
-Runnable, self-asserting examples of each `conduct-ts` flow. Each scenario
+Runnable, self-asserting examples of each `ai-conductor` flow. Each scenario
 spins up an isolated sandbox (a throwaway copy of the project, never the
 real repo), runs the flow against a small/medium/large prompt or fixture,
 and asserts the flow reached its completion checkpoint.
@@ -19,14 +19,14 @@ these scripts repeatedly, in parallel, or out of order.
 
 | Scenario | Command | Mode | Checkpoint | Invocation |
 | --- | --- | --- | --- | --- |
-| interactive | `conduct-ts inline "<prompt>" --interactive` | guided, interactive launcher (execs with stdio inherited so a human drives the REPL) | `feature_complete` / DONE, printed as the checkpoint to watch for before handing off to the human | `./interactive.sh [s|m|l]` |
+| interactive | `ai-conductor inline "<prompt>" --interactive` | guided, interactive launcher (execs with stdio inherited so a human drives the REPL) | `feature_complete` / DONE, printed as the checkpoint to watch for before handing off to the human | `./interactive.sh [s|m|l]` |
 | daemon | daemon drain against a seeded accepted story + plan fixture | headless, self-asserting | feature reaches DONE with a recorded `pr_url` / local-commit | `./daemon.sh [s|m|l]` |
-| engineer | `engineer worktree` -> `engineer land` -> `engineer handoff` (headless); or the real `conduct-ts engineer` loop with `--interactive` | headless self-asserting by default; guided interactive launcher with `--interactive` | flow reaches `pr-opened` or `local-commit` | `./engineer.sh [s|m|l] [--interactive]` |
-| intake-loop | `conduct-ts intake-loop --once` against a seeded pending envelope | headless, self-asserting | `intake-status.json` written into the sandbox engineer dir | `./intake-loop.sh [s|m|l]` |
+| composer | `compose worktree` -> `compose land` -> `compose handoff` (headless); or the real `ai-conductor compose` loop with `--interactive` | headless self-asserting by default; guided interactive launcher with `--interactive` | flow reaches `pr-opened` or `local-commit` | `./engineer.sh [s|m|l] [--interactive]` |
+| intake-loop | `ai-conductor intake-loop --once` against a seeded pending envelope | headless, self-asserting | `intake-status.json` written into the sandbox engineer dir | `./intake-loop.sh [s|m|l]` |
 
 Unattended runs go through the **daemon** flow — it is the only headless way to
-drive a feature end to end. The retired `conduct-ts inline --auto` one-shot no
-longer exists; `conduct-ts inline --interactive` remains, and is a guided
+drive a feature end to end. The retired `ai-conductor inline --auto` one-shot no
+longer exists; `ai-conductor inline --interactive` remains, and is a guided
 launcher a human drives.
 
 Every script accepts a tier of `s`, `m`, or `l` (or the long forms `small`,

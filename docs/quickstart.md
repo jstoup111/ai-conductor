@@ -6,7 +6,7 @@ nav_order: 2
 # Quickstart
 
 Install the harness, register a project, and run one feature through the SDLC pipeline. For
-operators setting up `conduct-ts` for the first time.
+operators setting up `ai-conductor` for the first time.
 
 ## Prerequisites
 
@@ -17,14 +17,14 @@ one is missing, so install them first.
 | --- | --- | --- |
 | `git` | cloning the harness; every worktree operation | `git --version` |
 | `gh`, authenticated | opening spec and implementation PRs | `gh auth status` |
-| `tmux` | `conduct-ts daemon start/stop/restart/connect/debug` | `tmux -V` |
+| `tmux` | `ai-conductor daemon start/stop/restart/connect/debug` | `tmux -V` |
 | `python3` | writing permissions and hooks into `~/.claude/settings.json` | `python3 --version` |
 | Node >= 26.0.0 (repo pins 26.7.0) | building and running the engine, and reading/writing the markdown-viewer and mermaid-renderer config | `node --version` |
 | `npm` | `npm ci` + `npm run build` for the engine | `npm --version` |
 | `claude` and/or `codex` | executing steps — at least one is required | `claude --version` / `codex --version` |
 
 Node is pinned to `26.7.0` in `.tool-versions` and `src/conductor/.tool-versions`. Install it
-with `asdf install nodejs 26.7.0` or any equivalent version manager. `bin/conduct-ts` exports
+with `asdf install nodejs 26.7.0` or any equivalent version manager. `bin/ai-conductor` exports
 `ASDF_NODEJS_VERSION` from that pin **only when `asdf` is on `PATH`** — without asdf, whatever
 `node` resolves first runs the engine.
 
@@ -65,7 +65,7 @@ You should see `Installation complete.` followed by a quick-start banner.
 
 ## Put `~/.local/bin` on PATH
 
-The installer symlinks `conduct-ts` into `~/.local/bin` but **never edits your shell profile**. If
+The installer symlinks `ai-conductor` into `~/.local/bin` but **never edits your shell profile**. If
 that directory is not already on `PATH` it prints:
 
 ```text
@@ -83,7 +83,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ```bash
 ./bin/install --check
-conduct-ts --help
+ai-conductor --help
 ```
 
 `--check` mutates nothing. Its exit code is the signal:
@@ -92,11 +92,11 @@ conduct-ts --help
 | --- | --- |
 | `0` | All checks passed. Prints `All checks passed.` |
 | `1` | Drift: missing, stale, or duplicated skill links, or a failed host-CLI or bin-symlink check. Prints a per-category count and `Run ./bin/install to fix.` |
-| `2` | Everything else is clean but `conduct-ts build-auth-status` failed |
+| `2` | Everything else is clean but `ai-conductor build-auth-status` failed |
 
 Exit `2` prints `Build authentication check failed.` instead of the `All checks passed.` summary —
 read the `build-auth-status:` line in the body for the underlying reason. The engine treats both
-`0` and `2` as passing; any other code blocks `conduct-ts daemon start` on a stale install.
+`0` and `2` as passing; any other code blocks `ai-conductor daemon start` on a stale install.
 
 ## Register a project
 
@@ -104,13 +104,13 @@ The target must already be a git repository.
 
 ```bash
 cd /path/to/your-project
-conduct-ts register
+ai-conductor register
 ```
 
 You should see `Registered <name> (<absolute-path>).` The record lands in
 `~/.ai-conductor/registry.json` with `status: registered`; nothing is written into the project.
 
-To scaffold a new repository instead, `conduct-ts create <name>` runs `git init` and writes a
+To scaffold a new repository instead, `ai-conductor create <name>` runs `git init` and writes a
 skeleton `CLAUDE.md`, a `.gitignore`, and a project-safe `.ai-conductor/config.yml` before
 registering it. Both commands are detailed in
 [reference/cli.md](reference/cli.md).
@@ -134,7 +134,7 @@ Then, in-session:
 Under Codex the same skill is invoked as `$bootstrap`. You should end with `CLAUDE.md` (and/or
 `AGENTS.md`) referencing the harness, plus a populated `.docs/` directory.
 
-For an existing Git repository, `bootstrap` runs the idempotent `conduct-ts config init` primitive.
+For an existing Git repository, `bootstrap` runs the idempotent `ai-conductor config init` primitive.
 You can also run that command directly before bootstrap. It creates
 `.ai-conductor/config.yml` from the project-safe template and preserves an existing file
 byte-for-byte. See [reference/configuration.md](reference/configuration.md).
@@ -142,25 +142,25 @@ byte-for-byte. See [reference/configuration.md](reference/configuration.md).
 ## Run your first feature with the daemon
 
 ```bash
-conduct-ts engineer --idea "add a CSV export to the reporting page"
+ai-conductor compose --idea "add a CSV export to the reporting page"
 ```
 
-The engineer authors the DECIDE artifacts in an isolated worktree and opens a spec PR. Review and
+The composer authors the DECIDE artifacts in an isolated worktree and opens a spec PR. Review and
 merge that PR, then start the daemon:
 
 ```bash
-conduct-ts daemon start
+ai-conductor daemon start
 ```
 
 The daemon drains merged specs, builds each feature in an isolated worktree, retains its logs, and
-opens an implementation PR. Watch it with `conduct-ts daemon logs --follow` or check it with
-`conduct-ts daemon status`.
+opens an implementation PR. Watch it with `ai-conductor daemon logs --follow` or check it with
+`ai-conductor daemon status`.
 
 Continue with [first feature](guides/first-feature.md) for the complete idea → spec PR → daemon
 build → implementation PR walkthrough.
 
 For a supervised foreground run, use
-`conduct-ts inline --interactive "add a CSV export to the reporting page"`. The foreground
+`ai-conductor inline --interactive "add a CSV export to the reporting page"`. The foreground
 `--auto` mode is deprecated; use the daemon for unattended work. Inline flags are enumerated in
 [reference/cli.md](reference/cli.md).
 
@@ -174,15 +174,15 @@ The engine is gitignored, so a fresh clone has no `dist` until `bin/install` (or
 runs.
 
 ```text
-conduct-ts: missing <harness>/src/conductor/dist/index.js
-conduct-ts: run 'npm run build' in src/conductor/
+ai-conductor: missing <harness>/src/conductor/dist/index.js
+ai-conductor: run 'npm run build' in src/conductor/
 ```
 
 A half-finished publish leaves a dangling symlink instead:
 
 ```text
-conduct-ts: dist symlink is broken (<harness>/src/conductor/dist)
-conduct-ts: run 'npm run build' to rebuild, or republish the engine, to fix it
+ai-conductor: dist symlink is broken (<harness>/src/conductor/dist)
+ai-conductor: run 'npm run build' to rebuild, or republish the engine, to fix it
 ```
 
 Both exit `1`. Fix by re-running `./bin/install`, or `npm run build` inside `src/conductor/`. Never
@@ -194,7 +194,7 @@ The installer still links the skills, permissions and hooks — those work on an
 cannot build the engine, so the run fails:
 
 ```text
-  ✗ conduct-ts requires Node >=26 — found v20.11.0
+  ✗ ai-conductor requires Node >=26 — found v20.11.0
   → This repo pins nodejs 26.7.0 via .tool-versions; install it (e.g. 'asdf install nodejs
     26.7.0'), then re-run bin/install
 ```
@@ -202,13 +202,13 @@ cannot build the engine, so the run fails:
 and the run ends with the reason restated:
 
 ```text
-Installation incomplete — conduct-ts was not installed.
-  ✗ conduct-ts requires Node >=26 but found v20.11.0. Install the pinned nodejs 26.7.0
+Installation incomplete — ai-conductor was not installed.
+  ✗ ai-conductor requires Node >=26 but found v20.11.0. Install the pinned nodejs 26.7.0
     (.tool-versions), then re-run ./bin/install.
 ```
 
 `./bin/install` exits `1`, and so does `./bin/install --check` while the bundle is missing or
-`conduct-ts` is off PATH. A missing `npm`, or a failing `npm ci`/`npm run build`, fails the same
+`ai-conductor` is off PATH. A missing `npm`, or a failing `npm ci`/`npm run build`, fails the same
 way. Install Node 26.7.0 and re-run `./bin/install`.
 
 ### Missing `gh` authentication
@@ -245,15 +245,15 @@ fails closed on the same identity — an unidentified daemon builds nothing and 
 Exit `1`. The guard applies to the default and `--update` modes only; `--check`, `--uninstall`, and
 `--help` are unaffected. Install from the main checkout.
 
-### Missing or broken `conduct-ts` at viewer/renderer configuration time
+### Missing or broken `ai-conductor` at viewer/renderer configuration time
 
 The markdown-viewer and mermaid-renderer prompts write their selection through
-`conduct-ts config write`, not Python/YAML. If `conduct-ts` is not yet on `PATH` (for example the
+`ai-conductor config write`, not Python/YAML. If `ai-conductor` is not yet on `PATH` (for example the
 engine build failed — see [Missing engine bundle](#missing-engine-bundle) above), the prompts are
 skipped:
 
 ```text
-  ⚠ conduct-ts is required to save the markdown viewer; install or restore it, then re-run bin/install
+  ⚠ ai-conductor is required to save the markdown viewer; install or restore it, then re-run bin/install
 ```
 
 and if the write itself fails (e.g. the target directory is unwritable), the installer warns and
@@ -264,9 +264,9 @@ the step fails rather than silently reporting success:
 ```
 
 Either way, `~/.ai-conductor/config.yml` gets no viewer or renderer block, and install continues
-with a warning rather than aborting. Fix the underlying `conduct-ts` problem and re-run
+with a warning rather than aborting. Fix the underlying `ai-conductor` problem and re-run
 `./bin/install`. `./bin/install --check` reports the configured viewer and renderer, or
-`conduct-ts not on PATH` / `configuration unreadable` when it cannot read them back.
+`ai-conductor not on PATH` / `configuration unreadable` when it cannot read them back.
 
 ### Missing tmux
 
@@ -276,7 +276,7 @@ The daemon builds without tmux but cannot be hosted by it:
 tmux is not installed or not found on PATH. Please install tmux to use daemon hosting.
 ```
 
-Install tmux before `conduct-ts daemon start`. Recovery for a daemon that started and then broke is
+Install tmux before `ai-conductor daemon start`. Recovery for a daemon that started and then broke is
 in [runbooks/daemon-recovery.md](runbooks/daemon-recovery.md).
 
 ## Updates
@@ -286,7 +286,7 @@ The installer writes `conductor.update_channel` — `stable` (default), `tagged`
 fast-forwards a branch only to fully published releases, `tagged` uses semver tag checkouts, and
 `main` follows every merge. Existing tag-pinned installations are not switched automatically.
 
-`conduct-ts` spawns `bin/update --auto` on startup and swallows every failure. Force an attended
+`ai-conductor` spawns `bin/update --auto` on startup and swallows every failure. Force an attended
 check, or update a stable checkout manually:
 
 ```bash
@@ -318,12 +318,12 @@ bin/migrate
 ```
 
 > **Known limitation.** `--uninstall` removes only the harness-owned skill symlinks, the
-> `HARNESS.md` links, and `~/.local/bin/conduct`. It leaves `~/.local/bin/conduct-ts`, the 18
+> `HARNESS.md` links, and `~/.local/bin/conduct`. It leaves `~/.local/bin/ai-conductor`, the 18
 > permission entries and 10 hook commands written into `~/.claude/settings.json`, all of
 > `~/.ai-conductor/`, and any legacy `~/.claude/ai-conductor.config.json` or
 > `~/.claude/ai-conductor.config.json.migrated` artifact. If you then delete the checkout,
 > those hooks point at a directory that no longer exists and every Claude Code session in every
-> project runs them. Remove `~/.local/bin/conduct-ts` and strip the harness entries from
+> project runs them. Remove `~/.local/bin/ai-conductor` and strip the harness entries from
 > `~/.claude/settings.json` by hand — see
 > [reference/settings-and-hooks.md](reference/settings-and-hooks.md).
 > Tracked in [#1004](https://github.com/jstoup111/ai-conductor/issues/1004).

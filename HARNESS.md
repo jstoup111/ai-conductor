@@ -39,7 +39,7 @@ cite `verify-claims` in their own SKILL.md:
   `code-review`, `prd-audit`, `manual-test`, `remediate`, `debugging`.
 
 Execution steps that merely act on an already-gated artifact (`tdd`, `pipeline`), orchestration
-(`conduct`, `engineer`), and mechanical steps (`bootstrap`, `memory`, `architecture-diagram`,
+(`conduct`, `composer`), and mechanical steps (`bootstrap`, `memory`, `architecture-diagram`,
 `simplify`, `finish`, `pr`, `rebase`) do **not** self-cite — they rely on this rule and on
 the upstream/surrounding gates. Casual conversation and trivially-verifiable mechanics with no
 downstream blast radius are out of scope.
@@ -634,7 +634,7 @@ tmux present (management is purely additive).
 One daemon per repo, enforced by the pidfile lock at `.daemon/daemon.pid` (stale dead-pid
 locks self-reclaim) underneath the tmux session. The daemon runs **serially** (one feature at a
 time), so `connect` always shows exactly the feature currently building. A host reboot drops
-tmux sessions; the next `daemon start` (or engineer nudge) respawns.
+tmux sessions; the next `daemon start` (or composer nudge) respawns.
 
 ## Key Conventions
 

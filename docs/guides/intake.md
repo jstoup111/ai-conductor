@@ -20,7 +20,7 @@ to DECIDE.
 | `gh` authenticated for the target repo | `gh auth status` |
 | A harness checkout containing `bin/intake-file` | `<harness-checkout>/bin/intake-file` (prints usage, exit 1) |
 
-`bin/install` symlinks only `conduct-ts` (and the legacy `conduct`) into `~/.local/bin`, so
+`bin/install` symlinks only `ai-conductor` (and the legacy `conduct`) into `~/.local/bin`, so
 `intake-file` is never on `PATH`. Run it from the harness checkout, or call it by absolute path
 from anywhere. It always executes inside the harness's own engine directory, so a bare invocation
 files into the harness repo — pass `--repo <owner>/<repo>` to target any other repo, including the
@@ -271,11 +271,11 @@ scrubbing would gut the evidence.
 
 An intake issue does not reach the daemon by itself. The path is:
 
-1. **Poll.** `conduct-ts engineer poll`, or the intake loop, sweeps GitHub issues into the durable
+1. **Poll.** `ai-conductor compose poll`, or the intake loop, sweeps GitHub issues into the durable
    inbox. The ledger dedups, so a repeat poll enqueues nothing new.
-2. **Claim.** `conduct-ts engineer claim` dequeues the oldest unblocked idea and persists a claim
+2. **Claim.** `ai-conductor compose claim` dequeues the oldest unblocked idea and persists a claim
    record carrying the Desired-outcome bullets.
-3. **DECIDE.** The [engineer loop](engineer-loop.md) authors the full spec artifact set in a per-idea
+3. **DECIDE.** The [composer loop](engineer-loop.md) authors the full spec artifact set in a per-idea
    worktree and lands them on a `spec/<slug>` branch.
 4. **Merge.** You merge the spec PR. Only then do the artifacts exist on the default branch.
 5. **Build.** The daemon reads `.docs/plans` from the committed default-branch tree and dispatches

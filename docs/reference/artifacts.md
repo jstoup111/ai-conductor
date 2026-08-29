@@ -46,7 +46,7 @@ Nineteen entries. Alphabetized; the four with no code reference are marked.
 | `audits/` | free-form JSON | a one-off backfill | `shipment-audit.ts` — one hardcoded path, nothing else |
 | `coherence/` | `<plan-stem>.md` | `coherence-check` skill (M and L tiers only) | `coherence_check` completion glob; the land-time coherence validator |
 | `coherence-waivers/` | `<plan-stem>.md` | operator, hand-authored | the land-time coherence waiver check. The directory appears when the first waiver is committed — see below |
-| `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, engineer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line. Missing ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
+| `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, composer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line. Missing ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
 | `conflicts/` | `YYYY-MM-DD-<slug>.md` | `conflict-check` skill | `conflict_check` completion glob |
 | `decisions/` | `adr-<topic>.md`, `adr-YYYY-MM-DD-<topic>.md`, `NNN-<topic>.md`, `architecture-review-*.md`, `technical-assessment-*.md` | `architecture-review`, `assess`, `bootstrap`, `prd`, `simplify`, `debugging`, `finish` | `architecture_review` and `assess` completion globs; the land gate and daemon discovery both scan every `adr-*.md` and reject one whose first declared status is not `APPROVED` or `SUPERSEDED` |
 | `halted/` | `<slug>.md` | the halt-marker writer | An operator-readable halt record on the feature branch. It records status, slug, halt class, halting step, phase, branch, HEAD SHA, UTC halt time, the full HALT body, and whether the record may be ahead of the remote. It is written and committed for an operator-actionable (`needs-human`, `plan-gap`, or `protected-artifact`) halt off the default branch, then pushed best-effort; `mechanical` halts produce no record. Clearing the halt changes the record's status to resolved while retaining its original details. |
@@ -54,9 +54,9 @@ Nineteen entries. Alphabetized; the four with no code reference are marked.
 | `manual-test-results.md` | loose file | legacy | **no code reference** — superseded by `.pipeline/manual-test-results.md` |
 | `observation/` | free-form | manual | **no code reference** |
 | `phase7-daemon-validation.md` | loose file | manual | **no code reference** |
-| `plans/` | `YYYY-MM-DD-<slug>.md` — the stem is the canonical feature key | `plan` skill; the engineer loop writes `.docs/plans/<slug>.md` at land | `plan` completion glob; land requires every parsed task to have a `Done when:` block with 2–5 nonblank list checks; seeds `.pipeline/task-status.json`; the build predicate parses `### Task <id>` headings; protected-artifact seal |
+| `plans/` | `YYYY-MM-DD-<slug>.md` — the stem is the canonical feature key | `plan` skill; the composer loop writes `.docs/plans/<slug>.md` at land | `plan` completion glob; land requires every parsed task to have a `Done when:` block with 2–5 nonblank list checks; seeds `.pipeline/task-status.json`; the build predicate parses `### Task <id>` headings; protected-artifact seal |
 | `release-waivers/` | `<plan-stem>.md` | operator, hand-authored in the same diff | the self-host release gate. Also the only `.docs` prefix always writable during BUILD |
-| `shipped/` | `<plan-stem>.md` | `conduct-ts shipped-record` | daemon backlog dedup; the only input to `conduct-ts kpi` |
+| `shipped/` | `<plan-stem>.md` | `ai-conductor shipped-record` | daemon backlog dedup; the only input to `ai-conductor kpi` |
 | `specs/` | `YYYY-MM-DD-<slug>.md` | `prd` skill (product track only) | `prd` completion glob; protected-artifact seal |
 | `stories/` | `YYYY-MM-DD-<slug>.md`, plus `epics/` and `features/<name>/` subdirs | `stories` skill | `stories` completion glob; plan-coverage check; coherence rows; protected-artifact seal |
 | `track/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `explore` skill | `parseTrack` reads a `Track: product\|technical` line. Missing ⇒ defaults to `product`. Decides whether `prd` and `prd_audit` run. The file also carries a `Scope boundary:` line recording the operator-confirmed fix breadth; `plan` and `stories` read it as binding free-form text — no code parses it |
@@ -161,7 +161,7 @@ head, every suffix heading a recorded task id) is treated as the engine's own am
 without an operator reseal — the `protected_artifact_rebaseline` event reports it under
 `includedEngineAppendedPaths`. Any other authored divergence (unrecorded ids, extra headings, prose
 before the first recorded heading, or a non-append edit) still refuses with
-`feature-authored:head-differs-from-base` and requires `conduct-ts reseal`.
+`feature-authored:head-differs-from-base` and requires `ai-conductor reseal`.
 
 **Protected-artifact seal.** `.pipeline/protected-artifact-seal.json` fingerprints every file under
 `.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, and `.docs/stories` against a
@@ -202,13 +202,13 @@ artifact except stories, DECIDE writes the additive note beside the original ass
 The original assertion remains present, and no separate amendment artifact is created. Story artifacts
 under `.docs/stories/` are the exception: DECIDE replaces the superseded assertion in place and leaves
 no amendment record — git history and the spec PR carry the correction's provenance. Either way, this
-places the correction in the initial seal baseline. `conduct-ts plan-protected-targets <plan-path>`
+places the correction in the initial seal baseline. `ai-conductor plan-protected-targets <plan-path>`
 prevents a plan from assigning the same mutation to BUILD, and the land gate independently refuses a
 violating plan.
 
 An operator-approved plan or architecture amendment committed after first BUILD leaves this
 baseline stale by design. Review the amendment, then reseal the reviewed paths with
-[`conduct-ts reseal`](cli.md#conduct-ts-reseal) before the feature is re-queued — it runs only from an
+[`ai-conductor reseal`](cli.md#ai-conductor-reseal) before the feature is re-queued — it runs only from an
 interactive operator terminal, refuses the whole reseal if any unlisted protected path has also
 drifted, and records the old and new fingerprints, trigger, and rationale in both the seal's
 `rebaselines` entry and the audit trail. Editing the JSON directly is never a valid reseal.
@@ -454,9 +454,9 @@ Existence is the signal. Alphabetized.
 | `QUARANTINE` | setup triage | The feature is quarantined from dispatch |
 | `REKICK` | the re-kick sweep | Body is literally `rekick` |
 | `conduct-session-id` | step runners | Durable conductor run identity. It survives daemon restart and redispatch; provider attempts use separate fresh IDs and do not rewrite it |
-| `current-task` | `conduct-ts task` | Per-task stamp; the source of the `prepare-commit-msg` auto-stamp. Stale stamps are cleared during seeding |
+| `current-task` | `ai-conductor task` | Per-task stamp; the source of the `prepare-commit-msg` auto-stamp. Stale stamps are cleared during seeding |
 | `dispatch-count` | `pre-dispatch.sh` | One line per dispatch. Crossing the unattributed threshold emits `unattributed_dispatch` |
-| `finish-choice` | FINISH publication coordinator through `conduct-ts finish-record` | Final publication outcome; subject to the session freshness check. Interactive intent is acquired before this marker exists |
+| `finish-choice` | FINISH publication coordinator through `ai-conductor finish-record` | Final publication outcome; subject to the session freshness check. Interactive intent is acquired before this marker exists |
 | `halt-user-input-required` | `pipeline` skill on a user-requested exit | The build predicate returns not-done while it exists |
 | `phase-active` | `phase-marker.ts::writePhaseMarker` | Line-oriented on purpose so bash hooks can read it without a parser: `step: <name>`, `phase: <BUILD\|SHIP>`, `written: <ISO-8601>`, then zero or more `allow: <prefix>` lines. Removed idempotently on step exit |
 | `rate-limit-hit` | `rate-limit-wait.sh` | Line 1 epoch, line 2 wait seconds parsed from the Claude `StopFailure` payload; consumed by the legacy bash CLI's rate-limit retry path |
@@ -478,7 +478,7 @@ To clear a halt safely, use the procedure in
 | `pipeline-events.jsonl` | Pipeline-owned closeout timing events | Separate single-writer ledger — see below |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
-| `conduct.log` | Session narrative | Written only by the legacy bash CLI; `conduct-ts` never writes it. Read by `rate-limit-wait.sh` |
+| `conduct.log` | Session narrative | Written only by the legacy bash CLI; `ai-conductor` never writes it. Read by `rate-limit-wait.sh` |
 | `progress.log` | Batch-boundary narrative | Appended by the `pipeline` skill |
 
 > **Known limitation.** No engine code reads `.pipeline/fr-coverage.md`, `.pipeline/otel.jsonl`,
@@ -525,7 +525,7 @@ Daemon procedures live in [running the daemon](../guides/running-the-daemon.md);
 | Actor | Worktree path | Branch |
 | --- | --- | --- |
 | Daemon build | `<projectRoot>/.worktrees/<slug>` | `feat/daemon-<slug>` |
-| Engineer loop (spec authoring) | `<canonicalPath>/.worktrees/engineer-<slug>` | `spec/<slug>`, then `-2`, `-3`… on collision |
+| Composer loop (spec authoring) | `<canonicalPath>/.worktrees/engineer-<slug>` | `spec/<slug>`, then `-2`, `-3`… on collision |
 | Interactive `worktree` step | `<projectRoot>/.worktrees/<slug>` | `feature/<slug>`, then `-2`… on collision |
 | Autoresolve | `<repoCwd>/.worktrees/resolve-<slug>` | *(checks out the conflicting ref)* |
 | Setup triage quarantine | — | `wip/setup-quarantine-<slug>` |
@@ -593,11 +593,11 @@ engine_version: <engine-version-id | dev>
 ---
 ```
 
-`engine_version` is the engine build that shipped the feature — the same id `conduct-ts daemon status`
+`engine_version` is the engine build that shipped the feature — the same id `ai-conductor daemon status`
 prints as `version:<id>`, resolved from the running engine's own module path (`dev` for an unpublished
 source checkout). The line is emitted only when a value is supplied, so records written before this
 field existed, backfill proposals, and repair writes stay byte-identical to the four-field form.
-`conduct-ts kpi` reports an unstamped record as `engine=unknown`, keeping unattributed ships visible.
+`ai-conductor kpi` reports an unstamped record as `engine=unknown`, keeping unattributed ships visible.
 
 `spec_hash` is SHA-256 over the trimmed plan bytes, a `0x00` separator, and the trimmed stories bytes.
 Only trailing newline runs are trimmed; interior bytes are never modified and CRLF is deliberately not
@@ -619,10 +619,10 @@ the downgrade route, `partial` also carries `reason`: `empty-active-union`,
 `provider-evidence-incomplete`; records shipped before the reason field existed simply omit that
 line. `unavailable` carries no fields. Timing is derived from `.pipeline/events.jsonl` at ship time
 and is never a fabricated zero — missing or incomplete evidence downgrades the state instead. Records
-written before this section existed simply have no `## Time` block, and `conduct-ts kpi` reports those
+written before this section existed simply have no `## Time` block, and `ai-conductor kpi` reports those
 as `time=unavailable`.
 
-`conduct-ts shipped-record --slug <plan-stem> --pr <pr-url-or-local>` writes it; both flags are
+`ai-conductor shipped-record --slug <plan-stem> --pr <pr-url-or-local>` writes it; both flags are
 required and re-running with identical content is a no-op. Its exit code cannot be used to detect
 success — it exits 0 even when it wrote nothing. Recording a ship and verifying it landed is in
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
@@ -711,7 +711,7 @@ same session-capability contract described in
 [Per-step session capability contract](../explanation/architecture.md#per-step-session-capability-contract).
 
 Halt occurrences are consumed by `cost-rollup.halts`, the shipped record's `## Cost` block,
-`conduct-ts kpi`, and the engineer-loop signal assembler. `conduct-ts inline --report` renders
+`ai-conductor kpi`, and the engineer-loop signal assembler. `ai-conductor inline --report` renders
 neither halt nor kickback tables.
 
 > **Known limitation.** The other 27 event types — including `gate_verdict`, `loop_converged`,
@@ -719,7 +719,7 @@ neither halt nor kickback tables.
 > remaining `rebase_*` variant not listed above — are emitted for real but never persisted, because
 > the emitter dispatches only to handlers registered for that exact type. `loop_halt`,
 > `halt_marker_write_failed`, and `rebase_conflict_halt` are persisted, so `cost-rollup.halts`,
-> shipped records' `## Cost` blocks, `conduct-ts kpi`, and the engineer-loop signal assembler can
+> shipped records' `## Cost` blocks, `ai-conductor kpi`, and the engineer-loop signal assembler can
 > consume real halt occurrences. `.pipeline/HALT` remains the durable park signal and the daemon
 > log remains a useful immediate diagnostic. `kickback` is likewise persisted, but `--report`
 > renders neither halt nor kickback tables.
@@ -736,8 +736,8 @@ log, the terminal UI, and the OTel visualizer without a second writer to this fi
 
 ### `.pipeline/pipeline-events.jsonl`
 
-The pipeline's own closeout timing ledger, written by `conduct-ts closeout-event` — see
-[`conduct-ts closeout-event`](cli.md#conduct-ts-closeout-event). One JSON `pipeline_closeout`
+The pipeline's own closeout timing ledger, written by `ai-conductor closeout-event` — see
+[`ai-conductor closeout-event`](cli.md#ai-conductor-closeout-event). One JSON `pipeline_closeout`
 `ConductorEvent` per line: `obligation` (one of `evaluator`, `simplify`, `architecture-diagram`,
 `memory`, `summary`), `startedAt`/`endedAt` epoch milliseconds, and a
 pipeline-stamped `ts`. Append-only, gitignored, never committed.
@@ -748,7 +748,7 @@ so it cannot depend on `EventPersister` to observe its own completions. When a `
 running under the engine, `CloseoutEventTail` tails this file incrementally (skipping partial
 trailing lines) and re-emits each complete record onto the live bus exactly once; an inline run
 produces the same records with no tail and no re-emission. `computeBuildTailRollup` (see
-[`conduct-ts build-tail`](cli.md#conduct-ts-build-tail)) merges this ledger with `events.jsonl` by
+[`ai-conductor build-tail`](cli.md#ai-conductor-build-tail)) merges this ledger with `events.jsonl` by
 `ts` to decompose a `build` window into task execution, remediation, and closeout segments.
 
 ### `.pipeline/audit-trail/events.jsonl`
@@ -776,7 +776,7 @@ outside any step's phase. It subscribes to fifteen source events (`gate_verdict`
 `halt_record_push_failed`, `shipment_evidence_refused`, `verdict_freshness`). `remediation_sealed_artifact_redirect` is
 subscribed but intentionally emits no audit record. A write failure drops a
 `WRITE-FAILED` marker beside it and, for
-[`conduct-ts reseal`](cli.md#conduct-ts-reseal) specifically, fails the reseal itself — its writer is
+[`ai-conductor reseal`](cli.md#ai-conductor-reseal) specifically, fails the reseal itself — its writer is
 constructed fail-closed, unlike every step-attributed writer, because a reseal whose audit record was
 lost must not be treated as complete. No TypeScript reader exists.
 
@@ -815,13 +815,13 @@ appended. A line counts as a transition only when the glyph opens the message, b
 bracketed tag and ANSI codes — so a line that merely quotes another feature's lifecycle text cannot
 suppress that feature's real transition.
 
-Read it with `conduct-ts daemon logs`; flags are in [cli](cli.md).
+Read it with `ai-conductor daemon logs`; flags are in [cli](cli.md).
 
 > **Known limitation.** `daemon.log.1` is produced by rotation but no CLI path ever opens it — both the
 > tail and follow primitives only open the active log. Rotated history is reachable only by reading the
 > file directly. Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 
-### `conduct-ts kpi`
+### `ai-conductor kpi`
 
 **Input:** `<cwd>/.docs/shipped/*.md` and nothing else. It re-parses the committed `## Cost` and
 `## Time` markdown blocks with regexes; it does not read `events.jsonl`, `.pipeline/`, or `otel.jsonl`.
