@@ -425,8 +425,10 @@ complexity tier — the reachability sweep and the plan-gap check run at every t
 whenever approved ADRs exist; `diagramDrift` runs where diagrams exist — and each is
 operator-configurable per tier via `architecture_review_as_built.checks.<name>.tiers`. Its verdict is one
 of `APPROVED`, `PLAN_GAP`, or `BLOCKED` (FR-16): `PLAN_GAP` means the code faithfully implements the
-approved design and the design itself is the limit; it is recorded in the verdict and the shipped record
-and ships when acceptance criteria still pass, and halts when a stated outcome is not delivered.
+approved design and the design itself is the limit. The outcome it is judged against is the sealed
+story criteria under `.docs/stories/` — superseded `.docs/intake/` capture is never the authority — so
+the gap is recorded in the verdict and the shipped record and ships when those criteria are satisfied,
+and halts only when a sealed story criterion is unmet.
 
 A `BLOCKED` report must contain exactly one `## Blocking Findings` table with `Finding`, `Class`,
 `Governing clause`, and `Summary` columns. `Class` is either `REMEDIABLE` or `DESIGN`. Every

@@ -1018,9 +1018,10 @@ one of `APPROVED`, `PLAN_GAP`, or `BLOCKED`.
 | `adrCompliance` | Approved ADRs exist under `.docs/decisions/` |
 | `diagramDrift` | Architecture diagrams exist |
 
-`PLAN_GAP` means the code faithfully implements the approved design and the design itself is the limit;
-it is recorded in the verdict and the shipped record and ships when acceptance criteria still pass, and
-halts when a stated outcome is not delivered.
+`PLAN_GAP` means the code faithfully implements the approved design and the design itself is the limit.
+The outcome is judged against the sealed story criteria under `.docs/stories/`, never against superseded
+`.docs/intake/` capture: the gap is recorded in the verdict and the shipped record and ships when those
+criteria are satisfied, and halts only when a sealed story criterion is unmet.
 
 `remediation` accepts only the `enabled` boolean. `max_remediation_laps` must be an integer greater
 than zero; unknown keys and invalid values are configuration errors.
