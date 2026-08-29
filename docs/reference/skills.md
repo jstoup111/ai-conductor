@@ -58,7 +58,7 @@ activation boundary: the active lifecycle/caller state that qualifies, plus near
 not. A generic feature, change, plan, review, bug, or question is not sufficient by itself. Explicit
 operator invocation remains available regardless of these implicit-selection boundaries.
 
-The 17 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `conduct`,
+The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
 `daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
 `remediate`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
@@ -110,6 +110,7 @@ policy across both catalogs and both host metadata formats.
 | `plan` | gating | decide | — | `plan` (9) | Blocking |
 | `coherence-check` | gating | decide | — | `coherence_check` (10) | Blocking |
 | `intake` | gating | decide | — | none — operator-invoked | Neither |
+| `composer` | advisory | decide | opus | none — operator-invoked | Neither as a step; the land gate blocks |
 | `engineer` | advisory | decide | opus | none — operator-invoked | Neither as a step; the land gate blocks |
 | `writing-system-tests` | gating | build | — | `acceptance_specs` (11) | Blocking |
 | `pipeline` | structural | build | — | `build` (12) | Blocking; cannot be disabled |

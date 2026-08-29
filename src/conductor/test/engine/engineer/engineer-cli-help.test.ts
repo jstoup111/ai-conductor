@@ -62,6 +62,23 @@ describe('detectEngineerCommand: --help/-h short-circuits every subcommand', () 
 });
 
 describe('compose help is canonical while engineer remains a deprecated alias', () => {
+  it('uses canonical compose usage for unknown flags under either verb', async () => {
+    const expected = "compose projects: unknown flag '--bogus' — run `compose projects --help` for usage.";
+    const composeErr: string[] = [];
+    const engineerErr: string[] = [];
+    const compose = detectEngineerCommand(argv('compose', 'projects', '--bogus'));
+    const engineer = detectEngineerCommand(argv('engineer', 'projects', '--bogus'));
+
+    const composeCode = await dispatchEngineer(compose!, { printErr: (text) => composeErr.push(text) });
+    const engineerCode = await dispatchEngineer(engineer!, { printErr: (text) => engineerErr.push(text) });
+
+    expect(composeCode).toBe(1);
+    expect(engineerCode).toBe(1);
+    expect(composeErr).toEqual([expected]);
+    expect(engineerErr).toContain(expected);
+    expect(engineerErr.at(-1)).toBe(expected);
+  });
+
   it('`compose projects --help` prints the current subcommand help and exits 0 without a legacy warning', async () => {
     const command = detectEngineerCommand(argv('compose', 'projects', '--help'));
     const out: string[] = [];

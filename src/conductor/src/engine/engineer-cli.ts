@@ -839,7 +839,7 @@ export async function dispatchEngineer(
     // rather than silently ignoring the flag and running the subcommand anyway.
     case 'reject': {
       printErr(
-        `engineer ${dispatch.sub}: unknown flag '${dispatch.flag}' — run \`engineer ${dispatch.sub} --help\` for usage.`,
+        `compose ${dispatch.sub}: unknown flag '${dispatch.flag}' — run \`compose ${dispatch.sub} --help\` for usage.`,
       );
       return 1;
     }
