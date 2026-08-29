@@ -52,9 +52,14 @@ type PublicationTransition = (typeof PUBLICATION_TRANSITIONS)[number];
 type ScenarioDisposition =
   | { kind: 'publication_progress'; transition: PublicationTransition }
   | {
+      kind: 'publication_revision_progress';
+      transition: 'author_pr_prose';
+      detail?: string;
+    }
+  | {
       kind: 'publication_retry';
       transition: PublicationTransition;
-      reason: 'presentation_repair_failed' | 'authoring_required_after_judgment';
+      reason: 'presentation_repair_failed';
       detail?: string;
     }
   | { kind: 'complete' };
@@ -225,9 +230,8 @@ describe('FINISH publication progress accounting', () => {
       { length: 14 },
       (): readonly ScenarioDisposition[] => [
         {
-          kind: 'publication_retry',
+          kind: 'publication_revision_progress',
           transition: 'author_pr_prose',
-          reason: 'authoring_required_after_judgment',
           detail: objection,
         },
         { kind: 'publication_progress', transition: 'author_pr_prose' },
@@ -257,9 +261,8 @@ describe('FINISH publication progress accounting', () => {
   it('publishes after the second revision is accepted without exhausting the allowance', async () => {
     const convergingLap: readonly ScenarioDisposition[] = [
       {
-        kind: 'publication_retry',
+        kind: 'publication_revision_progress',
         transition: 'author_pr_prose',
-        reason: 'authoring_required_after_judgment',
         detail: 'The first revision needs a concrete validation section.',
       },
       { kind: 'publication_progress', transition: 'author_pr_prose' },

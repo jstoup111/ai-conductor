@@ -1242,8 +1242,8 @@ describe('production FINISH publication composition', () => {
     ['timed_out', { success: true, publicationDisposition: { kind: 'timed_out' } }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }],
     ['provider_unavailable', { success: true, publicationDisposition: { kind: 'provider_unavailable' } }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }],
     ['undecodable', { success: true, output: 'not a judgment result' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_malformed_response' }],
-    ['incompleteness', { success: true, publicationDisposition: { kind: 'revision_required', reason: 'structurally_incomplete' } }, { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' }],
-    ['raw-placeholder', { success: true, output: '{"kind":"revision_required","reason":"placeholder"}' }, { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' }],
+    ['incompleteness', { success: true, publicationDisposition: { kind: 'revision_required', reason: 'structurally_incomplete' } }, { kind: 'publication_revision_progress', transition: 'author_pr_prose' }],
+    ['raw-placeholder', { success: true, output: '{"kind":"revision_required","reason":"placeholder"}' }, { kind: 'publication_revision_progress', transition: 'author_pr_prose' }],
   ])('maps each $0 prose judgment response without readying or recording the PR', async (_label, judgmentResponse, expected) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-judgment-outcome-'));
     try {

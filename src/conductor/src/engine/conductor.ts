@@ -8393,10 +8393,15 @@ export class Conductor {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'complete' });
               result.success = true;
             }
-            if (route.kind === 'progress_finish') {
+            if (route.kind === 'progress_finish' || route.kind === 'revision_progress_finish') {
               // A completed publication transition advances FINISH's own
-              // state machine; it is neither a failure nor a retry. Re-enter
-              // immediately without consuming this step's attempt budget.
+              // state machine; it is neither a failure nor a retry. A judged
+              // deficiency carries its objection through the typed revision
+              // progress route. Re-enter immediately without consuming this
+              // step's attempt budget.
+              if (route.kind === 'revision_progress_finish') {
+                lastPublicationRetryDetail = route.detail;
+              }
               if (!(await consumeFinishPublicationProgress(route.transition))) return;
               attempt--;
               continue;
@@ -8404,23 +8409,6 @@ export class Conductor {
             if (route.kind === 'retry_finish') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_finish' });
               lastPublicationRetryDetail = route.detail;
-
-              // A deficiency verdict has advanced the author→judge state
-              // machine to its next authoring pass. Charge that judgment to
-              // FINISH's existing progress allowance with the paired authoring
-              // transition, rather than consuming the unrelated retry budget.
-              if (route.reason === 'authoring_required_after_judgment') {
-                // `retry_finish` is only produced after the router's exact
-                // disposition validation above. This reason belongs solely to
-                // the transition-bearing retry shape.
-                const revisionRetry = result.publicationDisposition as Extract<
-                  PublicationDisposition,
-                  { kind: 'publication_retry'; transition: PublicationTransition }
-                >;
-                if (!(await consumeFinishPublicationProgress(revisionRetry.transition))) return;
-                attempt--;
-                continue;
-              }
 
               lastError = `FINISH publication retry: ${route.reason}`;
               retryHint = `${lastError}. Retry only the incomplete publication transition.`;

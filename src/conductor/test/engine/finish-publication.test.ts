@@ -735,16 +735,15 @@ describe('FINISH publication disposition routing', () => {
       { kind: 'retry_finish', reason: 'outcome_record_write_failed' },
     ],
     [
-      'transition-based publication retry with detail',
+      'typed publication revision progress with detail',
       {
-        kind: 'publication_retry',
+        kind: 'publication_revision_progress',
         transition: 'author_pr_prose',
-        reason: 'authoring_required_after_judgment',
         detail: 'The body is missing its validation section.',
       },
       {
-        kind: 'retry_finish',
-        reason: 'authoring_required_after_judgment',
+        kind: 'revision_progress_finish',
+        transition: 'author_pr_prose',
         detail: 'The body is missing its validation section.',
       },
     ],
@@ -811,14 +810,23 @@ describe('FINISH publication disposition routing', () => {
     });
   });
 
-  it('rejects a transition retry with an unknown fifth key through exact validation', async () => {
+  it('rejects publication revision progress with an unknown extra key through exact validation', async () => {
     await expect(routeFinishPublicationDisposition({
-      kind: 'publication_retry',
+      kind: 'publication_revision_progress',
       transition: 'author_pr_prose',
-      reason: 'authoring_required_after_judgment',
       detail: 'The body is missing its validation section.',
       extra: 'unknown',
     })).resolves.toEqual({
+      kind: 'halt',
+      reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
+    });
+  });
+
+  it.each([
+    ['a transition other than author_pr_prose', { kind: 'publication_revision_progress', transition: 'judge_pr_prose' }],
+    ['an empty detail', { kind: 'publication_revision_progress', transition: 'author_pr_prose', detail: '' }],
+  ])('rejects publication revision progress with %s through exact validation', async (_shape, disposition) => {
+    await expect(routeFinishPublicationDisposition(disposition)).resolves.toEqual({
       kind: 'halt',
       reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
     });
@@ -1353,9 +1361,8 @@ describe('advancedPublicationTransition', () => {
     await writeState(stateFilePath, state as ConductState);
 
     const retry = {
-      kind: 'publication_retry' as const,
+      kind: 'publication_revision_progress' as const,
       transition: 'author_pr_prose' as const,
-      reason: 'authoring_required_after_judgment',
       ...(detail === undefined ? {} : { detail }),
     };
     const advance = vi.fn(async () => {
@@ -2328,12 +2335,16 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
 
   it.each([
     [
+      'placeholder prose without detail',
+      { kind: 'revision_required', reason: 'placeholder' },
+      { kind: 'publication_revision_progress', transition: 'author_pr_prose' },
+    ],
+    [
       'placeholder prose',
       { kind: 'revision_required', reason: 'placeholder', detail: 'The title and body are placeholders.' },
       {
-        kind: 'publication_retry',
+        kind: 'publication_revision_progress',
         transition: 'author_pr_prose',
-        reason: 'authoring_required_after_judgment',
         detail: 'The title and body are placeholders.',
       },
     ],
@@ -2341,14 +2352,38 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       'structurally incomplete prose',
       { kind: 'revision_required', reason: 'structurally_incomplete', detail: 'The body is missing its validation section.' },
       {
-        kind: 'publication_retry',
+        kind: 'publication_revision_progress',
         transition: 'author_pr_prose',
-        reason: 'authoring_required_after_judgment',
         detail: 'The body is missing its validation section.',
       },
     ],
-  ] as const)('preserves detail when mapping %s to an authoring retry', async (_label, judgment, expected) => {
+  ] as const)('preserves detail when mapping %s to typed authoring progress', async (_label, judgment, expected) => {
     await expect(mapPrProseJudgmentResult(judgment)).resolves.toEqual(expected);
+  });
+
+  it('prioritizes a fresh halted PR over a revision-progress re-entry', async () => {
+    const observe = vi
+      .fn()
+      .mockResolvedValueOnce(readyPublicationSnapshot())
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'stale',
+          halted: true,
+          ready: false,
+        },
+      }));
+    const dispatchJudgment = vi.fn(async () => ({
+      kind: 'revision_required' as const,
+      reason: 'placeholder' as const,
+    }));
+
+    await expect(advanceFinishPublication({ observe, effects: { dispatchJudgment } })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'halt_state_pr',
+    });
+    expect(observe).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -2361,9 +2396,8 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       'placeholder prose',
       { kind: 'revision_required', reason: 'placeholder', detail: 'The title and body are placeholders.' },
       {
-        kind: 'publication_retry',
+        kind: 'publication_revision_progress',
         transition: 'author_pr_prose',
-        reason: 'authoring_required_after_judgment',
         detail: 'The title and body are placeholders.',
       },
     ],
@@ -2371,9 +2405,8 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       'structurally incomplete prose',
       { kind: 'revision_required', reason: 'structurally_incomplete', detail: 'The body is missing its validation section.' },
       {
-        kind: 'publication_retry',
+        kind: 'publication_revision_progress',
         transition: 'author_pr_prose',
-        reason: 'authoring_required_after_judgment',
         detail: 'The body is missing its validation section.',
       },
     ],
@@ -2391,7 +2424,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
         emit,
       });
       expect(result).toMatchObject(
-        expected.kind === 'publication_retry'
+        expected.kind === 'publication_revision_progress'
           ? { kind: 'human_required', reason: 'publication_transition_unmoved' }
           : expected,
       );
