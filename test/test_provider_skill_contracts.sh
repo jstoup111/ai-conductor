@@ -280,8 +280,29 @@ require_pattern 'engineer remains a compatibility delegate to composer' \
 require_pattern 'engineer names both host-native compatibility entry points' \
   'Claude Code.{0,100}/engineer.{0,100}Codex.{0,100}\$engineer|Codex.{0,100}\$engineer.{0,100}Claude Code.{0,100}/engineer' \
   "$engineer_skill"
+require_pattern 'engineer keeps Claude compatibility invocation discoverable' \
+  'Claude Code retains `/engineer`.*compatibility entry point' \
+  "$engineer_skill"
+require_pattern 'engineer keeps Codex compatibility invocation discoverable' \
+  'Codex retains `\$engineer`' \
+  "$engineer_skill"
+require_pattern 'engineer keeps Claude canonical composer invocation discoverable' \
+  'Claude Code invokes `/composer`' \
+  "$engineer_skill"
+require_pattern 'engineer keeps Codex canonical composer invocation discoverable' \
+  'Codex invokes' \
+  "$engineer_skill"
+require_pattern 'engineer identifies the Codex canonical composer command' \
+  '^`\$composer`\.$' \
+  "$engineer_skill"
+require_pattern 'engineer transfers behavior and gates to canonical composer' \
+  'continue with the canonical composer.s behavior.*shared outcomes and gates' \
+  "$engineer_skill"
 require_absent_pattern 'engineer contains no second copy of the full loop instructions' \
   '## The Loop|AuthoringGuard|Handle exactly ONE idea per session|### 1\. Capture the idea' \
+  "$engineer_skill"
+require_absent_pattern 'engineer contains none of the canonical compose workflow primitives' \
+  'ai-conductor compose (claim|projects|worktree|land|handoff)' \
   "$engineer_skill"
 require_max_lines 'engineer remains a thin compatibility delegate' 30 "$engineer_skill"
 
