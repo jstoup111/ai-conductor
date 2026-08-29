@@ -262,20 +262,18 @@ describe('loadRateCard', () => {
     expect(loadRateCard(dir)).toBeUndefined();
   });
 
-  it('falls back to the global card at ~/.ai-conductor when the project has none', async () => {
+  it('reads the global card at ~/.ai-conductor when the project has none', async () => {
     await writeGlobal(JSON.stringify({ as_of: 'g', models: { 'gpt-5.6-terra': TERRA } }));
     expect(loadRateCard(dir)?.models['gpt-5.6-terra']).toEqual(TERRA);
     expect(loadRateCard(undefined)?.models['gpt-5.6-terra']).toEqual(TERRA);
   });
 
-  it('prefers a committed project card over the global one', async () => {
+  it('prefers the global card over a committed project card', async () => {
     await writeGlobal(
       JSON.stringify({ as_of: 'g', models: { 'gpt-5.6-terra': { ...TERRA, input_cost_per_token: 9e-6 } } }),
     );
     await write(JSON.stringify({ as_of: 'p', models: { 'gpt-5.6-terra': TERRA } }));
-    expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(
-      TERRA.input_cost_per_token,
-    );
+    expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(9e-6);
   });
 
   it('picks up a refreshed card without a restart', async () => {

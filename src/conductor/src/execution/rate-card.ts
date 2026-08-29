@@ -185,14 +185,15 @@ export function clearRateCardCache(): void {
  * Never throws — an absent or unreadable card is simply "no rates".
  */
 export function loadRateCard(projectRoot: string | undefined): RateCard | undefined {
-  const projectCard = projectRoot
+  // The global card WINS: bin/install and bin/update keep it symlinked to the
+  // harness checkout's committed card, so every project prices codex from one
+  // current source. A project's committed card only applies where no global
+  // card exists (e.g. an environment that never ran bin/install).
+  const globalCard = readCardAt(globalRateCardPath());
+  if (globalCard) return globalCard;
+  return projectRoot
     ? readCardAt(join(projectRoot, RATE_CARD_RELATIVE_PATH))
     : undefined;
-  if (projectCard) return projectCard;
-  // Global fallback: bin/install and bin/update mirror the harness checkout's
-  // committed card here, so a project that never ran `rate-card refresh` still
-  // prices its codex dispatches instead of reporting $0.
-  return readCardAt(globalRateCardPath());
 }
 
 /** Resolved per call so tests can redirect via $HOME. */
