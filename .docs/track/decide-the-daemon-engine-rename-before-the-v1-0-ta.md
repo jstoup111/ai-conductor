@@ -1,29 +1,21 @@
-# Track: decide the daemon→engine rename before the v1.0 tag
+# Track: revise the v1.0 rename — daemon stays, engineer→composer, ai-conductor CLI
 
 Track: technical
 
-Scope boundary: ADR adopts the music/orchestration naming system; the 1.0 major renames only
-the two breaking concepts — daemon→Player, engineer→Composer — across CLI subcommands, config
-keys, `.daemon/` paths, and docs, with a scoped `## Migration` block bound to cutover PR #226.
-Compatibility aliases and/or deprecation warnings for the old `daemon`/`engineer` command names
-are in scope as a transition aid (operator-requested). The repository keeps the `ai-conductor`
-name (bare "conductor" is not usable). The former daemon→engine proposal is rejected (Rails
-Engines collision; `src/engine/` already names the internals). The additive verdict/state
-vocabulary (attacca/dissonance/dal segno/da capo/rest/fermata and the broader table) is
-explicitly out of scope, deferred to #1918. This spec delivers the decision + scoping artifacts
-(ADR, rename scope, migration scoping), not the rename implementation itself.
+Scope boundary: This spec supersedes the 2026-08-26 player/composer implementation scope
+(operator reversal, 2026-08-28). The `daemon`→`player` rename is dropped entirely: `daemon`
+remains the canonical vocabulary, `.daemon/` remains the only state root, and no config keys
+are renamed — the mode-aware Player-state resolver and legacy-key normalization leave scope.
+What ships: (1) `engineer`→`composer` at the public boundary — canonical CLI verb `compose`
+with `engineer` retained as a deprecation-warning alias, `skills/composer` canonical with
+`skills/engineer` as a compatibility delegate for both supported host discovery mechanisms;
+(2) `ai-conductor` becomes the canonical CLI binary name installed by `bin/install`, with
+`conduct-ts` retained as a deprecated alias that warns once per invocation (argv0-based);
+(3) the ADR adr-2026-08-26-music-vocabulary-player-composer-rename is amended in place —
+including reversing its Decision 4 clause that entrypoints are unchanged. Internal symbols,
+filenames (`engineer-cli.ts`, `daemon-*.ts`), and the `bin/conduct` bash CLI are out of scope;
+`bin/conduct` removal and the installer cutover remain #226. Verdict vocabulary stays deferred
+to #1918. Ordinary documentation upkeep is not a story or BUILD-plan task.
 
-> **Amended 2026-08-26 by operator review of #1921:** the operator selected the comprehensive
-> implementation approach. This spec now owns the functional 1.0 rename: canonical `player` and
-> `composer` CLI/skill surfaces, temporary `daemon` and `engineer` compatibility aliases with
-> deprecation warnings, canonical Player config keys with legacy-key normalization, and canonical
-> `.player/` state with safe legacy-state resolution. Internal Conductor engine terminology,
-> repository/entrypoint names, and the verdict vocabulary remain out of scope. Ordinary
-> documentation upkeep is not a story or BUILD-plan task.
-
-Rationale: internal vocabulary decision and rename scoping — no user-facing product
-requirements, acceptance criteria live in stories.
-
-> **Amended rationale:** this remains a technical track because the work changes developer/operator
-> boundaries rather than introducing a new end-user product requirement. Acceptance criteria now
-> cover executable CLI, skill, configuration, and state-migration behavior.
+Rationale: technical track — changes developer/operator CLI/skill boundaries and installer
+naming, no new end-user product requirement; acceptance criteria live in stories.
