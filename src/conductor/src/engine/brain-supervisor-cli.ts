@@ -27,6 +27,7 @@ import {
   type TmuxRunner,
 } from './daemon-tmux.js';
 import { resolveEngineerDir } from './engineer-store.js';
+import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
 
 /** Session-name prefix for the brain loop's tmux session (ADR Q2 liveness gate). */
 export const BRAIN_SESSION_PREFIX = 'cc-brain-';
@@ -35,7 +36,8 @@ export const BRAIN_SESSION_PREFIX = 'cc-brain-';
 export const BRAIN_SESSION_NAME = `${BRAIN_SESSION_PREFIX}conductor`;
 
 /** Foreground command run inside the brain session (Task 17's entry point). */
-export const BRAIN_FOREGROUND_COMMAND = 'ai-conductor intake-loop --continuous';
+export const BRAIN_FOREGROUND_COMMAND =
+  `${shellQuote(resolveCanonicalLauncher())} intake-loop --continuous`;
 
 /** Shape of the status surface written by the notifier (Task 9); only the
  * fields this CLI reports are declared here. */

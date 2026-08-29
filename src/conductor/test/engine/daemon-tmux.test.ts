@@ -361,7 +361,7 @@ describe('respawnPane: argv and error handling', () => {
     expect(respawnCall.args[2]).toBe('-t');
     expect(respawnCall.args[3]).toBe('=cc-daemon-myapp-abc123:');
     const wrapped = respawnCall.args[4];
-    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec ai-conductor daemon --continuous$/);
+    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec .+ daemon --continuous$/);
     expect(wrapped).toContain(DAEMON_FOREGROUND_COMMAND as string);
     expect(respawnCall.inherit).toBe(false);
   });
@@ -619,6 +619,7 @@ describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)'
 
   it('the recreated session after fallback uses the same session name and foreground command', async () => {
     const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { DAEMON_FOREGROUND_COMMAND } = await load();
     const { run, calls } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
     await makeTmuxSupervisor(run).restart('/home/alice/myapp');
     const killCall = calls.find((c) => c.args[0] === 'kill-session')!;
@@ -626,7 +627,7 @@ describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)'
     expect(killCall.args).toEqual(
       expect.arrayContaining([expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}$/)]),
     );
-    expect(newCall.args).toContain('ai-conductor daemon --continuous');
+    expect(newCall.args).toContain(DAEMON_FOREGROUND_COMMAND as string);
   });
 });
 

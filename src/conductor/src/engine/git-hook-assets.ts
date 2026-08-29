@@ -1,4 +1,5 @@
 import { PROTECTED_ARTIFACT_DIRECTORIES } from './protected-artifact-seal.js';
+import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
 
 /**
  * Git hook scripts embedded as engine assets
@@ -160,7 +161,9 @@ export const PREPARE_COMMIT_MSG_HOOK = [
  * and warns on subject-vs-trailer mismatch. Chains to $GIT_COMMON_DIR/hooks/
  * commit-msg if it exists.
  */
-export const COMMIT_MSG_HOOK = [
+export function buildCommitMsgHook(launcher = resolveCanonicalLauncher()): string {
+  const scopeCheck = `${shellQuote(launcher)} scope-check "$COMMIT_MSG_FILE"`;
+  return [
   '#!/bin/bash',
   'set -e',
   '',
@@ -255,7 +258,7 @@ export const COMMIT_MSG_HOOK = [
   '  # result is advisory; an unresolvable check records ambiguity before exit 3.',
   '  if [[ -f "$TASK_STATUS_FILE" ]]; then',
   '    rc=0',
-  '    CONDUCT_SCOPE_CHECK_PROJECT_ROOT="$WORKTREE_ROOT" ai-conductor scope-check "$COMMIT_MSG_FILE" || rc=$?',
+  `    CONDUCT_SCOPE_CHECK_PROJECT_ROOT="$WORKTREE_ROOT" ${scopeCheck} || rc=$?`,
   '    if [[ "$rc" == "3" ]]; then',
   '      echo "commit-msg: scope-check recorded ambiguity (exit 3); allowing commit" >&2',
   '    elif [[ "$rc" != "0" ]]; then',
@@ -288,4 +291,7 @@ export const COMMIT_MSG_HOOK = [
   'fi',
   '',
   'exit 0',
-].join('\n');
+  ].join('\n');
+}
+
+export const COMMIT_MSG_HOOK = buildCommitMsgHook();

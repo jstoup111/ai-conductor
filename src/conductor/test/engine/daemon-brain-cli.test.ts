@@ -56,7 +56,7 @@ function makeFakeTmuxRunner(initiallyUp: string[] = []) {
 }
 
 describe('brainStart', () => {
-  it('creates a cc-brain-* tmux session running ai-conductor intake-loop --continuous', async () => {
+  it('creates a cc-brain-* tmux session running the canonical intake-loop launcher', async () => {
     const mod = await load();
     const brainStart = requireFn(mod, 'brainStart');
     const { calls, run } = makeFakeTmuxRunner();
@@ -70,7 +70,7 @@ describe('brainStart', () => {
     const sIdx = newSessionCall!.args.indexOf('-s');
     const sessionName = newSessionCall!.args[sIdx + 1];
     expect(sessionName).toMatch(/^cc-brain-/);
-    expect(newSessionCall!.args).toContain('ai-conductor intake-loop --continuous');
+    expect(newSessionCall!.args.at(-1)).toMatch(/bin\/ai-conductor.* intake-loop --continuous$/);
   });
 
   it('is idempotent: calling start twice does not create two sessions', async () => {

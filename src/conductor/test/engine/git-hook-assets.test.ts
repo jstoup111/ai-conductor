@@ -1,11 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, chmod, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK, PRE_COMMIT_HOOK } from '../../src/engine/git-hook-assets.js';
+import {
+  PREPARE_COMMIT_MSG_HOOK,
+  COMMIT_MSG_HOOK,
+  PRE_COMMIT_HOOK,
+  buildCommitMsgHook,
+} from '../../src/engine/git-hook-assets.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
@@ -100,15 +105,31 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(code).toBe(0);
     });
 
-    it('does not reference src/conductor/dist and invokes scope-check', () => {
+    it('does not reference src/conductor/dist and invokes scope-check through the canonical launcher', () => {
       expect(COMMIT_MSG_HOOK).not.toMatch(/src\/conductor\/dist/);
       expect(COMMIT_MSG_HOOK).not.toMatch(/tasksByFile/);
       expect(COMMIT_MSG_HOOK).toMatch(
-        /CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" ai-conductor scope-check "\$COMMIT_MSG_FILE"/,
+        /CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" '\/.*\/bin\/ai-conductor' scope-check "\$COMMIT_MSG_FILE"/,
       );
       expect(COMMIT_MSG_HOOK).toMatch(
-        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" ai-conductor scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "3" \]\]; then\n\s+echo "commit-msg: scope-check recorded ambiguity \(exit 3\); allowing commit" >&2\n\s+elif \[\[ "\$rc" != "0" \]\]; then\n\s+echo "commit-msg: scope-check abstained \(exit \$rc\); allowing commit" >&2/,
+        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" '\/.*\/bin\/ai-conductor' scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "3" \]\]; then\n\s+echo "commit-msg: scope-check recorded ambiguity \(exit 3\); allowing commit" >&2\n\s+elif \[\[ "\$rc" != "0" \]\]; then\n\s+echo "commit-msg: scope-check abstained \(exit \$rc\); allowing commit" >&2/,
       );
+    });
+
+    it('quotes and embeds an AI_CONDUCTOR_ENGINE_BIN override in the generated hook', async () => {
+      const prior = process.env.AI_CONDUCTOR_ENGINE_BIN;
+      process.env.AI_CONDUCTOR_ENGINE_BIN = "/override path/ai-conductor's";
+      vi.resetModules();
+      try {
+        const { COMMIT_MSG_HOOK: hook } = await import('../../src/engine/git-hook-assets.js');
+        expect(hook).toContain(
+          "CONDUCT_SCOPE_CHECK_PROJECT_ROOT=\"$WORKTREE_ROOT\" '/override path/ai-conductor'\\''s' scope-check \"$COMMIT_MSG_FILE\"",
+        );
+      } finally {
+        if (prior === undefined) delete process.env.AI_CONDUCTOR_ENGINE_BIN;
+        else process.env.AI_CONDUCTOR_ENGINE_BIN = prior;
+        vi.resetModules();
+      }
     });
   });
 
@@ -670,6 +691,9 @@ describe('git-hook-assets — embedding hook scripts', () => {
     async function writeScopeCheck(exitCode: number): Promise<NodeJS.ProcessEnv> {
       await writeFile(join(fakeBinDir, 'ai-conductor'), `#!/bin/sh\nexit ${exitCode}\n`, 'utf8');
       await chmod(join(fakeBinDir, 'ai-conductor'), 0o755);
+      const hookPath = join(repoDir, '.pipeline', 'git-hooks', 'commit-msg');
+      await writeFile(hookPath, buildCommitMsgHook(join(fakeBinDir, 'ai-conductor')), 'utf8');
+      await chmod(hookPath, 0o755);
       return { ...process.env, PATH: `${fakeBinDir}:${process.env.PATH}` };
     }
 

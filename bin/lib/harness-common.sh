@@ -40,6 +40,27 @@ conductor_cfg_key() {
   esac
 }
 
+# Resolve the launcher used by harness-owned shell helpers.  A sourced library
+# has no caller-provided HARNESS_DIR, so its own BASH_SOURCE location is the
+# authoritative repo-relative anchor.  An explicit override wins; unusual
+# layouts retain the historical PATH fallback.
+# Usage: conductor_cli
+conductor_cli() {
+  if [ -n "${AI_CONDUCTOR_ENGINE_BIN:-}" ]; then
+    printf '%s\n' "$AI_CONDUCTOR_ENGINE_BIN"
+    return 0
+  fi
+
+  local common_dir repo_launcher
+  common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  repo_launcher="$common_dir/../ai-conductor"
+  if [ -x "$repo_launcher" ]; then
+    printf '%s\n' "$repo_launcher"
+  else
+    printf '%s\n' 'ai-conductor'
+  fi
+}
+
 # Read a scalar field from the schema-owned conductor block.
 #
 # The optional default is retained for callers migrating from the legacy
@@ -58,7 +79,9 @@ conductor_cfg_key() {
 conductor_cfg_get() {
   seed_conductor_config_from_legacy || true
   local field=$1
-  if ! command -v ai-conductor &>/dev/null; then
+  local cli
+  cli="$(conductor_cli)"
+  if [ "$cli" = 'ai-conductor' ] && ! command -v ai-conductor &>/dev/null; then
     warn "ai-conductor is required to read conductor configuration; install or restore it, then re-run bin/install" >&2
     return 1
   fi
@@ -72,7 +95,7 @@ conductor_cfg_get() {
     warn "could not create a temporary file to read conductor configuration" >&2
     return 1
   fi
-  if ! value=$(ai-conductor config read "conductor.$(conductor_cfg_key "$field")" 2>"$diagnostic_file"); then
+  if ! value=$("$cli" config read "conductor.$(conductor_cfg_key "$field")" 2>"$diagnostic_file"); then
     diagnostics=$(<"$diagnostic_file")
     rm -f "$diagnostic_file"
     diagnostics=$(printf '%s\n%s\n' "$value" "$diagnostics" | sed '/^$/d')
@@ -90,11 +113,13 @@ conductor_cfg_set() {
     return 1
   fi
   local field=$1 value=$2
-  if ! command -v ai-conductor &>/dev/null; then
+  local cli
+  cli="$(conductor_cli)"
+  if [ "$cli" = 'ai-conductor' ] && ! command -v ai-conductor &>/dev/null; then
     warn "ai-conductor is required to save conductor configuration; install or restore it, then re-run bin/install" >&2
     return 1
   fi
-  ai-conductor config set "conductor.$(conductor_cfg_key "$field")" "$value"
+  "$cli" config set "conductor.$(conductor_cfg_key "$field")" "$value"
 }
 
 # Copy supported values from the former Claude-only JSON config into the

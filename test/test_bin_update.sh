@@ -267,12 +267,36 @@ run_conductor_cfg_accessors() {
   local home=$1 field=$2 value=$3 default=$4
   ACCESSOR_OUT=$(CONDUCTOR_CFG_CALLS="$home/conductor-cfg-calls" \
     CONDUCTOR_CFG_READ_VALUE="$value" \
+    AI_CONDUCTOR_ENGINE_BIN="$CONDUCTOR_CFG_STUBS/ai-conductor" \
     HOME="$home" PATH="$CONDUCTOR_CFG_STUBS:$TEST_PATH" \
     bash -c 'source "$1"; conductor_cfg_set "$2" "$3"; conductor_cfg_get "$2" "$4"' \
       _ "$HARNESS_DIR/bin/lib/harness-common.sh" "$field" "$value" "$default" \
       2>"$home/conductor-cfg-stderr")
   ACCESSOR_STDERR=$(<"$home/conductor-cfg-stderr")
 }
+
+# The shared helper must locate the launcher beside itself before consulting
+# PATH: bin/update sources it directly, so no caller-provided HARNESS_DIR is
+# available to reconstruct that location.
+CANONICAL_LAUNCHER_ROOT="$TMP_ROOT/canonical-launcher"
+mkdir -p "$CANONICAL_LAUNCHER_ROOT/bin/lib"
+cp "$HARNESS_DIR/bin/lib/harness-common.sh" "$CANONICAL_LAUNCHER_ROOT/bin/lib/harness-common.sh"
+cat > "$CANONICAL_LAUNCHER_ROOT/bin/ai-conductor" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "config" ] && [ "${2:-}" = "read" ]; then
+  printf 'repo-relative\n'
+fi
+EOF
+chmod +x "$CANONICAL_LAUNCHER_ROOT/bin/ai-conductor"
+HOME_DIR=$(make_isolated_home)
+set +e
+CANONICAL_LAUNCHER_OUT=$(HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" \
+  bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
+  _ "$CANONICAL_LAUNCHER_ROOT/bin/lib/harness-common.sh" 2>&1)
+CANONICAL_LAUNCHER_CODE=$?
+set -e
+assert "repo-relative launcher: config read succeeds without ai-conductor on PATH" \
+  "$([ "$CANONICAL_LAUNCHER_CODE" -eq 0 ] && [ "$CANONICAL_LAUNCHER_OUT" = "repo-relative" ] && echo 0 || echo 1)"
 
 # run_install_configure_conductor <home> <update_mode> [identity_fixture]
 # Loads the installer through its public configuration boundary, with the real
@@ -372,7 +396,7 @@ run_update_without_conduct() {
   local repo=$1 home=$2
   shift 2
   set +e
-  OUT=$(cd "$repo" && HOME="$home" PATH="$MISSING_CONDUCT_PATH" "$repo/bin/update" "$@" < /dev/null 2>&1)
+  OUT=$(cd "$repo" && AI_CONDUCTOR_ENGINE_BIN=ai-conductor HOME="$home" PATH="$MISSING_CONDUCT_PATH" "$repo/bin/update" "$@" < /dev/null 2>&1)
   CODE=$?
   set -e
 }
@@ -568,7 +592,7 @@ done
 # automatic entry remains advisory for startup callers.
 HOME_DIR=$(make_isolated_home)
 set +e
-ACCESSOR_OUT=$(HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
+ACCESSOR_OUT=$(AI_CONDUCTOR_ENGINE_BIN=ai-conductor HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
   _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
 ACCESSOR_CODE=$?
 set -e
@@ -627,6 +651,7 @@ HOME_DIR=$(make_isolated_home)
 set +e
 NO_YAML_ACCESSOR_OUT=$(CONDUCTOR_CFG_CALLS="$HOME_DIR/conductor-cfg-calls" \
   CONDUCTOR_CFG_READ_VALUE="main" \
+  AI_CONDUCTOR_ENGINE_BIN="$CONDUCTOR_CFG_STUBS/ai-conductor" \
   HOME="$HOME_DIR" PATH="$CONDUCTOR_CFG_STUBS:$NO_YAML_PATH" \
   bash -c 'source "$1"; conductor_cfg_set updateChannel main; conductor_cfg_get updateChannel tagged' \
     _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
@@ -742,7 +767,7 @@ run_legacy_seed() {
   set +e
   SEED_OUT=$(HOME="$home" PATH="$path" \
     bash -c 'source "$1"; seed_conductor_config_from_legacy' \
-    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
+    _ "$repo/bin/lib/harness-common.sh" 2>&1)
   SEED_CODE=$?
   set -e
 }
@@ -755,7 +780,7 @@ run_conductor_cfg_set_then_get() {
   set +e
   ACCESSOR_OUT=$(HOME="$home" PATH="$repo/bin:$TEST_PATH" \
     bash -c 'source "$1"; conductor_cfg_set currentVersion v0.101.0; conductor_cfg_get currentVersion ""' \
-    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
+    _ "$repo/bin/lib/harness-common.sh" 2>&1)
   ACCESSOR_CODE=$?
   set -e
 }
@@ -775,6 +800,7 @@ EOF
   set +e
   ACCESSOR_OUT=$(CONDUCTOR_CFG_CALLS="$home/conductor-cfg-calls" \
     CONDUCTOR_CFG_READ_VALUE='' \
+    AI_CONDUCTOR_ENGINE_BIN="$CONDUCTOR_CFG_STUBS/ai-conductor" \
     HOME="$home" PATH="$CONDUCTOR_CFG_STUBS:$python_stubs:$TEST_PATH" \
     bash -c '
       source "$1"
@@ -849,7 +875,7 @@ set_conductor_cfg "$HOME_DIR" updateChannel main
 set +e
 ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$REPO/bin:$TEST_PATH" \
   bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
-  _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+  _ "$REPO/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
 ACCESSOR_CODE=$?
 set -e
 ACCESSOR_STDERR=$(cat "$HOME_DIR/accessor-stderr")
@@ -887,7 +913,7 @@ set_conductor_cfg "$HOME_DIR" updateChannel main
 set +e
 ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$REPO/bin:$TEST_PATH" \
   bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
-  _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+  _ "$REPO/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
 ACCESSOR_CODE=$?
 set -e
 assert "unwritable conductor block during seed: getter still reads the channel" \
@@ -942,7 +968,7 @@ EOF
 set +e
 ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$REPO/bin:$TEST_PATH" \
   bash -c 'source "$1"; value=$(conductor_cfg_get currentVersion ""); status=$?; printf "%s\\n" "$value"; exit "$status"' \
-    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+    _ "$REPO/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
 ACCESSOR_CODE=$?
 set -e
 ACCESSOR_STDERR=$(cat "$HOME_DIR/accessor-stderr")
@@ -960,7 +986,7 @@ cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
 }
 EOF
 set +e
-ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" \
+ACCESSOR_VALUE=$(AI_CONDUCTOR_ENGINE_BIN=ai-conductor HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" \
   bash -c 'source "$1"; value=$(conductor_cfg_get currentVersion ""); status=$?; printf "%s\\n" "$value"; exit "$status"' \
     _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
 ACCESSOR_CODE=$?
