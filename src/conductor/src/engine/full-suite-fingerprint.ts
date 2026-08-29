@@ -78,6 +78,8 @@ export type FullSuiteFileHasher = (absolutePath: string) => Promise<string>;
 export interface FullSuiteFingerprintOptions {
   projectRoot: string;
   testSuite: TestSuiteConfig;
+  /** Resolved feature-surface test selectors for scoped verification identity. */
+  scopedSelectors?: string[];
   environmentValues?: NodeJS.ProcessEnv;
   /** Test seam for deterministic unreadable/hash-failure coverage. */
   fileHasher?: FullSuiteFileHasher;
@@ -506,13 +508,20 @@ function normalizeSuiteConfig(
   testSuite: TestSuiteConfig,
   normalizedInputs: string[],
   workingDirectory: string,
+  scopedSelectors: string[],
 ): string {
-  return JSON.stringify({
+  const normalized = {
     command: testSuite.command,
     working_directory: workingDirectory,
     timeout_seconds: testSuite.timeout_seconds ?? null,
     inputs: sortedUnique(normalizedInputs),
     environment: sortedUnique(testSuite.environment ?? []),
+  };
+  if (testSuite.verification?.mode !== 'scoped') return JSON.stringify(normalized);
+  return JSON.stringify({
+    ...normalized,
+    scoped_command: testSuite.scoped_command,
+    selectors: sortedUnique(scopedSelectors),
   });
 }
 
@@ -576,6 +585,7 @@ async function calculateFingerprint(
   const {
     projectRoot,
     testSuite,
+    scopedSelectors = [],
     environmentValues = process.env,
     fileHasher = streamedFileDigest,
   } = options;
@@ -614,7 +624,7 @@ async function calculateFingerprint(
   updateFields(
     [hash, categoryHashes.project_config],
     'test_suite',
-    normalizeSuiteConfig(testSuite, normalizedInputs, workingDirectory),
+    normalizeSuiteConfig(testSuite, normalizedInputs, workingDirectory, scopedSelectors),
   );
 
   updateField(hash, 'environment_commitment', environmentDigest);

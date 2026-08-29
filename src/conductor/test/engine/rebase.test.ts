@@ -1167,6 +1167,40 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(byGate.manual_test).toBeUndefined();
   });
 
+  it('preserves a within-budget test-suite PASS through the rebase-preserved event', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/feature.ts'],
+      featureSurface: ['src/feature.ts'],
+    };
+    const verdict = await applyRebaseVerdicts(dir, outcome, false, async (step) =>
+      step === 'test_suite'
+        ? { done: true, preservationBasis: 'test_suite_drift_budget' }
+        : { done: false },
+    );
+    const events = new ConductorEventEmitter();
+    const preserved: Array<Record<string, unknown>> = [];
+    const invalidated: string[] = [];
+    events.on('rebase_gate_preserved', (event) => {
+      if (event.type === 'rebase_gate_preserved') preserved.push(event);
+    });
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type === 'rebase_gate_invalidated') invalidated.push(event.gate);
+    });
+
+    await emitGateInvalidationEvents(events, outcome, false, verdict.preserved ?? []);
+
+    expect(verdict).toEqual(expect.objectContaining({
+      kickedBack: expect.not.arrayContaining(['test_suite']),
+      preserved: [{ gate: 'test_suite', basis: 'test_suite_drift_budget' }],
+    }));
+    expect(preserved).toContainEqual(expect.objectContaining({
+      gate: 'test_suite',
+      basis: 'test_suite_drift_budget',
+    }));
+    expect(invalidated).not.toContain('test_suite');
+  });
+
   it('Task 6: delta-aware — feature runtime source changed → all judged gates invalidated including audits', async () => {
     const outcome: RebaseOutcome = {
       kind: 'changed',

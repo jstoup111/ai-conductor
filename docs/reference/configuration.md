@@ -590,6 +590,8 @@ The project-owned aggregate verification command run by the pre-SHIP `test_suite
 | `test_suite.timeout_seconds` | number | No | Finite and `> 0` (`config.ts:1264-1274`) | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts:7`) |
 | `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1276-1287`) | none |
 | `test_suite.environment` | string[] | No | Array of strings | none |
+| `test_suite.verification.mode` | `aggregate` \| `scoped` | No | `scoped` requires `test_suite.scoped_command`; unknown modes are rejected | `aggregate` |
+| `test_suite.verification.drift_budget` | category → `none` \| positive integer \| `unlimited` | No | Only budgetable fingerprint categories are accepted; dependency, migration, environment, and project-config drift always re-runs | all categories `none` |
 
 `environment` holds environment variable **names**, not values. Each value is HMAC'd into the full-suite
 fingerprint (`src/conductor/src/engine/full-suite-fingerprint.ts:209-228`) so that changing it
@@ -600,6 +602,13 @@ The block must configure at least one of `command` or `scoped_command`. `command
 the aggregate pre-SHIP gate. Omitting the block entirely is a gating failure at SHIP: the verifier returns
 `{ status: 'FAILED', reason: 'missing_config' }` (`src/conductor/src/engine/full-suite-verifier.ts:717-724`)
 and the run HALTs. The gate itself is described in [gates](../explanation/gates.md).
+
+`verification.mode: scoped` derives selectors from the feature's changed test paths. A scoped PASS
+includes its command template and resolved selector set in the fingerprint, so either change makes
+the evidence stale. An empty scoped selection deliberately runs the aggregate command and records
+that basis in evidence and the existing verification event. `drift_budget` is cumulative from the
+attested PASS: a declared within-budget change preserves that PASS; every other mismatch re-runs the
+aggregate or scoped command as configured.
 
 ## llm_provider
 
@@ -1330,6 +1339,11 @@ test_suite:
   timeout_seconds: 1800
   environment:
     - CI
+  verification:
+    mode: aggregate
+    drift_budget:
+      source: 5
+      tests: 10
 
 markdown_viewer:
   preset: glow

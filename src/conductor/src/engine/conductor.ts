@@ -11992,7 +11992,13 @@ export class Conductor {
     // Task 7: Inject pre-verify capability for daemon build gate-first re-verify.
     // Closure checks build completion objectively (via evidence) after file-changing rebase.
     // Non-daemon call site (line 2872) keeps today's behavior with no preVerify.
-    const preVerify = async (step: string) => {
+    const preVerify = async (step: StepName) => {
+      if (step === 'test_suite') {
+        const inspection = await this.fullSuiteVerifier.inspect();
+        return inspection.status === 'PRESERVED_WITHIN_BUDGET'
+          ? { done: true, preservationBasis: 'test_suite_drift_budget' as const }
+          : { done: inspection.status === 'CURRENT' };
+      }
       if (step !== 'build') return { done: false };
       const ctx = await this.completionCtx(state);
       if (!ctx.planPath) {
@@ -12022,7 +12028,7 @@ export class Conductor {
     // Task 8: emit rebase_gate_invalidated for each judged gate that
     // classifyGateInvalidation decided to invalidate, with the specific
     // matched delta paths that justified invalidating THAT gate.
-    await emitGateInvalidationEvents(this.events, outcome, ranManualTest);
+    await emitGateInvalidationEvents(this.events, outcome, ranManualTest, verdict.preserved ?? []);
 
     if (sealRejectionReason) {
       await writeSealHalt(this.projectRoot, sealRejectionReason, this.events);

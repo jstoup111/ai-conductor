@@ -1251,8 +1251,17 @@ export async function applyRebaseVerdicts(
   projectRoot: string,
   outcome: RebaseOutcome,
   ranManualTest: boolean,
-  preVerify?: (step: StepName) => Promise<{ done: boolean; reason?: string }>,
-): Promise<{ satisfied: boolean; kickedBack: StepName[]; reverified: StepName[] }> {
+  preVerify?: (step: StepName) => Promise<{
+    done: boolean;
+    reason?: string;
+    preservationBasis?: 'test_suite_drift_budget';
+  }>,
+): Promise<{
+  satisfied: boolean;
+  kickedBack: StepName[];
+  reverified: StepName[];
+  preserved?: Array<{ gate: StepName; basis: 'test_suite_drift_budget' }>;
+}> {
   if (outcome.kind === 'conflict_halt') {
     await writeVerdict(projectRoot, 'rebase', {
       satisfied: false,
@@ -1290,6 +1299,7 @@ export async function applyRebaseVerdicts(
       : '');
   const kickedBack: StepName[] = [];
   const reverified: StepName[] = [];
+  const preserved: Array<{ gate: StepName; basis: 'test_suite_drift_budget' }> = [];
 
   // Pre-verify every gate whose registry declaration says its completion
   // predicate mechanically attests the current tree/history. A successful
@@ -1304,11 +1314,16 @@ export async function applyRebaseVerdicts(
         if (!verification.done) continue;
         await writeVerdict(projectRoot, gate.name, {
           satisfied: true,
-          reason: 're-verified mechanically after file-changing rebase — evidence remains intact',
+          reason: verification.preservationBasis === 'test_suite_drift_budget'
+            ? 're-verified mechanically after file-changing rebase — test-suite PASS preserved within drift budget'
+            : 're-verified mechanically after file-changing rebase — evidence remains intact',
           checkedAt: Date.now(),
         });
         reverified.push(gate.name);
         reverifiedGates.add(gate.name);
+        if (verification.preservationBasis === 'test_suite_drift_budget') {
+          preserved.push({ gate: gate.name, basis: verification.preservationBasis });
+        }
       } catch {
         // Any pre-verify error fails closed through the kickback below.
       }
@@ -1369,7 +1384,12 @@ export async function applyRebaseVerdicts(
     });
     kickedBack.push(target);
   }
-  return { satisfied: true, kickedBack, reverified };
+  return {
+    satisfied: true,
+    kickedBack,
+    reverified,
+    ...(preserved.length === 0 ? {} : { preserved }),
+  };
 }
 
 /**
@@ -1429,6 +1449,7 @@ export async function emitGateInvalidationEvents(
   events: ConductorEventEmitter,
   outcome: RebaseOutcome,
   ranManualTest: boolean,
+  preverifiedPreserved: ReadonlyArray<{ gate: StepName; basis: 'test_suite_drift_budget' }> = [],
 ): Promise<void> {
   if (outcome.kind !== 'changed' || outcome.featureSurface === undefined) return;
 
@@ -1443,6 +1464,7 @@ export async function emitGateInvalidationEvents(
   );
 
   const featureTest = featureTestPaths(outcome.changedCodePaths, outcome.featureSurface);
+  const preservationBases = new Map(preverifiedPreserved.map(({ gate, basis }) => [gate, basis]));
 
   const matchedPathsFor = (gate: string): string[] => {
     const surface = GATE_SURFACE[gate];
@@ -1470,6 +1492,7 @@ export async function emitGateInvalidationEvents(
   };
 
   for (const gate of invalidated) {
+    if (preservationBases.has(gate as StepName)) continue;
     await events.emit({
       type: 'rebase_gate_invalidated',
       gate: gate as StepName,
@@ -1477,12 +1500,15 @@ export async function emitGateInvalidationEvents(
     });
   }
 
-  for (const gate of preserved) {
+  for (const gate of new Set([...preserved, ...preservationBases.keys()])) {
     await events.emit({
       type: 'rebase_gate_preserved',
       gate: gate as StepName,
       surface: declaredSurfaceFor(gate),
       deltaConsidered: matchedPathsFor(gate),
+      ...(preservationBases.has(gate as StepName)
+        ? { basis: preservationBases.get(gate as StepName)! }
+        : {}),
     });
   }
 }

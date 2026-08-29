@@ -263,6 +263,42 @@ describe('fingerprintFullSuiteInputs', () => {
     expect(changed.every((entry) => entry.digest !== baseline.digest)).toBe(true);
   });
 
+  it('binds scoped identity to the template and resolved selector set only in scoped mode', async () => {
+    const repo = await makeRepo({
+      'src/main.ts': 'main\n',
+      'test/first.test.ts': 'first\n',
+      'test/second.test.ts': 'second\n',
+    });
+    const scoped = {
+      ...DEFAULT_TEST_SUITE,
+      scoped_command: 'npx vitest run {selectors}',
+      verification: { mode: 'scoped' as const, drift_budget: {} },
+    } as TestSuiteConfig;
+    const baseline = await fingerprint(repo, scoped);
+    const changedTemplate = await fingerprint(repo, {
+      ...scoped,
+      scoped_command: 'npx vitest run --pool=forks {selectors}',
+    });
+    const changedSelectors = await fingerprintFullSuiteInputs({
+      projectRoot: repo,
+      testSuite: scoped,
+      scopedSelectors: ['test/second.test.ts'],
+    });
+    const aggregate = { ...DEFAULT_TEST_SUITE, verification: { mode: 'aggregate' as const, drift_budget: {} } } as TestSuiteConfig;
+    const aggregateWithScopedFields = {
+      ...aggregate,
+      scoped_command: 'npx vitest run --pool=forks {selectors}',
+    };
+
+    expect(changedTemplate.digest).not.toBe(baseline.digest);
+    expect(changedSelectors.ok).toBe(true);
+    if (changedSelectors.ok) {
+      expect(changedSelectors.fingerprint.digest).not.toBe(baseline.digest);
+    }
+    expect((await fingerprint(repo, aggregateWithScopedFields)).digest)
+      .toBe((await fingerprint(repo, aggregate)).digest);
+  });
+
   it.each([
     ['package-lock.json', '{"lockfileVersion": 3}\n', '{"lockfileVersion": 4}\n'],
     ['requirements.txt', 'pytest==8.0.0\n', 'pytest==8.1.0\n'],

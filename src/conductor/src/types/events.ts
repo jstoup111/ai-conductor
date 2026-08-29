@@ -855,6 +855,8 @@ export type ConductorEvent =
       gate: StepName;
       surface: string[];
       deltaConsidered: string[];
+      /** A bounded test-suite drift evaluation retained its existing PASS. */
+      basis?: 'test_suite_drift_budget';
     }
   | {
       /**

@@ -12,6 +12,7 @@ import {
   performRebase,
   runGatedRebaseResolution,
   applyRebaseVerdicts,
+  emitGateInvalidationEvents,
   emitRebaseEvent,
   recordRebaseStepCompletion,
   writeHalt,
@@ -23,6 +24,7 @@ import {
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
+import { FullSuiteVerifier } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -350,7 +352,11 @@ export type RekickResumeResult = 'skipped' | 'rebased' | 'halted' | 'already_shi
 export function makeRekickBuildPreVerify(
   worktreePath: string,
   slug?: string,
-): (step: string) => Promise<{ done: boolean; reason?: string }> {
+): (step: string) => Promise<{
+  done: boolean;
+  reason?: string;
+  preservationBasis?: 'test_suite_drift_budget';
+}> {
   return async (step) => {
     const definition = ALL_STEPS.find((candidate) => candidate.name === step);
     if (!definition?.treeAttestingCompletion) {
@@ -373,11 +379,16 @@ export function makeRekickBuildPreVerify(
         reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed',
       };
     }
-    return checkStepCompletion(worktreePath, definition.name, {
+    const completion = await checkStepCompletion(worktreePath, definition.name, {
       projectRoot: worktreePath,
       planPath,
       featureDesc,
     });
+    if (definition.name !== 'test_suite' || !completion.done) return completion;
+    const inspection = await new FullSuiteVerifier({ projectRoot: worktreePath }).inspect();
+    return inspection.status === 'PRESERVED_WITHIN_BUDGET'
+      ? { ...completion, preservationBasis: 'test_suite_drift_budget' as const }
+      : completion;
   };
 }
 
@@ -448,7 +459,11 @@ export async function resumeRebaseFirst(opts: {
    * {@link makeRekickBuildPreVerify} bound to this worktree, so real re-kicks
    * always re-verify before invalidating.
    */
-  preVerify?: (step: string) => Promise<{ done: boolean; reason?: string }>;
+  preVerify?: (step: string) => Promise<{
+    done: boolean;
+    reason?: string;
+    preservationBasis?: 'test_suite_drift_budget';
+  }>;
   log?: (msg: string) => void;
 }): Promise<RekickResumeResult> {
   const sentinel = join(opts.worktreePath, REKICK_SENTINEL);
@@ -559,6 +574,12 @@ export async function resumeRebaseFirst(opts: {
       `re-kick ${basename(opts.worktreePath)}: ${step} gate re-verified mechanically after rebase — dispatch skipped`,
     );
   }
+  await emitGateInvalidationEvents(
+    opts.events,
+    outcome,
+    opts.ranManualTest,
+    rebaseVerdict.preserved ?? [],
+  );
   // #436: stamp state.rebase = 'done' for clean/noop/changelog-resolved
   // outcomes via the shared helper (no-ops on conflict_halt) — same call
   // the in-loop runRebaseStep makes, so the pre-loop re-kick path leaves

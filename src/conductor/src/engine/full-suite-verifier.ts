@@ -188,6 +188,7 @@ export interface FullSuiteLockOptions {
 interface FullSuiteVerificationContext {
   testSuite: AggregateTestSuiteConfig;
   fingerprint: FullSuiteFingerprint;
+  selection: FullSuiteScopedSelection;
   worktreeClean?: boolean;
 }
 
@@ -791,11 +792,7 @@ export class FullSuiteVerifier {
       const freshness = resolved.inspection;
       const secretValues = declaredEnvironmentValues(testSuite, environment);
       const verificationMode = testSuite.verification?.mode ?? 'aggregate';
-      const selection = verificationMode === 'scoped'
-        ? await deriveFullSuiteScopedSelection(
-          this.options.git ?? productionFullSuiteGitRunner(projectRoot),
-        )
-        : { status: 'EMPTY' as const };
+      const selection = resolved.context.selection;
       const execution = verificationMode === 'scoped' && selection.status === 'SELECTED'
         ? await executeScopedFullSuite({
           projectRoot,
@@ -960,9 +957,18 @@ export class FullSuiteVerifier {
         };
       }
       const aggregateTestSuite: AggregateTestSuiteConfig = testSuite as AggregateTestSuiteConfig;
+      const verificationMode = aggregateTestSuite.verification?.mode ?? 'aggregate';
+      const selection = verificationMode === 'scoped'
+        ? await deriveFullSuiteScopedSelection(
+          this.options.git ?? productionFullSuiteGitRunner(projectRoot),
+        )
+        : { status: 'EMPTY' as const };
       const fingerprintResult = await fingerprint({
         projectRoot,
         testSuite: aggregateTestSuite,
+        ...(verificationMode === 'scoped'
+          ? { scopedSelectors: selection.status === 'SELECTED' ? selection.selectors : [] }
+          : {}),
         environmentValues: environment,
       });
       if (!fingerprintResult.ok) {
@@ -985,6 +991,7 @@ export class FullSuiteVerifier {
       const context = {
         testSuite: aggregateTestSuite,
         fingerprint: fingerprintResult.fingerprint,
+        selection,
         worktreeClean: await fingerprintTimeWorktreeCleanliness(projectRoot, inspectWorktreeStatus),
       };
       const persisted = await readEvidence(projectRoot);
@@ -1008,7 +1015,6 @@ export class FullSuiteVerifier {
           context,
         };
       }
-      const verificationMode = aggregateTestSuite.verification?.mode ?? 'aggregate';
       if (persisted.evidence.mode !== verificationMode) {
         return {
           inspection: { status: 'STALE', reason: 'fingerprint_mismatch' },

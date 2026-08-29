@@ -194,6 +194,47 @@ describe('EventPersister', () => {
     });
   });
 
+  it('round-trips the additive verification mode and budget verdict fields', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({
+      type: 'test_suite_verification',
+      freshness: { status: 'CURRENT' },
+      mode: 'scoped',
+      budgetVerdict: { outcome: 'preserved_within_budget', categories: { source: 3 } },
+    } satisfies ConductorEvent);
+    await emitter.emit({
+      type: 'build_member_evidence_reused',
+      member: 'test_suite',
+      decision: 'reuse',
+      basis: 'fingerprint-match',
+      mode: 'scoped',
+    } satisfies ConductorEvent);
+
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8')).trim().split('\n').map((line) => {
+      const { ts: _ts, ...record } = JSON.parse(line);
+      return record;
+    });
+    expect(records).toEqual([
+      {
+        type: 'test_suite_verification',
+        freshness: { status: 'CURRENT' },
+        mode: 'scoped',
+        budgetVerdict: { outcome: 'preserved_within_budget', categories: { source: 3 } },
+      },
+      {
+        type: 'build_member_evidence_reused',
+        member: 'test_suite',
+        decision: 'reuse',
+        basis: 'fingerprint-match',
+        mode: 'scoped',
+      },
+    ]);
+  });
+
   it('persists typed credential-park progress as JSONL', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();
