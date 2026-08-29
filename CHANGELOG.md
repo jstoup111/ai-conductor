@@ -81,6 +81,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon project setup now runs only when the worktree setup marker is no longer valid. ([implementation PR #1968](https://github.com/jstoup111/ai-conductor/pull/1968)).
 - OpenTelemetry metrics now retain a stable per-feature identity across daemon dispatches. ([implementation PR #1971](https://github.com/jstoup111/ai-conductor/pull/1971)).
 - OpenTelemetry now exports reliable completed, halted, and terminated run outcome counts for dashboards. ([implementation PR #2024](https://github.com/jstoup111/ai-conductor/pull/2024)).
+- Codex dispatches are priced from a global rate card at ~/.ai-conductor/rate-card.json (symlinked by bin/install and bin/update to the harness checkout's committed card), which takes precedence over per-project cards. ([implementation PR #2029](https://github.com/jstoup111/ai-conductor/pull/2029)).
 
 ## Migration
 
