@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:13
+// Covers: task:1, task:4, task:6, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -48,6 +48,28 @@ const CATEGORY_FINGERPRINTS = {
   test_infrastructure: 'category:test_infrastructure',
   tests: 'category:tests',
 };
+
+function attestedPassEvidence(projectRoot: string): FullSuitePassEvidence {
+  return {
+    version: FULL_SUITE_EVIDENCE_VERSION,
+    outcome: 'PASS',
+    reason: 'exit_zero',
+    fingerprint: 'sha256:attested',
+    categoryFingerprints: CATEGORY_FINGERPRINTS,
+    provenanceHeadSha: 'attested-head',
+    mode: 'aggregate',
+    selectors: [],
+    driftLedger: [],
+    command: 'node suite.mjs --all',
+    workingDirectory: projectRoot,
+    startedAt: '2026-08-29T10:00:00.000Z',
+    endedAt: '2026-08-29T10:00:01.000Z',
+    durationMs: 1_000,
+    exitCode: 0,
+    stdout: 'all suites passed\n',
+    stderr: '',
+  };
+}
 
 async function writeProjectFile(
   projectRoot: string,
@@ -752,6 +774,200 @@ describe('FullSuiteVerifier', () => {
       executionCount: 1,
       fingerprintCount: 5,
       persisted: { usable: true, evidence: expectedEvidence },
+    });
+  });
+
+  it('preserves a PASS within a declared source drift budget without launching the suite', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-within-source-budget-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: 20',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const attestedPass = attestedPassEvidence(projectRoot);
+    await writeFullSuiteEvidence(projectRoot, attestedPass);
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:current',
+          headSha: 'evaluation-head',
+          categoryFingerprints: { ...CATEGORY_FINGERPRINTS, source: 'category:source:current' },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? { exitCode: 0, stdout: 'src/a.ts\nsrc/b.ts\nsrc/c.ts\n', stderr: '' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        launches += 1;
+        throw new Error('The suite must not launch for within-budget drift');
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+    const persisted = await readFullSuiteEvidence(projectRoot);
+
+    expect({ inspection, ensured: ensured.status, launches, persisted }).toEqual({
+      inspection: {
+        status: 'PRESERVED_WITHIN_BUDGET',
+        evidence: {
+          ...attestedPass,
+          fingerprint: 'sha256:current',
+          categoryFingerprints: {
+            ...CATEGORY_FINGERPRINTS,
+            source: 'category:source:current',
+          },
+          driftLedger: [{
+            at: expect.any(String),
+            headSha: 'evaluation-head',
+            categories: {
+              additional_inputs: 0,
+              dependencies: 0,
+              environment: 0,
+              migrations: 0,
+              project_config: 0,
+              source: 3,
+              test_infrastructure: 0,
+              tests: 0,
+            },
+          }],
+        },
+      },
+      ensured: 'REUSED',
+      launches: 0,
+      persisted: {
+        usable: true,
+        evidence: {
+          ...attestedPass,
+          fingerprint: 'sha256:current',
+          categoryFingerprints: {
+            ...CATEGORY_FINGERPRINTS,
+            source: 'category:source:current',
+          },
+          driftLedger: [{
+            at: expect.any(String),
+            headSha: 'evaluation-head',
+            categories: {
+              additional_inputs: 0,
+              dependencies: 0,
+              environment: 0,
+              migrations: 0,
+              project_config: 0,
+              source: 3,
+              test_infrastructure: 0,
+              tests: 0,
+            },
+          }],
+        },
+      },
+    });
+  });
+
+  it('preserves a PASS when two changed categories are both within their declared budgets', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-two-category-budget-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: 2',
+        '      tests: 4',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:current',
+          headSha: 'two-category-head',
+          categoryFingerprints: {
+            ...CATEGORY_FINGERPRINTS,
+            source: 'category:source:current',
+            tests: 'category:tests:current',
+          },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? { exitCode: 0, stdout: 'src/a.ts\ntest/a.test.ts\ntest/b.test.ts\n', stderr: '' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        throw new Error('The suite must not launch for within-budget drift');
+      },
+      worktreeStatus: async () => '',
+    });
+
+    await expect(verifier.inspect()).resolves.toMatchObject({
+      status: 'PRESERVED_WITHIN_BUDGET',
+      evidence: {
+        driftLedger: [{
+          headSha: 'two-category-head',
+          categories: {
+            source: 1,
+            tests: 2,
+          },
+        }],
+      },
+    });
+  });
+
+  it('reruns the same source drift when no drift budget is declared', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-absent-drift-budget-');
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:current',
+          headSha: 'unbudgeted-head',
+          categoryFingerprints: { ...CATEGORY_FINGERPRINTS, source: 'category:source:current' },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? { exitCode: 0, stdout: 'src/a.ts\nsrc/b.ts\nsrc/c.ts\n', stderr: '' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ inspection, ensured: ensured.status, launches }).toEqual({
+      inspection: { status: 'STALE', reason: 'source_changed' },
+      ensured: 'EXECUTED',
+      launches: 1,
     });
   });
 

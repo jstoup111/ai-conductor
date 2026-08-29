@@ -69,6 +69,7 @@ export type FullSuiteVerifierResult =
 
 export type FullSuiteInspectionResult =
   | { status: 'CURRENT'; evidence: FullSuitePassEvidence }
+  | { status: 'PRESERVED_WITHIN_BUDGET'; evidence: FullSuitePassEvidence }
   | FullSuiteStaleInspection
   | { status: 'FAILED'; reason: FullSuiteFailureReason; message: string };
 
@@ -87,6 +88,8 @@ export interface FullSuiteVerifierOptions {
   lock?: FullSuiteLockOptions;
   /** Test seam for Git-backed drift measurement. */
   git?: FullSuiteGitRunner;
+  /** Test seam for the fingerprint-time worktree observation. */
+  worktreeStatus?: typeof worktreeStatus;
 }
 
 export interface FullSuiteGitResult {
@@ -166,7 +169,10 @@ type FullSuiteInspectionFailure = Extract<FullSuiteInspectionResult, { status: '
 
 type ResolvedInspection =
   | {
-      inspection: Extract<FullSuiteInspectionResult, { status: 'CURRENT' | 'STALE' }>;
+      inspection: Extract<
+        FullSuiteInspectionResult,
+        { status: 'CURRENT' | 'PRESERVED_WITHIN_BUDGET' | 'STALE' }
+      >;
       context: FullSuiteVerificationContext;
     }
   | {
@@ -741,7 +747,10 @@ export class FullSuiteVerifier {
         }
         return { ...failure, message, evidence: persisted.evidence };
       }
-      if (resolved.inspection.status === 'CURRENT') {
+      if (
+        resolved.inspection.status === 'CURRENT' ||
+        resolved.inspection.status === 'PRESERVED_WITHIN_BUDGET'
+      ) {
         return { status: 'REUSED', evidence: resolved.inspection.evidence };
       }
 
@@ -859,6 +868,8 @@ export class FullSuiteVerifier {
       environment = process.env,
       fingerprint = fingerprintFullSuiteInputs,
       readEvidence = readFullSuiteEvidence,
+      writeEvidence = writeFullSuiteEvidence,
+      worktreeStatus: inspectWorktreeStatus = worktreeStatus,
     } = this.options;
 
     try {
@@ -918,7 +929,7 @@ export class FullSuiteVerifier {
       const context = {
         testSuite: aggregateTestSuite,
         fingerprint: fingerprintResult.fingerprint,
-        worktreeClean: await fingerprintTimeWorktreeCleanliness(projectRoot),
+        worktreeClean: await fingerprintTimeWorktreeCleanliness(projectRoot, inspectWorktreeStatus),
       };
       const persisted = await readEvidence(projectRoot);
       if (!persisted.usable) {
@@ -937,6 +948,37 @@ export class FullSuiteVerifier {
         };
       }
       if (persisted.evidence.fingerprint !== fingerprintResult.fingerprint.digest) {
+        const measurement = await this.measureDriftFromAttestedPass(
+          persisted.evidence.provenanceHeadSha,
+          new Set(aggregateTestSuite.inputs ?? []),
+        );
+        if (
+          measurement.status === 'MEASURED' &&
+          driftIsWithinDeclaredBudget(measurement, aggregateTestSuite)
+        ) {
+          const evidence: FullSuitePassEvidence = {
+            ...persisted.evidence,
+            fingerprint: fingerprintResult.fingerprint.digest,
+            categoryFingerprints: fingerprintResult.fingerprint.categoryFingerprints,
+            driftLedger: [
+              ...(persisted.evidence.driftLedger ?? []),
+              {
+                at: new Date().toISOString(),
+                headSha: fingerprintResult.fingerprint.headSha,
+                categories: measurement.categoryCounts,
+              },
+            ],
+          };
+          await writeEvidence(
+            projectRoot,
+            evidence,
+            declaredEnvironmentValues(aggregateTestSuite, environment),
+          );
+          return {
+            inspection: { status: 'PRESERVED_WITHIN_BUDGET', evidence },
+            context,
+          };
+        }
         return {
           inspection: changedFingerprintInspection(
             persisted.evidence,
@@ -1019,12 +1061,27 @@ function porcelainPaths(stdout: string): string[] {
 
 async function fingerprintTimeWorktreeCleanliness(
   projectRoot: string,
+  inspectWorktreeStatus: typeof worktreeStatus = worktreeStatus,
 ): Promise<boolean | undefined> {
   try {
-    return (await worktreeStatus(projectRoot)).length === 0;
+    return (await inspectWorktreeStatus(projectRoot)).length === 0;
   } catch {
     return undefined;
   }
+}
+
+function driftIsWithinDeclaredBudget(
+  measurement: Extract<FullSuiteDriftMeasurement, { status: 'MEASURED' }>,
+  testSuite: AggregateTestSuiteConfig,
+): boolean {
+  const changedCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
+    (category) => measurement.categoryCounts[category] > 0,
+  );
+  return changedCategories.length > 0 && changedCategories.every((category) => {
+    const bound = testSuite.verification?.drift_budget[category];
+    return bound === 'unlimited' ||
+      (typeof bound === 'number' && measurement.categoryCounts[category] <= bound);
+  });
 }
 
 function buildPreflightFailEvidence(
