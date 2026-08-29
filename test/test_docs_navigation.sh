@@ -252,7 +252,7 @@ source_has_reference_destination() {
 
 record "core reference topics have unique titles, the Reference parent, and stable order" \
   "$( source_has_reference_destination 'artifacts.md' 'Artifacts and state files' 1 && \
-    source_has_reference_destination 'cli.md' '`conduct-ts` CLI reference' 2 && \
+    source_has_reference_destination 'cli.md' '`ai-conductor` CLI reference' 2 && \
     source_has_reference_destination 'configuration.md' 'Configuration reference' 3 && \
     source_has_reference_destination 'environment.md' 'Environment variables' 4 && echo 0 || echo 1 )"
 

@@ -8,7 +8,28 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 failures=0
+if ! command -v rg >/dev/null 2>&1; then
+  printf 'legacy CLI reference guard: required scanner rg is unavailable\n' >&2
+  exit 1
+fi
+
+set +e
+scan_output=$(cd "$HARNESS_DIR" && rg -n --no-heading --fixed-strings 'conduct-ts' \
+  src/conductor/src hooks skills bin/lib README.md HARNESS.md docs/reference/cli.md docs/reference/skills.md)
+scan_exit=$?
+set -e
+
+case "$scan_exit" in
+  0) ;;
+  1) scan_output='' ;;
+  *)
+    printf 'legacy CLI reference guard: rg scan failed (exit %s)\n' "$scan_exit" >&2
+    exit "$scan_exit"
+    ;;
+esac
+
 while IFS= read -r hit; do
+  [ -n "$hit" ] || continue
   path=${hit%%:*}
   remainder=${hit#*:}
   text=${remainder#*:}
@@ -31,10 +52,7 @@ while IFS= read -r hit; do
       failures=1
       ;;
   esac
-done < <(
-  cd "$HARNESS_DIR"
-  rg -n --no-heading --fixed-strings 'conduct-ts' src/conductor/src hooks skills || true
-)
+done <<< "$scan_output"
 
 if [ "$failures" -ne 0 ]; then
   exit 1

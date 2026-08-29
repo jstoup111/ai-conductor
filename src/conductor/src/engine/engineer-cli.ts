@@ -1,9 +1,9 @@
-// `ai-conductor engineer` command handler (Phase 9.3, ADR-008 conformance rework).
+// `ai-conductor compose` command handler (Phase 9.3, ADR-008 conformance rework).
 //
 // AGENT-HOSTED EXECUTION MODEL (ADR-008):
-//   The engineer subsystem is driven by the /engineer host-agent skill in a Claude
-//   Code session. The bare `ai-conductor engineer` command is the FRONT DOOR: it launches
-//   an INTERACTIVE `claude /engineer` session (stdio inherited, operator present),
+//   The composer subsystem is driven by the /composer host-agent skill in a Claude
+//   Code session. The bare `ai-conductor compose` command is the FRONT DOOR: it launches
+//   an INTERACTIVE `claude /composer` session (stdio inherited, operator present),
 //   dropping the operator into the human-in-the-loop idea→spec loop. This is NOT the
 //   forbidden `claude -p` substrate — that was a headless subprocess doing autonomous
 //   routing/authoring (ADR-008 removes it). Launching an interactive, operator-driven
@@ -14,10 +14,10 @@
 //   routing/authoring.
 //
 // Subcommands:
-//   ai-conductor engineer               → {kind:'launch'}   — launch interactive `claude /engineer`
-//   ai-conductor engineer projects      → {kind:'projects'} — list registry to stdout as JSON
-//   ai-conductor engineer land          → {kind:'land'}     — commit pre-written artifacts to spec branch
-//   ai-conductor engineer handoff       → {kind:'handoff'}  — open spec PR + ensureRunning
+//   ai-conductor compose                → {kind:'launch'}   — launch interactive `claude /composer`
+//   ai-conductor compose projects       → {kind:'projects'} — list registry to stdout as JSON
+//   ai-conductor compose land           → {kind:'land'}     — commit pre-written artifacts to spec branch
+//   ai-conductor compose handoff        → {kind:'handoff'}  — open spec PR + ensureRunning
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
 import { spawn } from 'node:child_process';
@@ -100,7 +100,7 @@ export const ENGINEER_SUBCOMMANDS = [
  * argv[2] is neither 'engineer' nor 'compose'.
  *
  * Subcommand grammar (argv[3]):
- *   absent / undefined   → {kind:'launch'}   (drop into interactive `claude /engineer`)
+ *   absent / undefined   → {kind:'launch'}   (drop into interactive `claude /composer`)
  *   'projects'           → {kind:'projects'}
  *   'land'               → {kind:'land', project, idea}  (--project <n> --idea <i>)
  *   'handoff'            → {kind:'handoff', project, branch}  (--project <n> --branch <b>)
@@ -124,7 +124,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   const subCmd = argv[3];
 
   if (!subCmd || subCmd === '') {
-    // Bare `ai-conductor engineer` → launch the interactive host-agent loop.
+    // Bare `ai-conductor compose` → launch the interactive host-agent loop.
     return { kind: 'launch' };
   }
 
@@ -493,14 +493,14 @@ export function engineerLaunchArgs(env: NodeJS.ProcessEnv = process.env, idea?: 
   const mode = requested && requested !== 'plan' ? requested : 'default';
   // The slash command is the initial prompt; a CLI-supplied idea is appended so
   // the skill receives it directly instead of prompting in chat. With no idea the
-  // prompt is exactly `/engineer` (backward-compatible).
+  // prompt is exactly `/composer`.
   const trimmed = (idea ?? '').trim();
-  const prompt = trimmed ? `/engineer ${trimmed}` : '/engineer';
+  const prompt = trimmed ? `/composer ${trimmed}` : '/composer';
   return ['--permission-mode', mode, prompt];
 }
 
 /**
- * Default interactive launcher: drop the operator into `claude /engineer`, inheriting
+ * Default interactive launcher: drop the operator into `claude /composer`, inheriting
  * the terminal so the human drives the loop. Resolves with the child's exit code.
  * Rejects on spawn error (e.g. `claude` not on PATH) so the caller can fall back.
  */
@@ -615,12 +615,12 @@ export const SUBCOMMAND_HELP = {
 function printGuide(print: (s: string) => void): void {
   print(
     'Compose is the agent-hosted idea→spec loop. Run `ai-conductor compose` (no\n' +
-      'subcommand) to drop into an interactive `claude /engineer` session and drive it\n' +
+      'subcommand) to drop into an interactive `claude /composer` session and drive it\n' +
       'with a human in the loop. `conduct-ts engineer` remains a deprecated alias. The\n' +
       'subcommands below are the deterministic primitives\n' +
-      'the /engineer skill calls in-chat:\n' +
+      'the /composer skill calls in-chat:\n' +
       '\n' +
-      '  ai-conductor compose                                     — launch the interactive /engineer loop (pre-polls intake)\n' +
+      '  ai-conductor compose                                     — launch the interactive /composer loop (pre-polls intake)\n' +
       '  ai-conductor compose --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
       '  ai-conductor compose projects                            — list registered projects\n' +
       '  ai-conductor compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
@@ -687,7 +687,7 @@ export function buildIntake(deps: {
 /**
  * Pre-poll the github-issues source and enqueue new ideas into the durable inbox,
  * returning the count enqueued. This is the launch-time half of intake: the bare
- * `ai-conductor engineer` primes the inbox here so the spawned `claude /engineer`
+ * `ai-conductor compose` primes the inbox here so the spawned `claude /composer`
  * session can `claim` an idea instead of starting blank. Idempotent — the ledger
  * dedups, so a re-poll enqueues nothing new. Exported for direct testing.
  */
@@ -710,7 +710,7 @@ export async function prePollIntake(deps: {
 /**
  * Dispatch an engineer command.
  *
- * The bare `launch` kind spawns an INTERACTIVE `claude /engineer` session (the front
+ * The bare `launch` kind spawns an INTERACTIVE `claude /composer` session (the front
  * door — operator present, drives the loop). The `projects`/`land`/`handoff` primitives
  * are deterministic and spawn no claude: no Node readline REPL, and no `claude -p`
  * subprocess for routing or authoring (those happen in-chat in the launched session).
@@ -742,7 +742,7 @@ export async function dispatchEngineer(
   try {
     switch (dispatch.kind) {
     // ── launch ──────────────────────────────────────────────────────────────────
-    // Bare `ai-conductor engineer`: drop the operator into the interactive /engineer loop.
+    // Bare `ai-conductor compose`: drop the operator into the interactive /composer loop.
     case 'launch': {
       const launchOne =
         opts.launchInteractive ?? ((idea?: string) => launchClaudeEngineer(process.cwd(), idea));
@@ -755,7 +755,7 @@ export async function dispatchEngineer(
         const inside = opts.insideClaudeSession ?? Boolean(process.env.CLAUDECODE);
         if (inside) {
           print(
-            "You're already inside a Claude Code session — run /engineer directly to start " +
+            "You're already inside a Claude Code session — run /composer directly to start " +
               'the idea→spec loop (no need to launch a nested session).',
           );
           return 0;
@@ -763,7 +763,7 @@ export async function dispatchEngineer(
       }
 
       // Intake pre-poll: prime the durable inbox before launching so the spawned
-      // /engineer session can `claim` a github-issue idea. Defaults to a real sweep
+      // /composer session can `claim` a github-issue idea. Defaults to a real sweep
       // only on the production spawn path (launchInteractive not injected) so tests
       // that stub the launcher never hit the network. A CLI-supplied idea drives a
       // specific idea and skips polling. Best-effort — a poll failure never blocks
@@ -784,7 +784,7 @@ export async function dispatchEngineer(
                 printErr,
               }));
 
-      // Outer loop: ONE fresh `claude /engineer` session per idea, so each idea
+      // Outer loop: ONE fresh `claude /composer` session per idea, so each idea
       // starts with clean context. Durable state (registry, lessons, processed
       // markers) is file-backed, so a fresh process loses nothing. The skill delivers
       // a single idea's spec then asks the operator to `/quit`; on exit we offer to
@@ -1159,8 +1159,8 @@ export async function dispatchEngineer(
     }
 
     // ── claim ─────────────────────────────────────────────────────────────────
-    // `ai-conductor engineer claim`: atomically dequeue the oldest pending idea so the
-    // /engineer skill can route it. claim+ack removes it from the inbox (the ledger
+    // `ai-conductor compose claim`: atomically dequeue the oldest pending idea so the
+    // /composer skill can route it. claim+ack removes it from the inbox (the ledger
     // is the durable record); the ledger advances to `claimed`. On an empty inbox,
     // reports {empty:true} — the skill then falls back to a CLI idea arg or chat.
     //

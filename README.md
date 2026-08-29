@@ -54,7 +54,7 @@ Register and bootstrap a project:
 
 ```bash
 cd your-project/            # must already be a git repository
-conduct-ts register
+ai-conductor register
 claude                      # then run /bootstrap in the session
 ```
 
@@ -62,19 +62,19 @@ For the preferred autonomous path, author a spec, merge its PR, then start the d
 builds each merged spec in an isolated worktree, retains logs, and opens an implementation PR:
 
 ```bash
-conduct-ts engineer --idea "add a CSV export"
+ai-conductor engineer --idea "add a CSV export"
 # Review and merge the spec PR, then:
-conduct-ts daemon start
+ai-conductor daemon start
 ```
 
 For a supervised foreground run, use interactive inline mode:
 
 ```bash
-conduct-ts inline --interactive "add a CSV export"
+ai-conductor inline --interactive "add a CSV export"
 ```
 
-`conduct-ts inline --auto` is deprecated; use the daemon for unattended work. The `inline` token is
-required for foreground runs — the bare form `conduct-ts "<feature>"` is rejected.
+`ai-conductor inline --auto` is deprecated; use the daemon for unattended work. The `inline` token is
+required for foreground runs — the bare form `ai-conductor "<feature>"` is rejected.
 
 The harness runs on Claude Code and Codex. Select the host with the `llm_provider` config key; an ordered
 array such as `[claude, codex]` acts as a fallback ladder. See
@@ -109,7 +109,7 @@ owns that call.
 
 **Reference** — exact interfaces
 
-- [CLI](docs/reference/cli.md) — every `conduct-ts` command, subcommand, and flag
+- [CLI](docs/reference/cli.md) — every `ai-conductor` command, subcommand, and flag
 - [Configuration](docs/reference/configuration.md) — every `.ai-conductor/config.yml` key
 - [Settings and hooks](docs/reference/settings-and-hooks.md) — `settings.json` and host event hooks
 - [Environment variables](docs/reference/environment.md)

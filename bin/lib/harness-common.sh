@@ -52,19 +52,18 @@ conductor_cfg_key() {
 # later repair, and the read below still decides fail-closed on the
 # schema-owned block. Letting a stale ~/.claude JSON file veto the read
 # disabled the update check outright even when config.yml was perfectly
-# readable — most visibly mid-update, when an installed conduct-ts too old for
+# readable — most visibly mid-update, when an installed ai-conductor too old for
 # `config set` failed the seed's write while `config read` still worked.
 # Usage: conductor_cfg_get <field> [default]
 conductor_cfg_get() {
   seed_conductor_config_from_legacy || true
   local field=$1
-  if ! command -v conduct-ts &>/dev/null; then
-    warn "conduct-ts is required to read conductor configuration; install or restore it, then re-run bin/install" >&2
+  if ! command -v ai-conductor &>/dev/null; then
+    warn "ai-conductor is required to read conductor configuration; install or restore it, then re-run bin/install" >&2
     return 1
   fi
   local value
-  # The compatibility launcher emits its deprecation notice on stderr. Keep
-  # that diagnostic separate from scalar stdout: combining streams turns a
+  # Keep diagnostics separate from scalar stdout: combining streams turns a
   # value such as `false` or `main` into a multi-line string and makes callers
   # take the tagged/default path. Failed reads still report their original
   # diagnostic, while successful reads remain silent.
@@ -73,12 +72,11 @@ conductor_cfg_get() {
     warn "could not create a temporary file to read conductor configuration" >&2
     return 1
   fi
-  if ! value=$(conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>"$diagnostic_file"); then
+  if ! value=$(ai-conductor config read "conductor.$(conductor_cfg_key "$field")" 2>"$diagnostic_file"); then
     diagnostics=$(<"$diagnostic_file")
     rm -f "$diagnostic_file"
-    diagnostics=$(printf '%s\n%s\n' "$value" "$diagnostics" | \
-      sed '/^conduct-ts is deprecated; use ai-conductor instead$/d' | sed '/^$/d')
-    warn "${diagnostics:-conduct-ts could not read conductor configuration; install or restore it, then re-run bin/install}" >&2
+    diagnostics=$(printf '%s\n%s\n' "$value" "$diagnostics" | sed '/^$/d')
+    warn "${diagnostics:-ai-conductor could not read conductor configuration; install or restore it, then re-run bin/install}" >&2
     return 1
   fi
   rm -f "$diagnostic_file"
@@ -92,11 +90,11 @@ conductor_cfg_set() {
     return 1
   fi
   local field=$1 value=$2
-  if ! command -v conduct-ts &>/dev/null; then
-    warn "conduct-ts is required to save conductor configuration; install or restore it, then re-run bin/install" >&2
+  if ! command -v ai-conductor &>/dev/null; then
+    warn "ai-conductor is required to save conductor configuration; install or restore it, then re-run bin/install" >&2
     return 1
   fi
-  conduct-ts config set "conductor.$(conductor_cfg_key "$field")" "$value"
+  ai-conductor config set "conductor.$(conductor_cfg_key "$field")" "$value"
 }
 
 # Copy supported values from the former Claude-only JSON config into the
@@ -274,7 +272,7 @@ PY
 
 # Render a markdown file using the configured viewer. Reads
 # markdown_viewer.{command,args,mode} from ~/.ai-conductor/config.yml (or
-# .ai-conductor/config.yml in the project — not read here directly; conduct-ts does
+# .ai-conductor/config.yml in the project — not read here directly; ai-conductor does
 # the full project-level merge). Falls back to cat if the configured viewer
 # isn't on PATH, so conduct never hard-crashes on a missing renderer.
 render_md() {
