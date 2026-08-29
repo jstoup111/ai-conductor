@@ -273,6 +273,7 @@ describe('FINISH publication progress accounting', () => {
     const result = await runFinishScenario(convergingLap);
 
     expect(result.advanceCalls).toBe(convergingLap.length);
+    expect(result.retryReasons).toEqual([]);
     expect(result.completedTransitions).toEqual([
       'author_pr_prose',
       'judge_pr_prose',
