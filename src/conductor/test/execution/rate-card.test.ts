@@ -218,16 +218,30 @@ describe('parseRateCard', () => {
 
 describe('loadRateCard', () => {
   let dir: string;
+  let home: string;
+  let realHome: string | undefined;
 
   beforeEach(async () => {
     clearRateCardCache();
     dir = await mkdtemp(join(tmpdir(), 'rate-card-'));
+    // Isolate the global-fallback path from the developer's real ~/.ai-conductor.
+    home = await mkdtemp(join(tmpdir(), 'rate-card-home-'));
+    realHome = process.env.HOME;
+    process.env.HOME = home;
   });
 
   afterEach(async () => {
     clearRateCardCache();
+    if (realHome === undefined) delete process.env.HOME;
+    else process.env.HOME = realHome;
     await rm(dir, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
   });
+
+  const writeGlobal = async (contents: string) => {
+    await mkdir(join(home, '.ai-conductor'), { recursive: true });
+    await writeFile(join(home, '.ai-conductor', 'rate-card.json'), contents, 'utf-8');
+  };
 
   const write = async (contents: string) => {
     const path = join(dir, RATE_CARD_RELATIVE_PATH);
@@ -246,6 +260,22 @@ describe('loadRateCard', () => {
     expect(loadRateCard(undefined)).toBeUndefined();
     await write('{ not json');
     expect(loadRateCard(dir)).toBeUndefined();
+  });
+
+  it('falls back to the global card at ~/.ai-conductor when the project has none', async () => {
+    await writeGlobal(JSON.stringify({ as_of: 'g', models: { 'gpt-5.6-terra': TERRA } }));
+    expect(loadRateCard(dir)?.models['gpt-5.6-terra']).toEqual(TERRA);
+    expect(loadRateCard(undefined)?.models['gpt-5.6-terra']).toEqual(TERRA);
+  });
+
+  it('prefers a committed project card over the global one', async () => {
+    await writeGlobal(
+      JSON.stringify({ as_of: 'g', models: { 'gpt-5.6-terra': { ...TERRA, input_cost_per_token: 9e-6 } } }),
+    );
+    await write(JSON.stringify({ as_of: 'p', models: { 'gpt-5.6-terra': TERRA } }));
+    expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(
+      TERRA.input_cost_per_token,
+    );
   });
 
   it('picks up a refreshed card without a restart', async () => {

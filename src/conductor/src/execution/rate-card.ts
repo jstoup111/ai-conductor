@@ -25,6 +25,7 @@
 //     "without inventing a cost", and this module does not weaken that.
 
 import { readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { TokenUsage } from './llm-provider.js';
 
@@ -184,8 +185,22 @@ export function clearRateCardCache(): void {
  * Never throws — an absent or unreadable card is simply "no rates".
  */
 export function loadRateCard(projectRoot: string | undefined): RateCard | undefined {
-  if (!projectRoot) return undefined;
-  const path = join(projectRoot, RATE_CARD_RELATIVE_PATH);
+  const projectCard = projectRoot
+    ? readCardAt(join(projectRoot, RATE_CARD_RELATIVE_PATH))
+    : undefined;
+  if (projectCard) return projectCard;
+  // Global fallback: bin/install and bin/update mirror the harness checkout's
+  // committed card here, so a project that never ran `rate-card refresh` still
+  // prices its codex dispatches instead of reporting $0.
+  return readCardAt(globalRateCardPath());
+}
+
+/** Resolved per call so tests can redirect via $HOME. */
+export function globalRateCardPath(): string {
+  return join(homedir(), '.ai-conductor', 'rate-card.json');
+}
+
+function readCardAt(path: string): RateCard | undefined {
   let mtimeMs: number;
   try {
     mtimeMs = statSync(path).mtimeMs;

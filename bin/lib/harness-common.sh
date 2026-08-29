@@ -297,3 +297,40 @@ render_md() {
       ;;
   esac
 }
+
+# ─── Global codex rate card ─────────────────────────────────────────────────
+
+# Sync the harness checkout's committed codex rate card
+# (.ai-conductor/rate-card.json) to ~/.ai-conductor/rate-card.json. The engine
+# falls back to that global card when a project has no committed card of its
+# own, so codex dispatches price to real dollars in every project — not just
+# ones that ran `conduct rate-card refresh` themselves. Overwrites only when
+# the checkout's card carries a strictly newer as_of than the global one
+# (an operator's fresher global refresh is never clobbered). Never fatal.
+sync_global_rate_card() {
+  local harness_dir=$1
+  local src="${harness_dir}/.ai-conductor/rate-card.json"
+  local dest_dir="${HOME}/.ai-conductor"
+  local dest="${dest_dir}/rate-card.json"
+  [ -f "$src" ] || return 0
+  command -v python3 &>/dev/null || return 0
+
+  local src_as_of=""
+  src_as_of=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("as_of",""))' "$src" 2>/dev/null) || return 0
+  [ -n "$src_as_of" ] || return 0
+
+  if [ -f "$dest" ]; then
+    local dest_as_of=""
+    dest_as_of=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("as_of",""))' "$dest" 2>/dev/null) || dest_as_of=""
+    # ISO-8601 UTC instants compare correctly as strings.
+    if [ -n "$dest_as_of" ] && ! [[ "$src_as_of" > "$dest_as_of" ]]; then
+      return 0
+    fi
+  fi
+
+  if mkdir -p "$dest_dir" && cp "$src" "$dest"; then
+    ok "Synced global rate card (${dest}, as_of ${src_as_of})"
+  else
+    warn "Could not sync global rate card to ${dest}"
+  fi
+}

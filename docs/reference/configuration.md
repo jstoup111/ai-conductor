@@ -17,6 +17,7 @@ code that consumes it, and what a bad value does. Sections follow the loader's o
 | Project config | `<project>/.ai-conductor/config.yml` | `PROJECT_CONFIG_DIR` / `PROJECT_CONFIG_FILE`, `src/conductor/src/engine/config.ts:94-95` |
 | User config | `~/.ai-conductor/config.yml` | `src/conductor/src/engine/user-config.ts:13-19` |
 | Project rate card | `<project>/.ai-conductor/rate-card.json` | `RATE_CARD_RELATIVE_PATH`, `src/conductor/src/execution/rate-card.ts` |
+| Global rate card (fallback) | `~/.ai-conductor/rate-card.json` | `globalRateCardPath`, `src/conductor/src/execution/rate-card.ts` |
 | Legacy project dir | `<project>/.harness/config.yml` | `LEGACY_PROJECT_CONFIG_DIR`, `config.ts:96` |
 | Legacy user JSON seed | `~/.claude/ai-conductor.config.json` (flat camelCase) | One-time migration input; after a successful seed it is renamed to `ai-conductor.config.json.migrated` |
 
@@ -51,6 +52,14 @@ which is why the card is committed rather than fetched live.
 
 The card's `as_of` therefore tracks when the rates last **changed**, not when they were last
 checked: a refresh that finds identical rates leaves the committed file untouched.
+
+A project without a committed card falls back to the **global card** at
+`~/.ai-conductor/rate-card.json`, so codex dispatches price to dollars in every project, not just
+ones that ran their own refresh. `bin/install` and `bin/update` maintain the global card by
+mirroring the harness checkout's committed card there (`sync_global_rate_card`,
+`bin/lib/harness-common.sh`); the copy is skipped when the global card's `as_of` is already the
+same or newer, so a fresher hand-placed global card is never clobbered. A committed project card
+always wins over the global one.
 
 It exists because providers disagree about reporting cost. Claude Code returns `total_cost_usd` on
 every dispatch, so its `TokenUsage.costUsd` is provider truth. Codex returns token counts and no
