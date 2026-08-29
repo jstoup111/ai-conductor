@@ -14,7 +14,7 @@
 //   `created`. A non-empty target writes NOTHING.
 
 import { execa } from 'execa';
-import { copyFile, mkdir, writeFile, readdir } from 'fs/promises';
+import { copyFile, mkdir, readFile, writeFile, readdir } from 'fs/promises';
 import { constants, existsSync, writeSync } from 'fs';
 import { join, basename, isAbsolute, resolve as resolvePath } from 'path';
 import { resolveHarnessRoot } from './install-freshness.js';
@@ -150,8 +150,96 @@ async function dirIsNonEmpty(dir: string): Promise<boolean> {
 
 export type ProjectConfigWriteOutcome = 'created' | 'already-exists';
 
+const TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR = '# CONFIG_INIT_TEST_SUITE_VERIFICATION';
+const TEST_SUITE_VERIFICATION_MODES = ['aggregate', 'scoped'] as const;
+const TEST_SUITE_DRIFT_BUDGET_PRESETS = {
+  strict: {
+    additional_inputs: 'none',
+    dependencies: 'none',
+    environment: 'none',
+    migrations: 'none',
+    project_config: 'none',
+    source: 'none',
+    test_infrastructure: 'none',
+    tests: 'none',
+  },
+  tolerant: {
+    additional_inputs: 'unlimited',
+    dependencies: 'none',
+    environment: 'none',
+    migrations: 'none',
+    project_config: 'none',
+    source: 20,
+    test_infrastructure: 'none',
+    tests: 'none',
+  },
+} as const;
+
+type TestSuiteVerificationMode = (typeof TEST_SUITE_VERIFICATION_MODES)[number];
+type TestSuiteDriftBudgetPreset = keyof typeof TEST_SUITE_DRIFT_BUDGET_PRESETS;
+
+interface ConfigInitOptions {
+  testSuiteMode?: string;
+  testSuiteDriftBudget?: string;
+  hasVerificationFlags?: boolean;
+}
+
+interface TestSuiteVerificationSelection {
+  mode: TestSuiteVerificationMode;
+  preset: TestSuiteDriftBudgetPreset;
+}
+
+function resolveVerificationSelection(
+  options: ConfigInitOptions,
+): TestSuiteVerificationSelection | string {
+  if (
+    options.testSuiteMode !== undefined &&
+    !TEST_SUITE_VERIFICATION_MODES.includes(
+      options.testSuiteMode as TestSuiteVerificationMode,
+    )
+  ) {
+    return `invalid --test-suite-mode ${JSON.stringify(options.testSuiteMode)}; allowed values: ${TEST_SUITE_VERIFICATION_MODES.join(', ')}`;
+  }
+  if (
+    options.testSuiteDriftBudget !== undefined &&
+    !(options.testSuiteDriftBudget in TEST_SUITE_DRIFT_BUDGET_PRESETS)
+  ) {
+    return `invalid --test-suite-drift-budget ${JSON.stringify(options.testSuiteDriftBudget)}; allowed values: ${Object.keys(TEST_SUITE_DRIFT_BUDGET_PRESETS).join(', ')}`;
+  }
+
+  return {
+    mode: (options.testSuiteMode ?? 'aggregate') as TestSuiteVerificationMode,
+    preset: (options.testSuiteDriftBudget ?? 'strict') as TestSuiteDriftBudgetPreset,
+  };
+}
+
+function renderVerificationBlock(selection: TestSuiteVerificationSelection): string {
+  const driftBudget = TEST_SUITE_DRIFT_BUDGET_PRESETS[selection.preset];
+  const scopedCommand =
+    selection.mode === 'scoped'
+      ? '  scoped_command: npm test -- {selectors}\n'
+      : '';
+  const budgetLines = Object.entries(driftBudget)
+    .map(([category, bound]) => `      ${category}: ${bound}`)
+    .join('\n');
+
+  return [
+    '# Test-suite verification answer recorded by conduct-ts config init.',
+    'test_suite:',
+    '  command: npm test',
+    scopedCommand.trimEnd(),
+    '  verification:',
+    `    mode: ${selection.mode}`,
+    '    drift_budget:',
+    budgetLines,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 async function writeProjectConfig(
   projectRoot: string,
+  verification?: TestSuiteVerificationSelection,
 ): Promise<ProjectConfigWriteOutcome> {
   const configPath = join(projectRoot, '.ai-conductor', 'config.yml');
   if (existsSync(configPath)) return 'already-exists';
@@ -168,7 +256,22 @@ async function writeProjectConfig(
   );
   await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
   try {
-    await copyFile(templatePath, configPath, constants.COPYFILE_EXCL);
+    if (verification === undefined) {
+      await copyFile(templatePath, configPath, constants.COPYFILE_EXCL);
+    } else {
+      const template = await readFile(templatePath, 'utf8');
+      if (!template.includes(TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR)) {
+        throw new Error('project config template is missing the verification substitution anchor');
+      }
+      await writeFile(
+        configPath,
+        template.replace(
+          TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR,
+          renderVerificationBlock(verification),
+        ),
+        { encoding: 'utf8', flag: 'wx' },
+      );
+    }
     return 'created';
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
@@ -178,7 +281,18 @@ async function writeProjectConfig(
   }
 }
 
-async function runConfigInit(projectRoot = process.cwd()): Promise<number> {
+async function runConfigInit(
+  options: ConfigInitOptions = {},
+  projectRoot = process.cwd(),
+): Promise<number> {
+  const verification = options.hasVerificationFlags
+    ? resolveVerificationSelection(options)
+    : undefined;
+  if (typeof verification === 'string') {
+    console.error(`conduct config init: ${verification}`);
+    return 1;
+  }
+
   if (!(await isGitRepo(projectRoot))) {
     writeSync(
       process.stderr.fd,
@@ -188,7 +302,7 @@ async function runConfigInit(projectRoot = process.cwd()): Promise<number> {
   }
 
   try {
-    const outcome = await writeProjectConfig(projectRoot);
+    const outcome = await writeProjectConfig(projectRoot, verification);
     const configPath = join(projectRoot, '.ai-conductor', 'config.yml');
     const message =
       outcome === 'already-exists'
@@ -272,7 +386,12 @@ export async function runCreate(
 export type RegistryDispatch =
   | { kind: 'register'; path?: string }
   | { kind: 'create'; name: string; remote?: string }
-  | { kind: 'config-init' };
+  | {
+      kind: 'config-init';
+      testSuiteMode?: string;
+      testSuiteDriftBudget?: string;
+      hasVerificationFlags?: boolean;
+    };
 
 export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
   // argv is process.argv: [node, entry, sub, ...]
@@ -301,7 +420,31 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
     return { kind: 'create', name, remote };
   }
   if (sub === 'config' && args[1] === 'init') {
-    return { kind: 'config-init' };
+    let testSuiteMode: string | undefined;
+    let testSuiteDriftBudget: string | undefined;
+    let hasVerificationFlags = false;
+    for (let i = 2; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '--test-suite-mode') {
+        hasVerificationFlags = true;
+        testSuiteMode = args[++i] ?? '';
+      } else if (arg.startsWith('--test-suite-mode=')) {
+        hasVerificationFlags = true;
+        testSuiteMode = arg.slice('--test-suite-mode='.length);
+      } else if (arg === '--test-suite-drift-budget') {
+        hasVerificationFlags = true;
+        testSuiteDriftBudget = args[++i] ?? '';
+      } else if (arg.startsWith('--test-suite-drift-budget=')) {
+        hasVerificationFlags = true;
+        testSuiteDriftBudget = arg.slice('--test-suite-drift-budget='.length);
+      }
+    }
+    return {
+      kind: 'config-init',
+      testSuiteMode,
+      testSuiteDriftBudget,
+      hasVerificationFlags,
+    };
   }
   return null;
 }
@@ -309,7 +452,13 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
 // Read a record back (used by integration helpers/tests). Thin re-export shim.
 export async function dispatchRegistry(d: RegistryDispatch): Promise<number> {
   if (d.kind === 'register') return runRegister(d.path);
-  if (d.kind === 'config-init') return runConfigInit();
+  if (d.kind === 'config-init') {
+    return runConfigInit({
+      testSuiteMode: d.testSuiteMode,
+      testSuiteDriftBudget: d.testSuiteDriftBudget,
+      hasVerificationFlags: d.hasVerificationFlags,
+    });
+  }
   return runCreate(d.name, { remote: d.remote });
 }
 
