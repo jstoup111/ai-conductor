@@ -212,6 +212,7 @@ import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
   FullSuiteVerifier,
+  type FullSuiteInspectionResult,
   type FullSuiteVerifierResult,
 } from './full-suite-verifier.js';
 import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
@@ -1875,6 +1876,28 @@ async function refreshPostFinishShippedRecord({
       }`,
     );
   }
+}
+
+function testSuiteBudgetVerdict(inspection: FullSuiteInspectionResult) {
+  if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+    const categories = inspection.evidence.driftLedger?.at(-1)?.categories;
+    return categories === undefined
+      ? undefined
+      : { outcome: 'preserved_within_budget' as const, categories };
+  }
+  if (
+    inspection.status === 'STALE' &&
+    (inspection.reason === 'drift_budget_exceeded' || inspection.reason === 'unbudgetable_drift')
+  ) {
+    return {
+      outcome: 'rerun_required' as const,
+      reason: inspection.reason,
+      category: inspection.category,
+      count: inspection.count,
+      bound: inspection.bound,
+    };
+  }
+  return undefined;
 }
 
 export class Conductor {
@@ -11163,11 +11186,11 @@ export class Conductor {
   private async runTestSuiteStep(): Promise<StepRunResult> {
     this.retainedFullSuiteInspection = undefined;
     const inspection = await this.fullSuiteVerifier.inspect();
-    if (inspection.status === 'STALE') {
-      await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
-    }
     const verification = await this.fullSuiteVerifier.ensure();
     if (verification.status === 'FAILED') {
+      if (inspection.status === 'STALE') {
+        await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
+      }
       return {
         success: false,
         output: verification.message,
@@ -11187,6 +11210,20 @@ export class Conductor {
         fullSuiteVerification: verification,
       };
     }
+    if (inspection.status === 'STALE' || inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+      const budgetVerdict = testSuiteBudgetVerdict(inspection);
+      await this.events.emit({
+        type: 'test_suite_verification',
+        freshness: inspection.status === 'PRESERVED_WITHIN_BUDGET'
+          ? { status: 'CURRENT' }
+          : inspection,
+        mode: verification.evidence.mode ?? 'aggregate',
+        ...(budgetVerdict === undefined ? {} : { budgetVerdict }),
+        ...(verification.evidence.executionBasis === 'scoped-empty-selection-aggregate'
+          ? { executionBasis: 'scoped-empty-selection-aggregate' as const }
+          : {}),
+      });
+    }
     this.retainedFullSuiteInspection = {
       status: 'CURRENT',
       evidence: verification.evidence,
@@ -11197,6 +11234,7 @@ export class Conductor {
         member: 'test_suite',
         decision: 'reuse',
         basis: 'fingerprint-match',
+        mode: verification.evidence.mode ?? 'aggregate',
       });
     } else {
       await this.events.emit({

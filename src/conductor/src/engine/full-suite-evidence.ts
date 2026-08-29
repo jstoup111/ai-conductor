@@ -34,6 +34,12 @@ type FullSuiteEvidenceWriteVersion = typeof FULL_SUITE_EVIDENCE_VERSION | 3;
 
 export type FullSuiteEvidenceMode = 'aggregate' | 'scoped';
 
+/** The closed execution route that produced a PASS. */
+export type FullSuiteExecutionBasis =
+  | 'aggregate'
+  | 'scoped'
+  | 'scoped-empty-selection-aggregate';
+
 export type FullSuiteDriftCategoryCounts = Record<
   FullSuiteFingerprintCategory,
   number
@@ -56,6 +62,8 @@ export interface FullSuitePassEvidence {
   mode?: FullSuiteEvidenceMode;
   /** Defaults to an empty list on write for aggregate verification. */
   selectors?: string[];
+  /** Defaults from the recorded mode; scoped-empty records its aggregate fallback explicitly. */
+  executionBasis?: FullSuiteExecutionBasis;
   /** Starts empty for a new PASS epoch; later tasks append drift observations. */
   driftLedger?: FullSuiteDriftLedgerEntry[];
   worktreeClean?: boolean;
@@ -251,6 +259,13 @@ function isPassMode(value: unknown): value is FullSuiteEvidenceMode {
   return value === 'aggregate' || value === 'scoped';
 }
 
+function isOptionalExecutionBasis(value: unknown): value is FullSuiteExecutionBasis | undefined {
+  return value === undefined ||
+    value === 'aggregate' ||
+    value === 'scoped' ||
+    value === 'scoped-empty-selection-aggregate';
+}
+
 function isSelectors(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isNonEmptyString);
 }
@@ -267,6 +282,7 @@ function isPassEvidence(
     isNonEmptyString(value.provenanceHeadSha) &&
     isPassMode(value.mode) &&
     isSelectors(value.selectors) &&
+    isOptionalExecutionBasis(value.executionBasis) &&
     Array.isArray(value.driftLedger) && value.driftLedger.every(isDriftLedgerEntry) &&
     isOptionalBoolean(value.worktreeClean) &&
     isNullableBoundedNonEmptyString(value.command) &&

@@ -172,6 +172,28 @@ describe('EventPersister', () => {
     ]);
   });
 
+  it('round-trips the scoped-empty aggregate route on the existing verification event', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({
+      type: 'test_suite_verification',
+      freshness: { status: 'STALE', reason: 'source_changed' },
+      mode: 'scoped',
+      executionBasis: 'scoped-empty-selection-aggregate',
+    } satisfies ConductorEvent);
+
+    persister.stop();
+
+    const { ts: _ts, ...record } = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
+    expect(record).toEqual({
+      type: 'test_suite_verification',
+      freshness: { status: 'STALE', reason: 'source_changed' },
+      mode: 'scoped',
+      executionBasis: 'scoped-empty-selection-aggregate',
+    });
+  });
+
   it('persists typed credential-park progress as JSONL', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();

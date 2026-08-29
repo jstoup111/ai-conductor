@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:7, task:8, task:9, task:10, task:11, task:13, task:14
+// Covers: task:1, task:4, task:6, task:7, task:8, task:9, task:10, task:11, task:13, task:14, task:15
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -249,6 +249,75 @@ describe('FullSuiteVerifier', () => {
       scopedCommand: "npx vitest run 'test/with space.test.ts'",
       aggregateCalls: 0,
       inspection: expect.objectContaining({ status: 'CURRENT' }),
+    });
+  });
+
+  it('routes an empty scoped selection through aggregate verification with a recorded basis', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-scoped-empty-selection-');
+    const scopedRunner = async () => {
+      throw new Error('scoped command must not run with zero selectors');
+    };
+    let aggregateCalls = 0;
+    const aggregateExecute = async () => {
+      aggregateCalls += 1;
+      return {
+        ok: true as const,
+        command: 'node suite.mjs --all',
+        cwd: projectRoot,
+        startedAt: '2026-08-29T10:00:00.000Z',
+        endedAt: '2026-08-29T10:00:01.000Z',
+        durationMs: 1_000,
+        exitCode: 0 as const,
+        stdout: '',
+        stderr: '',
+      };
+    };
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  scoped_command: npx vitest run {selectors}',
+        '  verification:',
+        '    mode: scoped',
+        '',
+      ].join('\n'),
+    );
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      execute: aggregateExecute,
+      scopedRunner,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:scoped-empty-selection',
+          headSha: 'scoped-empty-selection-head',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      git: async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') {
+          return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        }
+        if (args[0] === 'merge-base') {
+          return { exitCode: 0, stdout: 'scoped-empty-selection-base\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: 'src/feature.ts\n', stderr: '' };
+      },
+    } as never).ensure();
+
+    expect({ result, aggregateCalls }).toEqual({
+      result: expect.objectContaining({
+        status: 'EXECUTED',
+        evidence: expect.objectContaining({
+          mode: 'scoped',
+          selectors: [],
+          executionBasis: 'scoped-empty-selection-aggregate',
+        }),
+      }),
+      aggregateCalls: 1,
     });
   });
 
@@ -754,6 +823,7 @@ describe('FullSuiteVerifier', () => {
       provenanceHeadSha: '0123456789abcdef',
       mode: 'aggregate',
       selectors: [],
+      executionBasis: 'aggregate',
       driftLedger: [],
       command: 'node suite.mjs --all',
       workingDirectory,
@@ -883,6 +953,7 @@ describe('FullSuiteVerifier', () => {
       provenanceHeadSha: originalHeadSha,
       mode: 'aggregate',
       selectors: [],
+      executionBasis: 'aggregate',
       driftLedger: [],
       command: 'node suite.mjs --all',
       workingDirectory,

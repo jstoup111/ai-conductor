@@ -229,11 +229,11 @@ describe('test_suite native gate loop', () => {
       .runTestSuiteStep();
 
     expect(observed).toEqual([
+      'ensure',
       {
         type: 'test_suite_verification',
         freshness: { status: 'STALE', reason: 'source_changed' },
       },
-      'ensure',
     ]);
   });
 

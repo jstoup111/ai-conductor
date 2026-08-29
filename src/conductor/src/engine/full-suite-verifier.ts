@@ -873,6 +873,11 @@ export class FullSuiteVerifier {
         selectors: verificationMode === 'scoped' && selection.status === 'SELECTED'
           ? selection.selectors
           : [],
+        executionBasis: verificationMode === 'scoped'
+          ? selection.status === 'SELECTED'
+            ? 'scoped'
+            : 'scoped-empty-selection-aggregate'
+          : 'aggregate',
       };
       try {
         await writeEvidence(projectRoot, evidence, secretValues);
