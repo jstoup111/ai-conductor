@@ -4,6 +4,12 @@ spec_hash: 72ae3720c5adfb4fab2d2687d2c2979487aad62631e611d72f5c1d2648cabd41
 pr: https://github.com/jstoup111/ai-conductor/pull/1972
 shipped: 2026-08-29
 engine_version: 20260829T124007Z-0fc0ed0e907e
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/otel/metrics.ts:95,158 — both new instruments route through `withIdentity`, adding `project`/`feature` attributes that neither the stories nor the plan's attribute lists specify"
+    accepted: true
 ---
 
 ## Cost
