@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:7, task:13
+// Covers: task:1, task:4, task:6, task:7, task:8, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -1124,6 +1124,124 @@ describe('FullSuiteVerifier', () => {
     });
   });
 
+  it.each([
+    {
+      name: 'the attested provenance SHA cannot be resolved',
+      git: async (args: string[]) => args[0] === 'diff'
+        ? { exitCode: 128, stdout: '', stderr: 'fatal: bad object attested-head' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+    },
+    {
+      name: 'Git fails while measuring the worktree',
+      git: async (args: string[]) => args[0] === 'diff'
+        ? { exitCode: 0, stdout: 'src/a.ts\n', stderr: '' }
+        : { exitCode: 1, stdout: '', stderr: 'fatal: status failed' },
+    },
+  ])('reruns rather than preserving when $name', async ({ git }) => {
+    const projectRoot = await makeConfiguredProject('full-suite-indeterminate-drift-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: unlimited',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:indeterminate-current',
+          headSha: 'indeterminate-evaluation-head',
+          categoryFingerprints: { ...CATEGORY_FINGERPRINTS, source: 'category:source:current' },
+        },
+      }),
+      git,
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ inspection, ensured: ensured.status, freshness: ensured.status === 'EXECUTED'
+      ? ensured.freshness
+      : undefined, launches }).toEqual({
+      inspection: { status: 'STALE', reason: 'drift_measurement_indeterminate' },
+      ensured: 'EXECUTED',
+      freshness: { status: 'STALE', reason: 'drift_measurement_indeterminate' },
+      launches: 1,
+    });
+  });
+
+  it('reruns prior-version evidence with a version-staleness reason', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-prior-version-evidence-');
+    await writeProjectFile(
+      projectRoot,
+      '.pipeline/test-suite-evidence.json',
+      JSON.stringify({ version: 3, outcome: 'PASS' }),
+    );
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:version-current',
+          headSha: 'version-evaluation-head',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ inspection, ensured: ensured.status, freshness: ensured.status === 'EXECUTED'
+      ? ensured.freshness
+      : undefined, launches }).toEqual({
+      inspection: { status: 'STALE', reason: 'evidence_version_stale' },
+      ensured: 'EXECUTED',
+      freshness: { status: 'STALE', reason: 'evidence_version_stale' },
+      launches: 1,
+    });
+  });
+
   it('classifies the complete mutation matrix and reruns only content-stale inputs', async () => {
     const mutationCases: Array<{
       name: string;
@@ -1516,7 +1634,7 @@ describe('FullSuiteVerifier', () => {
       },
       {
         name: 'unsupported',
-        reason: 'unsupported_version',
+        reason: 'evidence_version_stale',
         arrange: (root) => writeProjectFile(
           root,
           '.pipeline/test-suite-evidence.json',

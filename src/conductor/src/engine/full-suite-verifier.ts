@@ -38,6 +38,8 @@ export type FullSuiteStaleReason =
   | 'fingerprint_mismatch'
   | 'additional_inputs_changed'
   | 'dependencies_changed'
+  | 'drift_measurement_indeterminate'
+  | 'evidence_version_stale'
   | 'environment_changed'
   | 'migrations_changed'
   | 'multiple_categories_changed'
@@ -943,7 +945,12 @@ export class FullSuiteVerifier {
           };
         }
         return {
-          inspection: { status: 'STALE', reason: persisted.reason },
+          inspection: {
+            status: 'STALE',
+            reason: persisted.reason === 'unsupported_version'
+              ? 'evidence_version_stale'
+              : persisted.reason,
+          },
           context,
         };
       }
@@ -976,6 +983,12 @@ export class FullSuiteVerifier {
           );
           return {
             inspection: { status: 'PRESERVED_WITHIN_BUDGET', evidence },
+            context,
+          };
+        }
+        if (measurement.status === 'INDETERMINATE') {
+          return {
+            inspection: { status: 'STALE', reason: 'drift_measurement_indeterminate' },
             context,
           };
         }
