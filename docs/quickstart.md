@@ -190,21 +190,26 @@ run `tsup` directly — the publish guard refuses it.
 
 ### Wrong Node version
 
-The installer skips the engine build rather than failing:
+The installer still links the skills, permissions and hooks — those work on any Node — but it
+cannot build the engine, so the run fails:
 
 ```text
-  ⚠ Node >=26 not active (repo pins 26.7.0 via .tool-versions) — skipping conduct-ts build
+  ✗ conduct-ts requires Node >=26 — found v20.11.0
+  → This repo pins nodejs 26.7.0 via .tool-versions; install it (e.g. 'asdf install nodejs
+    26.7.0'), then re-run bin/install
 ```
 
-and later:
+and the run ends with the reason restated:
 
 ```text
-  ⚠ conduct-ts bundle not found and Node >=26 is not active (the repo pins 26.7.0 via
-    .tool-versions). Install it (e.g. 'asdf install nodejs 26.7.0'), then re-run bin/install.
+Installation incomplete — conduct-ts was not installed.
+  ✗ conduct-ts requires Node >=26 but found v20.11.0. Install the pinned nodejs 26.7.0
+    (.tool-versions), then re-run ./bin/install.
 ```
 
-The install "succeeds" and `conduct-ts` is simply never symlinked. Install Node 26.7.0 and re-run
-`./bin/install`.
+`./bin/install` exits `1`, and so does `./bin/install --check` while the bundle is missing or
+`conduct-ts` is off PATH. A missing `npm`, or a failing `npm ci`/`npm run build`, fails the same
+way. Install Node 26.7.0 and re-run `./bin/install`.
 
 ### Missing `gh` authentication
 
