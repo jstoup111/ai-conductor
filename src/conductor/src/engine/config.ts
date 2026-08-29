@@ -777,7 +777,7 @@ export function validateConfig(
 
   // test_suite — the project-owned aggregate verification operation.
   if (obj.test_suite !== undefined) {
-    const err = validateTestSuiteBlock(obj.test_suite, projectRoot);
+    const err = validateTestSuiteBlock(obj.test_suite, projectRoot, materializeDefaults);
     if (err) return { ok: false, error: err };
   }
 
@@ -1615,7 +1615,11 @@ function validateAssessBlock(raw: unknown): ConfigError | null {
   return null;
 }
 
-function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError | null {
+function validateTestSuiteBlock(
+  raw: unknown,
+  projectRoot: string | undefined,
+  materializeDefaults: boolean,
+): ConfigError | null {
   if (!isPlainObject(raw)) {
     return { type: 'validation_error', message: 'test_suite must be an object' };
   }
@@ -1712,7 +1716,9 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
   );
   if (verificationError) return verificationError;
 
-  raw.verification = resolveTestSuiteVerification(raw.verification);
+  if (materializeDefaults) {
+    raw.verification = resolveTestSuiteVerification(raw.verification);
+  }
 
   return null;
 }
