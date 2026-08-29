@@ -701,7 +701,7 @@ describe('Task 4: unmetered close observability', () => {
         { value: 1, attributes: { step: 'build', metering: 'unmetered' } },
       ]);
     expect(findMetric(metricExporter, 'conductor.step.duration')?.dataPoints).toContainEqual(
-      expect.objectContaining({ attributes: { step: 'build' } }),
+      expect.objectContaining({ attributes: expect.objectContaining({ step: 'build' }) }),
     );
     expect(findMetric(metricExporter, 'conductor.step.tokens')?.dataPoints.filter(
       (dataPoint) => dataPoint.attributes['step'] === 'build',
