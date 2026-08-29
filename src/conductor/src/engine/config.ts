@@ -1728,12 +1728,15 @@ const TEST_SUITE_DRIFT_CATEGORIES: readonly TestSuiteDriftCategory[] = [
   'tests',
 ];
 
-const UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES = new Set<TestSuiteDriftCategory>([
+export const UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES = [
   'dependencies',
   'environment',
   'migrations',
   'project_config',
-]);
+] as const satisfies readonly TestSuiteDriftCategory[];
+
+export type UnbudgetableTestSuiteDriftCategory =
+  (typeof UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES)[number];
 
 const DEFAULT_TEST_SUITE_DRIFT_BUDGET: Record<
   TestSuiteDriftCategory,
@@ -1791,8 +1794,9 @@ function validateTestSuiteVerification(
       };
     }
     if (
-      UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES.has(category as TestSuiteDriftCategory) &&
-      bound !== 'none'
+      UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES.includes(
+        category as UnbudgetableTestSuiteDriftCategory,
+      )
     ) {
       return {
         type: 'validation_error',

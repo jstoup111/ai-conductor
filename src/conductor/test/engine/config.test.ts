@@ -1237,6 +1237,26 @@ steps:
       },
     );
 
+    it.each(['dependencies', 'environment', 'migrations', 'project_config'])(
+      'rejects explicit none for unbudgetable drift_budget category %s',
+      async (category) => {
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          `test_suite:\n  command: npm test\n  verification:\n    drift_budget:\n      ${category}: none\n`,
+        );
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: expect.stringMatching(new RegExp(`${category}.*unbudgetable`, 'i')),
+          },
+        });
+      },
+    );
+
     it.each([
       ['zero', 0],
       ['a negative value', -1],
@@ -1388,7 +1408,7 @@ steps:
       expect(result.config.test_suite?.scoped_command).toBeUndefined();
     });
 
-    it('accepts an aggregate suite declaration with every supported field', () => {
+    it('accepts an aggregate suite declaration with every configurable drift budget', () => {
       const testSuite = {
         command: 'npm test',
         working_directory: 'src/conductor',
@@ -1399,10 +1419,6 @@ steps:
           mode: 'aggregate',
           drift_budget: {
             additional_inputs: 'none',
-            dependencies: 'none',
-            environment: 'none',
-            migrations: 'none',
-            project_config: 'none',
             source: 'none',
             test_infrastructure: 'none',
             tests: 'none',
@@ -1412,7 +1428,19 @@ steps:
 
       const result = validateConfig({ test_suite: testSuite });
 
-      expect(result.ok && result.config.test_suite).toEqual(testSuite);
+      expect(result.ok && result.config.test_suite).toEqual({
+        ...testSuite,
+        verification: {
+          ...testSuite.verification,
+          drift_budget: {
+            ...testSuite.verification.drift_budget,
+            dependencies: 'none',
+            environment: 'none',
+            migrations: 'none',
+            project_config: 'none',
+          },
+        },
+      });
     });
 
     it.each([

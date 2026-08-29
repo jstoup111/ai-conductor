@@ -4,7 +4,11 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { execa } from 'execa';
-import { loadConfig } from './config.js';
+import {
+  loadConfig,
+  UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES,
+  type UnbudgetableTestSuiteDriftCategory,
+} from './config.js';
 import {
   FULL_SUITE_EVIDENCE_VERSION,
   readFullSuiteEvidence,
@@ -59,7 +63,7 @@ type FullSuiteBudgetBound = 'none' | number;
 
 type FullSuiteUnbudgetableCategory = Extract<
   FullSuiteFingerprintCategory,
-  'dependencies' | 'environment' | 'migrations' | 'project_config'
+  UnbudgetableTestSuiteDriftCategory
 >;
 
 export type FullSuiteStaleInspection =
@@ -1240,13 +1244,6 @@ async function fingerprintTimeWorktreeCleanliness(
   }
 }
 
-const UNBUDGETABLE_DRIFT_CATEGORIES = new Set<FullSuiteUnbudgetableCategory>([
-  'dependencies',
-  'environment',
-  'migrations',
-  'project_config',
-]);
-
 function driftBudgetRejection(
   measurement: Extract<FullSuiteDriftMeasurement, { status: 'MEASURED' }>,
   testSuite: AggregateTestSuiteConfig,
@@ -1263,7 +1260,9 @@ function driftBudgetRejection(
   );
   const unbudgetableCategory = driftedCategories.find(
     (category): category is FullSuiteUnbudgetableCategory =>
-      UNBUDGETABLE_DRIFT_CATEGORIES.has(category as FullSuiteUnbudgetableCategory),
+      UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES.includes(
+        category as FullSuiteUnbudgetableCategory,
+      ),
   );
   if (unbudgetableCategory) {
     return {
