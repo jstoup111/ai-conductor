@@ -18,6 +18,10 @@ import { copyFile, mkdir, readFile, rm, writeFile, readdir } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { constants, existsSync, writeSync } from 'fs';
 import { join, basename, isAbsolute, resolve as resolvePath } from 'path';
+import {
+  UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES,
+  type UnbudgetableTestSuiteDriftCategory,
+} from './config.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import {
   resolveRegistryPath,
@@ -156,20 +160,12 @@ const TEST_SUITE_VERIFICATION_MODES = ['aggregate', 'scoped'] as const;
 const TEST_SUITE_DRIFT_BUDGET_PRESETS = {
   strict: {
     additional_inputs: 'none',
-    dependencies: 'none',
-    environment: 'none',
-    migrations: 'none',
-    project_config: 'none',
     source: 'none',
     test_infrastructure: 'none',
     tests: 'none',
   },
   tolerant: {
     additional_inputs: 'unlimited',
-    dependencies: 'none',
-    environment: 'none',
-    migrations: 'none',
-    project_config: 'none',
     source: 20,
     test_infrastructure: 'none',
     tests: 'none',
@@ -221,6 +217,12 @@ function renderVerificationBlock(selection: TestSuiteVerificationSelection): str
       ? '  scoped_command: npm test -- {selectors}\n'
       : '';
   const budgetLines = Object.entries(driftBudget)
+    .filter(
+      ([category]) =>
+        !UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES.includes(
+          category as UnbudgetableTestSuiteDriftCategory,
+        ),
+    )
     .map(([category, bound]) => `      ${category}: ${bound}`)
     .join('\n');
 

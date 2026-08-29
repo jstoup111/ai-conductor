@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadConfig } from '../../src/engine/config.js';
+import {
+  loadConfig,
+  UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES,
+} from '../../src/engine/config.js';
 import {
   detectRegistryCommand,
   dispatchRegistry,
@@ -44,10 +47,6 @@ describe('conduct-ts config init verification flags', () => {
         mode: 'aggregate',
         drift_budget: {
           additional_inputs: 'none',
-          dependencies: 'none',
-          environment: 'none',
-          migrations: 'none',
-          project_config: 'none',
           source: 'none',
           test_infrastructure: 'none',
           tests: 'none',
@@ -61,10 +60,6 @@ describe('conduct-ts config init verification flags', () => {
         mode: 'scoped',
         drift_budget: {
           additional_inputs: 'unlimited',
-          dependencies: 'none',
-          environment: 'none',
-          migrations: 'none',
-          project_config: 'none',
           source: 20,
           test_infrastructure: 'none',
           tests: 'none',
@@ -86,8 +81,18 @@ describe('conduct-ts config init verification flags', () => {
     expect(command).not.toBeNull();
     expect(await dispatchRegistry(command!)).toBe(0);
 
+    const generatedConfig = await readFile(
+      join(projectRoot, '.ai-conductor', 'config.yml'),
+      'utf8',
+    );
+    for (const category of UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES) {
+      expect(generatedConfig).not.toContain(`      ${category}:`);
+    }
+
     const loaded = await loadConfig(projectRoot);
-    expect(loaded.ok && loaded.config.test_suite?.verification).toEqual(verification);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.config.test_suite?.verification).toMatchObject(verification);
   });
 
   it('copies the bare template byte-for-byte without verification flags', async () => {
