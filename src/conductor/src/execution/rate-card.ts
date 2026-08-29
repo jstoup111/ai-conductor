@@ -24,7 +24,8 @@
 //     `cost-unmetered` exactly as it does today. `metering.ts` classifies
 //     "without inventing a cost", and this module does not weaken that.
 
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { TokenUsage } from './llm-provider.js';
 
@@ -163,45 +164,46 @@ export function applyRateCard(
   return { ...usage, costUsd, costSource: 'rate-card' };
 }
 
-interface CacheEntry {
-  mtimeMs: number;
-  card: RateCard | undefined;
-}
+const cache = new Map<string, RateCard | undefined>();
 
-const cache = new Map<string, CacheEntry>();
-
-/** Test seam: drop the mtime-keyed read cache. */
+/** Test seam: drop the per-process memo. */
 export function clearRateCardCache(): void {
   cache.clear();
 }
 
 /**
- * Read the rate card committed under `projectRoot`. Synchronous and
- * mtime-cached: a dispatch takes minutes, a stat takes microseconds, and an
- * operator who refreshes the card mid-run gets the new rates on the next
- * dispatch without a daemon restart.
+ * Read the rate card for `projectRoot`. Memoized per path for the life of the
+ * process: rates change rarely (a merged bot PR), and a daemon restart picks
+ * up the new card. No stat on the dispatch path.
  *
  * Never throws — an absent or unreadable card is simply "no rates".
  */
 export function loadRateCard(projectRoot: string | undefined): RateCard | undefined {
-  if (!projectRoot) return undefined;
-  const path = join(projectRoot, RATE_CARD_RELATIVE_PATH);
-  let mtimeMs: number;
-  try {
-    mtimeMs = statSync(path).mtimeMs;
-  } catch {
-    cache.delete(path);
-    return undefined;
-  }
-  const cached = cache.get(path);
-  if (cached && cached.mtimeMs === mtimeMs) return cached.card;
+  // The global card WINS: bin/install and bin/update keep it symlinked to the
+  // harness checkout's committed card, so every project prices codex from one
+  // current source. A project's committed card only applies where no global
+  // card exists (e.g. an environment that never ran bin/install).
+  const globalCard = readCardAt(globalRateCardPath());
+  if (globalCard) return globalCard;
+  return projectRoot
+    ? readCardAt(join(projectRoot, RATE_CARD_RELATIVE_PATH))
+    : undefined;
+}
+
+/** Resolved per call so tests can redirect via $HOME. */
+export function globalRateCardPath(): string {
+  return join(homedir(), '.ai-conductor', 'rate-card.json');
+}
+
+function readCardAt(path: string): RateCard | undefined {
+  if (cache.has(path)) return cache.get(path);
   let card: RateCard | undefined;
   try {
     card = parseRateCard(readFileSync(path, 'utf-8'));
   } catch {
     card = undefined;
   }
-  cache.set(path, { mtimeMs, card });
+  cache.set(path, card);
   return card;
 }
 

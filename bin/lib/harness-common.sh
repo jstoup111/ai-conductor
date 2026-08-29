@@ -297,3 +297,35 @@ render_md() {
       ;;
   esac
 }
+
+# ─── Global codex rate card ─────────────────────────────────────────────────
+
+# Link the harness checkout's committed codex rate card
+# (.ai-conductor/rate-card.json) at ~/.ai-conductor/rate-card.json. The engine
+# falls back to that global card when a project has no committed card of its
+# own, so codex dispatches price to real dollars in every project — not just
+# ones that ran `conduct rate-card refresh` themselves. A symlink (same idiom
+# as skill installs) tracks the checkout: a daily rate-card bot PR merged to
+# main updates the global card with no re-run of install/update. A missing
+# target simply fails closed to cost-unmetered. A regular file already at the
+# destination is operator-owned and left alone. Never fatal.
+sync_global_rate_card() {
+  local harness_dir=$1
+  local src="${harness_dir}/.ai-conductor/rate-card.json"
+  local dest_dir="${HOME}/.ai-conductor"
+  local dest="${dest_dir}/rate-card.json"
+  [ -f "$src" ] || return 0
+
+  if [ -L "$dest" ]; then
+    [ "$(readlink "$dest")" = "$src" ] && return 0
+  elif [ -e "$dest" ]; then
+    warn "Global rate card ${dest} is a regular file — leaving it; remove it to link the harness card"
+    return 0
+  fi
+
+  if mkdir -p "$dest_dir" && ln -sfn "$src" "$dest"; then
+    ok "Linked global rate card (${dest} -> ${src})"
+  else
+    warn "Could not link global rate card at ${dest}"
+  fi
+}

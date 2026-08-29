@@ -218,16 +218,30 @@ describe('parseRateCard', () => {
 
 describe('loadRateCard', () => {
   let dir: string;
+  let home: string;
+  let realHome: string | undefined;
 
   beforeEach(async () => {
     clearRateCardCache();
     dir = await mkdtemp(join(tmpdir(), 'rate-card-'));
+    // Isolate the global-fallback path from the developer's real ~/.ai-conductor.
+    home = await mkdtemp(join(tmpdir(), 'rate-card-home-'));
+    realHome = process.env.HOME;
+    process.env.HOME = home;
   });
 
   afterEach(async () => {
     clearRateCardCache();
+    if (realHome === undefined) delete process.env.HOME;
+    else process.env.HOME = realHome;
     await rm(dir, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
   });
+
+  const writeGlobal = async (contents: string) => {
+    await mkdir(join(home, '.ai-conductor'), { recursive: true });
+    await writeFile(join(home, '.ai-conductor', 'rate-card.json'), contents, 'utf-8');
+  };
 
   const write = async (contents: string) => {
     const path = join(dir, RATE_CARD_RELATIVE_PATH);
@@ -248,7 +262,21 @@ describe('loadRateCard', () => {
     expect(loadRateCard(dir)).toBeUndefined();
   });
 
-  it('picks up a refreshed card without a restart', async () => {
+  it('reads the global card at ~/.ai-conductor when the project has none', async () => {
+    await writeGlobal(JSON.stringify({ as_of: 'g', models: { 'gpt-5.6-terra': TERRA } }));
+    expect(loadRateCard(dir)?.models['gpt-5.6-terra']).toEqual(TERRA);
+    expect(loadRateCard(undefined)?.models['gpt-5.6-terra']).toEqual(TERRA);
+  });
+
+  it('prefers the global card over a committed project card', async () => {
+    await writeGlobal(
+      JSON.stringify({ as_of: 'g', models: { 'gpt-5.6-terra': { ...TERRA, input_cost_per_token: 9e-6 } } }),
+    );
+    await write(JSON.stringify({ as_of: 'p', models: { 'gpt-5.6-terra': TERRA } }));
+    expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(9e-6);
+  });
+
+  it('memoizes per process — a rewrite applies only after clearRateCardCache (restart)', async () => {
     const path = await write(JSON.stringify({ as_of: 'x', models: { 'gpt-5.6-terra': TERRA } }));
     expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(2e-6);
     await writeFile(
@@ -256,9 +284,8 @@ describe('loadRateCard', () => {
       JSON.stringify({ as_of: 'y', models: { 'gpt-5.6-terra': { ...TERRA, input_cost_per_token: 5e-6 } } }),
       'utf-8',
     );
-    // mtime granularity: force a distinct stamp rather than sleeping.
-    const { utimesSync } = await import('node:fs');
-    utimesSync(path, new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(2e-6);
+    clearRateCardCache();
     expect(loadRateCard(dir)?.models['gpt-5.6-terra']?.input_cost_per_token).toBe(5e-6);
   });
 });

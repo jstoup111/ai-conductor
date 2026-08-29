@@ -1404,6 +1404,10 @@ install() {
   # 6b. Seed or refresh the AI-conductor config (channel prompt only on first run)
   configure_conductor || warn "Conductor config refresh incomplete — continuing"
 
+  # 6b'. Link the committed codex rate card at ~/.ai-conductor so every
+  # project's codex dispatches price to dollars (engine falls back globally).
+  sync_global_rate_card "$HARNESS_DIR"
+
   # 6c. Prompt for a markdown viewer (skipped on --update)
   configure_md_viewer || warn "Markdown viewer configuration incomplete — continuing"
   configure_mermaid_renderer || warn "Mermaid renderer configuration incomplete — continuing"

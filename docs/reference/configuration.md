@@ -17,6 +17,7 @@ code that consumes it, and what a bad value does. Sections follow the loader's o
 | Project config | `<project>/.ai-conductor/config.yml` | `PROJECT_CONFIG_DIR` / `PROJECT_CONFIG_FILE`, `src/conductor/src/engine/config.ts:94-95` |
 | User config | `~/.ai-conductor/config.yml` | `src/conductor/src/engine/user-config.ts:13-19` |
 | Project rate card | `<project>/.ai-conductor/rate-card.json` | `RATE_CARD_RELATIVE_PATH`, `src/conductor/src/execution/rate-card.ts` |
+| Global rate card (fallback) | `~/.ai-conductor/rate-card.json` | `globalRateCardPath`, `src/conductor/src/execution/rate-card.ts` |
 | Legacy project dir | `<project>/.harness/config.yml` | `LEGACY_PROJECT_CONFIG_DIR`, `config.ts:96` |
 | Legacy user JSON seed | `~/.claude/ai-conductor.config.json` (flat camelCase) | One-time migration input; after a successful seed it is renamed to `ai-conductor.config.json.migrated` |
 
@@ -51,6 +52,14 @@ which is why the card is committed rather than fetched live.
 
 The card's `as_of` therefore tracks when the rates last **changed**, not when they were last
 checked: a refresh that finds identical rates leaves the committed file untouched.
+
+The **global card** at `~/.ai-conductor/rate-card.json` takes precedence, so every project prices
+codex from one current source — not just projects that ran their own refresh. `bin/install` and
+`bin/update` maintain it as a symlink to the harness checkout's committed card
+(`sync_global_rate_card`, `bin/lib/harness-common.sh`) — the same idiom as skill installs — so a
+merged rate-card bot PR updates every project at once with no re-install. A regular file already at
+that path is treated as operator-owned and left alone. A committed project card applies only where
+no global card exists (e.g. an environment that never ran `bin/install`).
 
 It exists because providers disagree about reporting cost. Claude Code returns `total_cost_usd` on
 every dispatch, so its `TokenUsage.costUsd` is provider truth. Codex returns token counts and no
@@ -97,8 +106,8 @@ Rules that govern how the card is used:
   and `rate-card` for a harness estimate. A provider-reported cost is never overwritten.
 - **Cost-unmetered dispatches are visible.** The finish usage line names them explicitly
   (`N cost-unmetered (tokens counted, cost not)`), so a partial cost can never be read as a total.
-- **Refreshes are picked up live.** The card is re-read when its mtime changes; refreshing it
-  mid-run does not require a daemon restart.
+- **The card is read once per process.** Rates change rarely (a merged bot PR); a daemon or CLI
+  restart picks up the new card.
 
 ## Load order and precedence
 

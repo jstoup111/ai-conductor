@@ -408,7 +408,11 @@ EOF
 
 if [ "$#" -eq 0 ]; then
   check_harness_update
-  exit $?
+  rc=$?
+  # Ensure the ~/.ai-conductor global-fallback symlink to the checkout's
+  # committed rate card exists (repair after a moved checkout or old install).
+  sync_global_rate_card "$HARNESS_DIR"
+  exit $rc
 fi
 
 case "${1:-}" in
@@ -416,6 +420,7 @@ case "${1:-}" in
     # Automatic checks are advisory: report an unavailable prerequisite but
     # never make the embedding startup path fail.
     check_harness_update_auto || true
+    sync_global_rate_card "$HARNESS_DIR"
     exit 0
     ;;
   --set-channel)
