@@ -13,7 +13,11 @@ Scope boundary (binding — issue #588): the FULL conductor test suite must run
 authoritatively at CI (the `conductor` job on the PR), and at most ONCE more in-pipeline
 where the pre-SHIP `test_suite` gate needs it. Every intermediate build
 step that today re-runs the whole suite is scoped down to the affected/mapped tests (the
-task's / diff's own test files). No gate semantics change; nothing may ship on a red CI.
+task's / diff's own test files). Gate semantics are unchanged except where a project
+explicitly opts in via `test_suite.verification`
+(adr-2026-08-28-test-suite-drift-budget-and-verification-mode, #2021: a declared drift
+budget may preserve an inspected PASS, and scoped mode may satisfy the gate); nothing may
+ship on a red CI.
 
 Design anchors:
 - build_review gate = the verdict JSON predicate (`CUSTOM_COMPLETION_PREDICATES.build_review`,

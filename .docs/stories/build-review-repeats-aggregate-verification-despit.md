@@ -252,8 +252,11 @@ so that adding a scoped path cannot weaken the gate that blocks progression on a
 #### Negative Paths
 - Given a failing aggregate suite, when the aggregate verifier runs, then it still fails closed and
   still blocks progression — the scoped path provides no route around it.
-- Given a scoped run has just completed successfully, when the aggregate gate is subsequently
-  evaluated, then the scoped result does **not** satisfy it; aggregate proof is still required.
+- Given a scoped run has just completed successfully and the project has not set
+  `test_suite.verification.mode: scoped`, when the aggregate gate is subsequently evaluated, then
+  the scoped result does **not** satisfy it; aggregate proof is still required (in explicitly
+  configured scoped mode a mode-matching scoped PASS satisfies the gate, per
+  adr-2026-08-28-test-suite-drift-budget-and-verification-mode).
 - Given aggregate evidence that is missing, corrupt, or records a failure, when the aggregate
   verifier is invoked, then it still executes the suite rather than treating any scoped result as a
   substitute.
