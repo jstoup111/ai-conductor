@@ -1,3 +1,4 @@
+// Covers: task:3
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   chmod,
@@ -17,7 +18,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
-import { fingerprintFullSuiteInputs } from '../../src/engine/full-suite-fingerprint.js';
+import {
+  classifyFullSuiteFingerprintPath,
+  fingerprintFullSuiteInputs,
+} from '../../src/engine/full-suite-fingerprint.js';
+import type {
+  FullSuitePersistedFingerprintCategory,
+} from '../../src/engine/full-suite-fingerprint.js';
 import type { TestSuiteConfig } from '../../src/types/config.js';
 
 const execFile = promisify(execFileCallback);
@@ -88,6 +95,29 @@ afterEach(async () => {
 });
 
 describe('fingerprintFullSuiteInputs', () => {
+  it('classifies every full-suite fingerprint input category', () => {
+    const cases: Array<{
+      path: string;
+      explicitlyDeclared?: boolean;
+      category: FullSuitePersistedFingerprintCategory;
+    }> = [
+      { path: 'fixtures/custom-input.bin', explicitlyDeclared: true, category: 'additional_inputs' },
+      { path: 'package-lock.json', category: 'dependencies' },
+      { path: '.pipeline/test-suite-environment.key', category: 'environment' },
+      { path: 'db/migrations/001.sql', category: 'migrations' },
+      { path: '.ai-conductor/config.yml', category: 'project_config' },
+      { path: 'src/main.ts', category: 'source' },
+      { path: 'test/setup.ts', category: 'test_infrastructure' },
+      { path: 'test/main.test.ts', category: 'tests' },
+    ];
+
+    expect(cases.map(({ path, explicitlyDeclared, category }) => [
+      path,
+      classifyFullSuiteFingerprintPath(path, explicitlyDeclared),
+      category,
+    ])).toEqual(cases.map(({ path, category }) => [path, category, category]));
+  });
+
   it('is deterministic for unchanged tracked content', async () => {
     const repo = await makeRepo({ 'src/main.ts': 'export const value = 1;\n' });
 

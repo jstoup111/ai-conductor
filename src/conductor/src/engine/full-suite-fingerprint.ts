@@ -247,12 +247,13 @@ function updateFields(
   for (const hash of hashes) updateField(hash, name, value);
 }
 
-function fingerprintCategory(
+export function classifyFullSuiteFingerprintPath(
   path: string,
-  explicitlyDeclared: boolean,
+  explicitlyDeclared = false,
 ): FullSuitePersistedFingerprintCategory {
   if (explicitlyDeclared) return 'additional_inputs';
   const normalized = path.toLowerCase();
+  if (normalized === ENVIRONMENT_KEY_PATH) return 'environment';
   const base = posix.basename(normalized);
   if (normalized.startsWith('.ai-conductor/')) return 'project_config';
   if (
@@ -620,7 +621,7 @@ async function calculateFingerprint(
 
   for (const path of paths) {
     const required = requiredPaths.has(path);
-    const category = fingerprintCategory(path, required);
+    const category = classifyFullSuiteFingerprintPath(path, required);
     await updatePathIdentity(
       [hash, categoryHashes[category]],
       projectRoot,
