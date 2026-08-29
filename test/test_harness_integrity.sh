@@ -1202,6 +1202,23 @@ else
   assert "test/test_no_legacy_cli_references.sh exists" 1
 fi
 
+legacy_cli_backend_test="${HARNESS_DIR}/test/test_legacy_cli_guard_backends.sh"
+if [ -f "$legacy_cli_backend_test" ]; then
+  set +e
+  legacy_cli_backend_output=$(bash "$legacy_cli_backend_test" 2>&1)
+  legacy_cli_backend_exit=$?
+  set -e
+
+  if [ "$legacy_cli_backend_exit" -eq 0 ]; then
+    assert "test/test_legacy_cli_guard_backends.sh — scanner backends fail closed identically" 0
+  else
+    echo "$legacy_cli_backend_output" | sed 's/^/    /'
+    assert "test/test_legacy_cli_guard_backends.sh — scanner backends fail closed identically" 1
+  fi
+else
+  assert "test/test_legacy_cli_guard_backends.sh exists" 1
+fi
+
 # ── 13. ci-detect-docs-only.sh predicate suite ──────────────────────────────
 # Runs test/test_ci_detect_docs_only.sh, which covers
 # .github/scripts/ci-detect-docs-only.sh (the docs-only CI gating predicate).

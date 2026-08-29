@@ -8,17 +8,26 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 failures=0
-if ! command -v rg >/dev/null 2>&1; then
-  printf 'legacy CLI reference guard: required scanner rg is unavailable\n' >&2
+if command -v rg >/dev/null 2>&1; then
+  scanner=rg
+elif command -v grep >/dev/null 2>&1; then
+  scanner=grep
+else
+  printf 'legacy CLI reference guard: scanners rg and grep are unavailable\n' >&2
   exit 1
 fi
 
 set +e
-scan_output=$(cd "$HARNESS_DIR" && rg -n --no-heading --fixed-strings 'conduct-ts' \
-  --glob '!bin/ai-conductor' \
-  --glob '!bin/conduct' \
-  --glob '!bin/update' \
-  src/conductor/src hooks skills bin README.md HARNESS.md docs/reference/cli.md docs/reference/skills.md)
+if [ "$scanner" = rg ]; then
+  scan_output=$(cd "$HARNESS_DIR" && rg -n --no-heading --fixed-strings 'conduct-ts' \
+    --glob '!bin/ai-conductor' \
+    --glob '!bin/conduct' \
+    --glob '!bin/update' \
+    src/conductor/src hooks skills bin README.md HARNESS.md docs/reference/cli.md docs/reference/skills.md)
+else
+  scan_output=$(cd "$HARNESS_DIR" && grep -rInH --fixed-strings --exclude-dir=node_modules 'conduct-ts' \
+    src/conductor/src hooks skills bin README.md HARNESS.md docs/reference/cli.md docs/reference/skills.md)
+fi
 scan_exit=$?
 set -e
 
@@ -26,7 +35,7 @@ case "$scan_exit" in
   0) ;;
   1) scan_output='' ;;
   *)
-    printf 'legacy CLI reference guard: rg scan failed (exit %s)\n' "$scan_exit" >&2
+    printf 'legacy CLI reference guard: %s scan failed (exit %s)\n' "$scanner" "$scan_exit" >&2
     exit "$scan_exit"
     ;;
 esac
