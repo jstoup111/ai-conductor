@@ -31,6 +31,7 @@ const PROJECT_PRELUDE = 'src/conductor/src/engine/project-prelude.ts';
 const BUILD_PROGRESS_WATCHER = 'src/conductor/src/engine/build-progress-watcher.ts';
 const FULL_SUITE_EXECUTOR = 'src/conductor/src/engine/full-suite-executor.ts';
 const FULL_SUITE_FINGERPRINT = 'src/conductor/src/engine/full-suite-fingerprint.ts';
+const FULL_SUITE_VERIFIER = 'src/conductor/src/engine/full-suite-verifier.ts';
 const HARNESS_COMMON = 'bin/lib/harness-common.sh';
 const OTEL_CONFIG = 'src/conductor/src/engine/otel/otel-config.ts';
 
@@ -240,6 +241,11 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'test_suite.timeout_seconds': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.inputs': consumer(FULL_SUITE_FINGERPRINT),
   'test_suite.environment': consumer(FULL_SUITE_FINGERPRINT),
+  // The verifier resolves the test-suite block before selecting aggregate or
+  // scoped execution and applying the configured drift budget.
+  'test_suite.verification': consumer(FULL_SUITE_VERIFIER),
+  'test_suite.verification.mode': consumer(FULL_SUITE_VERIFIER),
+  'test_suite.verification.drift_budget': consumer(FULL_SUITE_VERIFIER),
 
   // ── build_progress ────────────────────────────────────────────────────────
   'build_progress.poll_seconds': consumer(BUILD_PROGRESS_WATCHER),
