@@ -262,9 +262,9 @@ describe('Story 2 — malformed values keep their existing source-aware contract
 });
 
 describe('merged test_suite verification defaults', () => {
-  it('resolves an absent verification block only after merging user and project config', async () => {
+  it('preserves a user drift budget when project verification defaults materialize after merge', async () => {
     const root = await makeConfigPair(
-      undefined,
+      'test_suite:\n  verification:\n    drift_budget:\n      source: 20\n',
       'test_suite:\n  command: npm test\n',
     );
 
@@ -282,7 +282,7 @@ describe('merged test_suite verification defaults', () => {
               environment: 'none',
               migrations: 'none',
               project_config: 'none',
-              source: 'none',
+              source: 20,
               test_infrastructure: 'none',
               tests: 'none',
             },
