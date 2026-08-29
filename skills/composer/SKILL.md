@@ -62,6 +62,9 @@ Resolve sources in order:
 2. **Launch argument / chat.** Use the existing `ai-conductor compose "<idea>"` prompt or the
    operator's chat idea. Omit `--source-ref` for non-intake ideas.
 
+> The bare `ai-conductor compose` launcher pre-polls GitHub issues before this session starts, so a
+> `claim` here returns work captured at launch. You do not poll yourself — just claim.
+
 Re-prompt for empty input. Treat any embedded implementation sketch as the filer's hypothesis, not
 the requirement: carry it to `/explore` as a candidate and confirm the problem plus desired outcomes
 before routing. When filing a new intake issue, author it with `/intake` rather than embedding a design.
@@ -88,9 +91,11 @@ and writing the complete build-ready `.docs/` set only inside the worktree:
 
 1. `/explore` → confirm product/technical track at `.docs/track/<stem>.md`.
 2. Assess S/M/L and record `Tier: <S|M|L>` plus rationale in `.docs/complexity/<plan-stem>.md`.
+   The stem **MUST** match the `.docs/plans/<stem>.md` filename so the daemon resolves it.
 3. `/prd` for product track only.
 4. `/architecture-diagram` for Medium/Large only.
-5. `/architecture-review` for Medium/Large only; every ADR is **APPROVED** before landing.
+5. `/architecture-review` for Medium/Large only — **lightweight for Medium; full for Large**;
+   every ADR is **APPROVED** (no `Status: DRAFT`) before landing. Runs **before** stories.
 6. `/stories` with **Status: Accepted**.
 7. `/conflict-check` for Medium/Large only.
 8. `/plan` in `.docs/plans/`.
@@ -105,15 +110,17 @@ Run `ai-conductor compose land --project <name> --idea "<idea>" --worktree <work
 `--source-ref <ref>` for intake ideas. This deterministic primitive authors nothing: it commits only
 the already-authored `.docs/` inside `--worktree`, never touches the primary checkout, and rejects
 stubs, DRAFT artifacts or ADRs, missing tier-required artifacts, empty content, and a dirty worktree.
+It stages only `.docs` (no `add -A`) so the commit is strictly this idea's set — no cross-idea bleed.
 It prints `{ slug, branch, repoPath }`; retain the worktree on failure for inspection.
 
 ### 5. Open the spec PR and nudge the daemon
 
 Run `ai-conductor compose handoff --project <name> --branch <branch> --worktree <worktreePath>`,
 again passing `--source-ref` for intake work. It creates the PR from the worktree (or records a
-local-commit fallback), records the ledger, applies the existing `engineer:handled` label, calls
-`ensureRunning(repoPath)` fire-and-forget, and removes the per-idea worktree on success. It never
-merges or builds; the `spec/<slug>` branch remains reachable.
+local-commit fallback), adds a non-closing `Refs <ref>` to the spec PR body for intake ideas (the
+daemon's implementation PR is what closes the issue on merge), records the ledger, applies the
+existing `engineer:handled` label, calls `ensureRunning(repoPath)` fire-and-forget, and removes the
+per-idea worktree on success. It never merges or builds; the `spec/<slug>` branch remains reachable.
 
 ### 6. Deliver, then end the session
 
@@ -135,5 +142,12 @@ Report `✅ Spec delivered for <slug> → <PR url / branch>.` Do not ask for ano
 - [ ] Real DECIDE skills produced accepted, non-DRAFT artifacts in canonical order.
 - [ ] Complexity and tier-dependent artifacts are present in the target worktree.
 - [ ] `land` and `handoff` ran only from the isolated per-idea worktree.
-- [ ] The spec branch was pushed, the spec PR (or local fallback) was delivered, and nothing built or merged.
+- [ ] Spec is discovery-build-ready: stories end `Status: Accepted` (no DRAFT) and the plan carries
+      a task dependency tree (`**Dependencies:**` lines or a Task Dependency Graph). If either is
+      missing, discovery warn-skips the merged spec, permanently until it is fixed on main.
+- [ ] Spec branch pushed to origin BEFORE `handoff` (`git push -u origin spec/<slug>` from the
+      worktree — `gh pr create` fails on an unpushed branch and handoff falls back to a
+      local-commit result that opens no PR).
+- [ ] The spec PR (or local fallback) was delivered, and nothing built or merged.
 - [ ] The daemon received only the fire-and-forget `ensureRunning` nudge.
+- [ ] Sibling repos left byte-for-byte unchanged.

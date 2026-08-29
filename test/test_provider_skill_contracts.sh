@@ -322,6 +322,41 @@ require_pattern 'composer gives non-Claude hosts a normal session-end path' \
   'other supported host.*(end|close).*session|end.*session.*other supported host' \
   "$composer_skill"
 
+# S3.1: the composer body must carry the loop's normative instructions in full,
+# not just its section shape. Each assertion below pins a specific instruction
+# whose removal changes what the composer agent does; heading-presence proxies
+# cannot detect that.
+require_pattern 'composer carries the push-before-handoff command' \
+  'git push -u origin spec/' \
+  "$composer_skill"
+require_pattern 'composer names the unpushed-branch handoff failure mode' \
+  'gh pr create.{0,80}unpushed|unpushed.{0,80}(gh pr create|local-commit)' \
+  "$composer_skill"
+require_pattern 'composer states the complexity-stem MUST against the plan filename' \
+  'stem.{0,40}MUST.{0,60}\.docs/plans/<stem>\.md' \
+  "$composer_skill"
+require_pattern 'composer states the architecture-review depth split' \
+  'lightweight for Medium.{0,20}full for Large' \
+  "$composer_skill"
+require_pattern 'composer states that architecture-review runs before stories' \
+  'Runs \*\*before\*\* stories|runs before stories' \
+  "$composer_skill"
+require_pattern 'composer states the land .docs-only staging rule' \
+  'stages only `\.docs`|no `add -A`' \
+  "$composer_skill"
+require_pattern 'composer states the non-closing Refs handoff rule' \
+  'non-closing.{0,20}`?Refs' \
+  "$composer_skill"
+require_pattern 'composer states the discovery-build-readiness rationale' \
+  'discovery warn-skips' \
+  "$composer_skill"
+require_pattern 'composer keeps the launcher pre-poll note' \
+  'You do not poll yourself' \
+  "$composer_skill"
+require_pattern 'composer keeps the sibling-repo invariance checklist item' \
+  'Sibling repos left byte-for-byte unchanged' \
+  "$composer_skill"
+
 # The positive checks above pin expected language. This small deterministic audit
 # rejects the high-risk ways a shared instruction can accidentally become
 # Claude-only. Its fixtures keep the rules honest: every category below must
