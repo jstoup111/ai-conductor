@@ -135,6 +135,17 @@ Choose **Option C**, with the validation rule moved onto the new surface where i
    placed on it, and the aggregate verifier's fingerprint, lock, evidence, timeout, redaction, and
    reuse behavior are untouched.
 
+   > **Amended 2026-08-28 by #2021:** Points 7 and 8 gain one explicitly configured exception.
+   > When a project sets `test_suite.verification.mode: scoped`
+   > (adr-2026-08-28-test-suite-drift-budget-and-verification-mode), the `test_suite` gate itself
+   > executes through this ADR's engine-owned scoped interface — selectors derived
+   > framework-agnostically from the feature surface — and that scoped PASS satisfies the gate,
+   > with the mode and selector set recorded in the evidence identity. An empty selection still
+   > routes to the aggregate verifier (point 7's "routes, never expands"), and the route is
+   > recorded in evidence and events. In aggregate mode, and wherever the new key is absent,
+   > points 7 and 8 apply exactly as written: aggregate verification semantics are unchanged and
+   > no scoped invocation satisfies the gate.
+
 9. **This repository's own arg-swallowing scripts are repaired** so the legacy hand-assembled form
    is not a trap for a human or an agent that reaches for it. This is a local correction, not a
    substitute for points 1–6.

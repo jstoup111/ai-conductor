@@ -104,6 +104,17 @@ Choose **Option C**.
 7. Recalculate freshness at every engine, CLI, and finish entry. Missing
    config, invalid config, unresolved required input, launch failure, timeout,
    or non-zero exit blocks. Indeterminate freshness never reuses evidence.
+
+   > **Amended 2026-08-28 by #2021:** Freshness recalculation at every entry is
+   > unchanged and remains mandatory. What changes is the consequence of an
+   > observed fingerprint mismatch: under an explicitly configured
+   > `test_suite.verification.drift_budget`
+   > (adr-2026-08-28-test-suite-drift-budget-and-verification-mode), a mismatch
+   > whose measured per-category drift is entirely within the declared budget
+   > preserves the recorded PASS with an auditable drift record instead of
+   > forcing execution. Indeterminate freshness — and indeterminate drift
+   > measurement — still never reuses evidence, and absent configuration keeps
+   > this decision's original behavior exactly.
 8. Add `test_suite` to rebase and kickback invalidation/routing surfaces. The
    verifier may immediately preserve it when content is identical; a changed
    fingerprint causes execution before the validation group is allowed to run

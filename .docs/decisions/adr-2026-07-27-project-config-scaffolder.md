@@ -41,6 +41,13 @@ or prompt discipline, where machinery should do the work.
    the same template into an existing repo. This covers repos onboarded via `conduct register` +
    `/bootstrap`, deterministically rather than by instructing an agent to hand-author a config.
 
+   > **Amended 2026-08-28 by #2021:** `config init` remains the sole deterministic writer and
+   > stays idempotent and refuse-to-clobber, but it is no longer restricted to a byte copy:
+   > per adr-2026-08-28-test-suite-drift-budget-and-verification-mode D8 it accepts optional
+   > flags that substitute the operator's recorded `test_suite.verification` answers into the
+   > generated block. The template remains the single source shape, and the hand-authoring
+   > prohibition is unchanged.
+
 4. **Delete the hand-copy instruction from the docs** and describe the scaffolded behavior
    instead, in `docs/quickstart.md`, `docs/guides/multiprovider.md`, and
    `docs/reference/configuration.md`.
