@@ -271,11 +271,12 @@ export function createProductionFinishPublicationCoordinator(
       // Best-effort durability; the in-memory verdict still bounds this run.
     }
   };
-  // A successful coordinator authoring pass owns exactly one mandatory
+  // A successful placeholder-authoring pass owns exactly one mandatory
   // re-observation. Its revision is accepted without a redundant judgment;
-  // independently observed authored prose remains stale and is judged.
+  // a rewrite of prose already judged deficient remains stale and is judged.
   const acceptedProseRevisionByPr = new Map<string, string>();
-  const authoredProsePendingByPr = new Set<string>();
+  const authoredPlaceholderProsePendingByPr = new Set<string>();
+  const authoringOriginByPr = new Map<string, 'placeholder' | 'revision_required'>();
   // Interactive authority is acquired once per coordinator lifetime. A retry
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
@@ -413,7 +414,7 @@ export function createProductionFinishPublicationCoordinator(
                   const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
                   proseRevisionByPr.set(pr.url, revision);
                   await seedJudgmentStore();
-                  if (authoredProsePendingByPr.delete(pr.url) && !halted) {
+                  if (authoredPlaceholderProsePendingByPr.delete(pr.url) && !halted) {
                     const observedProse = prProse(pr.title, pr.body, false, 'none');
                     if (observedProse !== 'placeholder') {
                       // The authoring pass, not an independently observed
@@ -447,6 +448,11 @@ export function createProductionFinishPublicationCoordinator(
                     halted,
                     verdict,
                   );
+                  if (prose === 'placeholder' || prose === 'revision_required') {
+                    authoringOriginByPr.set(pr.url, prose);
+                  } else {
+                    authoringOriginByPr.delete(pr.url);
+                  }
                   return {
                       state: 'one' as const,
                       url: pr.url,
@@ -494,7 +500,9 @@ export function createProductionFinishPublicationCoordinator(
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
                   await dispatchAuthoring(request);
-                  authoredProsePendingByPr.add(request.pullRequestUrl);
+                  if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
+                    authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
+                  }
                 },
               }
             : {}),

@@ -59,7 +59,8 @@ async function advance(
 
 async function dispatchPersistedRevisionAuthoring(
   detail: string | undefined,
-): Promise<PrProseAuthoringRequest> {
+  continueToNextTransition = false,
+): Promise<{ request: PrProseAuthoringRequest; judgmentDispatches: number }> {
   const root = await mkdtemp(join(tmpdir(), 'finish-prose-authoring-guidance-'));
   try {
     const pipeline = join(root, '.pipeline');
@@ -101,7 +102,8 @@ async function dispatchPersistedRevisionAuthoring(
       observeReleaseReadiness: async () => 'present',
     });
 
-    await expect(coordinator.advance({
+    const dispatchJudgment = vi.fn(async () => ({ success: true }));
+    const input = {
       state: {
         feature_desc: 'prose-guidance',
         worktree_branch: 'feat/prose-guidance',
@@ -111,16 +113,20 @@ async function dispatchPersistedRevisionAuthoring(
         manual_test: 'done',
         architecture_review_as_built: 'done',
       } as ConductState,
-      mode: 'auto',
+      mode: 'auto' as const,
       daemon: true,
-      dispatchJudgment: async () => ({ success: true }),
+      dispatchJudgment,
       dispatchAuthoring,
       emit: async () => {},
-    })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+    };
+    await expect(coordinator.advance(input)).resolves.toEqual({
+      kind: 'publication_progress', transition: 'author_pr_prose',
+    });
+    if (continueToNextTransition) await coordinator.advance(input);
 
     const request = dispatchAuthoring.mock.calls[0]?.[0];
     if (request === undefined) throw new Error('expected the authoring dispatch');
-    return request;
+    return { request, judgmentDispatches: dispatchJudgment.mock.calls.length };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -223,15 +229,23 @@ describe('FINISH authors PR prose before it judges it', () => {
   });
 
   it('threads persisted verdict detail through the production observation boundary', async () => {
-    await expect(
-      dispatchPersistedRevisionAuthoring('Explain the user-visible recovery behavior.'),
-    ).resolves.toEqual({
+    const { request } = await dispatchPersistedRevisionAuthoring(
+      'Explain the user-visible recovery behavior.',
+    );
+
+    expect(request).toEqual({
       kind: 'finish_pr_prose_authoring',
       pullRequestUrl: PR_URL,
       authoringScope: ['title', 'body'],
       maximumPasses: 1,
       revisionGuidance: 'Explain the user-visible recovery behavior.',
     });
+  });
+
+  it('re-judges the new revision after a persisted deficient verdict is authored', async () => {
+    const result = await dispatchPersistedRevisionAuthoring(undefined, true);
+
+    expect(result.judgmentDispatches).toBe(1);
   });
 
   it('still dispatches a detail-less revision authoring pass without guidance', async () => {
@@ -258,7 +272,9 @@ describe('FINISH authors PR prose before it judges it', () => {
   });
 
   it('still dispatches an authoring pass when the persisted verdict has no detail', async () => {
-    await expect(dispatchPersistedRevisionAuthoring(undefined)).resolves.toEqual({
+    const { request } = await dispatchPersistedRevisionAuthoring(undefined);
+
+    expect(request).toEqual({
       kind: 'finish_pr_prose_authoring',
       pullRequestUrl: PR_URL,
       authoringScope: ['title', 'body'],
