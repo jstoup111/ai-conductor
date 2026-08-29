@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-29T04:12:14.816Z
 Slug: decide-the-daemon-engine-rename-before-the-v1-0-ta
 Class: needs-human
 Halting step: unknown
