@@ -384,6 +384,28 @@ export interface HarnessSelfHostConfig {
   };
 }
 
+export type TestSuiteVerificationMode = 'aggregate' | 'scoped';
+
+/** Closed vocabulary shared by full-suite fingerprints and drift budgets. */
+export type TestSuiteDriftCategory =
+  | 'additional_inputs'
+  | 'dependencies'
+  | 'environment'
+  | 'migrations'
+  | 'project_config'
+  | 'source'
+  | 'test_infrastructure'
+  | 'tests';
+
+/** A declared per-category tolerance for drift since an attested PASS. */
+export type TestSuiteDriftBudgetBound = 'none' | 'unlimited' | number;
+
+/** Fully resolved verification settings with a bound for every drift category. */
+export interface TestSuiteVerificationConfig {
+  mode: TestSuiteVerificationMode;
+  drift_budget: Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>;
+}
+
 /** Project-owned aggregate test operation used by full-suite verification. */
 export interface TestSuiteConfig {
   command?: string;
@@ -392,6 +414,7 @@ export interface TestSuiteConfig {
   timeout_seconds?: number;
   inputs?: string[];
   environment?: string[];
+  verification?: TestSuiteVerificationConfig;
 }
 
 export type AggregateTestSuiteConfig = TestSuiteConfig & { command: string };

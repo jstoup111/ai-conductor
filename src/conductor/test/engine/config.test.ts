@@ -1,5 +1,4 @@
-// Covers: task:2
-// Covers: task:1, task:3
+// Covers: task:1, task:2, task:3
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -1091,6 +1090,86 @@ steps:
   });
 
   describe('test_suite config block', () => {
+    it('resolves aggregate verification with an all-none drift budget', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    mode: aggregate\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok && result.config.test_suite?.verification).toEqual({
+        mode: 'aggregate',
+        drift_budget: {
+          additional_inputs: 'none',
+          dependencies: 'none',
+          environment: 'none',
+          migrations: 'none',
+          project_config: 'none',
+          source: 'none',
+          test_infrastructure: 'none',
+          tests: 'none',
+        },
+      });
+    });
+
+    it('resolves declared budgetable drift bounds exactly', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    drift_budget:\n      source: 20\n      tests: none\n      test_infrastructure: unlimited\n      additional_inputs: 3\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok && result.config.test_suite?.verification).toEqual({
+        mode: 'aggregate',
+        drift_budget: {
+          additional_inputs: 3,
+          dependencies: 'none',
+          environment: 'none',
+          migrations: 'none',
+          project_config: 'none',
+          source: 20,
+          test_infrastructure: 'unlimited',
+          tests: 'none',
+        },
+      });
+    });
+
+    it('resolves scoped verification when the scoped command is valid', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  scoped_command: npx vitest run {selectors}\n  verification:\n    mode: scoped\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok && result.config.test_suite?.verification?.mode).toBe('scoped');
+    });
+
+    it('defaults absent verification to aggregate mode with an all-none drift budget', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok && result.config.test_suite?.verification).toEqual({
+        mode: 'aggregate',
+        drift_budget: {
+          additional_inputs: 'none',
+          dependencies: 'none',
+          environment: 'none',
+          migrations: 'none',
+          project_config: 'none',
+          source: 'none',
+          test_infrastructure: 'none',
+          tests: 'none',
+        },
+      });
+    });
+
     it('loads and exposes an optional scoped_command template', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),
@@ -1169,6 +1248,19 @@ steps:
         timeout_seconds: 1800,
         inputs: ['test-support/**'],
         environment: ['CI', 'DATABASE_URL'],
+        verification: {
+          mode: 'aggregate',
+          drift_budget: {
+            additional_inputs: 'none',
+            dependencies: 'none',
+            environment: 'none',
+            migrations: 'none',
+            project_config: 'none',
+            source: 'none',
+            test_infrastructure: 'none',
+            tests: 'none',
+          },
+        },
       };
 
       const result = validateConfig({ test_suite: testSuite });

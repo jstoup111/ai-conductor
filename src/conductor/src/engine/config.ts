@@ -17,6 +17,9 @@ import type {
   MarkdownViewerConfig,
   MermaidRendererConfig,
   BuildProgressConfig,
+  TestSuiteDriftBudgetBound,
+  TestSuiteDriftCategory,
+  TestSuiteVerificationConfig,
 } from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
 import { ALL_STEPS, OUT_OF_BAND_STEPS, getStepDefinition } from './steps.js';
@@ -125,7 +128,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'architecture_review_as_built.remediation': ['enabled'],
   'architecture_review_as_built.checks': ['tiers'],
   assess: ['stale_after_days', 'stale_after_commits'],
-  test_suite: ['command', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment'],
+  test_suite: ['command', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
   build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled'],
   provider_stream: ['min_interval_ms'],
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
@@ -1702,7 +1705,48 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
     }
   }
 
+  raw.verification = resolveTestSuiteVerification(raw.verification);
+
   return null;
+}
+
+const TEST_SUITE_DRIFT_CATEGORIES: readonly TestSuiteDriftCategory[] = [
+  'additional_inputs',
+  'dependencies',
+  'environment',
+  'migrations',
+  'project_config',
+  'source',
+  'test_infrastructure',
+  'tests',
+];
+
+const DEFAULT_TEST_SUITE_DRIFT_BUDGET: Record<
+  TestSuiteDriftCategory,
+  TestSuiteDriftBudgetBound
+> = Object.fromEntries(
+  TEST_SUITE_DRIFT_CATEGORIES.map((category) => [category, 'none']),
+) as Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>;
+
+function resolveTestSuiteVerification(raw: unknown): TestSuiteVerificationConfig {
+  const verification = isPlainObject(raw) ? raw : {};
+  const rawBudget = isPlainObject(verification.drift_budget) ? verification.drift_budget : {};
+  const mode = verification.mode === 'scoped' ? 'scoped' : 'aggregate';
+
+  return {
+    mode,
+    drift_budget: Object.fromEntries(
+      TEST_SUITE_DRIFT_CATEGORIES.map((category) => {
+        const bound = rawBudget[category];
+        return [
+          category,
+          bound === 'none' || bound === 'unlimited' || typeof bound === 'number'
+            ? bound
+            : DEFAULT_TEST_SUITE_DRIFT_BUDGET[category],
+        ];
+      }),
+    ) as Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>,
+  };
 }
 
 function existingRealPathEscapesRoot(projectRoot: string, candidate: string): boolean {
