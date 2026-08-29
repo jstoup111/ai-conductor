@@ -1472,7 +1472,7 @@ describe('landSpec remediation text uses the canonical compose verb', () => {
     let caught: Error | null = null;
     try {
       await landSpec(target(), 'dep bump', missing, undefined, {
-        ownerConfig: { operatorId: 'bob' },
+        ownerConfig: { spec_owner: 'bob' },
         gh: async () => ({ stdout: 'bob\n' }),
       });
     } catch (e) {
