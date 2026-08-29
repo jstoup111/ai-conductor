@@ -193,16 +193,16 @@ describe('detectEngineerCommand: idea sources, claim, --source-ref', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('engineerLaunchArgs: idea passthrough', () => {
-  it('no idea → exactly /engineer (backward compatible)', () => {
-    expect(engineerLaunchArgs({})).toEqual(['--permission-mode', 'default', '/engineer']);
+  it('no idea → exactly /composer', () => {
+    expect(engineerLaunchArgs({})).toEqual(['--permission-mode', 'default', '/composer']);
   });
-  it('idea → appended to the /engineer prompt', () => {
+  it('idea → appended to the /composer prompt', () => {
     expect(engineerLaunchArgs({}, 'add a /metrics endpoint')).toEqual([
-      '--permission-mode', 'default', '/engineer add a /metrics endpoint',
+      '--permission-mode', 'default', '/composer add a /metrics endpoint',
     ]);
   });
   it('blank idea is treated as no idea', () => {
-    expect(engineerLaunchArgs({}, '   ')).toEqual(['--permission-mode', 'default', '/engineer']);
+    expect(engineerLaunchArgs({}, '   ')).toEqual(['--permission-mode', 'default', '/composer']);
   });
 });
 

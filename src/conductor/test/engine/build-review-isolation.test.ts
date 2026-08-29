@@ -173,7 +173,7 @@ describe('build_review input isolation', () => {
       expect(policy).toContain('ai-conductor scoped-run <selectors...>');
       expect(policy).toMatch(/agent derives the selectors/i);
     }
-    expect(harness).toContain('conduct-ts scoped-run <selectors...>');
+    expect(harness).toContain('ai-conductor scoped-run <selectors...>');
     expect(harness).toMatch(/agent derives the selectors/i);
 
     for (const trigger of BROAD_FALLBACK_TRIGGERS) {
