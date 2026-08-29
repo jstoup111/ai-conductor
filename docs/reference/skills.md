@@ -298,8 +298,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `/architecture-review --as-built`. The DECIDE-time step skips at tier S; the as-built step runs at
   every tier.
 - **Inputs** — `.docs/decisions/`, `.docs/architecture/`, `CLAUDE.md`, `.memory/decisions/`, existing
-  code, and the PRD's FRs or the explore output. As-built mode reads only `Status: APPROVED` ADRs plus
-  the feature diff.
+  code, and the PRD's FRs or the explore output. As-built mode reads only `Status: APPROVED` ADRs, the
+  feature diff, and the sealed `.docs/stories/` criteria that anchor its plan-gap outcome judgement.
 - **Outputs** — `.docs/decisions/architecture-review-<date>-<feature>.md`; ADRs under
   `.docs/decisions/`; `.pipeline/architecture-review-as-built.md`, which must be rewritten on every
   invocation or the engine reads it as stale and halts the SHIP tail.

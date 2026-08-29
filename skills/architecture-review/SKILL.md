@@ -441,8 +441,14 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
     primary's precondition is never produced. All are green under unit tests and invisible to a
     conformance-only review.
 - **Plan-gap check.** When the shipped code faithfully implements the approved design but that
-  design is itself the limit that prevents a stated outcome, issue `PLAN_GAP`. Record the affected
-  outcome and whether it was delivered; do not send unplanned work back to BUILD.
+  design is itself the limit that prevents an outcome the sealed story criteria require, issue
+  `PLAN_GAP`. Record the affected outcome and whether it was delivered; do not send unplanned work
+  back to BUILD.
+  - **Outcome authority: the sealed story criteria.** The approved, sealed acceptance criteria under
+    `.docs/stories/` are this feature's acceptance contract and the only authority for what outcome
+    was stated. `.docs/intake/` is an idea capture that is **superseded** once stories are approved;
+    never grade the shipped code against it. Where intake and the stories disagree, the stories win:
+    a deliberate narrowing recorded in an amended, resealed story is the decision, not a plan gap.
 - Do NOT re-run §2/§3/§5 (feasibility/complexity/domain pre-checks) — those belong to the DECIDE
   pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
   deliberately cheap.
@@ -453,9 +459,10 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR only
   when it makes or changes a structural decision; otherwise no ADR is needed, and it does not block.
 - **PLAN_GAP** — the shipped code faithfully implements the approved design, but the design is the
-  limit preventing a stated outcome. Include `Outcome delivered: yes` when acceptance criteria
-  still pass; record the gap and proceed. Include `Outcome delivered: no` when the stated outcome
-  is not delivered; the loop HALTS for a human. Never turn this finding into unplanned BUILD work.
+  limit preventing an outcome the sealed story criteria require. Include `Outcome delivered: yes`
+  when the sealed story criteria are satisfied; record the outcome-level gap and proceed. Include
+  `Outcome delivered: no` only when a sealed story criterion is genuinely unmet and the approved
+  design is the limit; the loop HALTS for a human. Never turn this finding into unplanned BUILD work.
 - **BLOCKED** — an enabled check found an architectural violation, such as an APPROVED-ADR
   violation or an unreachable production rung. The loop HALTS. A human must resolve it: fix the
   code to comply, or for an ADR violation supersede the ADR with a new, human-APPROVED ADR
@@ -558,8 +565,9 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
 - [ ] **As-built mode:** statically-reachable-but-unobserved behavior recorded as `UNEXERCISED`
       with its greppable observation signature
 - [ ] **As-built mode:** verdict written to `.pipeline/architecture-review-as-built.md`
-- [ ] **As-built mode:** PLAN_GAP records the affected outcome and `Outcome delivered: yes|no`;
-      no as-built finding sends unplanned work back to BUILD
+- [ ] **As-built mode:** PLAN_GAP records the affected outcome and `Outcome delivered: yes|no`,
+      judged against the sealed `.docs/stories/` criteria and never against superseded
+      `.docs/intake/` capture; no as-built finding sends unplanned work back to BUILD
 - [ ] **As-built mode:** BLOCKED on any enabled APPROVED-ADR violation; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
 - [ ] **As-built mode:** every BLOCKED verdict contains exactly one `## Blocking Findings` table,
