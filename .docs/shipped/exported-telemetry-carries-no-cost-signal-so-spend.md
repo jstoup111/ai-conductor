@@ -4,12 +4,6 @@ spec_hash: 72ae3720c5adfb4fab2d2687d2c2979487aad62631e611d72f5c1d2648cabd41
 pr: https://github.com/jstoup111/ai-conductor/pull/1972
 shipped: 2026-08-29
 engine_version: 20260829T124007Z-0fc0ed0e907e
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/src/engine/otel/metrics.ts:95,158 — both new instruments route through `withIdentity`, adding `project`/`feature` attributes that neither the stories nor the plan's attribute lists specify"
-    accepted: true
 ---
 
 ## Cost
@@ -18,18 +12,20 @@ output: 189387
 cache_read: 26505282
 cache_creation: 686319
 cost_usd: 25.2297
-dispatches: 30
+dispatches: 31
 retries: 0
 halts: 5
-unmetered: count: 9, duration_ms: 0
+unmetered: count: 10, duration_ms: 0
 cost_unmetered: count: 0
 providers:
   codex: input: 1382549, output: 107863, cache_read: 18805760, cache_creation: 0, cost_usd: 12.4773, dispatches: 10, cost_unmetered: 0
   claude: input: 268, output: 81524, cache_read: 7699522, cache_creation: 686319, cost_usd: 12.7524, dispatches: 11, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:finish
+state: measured
+active_ms: 6233745
+provider_active_ms: 4512976
+no_provider_active_ms: 1720769
 
 ## Build Review
 laps_to_pass: 1
