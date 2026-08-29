@@ -24,7 +24,7 @@ import {
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
-import { FullSuiteVerifier } from './full-suite-verifier.js';
+import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -379,14 +379,22 @@ export function makeRekickBuildPreVerify(
         reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed',
       };
     }
+    let inspection: FullSuiteInspectionResult | undefined;
     const completion = await checkStepCompletion(worktreePath, definition.name, {
       projectRoot: worktreePath,
       planPath,
       featureDesc,
+      ...(definition.name === 'test_suite'
+        ? {
+            fullSuiteInspect: async () => {
+              inspection = await new FullSuiteVerifier({ projectRoot: worktreePath }).inspect();
+              return inspection;
+            },
+          }
+        : {}),
     });
     if (definition.name !== 'test_suite' || !completion.done) return completion;
-    const inspection = await new FullSuiteVerifier({ projectRoot: worktreePath }).inspect();
-    return inspection.status === 'PRESERVED_WITHIN_BUDGET'
+    return inspection?.status === 'PRESERVED_WITHIN_BUDGET'
       ? { ...completion, preservationBasis: 'test_suite_drift_budget' as const }
       : completion;
   };
