@@ -9,7 +9,7 @@ export interface BuildTailDispatch {
   worktree?: string;
 }
 
-/** Parse `conduct-ts build-tail [worktree]` without starting a pipeline. */
+/** Parse `ai-conductor build-tail [worktree]` without starting a pipeline. */
 export function detectBuildTailCommand(argv: string[]): BuildTailDispatch | null {
   if (argv[2] !== 'build-tail') return null;
   return { kind: 'build-tail', worktree: argv[3] };

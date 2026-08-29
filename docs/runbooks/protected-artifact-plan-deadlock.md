@@ -28,7 +28,7 @@ Accept the exact current finding with a rationale that identifies the sealed art
 DECIDE-owned amendment:
 
 ```bash
-conduct-ts build-review accept \
+ai-conductor build-review accept \
   --feature <slug> \
   --lap <lap> \
   --finding <finding-id> \

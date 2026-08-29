@@ -2,7 +2,7 @@
 
 Seeds the sandbox engineer store's durable inbox (`$AI_CONDUCTOR_ENGINEER_DIR/inbox/`,
 `src/conductor/src/engine/engineer/intake/queue.ts`'s `createFileQueue` file layout) so
-`conduct-ts intake-loop --once` (`examples/intake-loop.sh`, Story 8) has a pending
+`ai-conductor intake-loop --once` (`examples/intake-loop.sh`, Story 8) has a pending
 `Envelope` (`src/conductor/src/engine/engineer/intake/port.ts`) to process without
 spawning a real `github-issues` poll.
 
@@ -23,5 +23,5 @@ source lib/common.sh
 sandbox_up
 fixtures/intake/seed.sh
 # $AI_CONDUCTOR_ENGINEER_DIR/inbox/ now has one pending envelope for
-# `conduct-ts intake-loop --once` to pick up.
+# `ai-conductor intake-loop --once` to pick up.
 ```

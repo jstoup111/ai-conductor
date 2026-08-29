@@ -13704,7 +13704,7 @@ describe('buildRetryHint', () => {
       'manual_test',
       '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
     );
-    expect(hint).toContain('conduct-ts manual-test-record');
+    expect(hint).toContain('ai-conductor manual-test-record');
   });
 
   it('does not mention --skip for a manual_test FAIL-reason miss', () => {

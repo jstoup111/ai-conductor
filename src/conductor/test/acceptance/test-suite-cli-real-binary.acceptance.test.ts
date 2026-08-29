@@ -1,3 +1,5 @@
+// Covers: task:10
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { spawnSync } from 'node:child_process';
@@ -84,7 +86,7 @@ afterEach(async () => {
   await rm(projectRoot, { recursive: true, force: true });
 });
 
-describe('conduct-ts test-suite real-binary acceptance', () => {
+describe('ai-conductor test-suite real-binary acceptance', () => {
   it('executes once, reuses the canonical PASS, and never exposes declared environment values', async () => {
     const secret = 'real-binary-suite-secret-940';
     const first = runRealTestSuite(secret);
@@ -123,7 +125,7 @@ describe('conduct-ts test-suite real-binary acceptance', () => {
       pipelineStarted: existsSync(join(projectRoot, '.pipeline/conduct-state.json')),
     }).toEqual({
       exitCode: 1,
-      output: expect.stringMatching(/Usage: conduct-ts test-suite[\s\S]*\/tdd or \/pipeline/i),
+      output: expect.stringMatching(/Usage: ai-conductor test-suite[\s\S]*\/tdd or \/pipeline/i),
       suiteLaunched: false,
       pipelineStarted: false,
     });

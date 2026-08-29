@@ -39,7 +39,7 @@ describe('project config load errors', () => {
       if (result.ok) return;
       expect(result.error.type).toBe(expectedType);
       if (expectedType === 'missing') {
-        expect.soft(result.error.message).toContain('conduct-ts config init');
+        expect.soft(result.error.message).toContain('ai-conductor config init');
         expect.soft(result.error.message).not.toContain('bin/migrate');
       }
     } finally {

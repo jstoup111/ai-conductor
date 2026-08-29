@@ -83,7 +83,7 @@ As an operator, I want the harness's own spawns, hooks, and skill text to invoke
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the shipped tree, when engine code, hooks, and skill/doc text reference the CLI, then they use `ai-conductor` (the surviving references to `conduct-ts` are exactly: the alias symlink/launcher definition, the deprecation warning text, and deprecation-window documentation)
+- Given the shipped tree, when engine code, hooks, skill text, the harness's own `bin/lib/` config read, and the operator entry-point docs (`README.md`, `HARNESS.md`, `docs/reference/cli.md`, `docs/reference/skills.md`) reference the CLI, then they use `ai-conductor` (the surviving references to `conduct-ts` are exactly: the alias symlink/launcher definition, the deprecation warning text, and deprecation-window documentation)
 - Given a daemon run driven by the repointed internals, when its logs are inspected, then they contain no CLI deprecation warning lines
 
 #### Negative Paths
@@ -91,6 +91,9 @@ As an operator, I want the harness's own spawns, hooks, and skill text to invoke
 - Given an environment where the operator has not re-run `bin/install` (no `ai-conductor` on PATH yet), when the repo-local harness invokes its own CLI via repo-relative launcher paths, then those invocations still succeed — repo-internal spawns must not depend on the operator's PATH symlink
 
 ### Done When
-- [ ] A committed test enumerates and fails on non-allowlisted `conduct-ts` references in `src/conductor/src/`, `hooks/`, and `skills/` (allowlist: launcher/alias definitions, warning text, deprecation docs)
+- [ ] A committed test enumerates and fails on non-allowlisted `conduct-ts` references in `src/conductor/src/`, `hooks/`, `skills/`, `bin/lib/`, `README.md`, `HARNESS.md`, and the two reference pages (allowlist: launcher/alias definitions, warning text, deprecation docs)
+- [ ] That guard fails closed: an unavailable or failing scanner exits non-zero naming the tool, never a PASS on an unscanned tree
+- [ ] `ai-conductor compose` opens the `/composer` prompt, so the canonical verb does not load the deprecated delegate skill
+- [ ] The bulk `docs/` prose repoint beyond the two reference pages is out of scope here and tracked by its own follow-up feature, per the 2026-08-29 ADR amendment
 - [ ] The ~10 src and 11 hook/skill call sites are repointed (message strings, comments, hook launcher paths, skill text)
 - [ ] Deprecation warnings originate only from the two alias entrypoints (the launcher's invoked-name check and the `engineer` verb), proven by the grep guard plus the launcher and parser warning tests

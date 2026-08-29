@@ -18,10 +18,10 @@ nothing. The only thing that records a ship is a committed shipped record on the
 ## Symptom
 
 - The daemon keeps dispatching a feature whose implementation is already merged.
-- `conduct-ts daemon park <slug>` is the only thing holding it back — and you have to keep it
+- `ai-conductor daemon park <slug>` is the only thing holding it back — and you have to keep it
   parked forever.
 - The startup dashboard lists the slug under ELIGIBLE even though its PR shows as merged.
-- `conduct-ts shipment-evidence --pr <url>` exits 1 with a `shipped-record-*` code.
+- `ai-conductor shipment-evidence --pr <url>` exits 1 with a `shipped-record-*` code.
 
 Parking is a stopgap, not a finish. A parked feature is one you can never unpark, and its park
 marker is indistinguishable from a deliberate operational hold.
@@ -61,7 +61,7 @@ just cannot dedup a renamed spec by content hash.
 ### 3. Ask the verifier
 
 ```bash
-conduct-ts shipment-evidence --pr <implementation-pr-url>
+ai-conductor shipment-evidence --pr <implementation-pr-url>
 ```
 
 | Output | Meaning | Exit |
@@ -87,9 +87,9 @@ the dedup fires.
 ## Recovery
 
 Pick the branch that matches where the implementation is. Every one of them ends in
-`conduct-ts shipped-record`, so read this first — it applies to all of them.
+`ai-conductor shipped-record`, so read this first — it applies to all of them.
 
-> **Known limitation — do not trust the exit code.** `conduct-ts shipped-record` is
+> **Known limitation — do not trust the exit code.** `ai-conductor shipped-record` is
 > degrade-never-block by contract: *any* failure (unreadable plan, ambiguous candidates,
 > filesystem error, git error) prints one warning — `shipped-record write failed — dedup degraded
 > to local cache for <slug>: <reason>` — and **exits 0**. A clean exit does not mean a record was
@@ -104,7 +104,7 @@ on the implementation branch**, before the final push:
 
 ```bash
 cd .worktrees/<slug>
-conduct-ts shipped-record --slug <slug> --pr <implementation-pr-url>
+ai-conductor shipped-record --slug <slug> --pr <implementation-pr-url>
 ```
 
 **What it changes:**
@@ -129,9 +129,9 @@ Use `--pr local` instead of a URL for a merge-local finish. Never run it for a `
 
 > **Known limitation.** The Cost block's `halts:` field counts persisted `loop_halt` events from
 > `.pipeline/events.jsonl`; it is written into every committed shipped record and re-read by
-> `conduct-ts kpi`. Use it as the ledger-derived count of recorded halt occurrences. `.pipeline/HALT`
+> `ai-conductor kpi`. Use it as the ledger-derived count of recorded halt occurrences. `.pipeline/HALT`
 > remains the durable current park signal, and the daemon log provides immediate diagnostic detail.
-> The per-provider breakdown is written but never surfaced: `conduct-ts kpi` has no parser for the
+> The per-provider breakdown is written but never surfaced: `ai-conductor kpi` has no parser for the
 > `providers:` lines.
 
 Then push, and merge the PR. The record rides in with the code, so the merge lands the
@@ -148,7 +148,7 @@ Do not commit a record onto the base branch by hand. Use the reconciler, which b
 
 ```bash
 export GITHUB_REPOSITORY=<owner>/<repo>
-conduct-ts shipment-evidence reconcile --pr <implementation-pr-url> --shipped <YYYY-MM-DD>
+ai-conductor shipment-evidence reconcile --pr <implementation-pr-url> --shipped <YYYY-MM-DD>
 ```
 
 **What it changes:** creates `shipment-repair/<pr-number>/<slug>` off `main`, commits exactly one
@@ -176,9 +176,9 @@ Park the slug so the daemon stops burning dispatches during the repair, and unpa
 record is merged:
 
 ```bash
-conduct-ts daemon park <slug>
+ai-conductor daemon park <slug>
 # …land the record…
-conduct-ts daemon unpark <slug>
+ai-conductor daemon unpark <slug>
 ```
 
 Ordering rules are in
@@ -193,7 +193,7 @@ the sweep no longer needs the branch to still exist. If the branch does still ex
 commits that cleanup cannot prove safe to delete, the sweep refuses it with a specific reason; an
 `unmerged-commits` refusal lists the commits that would be dropped. Merge or otherwise resolve the
 listed work, and the next tick reconciles the slug. Run
-`conduct-ts daemon reconcile-parked <slug>` to do the same thing immediately instead of waiting
+`ai-conductor daemon reconcile-parked <slug>` to do the same thing immediately instead of waiting
 for the next tick, or if `reconcile_parked_auto_cleanup` is set to `false`.
 
 ### The spec was renamed after it shipped
@@ -231,7 +231,7 @@ Until the PR merges, this fails — and until it succeeds, the daemon cannot see
 ### The record parses and binds to the PR
 
 ```bash
-conduct-ts shipment-evidence --pr <implementation-pr-url>
+ai-conductor shipment-evidence --pr <implementation-pr-url>
 ```
 
 Expect `shipped-record: valid <path>` and exit 0.
@@ -242,7 +242,7 @@ Two independent signals, both on the next daemon poll after the merge:
 
 1. The daemon log carries the skip line:
    ```bash
-   conduct-ts daemon logs --lines 200 | grep "shipped dedup"
+   ai-conductor daemon logs --lines 200 | grep "shipped dedup"
    ```
    Expect `skip <slug>: shipped dedup — implementation already merged (base-branch shipped
    record found); not re-dispatching.` — or, for a renamed spec, `skip <slug>: shipped dedup —
@@ -262,7 +262,7 @@ Two independent signals, both on the next daemon poll after the merge:
 ### The slug leaves the eligible set
 
 ```bash
-conduct-ts daemon logs --lines 60
+ai-conductor daemon logs --lines 60
 ```
 
 In the startup dashboard the slug must appear under PROCESSED — not ELIGIBLE, and not PARKED.

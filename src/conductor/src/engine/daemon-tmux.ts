@@ -17,12 +17,14 @@ import { createHash, randomBytes } from 'node:crypto';
 import { unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants — only place that encodes the session prefix and foreground command.
 // ─────────────────────────────────────────────────────────────────────────────
 export const SESSION_PREFIX = 'cc-daemon-';
-export const DAEMON_FOREGROUND_COMMAND = 'conduct-ts daemon --continuous';
+export const DAEMON_FOREGROUND_COMMAND =
+  `${shellQuote(resolveCanonicalLauncher())} daemon --continuous`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TmuxRunner — injectable execution boundary (allows deterministic unit tests).
@@ -555,7 +557,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       const name = sessionNameForRepo(repo);
       if (!(await hasSession(name, run))) {
         throw new Error(
-          `No daemon session found for "${repo}". Run 'conduct-ts daemon start' first.`,
+          `No daemon session found for "${repo}". Run 'ai-conductor daemon start' first.`,
         );
       }
       await attachSession(name, opts, run);

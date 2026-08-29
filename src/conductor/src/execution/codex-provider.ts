@@ -938,7 +938,7 @@ export class CodexProvider implements LLMProvider {
   private invocationEnv(options: InvokeOptions, authentication: SelectedAuthentication): NodeJS.ProcessEnv {
     const auth = authentication.apiKey ? { CODEX_API_KEY: authentication.apiKey } : undefined;
     // Every session env carries the daemon-session marker: any Codex session
-    // spawned through this adapter is engine-managed, and the conduct-ts
+    // spawned through this adapter is engine-managed, and the ai-conductor
     // entry guard refuses recursive conductor invocations from inside it
     // (see daemon-session.ts). Applied last so neither self-host env nor auth
     // can unset it.

@@ -375,7 +375,7 @@ Save the plan to `.docs/plans/YYYY-MM-DD-<feature>.md`
 
 ### 8a. Advisory Overlap Scan
 
-Before the plan is committed, run `conduct-ts overlap-scan --files <comma-separated Files set>` over
+Before the plan is committed, run `ai-conductor overlap-scan --files <comma-separated Files set>` over
 the union of every task's `**Files:**` paths (add `--source-ref
 <issue ref>` when the feature's originating issue/intake ref is known). Surface the
 rendered report to the author as-is.
@@ -389,7 +389,7 @@ plan regardless of what the scan reports.
 Before committing the plan, run:
 
 ```bash
-conduct-ts plan-protected-targets .docs/plans/<feature>.md
+ai-conductor plan-protected-targets .docs/plans/<feature>.md
 ```
 
 This check is **blocking**. It must report no task/path violations before the plan is saved or
@@ -425,7 +425,7 @@ any code is written. The full flow from here is:
 - [ ] Tasks are 2-5 minute granularity
 - [ ] Each task has specific test and implementation descriptions
 - [ ] Dependencies are declared and acyclic
-- [ ] `conduct-ts plan-protected-targets .docs/plans/<feature>.md` passes with no task/path
+- [ ] `ai-conductor plan-protected-targets .docs/plans/<feature>.md` passes with no task/path
       violations; no task targets another feature's sealed artifact
 - [ ] Plan saved to `.docs/plans/`
 - [ ] Coverage mapping presented to user

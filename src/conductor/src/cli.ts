@@ -55,7 +55,7 @@ export interface CLIOptions {
   report: boolean;
 }
 
-// Daemon mode (Phase 6) is its own subcommand (`conduct daemon …`), parsed by
+// Daemon mode (Phase 6) is its own subcommand (`ai-conductor daemon …`), parsed by
 // detectDaemonCommand in engine/daemon-command.ts and dispatched from index.ts
 // before the interactive pipeline boots — NOT a flag on the base program. See
 // DaemonCommandOptions there for the daemon's own options.
@@ -68,7 +68,7 @@ function applyPipelineOptions(cmd: Command): Command {
     .argument('[feature]', 'Feature description')
     .option('--resume', 'Resume from last state')
     .option('--fresh', 'Start a new feature; skip auto-resume even if a worktree for this feature description already exists')
-    .option('--auto', 'Deprecated: use `conduct-ts daemon start` instead')
+    .option('--auto', 'Deprecated: use `ai-conductor daemon start` instead')
     .option('--status', 'Show dashboard only')
     .option('--from <step>', 'Start from specific step')
     .option('--cleanup', 'Clean up worktrees')
@@ -89,7 +89,7 @@ function applyPipelineOptions(cmd: Command): Command {
 function createBaseProgram(): Command {
   const program = new Command();
   program
-    .name('conduct')
+    .name('ai-conductor')
     .description(
       'Orchestrate SDLC pipeline — two loops: the build/ship daemon (`daemon`) and the ' +
         'engineer/brain idea→spec loop (`engineer`, or `engineer --help` for its full command reference)',
@@ -99,7 +99,7 @@ function createBaseProgram(): Command {
 
 /**
  * The inline pipeline now runs under an explicit `inline` subcommand
- * (`conduct inline "<feature>"`), not as a bare positional. detectInline strips
+ * (`ai-conductor inline "<feature>"`), not as a bare positional. detectInline strips
  * that token so parseArgs sees just the feature + flags.
  *
  * @returns isInline=true and the argv with `inline` removed when argv[2] is
@@ -432,7 +432,7 @@ export async function dispatchDecideGrantCommand(
   return 0;
 }
 
-/** Parse argv for `conduct-ts plan-protected-targets <path>` without I/O. */
+/** Parse argv for `ai-conductor plan-protected-targets <path>` without I/O. */
 export function detectPlanProtectedTargetsCommand(
   argv: string[],
 ): PlanProtectedTargetsDispatch | null {
@@ -485,10 +485,10 @@ export function createProgram(): Command {
   const program = createBaseProgram();
 
   // Inline pipeline subcommand. This is the DEFAULT mode — running the SDLC
-  // pipeline in the foreground (`conduct inline "<feature>"`), the counterpart to
+  // pipeline in the foreground (`ai-conductor inline "<feature>"`), the counterpart to
   // the background `daemon`. Dispatched in index.ts (detectInline) before the
   // pipeline boots; declared here with the full pipeline option surface so
-  // `--help` and `conduct inline --help` list it.
+  // `--help` and `ai-conductor inline --help` list it.
   applyPipelineOptions(
     program
       .command('inline')
@@ -766,7 +766,7 @@ export function createProgram(): Command {
 
 /**
  * Render a SINGLE, root-level help document that recurses through every command
- * and sub-subcommand — so `conduct --help` is a complete reference (each command's
+ * and sub-subcommand — so `ai-conductor --help` is a complete reference (each command's
  * options + nested subcommands), not just a top-level name list. Commander only
  * renders one level per `helpInformation()`; this walks the tree depth-first and
  * appends a titled section per command (skipping the auto-generated `help`).
@@ -778,7 +778,7 @@ export function renderFullHelp(program: Command = createProgram()): string {
   const walk = (cmd: Command, path: string[]): void => {
     for (const sub of cmd.commands) {
       if (sub.name() === 'help') continue; // commander's auto `help [command]`
-      const fullPath = ['conduct', ...path, sub.name()].join(' ');
+      const fullPath = ['ai-conductor', ...path, sub.name()].join(' ');
       sections.push(`${rule}\n${fullPath}\n${rule}\n${sub.helpInformation().trimEnd()}`);
       walk(sub, [...path, sub.name()]);
     }
@@ -791,7 +791,7 @@ export function renderFullHelp(program: Command = createProgram()): string {
 /**
  * Render help for the `daemon` command subtree only — the run flags plus every
  * sub-verb (status/logs + the tmux management verbs). Used by index.ts to answer
- * `conduct daemon --help` WITHOUT falling through to detectDaemonCommand (which
+ * `ai-conductor daemon --help` WITHOUT falling through to detectDaemonCommand (which
  * would treat `--help` as an unknown flag and LAUNCH a daemon run).
  */
 export function renderDaemonHelp(program: Command = createProgram()): string {
@@ -802,7 +802,7 @@ export function renderDaemonHelp(program: Command = createProgram()): string {
   for (const sub of daemon.commands) {
     if (sub.name() === 'help') continue; // commander's auto `help [command]`
     sections.push(
-      `${rule}\nconduct daemon ${sub.name()}\n${rule}\n${sub.helpInformation().trimEnd()}`,
+      `${rule}\nai-conductor daemon ${sub.name()}\n${rule}\n${sub.helpInformation().trimEnd()}`,
     );
   }
   return sections.join('\n\n') + '\n';

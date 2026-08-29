@@ -19,7 +19,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
   }
   if (opts.auto) {
     console.error(
-      'Error: --auto is deprecated. Use `conduct-ts daemon start` instead; see docs/guides/running-the-daemon.md.',
+      'Error: --auto is deprecated. Use `ai-conductor daemon start` instead; see docs/guides/running-the-daemon.md.',
     );
     process.exit(1);
   }
@@ -339,6 +339,20 @@ export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<
   );
 }
 
+/** Render root help with the public compose alias as the canonical spelling. */
+export function renderCanonicalFullHelp(): string {
+  return renderFullHelp()
+    .replace(
+      /engineer\/brain idea→spec loop \(`engineer`, or `engineer --help` for its full\s+command reference\)/,
+      'compose/brain idea→spec loop (`compose`; `engineer` is a deprecated alias, and `compose --help` shows its full command reference)',
+    )
+    .replace(/^  engineer(\s)/m, '  compose$1')
+    .replaceAll('ai-conductor engineer', 'ai-conductor compose')
+    .replace('Supervisor engineer:', 'Compose:')
+    .replaceAll('`engineer worktree`', '`compose worktree`')
+    .replaceAll('`engineer land`', '`compose land`');
+}
+
 /**
  * Build the options object passed into `runDaemonMode` for a `daemon` CLI
  * invocation (FR-9 wiring). Wires the self-restart callback when this daemon
@@ -513,7 +527,7 @@ export interface OverlapScanDispatch {
 
 /**
  * Parse argv for the `overlap-scan` subcommand.
- *   conduct-ts overlap-scan --files a.ts,b.ts --source-ref owner/repo#5 --base main --cwd <dir>
+ *   ai-conductor overlap-scan --files a.ts,b.ts --source-ref owner/repo#5 --base main --cwd <dir>
  * Mirrors the detectXCommand pattern used by the other non-interactive
  * subcommands (registry, engineer, evidence, ...): pure argv parsing, no I/O.
  */
@@ -590,7 +604,7 @@ export async function overlapScanCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
-  // Boundary enforcement, before any subcommand parsing: a conduct-ts
+  // Boundary enforcement, before any subcommand parsing: an ai-conductor
   // invocation from inside an engine-dispatched provider session (daemon
   // builds, reviews, self-host candidates — marked CONDUCT_DAEMON_SESSION=1)
   // is refused, except for the session-sanctioned worker subcommands the
@@ -740,7 +754,7 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
-  // Brain subcommand (`conduct-ts brain start|stop|status`, Task 18) runs
+  // Brain subcommand (`ai-conductor brain start|stop|status`, Task 18) runs
   // NON-INTERACTIVELY and exits — it hosts the intake-loop (Task 17) under a
   // dedicated `cc-brain-*` tmux session (no cron, no external scheduler).
   // Dispatched before parseArgs, mirroring the daemon/intake-loop subcommand
@@ -1006,7 +1020,7 @@ async function main(): Promise<void> {
   // surface lives in createProgram(). Subcommand-specific help is already handled
   // by the dispatchers above, so any `--help` reaching here is top-level.
   if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
-    process.stdout.write(renderFullHelp());
+    process.stdout.write(renderCanonicalFullHelp());
     process.exit(0);
   }
 
@@ -1159,7 +1173,7 @@ async function main(): Promise<void> {
       } else {
         // orphaned-state: surface the same message --resume would
         console.error(
-          `\nOrphaned conductor state in ${detection.stateFilePath}.\n  Run conduct-ts --reset to clear, or recreate the worktree.\n`,
+          `\nOrphaned conductor state in ${detection.stateFilePath}.\n  Run ai-conductor --reset to clear, or recreate the worktree.\n`,
         );
         process.exit(1);
       }
@@ -1174,8 +1188,8 @@ async function main(): Promise<void> {
     console.error(formatGapReport(targetFeatureDesc, targetWorktree, verification));
     console.error(
       '  To roll back feature_status and resume at the first failing step, run:\n' +
-        `    conduct-ts ${targetFeatureDesc ? `"${targetFeatureDesc}"` : ''}\n` +
-        '  …and answer "y" at the recovery prompt. To inspect raw state: conduct-ts --status\n',
+        `    ai-conductor ${targetFeatureDesc ? `"${targetFeatureDesc}"` : ''}\n` +
+        '  …and answer "y" at the recovery prompt. To inspect raw state: ai-conductor --status\n',
     );
     process.exit(1);
   }
@@ -1214,8 +1228,8 @@ async function main(): Promise<void> {
         );
         if (answer === 'n' || answer === 'q') {
           console.log(
-            '\nNo changes made. To inspect: conduct-ts --status\n' +
-              `  To start over: conduct-ts --fresh ${opts.featureDesc ? `"${opts.featureDesc}"` : ''}\n`,
+            '\nNo changes made. To inspect: ai-conductor --status\n' +
+              `  To start over: ai-conductor --fresh ${opts.featureDesc ? `"${opts.featureDesc}"` : ''}\n`,
           );
           return;
         }
@@ -1264,7 +1278,7 @@ async function main(): Promise<void> {
           detection.expectedLocations.map((p) => `    - ${p}`).join('\n') +
           `\n\n  Either:\n` +
           `    1) Recreate the missing worktree at one of those paths, OR\n` +
-          `    2) Run \`conduct-ts --reset\` from this directory to clear the stale state\n` +
+          `    2) Run \`ai-conductor --reset\` from this directory to clear the stale state\n` +
           `       (you'll lose the recorded progress, but the actual code on the\n` +
           `       feature branch — if it exists — is untouched).\n` +
           `\n  Refusing to continue here so artifacts don't land on the wrong branch.\n`,

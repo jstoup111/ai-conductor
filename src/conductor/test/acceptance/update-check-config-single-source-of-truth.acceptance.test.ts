@@ -38,6 +38,7 @@ import { dirname, join } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 
 const REPO_ROOT = join(process.cwd(), '..', '..');
+const REAL_AI_CONDUCTOR = join(REPO_ROOT, 'bin', 'ai-conductor');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
 const REAL_CONDUCT = join(REPO_ROOT, 'bin', 'conduct');
 const REAL_UPDATE = join(REPO_ROOT, 'bin', 'update');
@@ -112,6 +113,7 @@ async function makeHarness(options: { withConductor?: boolean } = {}): Promise<F
   await chmod(conduct, 0o755);
 
   if (options.withConductor !== false) {
+    await symlink(REAL_AI_CONDUCTOR, join(bin, 'ai-conductor'));
     await symlink(REAL_CONDUCT_TS, join(bin, 'conduct-ts'));
   }
 
@@ -367,7 +369,7 @@ exit 0
     expect(existsSync(harness.gitLog)).toBe(false);
   });
 
-  it('names a missing conduct-ts prerequisite and contains the advisory failure', async () => {
+  it('names a missing ai-conductor prerequisite and contains the advisory failure', async () => {
     const harness = await makeHarness({ withConductor: false });
     await writeUserConfig('conductor:\n  auto_check: true\n');
     const env = {
@@ -378,7 +380,7 @@ exit 0
     const result = await run(harness.update, ['--auto'], env);
 
     expect(result.exitCode).toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/conduct-ts/i);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/ai-conductor/i);
     expect(existsSync(harness.gitLog)).toBe(false);
   });
 
@@ -399,8 +401,8 @@ exit 0
     const output = `${result.stdout}\n${result.stderr}`;
 
     // Reports the prerequisite, once — not swallowed, not repeated per read.
-    expect(output).toMatch(/conduct-ts is required to read conductor configuration/);
-    expect(output.match(/conduct-ts is required to read/g)).toHaveLength(1);
+    expect(output).toMatch(/ai-conductor is required to read conductor configuration/);
+    expect(output.match(/ai-conductor is required to read/g)).toHaveLength(1);
     // ...and still reaches normal CLI handling, which is the observable that
     // separates "declined the update check" from "died during startup".
     expect(output).toMatch(/Feature description required/);
@@ -422,7 +424,7 @@ exit 0
     const result = await run(harness.conduct, ['--update'], env);
 
     expect(result.exitCode).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/conduct-ts/i);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/ai-conductor/i);
     expect(existsSync(harness.gitLog)).toBe(false);
   });
 });

@@ -34,6 +34,7 @@ import { dirname, join } from 'node:path';
 const REPO_ROOT = process.env.OFF_TAG_ACCEPTANCE_REPO_ROOT ?? join(process.cwd(), '..', '..');
 const REAL_UPDATE = join(REPO_ROOT, 'bin', 'update');
 const REAL_CONDUCT = join(REPO_ROOT, 'bin', 'conduct');
+const REAL_AI_CONDUCTOR = join(REPO_ROOT, 'bin', 'ai-conductor');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
 const REAL_COMMON = join(REPO_ROOT, 'bin', 'lib', 'harness-common.sh');
 
@@ -102,6 +103,7 @@ async function makeHarness(name: string): Promise<HarnessFixture> {
   await chmod(update, 0o755);
   await chmod(conduct, 0o755);
 
+  await symlink(REAL_AI_CONDUCTOR, join(bin, 'ai-conductor'));
   await symlink(REAL_CONDUCT_TS, join(bin, 'conduct-ts'));
 
   await writeFile(join(bin, 'migrate'), '#!/usr/bin/env bash\nexit 0\n', 'utf8');

@@ -17,9 +17,9 @@ so an unmerged `spec/<slug>` branch is invisible to it.
 
 | Requirement | Check |
 | --- | --- |
-| `conduct-ts` on PATH | `conduct-ts --help` |
+| `ai-conductor` on PATH | `ai-conductor --help` |
 | `tmux` installed (for `daemon start` and every management verb) | `tmux -V` |
-| The repo registered | `conduct-ts register <path>` |
+| The repo registered | `ai-conductor register <path>` |
 | A fresh install | `bin/install --check` exits 0 or 2 — the freshness gate accepts both |
 | At least one merged spec on the default branch | `.docs/plans/<slug>.md` present on `main` |
 
@@ -51,7 +51,7 @@ cleanup. Each reason is logged once per slug (the ADR reason once per
 pass for the whole corpus) through `.daemon/warned/<slug>`; the marker suppresses repeated poll
 warnings until the spec is fixed.
 
-Run `conduct-ts daemon status` to read the persisted `BLOCKED` section. It lists each blocked slug,
+Run `ai-conductor daemon status` to read the persisted `BLOCKED` section. It lists each blocked slug,
 machine-readable reason, remedy, and the latest scan age without invoking Git or the network. An
 empty snapshot reports that no specs are blocked; no valid snapshot means the blocked state is
 unknown until discovery completes. The startup dashboard does not yet render blocked specs;
@@ -63,7 +63,7 @@ tier-skipped steps as skipped) and starts at BUILD; it never authors or reruns D
 ## Start the daemon
 
 ```bash
-conduct-ts daemon start
+ai-conductor daemon start
 ```
 
 `start` refuses to launch on a stale install: it runs `bin/install --check` first, and on drift it
@@ -77,16 +77,16 @@ the daemon resolves the main repository root first, so runtime files always live
 
 | Variant | Result |
 | --- | --- |
-| `conduct-ts daemon start` on a TTY | Starts and attaches read-only |
-| `conduct-ts daemon start -D` | Prints `daemon started (detached). Attach with 'conduct daemon connect'.` |
-| `conduct-ts daemon start` with no TTY | Prints `daemon started (no interactive terminal to attach to)…` |
+| `ai-conductor daemon start` on a TTY | Starts and attaches read-only |
+| `ai-conductor daemon start -D` | Prints `daemon started (detached). Attach with 'conduct daemon connect'.` |
+| `ai-conductor daemon start` with no TTY | Prints `daemon started (no interactive terminal to attach to)…` |
 
 Exit 1 on any error, including a missing `tmux`.
 
 ## Watch it work
 
 ```bash
-conduct-ts daemon status
+ai-conductor daemon status
 ```
 
 Sweeps the whole project registry and prints one badge line per repo — state, path, pid, since,
@@ -103,10 +103,10 @@ only when the registry itself is unreadable.
 For the log:
 
 ```bash
-conduct-ts daemon logs                  # this repo, whole file
-conduct-ts daemon logs --lines 200      # last 200 lines
-conduct-ts daemon logs --follow         # stream new lines until Ctrl-C
-conduct-ts daemon logs --all            # every registered repo, with ==> path <== headers
+ai-conductor daemon logs                  # this repo, whole file
+ai-conductor daemon logs --lines 200      # last 200 lines
+ai-conductor daemon logs --follow         # stream new lines until Ctrl-C
+ai-conductor daemon logs --all            # every registered repo, with ==> path <== headers
 ```
 
 `--lines`/`-n`, `-f`, and `--repo=<path>` all work but are absent from `--help`. `--follow` with
@@ -125,7 +125,7 @@ readable and greppable:
 [daemon][my-feature-254] ·   build via claude (opus) ✓ — 54 turns, 8m7s, $4.96
 ```
 
-Filter one feature's narrative with `conduct-ts daemon logs | grep '\[<slug>\]'`. Untagged `[daemon]`
+Filter one feature's narrative with `ai-conductor daemon logs | grep '\[<slug>\]'`. Untagged `[daemon]`
 lines are daemon-wide, not feature work. The exact shapes and the slug length bound are in
 [artifacts](../reference/artifacts.md#line-shapes).
 
@@ -147,12 +147,12 @@ Never delete or rewrite `.pipeline/protected-artifact-seal.json` by hand.
 
 An approved plan or architecture amendment after first BUILD intentionally makes the existing seal
 baseline stale. Review the amendment, then reseal the approved paths with
-[`conduct-ts reseal`](../reference/cli.md#conduct-ts-reseal) before clearing the HALT (`--clear-halt`
+[`ai-conductor reseal`](../reference/cli.md#ai-conductor-reseal) before clearing the HALT (`--clear-halt`
 clears it in the same command). If the refusal occurs during REKICK before git starts, the HALT
 begins `protected-artifact seal error`; it is not a rebase conflict and must not be sent through
 `git rebase --continue`.
 
-A `conduct-ts reseal` outcome also logs:
+A `ai-conductor reseal` outcome also logs:
 
 ```text
 protected artifacts resealed: <paths>
@@ -210,7 +210,7 @@ necessarily the repo default.
   token counts that ARE in the token totals, but no dollars. That happens when a provider reports no
   cost of its own (codex) and the model it ran has no entry in the committed
   `.ai-conductor/rate-card.json` — see the rate-card section of the configuration reference, and run
-  `conduct-ts rate-card refresh` to close the gap. The clause is omitted when every metered dispatch
+  `ai-conductor rate-card refresh` to close the gap. The clause is omitted when every metered dispatch
   also carried a cost.
 
   Cost and token figures appear only when at least one dispatch was actually metered. A build whose
@@ -225,9 +225,9 @@ necessarily the repo default.
 To watch the session itself:
 
 ```bash
-conduct-ts daemon connect             # attach READ-ONLY
-conduct-ts daemon connect --write     # attach READ-WRITE (same as `debug`)
-conduct-ts daemon debug               # attach READ-WRITE
+ai-conductor daemon connect             # attach READ-ONLY
+ai-conductor daemon connect --write     # attach READ-WRITE (same as `debug`)
+ai-conductor daemon debug               # attach READ-WRITE
 ```
 
 `Ctrl-b d` detaches from any of these.
@@ -238,7 +238,7 @@ hits tmux's own nesting guard (`sessions should be nested with care, unset $TMUX
 tmux server instead of taking over the current process's terminal:
 
 ```bash
-conduct-ts daemon connect --write --attach-into mywindow:1.0
+ai-conductor daemon connect --write --attach-into mywindow:1.0
 ```
 
 `<target>` is a tmux session, `session:window`, or `session:window.pane` string. This also works on
@@ -405,12 +405,12 @@ A pause stops the daemon starting **new** work while leaving in-flight work and 
 alone. It is the right tool when you want the loop to go quiet without killing it.
 
 ```bash
-conduct-ts daemon pause
-conduct-ts daemon resume
+ai-conductor daemon pause
+ai-conductor daemon resume
 ```
 
 `pause` prints `daemon paused`, or `already paused` when the marker exists. `resume` prints
-`daemon resumed`, or `not paused`. Both are listed in `conduct-ts daemon --help`.
+`daemon resumed`, or `not paused`. Both are listed in `ai-conductor daemon --help`.
 
 The marker is `.daemon/PAUSED`. Its existence is authoritative; its JSON body is informational only.
 Reads fail closed — an unreadable marker counts as paused.
@@ -422,7 +422,7 @@ delete, and its resume path re-kicks git errors with no backoff. Removing a work
 a live daemon produces a `git worktree add` failure loop, not a clean stop.
 
 ```bash
-conduct-ts daemon park <slug>
+ai-conductor daemon park <slug>
 ```
 
 You should see:
@@ -450,14 +450,14 @@ inside the active unit. Interactive `conduct` runs are unchanged.
 To release:
 
 ```bash
-conduct-ts daemon unpark <slug>
+ai-conductor daemon unpark <slug>
 ```
 
 `unpark` resets the no-evidence attempt counter **first** and removes the park marker only after that
 succeeds — a failed reset deliberately leaves the marker in place for retry. You should see
 `Unparked '<slug>' and reset no-evidence counter — normal dispatch and re-kick resume.`
 
-> **Known limitation.** `conduct-ts daemon park` with no slug does not print a park usage error. The
+> **Known limitation.** `ai-conductor daemon park` with no slug does not print a park usage error. The
 > park detector returns null without a slug, `park` is a known sub-verb so the unknown-sub-verb guard
 > passes it through, and the invocation falls all the way to the inline refusal, printing
 > `conduct: the inline SDLC pipeline now runs under the \`inline\` subcommand.` and exiting 1 — a
@@ -468,7 +468,7 @@ succeeds — a failed reset deliberately leaves the marker in place for retry. Y
 
 On startup and on every idle poll tick, the daemon classifies each parked slug: `merged`, `orphan`
 (its source issue is closed but the work never merged), `normal`, or `unclassified` (the check was
-unavailable). `conduct-ts daemon status` annotates the parked list accordingly — `— orphan — needs
+unavailable). `ai-conductor daemon status` annotates the parked list accordingly — `— orphan — needs
 manual review` or `— merged — ready to reconcile`.
 
 A slug counts as `merged` on either of two signals:
@@ -528,7 +528,7 @@ reconciles on a later tick once the record lands. Set `reconcile_parked_auto_cle
 disable the automatic cleanup step and only classify/annotate, then reconcile explicitly per slug:
 
 ```bash
-conduct-ts daemon reconcile-parked <slug>
+ai-conductor daemon reconcile-parked <slug>
 ```
 
 See [`daemon reconcile-parked`](../reference/cli.md#daemon-reconcile-parked) for its exact output
@@ -577,7 +577,7 @@ marker and re-provisions from scratch. To force a single re-run by hand, delete
 
 To clean project-owned resources before the daemon removes a feature worktree, add an executable
 `bin/teardown` to the project. The daemon runs it from the worktree immediately before an already
-authorized removal: post-ship reaping, `conduct-ts daemon reclaim-worktree <slug>`, or parked-feature
+authorized removal: post-ship reaping, `ai-conductor daemon reclaim-worktree <slug>`, or parked-feature
 reconciliation. It never runs for a retained worktree or before the removal safety proofs pass.
 
 The hook inherits the daemon's process environment, with `CI=true` and `WORKTREE_NAMESPACE` overlaid.
@@ -639,7 +639,7 @@ proof-gated cleanup paths.
   `daemon reclaim-worktree` and parked reconciliation surface their actual Git removal failures and
   retain the worktree for recovery.
 
-`conduct-ts daemon status`'s startup dashboard groups every retained worktree under
+`ai-conductor daemon status`'s startup dashboard groups every retained worktree under
 `RETAINED WORKTREES (<n>)`. A retained row includes an evidence-derived reason and a `remedy:`
 line. `pr-open-awaiting-main` appears only after the daemon has verified that the ledger's PR URL
 is still open; an unavailable, failed, or mismatched PR lookup reports `pr-state-unknown` instead.
@@ -658,7 +658,7 @@ resume, or one you want gone before its shipped record lands — use
 [`daemon reclaim-worktree`](../reference/cli.md#daemon-reclaim-worktree):
 
 ```bash
-conduct-ts daemon reclaim-worktree <slug>
+ai-conductor daemon reclaim-worktree <slug>
 ```
 
 It refuses a slug with a resume in progress, refuses anything but a single plain slug (no globs, no
@@ -685,8 +685,8 @@ Each of these encodes a failure that has already corrupted daemon state.
 4. **A manual PR is not a harness finish.** Opening a PR by hand tells the daemon nothing, so it
    re-dispatches the feature forever and parking is the only stopgap. Record the ship instead —
    see the next section.
-5. **Dispatched sessions cannot run `conduct-ts`.** Every session the daemon dispatches carries
-   `CONDUCT_DAEMON_SESSION=1`, and `conduct-ts` refuses to run under it (exit 1) except for the
+5. **Dispatched sessions cannot run `ai-conductor`.** Every session the daemon dispatches carries
+   `CONDUCT_DAEMON_SESSION=1`, and `ai-conductor` refuses to run under it (exit 1) except for the
    session-sanctioned worker commands its skills mandate — so a maker session can never park,
    unpark, restart, or reseal the daemon that dispatched it. See the
    [CLI reference](../reference/cli.md#daemon-session-refusal).
@@ -694,7 +694,7 @@ Each of these encodes a failure that has already corrupted daemon state.
 ## Record a manual finish
 
 ```bash
-conduct-ts shipped-record --slug <slug> --pr <url>
+ai-conductor shipped-record --slug <slug> --pr <url>
 ```
 
 Use `--pr local` for a merge-local finish. This writes and commits `.docs/shipped/<slug>.md` on the
@@ -709,7 +709,7 @@ rely on it. See
 ## Restart after an engine change
 
 ```bash
-conduct-ts daemon restart
+ai-conductor daemon restart
 ```
 
 Behavior depends on what the daemon is doing:
@@ -732,9 +732,9 @@ after the verb. With a selector the verb iterates the project registry instead o
 current directory. None of these selectors appear in `--help`.
 
 ```bash
-conduct-ts daemon pause --all
-conduct-ts daemon resume <repo-a> <repo-b>
-conduct-ts daemon restart --all
+ai-conductor daemon pause --all
+ai-conductor daemon resume <repo-a> <repo-b>
+ai-conductor daemon restart --all
 ```
 
 Each repo is handled in its own try/catch, so one failure never aborts the sweep. Per-repo `restart`
@@ -744,7 +744,7 @@ outcomes are: paused → respawn, idle → respawn, busy → queued, stopped wit
 ## Stop the daemon
 
 ```bash
-conduct-ts daemon stop
+ai-conductor daemon stop
 ```
 
 Kills the tmux session. Exit 1 on error.
@@ -754,11 +754,11 @@ To halt one in-flight feature rather than the whole loop, see
 
 ## Run the daemon in the foreground
 
-Bare `conduct-ts daemon` runs the loop in the current terminal, with no tmux session and no
+Bare `ai-conductor daemon` runs the loop in the current terminal, with no tmux session and no
 supervisor. Use it for a bounded drain or for debugging.
 
 ```bash
-conduct-ts daemon --continuous --max-items 3 --idle-poll 30
+ai-conductor daemon --continuous --max-items 3 --idle-poll 30
 ```
 
 Three things shape the run itself. Every flag, its default, and its exact parsing behavior are in
@@ -771,7 +771,7 @@ Three things shape the run itself. Every flag, its default, and its exact parsin
 3. **Pass `--idle-poll` explicitly** if the polling interval matters. Its effective default does not
    match its help text.
 
-`conduct-ts daemon --help` (or `-h`) anywhere after `daemon` prints the daemon help and exits 0. That
+`ai-conductor daemon --help` (or `-h`) anywhere after `daemon` prints the daemon help and exits 0. That
 guard runs before every daemon dispatcher on purpose: without it, `--help` would be treated as an
 unknown flag and would **launch a daemon run**.
 
@@ -839,7 +839,7 @@ named DECIDE step should be authored, record a one-use grant from the main repos
 clear the halt:
 
 ```bash
-conduct-ts decide-grant --slug <slug> --step <step> --reason "<why this authoring pass is approved>"
+ai-conductor decide-grant --slug <slug> --step <step> --reason "<why this authoring pass is approved>"
 rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
 ```
 
@@ -980,11 +980,11 @@ missing terminal verdict.
 ## Troubleshooting
 
 **`status` shows `⚠ session-up/process-dead`.** The tmux session outlived the daemon process. Run
-`conduct-ts daemon restart`, which reconciles the orphan (SIGTERM, then SIGKILL) and reclaims the
+`ai-conductor daemon restart`, which reconciles the orphan (SIGTERM, then SIGKILL) and reclaims the
 lock before respawning.
 
 **The daemon keeps re-dispatching a feature you already shipped by hand.** You are missing the
-shipped record. Park it, then run `conduct-ts shipped-record`. See
+shipped record. Park it, then run `ai-conductor shipped-record`. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md).
 
 **An intake command reports a corrupt ledger or a `ledger.json.lease` timeout.** Do not bypass the
@@ -1019,6 +1019,6 @@ kicked back. Nothing is written back into the missing path: a stub there makes t
 [worktree and evidence recovery](../runbooks/worktree-and-evidence-recovery.md).
 
 **The daemon is alive but nothing moves.** Check for `.daemon/PAUSED`, a park marker under
-`.daemon/parked/`, and the `GATED:` section of `conduct-ts daemon status`. See
+`.daemon/parked/`, and the `GATED:` section of `ai-conductor daemon status`. See
 [stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md) and
 [daemon recovery](../runbooks/daemon-recovery.md).

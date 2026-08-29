@@ -37,7 +37,7 @@ describe('RunMode derivation', () => {
       thrown: exitSentinel,
       exitCode: 1,
       notice: expect.stringMatching(
-        /--auto.*deprecated.*conduct-ts daemon start.*docs\/guides\/running-the-daemon\.md/i,
+        /--auto.*deprecated.*ai-conductor daemon start.*docs\/guides\/running-the-daemon\.md/i,
       ),
       pipelineConstructed: false,
     });

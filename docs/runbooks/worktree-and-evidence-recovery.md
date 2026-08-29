@@ -35,7 +35,7 @@ One or more of:
   task 1.
 - A build reports `no_task_progress` or "N/M tasks pending/not completed" for tasks whose
   commits are visibly on the branch.
-- `conduct-ts inline` refuses with `Orphaned conductor state in <path>.`
+- `ai-conductor inline` refuses with `Orphaned conductor state in <path>.`
 - The daemon repeatedly logs `[session-hooks] restored <script> in <worktree>` for one feature, or
   reports that it could not restore an enforcement script.
 - A step fails with `Cannot dispatch '<step>': its working directory <path> does not exist.` The
@@ -106,7 +106,7 @@ find it, and it will not be provisioned.
 ### 4. Ask the engine what it thinks is missing
 
 ```bash
-conduct-ts inline --diagnose "<feature description>"
+ai-conductor inline --diagnose "<feature description>"
 ```
 
 When the recorded state says the feature is past the `worktree` step but no worktree exists at
@@ -116,7 +116,7 @@ locations it searched. That message is the confirmation that state and disk disa
 ### 5. Classify session-hook repair messages
 
 ```bash
-conduct-ts daemon logs --lines 200 | grep '\[session-hooks\]'
+ai-conductor daemon logs --lines 200 | grep '\[session-hooks\]'
 ```
 
 One `restored` line is a successful build-preflight repair; leave the feature running. Do not park
@@ -132,7 +132,7 @@ worktree, correct the filesystem cause, then let the next build preflight provis
 ### 1. Park the feature before touching anything
 
 ```bash
-conduct-ts daemon park <slug>
+ai-conductor daemon park <slug>
 ```
 
 **What it changes:** writes `.daemon/parked/<slug>` at the main repo root. Without this, the
@@ -240,7 +240,7 @@ node -e "JSON.parse(require('fs').readFileSync('.worktrees/<slug>/.pipeline/task
 grep -nE '^#{1,6} +(Task +[A-Za-z0-9._,-]|T[0-9])' .docs/plans/<slug>.md
 ```
 
-`conduct-ts task done <id>` is not a substitute: it only clears the `.pipeline/current-task`
+`ai-conductor task done <id>` is not a substitute: it only clears the `.pipeline/current-task`
 stamp and never modifies `task-status.json`.
 
 ### 6. Decide what to do about `conduct-state.json`
@@ -278,7 +278,7 @@ empty`), not an empty state. If you want a clean slate, write `{}` or delete the
 **Confirm:**
 
 ```bash
-cd .worktrees/<slug> && conduct-ts inline --status
+cd .worktrees/<slug> && ai-conductor inline --status
 ```
 
 That prints `## Conductor State` and the parsed JSON without starting a run.
@@ -294,7 +294,7 @@ the project's `bin/setup` if it has one. All of those steps are idempotent.
 ### 8. Unpark last
 
 ```bash
-conduct-ts daemon unpark <slug>
+ai-conductor daemon unpark <slug>
 ```
 
 **What it changes:** resets the no-evidence attempt counter in the recreated worktree, then
@@ -316,7 +316,7 @@ repairing after is what produces the 128 spin described in
    The SHA must match the branch tip you recorded in Diagnosis step 1.
 3. **State parses:**
    ```bash
-   cd .worktrees/<slug> && conduct-ts inline --status
+   cd .worktrees/<slug> && ai-conductor inline --status
    ```
 4. **The build gate does not ask for finished tasks.** After the next dispatch, read the verdict:
    ```bash
@@ -327,7 +327,7 @@ repairing after is what produces the 128 spin described in
 5. **The daemon resumes rather than restarts.** The log line is `↻ resume <slug>`, not
    `▶ start <slug>`, and the first dispatched task is not task 1.
    ```bash
-   conduct-ts daemon logs --lines 40
+   ai-conductor daemon logs --lines 40
    ```
 
 If the build still reports no progress on committed work, the stall is a false negative — work

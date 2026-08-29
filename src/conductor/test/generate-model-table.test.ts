@@ -348,6 +348,27 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     expect(violations).toEqual([]);
   });
 
+  it('renders composer as the canonical Opus authoring loop and engineer as its compatibility delegate', () => {
+    const rowsByName = new Map(buildExtraRows().map((row) => [row.name, row]));
+
+    expect(rowsByName.get('composer')).toMatchObject({
+      executionPath: 'supported-host interactive',
+      claudeModel: 'opus',
+      claudeEffort: '',
+      codexModel: 'inherits model from the Codex session or spawned-agent configuration',
+      codexEffort: 'inherits effort from the Codex session or spawned-agent configuration',
+      why: expect.stringMatching(/canonical.*authoring/i),
+    });
+    expect(rowsByName.get('engineer')).toMatchObject({
+      executionPath: 'supported-host interactive',
+      why: expect.stringMatching(/compatibility delegate/i),
+    });
+
+    const table = renderModelTable();
+    expect(table).toContain('| composer | supported-host interactive | opus |');
+    expect(table).toContain('| engineer | supported-host interactive |');
+  });
+
   it('rejects incomplete and cross-provider interactive metadata with row and field details', () => {
     const canonical = buildExtraRows()[0]!;
     const invalidCases = [

@@ -286,10 +286,10 @@ describe('TS-2: the authoring boundary exposes a blocking protected-target check
     expect(command).toBeDefined();
   });
 
-  it('requires plan authoring to run the blocking conduct-ts command', async () => {
+  it('requires plan authoring to run the blocking ai-conductor command', async () => {
     const text = await readContract('skills/plan/SKILL.md');
 
-    expect(text).toMatch(/conduct-ts\s+[^\n]*protect/i);
+    expect(text).toMatch(/ai-conductor\s+[^\n]*protect/i);
     expect(text).toMatch(/(?:block|fail|reject)[\s\S]{0,220}(?:task id|task)[\s\S]{0,160}(?:protected path|path)/i);
   });
 });

@@ -172,6 +172,7 @@ const EXPECTED_EXTRA_ROW_NAMES = [
   'code-review',
   'debugging',
   'simplify',
+  'composer',
   'engineer',
   'intake',
   'conduct',
@@ -215,6 +216,28 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     });
 
     expect(violations).toEqual([]);
+  });
+
+  it('registers the canonical composer at the Opus tier and keeps engineer as its compatibility delegate', () => {
+    const rowsByName = new Map(EXTRA_MODEL_TABLE_ROWS.map((row) => [row.name, row]));
+    const composer = rowsByName.get('composer');
+    const engineer = rowsByName.get('engineer');
+
+    expect(composer).toMatchObject({
+      executionPath: 'supported-host interactive',
+      claudeModel: 'opus',
+      claudeEffort: '',
+      codexModel: expect.stringMatching(/inherits.*Codex.*session/i),
+      codexEffort: expect.stringMatching(/inherits.*Codex.*session/i),
+      why: expect.stringMatching(/canonical.*authoring/i),
+    });
+    expect(readSkillModelPin(join(skillsDir, 'composer'))).toBe('opus');
+    expect(PIN_EXEMPT_SKILLS).toContain('composer');
+
+    expect(engineer).toMatchObject({
+      executionPath: 'supported-host interactive',
+      why: expect.stringMatching(/compatibility delegate/i),
+    });
   });
 });
 

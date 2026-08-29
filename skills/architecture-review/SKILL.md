@@ -309,7 +309,7 @@ Write the review to `.docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md
 the feature introduces (exported function/module, hook script, config key, emitted event,
 scheduled job, CLI subcommand, etc.), state at design time where/how it will be called from
 in production — e.g. "invoked from the daemon loop's step dispatcher," "wired into
-`conduct-ts`'s command table," "consumed by the existing event bus subscriber in
+`ai-conductor`'s command table," "consumed by the existing event bus subscriber in
 `src/x.ts`." This is a design-time commitment, not a code citation — no `file:line` is
 required yet since the code doesn't exist. It informs the review's feasibility and overlap
 analysis; it is not a per-task plan contract.
@@ -323,7 +323,7 @@ an observed caller there).
 Not required for **Small** tier features (the DECIDE-time review is skipped for Small per the
 Lightweight Mode section above; §12 still runs at SHIP).
 
-**Early overlap scan (Medium/Large tier):** Before `/plan` runs, run `conduct-ts overlap-scan
+**Early overlap scan (Medium/Large tier):** Before `/plan` runs, run `ai-conductor overlap-scan
 --files <Wiring Surface candidate paths>` over the paths named in `## Wiring Surface` above.
 Surface the rendered report to the author alongside the review output. This is **advisory
 only** — it never blocks the verdict or the review — it exists to flag unmerged dependent
@@ -414,7 +414,7 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
 - **Production reachability sweep (green-but-unwired guard).** For each primitive this
   feature's diff introduces or materially changes — exported functions/modules, hook scripts,
   config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
-  production entry point (`conduct-ts` command dispatch, the daemon loop, hook/settings provisioning,
+  production entry point (`ai-conductor` command dispatch, the daemon loop, hook/settings provisioning,
   a wired step runner) and cite the caller as `file:line`. Test files, fixtures, and the
   primitive's own module do not count as callers, except for the narrow same-file composition
   case below.

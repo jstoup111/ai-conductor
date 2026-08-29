@@ -15,8 +15,8 @@ machinery.
 
 ## Prerequisites
 
-- The harness installed and `conduct-ts --help` working.
-- The target project registered (`conduct-ts register`) and bootstrapped (`/bootstrap`).
+- The harness installed and `ai-conductor --help` working.
+- The target project registered (`ai-conductor register`) and bootstrapped (`/bootstrap`).
 - `gh auth status` clean, or `spec_owner` set in `~/.ai-conductor/config.yml`. Without one of
   these the spec cannot land and the daemon builds nothing.
 - `tmux` on `PATH` — the daemon is hosted in a tmux session.
@@ -28,10 +28,10 @@ Run every command from the project root unless stated otherwise.
 
 ```bash
 cd /path/to/your-project
-conduct-ts engineer
+ai-conductor compose
 ```
 
-This spawns an interactive `claude` session with `/engineer` as the opening prompt, inheriting your
+This spawns an interactive `claude` session with `/composer` as the opening prompt, inheriting your
 terminal. Drive the loop from there: it walks the DECIDE phase — explore, complexity, PRD (product
 track only), architecture, stories, conflict-check, plan, and (for Medium and Large tiers)
 coherence-check — inside a dedicated per-idea git worktree,
@@ -40,11 +40,11 @@ then lands the artifacts on a `spec/<slug>` branch and opens the spec PR.
 To skip the chat prompt and hand it the idea directly:
 
 ```bash
-conduct-ts engineer --idea "add a CSV export to the reporting page"
+ai-conductor compose --idea "add a CSV export to the reporting page"
 ```
 
 The idea is one-shot — it seeds only the first session. If you are already inside a Claude Code
-session, `conduct-ts engineer` refuses to nest a second one and tells you to run `/engineer`
+session, `ai-conductor compose` refuses to nest a second one and tells you to run `/composer`
 directly.
 
 **Observable outcome:** a PR against `main` whose diff is entirely `.docs/` artifacts — an intake
@@ -94,7 +94,7 @@ gh pr merge <spec-pr-number> --squash
 ## 3. Start the daemon
 
 ```bash
-conduct-ts daemon start
+ai-conductor daemon start
 ```
 
 `start` first runs `./bin/install --check` internally — a stale skill catalog **never** starts a
@@ -104,14 +104,14 @@ tmux session and attaches you read-only. Detach with `Ctrl-b d`; the daemon keep
 To start without attaching:
 
 ```bash
-conduct-ts daemon start -D
+ai-conductor daemon start -D
 ```
 
 **Observable outcome:** `daemon started (detached). Attach with 'conduct daemon connect'.`, or a
 live read-only pane.
 
 ```bash
-conduct-ts daemon status
+ai-conductor daemon status
 ```
 
 shows `● running` for the project with its pid, engine version, and last log line. Start, stop,
@@ -121,7 +121,7 @@ park, fleet operations, and pause semantics are covered in
 ## 4. Watch the build
 
 ```bash
-conduct-ts daemon logs --follow
+ai-conductor daemon logs --follow
 ```
 
 The daemon scans `main` for merged specs, filters out anything already shipped, applies the owner
@@ -131,7 +131,7 @@ implementing tasks test-first, reviewing, simplifying, running the aggregate tes
 SHIP validators.
 
 **Observable outcome:** a new directory `.worktrees/<slug>/`, a branch `feat/daemon-<slug>`, and log
-lines advancing through step names. `conduct-ts daemon status` reports the running pid and the
+lines advancing through step names. `ai-conductor daemon status` reports the running pid and the
 current slug.
 
 Only one feature builds at a time. `--concurrency` is accepted, but any value above 1 is clamped
@@ -172,7 +172,7 @@ backlog scan sees the record and skips the slug permanently.
 Clean up the finished worktree:
 
 ```bash
-conduct-ts inline --cleanup
+ai-conductor inline --cleanup
 ```
 
 This scans resumable features, checks each one's recorded PR for a merge, and prompts
@@ -184,7 +184,7 @@ Opening or merging a PR outside this flow does not write `.docs/shipped/<slug>.m
 dedup never fires and it re-dispatches the spec on every scan. Record the ship explicitly:
 
 ```bash
-conduct-ts shipped-record --slug <slug> --pr <pr-url>
+ai-conductor shipped-record --slug <slug> --pr <pr-url>
 ```
 
 It writes and commits the record, and is idempotent. The exit code proves nothing — it exits `0`
@@ -195,7 +195,7 @@ Recovery is in
 Meanwhile, park the slug so the daemon stops re-kicking it:
 
 ```bash
-conduct-ts daemon park <slug>
+ai-conductor daemon park <slug>
 ```
 
 Always park **before** touching a feature's worktree or branch.
@@ -205,7 +205,7 @@ Always park **before** touching a feature's worktree or branch.
 For a change that does not need a spec PR or the daemon, run the whole pipeline in the foreground:
 
 ```bash
-conduct-ts inline "add a CSV export to the reporting page"
+ai-conductor inline "add a CSV export to the reporting page"
 ```
 
 Same steps, same gates, no backlog and no tmux — it checkpoints for your approval instead. The

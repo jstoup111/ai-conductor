@@ -2,7 +2,7 @@
  * Regression test for jstoup111/ai-conductor#1003 — the post-install success
  * banner printed a command the CLI itself rejects: a bare `conduct "your
  * feature description"`. The preferred automated path is now the daemon, and
- * the banner must keep printing the real `conduct-ts daemon start` invocation.
+ * the banner must keep printing the real `ai-conductor daemon start` invocation.
  *
  * A hardcoded expected-string assertion would pass even if the banner
  * drifted back to the broken form (it already drifted once). To keep this
@@ -13,7 +13,7 @@
  *   2. Shell-tokenizes that extracted string exactly as a terminal would.
  *   3. Feeds the resulting argv through the real daemon supervisor parser.
  *   4. Asserts the parser accepts it as a daemon start invocation and that
- *      the binary name is conduct-ts.
+ *      the binary name is ai-conductor.
  *
  * If the banner ever reverts to the bare `conduct "..."` form (or any other
  * shape the parser rejects), this test fails.
@@ -31,11 +31,11 @@ const REPO_ROOT = resolve(__dirname, '../../../..');
 const INSTALL_SCRIPT_PATH = resolve(REPO_ROOT, 'bin/install');
 
 /**
- * Extracts the literal `conduct-ts daemon start` command from bin/install's
+ * Extracts the literal `ai-conductor daemon start` command from bin/install's
  * `echo -e "..."` source lines.
  *
- * Scans every `echo -e "<content>"` line after the "Or automated:" marker
- * and returns the first whose content mentions "conduct" — that's the
+ * Scans every `echo -e "<content>"` line after the preferred autonomous-path
+ * marker and returns the daemon-start command — that's the
  * invocation example line, as opposed to the `cd your-project/` line above
  * it. Un-escapes the `\"` bash uses to embed literal quotes inside the
  * double-quoted echo string, so the returned text is exactly what the
@@ -54,11 +54,11 @@ function extractAutomatedBannerCommand(installSource: string): string {
   let match: RegExpExecArray | null;
   while ((match = echoLineRe.exec(afterMarker)) !== null) {
     const content = match[1].replace(/\\"/g, '"').trim();
-    if (content.includes('conduct-ts daemon start')) {
+    if (content.includes('ai-conductor daemon start')) {
       return content;
     }
   }
-  throw new Error('bin/install: no conduct invocation line found under "Or automated:"');
+  throw new Error('bin/install: no ai-conductor daemon start line found under preferred autonomous path');
 }
 
 /** Tokenizes a shell command line the way a terminal would: quoted spans stay one token. */
@@ -78,14 +78,12 @@ describe('bin/install success banner — preferred autonomous invocation', () =>
     const bannerCommand = extractAutomatedBannerCommand(installSource);
     const tokens = shellSplit(bannerCommand);
 
-    // Binary name: must be conduct-ts (the TypeScript CLI), not the
-    // deprecated bash `conduct` script — bin/install itself builds and
-    // PATH-checks conduct-ts, not conduct.
-    expect(tokens[0]).toBe('conduct-ts');
+    // The banner must name the canonical CLI, not either legacy alias.
+    expect(tokens[0]).toBe('ai-conductor');
 
     // Simulate real process.argv and run it through the same parser index.ts
     // uses to dispatch daemon management verbs.
-    const simulatedArgv = ['node', 'conduct-ts', ...tokens.slice(1)];
+    const simulatedArgv = ['node', 'ai-conductor', ...tokens.slice(1)];
     expect(detectDaemonSupervisorCommand(simulatedArgv)).toEqual({ verb: 'start' });
   });
 });

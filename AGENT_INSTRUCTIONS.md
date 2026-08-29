@@ -246,7 +246,7 @@ fix all references before committing.
 Docs track features. Every change that adds or alters user-facing behavior MUST
 update the relevant documentation in the **same** PR:
 
-- New `conduct-ts` flags → update `docs/reference/cli.md`; new config keys → `docs/reference/configuration.md`.
+- New `ai-conductor` flags → update `docs/reference/cli.md`; new config keys → `docs/reference/configuration.md`.
 - New daemon options or operational behavior → update `docs/guides/running-the-daemon.md`, and the
   affected runbook under `docs/runbooks/` if it changes recovery.
 - New skill → `docs/reference/skills.md`; new step → `docs/reference/steps.md`; new gate →

@@ -173,12 +173,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect({
         haltFirstLine: halt.split('\n', 1)[0],
         containsWriteFailure: halt.includes('EACCES: permission denied writing auto-park marker'),
-        containsRemedy: halt.includes(`conduct-ts daemon park ${ITEM.slug}`),
+        containsRemedy: halt.includes(`ai-conductor daemon park ${ITEM.slug}`),
         containsParkedClaim: halt.includes('feature parked — will not re-dispatch on the next scan'),
         parkFailureLogs: logs.filter((line) => line.includes(ITEM.slug) && /park.*write.*fail/i.test(line)),
         haltVerificationLogs: logs.filter((line) => line.includes('HALT marker write failed')),
       }).toEqual({
-        haltFirstLine: 'feature errored — automatic park failed: EACCES: permission denied writing auto-park marker; run conduct-ts daemon park feat-x',
+        haltFirstLine: 'feature errored — automatic park failed: EACCES: permission denied writing auto-park marker; run ai-conductor daemon park feat-x',
         containsWriteFailure: true,
         containsRemedy: true,
         containsParkedClaim: false,

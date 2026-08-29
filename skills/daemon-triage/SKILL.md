@@ -68,7 +68,7 @@ The marker is advisory because it can survive a daemon crash. Check it first,
 then run this read-only liveness corroboration:
 
 ```bash
-conduct-ts daemon status
+ai-conductor daemon status
 ```
 
 Read-only triage always continues, even when the marker or daemon status appears live.
@@ -97,7 +97,7 @@ inside a feature worktree — the daemon-level evidence (`.daemon/`) only exists
 the root.
 
 ```bash
-conduct-ts daemon status
+ai-conductor daemon status
 ```
 
 If the operator did not name a slug, list the halted and in-progress features from
@@ -116,8 +116,8 @@ for `<base-branch>` throughout.
 
 ```bash
 # Daemon-level: liveness, last activity, what it thinks the state is
-conduct-ts daemon status
-conduct-ts daemon logs --lines 200 | grep -F "<slug>"
+ai-conductor daemon status
+ai-conductor daemon logs --lines 200 | grep -F "<slug>"
 
 # The halt and its class — the single most decisive signal
 head -1 .worktrees/<slug>/.pipeline/HALT 2>/dev/null
@@ -289,7 +289,7 @@ wrong midway, the record must already show what had actually run.
 ## Verification
 
 - [ ] The skill was directly operator-invoked, never auto-dispatched
-- [ ] `.pipeline/phase-active` was checked **first**, then `conduct-ts daemon
+- [ ] `.pipeline/phase-active` was checked **first**, then `ai-conductor daemon
       status` supplied advisory liveness context
 - [ ] Read-only triage continued for every marker/status combination; an
       apparently live step produced a warning, while stale/stopped daemon or

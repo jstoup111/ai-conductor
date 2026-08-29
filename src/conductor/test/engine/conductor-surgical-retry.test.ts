@@ -162,7 +162,7 @@ describe('conductor/surgical-retry', () => {
 
       // Should NOT suggest looping or retrying multiple times
       // (that would be indicated by "try again" or "retry" without exit condition)
-      expect(hint).toContain('conduct-ts finish-record');
+      expect(hint).toContain('ai-conductor finish-record');
       // The single command run is the requirement, not loops
       expect(hint).not.toContain('try again');
     });
@@ -183,7 +183,7 @@ describe('conductor/surgical-retry', () => {
       const hint = buildRetryHint('finish', reason, missing);
 
       // Should contain the CLI command
-      expect(hint).toContain('conduct-ts finish-record --choice');
+      expect(hint).toContain('ai-conductor finish-record --choice');
       // Should be instructional (user-facing)
       expect(hint).toContain('run ONLY');
       // Should NOT mention automatic marker writes or engine state

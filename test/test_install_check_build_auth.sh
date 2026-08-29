@@ -4,17 +4,16 @@ set -euo pipefail
 # test_install_check_build_auth.sh — `bin/install --check` build-auth delegate
 # (Task 10, FR-1/FR-3).
 #
-# `bin/install --check` must surface build-auth state by calling
-# `conduct-ts build-auth-status` and formatting ok/fail from its exit code —
-# no token path/mode derivation logic in bash. If conduct-ts is absent/stale,
-# it must warn, not crash, mirroring the existing conduct-ts staleness
-# warning already in check_installation.
+# `bin/install --check` must surface build-auth state by calling its
+# repo-relative canonical launcher and formatting ok/fail from its exit code —
+# no token path/mode derivation logic in bash. The compatibility alias remains
+# a PATH health probe; if it is absent/stale, the doctor must warn, not crash.
 #
 # Runs the REAL bin/install --check with a stubbed conduct-ts on PATH so the
 # assertions are proven against the actual script, not a sourced fragment.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SOURCE_HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -39,6 +38,23 @@ assert() {
 
 TMP_ROOT=$(mktemp -d)
 
+# Exercise the real installer from an isolated harness layout. Its canonical
+# launcher delegates to a PATH test double, which proves the installer uses
+# its repo-relative launcher while the separate `conduct-ts` stub proves the
+# operator-facing alias probe still runs.
+HARNESS_DIR="${TMP_ROOT}/harness"
+mkdir -p "$HARNESS_DIR/bin" "$HARNESS_DIR/src/conductor/dist"
+cp "$SOURCE_HARNESS_DIR/bin/install" "$HARNESS_DIR/bin/install"
+cp -R "$SOURCE_HARNESS_DIR/bin/lib" "$HARNESS_DIR/bin/lib"
+cp -R "$SOURCE_HARNESS_DIR/skills" "$HARNESS_DIR/skills"
+cp "$SOURCE_HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/HARNESS.md"
+printf '%s\n' '# placeholder bundle for --check' > "$HARNESS_DIR/src/conductor/dist/index.js"
+cat > "$HARNESS_DIR/bin/ai-conductor" <<'EOF'
+#!/usr/bin/env bash
+exec ai-conductor-test-double "$@"
+EOF
+chmod +x "$HARNESS_DIR/bin/install" "$HARNESS_DIR/bin/ai-conductor"
+
 # `--check` fails when this checkout has no built conduct-ts bundle, so without
 # a bundle every case below would report that drift and the exit codes under
 # test (0 for clean, 2 for a build-auth-only failure) would be unreachable in a
@@ -46,19 +62,7 @@ TMP_ROOT=$(mktemp -d)
 # only when there is none, and remove it again on exit, so these assertions
 # describe build-auth behavior rather than the local build state. A real bundle
 # is never touched.
-CONDUCT_TS_DIST="${HARNESS_DIR}/src/conductor/dist/index.js"
-PLACEHOLDER_DIST=false
-if [ ! -f "$CONDUCT_TS_DIST" ]; then
-  PLACEHOLDER_DIST=true
-  mkdir -p "$(dirname "$CONDUCT_TS_DIST")"
-  printf '// placeholder written by test_install_check_build_auth.sh\n' > "$CONDUCT_TS_DIST"
-fi
-
 cleanup() {
-  if [ "$PLACEHOLDER_DIST" = true ]; then
-    rm -f "$CONDUCT_TS_DIST"
-    rmdir "$(dirname "$CONDUCT_TS_DIST")" 2>/dev/null || true
-  fi
   rm -rf "$TMP_ROOT"
 }
 trap cleanup EXIT INT TERM
@@ -85,7 +89,11 @@ cat > "${STUB_BIN}/conduct" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x "${STUB_BIN}/claude" "${STUB_BIN}/conduct"
+cat > "${STUB_BIN}/ai-conductor" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "${STUB_BIN}/claude" "${STUB_BIN}/conduct" "${STUB_BIN}/ai-conductor"
 
 run_check() {
   # $1 = path to a directory to prepend to PATH (contains the conduct-ts stub,
@@ -104,10 +112,14 @@ CLEAN_BIN="${TMP_ROOT}/clean-bin"
 mkdir -p "$CLEAN_BIN"
 cat > "${CLEAN_BIN}/conduct-ts" <<'EOF'
 #!/usr/bin/env bash
+exit 0
+EOF
+cat > "${CLEAN_BIN}/ai-conductor-test-double" <<'EOF'
+#!/usr/bin/env bash
 echo "build-auth-status: mode=daemon-token state=valid path=/fake/token"
 exit 0
 EOF
-chmod +x "${CLEAN_BIN}/conduct-ts"
+chmod +x "${CLEAN_BIN}/conduct-ts" "${CLEAN_BIN}/ai-conductor-test-double"
 
 out=$(run_check "$CLEAN_BIN" 2>&1) && rc=0 || rc=$?
 echo "$out" | grep -qi "build-auth" && r=0 || r=1
@@ -126,6 +138,10 @@ printf '%s\n' 'markdown_viewer: {command: glow}' 'mermaid_renderer: {preset: mmd
   > "$FAKE_HOME/.ai-conductor/config.yml"
 cat > "${CONFIG_BIN}/conduct-ts" <<'EOF'
 #!/usr/bin/env bash
+exit 0
+EOF
+cat > "${CONFIG_BIN}/ai-conductor-test-double" <<'EOF'
+#!/usr/bin/env bash
 set -euo pipefail
 
 case "$*" in
@@ -141,7 +157,7 @@ for tool in glow mmdc; do
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "${CONFIG_BIN}/${tool}"
   chmod +x "${CONFIG_BIN}/${tool}"
 done
-chmod +x "${CONFIG_BIN}/conduct-ts"
+chmod +x "${CONFIG_BIN}/conduct-ts" "${CONFIG_BIN}/ai-conductor-test-double"
 
 out=$(CONFIG_READ_CALLS="$CONFIG_READ_CALLS" run_check "$CONFIG_BIN" 2>&1) && rc=0 || rc=$?
 printf '%s\n' "$out" | grep -q 'markdown viewer: glow (artifact review)' && r=0 || r=1
@@ -149,7 +165,7 @@ assert "configured viewer: preserves the successful artifact-review output" "$r"
 printf '%s\n' "$out" | grep -q 'mermaid renderer: mmdc-png (diagram approval gates)' && r=0 || r=1
 assert "configured renderer: preserves the successful diagram-gate output" "$r"
 [ "$(cat "$CONFIG_READ_CALLS")" = $'config read markdown_viewer.command\nconfig read mermaid_renderer.preset\nconfig read mermaid_renderer.command' ] && r=0 || r=1
-assert "configured dependencies: reads viewer and renderer fields through conduct-ts" "$r"
+assert "configured dependencies: reads viewer and renderer fields through the canonical launcher" "$r"
 [ "$rc" -eq 0 ] && r=0 || r=1
 assert "configured dependencies: overall --check remains successful" "$r"
 
@@ -166,12 +182,16 @@ mkdir -p "$MALFORMED_BIN"
 printf '%s\n' 'markdown_viewer: [' > "$FAKE_HOME/.ai-conductor/config.yml"
 cat > "${MALFORMED_BIN}/conduct-ts" <<'EOF'
 #!/usr/bin/env bash
+exit 0
+EOF
+cat > "${MALFORMED_BIN}/ai-conductor-test-double" <<'EOF'
+#!/usr/bin/env bash
 case "$*" in
   build-auth-status) echo 'build-auth-status: mode=daemon-token state=valid'; exit 0 ;;
   config\ read\ *) exit 1 ;;
 esac
 EOF
-chmod +x "${MALFORMED_BIN}/conduct-ts"
+chmod +x "${MALFORMED_BIN}/conduct-ts" "${MALFORMED_BIN}/ai-conductor-test-double"
 
 out=$(run_check "$MALFORMED_BIN" 2>&1) && rc=0 || rc=$?
 printf '%s\n' "$out" | grep -q 'markdown viewer configuration unreadable' && r=0 || r=1
@@ -185,10 +205,14 @@ FAIL_BIN="${TMP_ROOT}/fail-bin"
 mkdir -p "$FAIL_BIN"
 cat > "${FAIL_BIN}/conduct-ts" <<'EOF'
 #!/usr/bin/env bash
+exit 0
+EOF
+cat > "${FAIL_BIN}/ai-conductor-test-double" <<'EOF'
+#!/usr/bin/env bash
 echo "build-auth-status: mode=daemon-token state=missing path=/fake/token"
 exit 1
 EOF
-chmod +x "${FAIL_BIN}/conduct-ts"
+chmod +x "${FAIL_BIN}/conduct-ts" "${FAIL_BIN}/ai-conductor-test-double"
 
 out=$(run_check "$FAIL_BIN" 2>&1) && rc=0 || rc=$?
 echo "$out" | grep -qE "✗.*build-auth" && r=0 || r=1

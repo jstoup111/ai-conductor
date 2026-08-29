@@ -3,7 +3,7 @@
  *
  * Hooks are written to .pipeline/session-hooks/ at worktree provisioning
  * and wired via settings.json hook entries. They use only bash and POSIX
- * tools — no dist references, no conduct-ts invocations. stdin is bounded
+ * tools — no dist references, no ai-conductor invocations. stdin is bounded
  * via `head -c` so a runaway payload can never hang or OOM the hook.
  */
 

@@ -25,7 +25,7 @@ notice and links the required branch, validation, documentation, and release-met
 | `src/conductor/test/` | Vitest suite. See [testing](testing.md). |
 | `src/conductor/scripts/` | `publish-engine.mjs` (the build), `publish-guard.mjs`, `intake-label-sync-apply.mts`. |
 | `src/conductor/bin/` | `intake-file` — a `tsx` shebang wrapper over `src/intake-file-cli.ts`. |
-| `bin/` | Repo-root bash wrappers: `conduct-ts`, `install`, `setup`, `update`, `migrate`, `generate-model-table`, `generate-docs-guard-hook`, `intake-file`, `intake-backfill`, `quarantine-engineer-signals`. |
+| `bin/` | Repo-root bash wrappers: `ai-conductor`, `install`, `setup`, `update`, `migrate`, `generate-model-table`, `generate-docs-guard-hook`, `intake-file`, `intake-backfill`, `quarantine-engineer-signals`. |
 | `skills/` | Skill catalog. See [skills reference](../reference/skills.md). |
 | `agents/`, `templates/`, `tech-context/` | Prompt templates, scaffolding, stack knowledge. |
 | `hooks/claude/` | Hook scripts. See [settings and hooks](../reference/settings-and-hooks.md). |
@@ -48,7 +48,7 @@ Static-analysis configuration sits at two levels. Anything needing the TypeScrip
 
 | Layer | Files | Owns |
 | --- | --- | --- |
-| `engine/` | 238 | The state machine, step catalogue, gate loop, daemon, engineer loop, config resolution, self-host guardrails — essentially all domain logic. |
+| `engine/` | 238 | The state machine, step catalogue, gate loop, daemon, composer-loop implementation, config resolution, self-host guardrails — essentially all domain logic. |
 | `execution/` | 6 | The third-party process boundary: LLM provider adapters and subprocess/session management. |
 | `types/` | 6 | The shared type surface: `StepName`, `ConductState`, `ConductorEvent`, `HarnessConfig`, plugin kinds. |
 | `ui/` | 11 | Event emitter, subscribers, terminal renderers, dashboard snapshot/text, notifications, prompt host. |
@@ -60,7 +60,7 @@ Static-analysis configuration sits at two levels. Anything needing the TypeScrip
 
 | Subpackage | Files | Owns |
 | --- | --- | --- |
-| `engine/engineer/` | 25 | The engineer loop: authoring, routing, handoff, land-time spec and coherence gates, lesson store. |
+| `engine/engineer/` | 25 | The composer-loop implementation: authoring, routing, handoff, land-time spec and coherence gates, lesson store. |
 | `engine/engineer/intake/` | 16 | Intake queue, ledger, GitHub issue read/write-back, label sync, closed-issue reconciliation. |
 | `engine/self-host/` | 16 | Guardrails for the harness building itself: detector, write fence, sandbox build env, build auth, version gate, release gate. |
 | `engine/halt-issues/` | 6 | Halt-monitor issue reconciliation and its CLI. |
@@ -145,7 +145,7 @@ Seven files sit at the top level of `src/conductor/src/`.
 
 | File | Role |
 | --- | --- |
-| `index.ts` | The composition root and argv dispatcher. `bin/conduct-ts` execs `dist/index.js`, built from this file. |
+| `index.ts` | The composition root and argv dispatcher. `bin/ai-conductor` execs `dist/index.js`, built from this file. |
 | `cli.ts` | The commander declaration surface. Builds the help text; most subcommands declared here are help-only. |
 | `daemon-cli.ts` | The daemon runtime. Registers zero commander commands; entered through `runDaemonMode` at `:491`, lazily imported from `index.ts` so non-daemon paths never load it. |
 | `intake-loop-cli.ts` | `detectIntakeLoopCommand` `:49` / `dispatchIntakeLoop` `:106`, wired into `index.ts`. |

@@ -44,7 +44,7 @@ before Vitest loads, so use `npm test -- <selectors>` rather than invoking `vite
 
 ### The engine-dist guard
 
-Thirteen test files spawn the real `bin/conduct-ts`, which exits 1 when `src/conductor/dist` is
+Thirteen test files spawn the real `bin/ai-conductor`, which exits 1 when `src/conductor/dist` is
 missing or its symlink dangles. `dist` is gitignored, so it does not exist in a fresh clone or
 `git worktree` after `npm ci`, and there is no `pretest` hook — nothing built it before the tests
 ran. It appeared only partway through a run, whenever some test happened to publish an engine, and
@@ -265,7 +265,7 @@ None of this excuses a fixture from cleaning up after itself — it bounds the d
 kill-switches:
 
 - `NO_AUTOLAUNCH_ENV=1` — the engineer handoff's default launch path becomes a no-op, so no test spawns a
-  real `tmux new-session -d 'conduct-ts daemon --continuous'` that outlives its tmpdir.
+  real `tmux new-session -d 'ai-conductor daemon --continuous'` that outlives its tmpdir.
 - `AI_CONDUCTOR_NO_REAL_EXEC=1` — `makeProductionGh` and `makeProductionGit` refuse to exec. A test once
   added a `needs-remediation` label and a `boom` comment to a live PR; this is the guard against that.
 - `AI_CONDUCTOR_ENGINEER_DIR` — redirected to a fresh `mkdtempSync` directory unless a test already set

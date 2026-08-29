@@ -13,7 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { access, chmod, mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
+import { access, chmod, mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
@@ -34,6 +34,7 @@ import {
   renderDaemonEvent,
   runDaemonMode,
 } from '../../src/daemon-cli.js';
+import { terminateFeature } from '../../src/engine/daemon-runner.js';
 import type { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import type {
   ConductStateStore,
@@ -61,6 +62,51 @@ class RecordingConductStateStore implements ConductStateStore<ConductState> {
     return this.result;
   }
 }
+
+describe('daemon termination guidance', () => {
+  // Covers: task:10
+  it('uses the canonical CLI spelling for auto-park failure and parked-feature recovery', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-cli-guidance-'));
+    const slug = 'canonical-cli-guidance';
+    const failedWorktree = join(projectRoot, 'failed-worktree');
+    const parkedWorktree = join(projectRoot, 'parked-worktree');
+    const nonDirectoryProjectRoot = join(projectRoot, 'not-a-directory');
+
+    try {
+      await Promise.all([
+        mkdir(failedWorktree, { recursive: true }),
+        mkdir(parkedWorktree, { recursive: true }),
+        writeFile(nonDirectoryProjectRoot, ''),
+      ]);
+
+      await terminateFeature({
+        worktreePath: failedWorktree,
+        projectRoot: nonDirectoryProjectRoot,
+        reason: 'automatic park could not be recorded',
+        park: true,
+        slug,
+      });
+      await terminateFeature({
+        worktreePath: parkedWorktree,
+        projectRoot,
+        reason: 'feature needs operator recovery',
+        park: true,
+        slug,
+      });
+
+      const [failedHalt, parkedHalt] = await Promise.all([
+        readFile(join(failedWorktree, '.pipeline', 'HALT'), 'utf-8'),
+        readFile(join(parkedWorktree, '.pipeline', 'HALT'), 'utf-8'),
+      ]);
+
+      expect(failedHalt).toContain(`ai-conductor daemon park ${slug}`);
+      expect(parkedHalt).toContain(`ai-conductor daemon unpark ${slug}`);
+      expect(`${failedHalt}\n${parkedHalt}`).not.toContain('conduct-ts daemon');
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('daemon setup-triage prepare wiring', () => {
   // Real local Git: the base SHA the forced prepare stamps into the setup

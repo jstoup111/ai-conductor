@@ -40,6 +40,11 @@ cp -r "$HARNESS_DIR/bin" "$CHECKOUT/bin"
 cp -r "$HARNESS_DIR/skills" "$CHECKOUT/skills"
 cp -r "$HARNESS_DIR/hooks" "$CHECKOUT/hooks"
 cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/VERSION" "$CHECKOUT/"
+# The installer now requires an existing conductor bundle before it reports
+# completion. This catalog test stubs that unrelated build boundary so every
+# scenario observes real skill-link reconciliation only.
+mkdir -p "$CHECKOUT/src/conductor/dist"
+: > "$CHECKOUT/src/conductor/dist/index.js"
 
 STUBS="$TMP_ROOT/stubs"
 mkdir -p "$STUBS"
@@ -80,6 +85,19 @@ owned_catalog_is_current() {
   [ "$found" -eq "$expected" ] \
     && [ -L "$fake_home/.agents/skills/HARNESS.md" ] \
     && [ "$(readlink -f "$fake_home/.agents/skills/HARNESS.md")" = "$CHECKOUT/HARNESS.md" ]
+}
+
+canonical_composer_and_engineer_resolve_for_both_hosts() {
+  local fake_home=$1
+  local host_dir skill
+
+  for host_dir in "$fake_home/.claude/skills" "$fake_home/.agents/skills"; do
+    for skill in composer engineer; do
+      [ -L "$host_dir/$skill" ] || return 1
+      [ "$(readlink -f "$host_dir/$skill")" = "$CHECKOUT/skills/$skill" ] || return 1
+      [ -r "$host_dir/$skill/SKILL.md" ] || return 1
+    done
+  done
 }
 
 snapshot_current_catalog() {
@@ -139,21 +157,48 @@ legacy_catalog_has_no_owned_entries() {
 }
 
 # ST-904-1/ST-904-2: normal built-in installation exposes the whole canonical
-# catalog and linked resources through Codex's documented user scope.
+# catalog and linked resources through each host's documented user scope.
 FRESH_HOME="$TMP_ROOT/home-fresh"
-if run_install "$FRESH_HOME" --providers codex >"$TMP_ROOT/fresh.out" 2>&1; then
-  pass 'normal Codex installation completes without plugin or prompt setup'
+if run_install "$FRESH_HOME" --providers claude,codex >"$TMP_ROOT/fresh.out" 2>&1; then
+  pass 'normal both-host installation completes without plugin or prompt setup'
 else
-  fail 'normal Codex installation completes without plugin or prompt setup'
+  fail 'normal both-host installation completes without plugin or prompt setup'
 fi
 check 'every canonical skill is readable exactly once from ~/.agents/skills' \
   owned_catalog_is_current "$FRESH_HOME"
+check 'both hosts resolve canonical composer and the compatibility engineer delegate' \
+  canonical_composer_and_engineer_resolve_for_both_hosts "$FRESH_HOME"
 check 'a linked skill resource is readable from the installed Codex view' \
   test -r "$FRESH_HOME/.agents/skills/tdd/references/red.md"
 check 'normal installation creates no Codex plugin dependency' \
   test ! -e "$FRESH_HOME/.codex/plugins"
 check 'normal installation leaves no harness-owned duplicate catalog in the legacy scope' \
   legacy_catalog_has_no_owned_entries "$FRESH_HOME"
+
+# The generic catalog check must identify a compatibility delegate that has
+# disappeared or become unreadable in either supported host's installed view.
+BROKEN_DELEGATE_HOME="$TMP_ROOT/home-broken-engineer"
+run_install "$BROKEN_DELEGATE_HOME" --providers claude,codex \
+  >"$TMP_ROOT/broken-delegate-install.out" 2>&1
+rm -f "$BROKEN_DELEGATE_HOME/.claude/skills/engineer" \
+  "$BROKEN_DELEGATE_HOME/.agents/skills/engineer"
+ln -s "$TMP_ROOT/missing-claude-engineer" \
+  "$BROKEN_DELEGATE_HOME/.claude/skills/engineer"
+ln -s "$TMP_ROOT/missing-codex-engineer" \
+  "$BROKEN_DELEGATE_HOME/.agents/skills/engineer"
+set +e
+run_install "$BROKEN_DELEGATE_HOME" --check --providers claude,codex \
+  >"$TMP_ROOT/broken-delegate-check.out" 2>&1
+BROKEN_DELEGATE_CHECK_CODE=$?
+if [ "$BROKEN_DELEGATE_CHECK_CODE" -ne 0 ] \
+  && grep -qiE 'Claude skill: engineer.*broken symlink' \
+    "$TMP_ROOT/broken-delegate-check.out" \
+  && grep -qiE 'Codex active skill: engineer.*broken symlink' \
+    "$TMP_ROOT/broken-delegate-check.out"; then
+  pass 'check fails with both host diagnostics for a broken engineer delegate'
+else
+  fail 'check fails with both host diagnostics for a broken engineer delegate'
+fi
 
 # ST-904-3/ST-904-4: update replaces an older harness-owned target, removes
 # legacy duplication, and converges when repeated.

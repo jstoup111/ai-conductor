@@ -265,7 +265,7 @@ describe('Story 2 — portable configured-verifier contract (FR-2, FR-8)', () =>
 
     const result = invokeRealSuite();
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe('');
+    expect(result.stderr).toBe('conduct-ts is deprecated; use ai-conductor instead\n');
     expect(await readCount()).toBe(1);
   });
 

@@ -7,7 +7,7 @@ nav_order: 8
 # Steps
 
 The complete step vocabulary the engine executes: names, order, phase, enforcement, skip rules,
-artifacts, and the skill each step dispatches. These names are what `conduct-ts inline --from <step>` accepts.
+artifacts, and the skill each step dispatches. These names are what `ai-conductor inline --from <step>` accepts.
 
 There are 24 step names: 20 sequential steps in `ALL_STEPS` and 4 out-of-band steps in
 `OUT_OF_BAND_STEPS`. `validation` and `build_verification` are step *groups* wrapping existing steps,
@@ -176,7 +176,7 @@ reconciled with one another — the path in play decides which fallback you get.
 | Path | Where the tier is read | When no tier is found |
 | --- | --- | --- |
 | Daemon dispatch | `.docs/complexity/<slug>.md` on the base-branch tree, via the `Tier: <S\|M\|L>` line; a dated slug falls back once to the date-stripped stem when that stem is unambiguous | `M` — the daemon's own fallback for an absent or garbled marker, logged once per slug with the paths tried |
-| `conduct-ts inline --interactive`, and the default run mode | The persisted tier, else the `complexity` step's assessment, confirmed by the operator | `L`, when the assessment fails and there is no prompt to fall back on |
+| `ai-conductor inline --interactive`, and the default run mode | The persisted tier, else the `complexity` step's assessment, confirmed by the operator | `L`, when the assessment fails and there is no prompt to fall back on |
 
 The marker file is the only durable carrier. A tier chosen in an interactive run reaches a later
 daemon build only if the `complexity` step committed `.docs/complexity/<slug>.md` under the plan stem —
@@ -257,7 +257,7 @@ auto-skipped after a failed completion check (whose reason carries the failure).
 registry:
 
 ```bash
-conduct-ts inline "<feature description>" --from build
+ai-conductor inline "<feature description>" --from build
 ```
 
 Accepted values are the 20 sequential step names above, in underscore form, plus any custom step name

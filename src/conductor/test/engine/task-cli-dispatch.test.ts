@@ -24,7 +24,7 @@ describe('CLI surface — conduct task subcommand (Task 7 wiring)', () => {
   it('task subcommand appears in full help output', async () => {
     const { renderFullHelp } = await import('../../src/cli.js');
     const help = renderFullHelp();
-    expect(help).toMatch(/conduct task/i);
+    expect(help).toMatch(/ai-conductor task/i);
     expect(help).toMatch(/start/i);
     expect(help).toMatch(/done/i);
   });

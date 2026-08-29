@@ -2,7 +2,7 @@
 # Fast-feedback derive on commit: warns on non-evidencing commits.
 # Advisory only; never blocks commits or writes task-status.
 #
-# Invokes the ENGINE derive path (`conduct-ts derive-feedback --sha <sha>`)
+# Invokes the ENGINE derive path (`ai-conductor derive-feedback --sha <sha>`)
 # instead of a bare bash regex, so fast feedback agrees with the same
 # engine-owned evidence grammar the build gate uses (H9: task ids are
 # [A-Za-z0-9._-]+, not numeric-only — `rem-fr10-1` is a valid id and must
@@ -65,7 +65,7 @@ elif [ -d "$repo_root/.docs/plans" ]; then
 fi
 
 # ── Try the engine derive path first ──────────────────────────────────────
-engine_bin="${AI_CONDUCTOR_ENGINE_BIN:-$HARNESS_DIR/bin/conduct-ts}"
+engine_bin="${AI_CONDUCTOR_ENGINE_BIN:-$HARNESS_DIR/bin/ai-conductor}"
 
 engine_output=""
 engine_ok=0

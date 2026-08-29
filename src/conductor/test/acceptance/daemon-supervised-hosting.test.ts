@@ -99,7 +99,7 @@ describe('Supervisor port behavior (ADR-014)', () => {
     const newArgs = argvOf(calls, 'new-session');
     expect(newArgs, 'must create a session when none exists').toBeTruthy();
     expect(newArgs).toContain('-d'); // detached
-    expect(newArgs!.join(' ')).toContain('conduct-ts daemon --continuous');
+    expect(newArgs!.join(' ')).toContain('daemon --continuous');
   });
 
   it('connect attaches READ-ONLY through the Supervisor port (FR-5)', async () => {
@@ -204,7 +204,7 @@ describe('Guard isolation: injected runners bypass kill-switch (TS-1 neg 3, #257
       const newSessionCall = argvOf(calls, 'new-session');
       expect(newSessionCall, 'spy runner must receive new-session (guard does NOT block injected runners)').toBeTruthy();
       expect(newSessionCall).toContain('-d');
-      expect(newSessionCall!.join(' ')).toContain('conduct-ts daemon --continuous');
+      expect(newSessionCall!.join(' ')).toContain('daemon --continuous');
     } finally {
       if (prevFlag === undefined) {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;

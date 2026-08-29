@@ -37,7 +37,7 @@ describe('config', () => {
         expect(result.ok).toBe(false);
         if (result.ok) return;
         expect(result.error.type).toBe('missing');
-        expect(result.error.message).toContain('conduct-ts config init');
+        expect(result.error.message).toContain('ai-conductor config init');
         expect(result.error.message).not.toContain('bin/migrate');
       } finally {
         await rm(emptyDir, { recursive: true, force: true });

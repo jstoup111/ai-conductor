@@ -49,7 +49,7 @@ export async function dispatchTestSuiteCommand(
 
   if (command.kind === 'guide') {
     await print(
-      'Usage: conduct-ts test-suite\n' +
+      'Usage: ai-conductor test-suite\n' +
         'Remove extra arguments and rerun. If verification blocks, return to /tdd or /pipeline before SHIP.',
       true,
     );
@@ -66,7 +66,7 @@ export async function dispatchTestSuiteCommand(
     await print(
       `FAILED: full test suite evidence=${result.reason}${freshness}. ` +
         `${FAILURE_GUIDANCE[result.reason]} ` +
-        'Return to /tdd or /pipeline, fix the failure, then rerun conduct-ts test-suite.',
+        'Return to /tdd or /pipeline, fix the failure, then rerun ai-conductor test-suite.',
       true,
     );
     return 1;

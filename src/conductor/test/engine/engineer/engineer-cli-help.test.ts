@@ -1,3 +1,4 @@
+// Covers: task:3
 // #524: `engineer <subcommand> --help` must short-circuit to a help descriptor
 // BEFORE the subcommand's own dispatch logic runs — otherwise the flag is
 // silently ignored and the (potentially mutating) subcommand actually executes.
@@ -12,8 +13,8 @@ import {
 } from '../../../src/engine/engineer-cli.js';
 
 // Helper: build argv arrays for testing
-// detectEngineerCommand reads process.argv offsets: [node, entry, 'engineer', sub, ...].
-const argv = (...rest: string[]) => ['node', 'conduct-ts', 'engineer', ...rest];
+// detectEngineerCommand reads process.argv offsets: [node, entry, verb, sub, ...].
+const argv = (verb: 'engineer' | 'compose', ...rest: string[]) => ['node', 'conduct-ts', verb, ...rest];
 
 const SUBCOMMANDS = [
   'projects',
@@ -32,31 +33,89 @@ const SUBCOMMANDS = [
 describe('detectEngineerCommand: --help/-h short-circuits every subcommand', () => {
   for (const sub of SUBCOMMANDS) {
     it(`\`engineer ${sub} --help\` returns {kind:'help', topic:'${sub}'} (not the subcommand's own kind)`, () => {
-      const result = detectEngineerCommand(argv(sub, '--help'));
+      const result = detectEngineerCommand(argv('engineer', sub, '--help'));
       expect(result).toEqual({ kind: 'help', topic: sub });
       expect(result).not.toEqual(expect.objectContaining({ kind: sub }));
     });
 
     it(`\`engineer ${sub} -h\` returns {kind:'help', topic:'${sub}'}`, () => {
-      const result = detectEngineerCommand(argv(sub, '-h'));
+      const result = detectEngineerCommand(argv('engineer', sub, '-h'));
       expect(result).toEqual({ kind: 'help', topic: sub });
     });
   }
 
   it('--help anywhere in argv (not just immediately after the subcommand) is caught', () => {
-    const result = detectEngineerCommand(argv('land', '--project', 'x', '--help'));
+    const result = detectEngineerCommand(argv('engineer', 'land', '--project', 'x', '--help'));
     expect(result).toEqual({ kind: 'help', topic: 'land' });
   });
 
   it('exact issue repro: `engineer claim --help` does NOT execute the claim dispatch', () => {
-    const result = detectEngineerCommand(argv('claim', '--help'));
+    const result = detectEngineerCommand(argv('engineer', 'claim', '--help'));
     expect(result).toEqual({ kind: 'help', topic: 'claim' });
     expect(result).not.toEqual({ kind: 'claim' });
   });
 
   it('regression guard: bare `engineer --help` (no subcommand token) still returns {kind:"guide"}', () => {
-    const result = detectEngineerCommand(argv('--help'));
+    const result = detectEngineerCommand(argv('engineer', '--help'));
     expect(result).toEqual({ kind: 'guide' });
+  });
+});
+
+describe('compose help is canonical while engineer remains a deprecated alias', () => {
+  it('uses canonical compose usage for unknown flags under either verb', async () => {
+    const expected = "compose projects: unknown flag '--bogus' — run `compose projects --help` for usage.";
+    const composeErr: string[] = [];
+    const engineerErr: string[] = [];
+    const compose = detectEngineerCommand(argv('compose', 'projects', '--bogus'));
+    const engineer = detectEngineerCommand(argv('engineer', 'projects', '--bogus'));
+
+    const composeCode = await dispatchEngineer(compose!, { printErr: (text) => composeErr.push(text) });
+    const engineerCode = await dispatchEngineer(engineer!, { printErr: (text) => engineerErr.push(text) });
+
+    expect(composeCode).toBe(1);
+    expect(engineerCode).toBe(1);
+    expect(composeErr).toEqual([expected]);
+    expect(engineerErr).toContain(expected);
+    expect(engineerErr.at(-1)).toBe(expected);
+  });
+
+  it('`compose projects --help` prints the current subcommand help and exits 0 without a legacy warning', async () => {
+    const command = detectEngineerCommand(argv('compose', 'projects', '--help'));
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await dispatchEngineer(
+      command!,
+      { print: (text) => out.push(text), printErr: (text) => err.push(text) },
+    );
+
+    expect(code).toBe(0);
+    expect(out).toEqual([SUBCOMMAND_HELP.projects]);
+    expect(out[0]).toContain('compose projects');
+    expect(err).toEqual([]);
+  });
+
+  it('renders canonical compose usage and identifies engineer as deprecated', async () => {
+    const out: string[] = [];
+    const code = await dispatchEngineer(
+      { kind: 'guide' },
+      { print: (text) => out.push(text), printErr: () => {} },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join('\n')).toContain('ai-conductor compose');
+    expect(out.join('\n')).toMatch(/engineer.*deprecated/i);
+  });
+
+  it('renders compose as canonical in root usage and every full-help section', async () => {
+    const { renderCanonicalFullHelp } = await import('../../../src/index.js');
+    const help = renderCanonicalFullHelp();
+
+    expect(help).toMatch(/\n\s+compose\b/);
+    expect(help).not.toContain('\n  engineer ');
+    expect(help).toMatch(/engineer.*deprecated/i);
+    expect(help).toContain('ai-conductor compose projects');
+    expect(help).not.toContain('ai-conductor engineer projects');
+    expect(help).not.toContain('ai-conductor engineer ');
   });
 });
 
@@ -90,6 +149,7 @@ describe('dispatchEngineer: {kind:"help"} renders text with zero side effects (#
       expect(code).toBe(0);
       expect(out.length).toBe(1);
       expect(out[0]).toContain(sub);
+      expect(out[0]).toMatch(new RegExp(`^compose ${sub}`));
       expect(ghCalled).toBe(false);
       expect(err.length).toBe(0);
     });
@@ -127,8 +187,8 @@ describe('dispatchEngineer: {kind:"help"} renders text with zero side effects (#
   });
 });
 
-describe('printGuide: bare `engineer --help` lists the unclaim/requeue maintenance verbs (#story-3)', () => {
-  it('the guide text lists both `engineer unclaim <ref>` and `engineer requeue --stale [--older-than <dur>]`', async () => {
+describe('printGuide: bare `compose --help` lists the unclaim/requeue maintenance verbs (#story-3)', () => {
+  it('the guide text lists both `compose unclaim <ref>` and `compose requeue --stale [--older-than <dur>]`', async () => {
     const out: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'guide' },
@@ -136,8 +196,8 @@ describe('printGuide: bare `engineer --help` lists the unclaim/requeue maintenan
     );
     expect(code).toBe(0);
     const text = out.join('\n');
-    expect(text).toMatch(/engineer unclaim <[^>]+>/);
-    expect(text).toContain('engineer requeue --stale');
+    expect(text).toMatch(/compose unclaim <[^>]+>/);
+    expect(text).toContain('compose requeue --stale');
     expect(text).toContain('--older-than');
   });
 });

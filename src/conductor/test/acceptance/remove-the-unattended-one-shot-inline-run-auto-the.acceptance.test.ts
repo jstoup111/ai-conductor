@@ -91,7 +91,7 @@ describe('acceptance: unattended inline --auto is rejected before pipeline setup
       exitCode: 1,
       signal: null,
       stderr: expect.stringMatching(
-        /--auto[\s\S]*conduct-ts daemon start[\s\S]*docs\/guides\/running-the-daemon\.md/i,
+        /--auto[\s\S]*ai-conductor daemon start[\s\S]*docs\/guides\/running-the-daemon\.md/i,
       ),
       pipelineCreated: false,
       worktreesCreated: false,
@@ -118,7 +118,7 @@ describe('acceptance: unattended inline --auto is rejected before pipeline setup
     expect(result).toEqual({
       exitCode: 1,
       signal: null,
-      stderr: expect.stringMatching(/conduct-ts daemon start[\s\S]*running-the-daemon\.md/i),
+      stderr: expect.stringMatching(/ai-conductor daemon start[\s\S]*running-the-daemon\.md/i),
       pipelineCreated: false,
       worktreesCreated: false,
       providerDispatched: false,

@@ -31,9 +31,9 @@ projects.
 already exists, and returns `false` silently on any failure without touching either file
 (`config.ts:112-123`, called at `:132`).
 
-`conduct-ts create <name>` writes a new repository's project config from
+`ai-conductor create <name>` writes a new repository's project config from
 `templates/project-config.yml.template`. For an existing Git repository, run
-`conduct-ts config init`; it writes the same template when the file is absent, reports success
+`ai-conductor config init`; it writes the same template when the file is absent, reports success
 without changing bytes when the file already exists, and refuses a non-Git directory. The missing-file
 error names this command as its remedy. `bin/install` and `bin/migrate` continue to write only the
 user file.
@@ -42,7 +42,7 @@ user file.
 
 A committed, project-scoped JSON file of per-model token prices. It is durable state read by name,
 not configuration: it has no keys in `config.yml`, no user-scoped counterpart, and no precedence
-rules. Maintain it with `conduct-ts rate-card refresh` (see the CLI reference) and commit the result.
+rules. Maintain it with `ai-conductor rate-card refresh` (see the CLI reference) and commit the result.
 `.github/workflows/rate-card-refresh.yml` also runs that refresh daily and opens a bot pull
 request on `automation/rate-card` when the published rates change, so the card does not rot
 between manual refreshes. Review such a PR as a **cost change**: merging it alters every
@@ -500,7 +500,7 @@ kept for a later repair, but the read still proceeds and decides fail-closed on 
 block alone. A *write* stays fail-closed on the seed, so an explicit value can never be replayed
 over by legacy JSON on a later run. Without this split, an unseedable `~/.claude` file disabled the
 update check outright even with a perfectly readable `config.yml` — most visibly mid-update, where a
-`conduct-ts` build old enough to predate `config set` failed the seed's write while `config read`
+`ai-conductor` build old enough to predate `config set` failed the seed's write while `config read`
 still worked.
 
 Fresh installs default to `stable`, whose branch advances only after release CI publishes the matching
@@ -585,8 +585,8 @@ The project-owned aggregate verification command run by the pre-SHIP `test_suite
 | Key | Type | Required | Validation | Default |
 | --- | --- | --- | --- | --- |
 | `test_suite.command` | string | Yes, unless `test_suite.scoped_command` is configured | Non-empty after trim (`config.ts:1217-1221`) | — |
-| `test_suite.scoped_command` | string | No | Non-empty after trim and must contain `{selectors}`. `conduct-ts scoped-run <selectors...>` replaces that placeholder with the selected tests; it never falls back to `command`. (`config.ts:1223-1236`) | none; scoped runs are unavailable |
-| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. A non-ENOENT/ENOTDIR realpath error fails closed (`config.ts:1239-1262`). Applies to both the aggregate `command` and `scoped_command`; `conduct-ts scoped-run` rebases project-root-relative selectors onto it | project root |
+| `test_suite.scoped_command` | string | No | Non-empty after trim and must contain `{selectors}`. `ai-conductor scoped-run <selectors...>` replaces that placeholder with the selected tests; it never falls back to `command`. (`config.ts:1223-1236`) | none; scoped runs are unavailable |
+| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. A non-ENOENT/ENOTDIR realpath error fails closed (`config.ts:1239-1262`). Applies to both the aggregate `command` and `scoped_command`; `ai-conductor scoped-run` rebases project-root-relative selectors onto it | project root |
 | `test_suite.timeout_seconds` | number | No | Finite and `> 0` (`config.ts:1264-1274`) | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts:7`) |
 | `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1276-1287`) | none |
 | `test_suite.environment` | string[] | No | Array of strings | none |
@@ -991,7 +991,7 @@ configuration loading or halts a run
 (`adr-2026-08-22-build-review-opt-in-rubric-container`).
 
 `scopeContainmentEnforced` is resolved through the same block and read by the real
-`conduct-ts scope-check` command. It defaults to `false`, so verified violations are reported while
+`ai-conductor scope-check` command. It defaults to `false`, so verified violations are reported while
 the commit proceeds. Set it to `true` to make a verified violation return exit `2`; the generated
 `commit-msg` hook converts that result to Git exit `1` and refuses the commit without changing the
 working tree or index.
@@ -1156,7 +1156,7 @@ dashboard. Optional boolean; a non-boolean is a hard error (`config.ts:607-609`)
 resolves to `true` at validation time (unlike `daemon_verbose`, the default is written back into
 `obj.reconcile_parked_auto_cleanup`, not just applied at the wiring site).
 
-Set to `false` to require an explicit `conduct-ts daemon reconcile-parked <slug>` (or manual
+Set to `false` to require an explicit `ai-conductor daemon reconcile-parked <slug>` (or manual
 cleanup) for every parked feature, even once it is merged and recorded — see
 [park a feature before you touch its git state](../guides/running-the-daemon.md#park-a-feature-before-you-touch-its-git-state).
 
@@ -1188,7 +1188,7 @@ finite bound. It does not share the auth timeout contract: `harness_self_host.au
 0` requests an immediate authentication halt, while `teardown_timeout_seconds: 0` cannot opt out of
 the bound.
 
-The daemon passes this bound to post-ship reaping, `conduct-ts daemon reclaim-worktree <slug>`, and
+The daemon passes this bound to post-ship reaping, `ai-conductor daemon reclaim-worktree <slug>`, and
 parked-feature reconciliation. A missing `bin/teardown` is silent. A timeout, non-zero exit, or an
 unrunnable script is logged and contained; removal continues once its normal safety proof has
 authorized it. See [running the daemon](../guides/running-the-daemon.md#project-teardown-hook) for
@@ -1293,7 +1293,7 @@ Consumed at `src/conductor/src/engine/conductor.ts:1263`, then clamped to the br
 
 Controls how long a `claimed` engineer-intake ledger entry may remain unfinished before it is
 treated as stranded. It governs claim-time auto-heal and the default window for
-`conduct-ts engineer requeue --stale`; `--older-than` overrides it for one invocation.
+`ai-conductor compose requeue --stale`; `--older-than` overrides it for one invocation.
 
 The default is `24` hours. Non-positive and non-numeric values fall back to that default.
 
@@ -1332,8 +1332,8 @@ markdown_viewer:
   mode: inline
 ```
 
-`templates/project-config.yml.template` is the project seed used by `conduct-ts create` and
-`conduct-ts config init`. `templates/ai-conductor-config.yml.template` remains the user-level
+`templates/project-config.yml.template` is the project seed used by `ai-conductor create` and
+`ai-conductor config init`. `templates/ai-conductor-config.yml.template` remains the user-level
 reference. The remaining allow-listed keys are documented only here.
 
 ## See also

@@ -824,7 +824,7 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
       for (const consumer of [
         'cost-rollup.halts',
         "shipped records' `## Cost` blocks",
-        '`conduct-ts kpi`',
+        '`ai-conductor kpi`',
         'engineer-loop signal assembler',
       ]) {
         expect(artifacts).toContain(consumer);

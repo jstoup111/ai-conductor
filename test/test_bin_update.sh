@@ -54,7 +54,7 @@ PY3="$(python3 -c 'import sys; print(sys.executable)')"
 ln -s "$PY3" "$STUBS_DIR/python3"
 TEST_PATH="$STUBS_DIR:$PATH"
 # A deliberately minimal PATH for missing-command scenarios. Do not inherit
-# the operator PATH: it may contain a real ~/.local/bin/conduct-ts.
+# the operator PATH: it may contain a real ~/.local/bin/ai-conductor.
 MISSING_CONDUCT_PATH="$STUBS_DIR:/usr/bin:/bin"
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -92,8 +92,8 @@ make_repo() {
     cp -r "$HARNESS_DIR/bin/lib" "$dir/bin/lib"
   fi
   # Normal update scenarios exercise the real script through this local
-  # conduct-ts seam. It persists the scalar conductor fields in config.yml.
-  cat > "$dir/bin/conduct-ts" <<'EOF'
+  # ai-conductor seam. It persists the scalar conductor fields in config.yml.
+  cat > "$dir/bin/ai-conductor" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -126,7 +126,7 @@ case "$2" in
   *) exit 2 ;;
 esac
 EOF
-  chmod +x "$dir/bin/conduct-ts"
+  chmod +x "$dir/bin/ai-conductor"
   stub_migrate "$dir" 0
 
   cat > "$dir/CHANGELOG.md" << 'EOF'
@@ -250,31 +250,57 @@ set_conductor_cfg() {
 # run_conductor_cfg_accessors <home> <field> <value> <default>
 # Sources the shared accessors directly so this contract stays focused on the
 # update configuration boundary, rather than depending on an update scenario
-# to happen to reach each field. The conduct-ts stub is the CLI boundary:
+# to happen to reach each field. The ai-conductor stub is the CLI boundary:
 # tests inspect its argv log instead of parsing the YAML configuration file.
 CONDUCTOR_CFG_STUBS="$TMP_ROOT/conductor-cfg-stubs"
 mkdir -p "$CONDUCTOR_CFG_STUBS"
-cat > "$CONDUCTOR_CFG_STUBS/conduct-ts" <<'EOF'
+cat > "$CONDUCTOR_CFG_STUBS/ai-conductor" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CONDUCTOR_CFG_CALLS"
 if [ "$1" = "config" ] && [ "$2" = "read" ]; then
   printf '%s\n' "$CONDUCTOR_CFG_READ_VALUE"
 fi
 EOF
-chmod +x "$CONDUCTOR_CFG_STUBS/conduct-ts"
+chmod +x "$CONDUCTOR_CFG_STUBS/ai-conductor"
 
 run_conductor_cfg_accessors() {
   local home=$1 field=$2 value=$3 default=$4
-  CONDUCTOR_CFG_CALLS="$home/conductor-cfg-calls" \
+  ACCESSOR_OUT=$(CONDUCTOR_CFG_CALLS="$home/conductor-cfg-calls" \
     CONDUCTOR_CFG_READ_VALUE="$value" \
+    AI_CONDUCTOR_ENGINE_BIN="$CONDUCTOR_CFG_STUBS/ai-conductor" \
     HOME="$home" PATH="$CONDUCTOR_CFG_STUBS:$TEST_PATH" \
     bash -c 'source "$1"; conductor_cfg_set "$2" "$3"; conductor_cfg_get "$2" "$4"' \
-      _ "$HARNESS_DIR/bin/lib/harness-common.sh" "$field" "$value" "$default"
+      _ "$HARNESS_DIR/bin/lib/harness-common.sh" "$field" "$value" "$default" \
+      2>"$home/conductor-cfg-stderr")
+  ACCESSOR_STDERR=$(<"$home/conductor-cfg-stderr")
 }
+
+# The shared helper must locate the launcher beside itself before consulting
+# PATH: bin/update sources it directly, so no caller-provided HARNESS_DIR is
+# available to reconstruct that location.
+CANONICAL_LAUNCHER_ROOT="$TMP_ROOT/canonical-launcher"
+mkdir -p "$CANONICAL_LAUNCHER_ROOT/bin/lib"
+cp "$HARNESS_DIR/bin/lib/harness-common.sh" "$CANONICAL_LAUNCHER_ROOT/bin/lib/harness-common.sh"
+cat > "$CANONICAL_LAUNCHER_ROOT/bin/ai-conductor" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "config" ] && [ "${2:-}" = "read" ]; then
+  printf 'repo-relative\n'
+fi
+EOF
+chmod +x "$CANONICAL_LAUNCHER_ROOT/bin/ai-conductor"
+HOME_DIR=$(make_isolated_home)
+set +e
+CANONICAL_LAUNCHER_OUT=$(HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" \
+  bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
+  _ "$CANONICAL_LAUNCHER_ROOT/bin/lib/harness-common.sh" 2>&1)
+CANONICAL_LAUNCHER_CODE=$?
+set -e
+assert "repo-relative launcher: config read succeeds without ai-conductor on PATH" \
+  "$([ "$CANONICAL_LAUNCHER_CODE" -eq 0 ] && [ "$CANONICAL_LAUNCHER_OUT" = "repo-relative" ] && echo 0 || echo 1)"
 
 # run_install_configure_conductor <home> <update_mode> [identity_fixture]
 # Loads the installer through its public configuration boundary, with the real
-# shared accessor library available beside the copied script.  The conduct-ts
+# shared accessor library available beside the copied script.  The ai-conductor
 # fake persists the same scalar YAML fields that the production CLI owns.
 # `off-tag` and `exact-tag` create local Git checkouts whose release tag and
 # VERSION deliberately disagree, so installer identity must come from checkout
@@ -295,7 +321,7 @@ run_install_configure_conductor() {
   cp "$HARNESS_DIR/bin/install" "$installer_dir/bin/install"
   cp "$HARNESS_DIR/bin/lib/harness-common.sh" "$installer_dir/bin/lib/harness-common.sh"
   mkdir -p "$stubs"
-  cat > "$stubs/conduct-ts" <<'EOF'
+  cat > "$stubs/ai-conductor" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -329,7 +355,7 @@ case "$2" in
   *) exit 2 ;;
 esac
 EOF
-  chmod +x "$stubs/conduct-ts"
+  chmod +x "$stubs/ai-conductor"
   awk '/^# ─── Main /{exit} {print}' "$installer_dir/bin/install" > "$fragment"
   printf '%s\n' "UPDATE_MODE=$update_mode" 'configure_conductor' >> "$fragment"
   chmod +x "$fragment"
@@ -365,12 +391,12 @@ run_update() {
 }
 
 # run_update_without_conduct <repo> <home> [args...]
-# Deliberately leaves the repo's local conduct-ts seam off PATH.
+# Deliberately leaves the repo's local ai-conductor seam off PATH.
 run_update_without_conduct() {
   local repo=$1 home=$2
   shift 2
   set +e
-  OUT=$(cd "$repo" && HOME="$home" PATH="$MISSING_CONDUCT_PATH" "$repo/bin/update" "$@" < /dev/null 2>&1)
+  OUT=$(cd "$repo" && AI_CONDUCTOR_ENGINE_BIN=ai-conductor HOME="$home" PATH="$MISSING_CONDUCT_PATH" "$repo/bin/update" "$@" < /dev/null 2>&1)
   CODE=$?
   set -e
 }
@@ -539,7 +565,7 @@ echo -e "${BOLD}Update config accessors — conductor YAML${NC}"
 
 # The legacy accessor names remain the update flow's two-argument interface,
 # but every field must translate its camelCase name to the schema-owned
-# conductor.<snake_case_key> path at the conduct-ts boundary.
+# conductor.<snake_case_key> path at the ai-conductor boundary.
 for ACCESSOR_CASE in \
   'updateChannel|main|tagged|update_channel' \
   'autoCheck|false|true|auto_check' \
@@ -548,43 +574,45 @@ for ACCESSOR_CASE in \
 do
   IFS='|' read -r FIELD VALUE DEFAULT SCHEMA_KEY <<< "$ACCESSOR_CASE"
   HOME_DIR=$(make_isolated_home)
-  ACCESSOR_OUT=$(run_conductor_cfg_accessors "$HOME_DIR" "$FIELD" "$VALUE" "$DEFAULT")
+  run_conductor_cfg_accessors "$HOME_DIR" "$FIELD" "$VALUE" "$DEFAULT"
   ACCESSOR_CALLS=$(cat "$HOME_DIR/conductor-cfg-calls" 2>/dev/null || true)
 
   assert "${FIELD}: two-argument set resolves conductor.${SCHEMA_KEY}" \
     "$(printf '%s\n' "$ACCESSOR_CALLS" | grep -qx "config set conductor.${SCHEMA_KEY} ${VALUE}" && echo 0 || echo 1)"
   assert "${FIELD}: two-argument get resolves conductor.${SCHEMA_KEY}" \
     "$(printf '%s\n' "$ACCESSOR_CALLS" | grep -qx "config read conductor.${SCHEMA_KEY}" && echo 0 || echo 1)"
-  assert "${FIELD}: get returns conduct-ts config read output" \
+  assert "${FIELD}: get returns ai-conductor config read output" \
     "$( [ "$ACCESSOR_OUT" = "$VALUE" ] && echo 0 || echo 1 )"
+  assert "${FIELD}: successful config read emits no deprecation warning" \
+    "$( [ -z "$ACCESSOR_STDERR" ] && echo 0 || echo 1 )"
 done
 
-# A config read is authoritative: a missing conduct-ts must not turn into the
+# A config read is authoritative: a missing ai-conductor must not turn into the
 # caller's default. The update command names its declined reason, while its
 # automatic entry remains advisory for startup callers.
 HOME_DIR=$(make_isolated_home)
 set +e
-ACCESSOR_OUT=$(HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
+ACCESSOR_OUT=$(AI_CONDUCTOR_ENGINE_BIN=ai-conductor HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
   _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
 ACCESSOR_CODE=$?
 set -e
-assert "missing conduct-ts: config read returns non-zero" "$([ "$ACCESSOR_CODE" -ne 0 ] && echo 0 || echo 1)"
-assert "missing conduct-ts: config read names the prerequisite" "$(case "$ACCESSOR_OUT" in *"conduct-ts"*) echo 0;; *) echo 1;; esac)"
-assert "missing conduct-ts: config read never echoes caller default" "$(case "$ACCESSOR_OUT" in *"tagged"*) echo 1;; *) echo 0;; esac)"
+assert "missing ai-conductor: config read returns non-zero" "$([ "$ACCESSOR_CODE" -ne 0 ] && echo 0 || echo 1)"
+assert "missing ai-conductor: config read names the prerequisite" "$(case "$ACCESSOR_OUT" in *"ai-conductor"*) echo 0;; *) echo 1;; esac)"
+assert "missing ai-conductor: config read never echoes caller default" "$(case "$ACCESSOR_OUT" in *"tagged"*) echo 1;; *) echo 0;; esac)"
 
-REPO=$(make_repo "missing-conduct-ts")
+REPO=$(make_repo "missing-ai-conductor")
 HOME_DIR=$(make_isolated_home)
 run_update_without_conduct "$REPO" "$HOME_DIR"
-assert "missing conduct-ts: forced update check declines" "$([ "$CODE" -ne 0 ] && echo 0 || echo 1)"
-assert "missing conduct-ts: forced update check states the reason" "$(case "$OUT" in *"conduct-ts"*) echo 0;; *) echo 1;; esac)"
+assert "missing ai-conductor: forced update check declines" "$([ "$CODE" -ne 0 ] && echo 0 || echo 1)"
+assert "missing ai-conductor: forced update check states the reason" "$(case "$OUT" in *"ai-conductor"*) echo 0;; *) echo 1;; esac)"
 
 run_update_without_conduct "$REPO" "$HOME_DIR" --auto
-assert "missing conduct-ts: --auto remains advisory" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
-assert "missing conduct-ts: --auto states the declined reason" "$(case "$OUT" in *"conduct-ts"*) echo 0;; *) echo 1;; esac)"
+assert "missing ai-conductor: --auto remains advisory" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "missing ai-conductor: --auto states the declined reason" "$(case "$OUT" in *"ai-conductor"*) echo 0;; *) echo 1;; esac)"
 
 # ─── Update config access does not depend on PyYAML ────────────────────────
 # The approved ADR keeps the update-specific accessors and entry points off
-# PyYAML, routing every conductor read and write through conduct-ts. It
+# PyYAML, routing every conductor read and write through ai-conductor. It
 # deliberately leaves the generic harness_cfg_get/harness_cfg_set viewer
 # helpers on PyYAML, so those stay out of scope here.
 #
@@ -618,11 +646,12 @@ assert "no-PyYAML fixture actually breaks 'import yaml'" \
   "$( [ "$NO_YAML_PROBE_CODE" -ne 0 ] && case "$NO_YAML_PROBE" in *"unavailable in this fixture"*) echo 0;; *) echo 1;; esac || echo 1)"
 
 # The accessors are the ADR's subject: they must still resolve the conductor
-# block through conduct-ts with PyYAML unimportable.
+# block through ai-conductor with PyYAML unimportable.
 HOME_DIR=$(make_isolated_home)
 set +e
 NO_YAML_ACCESSOR_OUT=$(CONDUCTOR_CFG_CALLS="$HOME_DIR/conductor-cfg-calls" \
   CONDUCTOR_CFG_READ_VALUE="main" \
+  AI_CONDUCTOR_ENGINE_BIN="$CONDUCTOR_CFG_STUBS/ai-conductor" \
   HOME="$HOME_DIR" PATH="$CONDUCTOR_CFG_STUBS:$NO_YAML_PATH" \
   bash -c 'source "$1"; conductor_cfg_set updateChannel main; conductor_cfg_get updateChannel tagged' \
     _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
@@ -631,11 +660,11 @@ set -e
 NO_YAML_CALLS=$(cat "$HOME_DIR/conductor-cfg-calls" 2>/dev/null || true)
 assert "without PyYAML: conductor accessors still succeed" \
   "$([ "$NO_YAML_ACCESSOR_CODE" -eq 0 ] && echo 0 || echo 1)"
-assert "without PyYAML: conductor write delegates to conduct-ts" \
+assert "without PyYAML: conductor write delegates to ai-conductor" \
   "$(printf '%s\n' "$NO_YAML_CALLS" | grep -qx 'config set conductor.update_channel main' && echo 0 || echo 1)"
-assert "without PyYAML: conductor read delegates to conduct-ts" \
+assert "without PyYAML: conductor read delegates to ai-conductor" \
   "$(printf '%s\n' "$NO_YAML_CALLS" | grep -qx 'config read conductor.update_channel' && echo 0 || echo 1)"
-assert "without PyYAML: conductor read returns the conduct-ts value" \
+assert "without PyYAML: conductor read returns the ai-conductor value" \
   "$(case "$NO_YAML_ACCESSOR_OUT" in *"main"*) echo 0;; *) echo 1;; esac)"
 
 # The entry point must reach the same conclusion it reaches with PyYAML present.
@@ -738,7 +767,7 @@ run_legacy_seed() {
   set +e
   SEED_OUT=$(HOME="$home" PATH="$path" \
     bash -c 'source "$1"; seed_conductor_config_from_legacy' \
-    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
+    _ "$repo/bin/lib/harness-common.sh" 2>&1)
   SEED_CODE=$?
   set -e
 }
@@ -751,7 +780,7 @@ run_conductor_cfg_set_then_get() {
   set +e
   ACCESSOR_OUT=$(HOME="$home" PATH="$repo/bin:$TEST_PATH" \
     bash -c 'source "$1"; conductor_cfg_set currentVersion v0.101.0; conductor_cfg_get currentVersion ""' \
-    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
+    _ "$repo/bin/lib/harness-common.sh" 2>&1)
   ACCESSOR_CODE=$?
   set -e
 }
@@ -771,6 +800,7 @@ EOF
   set +e
   ACCESSOR_OUT=$(CONDUCTOR_CFG_CALLS="$home/conductor-cfg-calls" \
     CONDUCTOR_CFG_READ_VALUE='' \
+    AI_CONDUCTOR_ENGINE_BIN="$CONDUCTOR_CFG_STUBS/ai-conductor" \
     HOME="$home" PATH="$CONDUCTOR_CFG_STUBS:$python_stubs:$TEST_PATH" \
     bash -c '
       source "$1"
@@ -845,7 +875,7 @@ set_conductor_cfg "$HOME_DIR" updateChannel main
 set +e
 ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$REPO/bin:$TEST_PATH" \
   bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
-  _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+  _ "$REPO/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
 ACCESSOR_CODE=$?
 set -e
 ACCESSOR_STDERR=$(cat "$HOME_DIR/accessor-stderr")
@@ -856,11 +886,11 @@ assert "unseedable legacy JSON: getter still warns about the failed seed" \
 assert "unseedable legacy JSON: source is kept for a later repair" \
   "$( [ -f "$HOME_DIR/.claude/ai-conductor.config.json" ] && [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
 
-# The seed writes through conduct-ts, so an installed binary too old to accept
+# The seed writes through ai-conductor, so an installed binary too old to accept
 # `config set` fails the seed while `config read` still works. That is exactly
 # the mid-update stale-build case, and it must not decline the update check.
 REPO=$(make_repo "legacy-seed-set-unsupported")
-cat > "$REPO/bin/conduct-ts" <<'EOF'
+cat > "$REPO/bin/ai-conductor" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 config="${HOME}/.ai-conductor/config.yml"
@@ -871,7 +901,7 @@ fi
 echo "conduct: the inline SDLC pipeline now runs under the \`inline\` subcommand." >&2
 exit 1
 EOF
-chmod +x "$REPO/bin/conduct-ts"
+chmod +x "$REPO/bin/ai-conductor"
 HOME_DIR=$(make_isolated_home)
 mkdir -p "$HOME_DIR/.claude"
 cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
@@ -883,7 +913,7 @@ set_conductor_cfg "$HOME_DIR" updateChannel main
 set +e
 ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$REPO/bin:$TEST_PATH" \
   bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
-  _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+  _ "$REPO/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
 ACCESSOR_CODE=$?
 set -e
 assert "unwritable conductor block during seed: getter still reads the channel" \
@@ -938,7 +968,7 @@ EOF
 set +e
 ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$REPO/bin:$TEST_PATH" \
   bash -c 'source "$1"; value=$(conductor_cfg_get currentVersion ""); status=$?; printf "%s\\n" "$value"; exit "$status"' \
-    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+    _ "$REPO/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
 ACCESSOR_CODE=$?
 set -e
 ACCESSOR_STDERR=$(cat "$HOME_DIR/accessor-stderr")
@@ -956,14 +986,14 @@ cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
 }
 EOF
 set +e
-ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" \
+ACCESSOR_VALUE=$(AI_CONDUCTOR_ENGINE_BIN=ai-conductor HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" \
   bash -c 'source "$1"; value=$(conductor_cfg_get currentVersion ""); status=$?; printf "%s\\n" "$value"; exit "$status"' \
     _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
 ACCESSOR_CODE=$?
 set -e
 ACCESSOR_STDERR=$(cat "$HOME_DIR/accessor-stderr")
-assert "missing conduct-ts during legacy seed: getter fails with stderr-only setter diagnostic" \
-  "$(if [ "$ACCESSOR_CODE" -ne 0 ] && [ -z "$ACCESSOR_VALUE" ] && [[ "$ACCESSOR_STDERR" = *"conduct-ts is required to save conductor configuration"* ]]; then echo 0; else echo 1; fi)"
+assert "missing ai-conductor during legacy seed: getter fails with stderr-only setter diagnostic" \
+  "$(if [ "$ACCESSOR_CODE" -ne 0 ] && [ -z "$ACCESSOR_VALUE" ] && [[ "$ACCESSOR_STDERR" = *"ai-conductor is required to save conductor configuration"* ]]; then echo 0; else echo 1; fi)"
 
 # The rename is the idempotence marker. A rename failure must be visible and
 # leave the original source in place, never masquerading as a successful seed.
@@ -1473,7 +1503,7 @@ make_main_repo() {
     cd "$clone"
     git remote add origin "$origin"
     git branch -M main
-    git push -q origin main
+    git push -q -u origin main
     git --git-dir="$origin" symbolic-ref HEAD refs/heads/main
   )
   echo "$clone|$origin"
@@ -1609,7 +1639,7 @@ set_current_version "$HOME_DIR" v0.3.0
 run_update "$REPO" "$HOME_DIR" --set-channel stable
 cat > "$REPO/bin/migrate" <<EOF
 #!/usr/bin/env bash
-conduct-ts config set conductor.current_version v0.4.0
+ai-conductor config set conductor.current_version v0.4.0
 echo invoked >> "$REPO/.migrate-calls"
 exit 1
 EOF

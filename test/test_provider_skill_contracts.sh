@@ -33,6 +33,30 @@ require_pattern() {
   fi
 }
 
+require_absent_pattern() {
+  local description=$1
+  local pattern=$2
+  local file=$3
+  if grep -qiE "$pattern" "$file"; then
+    fail "$description"
+  else
+    pass "$description"
+  fi
+}
+
+require_max_lines() {
+  local description=$1
+  local maximum=$2
+  local file=$3
+  local lines
+  lines=$(wc -l < "$file" | tr -d ' ')
+  if [ "$lines" -le "$maximum" ]; then
+    pass "$description"
+  else
+    fail "$description"
+  fi
+}
+
 # The shared contract gives direct users semantic references, then maps only
 # the host-native invocation mechanics. Outcomes and gates remain common.
 require_pattern 'HARNESS defines provider-neutral or semantic skill references' \
@@ -213,21 +237,125 @@ require_pattern 'bootstrap identifies the legacy Codex skill location' \
 require_pattern 'conduct describes build orchestration as provider-neutral' \
   'host agent orchestrates|selected provider orchestrates|provider-neutral.*orchestrat' \
   "$HARNESS_DIR/skills/conduct/SKILL.md"
-require_pattern 'engineer makes the host-agent session model provider-neutral' \
+composer_skill="$HARNESS_DIR/skills/composer/SKILL.md"
+engineer_skill="$HARNESS_DIR/skills/engineer/SKILL.md"
+
+require_pattern 'composer declares its canonical skill name' \
+  '^name: composer$' "$composer_skill"
+require_pattern 'composer retains a direct-use description' \
+  '^description:' "$composer_skill"
+require_pattern 'composer retains its enforcement contract' \
+  '^enforcement:' "$composer_skill"
+require_pattern 'composer retains its DECIDE phase' \
+  '^phase: decide$' "$composer_skill"
+require_pattern 'composer pins the required interactive model' \
+  '^model: opus$' "$composer_skill"
+require_pattern 'composer remains explicit-only for Claude discovery' \
+  '^disable-model-invocation: true$' "$composer_skill"
+require_pattern 'composer remains explicit-only for Codex discovery' \
+  'allow_implicit_invocation: false' "$HARNESS_DIR/skills/composer/agents/openai.yaml"
+require_pattern 'composer retains the canonical full idea-to-spec loop' \
+  '## The Loop.{0,100}Capture the idea|### 1\. Capture the idea' "$composer_skill"
+require_pattern 'composer retains every deterministic compose primitive' \
+  'ai-conductor compose (claim|projects|worktree|land|handoff)' "$composer_skill"
+for compose_primitive in claim projects worktree land handoff; do
+  require_pattern "composer retains ai-conductor compose ${compose_primitive}" \
+    "ai-conductor compose ${compose_primitive}" "$composer_skill"
+done
+for decide_skill in explore prd architecture-diagram architecture-review stories conflict-check plan coherence-check; do
+  require_pattern "composer retains /${decide_skill} in the DECIDE workflow" \
+    "/${decide_skill}" "$composer_skill"
+done
+require_pattern 'composer retains AuthoringGuard worktree isolation' \
+  'AuthoringGuard.{0,160}(worktree|target repo)|(worktree|target repo).{0,160}AuthoringGuard' \
+  "$composer_skill"
+require_pattern 'composer uses the canonical ai-conductor compose CLI vocabulary' \
+  'ai-conductor compose' "$composer_skill"
+require_absent_pattern 'composer contains no legacy conduct-ts engineer CLI examples' \
+  'conduct-ts engineer' "$composer_skill"
+
+require_pattern 'engineer remains a compatibility delegate to composer' \
+  '(canonical|delegate).{0,100}composer|composer.{0,100}(canonical|delegate)' \
+  "$engineer_skill"
+require_pattern 'engineer names both host-native compatibility entry points' \
+  'Claude Code.{0,100}/engineer.{0,100}Codex.{0,100}\$engineer|Codex.{0,100}\$engineer.{0,100}Claude Code.{0,100}/engineer' \
+  "$engineer_skill"
+require_pattern 'engineer keeps Claude compatibility invocation discoverable' \
+  'Claude Code retains `/engineer`.*compatibility entry point' \
+  "$engineer_skill"
+require_pattern 'engineer keeps Codex compatibility invocation discoverable' \
+  'Codex retains `\$engineer`' \
+  "$engineer_skill"
+require_pattern 'engineer keeps Claude canonical composer invocation discoverable' \
+  'Claude Code invokes `/composer`' \
+  "$engineer_skill"
+require_pattern 'engineer keeps Codex canonical composer invocation discoverable' \
+  'Codex invokes' \
+  "$engineer_skill"
+require_pattern 'engineer identifies the Codex canonical composer command' \
+  '^`\$composer`\.$' \
+  "$engineer_skill"
+require_pattern 'engineer transfers behavior and gates to canonical composer' \
+  'continue with the canonical composer.s behavior.*shared outcomes and gates' \
+  "$engineer_skill"
+require_absent_pattern 'engineer contains no second copy of the full loop instructions' \
+  '## The Loop|AuthoringGuard|Handle exactly ONE idea per session|### 1\. Capture the idea' \
+  "$engineer_skill"
+require_absent_pattern 'engineer contains none of the canonical compose workflow primitives' \
+  'ai-conductor compose (claim|projects|worktree|land|handoff)' \
+  "$engineer_skill"
+require_max_lines 'engineer remains a thin compatibility delegate' 30 "$engineer_skill"
+
+require_pattern 'composer makes the host-agent session model provider-neutral' \
   'live supported host-agent session|supported host-agent session|host-agent session' \
-  "$HARNESS_DIR/skills/engineer/SKILL.md"
-require_pattern 'engineer scopes Claude launcher claims to Claude-only behavior' \
+  "$composer_skill"
+require_pattern 'composer scopes Claude launcher claims to Claude-only behavior' \
   'Claude-only.*(launcher|session)|(launcher|session).*Claude-only' \
-  "$HARNESS_DIR/skills/engineer/SKILL.md"
-require_pattern 'engineer defers native persistent-session launching to issue 759' \
+  "$composer_skill"
+require_pattern 'composer defers native persistent-session launching to issue 759' \
   '(#759|issue 759).*(defer|deferred)|(defer|deferred).*#759' \
-  "$HARNESS_DIR/skills/engineer/SKILL.md"
-require_pattern 'engineer scopes /quit to Claude Code sessions' \
+  "$composer_skill"
+require_pattern 'composer scopes /quit to Claude Code sessions' \
   'Claude Code.*`/quit`|`/quit`.*Claude Code' \
-  "$HARNESS_DIR/skills/engineer/SKILL.md"
-require_pattern 'engineer gives non-Claude hosts a normal session-end path' \
+  "$composer_skill"
+require_pattern 'composer gives non-Claude hosts a normal session-end path' \
   'other supported host.*(end|close).*session|end.*session.*other supported host' \
-  "$HARNESS_DIR/skills/engineer/SKILL.md"
+  "$composer_skill"
+
+# S3.1: the composer body must carry the loop's normative instructions in full,
+# not just its section shape. Each assertion below pins a specific instruction
+# whose removal changes what the composer agent does; heading-presence proxies
+# cannot detect that.
+require_pattern 'composer carries the push-before-handoff command' \
+  'git push -u origin spec/' \
+  "$composer_skill"
+require_pattern 'composer names the unpushed-branch handoff failure mode' \
+  'gh pr create.{0,80}unpushed|unpushed.{0,80}(gh pr create|local-commit)' \
+  "$composer_skill"
+require_pattern 'composer states the complexity-stem MUST against the plan filename' \
+  'stem.{0,40}MUST.{0,60}\.docs/plans/<stem>\.md' \
+  "$composer_skill"
+require_pattern 'composer states the architecture-review depth split' \
+  'lightweight for Medium.{0,20}full for Large' \
+  "$composer_skill"
+require_pattern 'composer states that architecture-review runs before stories' \
+  'Runs \*\*before\*\* stories|runs before stories' \
+  "$composer_skill"
+require_pattern 'composer states the land .docs-only staging rule' \
+  'stages only `\.docs`|no `add -A`' \
+  "$composer_skill"
+require_pattern 'composer states the non-closing Refs handoff rule' \
+  'non-closing.{0,20}`?Refs' \
+  "$composer_skill"
+require_pattern 'composer states the discovery-build-readiness rationale' \
+  'discovery warn-skips' \
+  "$composer_skill"
+require_pattern 'composer keeps the launcher pre-poll note' \
+  'You do not poll yourself' \
+  "$composer_skill"
+require_pattern 'composer keeps the sibling-repo invariance checklist item' \
+  'Sibling repos left byte-for-byte unchanged' \
+  "$composer_skill"
 
 # The positive checks above pin expected language. This small deterministic audit
 # rejects the high-risk ways a shared instruction can accidentally become
@@ -321,6 +449,7 @@ for provider_contract_file in \
   "$HARNESS_DIR/skills/bootstrap/SKILL.md" \
   "$HARNESS_DIR/skills/code-review/SKILL.md" \
   "$HARNESS_DIR/skills/conduct/SKILL.md" \
+  "$HARNESS_DIR/skills/composer/SKILL.md" \
   "$HARNESS_DIR/skills/engineer/SKILL.md" \
   "$HARNESS_DIR/skills/finish/SKILL.md" \
   "$HARNESS_DIR/skills/pipeline/SKILL.md" \

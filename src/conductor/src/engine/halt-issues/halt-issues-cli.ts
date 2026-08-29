@@ -1,5 +1,5 @@
 /**
- * CLI handler for `conduct-ts halt-issues sweep` subcommand.
+ * CLI handler for `ai-conductor halt-issues sweep` subcommand.
  *
  * Orchestrates the full sweep pipeline for processing filed halt-monitor issues:
  * 1. Parse monitor log → extract verdicts
@@ -139,7 +139,7 @@ export async function dispatchHaltIssuesSweep(cmd: HaltIssuesSweepCommand, cwd: 
   void cwd;
 
   const helpText =
-    'Usage: conduct-ts halt-issues sweep [options]\n\n' +
+    'Usage: ai-conductor halt-issues sweep [options]\n\n' +
     'Orchestrate the full sweep pipeline for processing filed halt-monitor issues:\n' +
     '  1. Parse monitor log → extract verdicts\n' +
     '  2. Load/rebuild ledger with parsed verdicts\n' +

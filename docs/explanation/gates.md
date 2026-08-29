@@ -172,7 +172,7 @@ result is the sole authority that marks the verifier satisfied for that round.
 
 ### Land-time gates
 
-These run when the engineer loop lands a spec branch, outside the step loop. They protect the base branch
+These run when the composer loop lands a spec branch, outside the step loop. They protect the base branch
 from specs that would waste a build.
 
 | Gate | Refuses |
@@ -187,7 +187,7 @@ from specs that would waste a build.
 | protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
 | plan completion checks | a task with no `Done when:` block, a blank check, fewer than two checks, or more than five checks; fenced-code examples are ignored |
 
-Before land, plan authoring runs `conduct-ts plan-protected-targets <plan-path>`. It is a blocking,
+Before land, plan authoring runs `ai-conductor plan-protected-targets <plan-path>`. It is a blocking,
 read-only check that reports every offending task/path pair. Land repeats the same judgment against
 the plan being landed, so a plan cannot bypass the rule by skipping the authoring command. Both gates
 apply at every tier and judge only the current plan, not historical plans already merged.
@@ -200,7 +200,7 @@ the ADR layer whenever the current spec change set contains a `.docs/decisions/a
 deletion. The ADR row pool itself contains only non-deleted ADRs, so a deletion-only change engages the
 layer but passes with no ADR row. It aggregates every waivable gap rather than stopping at the first, and
 reports them as one error. Already-landed specs whose coherence artifacts predate criterion rows remain
-valid for daemon discovery and BUILD. See [engineer loop](../guides/engineer-loop.md).
+valid for daemon discovery and BUILD. See [composer loop](../guides/engineer-loop.md).
 
 The criterion layer requires exactly one row for every happy- and negative-path criterion extracted from
 the stories artifact. Each row must mark the criterion `covered`, cite an existing plan task, quote an
@@ -275,7 +275,7 @@ unknown target or phase, or an unsatisfied or unverified DECIDE completion contr
 
 The policy fast-forwards without dispatch only when the DECIDE step is tier-skipped, has no completion
 contract, or has a verified satisfied contract. Otherwise an operator must create a matching
-[`decide-grant`](../reference/cli.md#conduct-ts-decide-grant); the grant authorizes one named step and
+[`decide-grant`](../reference/cli.md#ai-conductor-decide-grant); the grant authorizes one named step and
 is consumed immediately before that step dispatches. The grant is stored in the daemon-owned
 `.daemon/grants/<slug>.json`, outside every feature worktree, so a build agent cannot author its own
 authorization; a `decide-grant.json` inside `.pipeline/` authorizes nothing. `plan` is excluded
@@ -375,7 +375,7 @@ kickback budget.
 
 A below-cap mechanical (infrastructure) fault publishes no aggregate at all, so it cannot be stale
 by this check; the last such fault is instead recorded on the kickback ledger's `build_review` gate
-entry (`lastMechanicalFault`) and surfaces in `conduct-ts build-review findings` and in the
+entry (`lastMechanicalFault`) and surfaces in `ai-conductor build-review findings` and in the
 exhausted-mechanical-allowance HALT when the current lap has no readable diagnostic of its own — see
 [the runbook](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-exhausted-mechanical-fault-allowance).
 
@@ -524,7 +524,7 @@ independently of `build_review` (`test-suite-remediation.ts` reads it during reb
 
 ### Operator-authorized protected-artifact reseals
 
-An [`conduct-ts reseal`](../reference/cli.md#conduct-ts-reseal) an operator runs mid-feature writes a new
+An [`ai-conductor reseal`](../reference/cli.md#ai-conductor-reseal) an operator runs mid-feature writes a new
 baseline at the current commit and appends a `rebaselines` entry to
 `.pipeline/protected-artifact-seal.json` recording the trigger (`operator-reseal`) and rationale, and a
 `protected_artifact_reseal` audit record with an `operator` origin — so the override is auditable rather

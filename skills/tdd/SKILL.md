@@ -90,7 +90,7 @@ coverage, and need no RED of their own.
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
 2. Write one test with one assertion
 3. The agent derives selectors, retains the test under change as an expected failing member,
-   and runs the scoped union of affected tests through `conduct-ts scoped-run <selectors...>`
+   and runs the scoped union of affected tests through `ai-conductor scoped-run <selectors...>`
 4. Confirm that the test under change fails for the expected reason and every
    other affected test passes
 5. Paste the expected failure output
@@ -152,7 +152,7 @@ conforms to the applicable recorded basis.
    when no applicable basis exists, no pattern conformance is required.
 3. Write the smallest behavior-complete code change to pass the test
 4. Run the test — **watch it pass**
-5. The agent derives the selectors for the affected/scoped test set (the task's own tests + the files this change touches) and runs `conduct-ts scoped-run <selectors...>`. The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
+5. The agent derives the selectors for the affected/scoped test set (the task's own tests + the files this change touches) and runs `ai-conductor scoped-run <selectors...>`. The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
 
 A known failure in that scoped set blocks the current GREEN phase; fix it here
 rather than deferring it to a later gate. If one of the repository's documented

@@ -766,14 +766,14 @@ if [ -f "$adr_template" ]; then
 fi
 
 # 9g. skills/architecture-review/SKILL.md (Medium/Large tier) must run
-# `conduct-ts overlap-scan` over the `## Wiring Surface` candidate paths
+# `ai-conductor overlap-scan` over the `## Wiring Surface` candidate paths
 # before `/plan`, and must state it is advisory. Without this wiring, the
 # Task 7 overlap-scan subcommand exists but is never invoked at DECIDE
 # time, so authors stay blind to unmerged dependent work (the bug this
 # plan fixes). This check ties the skill instruction to the CLI subcommand.
 arch_review_skill="${HARNESS_DIR}/skills/architecture-review/SKILL.md"
 if [ -f "$arch_review_skill" ]; then
-  if grep -q "conduct-ts overlap-scan" "$arch_review_skill" \
+  if grep -q "ai-conductor overlap-scan" "$arch_review_skill" \
     && grep -q "Wiring Surface" "$arch_review_skill" \
     && grep -qi "advisory" "$arch_review_skill" \
     && grep -q "/plan" "$arch_review_skill"; then
@@ -1109,15 +1109,15 @@ done
 assert ".docs/intake/*.md all carry an Owner: marker" "$missing_owner"
 
 # ── 12. /plan wires the overlap-scan subcommand ──────────────────────────────
-# skills/plan/SKILL.md must contain a step invoking `conduct-ts overlap-scan`
+# skills/plan/SKILL.md must contain a step invoking `ai-conductor overlap-scan`
 # over the plan's authoritative Files set before the plan is committed, and
 # must state the result is advisory (never blocks).
 echo ""
 echo -e "${BOLD}12. /plan overlap-scan step${NC}"
 plan_skill="${HARNESS_DIR}/skills/plan/SKILL.md"
 if [ -f "$plan_skill" ]; then
-  grep -q "conduct-ts overlap-scan" "$plan_skill"
-  assert "skills/plan/SKILL.md — invokes conduct-ts overlap-scan" $?
+  grep -q "ai-conductor overlap-scan" "$plan_skill"
+  assert "skills/plan/SKILL.md — invokes ai-conductor overlap-scan" $?
 
   grep -qi "advisory" "$plan_skill"
   assert "skills/plan/SKILL.md — overlap-scan step states result is advisory" $?
@@ -1180,6 +1180,43 @@ if [ -f "$plan_skill" ]; then
   assert "HARNESS.md — assigns whole-feature validation outside terminal plan tasks" $?
 else
   assert "skills/plan/SKILL.md exists" 1
+fi
+
+# ── 12b. Legacy CLI reference guard ─────────────────────────────────────────
+echo ""
+echo -e "${BOLD}12b. Legacy CLI references${NC}"
+legacy_cli_test="${HARNESS_DIR}/test/test_no_legacy_cli_references.sh"
+if [ -f "$legacy_cli_test" ]; then
+  set +e
+  legacy_cli_output=$(bash "$legacy_cli_test" 2>&1)
+  legacy_cli_exit=$?
+  set -e
+
+  if [ "$legacy_cli_exit" -eq 0 ]; then
+    assert "test/test_no_legacy_cli_references.sh — closed legacy-reference allowlist passes" 0
+  else
+    echo "$legacy_cli_output" | sed 's/^/    /'
+    assert "test/test_no_legacy_cli_references.sh — closed legacy-reference allowlist passes" 1
+  fi
+else
+  assert "test/test_no_legacy_cli_references.sh exists" 1
+fi
+
+legacy_cli_backend_test="${HARNESS_DIR}/test/test_legacy_cli_guard_backends.sh"
+if [ -f "$legacy_cli_backend_test" ]; then
+  set +e
+  legacy_cli_backend_output=$(bash "$legacy_cli_backend_test" 2>&1)
+  legacy_cli_backend_exit=$?
+  set -e
+
+  if [ "$legacy_cli_backend_exit" -eq 0 ]; then
+    assert "test/test_legacy_cli_guard_backends.sh — scanner backends fail closed identically" 0
+  else
+    echo "$legacy_cli_backend_output" | sed 's/^/    /'
+    assert "test/test_legacy_cli_guard_backends.sh — scanner backends fail closed identically" 1
+  fi
+else
+  assert "test/test_legacy_cli_guard_backends.sh exists" 1
 fi
 
 # ── 13. ci-detect-docs-only.sh predicate suite ──────────────────────────────

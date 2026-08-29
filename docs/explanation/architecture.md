@@ -6,7 +6,7 @@ nav_order: 1
 
 # Architecture
 
-The roles in this harness — engine, daemon, engineer loop, host agent, operator — what each owns, and how
+The roles in this harness — engine, daemon, composer loop, host agent, operator — what each owns, and how
 work crosses the boundaries between them. For the module map and import layering, see
 [code-organization](../contributing/code-organization.md).
 
@@ -17,8 +17,8 @@ work crosses the boundaries between them. For the module map and import layering
 | operator | the human running the harness | intent, approvals, merges, halt recovery | step order, gate verdicts |
 | engine | the TypeScript conductor under `src/conductor/` | step order, prerequisite checks, gate verdicts, run state, worktrees, git mechanics, provider dispatch | judgement about a spec or a diff |
 | host agent | the LLM session the engine dispatches (`claude` or `codex`) | authoring and judgement — specs, code, reviews, verdict documents | whether its own work passed |
-| daemon | the background build/ship loop (`conduct-ts daemon`) | the backlog, the worker pool, per-feature isolation, PR opening | authoring specs |
-| engineer loop | the interactive idea→spec loop (`conduct-ts engineer`) | DECIDE-phase authoring for one idea, and the spec PR | building or shipping code |
+| daemon | the background build/ship loop (`ai-conductor daemon`) | the backlog, the worker pool, per-feature isolation, PR opening | authoring specs |
+| composer loop | the interactive idea→spec loop (`ai-conductor compose`) | DECIDE-phase authoring for one idea, and the spec PR | building or shipping code |
 
 The split that matters most: **the engine decides whether a step is done; the host agent decides what the
 work should be.** A host agent writes an artifact; the engine reads that artifact off disk and computes the
@@ -64,15 +64,15 @@ prompt rather than a resumed conversation.
 
 Work moves through two independent loops that meet at exactly one place: the base branch.
 
-![The engineer loop turns an operator's idea into a spec PR on the base branch; the daemon reads that branch, dispatches implementation work to a host agent, and returns an implementation PR.](../assets/images/architecture-loops.png)
+![The composer loop turns an operator's idea into a spec PR on the base branch; the daemon reads that branch, dispatches implementation work to a host agent, and returns an implementation PR.](../assets/images/architecture-loops.png)
 
-### The engineer loop: idea to spec
+### The composer loop: idea to spec
 
-You hand the harness a raw idea. The engineer loop picks the target repo, creates a dedicated worktree for
+You hand the harness a raw idea. The composer loop picks the target repo, creates a dedicated worktree for
 that idea on its own `spec/` branch, runs the full DECIDE phase inside it, commits the artifact set, and
 opens a spec PR. It never touches the target repo's primary checkout — there is no fallback to authoring in
 the shared checkout, and a worktree that cannot be created aborts with zero mutation. Procedure:
-[engineer loop](../guides/engineer-loop.md). Filing raw observations for a later DECIDE pass:
+[composer loop](../guides/engineer-loop.md). Filing raw observations for a later DECIDE pass:
 [intake](../guides/intake.md).
 
 ### The daemon loop: spec to shipped PR
@@ -100,7 +100,7 @@ Every feature and every idea gets its own git worktree. Inside it live that unit
 `.pipeline/` run state, its generated git hooks, and its session hooks. Nothing is shared between concurrent
 features except the base branch they were cut from.
 
-Each actor gets its own branch namespace, so a daemon build, an engineer-loop spec, and an
+Each actor gets its own branch namespace, so a daemon build, a composer-loop spec, and an
 interactive run can coexist on the same repo without colliding. The exact path and branch template
 per actor — six actors, five branch-name templates, including the collision suffixes — is in
 [artifacts](../reference/artifacts.md#worktree-and-branch-names).
@@ -135,8 +135,8 @@ file-by-file breakdown of what is committed versus ephemeral is in [artifacts](.
 
 | Handoff | Mechanism | What makes it durable |
 | --- | --- | --- |
-| operator → engineer loop | a raw idea, interactively | nothing yet — output is the artifact set |
-| engineer loop → daemon | merged spec PR | committed `.docs/plans/<slug>.md` and siblings on the base branch |
+| operator → composer loop | a raw idea, interactively | nothing yet — output is the artifact set |
+| composer loop → daemon | merged spec PR | committed `.docs/plans/<slug>.md` and siblings on the base branch |
 | engine → host agent | a dispatched skill in a fresh session | the artifact the agent writes to disk |
 | host agent → engine | files on disk | the engine recomputes the verdict; it does not read a self-report |
 | daemon → operator | implementation PR, or a halt marker plus a draft PR | `.docs/shipped/<slug>.md` committed on the implementation branch |

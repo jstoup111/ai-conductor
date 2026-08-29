@@ -109,7 +109,7 @@ describe('renderExhaustedMechanicalBuildReviewHalt', () => {
     expect(renderExhaustedMechanicalBuildReviewHalt(entry, aggregate)).toBe([
       'build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.',
       'Current lap lap-current: testQuality closed cause provider-error (current diagnostic).',
-      '1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <feature-slug> --lap lap-current --rubric testQuality --rationale "<rationale>".',
+      '1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-current --rubric testQuality --rationale "<rationale>".',
       '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
     ].join('\n'));
   });

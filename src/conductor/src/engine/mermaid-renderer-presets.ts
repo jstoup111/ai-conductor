@@ -1,5 +1,5 @@
 // Mermaid renderer preset catalog — single source of truth for the `bin/install`
-// prompt and the conduct-ts artifact-review render path. Parallels
+// prompt and the ai-conductor artifact-review render path. Parallels
 // `md-viewer-presets.ts`; keep the two in sync if you add/remove presets.
 //
 // Render presets turn the Mermaid blocks inside a generated `.md` (architecture

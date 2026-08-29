@@ -1,7 +1,7 @@
-// brain-supervisor-cli.ts — `conduct-ts brain start|stop|status` CLI dispatcher
+// brain-supervisor-cli.ts — `ai-conductor brain start|stop|status` CLI dispatcher
 // (Task 18, background-intake-conduct-loop).
 //
-// Hosts the background intake loop (`conduct-ts intake-loop --continuous`,
+// Hosts the background intake loop (`ai-conductor intake-loop --continuous`,
 // Task 17) under a dedicated tmux session — NO cron, no external scheduler.
 // Reuses the existing tmux adapter primitives (hasSession / newDetachedSession
 // / killSession from daemon-tmux.ts) rather than duplicating tmux argv/session
@@ -27,6 +27,7 @@ import {
   type TmuxRunner,
 } from './daemon-tmux.js';
 import { resolveEngineerDir } from './engineer-store.js';
+import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
 
 /** Session-name prefix for the brain loop's tmux session (ADR Q2 liveness gate). */
 export const BRAIN_SESSION_PREFIX = 'cc-brain-';
@@ -35,7 +36,8 @@ export const BRAIN_SESSION_PREFIX = 'cc-brain-';
 export const BRAIN_SESSION_NAME = `${BRAIN_SESSION_PREFIX}conductor`;
 
 /** Foreground command run inside the brain session (Task 17's entry point). */
-export const BRAIN_FOREGROUND_COMMAND = 'conduct-ts intake-loop --continuous';
+export const BRAIN_FOREGROUND_COMMAND =
+  `${shellQuote(resolveCanonicalLauncher())} intake-loop --continuous`;
 
 /** Shape of the status surface written by the notifier (Task 9); only the
  * fields this CLI reports are declared here. */
@@ -69,7 +71,7 @@ async function defaultReadStatus(path: string): Promise<string | null> {
 }
 
 /**
- * `conduct-ts brain start` — creates the `cc-brain-*` tmux session running the
+ * `ai-conductor brain start` — creates the `cc-brain-*` tmux session running the
  * intake loop, or reuses it if already up (idempotent: a second call never
  * creates a second session).
  */
@@ -93,7 +95,7 @@ export async function brainStart(deps: BrainCliDeps = {}): Promise<number> {
 }
 
 /**
- * `conduct-ts brain stop` — kills the brain session. Idempotent/graceful when
+ * `ai-conductor brain stop` — kills the brain session. Idempotent/graceful when
  * no session is running (killSession is a no-op on an absent session).
  */
 export async function brainStop(deps: BrainCliDeps = {}): Promise<number> {
@@ -111,7 +113,7 @@ export async function brainStop(deps: BrainCliDeps = {}): Promise<number> {
 }
 
 /**
- * `conduct-ts brain status` — reports liveness (running/stopped, from the
+ * `ai-conductor brain status` — reports liveness (running/stopped, from the
  * `cc-brain-*` tmux session) and the queued-work count from the durable
  * status surface written by the notifier (Task 9).
  */

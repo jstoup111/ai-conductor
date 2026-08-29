@@ -39,7 +39,7 @@ cite `verify-claims` in their own SKILL.md:
   `code-review`, `prd-audit`, `manual-test`, `remediate`, `debugging`.
 
 Execution steps that merely act on an already-gated artifact (`tdd`, `pipeline`), orchestration
-(`conduct`, `engineer`), and mechanical steps (`bootstrap`, `memory`, `architecture-diagram`,
+(`conduct`, `composer`), and mechanical steps (`bootstrap`, `memory`, `architecture-diagram`,
 `simplify`, `finish`, `pr`, `rebase`) do **not** self-cite — they rely on this rule and on
 the upstream/surrounding gates. Casual conversation and trivially-verifiable mechanics with no
 downstream blast radius are out of scope.
@@ -127,7 +127,7 @@ or delete the original text and never create a separate amendment record:
 
 BUILD never receives that mutation as a task. A plan task must not name another feature's artifact
 under `.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`; authoring checks
-the plan with `conduct-ts plan-protected-targets <plan-path>`, and the spec land gate independently
+the plan with `ai-conductor plan-protected-targets <plan-path>`, and the spec land gate independently
 refuses a violating plan. A BUILD-discovered need for such an amendment returns to its owning DECIDE
 step through remediation rather than routing to BUILD or acceptance-spec work. Because DECIDE runs
 before the first BUILD seal baseline, its amendment is part of that baseline.
@@ -171,10 +171,10 @@ valid path even when it differs from the other host's mechanism, and must procee
 unsupported-capability rejection.
 
 **Start here:** Prefer the daemon for autonomous work:
-- **Automated:** Author and merge a spec with `conduct-ts engineer`, then run `conduct-ts daemon start`
-- **Interactive:** Run `/conduct` inside Claude Code or `conduct-ts inline --interactive "feature description"`
+- **Automated:** Author and merge a spec with `ai-conductor compose`, then run `ai-conductor daemon start`
+- **Interactive:** Run `/conduct` inside Claude Code or `ai-conductor inline --interactive "feature description"`
 
-The foreground `conduct-ts inline --auto` mode is deprecated; use the daemon for unattended runs.
+The foreground `ai-conductor inline --auto` mode is deprecated; use the daemon for unattended runs.
 
 ## Agent Personas
 
@@ -254,7 +254,8 @@ this section. CI enforces both content drift (the table matches the source) and 
 | code-review | supported-host interactive | opus |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Multi-dimensional analysis (spec, quality, domain). |
 | debugging | supported-host interactive | opus |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes. |
 | simplify | supported-host interactive | sonnet |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Pattern matching for duplication and complexity — structured checklist work. |
-| engineer | supported-host interactive | opus |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Interactive idea→spec control plane routing the real DECIDE skills. Kept on Fable for operator-driven interactive quality — this is a capability / operator-preference call, NOT a cost saving: Fable is the premium tier ($10/$50 per 1M, ~2x Opus). |
+| composer | supported-host interactive | opus |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Canonical interactive idea→spec authoring loop: routes a raw idea through the full DECIDE phase and delivers a spec PR, so its high-stakes authoring judgement uses Claude Opus. |
+| engineer | supported-host interactive | opus |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Deprecated compatibility delegate for existing engineer invocations. It contributes only low-cost routing mechanics and no independent authoring loop; composer owns the canonical DECIDE workflow. |
 | intake | supported-host interactive | inherits caller |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch. |
 | conduct | supported-host interactive | haiku |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Artifact checking and status reporting — mechanical. |
 | daemon-triage | supported-host interactive | sonnet |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Operator-invoked, read-only triage. Routing determinism lives in the skill's signal table, not the model; the model gathers evidence and matches rows. |
@@ -381,7 +382,7 @@ fan-out, Standard and Full stop with the provider, missing capability, and recov
 they never silently serialize.
 
 **Intermediate test execution policy:** Ordinary TDD RED/GREEN runs the scoped union of affected tests
-through `conduct-ts scoped-run <selectors...>`. The agent derives the selectors; it does not
+through `ai-conductor scoped-run <selectors...>`. The agent derives the selectors; it does not
 hand-assemble or narrate a test command. Debugging and conduct progression use the same policy.
 Pipeline batch boundaries, parallel joins, and evaluators use pipeline's existing named
 `BATCH_AFFECTED_TESTS` union through the same interface. A known scoped failure blocks its current
@@ -487,7 +488,7 @@ Run whatever verification the project requires (tests, lint, type-check, etc.) l
 before pushing. The `/finish` skill presents the user with completion options and, when the
 outcome is Push & PR, performs the push and PR creation **inline** — it does not delegate to
 `/pr`, because a delegated skill invocation ends the finish turn before
-`conduct-ts finish-record` writes `.pipeline/finish-choice`. `/pr` remains available as a
+`ai-conductor finish-record` writes `.pipeline/finish-choice`. `/pr` remains available as a
 standalone skill for operator-driven PR authoring and owns the pre-push gate there; `/finish`
 inlines the same title/body contract and pre-push checks.
 
@@ -578,7 +579,7 @@ It is not a live configuration source.
    - `bin/update` (no args) forces a check now, bypassing the `conductor.auto_check`
      gate.
    - `bin/update --auto` checks only if `conductor.auto_check` is not `false`; this is
-     what `conduct-ts` spawns automatically at daemon startup.
+     what `ai-conductor` spawns automatically at daemon startup.
 2. If a newer version exists, the user is prompted before anything is applied.
    Tagged updates also render the relevant `CHANGELOG.md` blocks with the
    configured markdown viewer (see `markdown_viewer` in
@@ -609,9 +610,9 @@ same channel.
 
 ## Daemon CLI
 
-The per-repo build daemon is driven by the **`conduct-ts`** binary. **Use `conduct-ts`,
+The per-repo build daemon is driven by the **`ai-conductor`** binary. **Use `ai-conductor`,
 NOT the `conduct` bash wrapper, for daemon subcommands** — `conduct daemon status`
-mis-routes to a feature build; only `conduct-ts daemon …` reaches the daemon commands.
+mis-routes to a feature build; only `ai-conductor daemon …` reaches the daemon commands.
 
 The daemon is hosted as a **foreground process inside a per-repo tmux session**
 (`cc-daemon-<slug>`), so you can attach to, restart, and debug a *running* daemon on demand
@@ -620,20 +621,20 @@ tmux present (management is purely additive).
 
 | Command | What it does |
 |---------|--------------|
-| `conduct-ts daemon start` | Start the repo's daemon in a tmux session. **Idempotent** — a no-op if one is already running (never a duplicate). |
-| `conduct-ts daemon stop` | Stop the repo's daemon (kills the session, releases the lock). Safe no-op if not running. |
-| `conduct-ts daemon restart` | Restart the daemon — fresh inner process, same session endpoint. |
-| `conduct-ts daemon connect` | Attach **read-only** to watch the live, full-color output. Detach with `Ctrl-b d`; the daemon keeps running. |
-| `conduct-ts daemon debug` | Attach **read/write** — `Ctrl-c` to pause the loop, inspect, then resume/restart. |
-| `conduct-ts daemon status` | Liveness of every registered repo's daemon (running / stale / stopped, pid, started-at, last activity, **session up/down**) |
-| `conduct-ts daemon logs [--follow] [--all] [--repo <path>]` | Tail `.daemon/daemon.log` (ANSI-stripped) for this repo, all registered repos, or a named one |
-| `conduct-ts daemon --continuous` | Run a daemon in the **foreground**, idle-polling forever (omit `--max-idle-polls` ⇒ Infinity). This is the process tmux hosts. |
-| `conduct-ts daemon` | Drain the current backlog once, then exit (add `--max-idle-polls N` to self-limit after N idle polls) |
+| `ai-conductor daemon start` | Start the repo's daemon in a tmux session. **Idempotent** — a no-op if one is already running (never a duplicate). |
+| `ai-conductor daemon stop` | Stop the repo's daemon (kills the session, releases the lock). Safe no-op if not running. |
+| `ai-conductor daemon restart` | Restart the daemon — fresh inner process, same session endpoint. |
+| `ai-conductor daemon connect` | Attach **read-only** to watch the live, full-color output. Detach with `Ctrl-b d`; the daemon keeps running. |
+| `ai-conductor daemon debug` | Attach **read/write** — `Ctrl-c` to pause the loop, inspect, then resume/restart. |
+| `ai-conductor daemon status` | Liveness of every registered repo's daemon (running / stale / stopped, pid, started-at, last activity, **session up/down**) |
+| `ai-conductor daemon logs [--follow] [--all] [--repo <path>]` | Tail `.daemon/daemon.log` (ANSI-stripped) for this repo, all registered repos, or a named one |
+| `ai-conductor daemon --continuous` | Run a daemon in the **foreground**, idle-polling forever (omit `--max-idle-polls` ⇒ Infinity). This is the process tmux hosts. |
+| `ai-conductor daemon` | Drain the current backlog once, then exit (add `--max-idle-polls N` to self-limit after N idle polls) |
 
 One daemon per repo, enforced by the pidfile lock at `.daemon/daemon.pid` (stale dead-pid
 locks self-reclaim) underneath the tmux session. The daemon runs **serially** (one feature at a
 time), so `connect` always shows exactly the feature currently building. A host reboot drops
-tmux sessions; the next `daemon start` (or engineer nudge) respawns.
+tmux sessions; the next `daemon start` (or composer nudge) respawns.
 
 ## Key Conventions
 

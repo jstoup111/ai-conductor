@@ -1699,7 +1699,7 @@ export function renderExhaustedMechanicalBuildReviewHalt(
   return [
     `build_review mechanical fault allowance exhausted: ${consumed} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed.`,
     `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
-    `1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
+    `1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
     '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
   ].join('\n');
 }
@@ -5912,7 +5912,7 @@ export class Conductor {
 
         // Skip already-completed work. Without this, re-invoking the conductor
         // against a project with existing `done` / `skipped` state (e.g. after
-        // a crash, a terminal close, or a fresh `conduct-ts` call without
+        // a crash, a terminal close, or a fresh `ai-conductor` call without
         // `--resume` / `--from`) re-dispatches every completed step from the
         // top of ALL_STEPS. The `--from <step>` flag is the explicit opt-in to
         // re-run a specific step regardless of its current status.
@@ -12494,7 +12494,7 @@ export function buildRetryHint(
       'The finish work itself appears done — only the outcome was not recorded. ' +
       'Do NOT repeat the full /finish walk. Instead, determine the finish outcome ' +
       '(pr | merge-local | keep | discard) from current repo state and run ONLY:\n' +
-      `  conduct-ts finish-record --choice <choice> [--pr-url <url>] --pipeline-dir ${dirArg}\n` +
+      `  ai-conductor finish-record --choice <choice> [--pr-url <url>] --pipeline-dir ${dirArg}\n` +
       'IMPORTANT: do NOT `cd` elsewhere before running it; use this exact `--pipeline-dir` value ' +
       'regardless of the current working directory. The step is NOT complete until ' +
       '`finish-record` exits 0.'
@@ -12505,9 +12505,9 @@ export function buildRetryHint(
       return (
         `Previous attempt did not satisfy the completion check: ${r}. ` +
         'Record manual-test results now via:\n' +
-        '  conduct-ts manual-test-record --results <path> --pipeline-dir <dir>\n' +
+        '  ai-conductor manual-test-record --results <path> --pipeline-dir <dir>\n' +
         'or, if this is an automated/headless run with no human tester available:\n' +
-        '  conduct-ts manual-test-record --skip --reason <r> --pipeline-dir <dir>'
+        '  ai-conductor manual-test-record --skip --reason <r> --pipeline-dir <dir>'
       );
     }
     return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;

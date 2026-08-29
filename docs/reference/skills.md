@@ -50,7 +50,7 @@ The 13 implicit-required shipped skills are:
 
 | Skill group | Skills | Why they cannot be explicit-only in the distributed catalog |
 | --- | --- | --- |
-| `/engineer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/engineer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
+| `/composer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/composer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
 | Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims`, `code-removal` | Called from an active skill: issue authoring, fresh debugging, batch simplification, load-bearing claim verification, or removal-shaped build work — `/pipeline` dispatches `/code-removal` in place of a RED cycle |
 
 Because these skills remain visible for same-session composition, each description carries a closed
@@ -58,7 +58,7 @@ activation boundary: the active lifecycle/caller state that qualifies, plus near
 not. A generic feature, change, plan, review, bug, or question is not sufficient by itself. Explicit
 operator invocation remains available regardless of these implicit-selection boundaries.
 
-The 17 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `conduct`,
+The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
 `daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
 `remediate`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
@@ -110,6 +110,7 @@ policy across both catalogs and both host metadata formats.
 | `plan` | gating | decide | — | `plan` (9) | Blocking |
 | `coherence-check` | gating | decide | — | `coherence_check` (10) | Blocking |
 | `intake` | gating | decide | — | none — operator-invoked | Neither |
+| `composer` | advisory | decide | opus | none — operator-invoked | Neither as a step; the land gate blocks |
 | `engineer` | advisory | decide | opus | none — operator-invoked | Neither as a step; the land gate blocks |
 | `writing-system-tests` | gating | build | — | `acceptance_specs` (11) | Blocking |
 | `pipeline` | structural | build | — | `build` (12) | Blocking; cannot be disabled |
@@ -172,7 +173,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   The skill treats `.pipeline/phase-active` and daemon status as advisory context: an apparently live
   step produces a warning, while read-only triage always continues. Recovery mutations remain
   individually operator-approved.
-- **Inputs** — read-only evidence only: `conduct-ts daemon status`, `.daemon/daemon.log`, and the
+- **Inputs** — read-only evidence only: `ai-conductor daemon status`, `.daemon/daemon.log`, and the
   feature's `.pipeline/` state (`HALT` + `HALT.class`, `events.jsonl`, `task-status.json`,
   `step-heartbeat`, `phase-active`, `gates/<step>.json`), plus the branch's commit log.
 - **Outputs** — a triage report at `.daemon/triage/<slug>-<timestamp>.md`. Deliberately **not** under
@@ -420,20 +421,31 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Gate role** — neither. Its gate is a pre-file checklist at authoring time; nothing downstream blocks
   on it. See [intake](../guides/intake.md) for the filing procedure.
 
-### engineer
+### composer
 
 > Interactive, phone-drivable idea→spec loop: hands a raw idea to the right repo, runs the full DECIDE phase there, and opens a spec PR. Use when capturing and routing new work, NOT when building inside one repo (that is plain conduct).
 
 - **Frontmatter** — `enforcement: advisory`, `phase: decide`, `standalone: true`, `requires: []`,
   `model: opus`.
-- **Engine step** — none. It is a separate control plane with its own CLI subcommands.
+- **Engine step** — none. It is a separate control plane with its own `ai-conductor compose`
+  subcommands.
 - **Inputs** — a claimed GitHub intake issue, or a launch argument or chat idea; the project registry.
 - **Outputs** — in a per-idea worktree on a `spec/<slug>` branch: the track marker, the complexity
   marker whose stem must match the plan stem, and the full `.docs/` DECIDE artifact set; an intake
   marker committed at land; the spec PR.
 - **Gate role** — neither as an engine step, but the land gate is hard: no idea reaches a build without
   a merged spec PR, only the operator merges, no spec lands with a DRAFT ADR, and the tier must be
-  recorded. See [engineer-loop](../guides/engineer-loop.md).
+  recorded. See [composer loop](../guides/engineer-loop.md). The deprecated `engineer` skill is a
+  thin compatibility delegate to this canonical composer skill.
+
+### engineer
+
+> Deprecated compatibility delegate to [composer](#composer). It preserves existing explicit
+> `/engineer` invocations while the canonical skill is `/composer`.
+
+- **Frontmatter** — `enforcement: advisory`, `phase: decide`, `standalone: true`, `requires: []`,
+  `model: opus`.
+- **Engine step** — none. Use `composer` for new work.
 
 ## BUILD-phase skills
 
@@ -472,13 +484,13 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Outputs** — `.pipeline/audit-trail/batch-N/review.json` and the batch simplification
   records; `.pipeline/progress.log`; `.pipeline/summary.json`; `.pipeline/halt-user-input-required` and
   `.pipeline/HALT` on a stall; at least one `.memory/` entry per batch; a `pipeline_closeout` record in
-  `.pipeline/pipeline-events.jsonl` per completed evaluator gate, written via `conduct-ts
+  `.pipeline/pipeline-events.jsonl` per completed evaluator gate, written via `ai-conductor
   closeout-event`. `.pipeline/current-task` and `.pipeline/task-status.json` are written by engine
   hooks and must not be hand-edited.
 - **Gate role** — blocking. Evaluator dispatch at each batch boundary is mandatory; a missing or empty
   `review.json` halts and re-dispatches. A missing, malformed, or non-matching `evaluator`
   `pipeline_closeout` record is an independent second hard gate (waived for a batch already in flight
-  before the closeout-event emitter shipped) — see [`conduct-ts closeout-event`](cli.md#conduct-ts-closeout-event).
+  before the closeout-event emitter shipped) — see [`ai-conductor closeout-event`](cli.md#ai-conductor-closeout-event).
   `BLOCK` halts and escalates; `REQUEST_CHANGES` triggers rework against a three-cycle budget. Two
   consecutive zero-completion attempts trip a circuit breaker.
 - **Declared replication copy task** — on a plan with a resolved `**Pattern-source:**` /
@@ -606,7 +618,7 @@ after `build` and before `build_review`.
   Checkpoint and loop gate, and the only step that opts into `configDisableAllowed`.
 - **Inputs** — story acceptance criteria; the running application; the absolute worktree `.pipeline`
   path supplied in the step's system prompt.
-- **Outputs** — `.pipeline/manual-test-results.md`, written solely by `conduct-ts manual-test-record`,
+- **Outputs** — `.pipeline/manual-test-results.md`, written solely by `ai-conductor manual-test-record`,
   append-only as numbered attempt sections with per-criterion `PASS`, `WARN`, or `FAIL` results;
   `.pipeline/manual-test-fail-evidence.json`.
 - **Gate role** — blocking. Only the latest attempt is evaluated. The skill must never hand-write or
@@ -708,7 +720,7 @@ after `build` and before `build_review`.
   repair (judgment). Neither is trusted on self-report: the coordinator re-reads the PR and a body that
   still classifies as a placeholder is a failed pass. The coordinator separately persists
   `state.pr_url`, commits `.docs/shipped/<slug>.md`, and writes `.pipeline/finish-choice` through
-  `conduct-ts finish-record` after verification.
+  `ai-conductor finish-record` after verification.
 - **Gate role** — blocking. Missing or invalid deterministic evidence stops before this skill is
   dispatched. A placeholder body routes back to authoring; halt boilerplate and a refused judgment
   require a human. No prose defect commits the shipped record, so the halt stays re-dispatchable.

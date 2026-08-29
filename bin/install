@@ -266,13 +266,28 @@ check_installation() {
     all_ok=false
   fi
 
+  # Check ai-conductor (canonical TypeScript conductor). It shares the same
+  # built bundle as the deprecated conduct-ts alias, but must remain a
+  # separately verifiable PATH entry during the compatibility window.
+  if [ -f "${HARNESS_DIR}/src/conductor/dist/index.js" ]; then
+    if command -v ai-conductor &>/dev/null; then
+      ok "ai-conductor built and on PATH ($(which ai-conductor))"
+    else
+      fail "ai-conductor bundle built but not on PATH — run ./bin/install"
+      all_ok=false
+    fi
+  else
+    fail "ai-conductor bundle not built — run ./bin/install (needs Node >=26; this repo pins nodejs 26.7.0 via .tool-versions)"
+    all_ok=false
+  fi
+
   # Check build-auth state (FR-1/FR-3). Delegates entirely to
-  # `conduct-ts build-auth-status` — no token path/mode derivation logic
-  # here, bash just formats the ok/fail line from the exit code and mirrors
-  # the conduct-ts-absent warning pattern above.
+  # The canonical launcher owns build-auth state; bash only formats the
+  # resulting ok/fail line. The alias probe below remains an operator-facing
+  # installation-health check, not an internal launcher selection.
   if command -v conduct-ts &>/dev/null; then
     local build_auth_line build_auth_exit
-    build_auth_line=$(conduct-ts build-auth-status 2>&1 | head -1) && build_auth_exit=0 || build_auth_exit=$?
+    build_auth_line=$("$HARNESS_DIR/bin/ai-conductor" build-auth-status 2>&1 | head -1) && build_auth_exit=0 || build_auth_exit=$?
     if [ "$build_auth_exit" -eq 0 ]; then
       ok "${build_auth_line}"
     else
@@ -289,7 +304,7 @@ check_installation() {
     local mv_cmd
     if ! command -v conduct-ts &>/dev/null; then
       warn "markdown viewer configured but could not be read — conduct-ts not on PATH"
-    elif ! mv_cmd=$(conduct-ts config read markdown_viewer.command 2>/dev/null); then
+    elif ! mv_cmd=$("$HARNESS_DIR/bin/ai-conductor" config read markdown_viewer.command 2>/dev/null); then
       warn "markdown viewer configuration unreadable"
     elif [ -n "$mv_cmd" ] && command -v "$mv_cmd" &>/dev/null; then
       ok "markdown viewer: ${mv_cmd} (artifact review)"
@@ -303,8 +318,8 @@ check_installation() {
     local mr_preset mr_cmd
     if ! command -v conduct-ts &>/dev/null; then
       warn "mermaid renderer configured but could not be read — conduct-ts not on PATH"
-    elif ! mr_preset=$(conduct-ts config read mermaid_renderer.preset 2>/dev/null) || \
-      ! mr_cmd=$(conduct-ts config read mermaid_renderer.command 2>/dev/null); then
+    elif ! mr_preset=$("$HARNESS_DIR/bin/ai-conductor" config read mermaid_renderer.preset 2>/dev/null) || \
+      ! mr_cmd=$("$HARNESS_DIR/bin/ai-conductor" config read mermaid_renderer.command 2>/dev/null); then
       warn "mermaid renderer configuration unreadable"
     elif [ -z "$mr_cmd" ] || command -v "$mr_cmd" &>/dev/null; then
       ok "mermaid renderer: ${mr_preset:-unset} (diagram approval gates)"
@@ -712,7 +727,7 @@ install_md_viewer_tool() {
   esac
 }
 
-# Persist the chosen viewer through conduct-ts so it owns YAML preservation.
+# Persist the chosen viewer through the canonical launcher so it owns YAML preservation.
 # Install the tool a mermaid preset needs. html/none need no tool. mmdc-* need
 # @mermaid-js/mermaid-cli via npm (only if node is present). Silent best-effort;
 # returns 0 if present/installed or no tool needed, 1 otherwise.
@@ -737,7 +752,7 @@ install_mermaid_tool() {
 
 write_md_viewer_config() {
   local preset=$1 cmd=$2 args=$3 mode=$4
-  conduct-ts config write markdown_viewer "$preset" "$cmd" "$args" "$mode"
+  "$HARNESS_DIR/bin/ai-conductor" config write markdown_viewer "$preset" "$cmd" "$args" "$mode"
 }
 
 # Prompt the user for a markdown viewer preset, probe PATH for availability,
@@ -834,7 +849,7 @@ configure_md_viewer() {
 
 write_mermaid_renderer_config() {
   local preset=$1 cmd=$2 args=$3 mode=$4
-  conduct-ts config write mermaid_renderer "$preset" "$cmd" "$args" "$mode"
+  "$HARNESS_DIR/bin/ai-conductor" config write mermaid_renderer "$preset" "$cmd" "$args" "$mode"
 }
 
 # Prompt the user for a mermaid renderer preset, probe availability, optionally
@@ -1348,9 +1363,25 @@ install() {
   # it's still missing (build skipped or failed).
   local conduct_ts_source="${HARNESS_DIR}/bin/conduct-ts"
   local conduct_ts_target="${LOCAL_BIN}/conduct-ts"
+  local ai_conductor_source="${HARNESS_DIR}/bin/ai-conductor"
+  local ai_conductor_target="${LOCAL_BIN}/ai-conductor"
   local conduct_ts_dist="${HARNESS_DIR}/src/conductor/dist/index.js"
 
   if [ -f "$conduct_ts_dist" ]; then
+    if [ -L "$ai_conductor_target" ]; then
+      local current_ai_conductor
+      current_ai_conductor=$(readlink -f "$ai_conductor_target" 2>/dev/null || echo "")
+      if [ "$current_ai_conductor" != "$ai_conductor_source" ]; then
+        ln -sfn "$ai_conductor_source" "$ai_conductor_target" || warn "ai-conductor symlink update failed"
+        ok "Updated ai-conductor script symlink"
+      else
+        ok "ai-conductor script already current"
+      fi
+    else
+      ln -sfn "$ai_conductor_source" "$ai_conductor_target" || warn "ai-conductor symlink failed"
+      ok "Installed ai-conductor script to ${ai_conductor_target}"
+    fi
+
     if [ -L "$conduct_ts_target" ]; then
       local current_ts
       current_ts=$(readlink -f "$conduct_ts_target" 2>/dev/null || echo "")
@@ -1436,13 +1467,13 @@ install() {
   echo ""
   echo -e "  ${BOLD}Quick start (preferred autonomous path):${NC}"
   echo -e "    cd your-project/"
-  echo -e "    conduct-ts engineer --idea \"your feature description\""
+  echo -e "    ai-conductor compose --idea \"your feature description\""
   echo -e "    # Review and merge the spec PR, then:"
-  echo -e "    conduct-ts daemon start"
+  echo -e "    ai-conductor daemon start"
   echo ""
   echo -e "  ${BOLD}Or supervised in the foreground:${NC}"
   echo -e "    cd your-project/"
-  echo -e "    conduct-ts inline --interactive \"your feature description\""
+  echo -e "    ai-conductor inline --interactive \"your feature description\""
   echo ""
   echo -e "  ${BOLD}Verify:${NC}"
   echo -e "    ./bin/install --check"

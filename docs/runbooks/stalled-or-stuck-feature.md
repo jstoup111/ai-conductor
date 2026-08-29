@@ -31,7 +31,7 @@ All daemon-level evidence lives at the main repo root: `.daemon/`.
 
 ### Blocked merged spec
 
-**Symptom:** A merged plan never dispatches, and `conduct-ts daemon status` lists it in `BLOCKED`
+**Symptom:** A merged plan never dispatches, and `ai-conductor daemon status` lists it in `BLOCKED`
 with a reason and remedy. This is a discovery refusal, not a feature HALT: no feature worktree or
 `.pipeline/HALT` exists yet. The startup dashboard does not render this state
 ([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)); use `daemon status`.
@@ -50,7 +50,7 @@ upgrade that adds this visibility, the first discovery pass may dispatch a previ
 otherwise-buildable merged spec when the repository has no processed marker for it. That is expected;
 review the plan before starting the daemon if those older specs are not ready to build.
 
-**Verification:** Run `conduct-ts daemon status` after the next pass. A repaired spec disappears
+**Verification:** Run `ai-conductor daemon status` after the next pass. A repaired spec disappears
 from `BLOCKED` and is eligible for dispatch; a remaining entry includes its current remedy.
 
 ### First, read the committed halt record
@@ -136,7 +136,7 @@ operator action required.
 `conduct-state.json` to mark the prerequisite done or failed. The resumed conductor admits the
 unsatisfied prerequisite again and preserves already completed steps.
 
-**Verification:** Run `conduct-ts daemon status` after the next dispatch. The prerequisite runs
+**Verification:** Run `ai-conductor daemon status` after the next dispatch. The prerequisite runs
 again; the blocked later step does not remain the terminal step unless the underlying condition is
 still unresolved.
 
@@ -493,7 +493,7 @@ after `harness_self_host.auth_park_timeout_minutes` (default 60), then HALTs wit
 reason naming the credential to refresh.
 
 ```bash
-conduct-ts build-auth-status
+ai-conductor build-auth-status
 ```
 
 Exit 0 means clean (`state=api-key` when there is no daemon-owned token, or `state=valid`).
@@ -523,7 +523,7 @@ evidence or derived it again.
 **Diagnosis:** read the feature narrative, not merely the old gate files:
 
 ```bash
-conduct-ts daemon logs | grep 'BUILD member .* settled:'
+ai-conductor daemon logs | grep 'BUILD member .* settled:'
 ```
 
 The daemon writes `BUILD member test_suite settled: reuse (<basis>)` or `... recompute (<basis>)`.
@@ -538,7 +538,7 @@ change, rewind from the feature worktree rather than editing pipeline state:
 
 ```bash
 cd .worktrees/<slug>
-conduct-ts rewind --to test_suite
+ai-conductor rewind --to test_suite
 ```
 
 `rewind` clears the affected gate verdicts and both halt markers only after it has atomically demoted
@@ -565,7 +565,7 @@ marker. The first line has one of three meanings:
 
 - `feature parked — will not re-dispatch on the next scan` — the automatic marker was written
   (or was already present), so the daemon will keep the feature excluded.
-- `feature errored — automatic park failed: …; run conduct-ts daemon park <slug>` — the marker
+- `feature errored — automatic park failed: …; run ai-conductor daemon park <slug>` — the marker
   could not be written. Repair the reported filesystem error, then park it explicitly before
   changing its worktree state.
 - `feature errored — will re-dispatch on the next scan` — this was a non-park termination, so
@@ -576,7 +576,7 @@ marker. The first line has one of three meanings:
 the automatic marker and restore dispatch eligibility:
 
 ```bash
-conduct-ts daemon unpark <slug>
+ai-conductor daemon unpark <slug>
 ```
 
 **Verification:** `test ! -e .daemon/parked/<slug>` succeeds. The next daemon scan logs
@@ -589,11 +589,11 @@ conduct-ts daemon unpark <slug>
 It does not modify feature state.
 
 ```bash
-conduct-ts inline --diagnose "<feature description>"
+ai-conductor inline --diagnose "<feature description>"
 ```
 
 Run from the main checkout with the feature description, or from inside the worktree with no
-description at all (`conduct-ts inline --diagnose`).
+description at all (`ai-conductor inline --diagnose`).
 
 | Outcome | Output | Exit |
 | --- | --- | --- |
@@ -609,7 +609,7 @@ with no PR.
 ### 4. Read the run timeline with `--report`
 
 ```bash
-conduct-ts inline --report
+ai-conductor inline --report
 ```
 
 Read-only. Renders three tables from `.pipeline/events.jsonl` — Step Durations, Retry Hotspots,
@@ -619,7 +619,7 @@ worktree; it reads `.pipeline/` relative to the current directory.
 > **Known limitation.** `--report` renders neither halt nor kickback tables, although
 > `loop_halt`, `rebase_conflict_halt`, `halt_marker_write_failed`, and `kickback` persist in
 > `events.jsonl`. For halt occurrences, use `cost-rollup.halts`, the shipped record's `## Cost`
-> block, `conduct-ts kpi`, or the engineer-loop signal assembler; use `.pipeline/HALT` as the
+> block, `ai-conductor kpi`, or the engineer-loop signal assembler; use `.pipeline/HALT` as the
 > durable park state and `.pipeline/gates/<step>.json` for the gate verdict. Tracked in
 > [#1023](https://github.com/jstoup111/ai-conductor/issues/1023) and
 > [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
@@ -627,7 +627,7 @@ worktree; it reads `.pipeline/` relative to the current directory.
 ### 5. Read the daemon's own narrative
 
 ```bash
-conduct-ts daemon logs --lines 200
+ai-conductor daemon logs --lines 200
 ```
 
 `.daemon/daemon.log` carries every dispatch line, per-step result, engine warning, and the
@@ -662,12 +662,12 @@ Do not re-run the tasks. Make the work visible instead:
    edit survives.
 3. Confirm the gate now sees them:
    ```bash
-   conduct-ts inline --diagnose
+   ai-conductor inline --diagnose
    ```
    and re-read `.pipeline/gates/build.json` after the next dispatch — its `reason` should no
    longer list those task ids as pending.
 
-`conduct-ts task done <id>` will not help here: it clears the `.pipeline/current-task` stamp and
+`ai-conductor task done <id>` will not help here: it clears the `.pipeline/current-task` stamp and
 never modifies `task-status.json`.
 
 ### The stall was real — the build genuinely cannot proceed
@@ -692,7 +692,7 @@ authorizing anything. When the named DECIDE authoring pass is the intended opera
 commands from the main repository checkout:
 
 ```bash
-conduct-ts decide-grant --slug <slug> --step <target-from-HALT> \
+ai-conductor decide-grant --slug <slug> --step <target-from-HALT> \
   --reason "<why this one DECIDE entry is approved>"
 rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
 ```
@@ -706,7 +706,7 @@ provider dispatch, so it cannot authorize another DECIDE step or a later retry.
 directory is the build agent's own scratch space and an agent must not be able to authorize itself.
 Use the command from the main checkout.
 
-**`plan` is never grantable.** `conduct-ts decide-grant --step plan` exits non-zero, and the entry
+**`plan` is never grantable.** `ai-conductor decide-grant --step plan` exits non-zero, and the entry
 policy refuses `plan` before consulting any grant. If the HALT names `plan` as the requested target,
 the correct recovery is to drive the plan revision yourself — interactively, with `/conduct` or by
 editing the plan — and then clear the halt so the feature resumes into BUILD. See
@@ -721,7 +721,7 @@ the result of the named step:
 
 ```bash
 test ! -e .daemon/grants/<slug>.json
-conduct-ts daemon logs | grep '\[<slug>\]'
+ai-conductor daemon logs | grep '\[<slug>\]'
 ```
 
 ### A halt requests a plan revision
@@ -742,9 +742,9 @@ from a `remediate` or `build_review` disposition asking for a DECIDE revision.
 3. Rewind so the feature resumes into BUILD and actually builds the revised plan, from inside the
    feature worktree:
    ```bash
-   cd .worktrees/<slug> && conduct-ts rewind --to build
+   cd .worktrees/<slug> && ai-conductor rewind --to build
    ```
-   [`conduct-ts rewind`](../reference/cli.md#conduct-ts-rewind) marks `build` and every later
+   [`ai-conductor rewind`](../reference/cli.md#ai-conductor-rewind) marks `build` and every later
    non-skipped step stale, clears their gate verdicts, and clears `HALT` and `HALT.class` atomically.
    Do not delete the halt markers by hand: that leaves the already-recorded `build`, `test_suite`,
    and `build_review` verdicts standing, so the revised plan task is never built. If the plan you
@@ -779,17 +779,17 @@ re-runs BUILD and every later step. Nothing outside the feature moves.
 3. Reseal the amended protected paths from the main repository checkout, not the worktree — a plan
    or story committed after first BUILD entry leaves the seal baseline stale:
    ```bash
-   conduct-ts reseal --slug <slug> --path <path> [--path <path> ...] \
+   ai-conductor reseal --slug <slug> --path <path> [--path <path> ...] \
      --reason "<why this amendment is approved>"
    ```
-   [`conduct-ts reseal`](../reference/cli.md#conduct-ts-reseal) is TTY-only by design; run it
+   [`ai-conductor reseal`](../reference/cli.md#ai-conductor-reseal) is TTY-only by design; run it
    interactively. See [the protected-artifact recovery](#the-halt-is-a-protected-artifact-violation)
    for what it checks.
 4. Rewind, from inside the feature worktree:
    ```bash
-   cd .worktrees/<slug> && conduct-ts rewind --to build
+   cd .worktrees/<slug> && ai-conductor rewind --to build
    ```
-   [`conduct-ts rewind`](../reference/cli.md#conduct-ts-rewind) marks `build` and every later
+   [`ai-conductor rewind`](../reference/cli.md#ai-conductor-rewind) marks `build` and every later
    non-skipped step stale, clears their gate verdicts, and clears `HALT` and `HALT.class` atomically.
    Clearing the markers by hand instead leaves `build`, `test_suite`, and `build_review` recorded as
    done, so the amended plan task is never built.
@@ -857,13 +857,13 @@ one-line dated provenance marker. (Precedent: the 2026-08-14 wiring-rubric retir
 rewritten FR-1 and diagram passed `prd_audit` all-`PASS` on the first pass; the earlier
 annotation-only draft would have shipped an FR still claiming five rubrics.) Re-author the plan
 without a task targeting the other feature's sealed artifact, then run
-`conduct-ts plan-protected-targets .docs/plans/<feature>.md` before landing. A clean result is
+`ai-conductor plan-protected-targets .docs/plans/<feature>.md` before landing. A clean result is
 `No protected-target violations found.`; each violation is reported as `Task <id>: <path> —
 return this amendment to DECIDE; BUILD tasks must not target protected artifacts.`
 
 1. Read the refusal in `.daemon/daemon.log`:
    ```bash
-   conduct-ts daemon logs | grep 'Protected artifact rotation refused'
+   ai-conductor daemon logs | grep 'Protected artifact rotation refused'
    ```
 2. Inspect the named path and act on the specific reason:
    - `Uncommitted protected artifact changed: <path>` — a workspace edit that was never committed.
@@ -888,11 +888,11 @@ rotates on its own, by design, so there is no default action to take here withou
 the diff first. Do not hand-edit `.pipeline/protected-artifact-seal.json` (malformed JSON or a wrong
 fingerprint silently breaks verification for every other artifact in the seal). Instead, review the
 diff, commit the amendment, and only after approving it, run
-[`conduct-ts reseal`](../reference/cli.md#conduct-ts-reseal) from the main repository checkout so it
+[`ai-conductor reseal`](../reference/cli.md#ai-conductor-reseal) from the main repository checkout so it
 recomputes real fingerprints instead of guessing at them:
 
 ```bash
-conduct-ts reseal \
+ai-conductor reseal \
   --slug <feature-slug> \
   --path <path under .docs/... that was reviewed and approved> \
   --reason "<why this amendment is approved>" \
@@ -959,7 +959,7 @@ commands complete the rebase; they do not reconcile the daemon's pipeline marker
 
 1. Park the feature before inspecting or changing its git state:
    ```bash
-   conduct-ts daemon park <slug>
+   ai-conductor daemon park <slug>
    ```
    Keep it parked through marker cleanup and verification. Do not unpark before clearing the stale
    halt; that makes the feature dispatchable while its recovery state is inconsistent.
@@ -985,7 +985,7 @@ commands complete the rebase; they do not reconcile the daemon's pipeline marker
    test ! -d "$(git -C .worktrees/<slug> rev-parse --git-path rebase-apply)"
    test ! -e .worktrees/<slug>/.pipeline/HALT
    test ! -e .worktrees/<slug>/.pipeline/HALT.class
-   conduct-ts daemon unpark <slug>
+   ai-conductor daemon unpark <slug>
    ```
 
 The next dashboard snapshot should list the feature under ELIGIBLE or IN-PROGRESS rather than
@@ -1049,7 +1049,7 @@ on your merge.
 ### An auth park timed out
 
 Refresh the credential the halt body names, then clear the halt as above. Re-check with
-`conduct-ts build-auth-status` before clearing — a halt cleared against a still-broken
+`ai-conductor build-auth-status` before clearing — a halt cleared against a still-broken
 credential just re-parks and burns the timeout again.
 
 ### A rate-limit episode is in progress
@@ -1092,7 +1092,7 @@ to another provider; clearing the halt alone re-runs into the same denial.
 ```text
 build_review mechanical fault allowance exhausted: <consumed> of 3 shared faults consumed.
 Current lap <lap>: <rubric> closed cause <reason> (<detail>).
-1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale "<rationale>".
+1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale "<rationale>".
 2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
 
@@ -1127,7 +1127,7 @@ loop.
    not actually exhausted, a duplicate reduced-coverage record, or the lap/review has since gone
    stale):
    ```bash
-   conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> \
+   ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> \
      --rubric <rubric> --rationale "<why this rubric's coverage is being reduced>"
    ```
    This only writes the decision — it does not touch the halt marker.
@@ -1196,7 +1196,7 @@ of halting.
 ### The feature must stop being dispatched entirely
 
 ```bash
-conduct-ts daemon park <slug>
+ai-conductor daemon park <slug>
 ```
 
 **What it changes:** writes `.daemon/parked/<slug>` at the main repo root, which is checked
@@ -1211,7 +1211,7 @@ in [emergency stop a running feature](emergency-stop-a-running-feature.md).
    ```
 2. **SHIP evidence re-verifies** — from inside the worktree:
    ```bash
-   conduct-ts inline --diagnose
+   ai-conductor inline --diagnose
    ```
    Expect exit 0 and `State OK:`. A non-zero exit still names the failing steps.
 3. **The blocking gate now passes.** Re-read `.pipeline/gates/<step>.json` after the next

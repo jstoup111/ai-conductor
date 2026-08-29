@@ -64,7 +64,7 @@ Step 17: /finish                → SHIP (verify, review changes, present option
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
 > implementation plan is grounded in the agreed design. This is the canonical
-> `conduct-ts` order. Any legacy project runner that preserves the prior
+> `ai-conductor` order. Any legacy project runner that preserves the prior
 > plan→architecture order must not be used for the PRD-driven flow.
 
 ## Practices
@@ -249,7 +249,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
 
 **After the engine-native configured-verifier gate (before suggesting /manual-test):**
-- After the BUILD verification above passes, run `conduct-ts test-suite`.
+- After the BUILD verification above passes, run `ai-conductor test-suite`.
 - A zero exit reporting `EXECUTED PASS` or `REUSED PASS` satisfies this gate.
 - A non-zero exit BLOCKS progression to SHIP. Return to BUILD remediation via
   `/tdd` or `/pipeline`, then rerun the command.
