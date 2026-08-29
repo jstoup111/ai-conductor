@@ -266,6 +266,21 @@ check_installation() {
     all_ok=false
   fi
 
+  # Check ai-conductor (canonical TypeScript conductor). It shares the same
+  # built bundle as the deprecated conduct-ts alias, but must remain a
+  # separately verifiable PATH entry during the compatibility window.
+  if [ -f "${HARNESS_DIR}/src/conductor/dist/index.js" ]; then
+    if command -v ai-conductor &>/dev/null; then
+      ok "ai-conductor built and on PATH ($(which ai-conductor))"
+    else
+      fail "ai-conductor bundle built but not on PATH — run ./bin/install"
+      all_ok=false
+    fi
+  else
+    fail "ai-conductor bundle not built — run ./bin/install (needs Node >=26; this repo pins nodejs 26.7.0 via .tool-versions)"
+    all_ok=false
+  fi
+
   # Check build-auth state (FR-1/FR-3). Delegates entirely to
   # `conduct-ts build-auth-status` — no token path/mode derivation logic
   # here, bash just formats the ok/fail line from the exit code and mirrors
@@ -1348,9 +1363,25 @@ install() {
   # it's still missing (build skipped or failed).
   local conduct_ts_source="${HARNESS_DIR}/bin/conduct-ts"
   local conduct_ts_target="${LOCAL_BIN}/conduct-ts"
+  local ai_conductor_source="${HARNESS_DIR}/bin/ai-conductor"
+  local ai_conductor_target="${LOCAL_BIN}/ai-conductor"
   local conduct_ts_dist="${HARNESS_DIR}/src/conductor/dist/index.js"
 
   if [ -f "$conduct_ts_dist" ]; then
+    if [ -L "$ai_conductor_target" ]; then
+      local current_ai_conductor
+      current_ai_conductor=$(readlink -f "$ai_conductor_target" 2>/dev/null || echo "")
+      if [ "$current_ai_conductor" != "$ai_conductor_source" ]; then
+        ln -sfn "$ai_conductor_source" "$ai_conductor_target" || warn "ai-conductor symlink update failed"
+        ok "Updated ai-conductor script symlink"
+      else
+        ok "ai-conductor script already current"
+      fi
+    else
+      ln -sfn "$ai_conductor_source" "$ai_conductor_target" || warn "ai-conductor symlink failed"
+      ok "Installed ai-conductor script to ${ai_conductor_target}"
+    fi
+
     if [ -L "$conduct_ts_target" ]; then
       local current_ts
       current_ts=$(readlink -f "$conduct_ts_target" 2>/dev/null || echo "")

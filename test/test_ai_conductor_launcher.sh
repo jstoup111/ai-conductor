@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:4
+# Covers: task:4, task:5
 #
 # Verifies the canonical ai-conductor launcher and the deprecated conduct-ts
 # alias share one resolved dist entrypoint while keeping warnings off stdout.
@@ -53,11 +53,44 @@ mkdir -p "$NODE_STUBS"
 cat > "$NODE_STUBS/node" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = "--version" ]; then
+  echo 'v26.7.0'
+  exit 0
+fi
 printf 'ENTRYPOINT:%s\n' "$1"
 shift
 printf 'ARGUMENTS:%s\n' "$*"
 EOF
 chmod +x "$NODE_STUBS/node"
+
+cat > "$NODE_STUBS/npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  ci|list) exit 0 ;;
+  run)
+    [ "${2:-}" = build ]
+    exit
+    ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$NODE_STUBS/npm"
+
+for provider in claude codex; do
+  printf '#!/usr/bin/env bash\necho 1.0.0\n' > "$NODE_STUBS/$provider"
+  chmod +x "$NODE_STUBS/$provider"
+done
+
+CHECK_STUBS="$TMPDIR_ROOT/check-stubs"
+mkdir -p "$CHECK_STUBS"
+cat > "$CHECK_STUBS/conduct-ts" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = build-auth-status ]; then
+  echo 'build-auth-status: valid'
+fi
+EOF
+chmod +x "$CHECK_STUBS/conduct-ts"
 
 # make_fake_harness <name> [valid|missing|broken]
 make_fake_harness() {
@@ -140,6 +173,91 @@ WARNING_COUNT=$(printf '%s\n' "$LEGACY_STDERR" | grep -Fxc 'conduct-ts is deprec
 assert "legacy alias emits exactly one replacement warning" "$([ "$WARNING_COUNT" -eq 1 ] && echo 0 || echo 1)"
 assert_no_stdout_warning "canonical launcher never writes a warning to stdout" "$CANONICAL_STDOUT"
 assert_no_stdout_warning "legacy alias never writes a warning to stdout" "$LEGACY_STDOUT"
+
+echo ""
+echo "=== ai-conductor launcher: installation ==="
+
+INSTALL_HOME="$TMPDIR_ROOT/install-home"
+INSTALL_PATH="$NODE_STUBS:$INSTALL_HOME/.local/bin:/usr/bin:/bin"
+
+run_install() {
+  local output_file="$TMPDIR_ROOT/install-output"
+  local error_file="$TMPDIR_ROOT/install-error"
+
+  set +e
+  HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$HARNESS_DIR/bin/install" \
+    --update --providers codex --allow-worktree-root > "$output_file" 2> "$error_file"
+  INSTALL_STATUS=$?
+  set -e
+  INSTALL_STDOUT=$(<"$output_file")
+  INSTALL_STDERR=$(<"$error_file")
+}
+
+run_install
+INSTALLED_CANONICAL="$INSTALL_HOME/.local/bin/ai-conductor"
+assert "completed install creates the ai-conductor symlink" \
+  "$([ "$INSTALL_STATUS" -eq 0 ] && [ -L "$INSTALLED_CANONICAL" ] && echo 0 || echo 1)"
+assert "installed ai-conductor resolves to the canonical launcher" \
+  "$([ "$(readlink -f "$INSTALLED_CANONICAL")" = "$CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
+
+rm -f "$INSTALLED_CANONICAL"
+ln -s "$TMPDIR_ROOT/stale-ai-conductor" "$INSTALLED_CANONICAL"
+run_install
+assert "stale ai-conductor target updates in place" \
+  "$([ -L "$INSTALLED_CANONICAL" ] && [ "$(readlink -f "$INSTALLED_CANONICAL")" = "$CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
+if printf '%s\n' "$INSTALL_STDOUT" | grep -Fq 'Updated ai-conductor script symlink'; then
+  assert "ai-conductor stale-target output matches conduct-ts update behavior" 0
+else
+  echo "$INSTALL_STDOUT"
+  assert "ai-conductor stale-target output matches conduct-ts update behavior" 1
+fi
+
+CHECK_OUTPUT="$TMPDIR_ROOT/check-output"
+set +e
+HOME="$INSTALL_HOME" PATH="$CHECK_STUBS:$INSTALL_PATH" "$HARNESS_DIR/bin/install" \
+  --check --providers codex > "$CHECK_OUTPUT" 2>&1
+CHECK_STATUS=$?
+set -e
+if [ "$CHECK_STATUS" -eq 0 ] && grep -Fq 'ai-conductor built and on PATH' "$CHECK_OUTPUT"; then
+  assert "install --check verifies the installed ai-conductor launcher" 0
+else
+  cat "$CHECK_OUTPUT"
+  assert "install --check verifies the installed ai-conductor launcher" 1
+fi
+
+capture "$INSTALL_HOME/.local/bin/ai-conductor" daemon status
+INSTALLED_CANONICAL_STATUS=$CAPTURE_STATUS
+INSTALLED_CANONICAL_STDOUT=$CAPTURE_STDOUT
+INSTALLED_CANONICAL_STDERR=$CAPTURE_STDERR
+capture "$INSTALL_HOME/.local/bin/conduct-ts" daemon status
+INSTALLED_LEGACY_STATUS=$CAPTURE_STATUS
+INSTALLED_LEGACY_STDOUT=$CAPTURE_STDOUT
+INSTALLED_LEGACY_STDERR=$CAPTURE_STDERR
+assert "installed ai-conductor daemon status exits successfully" \
+  "$([ "$INSTALLED_CANONICAL_STATUS" -eq 0 ] && echo 0 || echo 1)"
+assert "installed ai-conductor and conduct-ts share the TS dist entrypoint" \
+  "$([ "$INSTALLED_CANONICAL_STDOUT" = "$INSTALLED_LEGACY_STDOUT" ] && echo 0 || echo 1)"
+assert "installed ai-conductor daemon status emits no warning" \
+  "$([ -z "$INSTALLED_CANONICAL_STDERR" ] && echo 0 || echo 1)"
+WARNING_COUNT=$(printf '%s\n' "$INSTALLED_LEGACY_STDERR" | grep -Fxc 'conduct-ts is deprecated; use ai-conductor instead' || true)
+assert "installed conduct-ts retains its one replacement warning" \
+  "$([ "$WARNING_COUNT" -eq 1 ] && echo 0 || echo 1)"
+
+rm "$INSTALLED_CANONICAL"
+MISSING_AI_CHECK_OUTPUT="$TMPDIR_ROOT/missing-ai-check-output"
+set +e
+HOME="$INSTALL_HOME" PATH="$CHECK_STUBS:$INSTALL_PATH" "$HARNESS_DIR/bin/install" \
+  --check --providers codex > "$MISSING_AI_CHECK_OUTPUT" 2>&1
+MISSING_AI_CHECK_STATUS=$?
+set -e
+assert "install --check fails when ai-conductor is absent from PATH" \
+  "$([ "$MISSING_AI_CHECK_STATUS" -ne 0 ] && echo 0 || echo 1)"
+if grep -Fq 'ai-conductor bundle built but not on PATH — run ./bin/install' "$MISSING_AI_CHECK_OUTPUT"; then
+  assert "missing ai-conductor check reports its recovery" 0
+else
+  cat "$MISSING_AI_CHECK_OUTPUT"
+  assert "missing ai-conductor check reports its recovery" 1
+fi
 
 run_dist_failure_case() {
   local dist_state=$1
