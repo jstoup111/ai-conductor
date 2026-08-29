@@ -4,6 +4,18 @@ spec_hash: 662937518f935147051ff0f09caf2b155fa2647b29b2928d0e6c6bc4f044c447
 pr: https://github.com/jstoup111/ai-conductor/pull/1968
 shipped: 2026-08-29
 engine_version: 20260829T023303Z-bae4facf3f45
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/worktree-prepare.ts:840-856 — a `bin/setup` that disappears between the decision and the run now throws `SetupFailureError` (previously a silent no-op return)"
+    accepted: true
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-26-setup-once-per-worktree-marker decision 7"
+    outcome: remediated
+    summary: "The generic resolve-worktree default applies the new dispatch-start lifecycle to autoresolve and CI-fix despite the approved daemon-dispatch/setup-triage-only boundary."
 ---
 
 ## Cost
