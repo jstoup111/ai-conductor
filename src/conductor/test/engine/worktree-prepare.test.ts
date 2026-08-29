@@ -290,6 +290,78 @@ describe('engine/worktree-prepare', () => {
     });
   });
 
+  /**
+   * As-built AB-4. `setupDecision` probes `bin/setup` with `lstat`, the
+   * `project_setup` decision is emitted, and only then does `runProjectSetup`
+   * re-probe with `access` — a TOCTOU window in which the script can vanish or
+   * lose access after every consumer has been told setup would run. The
+   * emitter is awaited inside that exact window, so an async subscriber is the
+   * production seam that reproduces it deterministically (no sleeps, no racing
+   * writer). adr-2026-08-26 decision 3 forbids reporting that state on a
+   * second raw channel, so the branch must fail closed instead.
+   */
+  describe('setup script disappearing after the decision (AB-4)', () => {
+    it('fails closed, with no raw skip line, when bin/setup is removed mid-window', async () => {
+      await writeSetup('#!/usr/bin/env bash\ntouch setup-ran.marker\n');
+      const log: string[] = [];
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('project_setup', async (event) => {
+        seen.push(event);
+        await rm(join(dir, 'bin'), { recursive: true, force: true });
+      });
+
+      let raised: unknown;
+      try {
+        await prepareWorktree(dir, (m) => log.push(m), { baseSha: 'base-a', events });
+        throw new Error('should have rejected');
+      } catch (err) {
+        raised = err;
+      }
+
+      // Half one: the fail-closed signal the caller (daemon-runner) handles.
+      expect(raised).toBeInstanceOf(SetupFailureError);
+      expect((raised as SetupFailureError).message).toContain(
+        'became unavailable after the setup decision',
+      );
+      // Half two: no second, contradictory reporting channel for the same fact.
+      expect(log).not.toContain('no bin/setup — skipping project setup');
+      expect(log.some((l) => l.includes('skipping project setup'))).toBe(false);
+      expect(seen).toEqual([{ type: 'project_setup', ran: true, reason: 'no-marker' }]);
+      // Setup never ran, so no success marker may claim it did.
+      await expect(access(join(dir, 'setup-ran.marker'))).rejects.toThrow();
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+    });
+
+    it('fails closed, with no raw skip line, when bin/setup becomes inaccessible mid-window', async () => {
+      await writeSetup('#!/usr/bin/env bash\ntouch setup-ran.marker\n');
+      const log: string[] = [];
+      const events = new ConductorEventEmitter();
+      events.on('project_setup', async () => {
+        await chmod(join(dir, 'bin'), 0o000);
+      });
+
+      try {
+        let raised: unknown;
+        try {
+          await prepareWorktree(dir, (m) => log.push(m), { baseSha: 'base-a', events });
+          throw new Error('should have rejected');
+        } catch (err) {
+          raised = err;
+        }
+
+        expect(raised).toBeInstanceOf(SetupFailureError);
+        expect((raised as SetupFailureError).message).toContain(
+          'became unavailable after the setup decision',
+        );
+        expect(log).not.toContain('no bin/setup — skipping project setup');
+        expect(log.some((l) => l.includes('skipping project setup'))).toBe(false);
+      } finally {
+        await chmod(join(dir, 'bin'), 0o755);
+      }
+    });
+  });
+
   describe('runDispatchStart', () => {
     it('is silent when absent, receives the dispatch environment, and contains failure', async () => {
       const log = vi.fn();

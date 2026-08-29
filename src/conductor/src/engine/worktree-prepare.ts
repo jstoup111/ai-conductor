@@ -22,10 +22,12 @@
  * Two divergences between the two runners are deliberate and easy to erase by
  * copying one onto the other (ADR §1, §2):
  *
- * - **The absent-script path is silent on the teardown side** and logs a skip
- *   notice on the setup side. FR-4 promises a non-adopting project
- *   byte-identical log output, so teardown emits no line at all when
- *   `bin/teardown` is absent.
+ * - **The absent-script path is silent on the teardown side** and rides the
+ *   `project_setup` event on the setup side. FR-4 promises a non-adopting
+ *   project byte-identical log output, so teardown emits no line at all when
+ *   `bin/teardown` is absent; the setup side reports `no-script` on the event
+ *   spine and never writes a raw skip line
+ *   (adr-2026-08-26-setup-once-per-worktree-marker decision 3).
  * - **Only teardown is time-bound**, via `execa`'s `timeout` (default 120s,
  *   overridable by `teardown_timeout_seconds`). There is deliberately no way
  *   to disable the bound — an unbounded project script sits in the daemon's
@@ -820,7 +822,13 @@ export async function runDispatchStart(
   }
 }
 
-/** Run the project's `bin/setup` if present; no-op otherwise; throw on failure. */
+/**
+ * Run the project's `bin/setup`. Only reached when `setupDecision` already
+ * resolved `ran: true`, so an absent script is a failure here, not a no-op:
+ * the genuinely scriptless project is decided (and reported) upstream as
+ * `no-script` and never reaches this runner. Returns true on success; every
+ * failure throws `SetupFailureError`.
+ */
 async function runProjectSetup(
   worktreePath: string,
   namespace: string,
@@ -831,9 +839,21 @@ async function runProjectSetup(
 
   try {
     await access(script);
-  } catch {
-    log?.('no bin/setup — skipping project setup');
-    return false;
+  } catch (err) {
+    // TOCTOU window: `setupDecision` observed this path with `lstat`, and the
+    // `project_setup` event has already told every consumer setup would run.
+    // If the script vanished or lost access in between, the emitted fact can
+    // no longer be honored — and adr-2026-08-26 decision 3 forbids correcting
+    // it with a raw `log()` write, which would be a second reporting channel
+    // contradicting the persisted one. Fail closed onto the setup-failure path
+    // `prepareWorktree`'s caller already handles: the run was attempted and
+    // could not proceed, so this is a real failure of an actual setup run
+    // (decision 4's triage trigger), never a silent skip.
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new SetupFailureError(
+      `project setup (${SETUP_SCRIPT}) became unavailable after the setup decision: ${detail}`,
+      detail,
+    );
   }
 
   log?.(`running ${SETUP_SCRIPT}`);
