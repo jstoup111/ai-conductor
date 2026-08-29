@@ -77,6 +77,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Prevent non-S daemon candidates with malformed coherence mappings from being silently lost and report actionable parse details. ([implementation PR #1945](https://github.com/jstoup111/ai-conductor/pull/1945)).
 - `bin/install` and `bin/install --check` now fail with exit 1 when the conduct-ts engine cannot be built or is missing, instead of reporting a successful install with no engine. ([implementation PR #2017](https://github.com/jstoup111/ai-conductor/pull/2017)).
 - The as-built architecture review now judges its plan-gap outcome against the approved, sealed story criteria instead of superseded intake capture, so a deliberate story narrowing no longer halts a feature whose acceptance criteria all pass. ([implementation PR #2018](https://github.com/jstoup111/ai-conductor/pull/2018)).
+- FINISH now returns prose-revision feedback to its author and completes the bounded revision loop without exhausting retries. ([implementation PR #2015](https://github.com/jstoup111/ai-conductor/pull/2015)).
 
 ## Migration
 
