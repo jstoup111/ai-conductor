@@ -128,6 +128,8 @@ export type PullRequestObservation =
       state: 'one';
       url: string;
       prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt';
+      /** Persisted objection for this exact judged-deficient PR revision. */
+      revisionGuidance?: string;
       /** The observer found a `needs-remediation` title, label, or body marker. */
       halted?: true;
       ready: boolean;
@@ -288,6 +290,9 @@ function mapPullRequest(
         identity: 'one',
         url: observation.url,
         prose: observation.prose,
+        ...(observation.revisionGuidance === undefined
+          ? {}
+          : { revisionGuidance: observation.revisionGuidance }),
         ...(observation.halted === true ? { halted: true } : {}),
         ready: observation.ready,
       };

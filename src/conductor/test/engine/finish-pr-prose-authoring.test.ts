@@ -1,5 +1,11 @@
 // Covers: task:5
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import type { ConductState } from '../../src/types/index.js';
 
 /**
  * FINISH must never reach its bounded prose judgment with an unauthored PR
@@ -17,6 +23,8 @@ type PublicationSnapshot = import('../../src/engine/finish-publication.js').Publ
 type PublicationTransition = import('../../src/engine/finish-publication.js').PublicationTransition;
 type AdvanceResult =
   import('../../src/engine/finish-publication.js').AdvanceFinishPublicationResult;
+type PrProseAuthoringRequest =
+  import('../../src/engine/finish-publication.js').PrProseAuthoringRequest;
 
 const PR_URL = 'https://github.com/acme/widget/pull/1364';
 
@@ -47,6 +55,75 @@ async function advance(
 ): Promise<AdvanceResult> {
   const mod = await import(FINISH_PUBLICATION_MODULE);
   return mod.advanceFinishPublication(input) as Promise<AdvanceResult>;
+}
+
+async function dispatchPersistedRevisionAuthoring(
+  detail: string | undefined,
+): Promise<PrProseAuthoringRequest> {
+  const root = await mkdtemp(join(tmpdir(), 'finish-prose-authoring-guidance-'));
+  try {
+    const pipeline = join(root, '.pipeline');
+    await mkdir(pipeline);
+    await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+    const title = 'fix: preserve authoring guidance';
+    let body = '## Why\n\nThe original prose needs revision.\n';
+    const revision = `${PR_URL}\u0000${JSON.stringify([title, body])}`;
+    const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+    await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+      version: 1,
+      records: {
+        [digest]: {
+          kind: 'revision_required',
+          reason: 'structurally_incomplete',
+          ...(detail === undefined ? {} : { detail }),
+        },
+      },
+    }));
+
+    const dispatchAuthoring = vi.fn(async (_request: PrProseAuthoringRequest) => {
+      body = '## Why\n\nThe reader can now see the recovery path.\n';
+      return { success: true };
+    });
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: root,
+      stateFilePath: join(pipeline, 'conduct-state.json'),
+      baseBranch: 'main',
+      git: async (args) => args[0] === 'remote'
+        ? { stdout: 'origin\n' }
+        : { stdout: 'refs/remotes/origin/feat/prose-guidance\n' },
+      gh: async (args) => {
+        if (args[0] === 'auth') return { stdout: '' };
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ url: PR_URL, title, body, isDraft: true, labels: [] }) };
+        }
+        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+      },
+      observeReleaseReadiness: async () => 'present',
+    });
+
+    await expect(coordinator.advance({
+      state: {
+        feature_desc: 'prose-guidance',
+        worktree_branch: 'feat/prose-guidance',
+        pr_url: PR_URL,
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
+      } as ConductState,
+      mode: 'auto',
+      daemon: true,
+      dispatchJudgment: async () => ({ success: true }),
+      dispatchAuthoring,
+      emit: async () => {},
+    })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+
+    const request = dispatchAuthoring.mock.calls[0]?.[0];
+    if (request === undefined) throw new Error('expected the authoring dispatch');
+    return request;
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 
 describe('FINISH authors PR prose before it judges it', () => {
@@ -145,6 +222,18 @@ describe('FINISH authors PR prose before it judges it', () => {
     });
   });
 
+  it('threads persisted verdict detail through the production observation boundary', async () => {
+    await expect(
+      dispatchPersistedRevisionAuthoring('Explain the user-visible recovery behavior.'),
+    ).resolves.toEqual({
+      kind: 'finish_pr_prose_authoring',
+      pullRequestUrl: PR_URL,
+      authoringScope: ['title', 'body'],
+      maximumPasses: 1,
+      revisionGuidance: 'Explain the user-visible recovery behavior.',
+    });
+  });
+
   it('still dispatches a detail-less revision authoring pass without guidance', async () => {
     let prose: 'revision_required' | 'accepted' = 'revision_required';
     const authorProse = vi.fn(async () => {
@@ -161,6 +250,15 @@ describe('FINISH authors PR prose before it judges it', () => {
     ).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
 
     expect(authorProse).toHaveBeenCalledWith({
+      kind: 'finish_pr_prose_authoring',
+      pullRequestUrl: PR_URL,
+      authoringScope: ['title', 'body'],
+      maximumPasses: 1,
+    });
+  });
+
+  it('still dispatches an authoring pass when the persisted verdict has no detail', async () => {
+    await expect(dispatchPersistedRevisionAuthoring(undefined)).resolves.toEqual({
       kind: 'finish_pr_prose_authoring',
       pullRequestUrl: PR_URL,
       authoringScope: ['title', 'body'],
