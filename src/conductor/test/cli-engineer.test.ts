@@ -1,3 +1,4 @@
+// Covers: task:1
 // Specs for the `conduct engineer` subcommand wiring (Phase 9.3, ADR-008 conformance).
 //
 // Mirrors the structural detection pattern used by the registry-cli tests:
@@ -9,6 +10,7 @@
 // All assertions use REAL exports from src/ — no mocks of the units under test.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { ENGINEER_SUBCOMMANDS } from '../src/engine/engineer-cli.js';
 
 // ─── 1. Structural: `createProgram()` registers a `engineer` subcommand ──────────
 
@@ -25,6 +27,60 @@ describe('CLI surface — conduct engineer subcommand (FR-1 wiring)', () => {
 // ─── 2. Detection: detectEngineerCommand matches argv[2] === 'engineer' ─────────────
 
 describe('detectEngineerCommand — argv detection', () => {
+  const subcommandArgs = {
+    projects: [],
+    worktree: ['--project', 'project', '--idea', 'idea'],
+    land: ['--project', 'project', '--idea', 'idea', '--worktree', '/tmp/worktree'],
+    handoff: ['--project', 'project', '--branch', 'spec/idea', '--worktree', '/tmp/worktree'],
+    poll: [],
+    claim: [],
+    forget: ['owner/repo#1'],
+    unclaim: ['owner/repo#1'],
+    requeue: ['--stale'],
+    resolve: ['owner/repo#1', '--pr-url', 'https://example.test/pr/1'],
+    'migrate-issue-deps': ['--confirm'],
+  } satisfies Record<(typeof ENGINEER_SUBCOMMANDS)[number], readonly string[]>;
+  const subcommandCases = ENGINEER_SUBCOMMANDS.map(
+    (subcommand) => [subcommand, subcommandArgs[subcommand]] as const,
+  );
+
+  it.each(subcommandCases)('returns the engineer descriptor for compose %s', async (subcommand, args) => {
+    const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
+    const engineer = detectEngineerCommand(['node', 'conduct', 'engineer', subcommand, ...args]);
+    const compose = detectEngineerCommand(['node', 'conduct', 'compose', subcommand, ...args]);
+
+    expect(compose).toEqual(engineer);
+    expect(compose).not.toBeNull();
+  });
+
+  it.each(['engineer', 'compose'])('returns launch for a bare %s command', async (verb) => {
+    const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
+    expect(detectEngineerCommand(['node', 'conduct', verb])).toEqual({ kind: 'launch' });
+  });
+
+  it.each(subcommandCases)('returns the same help descriptor for %s %s', async (subcommand, args) => {
+    const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
+    expect(detectEngineerCommand(['node', 'conduct', 'compose', subcommand, ...args, '--help']))
+      .toEqual(detectEngineerCommand(['node', 'conduct', 'engineer', subcommand, ...args, '--help']));
+  });
+
+  it('returns the engineer rejection descriptor for compose with an unknown flag', async () => {
+    const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
+    const engineer = detectEngineerCommand(['node', 'conduct', 'engineer', 'projects', '--unexpected']);
+    const compose = detectEngineerCommand(['node', 'conduct', 'compose', 'projects', '--unexpected']);
+
+    expect(engineer).toEqual({ kind: 'reject', sub: 'projects', flag: '--unexpected' });
+    expect(compose).toEqual(engineer);
+  });
+
+  it('returns the engineer descriptor for compose with an unknown subcommand', async () => {
+    const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
+    const engineer = detectEngineerCommand(['node', 'conduct', 'engineer', 'unknown-subcommand']);
+    const compose = detectEngineerCommand(['node', 'conduct', 'compose', 'unknown-subcommand']);
+
+    expect(compose).toEqual(engineer);
+  });
+
   it('returns a non-null dispatch descriptor when argv[2] is "engineer"', async () => {
     const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
     const result = detectEngineerCommand(['node', 'conduct', 'engineer']);

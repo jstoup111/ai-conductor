@@ -89,7 +89,7 @@ export const ENGINEER_SUBCOMMANDS = [
 
 /**
  * Parse process.argv into an EngineerDispatch descriptor, or return null if
- * argv[2] is not 'engineer'.
+ * argv[2] is neither 'engineer' nor 'compose'.
  *
  * Subcommand grammar (argv[3]):
  *   absent / undefined   → {kind:'launch'}   (drop into interactive `claude /engineer`)
@@ -111,7 +111,7 @@ function findUnknownFlag(argv: string[], allowed: string[]): string | null {
 export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
   // argv is process.argv: [node, entry, sub, ...]
   const sub = argv[2];
-  if (sub !== 'engineer') return null;
+  if (sub !== 'engineer' && sub !== 'compose') return null;
 
   const subCmd = argv[3];
 
