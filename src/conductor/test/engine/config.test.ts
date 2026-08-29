@@ -1231,7 +1231,7 @@ steps:
           ok: false,
           error: {
             type: 'validation_error',
-            message: expect.stringMatching(new RegExp(`${category}.*unbudgetable`, 'i')),
+            message: `test_suite.verification.drift_budget.${category} is unbudgetable`,
           },
         });
       },
@@ -1251,7 +1251,7 @@ steps:
           ok: false,
           error: {
             type: 'validation_error',
-            message: expect.stringMatching(new RegExp(`${category}.*unbudgetable`, 'i')),
+            message: `test_suite.verification.drift_budget.${category} is unbudgetable`,
           },
         });
       },
