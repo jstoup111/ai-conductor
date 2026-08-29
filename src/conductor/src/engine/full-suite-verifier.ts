@@ -22,6 +22,7 @@ import {
 import {
   FULL_SUITE_FINGERPRINT_CATEGORIES,
   classifyFullSuiteFingerprintPath,
+  expandFullSuiteDeclaredInputMembership,
   fingerprintFullSuiteInputs,
   type FullSuiteFingerprintCategory,
   type FullSuiteFingerprint,
@@ -1028,7 +1029,10 @@ export class FullSuiteVerifier {
       if (persisted.evidence.fingerprint !== fingerprintResult.fingerprint.digest) {
         const measurement = await this.measureDriftFromAttestedPass(
           persisted.evidence.provenanceHeadSha,
-          new Set(aggregateTestSuite.inputs ?? []),
+          await expandFullSuiteDeclaredInputMembership(
+            projectRoot,
+            aggregateTestSuite.inputs ?? [],
+          ),
         );
         if (measurement.status === 'INDETERMINATE') {
           return {

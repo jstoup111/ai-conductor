@@ -448,6 +448,20 @@ async function expandDeclaredInput(projectRoot: string, declaration: string): Pr
   }
 }
 
+/**
+ * Expands declared full-suite inputs into the concrete path membership that
+ * receives the `additional_inputs` fingerprint category.
+ */
+export async function expandFullSuiteDeclaredInputMembership(
+  projectRoot: string,
+  declarations: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const expanded = await Promise.all(
+    declarations.map((declaration) => expandDeclaredInput(projectRoot, declaration)),
+  );
+  return new Set(expanded.flat());
+}
+
 async function normalizedWorkingDirectory(
   projectRoot: string,
   workingDirectory?: string,
@@ -595,12 +609,12 @@ async function calculateFingerprint(
     testSuite.working_directory,
   );
 
-  const [headSha, trackedOutput, untrackedOutput, expandedInputs, environmentDigest] =
+  const [headSha, trackedOutput, untrackedOutput, requiredPaths, environmentDigest] =
     await Promise.all([
       gitOutput(projectRoot, ['rev-parse', 'HEAD']),
       gitOutput(projectRoot, ['ls-files', '-z']),
       gitOutput(projectRoot, ['ls-files', '--others', '--exclude-standard', '-z']),
-      Promise.all(normalizedInputs.map((input) => expandDeclaredInput(projectRoot, input))),
+      expandFullSuiteDeclaredInputMembership(projectRoot, normalizedInputs),
       environmentFingerprint(projectRoot, testSuite.environment ?? [], environmentValues),
     ]);
 
@@ -608,7 +622,6 @@ async function calculateFingerprint(
     ...nulSeparatedPaths(trackedOutput),
     ...nulSeparatedPaths(untrackedOutput),
   ].filter(isFullSuiteProjectInput);
-  const requiredPaths = new Set(expandedInputs.flat());
   const paths = sortedUnique([...broadPaths, ...requiredPaths]);
 
   const hash = createHash('sha256');

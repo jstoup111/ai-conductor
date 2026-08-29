@@ -20,6 +20,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   classifyFullSuiteFingerprintPath,
+  expandFullSuiteDeclaredInputMembership,
   fingerprintFullSuiteInputs,
 } from '../../src/engine/full-suite-fingerprint.js';
 import type {
@@ -116,6 +117,26 @@ describe('fingerprintFullSuiteInputs', () => {
       classifyFullSuiteFingerprintPath(path, explicitlyDeclared),
       category,
     ])).toEqual(cases.map(({ path, category }) => [path, category, category]));
+  });
+
+  it('expands literal, directory, and glob declarations into required-path membership', async () => {
+    const repo = await makeRepo({
+      'private/literal.bin': 'literal\n',
+      'private/directory/child.bin': 'directory child\n',
+      'private/glob/one.bin': 'glob one\n',
+      'private/glob/two.txt': 'glob two\n',
+    });
+
+    await expect(expandFullSuiteDeclaredInputMembership(repo, [
+      'private/literal.bin',
+      'private/directory',
+      'private/glob/*.bin',
+    ])).resolves.toEqual(new Set([
+      'private/literal.bin',
+      'private/directory',
+      'private/directory/child.bin',
+      'private/glob/one.bin',
+    ]));
   });
 
   it('is deterministic for unchanged tracked content', async () => {
