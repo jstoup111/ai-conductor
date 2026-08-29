@@ -35,6 +35,7 @@ import type { AggregateTestSuiteConfig, TestSuiteConfig } from '../types/config.
 
 export type FullSuiteStaleReason =
   | Exclude<FullSuiteEvidenceUnusableReason, 'io_error'>
+  | 'drift_budget_exceeded'
   | 'fingerprint_mismatch'
   | 'additional_inputs_changed'
   | 'dependencies_changed'
@@ -46,13 +47,36 @@ export type FullSuiteStaleReason =
   | 'project_config_changed'
   | 'source_changed'
   | 'test_infrastructure_changed'
-  | 'tests_changed';
+  | 'tests_changed'
+  | 'unbudgetable_drift';
 
-export interface FullSuiteStaleInspection {
-  status: 'STALE';
-  reason: FullSuiteStaleReason;
-  changedCategories?: FullSuiteFingerprintCategory[];
-}
+type FullSuiteBudgetBound = 'none' | number;
+
+type FullSuiteUnbudgetableCategory = Extract<
+  FullSuiteFingerprintCategory,
+  'dependencies' | 'environment' | 'migrations' | 'project_config'
+>;
+
+export type FullSuiteStaleInspection =
+  | {
+      status: 'STALE';
+      reason: Exclude<FullSuiteStaleReason, 'drift_budget_exceeded' | 'unbudgetable_drift'>;
+      changedCategories?: FullSuiteFingerprintCategory[];
+    }
+  | {
+      status: 'STALE';
+      reason: 'drift_budget_exceeded';
+      category: FullSuiteFingerprintCategory;
+      count: number;
+      bound: FullSuiteBudgetBound;
+    }
+  | {
+      status: 'STALE';
+      reason: 'unbudgetable_drift';
+      category: FullSuiteUnbudgetableCategory;
+      count: number;
+      bound: 'none';
+    };
 
 export type FullSuiteVerifierResult =
   | {
@@ -959,10 +983,18 @@ export class FullSuiteVerifier {
           persisted.evidence.provenanceHeadSha,
           new Set(aggregateTestSuite.inputs ?? []),
         );
-        if (
-          measurement.status === 'MEASURED' &&
-          driftIsWithinDeclaredBudget(measurement, aggregateTestSuite)
-        ) {
+        if (measurement.status === 'INDETERMINATE') {
+          return {
+            inspection: { status: 'STALE', reason: 'drift_measurement_indeterminate' },
+            context,
+          };
+        }
+        const driftRejection = driftBudgetRejection(
+          measurement,
+          aggregateTestSuite,
+          changedFingerprintCategories(persisted.evidence, fingerprintResult.fingerprint),
+        );
+        if (!driftRejection) {
           const evidence: FullSuitePassEvidence = {
             ...persisted.evidence,
             fingerprint: fingerprintResult.fingerprint.digest,
@@ -986,17 +1018,8 @@ export class FullSuiteVerifier {
             context,
           };
         }
-        if (measurement.status === 'INDETERMINATE') {
-          return {
-            inspection: { status: 'STALE', reason: 'drift_measurement_indeterminate' },
-            context,
-          };
-        }
         return {
-          inspection: changedFingerprintInspection(
-            persisted.evidence,
-            fingerprintResult.fingerprint,
-          ),
+          inspection: driftRejection,
           context,
         };
       }
@@ -1083,18 +1106,68 @@ async function fingerprintTimeWorktreeCleanliness(
   }
 }
 
-function driftIsWithinDeclaredBudget(
+const UNBUDGETABLE_DRIFT_CATEGORIES = new Set<FullSuiteUnbudgetableCategory>([
+  'dependencies',
+  'environment',
+  'migrations',
+  'project_config',
+]);
+
+function driftBudgetRejection(
   measurement: Extract<FullSuiteDriftMeasurement, { status: 'MEASURED' }>,
   testSuite: AggregateTestSuiteConfig,
-): boolean {
-  const changedCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
+  fingerprintChangedCategories: FullSuiteFingerprintCategory[],
+): FullSuiteStaleInspection | undefined {
+  if (!hasDeclaredDriftAllowance(testSuite)) {
+    return changedFingerprintInspectionFromCategories(fingerprintChangedCategories);
+  }
+  const measuredCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
     (category) => measurement.categoryCounts[category] > 0,
   );
-  return changedCategories.length > 0 && changedCategories.every((category) => {
-    const bound = testSuite.verification?.drift_budget[category];
-    return bound === 'unlimited' ||
-      (typeof bound === 'number' && measurement.categoryCounts[category] <= bound);
-  });
+  const driftedCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
+    (category) => fingerprintChangedCategories.includes(category) || measuredCategories.includes(category),
+  );
+  const unbudgetableCategory = driftedCategories.find(
+    (category): category is FullSuiteUnbudgetableCategory =>
+      UNBUDGETABLE_DRIFT_CATEGORIES.has(category as FullSuiteUnbudgetableCategory),
+  );
+  if (unbudgetableCategory) {
+    return {
+      status: 'STALE',
+      reason: 'unbudgetable_drift',
+      category: unbudgetableCategory,
+      count: measurement.categoryCounts[unbudgetableCategory],
+      bound: 'none',
+    };
+  }
+
+  if (
+    fingerprintChangedCategories.length === 0 ||
+    fingerprintChangedCategories.some((category) => measurement.categoryCounts[category] === 0)
+  ) {
+    return changedFingerprintInspectionFromCategories(fingerprintChangedCategories);
+  }
+
+  for (const category of fingerprintChangedCategories) {
+    const count = measurement.categoryCounts[category];
+    const bound = testSuite.verification?.drift_budget[category] ?? 'none';
+    if (bound !== 'unlimited' && (bound === 'none' || count > bound)) {
+      return {
+        status: 'STALE',
+        reason: 'drift_budget_exceeded',
+        category,
+        count,
+        bound,
+      };
+    }
+  }
+  return undefined;
+}
+
+function hasDeclaredDriftAllowance(testSuite: AggregateTestSuiteConfig): boolean {
+  return Object.values(testSuite.verification?.drift_budget ?? {}).some(
+    (bound) => bound !== 'none',
+  );
 }
 
 function buildPreflightFailEvidence(
@@ -1132,7 +1205,7 @@ function declaredEnvironmentValues(
 
 const CATEGORY_STALE_REASONS: Record<
   FullSuiteFingerprintCategory,
-  FullSuiteStaleReason
+  Exclude<FullSuiteStaleReason, 'drift_budget_exceeded' | 'unbudgetable_drift'>
 > = {
   additional_inputs: 'additional_inputs_changed',
   dependencies: 'dependencies_changed',
@@ -1148,11 +1221,23 @@ function changedFingerprintInspection(
   persisted: FullSuitePassEvidence,
   current: FullSuiteFingerprint,
 ): FullSuiteStaleInspection {
-  const changedCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
+  return changedFingerprintInspectionFromCategories(changedFingerprintCategories(persisted, current));
+}
+
+function changedFingerprintCategories(
+  persisted: FullSuitePassEvidence,
+  current: FullSuiteFingerprint,
+): FullSuiteFingerprintCategory[] {
+  return FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
     (category) =>
       persisted.categoryFingerprints[category] !==
       current.categoryFingerprints[category],
   );
+}
+
+function changedFingerprintInspectionFromCategories(
+  changedCategories: FullSuiteFingerprintCategory[],
+): FullSuiteStaleInspection {
   if (changedCategories.length === 1) {
     return {
       status: 'STALE',

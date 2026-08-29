@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:7, task:8, task:13
+// Covers: task:1, task:4, task:6, task:7, task:8, task:9, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -1120,6 +1120,442 @@ describe('FullSuiteVerifier', () => {
     expect({ inspection, ensured: ensured.status, launches }).toEqual({
       inspection: { status: 'STALE', reason: 'source_changed' },
       ensured: 'EXECUTED',
+      launches: 1,
+    });
+  });
+
+  it('reruns source drift that exceeds its declared budget with the measured count and bound', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-exhausted-source-budget-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: 5',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:source-exhausted',
+          headSha: 'source-exhausted-head',
+          categoryFingerprints: { ...CATEGORY_FINGERPRINTS, source: 'category:source:current' },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? {
+          exitCode: 0,
+          stdout: Array.from({ length: 6 }, (_, index) => `src/${index}.ts`).join('\n'),
+          stderr: '',
+        }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ inspection, ensured: ensured.status, freshness: ensured.status === 'EXECUTED'
+      ? ensured.freshness
+      : undefined, launches }).toEqual({
+      inspection: {
+        status: 'STALE',
+        reason: 'drift_budget_exceeded',
+        category: 'source',
+        count: 6,
+        bound: 5,
+      },
+      ensured: 'EXECUTED',
+      freshness: {
+        status: 'STALE',
+        reason: 'drift_budget_exceeded',
+        category: 'source',
+        count: 6,
+        bound: 5,
+      },
+      launches: 1,
+    });
+  });
+
+  it('preserves source drift exactly at its declared budget bound', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-source-budget-boundary-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: 5',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:source-boundary',
+          headSha: 'source-boundary-head',
+          categoryFingerprints: { ...CATEGORY_FINGERPRINTS, source: 'category:source:current' },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? {
+          exitCode: 0,
+          stdout: Array.from({ length: 5 }, (_, index) => `src/${index}.ts`).join('\n'),
+          stderr: '',
+        }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        throw new Error('The suite must not launch for drift at the declared bound');
+      },
+      worktreeStatus: async () => '',
+    });
+
+    await expect(verifier.inspect()).resolves.toMatchObject({
+      status: 'PRESERVED_WITHIN_BUDGET',
+      evidence: {
+        driftLedger: [
+          expect.objectContaining({
+            headSha: 'source-boundary-head',
+            categories: expect.objectContaining({ source: 5 }),
+          }),
+        ],
+      },
+    });
+  });
+
+  it.each([
+    { category: 'dependencies', path: 'package-lock.json' },
+    { category: 'migrations', path: 'db/migrations/001.sql' },
+    { category: 'environment', path: '.pipeline/test-suite-environment.key' },
+    { category: 'project_config', path: '.ai-conductor/config.yml' },
+  ] as const)('reruns unbudgetable $category drift regardless of other declared budget', async ({
+    category,
+    path,
+  }) => {
+    const projectRoot = await makeConfiguredProject(`full-suite-unbudgetable-${category}-`);
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: unlimited',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: `sha256:unbudgetable-${category}`,
+          headSha: `unbudgetable-${category}-head`,
+          categoryFingerprints: {
+            ...CATEGORY_FINGERPRINTS,
+            [category]: `category:${category}:current`,
+          },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? { exitCode: 0, stdout: path, stderr: '' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ inspection, ensured: ensured.status, freshness: ensured.status === 'EXECUTED'
+      ? ensured.freshness
+      : undefined, launches }).toEqual({
+      inspection: {
+        status: 'STALE',
+        reason: 'unbudgetable_drift',
+        category,
+        count: 1,
+        bound: 'none',
+      },
+      ensured: 'EXECUTED',
+      freshness: {
+        status: 'STALE',
+        reason: 'unbudgetable_drift',
+        category,
+        count: 1,
+        bound: 'none',
+      },
+      launches: 1,
+    });
+  });
+
+  it('reruns mixed drift using the category whose bound is exceeded', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-mixed-exhausted-budget-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: 5',
+        '      tests: 5',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:mixed-exhausted',
+          headSha: 'mixed-exhausted-head',
+          categoryFingerprints: {
+            ...CATEGORY_FINGERPRINTS,
+            source: 'category:source:current',
+            tests: 'category:tests:current',
+          },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? {
+          exitCode: 0,
+          stdout: [
+            ...Array.from({ length: 3 }, (_, index) => `src/${index}.ts`),
+            ...Array.from({ length: 6 }, (_, index) => `test/${index}.test.ts`),
+          ].join('\n'),
+          stderr: '',
+        }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ inspection, ensured: ensured.status, freshness: ensured.status === 'EXECUTED'
+      ? ensured.freshness
+      : undefined, launches }).toEqual({
+      inspection: {
+        status: 'STALE',
+        reason: 'drift_budget_exceeded',
+        category: 'tests',
+        count: 6,
+        bound: 5,
+      },
+      ensured: 'EXECUTED',
+      freshness: {
+        status: 'STALE',
+        reason: 'drift_budget_exceeded',
+        category: 'tests',
+        count: 6,
+        bound: 5,
+      },
+      launches: 1,
+    });
+  });
+
+  it('reruns an unlisted budgetable category using the default none bound', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-default-budget-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: 5',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:default-budget',
+          headSha: 'default-budget-head',
+          categoryFingerprints: { ...CATEGORY_FINGERPRINTS, tests: 'category:tests:current' },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? { exitCode: 0, stdout: 'test/a.test.ts', stderr: '' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ inspection, ensured: ensured.status, freshness: ensured.status === 'EXECUTED'
+      ? ensured.freshness
+      : undefined, launches }).toEqual({
+      inspection: {
+        status: 'STALE',
+        reason: 'drift_budget_exceeded',
+        category: 'tests',
+        count: 1,
+        bound: 'none',
+      },
+      ensured: 'EXECUTED',
+      freshness: {
+        status: 'STALE',
+        reason: 'drift_budget_exceeded',
+        category: 'tests',
+        count: 1,
+        bound: 'none',
+      },
+      launches: 1,
+    });
+  });
+
+  it('fails closed when a fingerprint-only environment drift is not represented by measured paths', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-unaccounted-environment-drift-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: unlimited',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:unaccounted-environment',
+          headSha: 'unaccounted-environment-head',
+          categoryFingerprints: {
+            ...CATEGORY_FINGERPRINTS,
+            environment: 'category:environment:current',
+          },
+        },
+      }),
+      git: async (args) => args[0] === 'diff'
+        ? { exitCode: 0, stdout: 'src/a.ts', stderr: '' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const inspection = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ inspection, ensured: ensured.status, freshness: ensured.status === 'EXECUTED'
+      ? ensured.freshness
+      : undefined, launches }).toEqual({
+      inspection: {
+        status: 'STALE',
+        reason: 'unbudgetable_drift',
+        category: 'environment',
+        count: 0,
+        bound: 'none',
+      },
+      ensured: 'EXECUTED',
+      freshness: {
+        status: 'STALE',
+        reason: 'unbudgetable_drift',
+        category: 'environment',
+        count: 0,
+        bound: 'none',
+      },
       launches: 1,
     });
   });
