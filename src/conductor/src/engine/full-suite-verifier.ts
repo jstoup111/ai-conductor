@@ -29,6 +29,7 @@ import {
   type FullSuiteExecutionFailure,
   type FullSuiteExecutionResult,
 } from './full-suite-executor.js';
+import { changedPathsBetween, originDefaultBranch } from './rebase.js';
 import { worktreeStatus } from './worktree-shared.js';
 import type { AggregateTestSuiteConfig, TestSuiteConfig } from '../types/config.js';
 
@@ -96,6 +97,34 @@ export interface FullSuiteGitResult {
 
 /** A Git runner rooted at the verifier's project directory. */
 export type FullSuiteGitRunner = (args: string[]) => Promise<FullSuiteGitResult>;
+
+export type FullSuiteScopedSelection =
+  | { status: 'SELECTED'; selectors: string[] }
+  | { status: 'EMPTY' };
+
+/**
+ * Derive scoped test selectors from the current feature's merge-base surface.
+ * Selector paths stay framework-agnostic; execution belongs to scoped-run.
+ */
+export async function deriveFullSuiteScopedSelection(
+  git: FullSuiteGitRunner,
+): Promise<FullSuiteScopedSelection> {
+  try {
+    const branch = await originDefaultBranch(git);
+    if (!branch) return { status: 'EMPTY' };
+
+    const mergeBase = await git(['merge-base', `origin/${branch}`, 'HEAD']);
+    const base = mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : '';
+    if (!base) return { status: 'EMPTY' };
+
+    const selectors = (await changedPathsBetween(git, base, 'HEAD')).filter(
+      (path) => classifyFullSuiteFingerprintPath(path) === 'tests',
+    );
+    return selectors.length === 0 ? { status: 'EMPTY' } : { status: 'SELECTED', selectors };
+  } catch {
+    return { status: 'EMPTY' };
+  }
+}
 
 export type FullSuiteDriftMeasurement =
   | {

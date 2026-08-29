@@ -1,4 +1,4 @@
-// Covers: task:1, task:4
+// Covers: task:1, task:4, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,10 @@ import {
   type FullSuitePassEvidence,
 } from '../../src/engine/full-suite-evidence.js';
 import type { FullSuiteExecutionResult } from '../../src/engine/full-suite-executor.js';
-import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
+import {
+  deriveFullSuiteScopedSelection,
+  FullSuiteVerifier,
+} from '../../src/engine/full-suite-verifier.js';
 
 const scratches: string[] = [];
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -110,6 +113,54 @@ afterEach(async () => {
 });
 
 describe('FullSuiteVerifier', () => {
+  it('derives changed test paths as scoped selectors', async () => {
+    const gitCalls: string[][] = [];
+
+    const selection = await deriveFullSuiteScopedSelection(async (args) => {
+      gitCalls.push(args);
+      if (args[0] === 'symbolic-ref') {
+        return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+      }
+      if (args[0] === 'merge-base') {
+        return { exitCode: 0, stdout: 'feature-base\n', stderr: '' };
+      }
+      return {
+        exitCode: 0,
+        stdout: [
+          'src/feature.ts',
+          'test/feature.test.ts',
+          'spec/widget.spec.ts',
+          'test/support/helpers.ts',
+        ].join('\n'),
+        stderr: '',
+      };
+    });
+
+    expect(selection).toEqual({
+      status: 'SELECTED',
+      selectors: ['test/feature.test.ts', 'spec/widget.spec.ts'],
+    });
+    expect(gitCalls).toEqual([
+      ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+      ['merge-base', 'origin/main', 'HEAD'],
+      ['diff', '--name-only', 'feature-base', 'HEAD'],
+    ]);
+  });
+
+  it('returns an explicit empty selection when the feature surface has no changed tests', async () => {
+    const selection = await deriveFullSuiteScopedSelection(async (args) => {
+      if (args[0] === 'symbolic-ref') {
+        return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+      }
+      if (args[0] === 'merge-base') {
+        return { exitCode: 0, stdout: 'feature-base\n', stderr: '' };
+      }
+      return { exitCode: 0, stdout: 'src/feature.ts\npackage-lock.json\n', stderr: '' };
+    });
+
+    expect(selection).toEqual({ status: 'EMPTY' });
+  });
+
   it('measures deduplicated changed and dirty paths by shared fingerprint category', async () => {
     const projectRoot = await makeConfiguredProject('full-suite-drift-measurement-');
     const gitCalls: string[][] = [];
