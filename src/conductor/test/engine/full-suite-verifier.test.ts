@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:13
+// Covers: task:1, task:4, task:6, task:7, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -924,6 +924,159 @@ describe('FullSuiteVerifier', () => {
           },
         }],
       },
+    });
+  });
+
+  it('measures a second tolerated source drift cumulatively from the attested PASS', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-cumulative-source-budget-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: 20',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    const gitCalls: string[][] = [];
+    let fingerprintCount = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => {
+        fingerprintCount += 1;
+        return {
+          ok: true,
+          fingerprint: {
+            digest: `sha256:preserved-${fingerprintCount}`,
+            headSha: `head-${fingerprintCount}`,
+            categoryFingerprints: {
+              ...CATEGORY_FINGERPRINTS,
+              source: `category:source:${fingerprintCount}`,
+            },
+          },
+        };
+      },
+      git: async (args) => {
+        gitCalls.push(args);
+        if (args[0] === 'diff') {
+          const pathCount = gitCalls.filter(([command]) => command === 'diff').length === 1 ? 15 : 19;
+          return {
+            exitCode: 0,
+            stdout: Array.from({ length: pathCount }, (_, index) => `src/${index}.ts`).join('\n'),
+            stderr: '',
+          };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      execute: async () => {
+        throw new Error('The suite must not launch for cumulative within-budget drift');
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const first = await verifier.inspect();
+    const second = await verifier.inspect();
+
+    expect({ first, second, gitCalls }).toEqual({
+      first: expect.objectContaining({ status: 'PRESERVED_WITHIN_BUDGET' }),
+      second: expect.objectContaining({
+        status: 'PRESERVED_WITHIN_BUDGET',
+        evidence: expect.objectContaining({
+          driftLedger: [
+            expect.objectContaining({ categories: expect.objectContaining({ source: 15 }) }),
+            expect.objectContaining({ categories: expect.objectContaining({ source: 19 }) }),
+          ],
+        }),
+      }),
+      gitCalls: [
+        ['diff', '--name-only', 'attested-head..HEAD'],
+        ['status', '--porcelain'],
+        ['diff', '--name-only', 'attested-head..HEAD'],
+        ['status', '--porcelain'],
+      ],
+    });
+  });
+
+  it('reruns when cumulative source drift exceeds the budget instead of ratcheting preservation', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-ratchet-source-budget-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: 20',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    const gitCalls: string[][] = [];
+    let fingerprintCount = 0;
+    let launches = 0;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => {
+        fingerprintCount += 1;
+        return {
+          ok: true,
+          fingerprint: {
+            digest: `sha256:ratchet-${fingerprintCount}`,
+            headSha: `head-${fingerprintCount}`,
+            categoryFingerprints: {
+              ...CATEGORY_FINGERPRINTS,
+              source: `category:source:${fingerprintCount}`,
+            },
+          },
+        };
+      },
+      git: async (args) => {
+        gitCalls.push(args);
+        if (args[0] === 'diff') {
+          const pathCount = gitCalls.filter(([command]) => command === 'diff').length === 1 ? 19 : 21;
+          return {
+            exitCode: 0,
+            stdout: Array.from({ length: pathCount }, (_, index) => `src/${index}.ts`).join('\n'),
+            stderr: '',
+          };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const preserved = await verifier.inspect();
+    const ensured = await verifier.ensure();
+
+    expect({ preserved, ensured: ensured.status, launches, gitCalls }).toEqual({
+      preserved: expect.objectContaining({ status: 'PRESERVED_WITHIN_BUDGET' }),
+      ensured: 'EXECUTED',
+      launches: 1,
+      gitCalls: [
+        ['diff', '--name-only', 'attested-head..HEAD'],
+        ['status', '--porcelain'],
+        ['diff', '--name-only', 'attested-head..HEAD'],
+        ['status', '--porcelain'],
+      ],
     });
   });
 
