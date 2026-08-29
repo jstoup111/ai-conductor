@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:7, task:8, task:9, task:10, task:11, task:13
+// Covers: task:1, task:4, task:6, task:7, task:8, task:9, task:10, task:11, task:13, task:14
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -181,6 +181,199 @@ describe('FullSuiteVerifier', () => {
     });
 
     expect(selection).toEqual({ status: 'EMPTY' });
+  });
+
+  it('runs scoped verification through the scoped-run interface and records its selected PASS', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-scoped-mode-');
+    const scopedCommands: string[] = [];
+    const scopedRunner = async (command: string) => {
+      scopedCommands.push(command);
+      return 0;
+    };
+    let aggregateCalls = 0;
+    const aggregateExecute = async () => {
+      aggregateCalls += 1;
+      throw new Error('aggregate command must not run in scoped mode');
+    };
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  scoped_command: npx vitest run {selectors}',
+        '  verification:',
+        '    mode: scoped',
+        '',
+      ].join('\n'),
+    );
+
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      execute: aggregateExecute,
+      scopedRunner,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:scoped-mode',
+          headSha: 'scoped-mode-head',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      git: async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') {
+          return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        }
+        if (args[0] === 'merge-base') {
+          return { exitCode: 0, stdout: 'scoped-mode-base\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: 'test/with space.test.ts\n', stderr: '' };
+      },
+    } as never);
+
+    const result = await verifier.ensure();
+
+    expect({
+      result,
+      scopedCommand: scopedCommands[0],
+      aggregateCalls,
+      inspection: await verifier.inspect(),
+    }).toEqual({
+      result: expect.objectContaining({
+        status: 'EXECUTED',
+        evidence: expect.objectContaining({
+          mode: 'scoped',
+          selectors: ['test/with space.test.ts'],
+        }),
+      }),
+      scopedCommand: "npx vitest run 'test/with space.test.ts'",
+      aggregateCalls: 0,
+      inspection: expect.objectContaining({ status: 'CURRENT' }),
+    });
+  });
+
+  it('rebases a project-root scoped selector when the configured runner directory differs', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-scoped-rebase-');
+    const scopedCalls: Array<{ command: string; cwd: string | undefined }> = [];
+    await writeProjectFile(projectRoot, 'test/with space.test.ts', 'export {}\n');
+    await writeProjectFile(projectRoot, 'packages/app/.gitkeep', '');
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  scoped_command: npx vitest run {selectors}',
+        '  working_directory: packages/app',
+        '  verification:',
+        '    mode: scoped',
+        '',
+      ].join('\n'),
+    );
+
+    await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => {
+        throw new Error('aggregate command must not run in scoped mode');
+      },
+      scopedRunner: async (command, { cwd }) => {
+        scopedCalls.push({ command, cwd });
+        return 0;
+      },
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:scoped-rebase',
+          headSha: 'scoped-rebase-head',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      git: async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') {
+          return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        }
+        if (args[0] === 'merge-base') {
+          return { exitCode: 0, stdout: 'scoped-rebase-base\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: 'test/with space.test.ts\n', stderr: '' };
+      },
+    }).ensure();
+
+    expect(scopedCalls).toEqual([
+      {
+        command: "npx vitest run '../../test/with space.test.ts'",
+        cwd: join(projectRoot, 'packages/app'),
+      },
+    ]);
+  });
+
+  it('rejects scoped PASS evidence in aggregate mode and executes the aggregate command', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-aggregate-mode-mismatch-');
+    const scopedCommands: string[] = [];
+    const scopedRunner = async (command: string) => {
+      scopedCommands.push(command);
+      return 0;
+    };
+    let aggregateCalls = 0;
+    const aggregateExecute = async () => {
+      aggregateCalls += 1;
+      return {
+        ok: true as const,
+        command: 'node suite.mjs --all',
+        cwd: projectRoot,
+        startedAt: '2026-08-29T10:00:00.000Z',
+        endedAt: '2026-08-29T10:00:01.000Z',
+        durationMs: 1_000,
+        exitCode: 0 as const,
+        stdout: '',
+        stderr: '',
+      };
+    };
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  scoped_command: npx vitest run {selectors}',
+        '  verification:',
+        '    mode: aggregate',
+        '',
+      ].join('\n'),
+    );
+    const evidence = {
+      ...attestedPassEvidence(projectRoot),
+      fingerprint: 'sha256:aggregate-mode',
+      mode: 'scoped' as const,
+      selectors: ['test/selected.test.ts'],
+    };
+    await writeFullSuiteEvidence(projectRoot, evidence);
+
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      execute: aggregateExecute,
+      scopedRunner,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:aggregate-mode',
+          headSha: 'aggregate-mode-head',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+    });
+    const inspection = await verifier.inspect();
+    const result = await verifier.ensure();
+
+    expect({ inspection, result, aggregateCalls, scopedCommands }).toEqual({
+      inspection: expect.objectContaining({ status: 'STALE' }),
+      result: expect.objectContaining({
+        status: 'EXECUTED',
+        evidence: expect.objectContaining({ mode: 'aggregate', selectors: [] }),
+      }),
+      aggregateCalls: 1,
+      scopedCommands: [],
+    });
   });
 
   it('measures deduplicated changed and dirty paths by shared fingerprint category', async () => {

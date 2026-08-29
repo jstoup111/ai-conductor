@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { execa } from 'execa';
 import { loadConfig } from './config.js';
@@ -29,6 +30,10 @@ import {
   type FullSuiteExecutionFailure,
   type FullSuiteExecutionResult,
 } from './full-suite-executor.js';
+import {
+  runScopedCommand,
+  type ScopedRunRunner,
+} from './scoped-run.js';
 import { changedPathsBetween, originDefaultBranch } from './rebase.js';
 import { worktreeStatus } from './worktree-shared.js';
 import type { AggregateTestSuiteConfig, TestSuiteConfig } from '../types/config.js';
@@ -116,6 +121,8 @@ export interface FullSuiteVerifierOptions {
   git?: FullSuiteGitRunner;
   /** Test seam for the fingerprint-time worktree observation. */
   worktreeStatus?: typeof worktreeStatus;
+  /** Test seam; production uses the engine-owned scoped-run process adapter. */
+  scopedRunner?: ScopedRunRunner;
 }
 
 export interface FullSuiteGitResult {
@@ -783,7 +790,21 @@ export class FullSuiteVerifier {
       const { testSuite, fingerprint, worktreeClean } = resolved.context;
       const freshness = resolved.inspection;
       const secretValues = declaredEnvironmentValues(testSuite, environment);
-      const execution = await execute({ projectRoot, testSuite, environment });
+      const verificationMode = testSuite.verification?.mode ?? 'aggregate';
+      const selection = verificationMode === 'scoped'
+        ? await deriveFullSuiteScopedSelection(
+          this.options.git ?? productionFullSuiteGitRunner(projectRoot),
+        )
+        : { status: 'EMPTY' as const };
+      const execution = verificationMode === 'scoped' && selection.status === 'SELECTED'
+        ? await executeScopedFullSuite({
+          projectRoot,
+          testSuite,
+          environment,
+          selectors: selection.selectors,
+          runner: this.options.scopedRunner,
+        })
+        : await execute({ projectRoot, testSuite, environment });
       if (!execution.ok) {
         const evidence = buildFailEvidence(fingerprint, execution, worktreeClean);
         try {
@@ -848,6 +869,10 @@ export class FullSuiteVerifier {
         exitCode: execution.exitCode,
         stdout: execution.stdout,
         stderr: execution.stderr,
+        mode: verificationMode,
+        selectors: verificationMode === 'scoped' && selection.status === 'SELECTED'
+          ? selection.selectors
+          : [],
       };
       try {
         await writeEvidence(projectRoot, evidence, secretValues);
@@ -978,6 +1003,13 @@ export class FullSuiteVerifier {
           context,
         };
       }
+      const verificationMode = aggregateTestSuite.verification?.mode ?? 'aggregate';
+      if (persisted.evidence.mode !== verificationMode) {
+        return {
+          inspection: { status: 'STALE', reason: 'fingerprint_mismatch' },
+          context,
+        };
+      }
       if (persisted.evidence.fingerprint !== fingerprintResult.fingerprint.digest) {
         const measurement = await this.measureDriftFromAttestedPass(
           persisted.evidence.provenanceHeadSha,
@@ -1071,6 +1103,97 @@ function buildFailEvidence(
     reason: execution.reason,
     exitCode: execution.exitCode,
     signal: execution.signal,
+  };
+}
+
+interface ExecuteScopedFullSuiteOptions {
+  projectRoot: string;
+  testSuite: AggregateTestSuiteConfig;
+  environment: NodeJS.ProcessEnv;
+  selectors: string[];
+  runner?: ScopedRunRunner;
+}
+
+async function executeScopedFullSuite({
+  projectRoot,
+  testSuite,
+  environment,
+  selectors,
+  runner = productionScopedRunRunner(projectRoot, environment),
+}: ExecuteScopedFullSuiteOptions): Promise<FullSuiteExecutionResult> {
+  const cwd = resolve(projectRoot, testSuite.working_directory ?? '.');
+  const startedAt = new Date();
+  let command = testSuite.scoped_command ?? '';
+  const result = await runScopedCommand({
+    template: testSuite.scoped_command,
+    selectors: selectors.map((selector) => rebaseScopedSelector(selector, projectRoot, cwd)),
+    cwd,
+    timeoutMs: (testSuite.timeout_seconds ?? 30 * 60) * 1_000,
+    runner: async (scopedCommand, options) => {
+      command = scopedCommand;
+      return runner(scopedCommand, options);
+    },
+  });
+  const endedAt = new Date();
+  const common = {
+    command,
+    cwd,
+    startedAt: startedAt.toISOString(),
+    endedAt: endedAt.toISOString(),
+    durationMs: endedAt.getTime() - startedAt.getTime(),
+    stdout: '',
+    stderr: result.reason === 'passed' ? '' : result.message,
+  };
+  if (result.reason === 'passed') {
+    return { ok: true, ...common, exitCode: 0 };
+  }
+  if (result.reason === 'timeout') {
+    return { ok: false, ...common, reason: 'timeout', exitCode: null, signal: null };
+  }
+  if (result.reason === 'launch_failure' || result.reason === 'unavailable') {
+    return { ok: false, ...common, reason: 'unlaunchable', exitCode: 127, signal: null };
+  }
+  return {
+    ok: false,
+    ...common,
+    reason: 'nonzero_exit',
+    exitCode: result.exitCode,
+    signal: null,
+  };
+}
+
+/**
+ * Scoped selectors are derived as project-root-relative feature paths. Keep
+ * the scoped CLI's established runner-directory contract when this verifier
+ * executes the same interface directly.
+ */
+function rebaseScopedSelector(
+  selector: string,
+  projectRoot: string,
+  cwd: string,
+): string {
+  if (selector.startsWith('-') || isAbsolute(selector)) return selector;
+  if (existsSync(resolve(cwd, selector))) return selector;
+  const fromRoot = resolve(projectRoot, selector);
+  if (!existsSync(fromRoot)) return selector;
+  const rebased = relative(cwd, fromRoot);
+  return rebased === '' ? selector : rebased;
+}
+
+function productionScopedRunRunner(
+  projectRoot: string,
+  environment: NodeJS.ProcessEnv,
+): ScopedRunRunner {
+  return async (command, { signal, cwd }) => {
+    const result = await execa(command, {
+      cwd: cwd ?? projectRoot,
+      env: environment,
+      extendEnv: false,
+      shell: true,
+      reject: false,
+      cancelSignal: signal,
+    });
+    return result.exitCode ?? 1;
   };
 }
 
