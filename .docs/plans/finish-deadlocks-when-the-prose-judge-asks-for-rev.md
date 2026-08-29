@@ -8,7 +8,9 @@
 
 Adds a `revision_required` prose state to the FINISH publication snapshot so judged-deficient PR
 prose routes back to authoring instead of deadlocking, threads the judge's objection into the
-authoring pass and the exhaustion halt, and updates the provider verdict contract. 10 tasks.
+authoring pass and the exhaustion halt, and updates the provider verdict contract. Amended 2026-08-28 after the as-built review: judged-deficiency
+progress becomes a typed disposition and every prose human-required exit states the judge's
+objection. 12 tasks.
 
 ## Technical Approach
 
@@ -44,7 +46,9 @@ authoring pass and the exhaustion halt, and updates the provider verdict contrac
   validator to move with the union). The conductor records the last retry detail and appends it to
   the allowance-exhaustion halt message (`conductor.ts` near the
   `FINISH_PUBLICATION_PROGRESS_ALLOWANCE` check). `FINISH_PUBLICATION_PROGRESS_ALLOWANCE` itself
-  is untouched.
+  is untouched. **Amended 2026-08-28 (as-built AB-1):** the `publication_retry`-with-detail shape
+  described here is superseded by the typed disposition in the amendment bullets below; the
+  exhaustion-halt message this bullet specifies is unchanged.
 - **Contract**: the finish skill's provider-facing verdict vocabulary section and the unattended
   judgment prompt in `step-runners.ts` are updated to request a concrete `detail` on
   `revision_required`; the decoder (`finish-pr-prose-judgment.ts`) already tolerates absent detail
@@ -57,6 +61,28 @@ authoring pass and the exhaustion halt, and updates the provider verdict contrac
   read — same digest keying, same read-inside-observation placement, same tolerance of an absent
   store. Allowed variation: the new read inspects `reason` to exclude `halt`. Search hints:
   `seedJudgmentStore`, `revisionDigest`, `prProse` in `finish-publication-production.ts`.
+- **Amendment — 2026-08-28, as-built AB-1 (typed judged-deficiency progress)**: the as-built review
+  found that reaching the approved accounting by matching the reason string
+  `authoring_required_after_judgment` on a `retry_finish` route violates
+  `adr-2026-08-06-publication-progress-is-its-own-disposition` decision 4, which exempts result
+  *shapes*, never reason strings. That ADR's 2026-08-28 amendment adds the typed sibling:
+  `PublicationDisposition` gains `{ kind: 'publication_revision_progress'; transition:
+  'author_pr_prose'; detail?: string }`, `FinishPublicationRoute` gains
+  `{ kind: 'revision_progress_finish'; transition; detail? }`, `isExactDisposition` widens under the
+  same exact-key discipline, and the conductor handles the new route beside `progress_finish` —
+  re-entering without charging `stepMaxRetries` while charging the unchanged publication-progress
+  allowance on every lap. The reason string is retired from `PUBLICATION_RETRY_REASONS`, and the
+  freshness reconciliation the 2026-08-13 amendment requires applies to the new shape unchanged.
+  Task 11 owns this.
+- **Amendment — 2026-08-28, as-built AB-2 (objection on every prose human-required exit)**: Desired
+  outcome 3 and Story 4 require the judge's concrete objection on any prose-related human-required
+  halt whose originating verdict carried one, but the plan as approved scoped objection detail to
+  the allowance-exhaustion halt (Task 8) only, so the byte-identical authoring guard
+  (`advancedPublicationTransition`'s `unmoved` branch) and the unselectable-prose-retry guard
+  (`reconcileSelectablePublicationRetry`) still render a bare dimension mismatch. The originating
+  objection is already carried on the observation as `pr.revisionGuidance`
+  (`finish-publication.ts:91`, `:132`), so both guards can read it from the snapshot they already
+  hold; one shared renderer keeps the three prose exits from drifting. Task 12 owns this.
 
 ## Prerequisites
 
@@ -287,6 +313,60 @@ None — the persisted verdict store and all touched seams already exist.
 
 **Dependencies:** none
 
+### Task 11: Judged-deficiency progress is a typed disposition, not a reason-string exemption
+**Story:** Story 4 — bounded-lap happy path (author→judge laps repeat only until the existing allowance is exhausted)
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: `mapPrProseJudgmentResult` on `revision_required`/`placeholder` and `/structurally_incomplete` returns `{ kind: 'publication_revision_progress', transition: 'author_pr_prose', detail }`, omitting `detail` when the verdict carried none; `isExactDisposition` accepts both shapes and rejects an extra key, a transition other than `author_pr_prose`, and an empty `detail`; `routeFinishPublicationDisposition` maps the kind to `{ kind: 'revision_progress_finish', transition, detail }`.
+2. Verify tests fail (RED) — the disposition kind does not exist yet.
+3. Implement the 2026-08-28 amendment to `adr-2026-08-06-publication-progress-is-its-own-disposition`: add the disposition and route members, widen `isExactDisposition` in the same diff, return the new shape from the deficient judgment arm, and remove `authoring_required_after_judgment` from `PUBLICATION_RETRY_REASONS.author_pr_prose`.
+4. Replace the conductor's reason-string branch: handle `revision_progress_finish` beside `progress_finish` — record `route.detail` as the last publication detail, charge `consumeFinishPublicationProgress(route.transition)`, then `attempt--` and continue — and delete the `route.reason === 'authoring_required_after_judgment'` branch together with its `as Extract<...>` cast.
+5. Preserve the freshness rule: extend `advanceFinishPublication`'s reconciliation so a `publication_revision_progress` is reconciled against a fresh observation exactly as a transition-bearing retry is today (unselectable transition resolves `human_required: publication_transition_unmoved`; a halted PR resolves `halt_state_pr` first).
+6. Verify GREEN, updating the existing tests that construct the retired retry shape.
+7. Commit with message: "finish: judged-deficiency progress is a typed disposition"
+
+**Done when:**
+- [ ] Searching `authoring_required_after_judgment` under `src/conductor/src` returns no matches, and `conductor.ts` carries no branch on a retry reason for retry-budget accounting
+- [ ] A test asserts a `revision_progress_finish` route re-enters FINISH without charging `stepMaxRetries` and charges exactly one publication-progress allowance tick per lap
+- [ ] A test asserts `isExactDisposition` rejects the new kind with an unknown extra key, with a transition other than `author_pr_prose`, and with an empty `detail`
+- [ ] A test asserts a `publication_revision_progress` naming a transition the fresh observation would not select still resolves `human_required`, and that a halted PR still resolves `halt_state_pr` first
+- [ ] `FINISH_PUBLICATION_PROGRESS_ALLOWANCE` and its derivation are byte-unchanged in the diff
+
+**Files likely touched:**
+- src/conductor/src/engine/finish-publication.ts — disposition and route members, validator, judgment mapper, reconciliation
+- src/conductor/src/engine/conductor.ts — typed route handling replaces the reason-string branch
+- src/conductor/test/engine/finish-publication.test.ts — shape, validator, and routing tests
+- src/conductor/test/acceptance/finish-publication-progress-budget.acceptance.test.ts — accounting under the new shape
+
+**Dependencies:** 8
+
+### Task 12: Every prose human-required exit states the originating objection
+**Story:** Story 4 — halt-carries-detail criteria, on every prose-related human-required exit
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests: when the pre-effect observation carried `pr.revisionGuidance`, the byte-identical authoring outcome's `human_required` detail names the unmoved dimension AND contains that objection verbatim; the unselectable-prose-retry halt from `reconcileSelectablePublicationRetry` does the same; with no guidance both messages render exactly as they do today, with no empty or placeholder objection clause.
+2. Verify RED — `advancedPublicationTransition`'s `unmoved` branch synthesizes only the dimension sentence and never reads guidance.
+3. Implement: read the originating objection from the snapshot the guard already holds (`pr.revisionGuidance`) and append it through ONE shared renderer used by both prose guards, applied only to the prose transitions `author_pr_prose` and `judge_pr_prose` so non-prose halts are byte-unchanged.
+4. Route Task 8's allowance-exhaustion message through the same renderer (or assert it against the same rendered shape) so all three prose-related human-required exits state the objection identically.
+5. Verify GREEN.
+6. Commit with message: "finish: prose human-required halts state the judge's objection"
+
+**Done when:**
+- [ ] A test asserts the byte-identical authoring halt's detail contains the originating verdict's objection verbatim when the observation carried one
+- [ ] A test asserts the unselectable-prose-retry halt's detail contains that objection verbatim under the same condition
+- [ ] A test asserts both messages are byte-identical to today's text when no objection is present, with no empty or placeholder clause
+- [ ] A test enumerates the prose-related `human_required` exits reachable from a `revision_required` observation and asserts each renders through the shared objection renderer
+- [ ] Non-prose transitions' `publication_transition_unmoved` text is byte-unchanged in the diff
+
+**Files likely touched:**
+- src/conductor/src/engine/finish-publication.ts — shared objection renderer at the prose human-required exits
+- src/conductor/src/engine/conductor.ts — exhaustion halt uses the shared renderer
+- src/conductor/test/engine/finish-publication.test.ts — guard-detail tests
+
+**Dependencies:** 5, 7, 8
+
 ## Task Dependency Graph
 
 ```
@@ -298,6 +378,8 @@ Task 1 ──► Task 2
                       │         │
                       └──► Task 7
 Task 8 ────────────────────────┘ (Task 9 also depends on Task 8)
+Task 8 ──► Task 11
+Task 5, Task 7, Task 8 ──► Task 12
 Task 10 (independent)
 ```
 
@@ -306,6 +388,10 @@ Task 10 (independent)
 - After Task 4: the #2006 deadlock scenario is provably gone at the coordinator level.
 - After Task 6: a full author-with-guidance dispatch is renderable end-to-end with fakes.
 - After Task 9: the complete bounded lap (author → judge → author → … → halt/publish) is exercised.
+- After Task 11: the lap's no-charge re-entry is carried by a typed shape the validator and the
+  compiler both police, with no reason-string exemption anywhere in the serial loop.
+- After Task 12: every prose-related human-required exit an operator can reach states the judge's
+  objection when the originating verdict carried one.
 
 ## Verification
 
