@@ -145,6 +145,28 @@ The budget is cumulative against the attested PASS, not against the previous eva
 feature cannot ratchet unlimited drift through repeated small preservations. When a re-run
 records a new PASS, drift measurement restarts from that PASS's provenance state.
 
+> **Amended 2026-08-29 by the operator (as-built review AB-3,
+> `test-suite-re-runs-and-re-passes-the-full-suite-10`):** this decision requires the drift
+> record to be appended when a PASS is preserved; it does **not** locate that append inside the
+> completion predicate. `adr-2026-08-19-tree-attesting-gates-recheck-before-dispatch` D3 stands
+> unamended: the completion re-check reads and never writes, and the rejection it holds shut
+> (`adr-2026-07-11-verdict-aware-resume-entry` Option C — "side-effectful read", two authorities
+> for one state) is not reopened.
+>
+> The append is therefore performed by a distinct recording seam, invoked by the caller that
+> acted on the judgement, never by `resolveInspection` or by anything the predicate reaches.
+> `FullSuiteVerifier` inspection returns the preservation outcome as a value; each caller — the
+> dispatched `test_suite` evaluation, the generic tree-attesting completion path, and the daemon
+> re-kick pre-verification — carries that one result forward, records it once through the seam,
+> and emits D7's event from the same result. No caller re-inspects to recover a preservation
+> outcome it already holds: a second inspection observes the first one's write and reports
+> `CURRENT`, losing the basis it was called to obtain.
+>
+> **Rationale.** The two decisions were never in conflict on substance — D4 says the record must
+> be written, D3 says the question is not what writes it. Both hold once the write has its own
+> home. Placing it there also removes the double-inspection defect the shipped code exhibited on
+> the daemon path, so one structural change satisfies both this decision and D7.
+
 ### D5 — Verification mode is a first-class, load-validated choice
 
 `verification.mode: scoped` requires a valid `scoped_command` (with `{selectors}`) at config
