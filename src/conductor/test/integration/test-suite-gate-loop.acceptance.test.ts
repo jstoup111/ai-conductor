@@ -10,6 +10,7 @@ import type {
 } from '../../src/engine/full-suite-evidence.js';
 import type { FullSuiteVerifierResult } from '../../src/engine/full-suite-verifier.js';
 import { readState, writeState } from '../../src/engine/state.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -235,6 +236,77 @@ describe('test_suite native gate loop', () => {
         freshness: { status: 'STALE', reason: 'source_changed' },
       },
     ]);
+  });
+
+  it('emits preserved verification once when completion rechecks a done test_suite', async () => {
+    // Covers: rem-ab4-1
+    const state = Object.fromEntries(
+      ALL_STEPS.map((step) => [step.name, 'done']),
+    ) as ConductState;
+    // This test owns the test_suite completion-recheck path only. BUILD is the
+    // other tree-attesting gate, so retain its prior scheduling decision rather
+    // than asking this fixture to create unrelated BUILD evidence.
+    state.build = 'skipped';
+    state.complexity_tier = 'M';
+    state.feature_desc = 'test-suite-completion-recheck';
+    await writeState(stateFilePath, state);
+
+    const categories = {
+      additional_inputs: 0,
+      dependencies: 0,
+      environment: 0,
+      migrations: 0,
+      project_config: 0,
+      source: 3,
+      test_infrastructure: 0,
+      tests: 0,
+    };
+    const evidence: FullSuitePassEvidence = {
+      ...PASS_EVIDENCE,
+      mode: 'scoped',
+      driftLedger: [{
+        at: '2026-08-29T00:00:00.000Z',
+        headSha: 'fedcba9876543210',
+        categories,
+      }],
+    };
+    const inspect = vi.fn(async () => ({
+      status: 'PRESERVED_WITHIN_BUDGET' as const,
+      evidence,
+    }));
+    const ensure = vi.fn();
+    const observed: unknown[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('test_suite_verification', (event) => { observed.push(event); });
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const runner: StepRunner = { run };
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events,
+      projectRoot,
+      verifyArtifacts: true,
+      fullSuiteVerifier: { inspect, ensure },
+    });
+
+    await conductor.run();
+
+    expect({
+      inspectCalls: inspect.mock.calls.length,
+      ensureCalls: ensure.mock.calls.length,
+      dispatched: run.mock.calls.map(([step]) => step),
+      observed,
+    }).toEqual({
+      inspectCalls: 1,
+      ensureCalls: 0,
+      dispatched: [],
+      observed: [{
+        type: 'test_suite_verification',
+        freshness: { status: 'CURRENT' },
+        mode: 'scoped',
+        budgetVerdict: { outcome: 'preserved_within_budget', categories },
+      }],
+    });
   });
 
   it.each<{

@@ -5967,14 +5967,33 @@ export class Conductor {
             step.treeAttestingCompletion
           ) {
             try {
+              let fullSuiteInspection: FullSuiteInspectionResult | undefined;
+              const completionContext = await this.completionCtx(state);
+              if (step.name === 'test_suite' && completionContext.fullSuiteInspect) {
+                const inspect = completionContext.fullSuiteInspect;
+                completionContext.fullSuiteInspect = async () => {
+                  const inspection = await inspect();
+                  fullSuiteInspection = inspection;
+                  return inspection;
+                };
+              }
               const completion = await checkStepCompletion(
                 this.projectRoot,
                 step.name,
-                await this.completionCtx(state),
+                completionContext,
               );
               if (!completion.done) {
                 // Continue into the ordinary scheduling and dispatch path.
               } else {
+                if (fullSuiteInspection?.status === 'PRESERVED_WITHIN_BUDGET') {
+                  const budgetVerdict = testSuiteBudgetVerdict(fullSuiteInspection);
+                  await emitTracked({
+                    type: 'test_suite_verification',
+                    freshness: { status: 'CURRENT' },
+                    mode: fullSuiteInspection.evidence.mode ?? 'aggregate',
+                    ...(budgetVerdict === undefined ? {} : { budgetVerdict }),
+                  });
+                }
                 continue;
               }
             } catch {
