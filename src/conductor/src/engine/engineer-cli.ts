@@ -62,7 +62,7 @@ import { makeProductionGh } from './tracker-client.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
-export type EngineerDispatch =
+type EngineerDispatchDescriptor =
   | { kind: 'launch'; idea?: string }
   | { kind: 'guide' }
   | { kind: 'projects' }
@@ -78,6 +78,14 @@ export type EngineerDispatch =
   | { kind: 'migrate-issue-deps'; confirm: boolean }
   | { kind: 'reject'; sub: string; flag: string }
   | { kind: 'help'; topic: string };
+
+/**
+ * The legacy verb is dispatch metadata, deliberately non-enumerable so the
+ * established descriptor data contract remains unchanged for callers.
+ */
+export type EngineerDispatch = EngineerDispatchDescriptor & {
+  readonly invokedVerb?: 'engineer';
+};
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
@@ -108,7 +116,7 @@ function findUnknownFlag(argv: string[], allowed: string[]): string | null {
   return null;
 }
 
-export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
+function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null {
   // argv is process.argv: [node, entry, sub, ...]
   const sub = argv[2];
   if (sub !== 'engineer' && sub !== 'compose') return null;
@@ -289,6 +297,19 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
 
   // Unknown flag-form / empty — treat as guide.
   return { kind: 'guide' };
+}
+
+/**
+ * Parse the compose/engineer command once, retaining legacy-verb provenance for
+ * the dispatcher without changing the enumerable descriptor data contract.
+ */
+export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
+  const dispatch = parseEngineerCommand(argv);
+  if (!dispatch || argv[2] !== 'engineer') return dispatch;
+
+  return Object.defineProperty(dispatch, 'invokedVerb', {
+    value: 'engineer',
+  });
 }
 
 /**
@@ -703,6 +724,10 @@ export async function dispatchEngineer(
   const git = opts.git ?? makeProductionGit();
   const registryPath = opts.registryPath;
   const engineerDir = opts.engineerDir;
+
+  if (dispatch.invokedVerb === 'engineer') {
+    printErr('Warning: `engineer` is deprecated; use `compose` instead.');
+  }
 
   const reportCorruptLedger = (error: CorruptLedgerError): number => {
     const quarantineLocation = error.quarantinePath ?? error.quarantineDiagnostic ?? 'unavailable';

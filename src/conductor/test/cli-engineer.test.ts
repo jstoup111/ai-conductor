@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 // Specs for the `conduct engineer` subcommand wiring (Phase 9.3, ADR-008 conformance).
 //
 // Mirrors the structural detection pattern used by the registry-cli tests:
@@ -10,6 +10,8 @@
 // All assertions use REAL exports from src/ — no mocks of the units under test.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { execa } from 'execa';
+import { join } from 'node:path';
 import { ENGINEER_SUBCOMMANDS } from '../src/engine/engineer-cli.js';
 
 // ─── 1. Structural: `createProgram()` registers a `engineer` subcommand ──────────
@@ -21,6 +23,27 @@ describe('CLI surface — conduct engineer subcommand (FR-1 wiring)', () => {
       .commands.map((c) => c.name())
       .sort();
     expect(names).toContain('engineer');
+  });
+});
+
+describe('legacy engineer CLI alias — process dispatch boundary', () => {
+  it('warns exactly once on stderr while preserving compose stdout byte-for-byte', async () => {
+    // Drive the actual index.ts entry point. An unknown flag selects the
+    // deterministic guide path, so no registry, GitHub, or interactive host is involved.
+    const entry = join(process.cwd(), 'src', 'index.ts');
+    const run = (verb: 'engineer' | 'compose') => execa(
+      process.execPath,
+      ['--import', 'tsx', entry, verb, '--bogus'],
+      { reject: false, stripFinalNewline: false },
+    );
+
+    const [engineer, compose] = await Promise.all([run('engineer'), run('compose')]);
+
+    expect(engineer.exitCode).toBe(0);
+    expect(compose.exitCode).toBe(0);
+    expect(engineer.stdout).toBe(compose.stdout);
+    expect(compose.stderr).toBe('');
+    expect(engineer.stderr).toBe('Warning: `engineer` is deprecated; use `compose` instead.\n');
   });
 });
 
