@@ -65,6 +65,13 @@ union carries zero daemon-named identifiers (grep-verified 2026-08-26).
   #226's installer cutover targets `ai-conductor`.
 - The compatibility boundary is exactly three seams: the `compose`/`engineer` verb alias, the
   `composer`/`engineer` skill delegate, and the `ai-conductor`/`conduct-ts` binary alias.
+
+> **Amended 2026-08-29 by #226:** the compatibility boundary gains a fourth seam — the
+> `conduct` binary alias. With `bin/conduct` removed, `bin/install` points
+> `~/.local/bin/conduct` at `bin/ai-conductor` under the same deprecation-window treatment as
+> `conduct-ts` (symlink onto the single launcher, invoked-name warning; decision 4 — aliases
+> never own a second implementation — applies unchanged). Alias retirement remains a later
+> major.
 - The v1 migration block covers: re-run `bin/install` (creates the `ai-conductor` symlink),
   optional continued use of `conduct-ts`/`engineer` under deprecation warnings.
 - Docs and skills speak `ai-conductor` / `compose` / `composer`; `daemon` wording is correct
