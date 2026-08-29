@@ -248,15 +248,89 @@ canonical `composer` skill, canonical `ai-conductor` binary — with deprecated 
 **Files:** `src/conductor/src/index.ts`, `src/conductor/src/cli.ts`, `src/conductor/src/execution/daemon-session.ts`, `src/conductor/test/cli/index.test.ts`
 **Dependencies:** Task 10
 
+### Task 13: Legacy-CLI guard fails closed and covers the entry-point surface
+**Story:** 4
+**Type:** negative-path
+
+**Steps:**
+1. RED: assert the guard exits non-zero when its scanner is unavailable — run `test/test_no_legacy_cli_references.sh` with `rg` masked off `PATH` and require a non-zero exit naming the missing scanner; today it prints PASS and exits 0.
+2. RED: plant a non-allowlisted `conduct-ts` reference under each newly covered path and require the guard to fail on each.
+3. GREEN: drop the `|| true` after the scan, add an explicit `command -v rg` precondition that exits non-zero naming the missing tool, treat any scanner exit other than 0 (match) or 1 (no match) as fatal, and extend the scanned set to `bin/lib/`, `README.md`, `HARNESS.md`, `docs/reference/cli.md`, and `docs/reference/skills.md`.
+4. Re-run `test/test_harness_integrity.sh` and confirm check 12b now reports a real scan.
+
+**Done when:**
+- With `rg` absent from `PATH`, the guard exits non-zero and names the missing scanner instead of printing PASS.
+- A planted non-allowlisted `conduct-ts` reference under each scanned path makes the guard fail, demonstrated per path.
+- A scanner exit status other than 0 or 1 is fatal, so a failing scan can never be read as a clean tree.
+- `bash -n` and `test/lint_shell.sh` pass on the changed script.
+
+**Files:** `test/test_no_legacy_cli_references.sh`
+**Dependencies:** Task 9
+
+### Task 14: Harness-internal config read and operator entry points speak `ai-conductor`
+**Story:** 4
+**Type:** happy-path
+
+**Steps:**
+1. RED: extend the harness-common config-read test to require that a successful `conductor_cfg_get` emits no deprecation line on stderr; prove it fails against the current `conduct-ts config read` spawn.
+2. GREEN: repoint `bin/lib/harness-common.sh` to invoke `ai-conductor config read`, so `bin/conduct`, `bin/update`, `bin/install`, and `bin/migrate` no longer trigger the alias warning on their own internal call.
+3. GREEN: repoint the `conduct-ts` invocations in `README.md` and `HARNESS.md` to `ai-conductor`, leaving deprecation-window text that documents the alias intact.
+4. Run `bash -n`, `test/lint_shell.sh`, and the Task 13 guard.
+
+**Done when:**
+- `bin/lib/harness-common.sh` invokes `ai-conductor config read`, with the existing stderr separation and `mktemp` failure branch preserved unchanged.
+- A successful config read through `bin/conduct` emits no `conduct-ts is deprecated` line, asserted by test.
+- `README.md` and `HARNESS.md` contain no non-allowlisted `conduct-ts` invocation.
+- `bash -n` and `test/lint_shell.sh` pass on every changed script.
+
+**Files:** `bin/lib/harness-common.sh`, `README.md`, `HARNESS.md`, `test/test_harness_common.sh`
+**Dependencies:** Task 11
+
+### Task 15: `compose` opens the composer skill prompt
+**Story:** 4
+**Type:** happy-path
+
+**Steps:**
+1. RED: assert that the interactive prompt built for `ai-conductor compose` is `/composer` (and `` `/composer ${idea}` `` with an idea argument); prove it fails against the hardcoded `/engineer` prompt.
+2. GREEN: build the prompt from the canonical skill name in `src/conductor/src/engine/engineer-cli.ts`, so the canonical verb no longer loads the deprecated delegate.
+3. Confirm `skills/composer/SKILL.md` lines 25-26 now describe the shipped behavior; correct the wording only if it still misstates it.
+4. Re-run the engineer-CLI focused tests.
+
+**Done when:**
+- `ai-conductor compose` builds the `/composer` prompt, asserted by test for both the bare and idea-carrying forms.
+- The deprecated `engineer` verb still reaches the same dispatch and still warns once, unchanged.
+- `skills/composer/SKILL.md` describes the prompt the launcher actually opens.
+
+**Files:** `src/conductor/src/engine/engineer-cli.ts`, `skills/composer/SKILL.md`, `src/conductor/test/engine/engineer-cli.test.ts`
+**Dependencies:** Task 6
+
+### Task 16: Reference documentation covers `compose` and `composer`
+**Story:** 4
+**Type:** infrastructure
+
+**Steps:**
+1. Rewrite the `docs/reference/cli.md` engineer section as `ai-conductor compose`, documenting every subcommand under the canonical verb and naming `engineer` as the deprecated alias.
+2. Add the `composer` entry to `docs/reference/skills.md`, and mark `engineer` as its delegate.
+3. Run `test/test_harness_integrity.sh` and the Task 13 guard.
+
+**Done when:**
+- `docs/reference/cli.md` documents `ai-conductor compose` with no non-allowlisted `conduct-ts` invocation remaining on the page.
+- `docs/reference/skills.md` carries a `composer` entry and marks `engineer` as the delegate.
+- The Task 13 guard passes with both reference pages inside its scanned set.
+
+**Files:** `docs/reference/cli.md`, `docs/reference/skills.md`
+**Dependencies:** Task 15
+
 ## Task Dependency Graph
 
 ```
 Task 1 ──> Task 2 ──> Task 10 ──> Task 12
    └─────> Task 3 ──> Task 6 ──> Task 7
                         ├──────> Task 8
-                        └──────> Task 11
+                        ├──────> Task 11 ──> Task 14
+                        └──────> Task 15 ──> Task 16
 Task 4 ──> Task 5
-Task 10, Task 11 ──> Task 9
+Task 10, Task 11 ──> Task 9 ──> Task 13
 ```
 
 ## Integration Points
@@ -264,6 +338,8 @@ Task 10, Task 11 ──> Task 9
 - After Task 5: full binary-alias behavior testable end-to-end (`ai-conductor`/`conduct-ts` + install + doctor).
 - After Task 8: skill catalog complete on both hosts; validation suite green.
 - After Task 9: repoint proven closed by the guard; warnings originate only at the two alias entrypoints.
+- After Task 13: the guard is fail-closed, so integrity check 12b records a real scan rather than a vacuous pass.
+- After Task 16: the operator entry-point docs and both reference pages speak the canonical vocabulary; the bulk `docs/` prose repoint is deferred to its own feature.
 
 ## Verification
 
