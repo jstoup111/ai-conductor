@@ -1404,7 +1404,7 @@ install() {
   # 6b. Seed or refresh the AI-conductor config (channel prompt only on first run)
   configure_conductor || warn "Conductor config refresh incomplete — continuing"
 
-  # 6b'. Sync the committed codex rate card to ~/.ai-conductor so every
+  # 6b'. Link the committed codex rate card at ~/.ai-conductor so every
   # project's codex dispatches price to dollars (engine falls back globally).
   sync_global_rate_card "$HARNESS_DIR"
 

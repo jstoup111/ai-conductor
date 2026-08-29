@@ -55,11 +55,11 @@ checked: a refresh that finds identical rates leaves the committed file untouche
 
 A project without a committed card falls back to the **global card** at
 `~/.ai-conductor/rate-card.json`, so codex dispatches price to dollars in every project, not just
-ones that ran their own refresh. `bin/install` and `bin/update` maintain the global card by
-mirroring the harness checkout's committed card there (`sync_global_rate_card`,
-`bin/lib/harness-common.sh`); the copy is skipped when the global card's `as_of` is already the
-same or newer, so a fresher hand-placed global card is never clobbered. A committed project card
-always wins over the global one.
+ones that ran their own refresh. `bin/install` and `bin/update` maintain it as a symlink to the
+harness checkout's committed card (`sync_global_rate_card`, `bin/lib/harness-common.sh`) — the
+same idiom as skill installs — so a merged rate-card bot PR updates every project's fallback with
+no re-install. A regular file already at that path is treated as operator-owned and left alone. A
+committed project card always wins over the global one.
 
 It exists because providers disagree about reporting cost. Claude Code returns `total_cost_usd` on
 every dispatch, so its `TokenUsage.costUsd` is provider truth. Codex returns token counts and no

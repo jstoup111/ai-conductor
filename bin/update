@@ -409,8 +409,8 @@ EOF
 if [ "$#" -eq 0 ]; then
   check_harness_update
   rc=$?
-  # After a check (and possible apply), the checkout's committed rate card is
-  # current — mirror it to ~/.ai-conductor for the engine's global fallback.
+  # Ensure the ~/.ai-conductor global-fallback symlink to the checkout's
+  # committed rate card exists (repair after a moved checkout or old install).
   sync_global_rate_card "$HARNESS_DIR"
   exit $rc
 fi
