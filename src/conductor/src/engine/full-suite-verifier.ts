@@ -685,9 +685,15 @@ export class FullSuiteVerifier {
       const status = await git(['status', '--porcelain']);
       if (status.exitCode !== 0) return { status: 'INDETERMINATE' };
 
+      const ignored = explicitlyDeclaredPaths.size === 0
+        ? { exitCode: 0, stdout: '', stderr: '' }
+        : await git(['ls-files', '--others', '--ignored', '--exclude-standard']);
+      if (ignored.exitCode !== 0) return { status: 'INDETERMINATE' };
+
       const paths = new Set([
         ...newlineSeparatedPaths(diff.stdout),
         ...porcelainPaths(status.stdout),
+        ...newlineSeparatedPaths(ignored.stdout).filter((path) => explicitlyDeclaredPaths.has(path)),
       ]);
       const categoryCounts = Object.fromEntries(
         FULL_SUITE_FINGERPRINT_CATEGORIES.map((category) => [category, 0]),
@@ -1027,12 +1033,21 @@ export class FullSuiteVerifier {
         };
       }
       if (persisted.evidence.fingerprint !== fingerprintResult.fingerprint.digest) {
-        const measurement = await this.measureDriftFromAttestedPass(
-          persisted.evidence.provenanceHeadSha,
-          await expandFullSuiteDeclaredInputMembership(
+        let declaredInputMembership: ReadonlySet<string>;
+        try {
+          declaredInputMembership = await expandFullSuiteDeclaredInputMembership(
             projectRoot,
             aggregateTestSuite.inputs ?? [],
-          ),
+          );
+        } catch {
+          return {
+            inspection: { status: 'STALE', reason: 'drift_measurement_indeterminate' },
+            context,
+          };
+        }
+        const measurement = await this.measureDriftFromAttestedPass(
+          persisted.evidence.provenanceHeadSha,
+          declaredInputMembership,
         );
         if (measurement.status === 'INDETERMINATE') {
           return {

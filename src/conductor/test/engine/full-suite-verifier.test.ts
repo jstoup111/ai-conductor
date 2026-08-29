@@ -502,7 +502,172 @@ describe('FullSuiteVerifier', () => {
     expect(gitCalls).toEqual([
       ['diff', '--name-only', 'attested-pass-sha..HEAD'],
       ['status', '--porcelain'],
+      ['ls-files', '--others', '--ignored', '--exclude-standard'],
     ]);
+  });
+
+  it('counts a globbed declared-input child as additional input drift', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-globbed-input-drift-');
+    await writeProjectFile(projectRoot, 'private/glob/child.bin', 'declared child\n');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  inputs:',
+        '    - private/glob/*.bin',
+        '  verification:',
+        '    drift_budget:',
+        '      additional_inputs: unlimited',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    const gitCalls: string[][] = [];
+    const inspection = await new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:globbed-input-current',
+          headSha: 'globbed-input-head',
+          categoryFingerprints: {
+            ...CATEGORY_FINGERPRINTS,
+            additional_inputs: 'category:additional_inputs:current',
+          },
+        },
+      }),
+      git: async (args) => {
+        gitCalls.push(args);
+        if (args[0] === 'diff') {
+          return { exitCode: 0, stdout: 'private/glob/child.bin\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      worktreeStatus: async () => '',
+    }).inspect();
+
+    expect(inspection).toEqual(expect.objectContaining({
+      status: 'PRESERVED_WITHIN_BUDGET',
+      evidence: expect.objectContaining({
+        driftLedger: [expect.objectContaining({
+          categories: expect.objectContaining({ additional_inputs: 1 }),
+        })],
+      }),
+    }));
+    expect(gitCalls).toEqual([
+      ['diff', '--name-only', 'attested-head..HEAD'],
+      ['status', '--porcelain'],
+      ['ls-files', '--others', '--ignored', '--exclude-standard'],
+    ]);
+  });
+
+  it('counts a declared ignored input as additional input drift', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-ignored-input-drift-');
+    const gitCalls: string[][] = [];
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      git: async (args) => {
+        gitCalls.push(args);
+        if (args[0] === 'ls-files') {
+          return { exitCode: 0, stdout: 'private/state.bin\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    }) as FullSuiteVerifier & {
+      measureDriftFromAttestedPass: (
+        provenanceHeadSha: string,
+        explicitlyDeclaredPaths?: ReadonlySet<string>,
+      ) => Promise<unknown>;
+    };
+
+    await expect(verifier.measureDriftFromAttestedPass(
+      'attested-pass-sha',
+      new Set(['private/state.bin']),
+    )).resolves.toEqual({
+      status: 'MEASURED',
+      categoryCounts: {
+        additional_inputs: 1,
+        dependencies: 0,
+        environment: 0,
+        migrations: 0,
+        project_config: 0,
+        source: 0,
+        test_infrastructure: 0,
+        tests: 0,
+      },
+    });
+    expect(gitCalls).toEqual([
+      ['diff', '--name-only', 'attested-pass-sha..HEAD'],
+      ['status', '--porcelain'],
+      ['ls-files', '--others', '--ignored', '--exclude-standard'],
+    ]);
+  });
+
+  it('returns an indeterminate drift result when ignored-input enumeration fails', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-ignored-input-enumeration-failure-');
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      git: async (args: string[]) => args[0] === 'ls-files'
+        ? { exitCode: 1, stdout: '', stderr: 'fatal: ignored enumeration failed' }
+        : { exitCode: 0, stdout: '', stderr: '' },
+    } as never) as FullSuiteVerifier & {
+      measureDriftFromAttestedPass: (
+        provenanceHeadSha: string,
+        explicitlyDeclaredPaths?: ReadonlySet<string>,
+      ) => Promise<unknown>;
+    };
+
+    await expect(verifier.measureDriftFromAttestedPass(
+      'attested-pass-sha',
+      new Set(['private/state.bin']),
+    )).resolves.toEqual({ status: 'INDETERMINATE' });
+  });
+
+  it('treats declared-input expansion failure as indeterminate drift', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-input-expansion-failure-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  inputs:',
+        '    - private/missing.bin',
+        '  verification:',
+        '    drift_budget:',
+        '      additional_inputs: unlimited',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, attestedPassEvidence(projectRoot));
+    const gitCalls: string[][] = [];
+    const inspection = await new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:input-expansion-failure-current',
+          headSha: 'input-expansion-failure-head',
+          categoryFingerprints: {
+            ...CATEGORY_FINGERPRINTS,
+            additional_inputs: 'category:additional_inputs:current',
+          },
+        },
+      }),
+      git: async (args) => {
+        gitCalls.push(args);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      worktreeStatus: async () => '',
+    }).inspect();
+
+    expect(inspection).toEqual({
+      status: 'STALE',
+      reason: 'drift_measurement_indeterminate',
+    });
+    expect(gitCalls).toEqual([]);
   });
 
   it('returns an indeterminate drift result for an unresolvable attested PASS SHA', async () => {
