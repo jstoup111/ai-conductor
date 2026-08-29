@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-29T01:58:21.269Z
 Slug: every-project-reports-the-same-otel-identity-so-me
 Class: plan-gap
 Halting step: prd_audit
