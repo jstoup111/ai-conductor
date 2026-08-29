@@ -1462,3 +1462,25 @@ describe('Task 7: idea-scoped resolution preserves content validation and the di
     expect(headAfter).toBe(headBefore);
   });
 });
+
+// AB-1: landSpec's missing-worktree error is operator guidance — it must name
+// the canonical `compose` verb, not the deprecated `engineer` alias.
+describe('landSpec remediation text uses the canonical compose verb', () => {
+  it('the missing-worktree error tells the operator to run `ai-conductor compose worktree`', async () => {
+    const missing = join(repoPath, '.worktrees', 'never-created');
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), 'dep bump', missing, undefined, {
+        ownerConfig: { operatorId: 'bob' },
+        gh: async () => ({ stdout: 'bob\n' }),
+      });
+    } catch (e) {
+      caught = e instanceof Error ? e : new Error(String(e));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain('ai-conductor compose worktree');
+    expect(caught!.message).not.toContain('ai-conductor engineer worktree');
+  });
+});

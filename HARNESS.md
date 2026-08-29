@@ -171,7 +171,7 @@ valid path even when it differs from the other host's mechanism, and must procee
 unsupported-capability rejection.
 
 **Start here:** Prefer the daemon for autonomous work:
-- **Automated:** Author and merge a spec with `ai-conductor engineer`, then run `ai-conductor daemon start`
+- **Automated:** Author and merge a spec with `ai-conductor compose`, then run `ai-conductor daemon start`
 - **Interactive:** Run `/conduct` inside Claude Code or `ai-conductor inline --interactive "feature description"`
 
 The foreground `ai-conductor inline --auto` mode is deprecated; use the daemon for unattended runs.

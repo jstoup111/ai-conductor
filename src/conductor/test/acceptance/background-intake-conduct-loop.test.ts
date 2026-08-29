@@ -687,6 +687,26 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     expect(detect(['node', 'conduct', 'intake-loop'])).toEqual({ kind: 'guide' });
   });
 
+  // AB-1: the guide text is operator guidance — it must select the canonical
+  // `compose` verb, not the deprecated `engineer` alias.
+  it('the guide text points the operator at the canonical `ai-conductor compose` session', async () => {
+    const mod = await load(CLI_MOD);
+    const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const written: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      written.push(args.map(String).join(' '));
+    });
+    try {
+      const code = await dispatch({ kind: 'guide' }, {});
+      expect(code).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    const guide = written.join('\n');
+    expect(guide).toContain('`ai-conductor compose`');
+    expect(guide).not.toContain('`ai-conductor engineer`');
+  });
+
   it('dispatchIntakeLoop({once:true}) dispatches the real loop for exactly one tick using mocked buildIntake/notifier/sleep', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');

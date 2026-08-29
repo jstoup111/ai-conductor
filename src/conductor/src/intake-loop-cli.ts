@@ -113,7 +113,7 @@ export async function dispatchIntakeLoop(
         '  Runs the background intake poll loop: polls registered repos for newly\n' +
         '  captured ideas, enqueues them into the durable inbox, and notifies the\n' +
         '  operator via the status surface. Never spawns claude, never opens a PR —\n' +
-        '  DECIDE/authoring still happens in an interactive `ai-conductor engineer`\n' +
+        '  DECIDE/authoring still happens in an interactive `ai-conductor compose`\n' +
         '  session started separately.\n' +
         '  --continuous       loop forever (poll, sleep, repeat)\n' +
         '  --once             run exactly one poll tick and exit\n' +

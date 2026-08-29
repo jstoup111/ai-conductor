@@ -62,7 +62,7 @@ For the preferred autonomous path, author a spec, merge its PR, then start the d
 builds each merged spec in an isolated worktree, retains logs, and opens an implementation PR:
 
 ```bash
-ai-conductor engineer --idea "add a CSV export"
+ai-conductor compose --idea "add a CSV export"
 # Review and merge the spec PR, then:
 ai-conductor daemon start
 ```
