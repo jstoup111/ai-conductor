@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:4
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -110,6 +110,102 @@ afterEach(async () => {
 });
 
 describe('FullSuiteVerifier', () => {
+  it('measures deduplicated changed and dirty paths by shared fingerprint category', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-drift-measurement-');
+    const gitCalls: string[][] = [];
+    const git = async (args: string[]) => {
+      gitCalls.push(args);
+      if (args[0] === 'diff') {
+        return {
+          exitCode: 0,
+          stdout: [
+            'src/app.ts',
+            'package-lock.json',
+            'test/app.test.ts',
+            'private/state.bin',
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+      return {
+        exitCode: 0,
+        stdout: [
+          ' M src/app.ts',
+          ' M db/migrations/001.sql',
+          '?? test/setup.ts',
+          '?? .ai-conductor/config.yml',
+          ' M private/state.bin',
+        ].join('\n'),
+        stderr: '',
+      };
+    };
+    const verifier = new FullSuiteVerifier({ projectRoot, git } as never) as FullSuiteVerifier & {
+      measureDriftFromAttestedPass: (
+        provenanceHeadSha: string,
+        explicitlyDeclaredPaths?: ReadonlySet<string>,
+      ) => Promise<unknown>;
+    };
+
+    const result = await verifier.measureDriftFromAttestedPass(
+      'attested-pass-sha',
+      new Set(['private/state.bin']),
+    );
+
+    expect(result).toEqual({
+      status: 'MEASURED',
+      categoryCounts: {
+        additional_inputs: 1,
+        dependencies: 1,
+        environment: 0,
+        migrations: 1,
+        project_config: 1,
+        source: 1,
+        test_infrastructure: 1,
+        tests: 1,
+      },
+    });
+    expect(gitCalls).toEqual([
+      ['diff', '--name-only', 'attested-pass-sha..HEAD'],
+      ['status', '--porcelain'],
+    ]);
+  });
+
+  it('returns an indeterminate drift result for an unresolvable attested PASS SHA', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-drift-bad-sha-');
+    const gitCalls: string[][] = [];
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      git: async (args: string[]) => {
+        gitCalls.push(args);
+        return { exitCode: 128, stdout: '', stderr: 'fatal: bad object' };
+      },
+    } as never) as FullSuiteVerifier & {
+      measureDriftFromAttestedPass: (provenanceHeadSha: string) => Promise<unknown>;
+    };
+
+    await expect(verifier.measureDriftFromAttestedPass('missing-sha')).resolves.toEqual({
+      status: 'INDETERMINATE',
+    });
+    expect(gitCalls).toEqual([['diff', '--name-only', 'missing-sha..HEAD']]);
+  });
+
+  it('returns an indeterminate drift result when Git fails while measuring paths', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-drift-git-failure-');
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      git: async (args: string[]) => {
+        if (args[0] === 'diff') return { exitCode: 0, stdout: 'src/app.ts', stderr: '' };
+        throw new Error('git status failed');
+      },
+    } as never) as FullSuiteVerifier & {
+      measureDriftFromAttestedPass: (provenanceHeadSha: string) => Promise<unknown>;
+    };
+
+    await expect(verifier.measureDriftFromAttestedPass('attested-pass-sha')).resolves.toEqual({
+      status: 'INDETERMINATE',
+    });
+  });
+
   it('fails aggregate verification explicitly when only scoped_command is configured', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-scoped-only-'));
     scratches.push(projectRoot);

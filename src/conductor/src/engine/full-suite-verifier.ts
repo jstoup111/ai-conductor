@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { execa } from 'execa';
 import { loadConfig } from './config.js';
 import {
   FULL_SUITE_EVIDENCE_VERSION,
@@ -15,6 +16,7 @@ import {
 } from './full-suite-evidence.js';
 import {
   FULL_SUITE_FINGERPRINT_CATEGORIES,
+  classifyFullSuiteFingerprintPath,
   fingerprintFullSuiteInputs,
   type FullSuiteFingerprintCategory,
   type FullSuiteFingerprint,
@@ -82,7 +84,25 @@ export interface FullSuiteVerifierOptions {
   writeEvidence?: typeof writeFullSuiteEvidence;
   /** Test seam for bounded lock timing and liveness probes. */
   lock?: FullSuiteLockOptions;
+  /** Test seam for Git-backed drift measurement. */
+  git?: FullSuiteGitRunner;
 }
+
+export interface FullSuiteGitResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** A Git runner rooted at the verifier's project directory. */
+export type FullSuiteGitRunner = (args: string[]) => Promise<FullSuiteGitResult>;
+
+export type FullSuiteDriftMeasurement =
+  | {
+      status: 'MEASURED';
+      categoryCounts: Record<FullSuiteFingerprintCategory, number>;
+    }
+  | { status: 'INDETERMINATE' };
 
 export interface FullSuiteLockOptions {
   waitTimeoutMs?: number;
@@ -574,6 +594,40 @@ async function acquireFullSuiteLock(
 export class FullSuiteVerifier {
   constructor(private readonly options: FullSuiteVerifierOptions) {}
 
+  /**
+   * Measures every path that changed after a PASS's attested HEAD, including
+   * paths still dirty in the worktree. A failed Git observation never returns
+   * a partial count, because later freshness policy must fail closed.
+   */
+  async measureDriftFromAttestedPass(
+    provenanceHeadSha: string,
+    explicitlyDeclaredPaths: ReadonlySet<string> = new Set(),
+  ): Promise<FullSuiteDriftMeasurement> {
+    const git = this.options.git ?? productionFullSuiteGitRunner(this.options.projectRoot);
+    try {
+      const diff = await git(['diff', '--name-only', `${provenanceHeadSha}..HEAD`]);
+      if (diff.exitCode !== 0) return { status: 'INDETERMINATE' };
+
+      const status = await git(['status', '--porcelain']);
+      if (status.exitCode !== 0) return { status: 'INDETERMINATE' };
+
+      const paths = new Set([
+        ...newlineSeparatedPaths(diff.stdout),
+        ...porcelainPaths(status.stdout),
+      ]);
+      const categoryCounts = Object.fromEntries(
+        FULL_SUITE_FINGERPRINT_CATEGORIES.map((category) => [category, 0]),
+      ) as Record<FullSuiteFingerprintCategory, number>;
+      for (const path of paths) {
+        const category = classifyFullSuiteFingerprintPath(path, explicitlyDeclaredPaths.has(path));
+        categoryCounts[category] += 1;
+      }
+      return { status: 'MEASURED', categoryCounts };
+    } catch {
+      return { status: 'INDETERMINATE' };
+    }
+  }
+
   async inspect(): Promise<FullSuiteInspectionResult> {
     return (await this.resolveInspection()).inspection;
   }
@@ -911,6 +965,27 @@ function buildFailEvidence(
     exitCode: execution.exitCode,
     signal: execution.signal,
   };
+}
+
+function productionFullSuiteGitRunner(projectRoot: string): FullSuiteGitRunner {
+  return async (args) => {
+    const result = await execa('git', args, { cwd: projectRoot, reject: false });
+    return {
+      exitCode: result.exitCode ?? 1,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  };
+}
+
+function newlineSeparatedPaths(stdout: string): string[] {
+  return stdout.split('\n').filter((path) => path.length > 0);
+}
+
+function porcelainPaths(stdout: string): string[] {
+  return newlineSeparatedPaths(stdout)
+    .filter((line) => line.length >= 4)
+    .map((line) => line.slice(3));
 }
 
 async function fingerprintTimeWorktreeCleanliness(
