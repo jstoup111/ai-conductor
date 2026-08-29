@@ -105,12 +105,12 @@ describe('guardDaemonSessionInvocation', () => {
   });
 
   it('permits the generated commit-msg hook to invoke scope-check inside a daemon session', () => {
-    // git-hook-assets.ts embeds `ai-conductor scope-check "$COMMIT_MSG_FILE"` in
+    // git-hook-assets.ts embeds a canonical-launcher scope-check invocation in
     // the commit-msg hook, which runs inside the daemon-managed maker session
-    // (CONDUCT_DAEMON_SESSION=1). Pins that the hook asset carries the
-    // invocation and that the guard's sanctioned set admits it. Authorized by
-    // plan task rem-daemon-scope-check-auth.
-    expect(COMMIT_MSG_HOOK).toContain('ai-conductor scope-check "$COMMIT_MSG_FILE"');
+    // (CONDUCT_DAEMON_SESSION=1). The launcher path is verified by the hook
+    // asset tests; this test pins that the guard's sanctioned set admits the
+    // invocation. Authorized by plan task rem-daemon-scope-check-auth.
+    expect(COMMIT_MSG_HOOK).toMatch(/'[^']*\/bin\/ai-conductor' scope-check "\$COMMIT_MSG_FILE"/);
     expect(
       guardDaemonSessionInvocation(
         argvFor('scope-check', '/worktree/.git/COMMIT_EDITMSG'),
