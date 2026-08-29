@@ -1,3 +1,4 @@
+// Covers: task:5
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,6 +32,9 @@ const PASS_EVIDENCE: FullSuitePassEvidence = {
   fingerprint: 'sha256:content-fingerprint',
   categoryFingerprints: CATEGORY_FINGERPRINTS,
   provenanceHeadSha: '0123456789abcdef',
+  mode: 'aggregate',
+  selectors: [],
+  driftLedger: [],
   command: 'npm test',
   workingDirectory: 'src/conductor',
   startedAt: '2026-07-25T12:00:00.000Z',
@@ -144,6 +148,80 @@ describe('full-suite evidence', () => {
     expect(serialized).toEqual(PASS_EVIDENCE);
   });
 
+  it('round-trips PASS mode, selectors, and drift ledger entries', async () => {
+    const projectRoot = await makeProject();
+    const evidence = {
+      ...PASS_EVIDENCE,
+      mode: 'scoped' as const,
+      selectors: ['test/engine/full-suite-evidence.test.ts', 'test/unit/example.test.ts'],
+      driftLedger: [{
+        at: '2026-08-29T12:34:56.789Z',
+        headSha: 'abcdef0123456789',
+        categories: {
+          additional_inputs: 0,
+          dependencies: 0,
+          environment: 0,
+          migrations: 0,
+          project_config: 0,
+          source: 2,
+          test_infrastructure: 0,
+          tests: 1,
+        },
+      }],
+    };
+
+    await writeFullSuiteEvidence(projectRoot, evidence);
+
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({
+      usable: true,
+      evidence,
+    });
+  });
+
+  it('defaults PASS evidence to aggregate mode with empty selectors and drift ledger', async () => {
+    const projectRoot = await makeProject();
+    const { mode: _mode, selectors: _selectors, driftLedger: _driftLedger, ...legacyPass } =
+      PASS_EVIDENCE;
+
+    await writeFullSuiteEvidence(projectRoot, legacyPass);
+
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({
+      usable: true,
+      evidence: PASS_EVIDENCE,
+    });
+  });
+
+  it.each([
+    {
+      name: 'an unknown mode',
+      evidence: { ...PASS_EVIDENCE, mode: 'unknown' },
+    },
+    {
+      name: 'a non-string selector',
+      evidence: { ...PASS_EVIDENCE, selectors: ['test/engine/example.test.ts', 1] },
+    },
+    {
+      name: 'a malformed drift ledger entry',
+      evidence: {
+        ...PASS_EVIDENCE,
+        driftLedger: [{
+          at: 'not-a-timestamp',
+          headSha: '',
+          categories: { source: -1 },
+        }],
+      },
+    },
+  ])('rejects current-version PASS evidence with $name', async ({ evidence }) => {
+    const projectRoot = await makeProject();
+
+    await writePersisted(projectRoot, evidence);
+
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({
+      usable: false,
+      reason: 'corrupt',
+    });
+  });
+
   it('round-trips atomically without leaving a temporary file', async () => {
     const projectRoot = await makeProject();
 
@@ -174,9 +252,9 @@ describe('full-suite evidence', () => {
     });
   });
 
-  it('treats v2 PASS evidence as unsupported rather than reusable', async () => {
+  it('treats v3 PASS evidence as unsupported rather than reusable', async () => {
     const projectRoot = await makeProject();
-    await writePersisted(projectRoot, { ...PASS_EVIDENCE, version: 2 });
+    await writePersisted(projectRoot, { ...PASS_EVIDENCE, version: 3 });
 
     await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({
       usable: false,
