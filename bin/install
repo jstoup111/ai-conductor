@@ -41,6 +41,17 @@ PROVIDER_SELECTION=""
 CHANNEL_SELECTION=""
 CHANNEL_SOURCE=""
 
+# CONDUCT_TS_FAILURE records why the conduct-ts bundle could not be built or
+# linked. It is a recorded reason rather than an immediate abort because the
+# skill symlinks, permissions and hook wiring above it install fine on any Node,
+# and an operator stuck on old Node should still get a working skills install.
+# install() restates the reason and exits non-zero at the very end, where it
+# cannot be lost in scrollback. Before this, every one of these paths was a
+# `warn` and the script still exited 0, so an install with no Node — or Node
+# older than the >=26 the engine requires — reported success while leaving
+# conduct-ts entirely absent.
+CONDUCT_TS_FAILURE=""
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -239,14 +250,20 @@ check_installation() {
 
   # Check conduct-ts (TypeScript conductor). The bundle is built from
   # src/conductor/ by bin/install; report whether it's built and on PATH.
+  # conduct-ts is the engine every harness command runs through, so neither of
+  # these is advisory: both fail the check (they used to warn, which let
+  # `--check` exit 0 with conduct-ts entirely absent and told the
+  # install-freshness guard the installation was clean).
   if [ -f "${HARNESS_DIR}/src/conductor/dist/index.js" ]; then
     if command -v conduct-ts &>/dev/null; then
       ok "conduct-ts built and on PATH ($(which conduct-ts))"
     else
-      warn "conduct-ts bundle built but not on PATH — run ./bin/install"
+      fail "conduct-ts bundle built but not on PATH — run ./bin/install"
+      all_ok=false
     fi
   else
-    warn "conduct-ts bundle not built — run ./bin/install (needs Node >=26)"
+    fail "conduct-ts bundle not built — run ./bin/install (needs Node >=26; this repo pins nodejs 26.7.0 via .tool-versions)"
+    all_ok=false
   fi
 
   # Check build-auth state (FR-1/FR-3). Delegates entirely to
@@ -997,9 +1014,11 @@ node_supports_conduct_ts() {
 
 # Build the conduct-ts bundle: npm ci + npm run build in src/conductor/.
 # Runs on both fresh installs and updates so the bundle reflects the checked-out
-# harness version and a corrupt node_modules directory is replaced. Non-fatal:
-# on any failure it warns and returns 1 so the caller can continue (step 3b then
-# reports the missing bundle).
+# harness version and a corrupt node_modules directory is replaced. Every
+# failure is recorded in CONDUCT_TS_FAILURE and returns 1: the caller continues
+# so the rest of the install still happens, but install() exits non-zero at the
+# end. Do NOT downgrade these back to bare warnings — a run that cannot build
+# the engine has not installed the harness.
 build_conduct_ts() {
   local conductor_dir="${HARNESS_DIR}/src/conductor"
   echo ""
@@ -1011,14 +1030,22 @@ build_conduct_ts() {
   fi
 
   if ! command -v npm &>/dev/null; then
-    warn "npm not found — cannot build conduct-ts; skipping"
-    info "Install Node >=26 + npm, then re-run bin/install"
+    fail "npm not found — cannot build conduct-ts"
+    info "Install Node >=26 with npm (this repo pins nodejs 26.7.0 via .tool-versions), then re-run bin/install"
+    CONDUCT_TS_FAILURE="npm was not found on PATH, so the conduct-ts bundle could not be built. Install Node >=26 with npm (this repo pins nodejs 26.7.0 via .tool-versions) and re-run ./bin/install."
     return 1
   fi
 
   if ! node_supports_conduct_ts; then
-    warn "Node >=26 not active (repo pins 26.7.0 via .tool-versions) — skipping conduct-ts build"
-    info "Install it (e.g. 'asdf install nodejs 26.7.0'), then re-run bin/install"
+    # Name what was actually found: "wrong Node" and "no Node at all" need
+    # different fixes, and the operator cannot tell which one tripped from a
+    # bare requirement restatement.
+    local node_found
+    node_found=$(node --version 2>/dev/null) || node_found=""
+    [ -n "$node_found" ] || node_found="no node on PATH"
+    fail "conduct-ts requires Node >=26 — found ${node_found}"
+    info "This repo pins nodejs 26.7.0 via .tool-versions; install it (e.g. 'asdf install nodejs 26.7.0'), then re-run bin/install"
+    CONDUCT_TS_FAILURE="conduct-ts requires Node >=26 but found ${node_found}. Install the pinned nodejs 26.7.0 (.tool-versions), then re-run ./bin/install."
     return 1
   fi
 
@@ -1032,6 +1059,7 @@ build_conduct_ts() {
     fail "npm ci failed in src/conductor/ — conduct-ts not built"
     tail -n 20 "$log" | sed 's/^/      /'
     rm -f "$log"
+    CONDUCT_TS_FAILURE="'npm ci' failed in src/conductor/, so the conduct-ts bundle was not built (log excerpt printed above)."
     return 1
   fi
 
@@ -1042,6 +1070,7 @@ build_conduct_ts() {
     fail "npm run build failed in src/conductor/ — conduct-ts not built"
     tail -n 20 "$log" | sed 's/^/      /'
     rm -f "$log"
+    CONDUCT_TS_FAILURE="'npm run build' failed in src/conductor/, so the conduct-ts bundle was not built (log excerpt printed above)."
     return 1
   fi
 
@@ -1306,8 +1335,10 @@ install() {
 
   # 3a. Build conduct-ts (npm ci + npm run build) so the dist bundle reflects
   # this harness version before we symlink it. This runs for installs and updates.
-  # Non-fatal: a build failure (no npm, wrong Node) just leaves the bundle
-  # missing, and step 3b reports that.
+  # A build failure (no npm, wrong Node) is deferred, not ignored: `|| true`
+  # only keeps `set -e` from aborting here so the remaining steps still install,
+  # while build_conduct_ts records the reason in CONDUCT_TS_FAILURE and the tail
+  # of install() exits non-zero on it.
   build_conduct_ts || true
 
   # 3b. Symlink conduct-ts (TypeScript conductor) if the dist bundle exists.
@@ -1334,14 +1365,15 @@ install() {
       ok "Installed conduct-ts script to ${conduct_ts_target}"
     fi
   else
-    # Build (step 3a) was skipped or failed, so the bundle is absent. Surface the
-    # real cause — conduct-ts needs Node >=26, and the repo pins 26.7.0 via
-    # .tool-versions.
-    if node_supports_conduct_ts; then
-      info "conduct-ts bundle not found — 'npm run build' in src/conductor/ failed or was skipped; see the conduct-ts section above"
-    else
-      warn "conduct-ts bundle not found and Node >=26 is not active (the repo pins 26.7.0 via .tool-versions). Install it (e.g. 'asdf install nodejs 26.7.0'), then re-run bin/install."
+    # Build (step 3a) was skipped or failed, so the bundle is absent and the
+    # conduct-ts symlink cannot be created. That is a hard failure however it
+    # came about — an install that ends with no engine has not succeeded — so
+    # record it if build_conduct_ts did not already name a more specific cause
+    # (e.g. a missing src/conductor/package.json, which it skips over).
+    if [ -z "$CONDUCT_TS_FAILURE" ]; then
+      CONDUCT_TS_FAILURE="the conduct-ts bundle (src/conductor/dist/index.js) was not produced — 'npm run build' in src/conductor/ failed or was skipped; see the conduct-ts section above."
     fi
+    fail "conduct-ts not installed — ${CONDUCT_TS_FAILURE}"
   fi
 
   # 4. Configure Claude Code permissions and hooks.
@@ -1384,6 +1416,18 @@ install() {
   fi
 
   echo ""
+  if [ -n "$CONDUCT_TS_FAILURE" ]; then
+    # Skills, permissions and hooks are installed and usable, but conduct-ts is
+    # the engine every documented command runs through, so the install as a
+    # whole failed. Restate the cause here: the diagnosis in the conduct-ts
+    # section is far up the scrollback by now, and the exit code is what CI and
+    # bin/migrate actually gate on.
+    echo -e "${RED}${BOLD}Installation incomplete — conduct-ts was not installed.${NC}"
+    fail "$CONDUCT_TS_FAILURE"
+    info "Skills, permissions and hook wiring were installed and remain usable."
+    info "Fix the above, then re-run ./bin/install and verify with ./bin/install --check"
+    return 1
+  fi
   echo -e "${GREEN}${BOLD}Installation complete.${NC}"
   echo ""
   echo -e "  ${BOLD}Quick start (preferred autonomous path):${NC}"

@@ -38,7 +38,30 @@ assert() {
 }
 
 TMP_ROOT=$(mktemp -d)
-trap 'rm -rf "$TMP_ROOT"' EXIT
+
+# `--check` fails when this checkout has no built conduct-ts bundle, so without
+# a bundle every case below would report that drift and the exit codes under
+# test (0 for clean, 2 for a build-auth-only failure) would be unreachable in a
+# checkout that has never run `npm run build`. Stand in a placeholder bundle
+# only when there is none, and remove it again on exit, so these assertions
+# describe build-auth behavior rather than the local build state. A real bundle
+# is never touched.
+CONDUCT_TS_DIST="${HARNESS_DIR}/src/conductor/dist/index.js"
+PLACEHOLDER_DIST=false
+if [ ! -f "$CONDUCT_TS_DIST" ]; then
+  PLACEHOLDER_DIST=true
+  mkdir -p "$(dirname "$CONDUCT_TS_DIST")"
+  printf '// placeholder written by test_install_check_build_auth.sh\n' > "$CONDUCT_TS_DIST"
+fi
+
+cleanup() {
+  if [ "$PLACEHOLDER_DIST" = true ]; then
+    rm -f "$CONDUCT_TS_DIST"
+    rmdir "$(dirname "$CONDUCT_TS_DIST")" 2>/dev/null || true
+  fi
+  rm -rf "$TMP_ROOT"
+}
+trap cleanup EXIT INT TERM
 
 FAKE_HOME="${TMP_ROOT}/home"
 mkdir -p "$FAKE_HOME"
