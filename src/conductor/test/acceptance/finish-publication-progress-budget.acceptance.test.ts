@@ -236,13 +236,17 @@ describe('FINISH publication progress accounting', () => {
 
     const result = await runFinishScenario(nonConvergingLap);
 
-    expect(result.advanceCalls).toBe(nonConvergingLap.length);
-    expect(result.completedTransitions).toHaveLength(14);
+    // A judged deficiency and its resulting authoring pass are both FINISH
+    // publication advances. Together they spend the pre-existing allowance;
+    // neither may fall back to the ordinary retry budget.
+    expect(result.advanceCalls).toBe(14);
+    expect(result.retryReasons).toEqual([]);
+    expect(result.completedTransitions).toHaveLength(7);
     expect(result.completedTransitions).toEqual(
-      Array.from({ length: 14 }, () => 'author_pr_prose'),
+      Array.from({ length: 7 }, () => 'author_pr_prose'),
     );
-    await expect(readFile(join(result.root, '.pipeline/HALT'), 'utf8')).resolves.toContain(
-      objection,
+    await expect(readFile(join(result.root, '.pipeline/HALT'), 'utf8')).resolves.toMatch(
+      new RegExp(`progress allowance exhausted after 14 transition\\(s\\);[\\s\\S]*${objection}`),
     );
     await expect(readFile(join(result.root, '.pipeline/HALT.class'), 'utf8')).resolves.toBe(
       'needs-human',
