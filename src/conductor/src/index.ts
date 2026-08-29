@@ -339,6 +339,20 @@ export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<
   );
 }
 
+/** Render root help with the public compose alias as the canonical spelling. */
+export function renderCanonicalFullHelp(): string {
+  return renderFullHelp()
+    .replace(
+      /engineer\/brain idea→spec loop \(`engineer`, or `engineer --help` for its full\s+command reference\)/,
+      'compose/brain idea→spec loop (`compose`; `engineer` is a deprecated alias, and `compose --help` shows its full command reference)',
+    )
+    .replace(/^  engineer(\s)/m, '  compose$1')
+    .replaceAll('conduct engineer', 'conduct compose')
+    .replace('Supervisor engineer:', 'Compose:')
+    .replaceAll('`engineer worktree`', '`compose worktree`')
+    .replaceAll('`engineer land`', '`compose land`');
+}
+
 /**
  * Build the options object passed into `runDaemonMode` for a `daemon` CLI
  * invocation (FR-9 wiring). Wires the self-restart callback when this daemon
@@ -1006,7 +1020,7 @@ async function main(): Promise<void> {
   // surface lives in createProgram(). Subcommand-specific help is already handled
   // by the dispatchers above, so any `--help` reaching here is top-level.
   if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
-    process.stdout.write(renderFullHelp());
+    process.stdout.write(renderCanonicalFullHelp());
     process.exit(0);
   }
 

@@ -555,83 +555,84 @@ function parseGhRepo(remote: string): string | null {
  */
 export const SUBCOMMAND_HELP = {
   projects:
-    'engineer projects — list the registered projects from the project registry.\n' +
+    'compose projects — list the registered projects from the project registry.\n' +
     'Flags: none.\n' +
     'Mutates: nothing (read-only).\n' +
     'Loop fit: informational only — inspect which projects the engineer can route ideas to; not a step in the claim → worktree → land → handoff → resolve/forget loop.',
   worktree:
-    'engineer worktree --project <name> --idea "<idea>" [--source-ref <ref>] — create the per-idea worktree used to author a spec.\n' +
+    'compose worktree --project <name> --idea "<idea>" [--source-ref <ref>] — create the per-idea worktree used to author a spec.\n' +
     'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas).\n' +
     'Mutates: creates a git worktree and branch on disk for the project.\n' +
     'Loop fit: second step of the loop — claim → worktree → land → handoff → resolve/forget.',
   land:
-    'engineer land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — land the authored spec from the worktree onto the spec/<slug> branch and open the spec PR.\n' +
+    'compose land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — land the authored spec from the worktree onto the spec/<slug> branch and open the spec PR.\n' +
     'Flags: --project <name> (required), --idea "<text>" (required), --worktree <path> (required — strict isolation, never falls back to the primary checkout), --source-ref <ref> (optional — intake write-back anchor for github-issues-sourced ideas).\n' +
     'Mutates: commits to the worktree, pushes the spec/<slug> branch, opens a PR.\n' +
     'Loop fit: third step — claim → worktree → land → handoff → resolve/forget.',
   handoff:
-    'engineer handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>] — hand the landed spec off to the daemon/build phase.\n' +
+    'compose handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>] — hand the landed spec off to the daemon/build phase.\n' +
     'Flags: --project <name> (required), --branch <branch> (required), --worktree <path> (required), --source-ref <ref> (optional — intake write-back anchor).\n' +
     'Mutates: notifies/nudges the daemon for the target project; updates ledger write-back state when --source-ref is present.\n' +
     'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
   poll:
-    'engineer poll — poll configured intake sources (e.g. github-issues) and enqueue new ideas into the durable inbox.\n' +
+    'compose poll — poll configured intake sources (e.g. github-issues) and enqueue new ideas into the durable inbox.\n' +
     'Flags: none.\n' +
     'Mutates: writes new envelopes to the file-backed inbox queue.\n' +
     'Loop fit: out-of-band maintenance op — primes the inbox but is not itself a step in claim → worktree → land → handoff → resolve/forget.',
   claim:
-    'engineer claim — atomically dequeue the oldest pending idea from the inbox for the operator to work.\n' +
+    'compose claim — atomically dequeue the oldest pending idea from the inbox for the operator to work.\n' +
     'Flags: none.\n' +
     'Mutates: dequeues from the inbox and records a claimed entry in the ledger.\n' +
     'Loop fit: first step of the loop — claim → worktree → land → handoff → resolve/forget.',
   forget:
-    'engineer forget <sourceRef> — drop a ledger entry and strip its intake label.\n' +
+    'compose forget <sourceRef> — drop a ledger entry and strip its intake label.\n' +
     'Flags: <sourceRef> positional (required, must not start with --).\n' +
     'Mutates: removes the entry from the ledger and strips the source label (e.g. on the GitHub issue).\n' +
     'Loop fit: terminal step — claim → worktree → land → handoff → resolve/forget (abandon path, alternative to resolve).',
   resolve:
-    'engineer resolve <sourceRef> --pr-url <url> [--branch <branch>] — mark a claimed ledger entry as delivered when the normal write-back failed.\n' +
+    'compose resolve <sourceRef> --pr-url <url> [--branch <branch>] — mark a claimed ledger entry as delivered when the normal write-back failed.\n' +
     'Flags: <sourceRef> positional (required), --pr-url <url> (required, must be http:// or https://), --branch <branch> (optional).\n' +
     'Mutates: stamps the ledger entry with prUrl (and branch, if given), recovering from a stranded claimed-but-undelivered state.\n' +
     'Loop fit: terminal step — claim → worktree → land → handoff → resolve/forget (recovery path, alternative to forget).',
   unclaim:
-    'engineer unclaim <sourceRef> — requeue a claimed ledger entry back to pending (single-idea recovery).\n' +
+    'compose unclaim <sourceRef> — requeue a claimed ledger entry back to pending (single-idea recovery).\n' +
     'Flags: <sourceRef> positional (required, must not start with --).\n' +
     'Mutates: flips the ledger entry from claimed to pending, preserving capturedAt; refuses (acted:false) as a non-error on absent or non-claimed entries.\n' +
     'Loop fit: out-of-band maintenance op — recovers a stale/stranded claim so it can be re-claimed; not a step in claim → worktree → land → handoff → resolve/forget.',
   requeue:
-    'engineer requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h", "2d").\n' +
+    'compose requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h", "2d").\n' +
     'Flags: --stale (required — invokes bulk recovery mode), --older-than <dur> (optional, overrides the resolved default stale-claim window).\n' +
     'Mutates: flips each eligible claimed entry to pending (preserving capturedAt), or forgets it (removes from ledger) when its originating GitHub issue is confirmed closed; never forgets on an unconfirmed/errored liveness read.\n' +
     'Loop fit: out-of-band maintenance op — bulk recovery of the whole stranded class; not a step in claim → worktree → land → handoff → resolve/forget.',
   'migrate-issue-deps':
-    'engineer migrate-issue-deps [--confirm] — one-time migration of prose-based issue dependency references to structured links.\n' +
+    'compose migrate-issue-deps [--confirm] — one-time migration of prose-based issue dependency references to structured links.\n' +
     'Flags: --confirm (optional — without it, dry-run only: proposes changes with zero writes; with it, applies via the GET-before-POST writer).\n' +
     'Mutates: nothing by default (dry-run); with --confirm, updates issue bodies/links on the source tracker.\n' +
     'Loop fit: out-of-band maintenance op, not a step in claim → worktree → land → handoff → resolve/forget.',
 } satisfies Record<(typeof ENGINEER_SUBCOMMANDS)[number], string>;
 
-/** Print the engineer usage/guide text (front door + deterministic primitives). */
+/** Print the canonical compose usage/guide text (front door + deterministic primitives). */
 function printGuide(print: (s: string) => void): void {
   print(
-    'The engineer is the agent-hosted idea→spec loop. Run `conduct-ts engineer` (no\n' +
+    'Compose is the agent-hosted idea→spec loop. Run `conduct-ts compose` (no\n' +
       'subcommand) to drop into an interactive `claude /engineer` session and drive it\n' +
-      'with a human in the loop. The subcommands below are the deterministic primitives\n' +
+      'with a human in the loop. `conduct-ts engineer` remains a deprecated alias. The\n' +
+      'subcommands below are the deterministic primitives\n' +
       'the /engineer skill calls in-chat:\n' +
       '\n' +
-      '  conduct-ts engineer                                     — launch the interactive /engineer loop (pre-polls intake)\n' +
-      '  conduct-ts engineer --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
-      '  conduct-ts engineer projects                            — list registered projects\n' +
-      '  conduct-ts engineer claim                               — dequeue the oldest pending intake idea (JSON)\n' +
-      '  conduct-ts engineer worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
-      '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
-      '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
-      '  conduct-ts engineer resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
-      '  conduct-ts engineer unclaim <owner/repo#N>              — requeue a claimed ledger entry back to pending (single-idea recovery)\n' +
-      '  conduct-ts engineer requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h")\n' +
-      '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
-      '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
-      '  conduct-ts engineer migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
+      '  conduct-ts compose                                     — launch the interactive /engineer loop (pre-polls intake)\n' +
+      '  conduct-ts compose --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
+      '  conduct-ts compose projects                            — list registered projects\n' +
+      '  conduct-ts compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
+      '  conduct-ts compose worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
+      '  conduct-ts compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
+      '  conduct-ts compose handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
+      '  conduct-ts compose resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
+      '  conduct-ts compose unclaim <owner/repo#N>              — requeue a claimed ledger entry back to pending (single-idea recovery)\n' +
+      '  conduct-ts compose requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h")\n' +
+      '  conduct-ts compose poll                                — poll github issues → enqueue new ideas\n' +
+      '  conduct-ts compose forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
+      '  conduct-ts compose migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
       '(dry-run by default; --confirm writes)\n',
   );
 }
