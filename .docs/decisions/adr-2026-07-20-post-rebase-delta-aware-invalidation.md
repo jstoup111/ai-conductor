@@ -118,6 +118,16 @@ surface toward re-run. The `manual_test`/`wiring_check` surfaces are deliberatel
 tree for this reason; only the feature-scoped judged gates narrow to `F`, and only because they
 provably evaluate the feature's own artifacts.
 
+> **Amended 2026-08-28 by #2021:** The invariant stands unweakened — `test_suite`'s observed
+> surface remains the whole fingerprinted input set, and nothing narrows what is inspected. The
+> per-project drift budget introduced by
+> adr-2026-08-28-test-suite-drift-budget-and-verification-mode operates AFTER total observation:
+> the fingerprint mismatch is still detected, and an explicitly declared, per-category, bounded
+> tolerance then decides whether the detected drift forces execution. The fail-closed default
+> (zero tolerance), the engine-fixed unbudgetable categories, and indeterminate-drift-never-
+> preserves keep "when in doubt, widen toward re-run" intact; the budget is an operator's
+> recorded decision, not an under-declaration.
+
 ## Refinement of the wiring_check invariant (adr-2026-07-12-wiring-check-gate)
 
 The wiring-reachability gate (`adr-2026-07-12-wiring-check-gate.md`, and its story

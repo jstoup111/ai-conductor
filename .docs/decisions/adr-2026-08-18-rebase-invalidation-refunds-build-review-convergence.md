@@ -177,6 +177,14 @@ rather than over `cumulative` and `rubricFailures` by name:
 - **No such counter is cleared by a `build_review` PASS.**
 - **Each is credited back by a rebase that invalidated the gate**, under D2's three conditions.
 
+> **Amended 2026-08-28 by #2021:** Under a configured `test_suite` drift budget
+> (adr-2026-08-28-test-suite-drift-budget-and-verification-mode), a post-rebase evaluation whose
+> drift is within budget PRESERVES the gate — it surfaces as `rebase_gate_preserved` with a
+> budget basis, not as an invalidation. No refund is due for a preserved gate, and none is
+> suppressed: the credit remains keyed exactly on genuine invalidation under D2's conditions,
+> which still occurs whenever the budget is exceeded, an unbudgetable category drifted, or the
+> project declares no budget.
+
 This binds `adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane` (#1629), whose D4 adds a
 bounded mechanical-fault allowance to this same entry and whose plan task-6 currently reads
 "Implement the advance, the declared ceiling constant, and the PASS reset beside the existing

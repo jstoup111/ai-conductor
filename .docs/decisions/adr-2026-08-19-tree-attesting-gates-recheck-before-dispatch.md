@@ -122,6 +122,15 @@ here unchanged and not relaxed. At this ADR's approval the eligible set is `{bui
 would be inert. Adding a gate to the set is an ADR-level act requiring the bar be shown met, not a
 code-local edit.
 
+> **Amended 2026-08-28 by #2021:** `test_suite` remains in the tree-attesting set, and its
+> predicate still re-reads the content fingerprint on every evaluation. Under an explicitly
+> configured drift budget (adr-2026-08-28-test-suite-drift-budget-and-verification-mode), the
+> attestation the predicate provides becomes "the current tree was inspected and its drift from
+> the attested PASS judged within the project's declared per-category budget" rather than "the
+> current tree is fingerprint-identical". The judgement happens inside the same predicate
+> evaluation — inspection is never skipped, so eligibility under this D1 is retained. Absent
+> configuration, the predicate's behavior is unchanged.
+
 ### D2 — The re-check runs at the dispatch boundary, before the `alreadyResolved` short-circuit
 
 Placement is load-bearing and is the whole fix: after the short-circuit the step is already skipped.
