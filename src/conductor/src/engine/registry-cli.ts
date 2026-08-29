@@ -14,7 +14,8 @@
 //   `created`. A non-empty target writes NOTHING.
 
 import { execa } from 'execa';
-import { copyFile, mkdir, readFile, writeFile, readdir } from 'fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile, readdir } from 'fs/promises';
+import { randomUUID } from 'crypto';
 import { constants, existsSync, writeSync } from 'fs';
 import { join, basename, isAbsolute, resolve as resolvePath } from 'path';
 import { resolveHarnessRoot } from './install-freshness.js';
@@ -263,14 +264,24 @@ async function writeProjectConfig(
       if (!template.includes(TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR)) {
         throw new Error('project config template is missing the verification substitution anchor');
       }
+      const renderedTemplatePath = join(
+        projectRoot,
+        '.ai-conductor',
+        `.config-init-${randomUUID()}.tmp`,
+      );
       await writeFile(
-        configPath,
+        renderedTemplatePath,
         template.replace(
           TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR,
           renderVerificationBlock(verification),
         ),
-        { encoding: 'utf8', flag: 'wx' },
+        'utf8',
       );
+      try {
+        await copyFile(renderedTemplatePath, configPath, constants.COPYFILE_EXCL);
+      } finally {
+        await rm(renderedTemplatePath, { force: true });
+      }
     }
     return 'created';
   } catch (error) {
