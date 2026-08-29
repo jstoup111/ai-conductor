@@ -664,7 +664,11 @@ Not schema-validated.
 OpenTelemetry export. Allow-listed at the top level but **not validated by `validateConfig`** — all
 handling lives in `resolveOtelConfig` (`src/conductor/src/engine/otel/otel-config.ts:26-70`), which never
 throws. When enabled, it exports interactive runs and each daemon-dispatched feature independently;
-the daemon resource identifies the feature, project, and durable dispatch run id.
+the trace Resource identifies the feature, project, and durable dispatch run id. The metric Resource
+keeps only feature-stable identity: `service.name`, `service.instance.id` (`<project>/<feature>`),
+`conductor.feature`, `conductor.project`, and `conductor.branch`. Metric data points also carry
+`project` and `feature`; neither a run id nor the engine version is attached to metric Resources, so
+a new dispatch does not create a new metric series for the same feature.
 
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
 duration buckets through 30 minutes; quantiles saturate above that largest finite bucket boundary.
@@ -683,10 +687,16 @@ terminal paths.
 | `otel.endpoint` | string | Yes, when `exporter: otlp` | any URL | — |
 | `otel.file` | string | No | any path | `<pipelineDir>/otel.jsonl` |
 | `otel.protocol` | string | No | `http/protobuf`, `grpc` per the type | passed through unchecked; omitted when falsy |
+| `otel.project_name` | string | No | any non-blank name | project root basename |
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
 `{ enabled: false, error: "Unknown otel exporter '<x>'. Valid options: otlp, file." }`; `otlp` without an
 endpoint yields `{ enabled: false, error: "otel exporter='otlp' requires an 'endpoint' URL …" }`.
+
+`otel.project_name` is trimmed before use. An absent, blank, or whitespace-only value falls back to
+the basename of the absolute project root for metric data-point identity; it does not affect
+`service.name` (`ai-conductor`) or the Resource `conductor.project` attribute. It is the project
+half of `service.instance.id` as well.
 
 > **Known limitation.** `otel.protocol` is passed through entirely unvalidated
 > (`otel-config.ts:60`) even though the type restricts it to `'http/protobuf' | 'grpc'`

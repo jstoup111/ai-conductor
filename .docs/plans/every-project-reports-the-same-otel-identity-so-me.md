@@ -8,7 +8,7 @@
 
 Makes per-project and per-run metric identity exportable without collector rewriting: identity
 attributes injected on every metric data point plus `service.instance.id` on the Resource, in
-5 tasks.
+6 tasks.
 
 ## Technical Approach
 
@@ -21,9 +21,14 @@ instruments added concurrently (#1941's cost/dispatch counters) inherit them aut
   and one private helper that merges it into a per-point attribute object; every
   `record()`/`add()` call site passes through that helper. No call site constructs its attribute
   object inline after this change — that is what makes the seam single.
-- `buildResource` (`src/conductor/src/engine/otel/resource.ts`) adds
-  `'service.instance.id': runId` to the returned attributes. The run-id resolution chain, the
-  never-throws contract, and all four existing `conductor.*` attributes are untouched.
+- `buildResource` (`src/conductor/src/engine/otel/resource.ts`) becomes signal-scoped. Both scopes
+  carry `service.instance.id`, composed from the resolved project name and the feature (`unknown`
+  for either missing half); the trace scope additionally carries `conductor.run.id` and
+  `conductor.engine.version`. The run id is on neither the instance nor any metric resource
+  attribute: backends translate `service.instance.id` into a per-series `instance` label and fold
+  the whole resource attribute set into `target_info`'s label set, so any run-varying value on the
+  metric side mints series per run. The run-id resolution chain and the never-throws contract are
+  untouched, and `conductor.run.id` remains the run's carrier on traces.
 - `OtelVisualizer` computes `identityAttrs` from its context — `project: basename(ctx.project)`
   (node:path) and `feature: ctx.feature` — and passes it to `MetricsRecorder`. `ctx.project`
   continues to receive the project root from the single production construction site
@@ -33,6 +38,13 @@ instruments added concurrently (#1941's cost/dispatch counters) inherit them aut
   `src/conductor/test/engine/otel/resource.test.ts` (direct `buildResource` assertions). Follow
   those files' existing describe/it shape; allowed variation: direct `MetricsRecorder`
   construction with a test `Meter` where the visualizer path cannot express a case.
+
+Amended 2026-08-27 (adr-014 amendment, configurable project name): the data-point `project` value
+is `otel.project_name` when that config key is present and non-blank (trimmed), and
+`basename(ctx.project)` otherwise. The override rides the existing `otel:` block through
+`ResolvedOtelConfig` into `OtelVisualizer`, which already receives that resolved config as its
+first constructor argument — no new construction site, no second resolution path, and the
+basename derivation stays exactly where Task 5 puts it as the fallback branch. Task 6 delivers it.
 
 Rebase note: #1941 (merged spec, in-flight) adds two counters to `metrics.ts`. If it lands first,
 route its counters' attributes through the same merge helper during rebase; the identity seam is
@@ -44,42 +56,45 @@ None — all touched modules exist on main; no new dependencies.
 
 ## Tasks
 
-### Task 1: service.instance.id on the Resource
+### Task 1: Signal-scoped Resources — feature-stable for metrics, run-identified for traces
 **Story:** Story 2
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests in the existing resource test file: explicit-runId build yields `service.instance.id` equal to the override while `conductor.run.id` still equals it; session-file path yields the file's trimmed content as `service.instance.id`; minted path (no file) yields a non-empty `service.instance.id`; `service.name` remains exactly `ai-conductor`; `conductor.feature`/`conductor.project` unchanged.
+1. Write failing tests in the existing resource test file: the metric Resource carries `service.name`, `service.instance.id` (project and feature joined by a slash), `conductor.project`, `conductor.feature`, `conductor.branch` and nothing else; the span Resource carries those plus `conductor.run.id` and `conductor.engine.version`; both carry the same `service.instance.id`; a configured project name is used as the project half; an absent project or feature yields `unknown` in that half.
 2. Verify tests fail (RED).
-3. Implement: add `'service.instance.id': runId` to the attribute object in `buildResource`.
+3. Implement: give `buildResource` a signal scope so it returns the feature-stable attribute set for metrics and that set plus the run-varying attributes for traces, and have `OtelVisualizer.initializeProviders` install the metric Resource on the `MeterProvider` and the trace Resource on the `BasicTracerProvider`.
 4. Verify tests pass (GREEN), including all pre-existing resource tests unmodified.
-5. Commit: "Export run id as service.instance.id on the OTel Resource".
+5. Commit: "Scope the OTel Resource by signal so metrics stay feature-stable".
 
 **Done when:**
-- The named assertions pass in the resource test file for override, file, and minted paths.
-- A passing assertion pins `service.name === 'ai-conductor'` and the four pre-existing `conductor.*` attributes byte-unchanged.
+- The metric Resource assertion passes and names the exact attribute set, so an added run-varying attribute fails it.
+- A passing assertion pins `conductor.run.id` and `conductor.engine.version` present on the span Resource and absent from the metric Resource.
+- A passing assertion pins `service.name === 'ai-conductor'` and identical `service.instance.id` on both Resources.
 - All pre-existing resource tests pass unmodified.
 
 **Files:**
-- src/conductor/src/engine/otel/resource.ts — add service.instance.id attribute
-- src/conductor/test/engine/otel/resource.test.ts — instance-id tests
+- src/conductor/src/engine/otel/resource.ts — signal-scoped attribute sets + service.instance.id composition
+- src/conductor/src/engine/otel/otel-visualizer.ts — install the metric Resource on the meter provider and the trace Resource on the tracer provider
+- src/conductor/test/engine/otel/resource.test.ts — signal-scope and instance-id tests
 
 **Dependencies:** none
 
-### Task 2: Resource robustness negatives preserved with instance id
+### Task 2: Resource robustness and stability negatives
 **Story:** Story 2
 **Type:** negative-path
 
 **Steps:**
-1. Write failing (or pinning) tests: with an unwritable pipeline directory, `buildResource` still returns a resource whose `service.instance.id` is non-empty and no exception reaches the caller; a whitespace-only session file falls through to a minted non-empty id.
+1. Write failing (or pinning) tests: two builds differing only in engine version yield byte-identical metric Resource attribute sets; with an unwritable pipeline directory both Resources still build and no exception reaches the caller; a whitespace-only session file still yields a minted `conductor.run.id` on the span Resource while the metric Resource is unaffected.
 2. Verify RED/pinning status honestly (the existing never-throws implementation may already satisfy a case — keep it as pinning coverage).
 3. Implement any gap.
 4. Verify tests pass (GREEN).
-5. Commit: "Pin never-throws and minted-id semantics for service.instance.id".
+5. Commit: "Pin metric-Resource stability and never-throws semantics".
 
 **Done when:**
-- The unwritable-directory test passes with no throw and a non-empty `service.instance.id`.
-- The whitespace-file test passes with a minted non-empty id.
+- The differing-engine-version test passes with identical metric Resource attribute sets.
+- The unwritable-directory test passes with no throw and a composed non-empty `service.instance.id`.
+- The whitespace-file test passes with a minted span-side `conductor.run.id` and an unchanged metric Resource.
 
 **Files:** same
 
@@ -149,23 +164,63 @@ None — all touched modules exist on main; no new dependencies.
 
 **Dependencies:** Task 3
 
+### Task 6: Configurable project name overrides the basename
+**Story:** Story 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: `resolveOtelConfig` carries a trimmed `otel.project_name` onto both enabled `ResolvedOtelConfig` variants and omits it when the key is absent, blank, or whitespace-only; driving `createOtelVisualizer` with a configured name yields data points whose `project` equals that name rather than the root's basename; two roots sharing a basename with distinct configured names yield distinct `project` values; absent/blank/whitespace-only configured names fall back to the basename with no error; with an override set, `service.name` is still `ai-conductor` and the Resource `conductor.project` is still the absolute root.
+2. Verify tests fail (RED).
+3. Implement: add optional `project_name?: string` to `OtelConfig`; resolve and trim it onto the enabled `ResolvedOtelConfig` variants in `resolveOtelConfig`; in the `OtelVisualizer` constructor use the resolved name when non-empty and `basename(ctx.project)` otherwise.
+4. Document the key in `docs/reference/configuration.md` alongside the other `otel:` keys, stating the basename default.
+5. Verify tests pass (GREEN), including every pre-existing otel-config, metrics, resource, and visualizer test unmodified.
+6. Commit: "Let otel.project_name override the basename project identity".
+
+**Done when:**
+- The configured-name assertion passes through the production construction path.
+- The same-basename/distinct-configured-name test yields distinct `project` values.
+- Absent, blank, and whitespace-only configured names each fall back to the basename with no error raised.
+- With an override set, `service.name` and the Resource `conductor.project` assertions are unchanged.
+- `docs/reference/configuration.md` documents `otel.project_name` and its basename default.
+
+**Files:**
+- src/conductor/src/types/config.ts — optional `project_name` on `OtelConfig`
+- src/conductor/src/engine/otel/otel-config.ts — resolve/trim onto `ResolvedOtelConfig`
+- src/conductor/src/engine/otel/otel-visualizer.ts — override-else-basename branch
+- src/conductor/test/engine/otel/otel-config.test.ts — resolution and blank-fallback tests
+- src/conductor/test/engine/otel/otel-visualizer.test.ts — end-to-end override tests
+- docs/reference/configuration.md — `otel.project_name` reference row
+
+**Dependencies:** Task 5
+
 ## Task Dependency Graph
 
 ```
 Task 1 ─▶ Task 2
 Task 3 ─▶ Task 4
-Task 3 ─▶ Task 5
+Task 3 ─▶ Task 5 ─▶ Task 6
 ```
 
 ## Integration Points
 
-- After Task 5: full identity observable end-to-end — resource instance id (Task 1) + data-point
-  identity (Task 3) through the real construction path.
+- After Task 6: the exported `project` dimension is operator-controllable, so two roots sharing a
+  directory name are distinguishable from harness exports alone.
+- After Task 5: full identity observable end-to-end — the per-feature resource instance id
+  (Task 1) + data-point identity (Task 3) through the real construction path, with the run id
+  reachable only through `conductor.run.id` on the trace Resource.
 
 ## Verification
 
-- [ ] All Story 1-3 happy-path criteria covered (Tasks 1, 3, 5)
-- [ ] All negative-path criteria covered as explicit tasks (Tasks 2, 4) plus Story 3's passthrough negative in Task 5
+- [ ] All Story 1-3 happy-path criteria covered (Tasks 1, 3, 5, 6)
+- [ ] All negative-path criteria covered as explicit tasks (Tasks 2, 4, 6) plus Story 3's passthrough negative in Task 5
 - [ ] No task exceeds 5 minutes
 - [ ] Every task has falsifiable Done-when checks
 - [ ] Dependencies explicit and acyclic
+
+### Task rem-prd-audit-rem-fr-s31-1: src/conductor/test/engine/otel/otel-visualizer.test.ts:277,296 — rebuild the Task 5 identity fixture to construct via `createOtelVisualizer(resolved, ctx)` (src/conductor/src/engine/otel/create-otel-visualizer.ts:19-29) instead of `new OtelVisualizer(...)`, and pass a real VisualizerStartContext to `start(identityEmitter, ctx)` so the deprecated legacyStartContext fallback at otel-visualizer.ts:282 is not exercised. Keep every existing identity assertion in that block byte-for-byte (basename derivation :313, distinct roots :337, feature fallback :327) — this changes only the construction path, never what is asserted.
+**Gate:** prd-audit
+**Rationale:** Evidence gap, not a defect (audit confidence 90%, verified): src/conductor/test/engine/otel/otel-visualizer.test.ts:277 builds the identity fixture with `new OtelVisualizer(resolved, {...})` and :296 calls `vis.start(identityEmitter)` with no VisualizerStartContext, so the assertions run through the `legacyStartContext` fallback at src/conductor/src/engine/otel/otel-visualizer.ts:282 whose backing fields are marked @deprecated for identity (:130-136), while production constructs through createOtelVisualizer at src/conductor/src/engine/plugin-loader.ts:244. Plan Task 5 (.docs/plans/every-project-reports-the-same-otel-identity-so-me.md:142) already owns this — its step 1 specifies driving `createOtelVisualizer` and its Done-when requires the assertions to pass through the production construction path — so the repair is inside an existing task's contract, not a planning omission. This strengthens an existing test rather than removing coverage: every current identity assertion is preserved and merely re-driven through the production entry point, so Task 5's delivered coverage survives intact. Class sweep: the same legacy-construction shape is the only identity driver in this file; the other createOtelVisualizer drivers at src/conductor/test/daemon-otel-wiring.test.ts:321,364 assert renderer errors and teardown and carry no identity assertions to restate, so they are named found-and-excluded rather than edited.
+**Criterion:** S3.1
+**Parent task:** 5
+**Done when:**
+- S3.1 is satisfied by this task.

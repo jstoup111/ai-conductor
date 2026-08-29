@@ -13,8 +13,14 @@ const DEFAULT_FILE = 'otel.jsonl';
  */
 export type ResolvedOtelConfig =
   | { enabled: false; error?: string }
-  | { enabled: true; exporter: 'otlp'; endpoint: string; protocol?: 'http/protobuf' | 'grpc' }
-  | { enabled: true; exporter: 'file'; file: string };
+  | {
+      enabled: true;
+      exporter: 'otlp';
+      endpoint: string;
+      protocol?: 'http/protobuf' | 'grpc';
+      projectName?: string;
+    }
+  | { enabled: true; exporter: 'file'; file: string; projectName?: string };
 
 /**
  * Parse and validate the `otel:` block from `config`. Returns a discriminated
@@ -34,7 +40,8 @@ export function resolveOtelConfig(
     return { enabled: false };
   }
 
-  const { exporter, endpoint, file, protocol } = otel;
+  const { exporter, endpoint, file, protocol, project_name } = otel;
+  const projectName = project_name?.trim() || undefined;
 
   // Unknown exporter → disabled + named error listing valid options.
   if (!VALID_EXPORTERS.includes(exporter as (typeof VALID_EXPORTERS)[number])) {
@@ -59,6 +66,7 @@ export function resolveOtelConfig(
       exporter: 'otlp',
       endpoint,
       ...(protocol ? { protocol } : {}),
+      ...(projectName ? { projectName } : {}),
     };
   }
 
@@ -68,5 +76,6 @@ export function resolveOtelConfig(
     enabled: true,
     exporter: 'file',
     file: resolvedFile,
+    ...(projectName ? { projectName } : {}),
   };
 }

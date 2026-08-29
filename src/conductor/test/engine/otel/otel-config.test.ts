@@ -1,3 +1,4 @@
+// Covers: task:6
 import { describe, it, expect } from 'vitest';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 
@@ -84,6 +85,41 @@ describe('resolveOtelConfig', () => {
       );
       expect(result.enabled).toBe(true);
       expect((result as { protocol?: string }).protocol).toBe('grpc');
+    });
+  });
+
+  describe('project_name', () => {
+    it('carries a trimmed configured project name on both enabled variants and omits blank values', () => {
+      const configs = [
+        resolveOtelConfig(
+          { otel: { exporter: 'file', project_name: '  tenant-a  ' } },
+          PIPELINE_DIR,
+        ),
+        resolveOtelConfig(
+          {
+            otel: {
+              exporter: 'otlp',
+              endpoint: 'http://localhost:4318',
+              project_name: 'tenant-b',
+            },
+          },
+          PIPELINE_DIR,
+        ),
+        resolveOtelConfig({ otel: { exporter: 'file', project_name: '   ' } }, PIPELINE_DIR),
+        resolveOtelConfig({ otel: { exporter: 'file', project_name: '' } }, PIPELINE_DIR),
+      ];
+
+      expect(configs).toEqual([
+        { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl`, projectName: 'tenant-a' },
+        {
+          enabled: true,
+          exporter: 'otlp',
+          endpoint: 'http://localhost:4318',
+          projectName: 'tenant-b',
+        },
+        { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl` },
+        { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl` },
+      ]);
     });
   });
 });

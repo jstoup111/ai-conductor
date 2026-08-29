@@ -121,6 +121,89 @@ Relevant existing facts (evidence):
 >   worktrees' traces separate") continues to hold for traces, and now also holds for metrics
 >   via the `feature` data-point attribute plus `service.instance.id`.
 
+> **Amended 2026-08-27 by #1938 (configurable project name):** the amendment above fixed the
+> data-point `project` value to `basename(projectRoot)`, which cannot distinguish two different
+> project roots that share a directory name (`/srv/tenant-a/shared` and `/opt/tenant-b/shared`
+> both export `project=shared`), so the stated outcome — two projects distinguishable from
+> harness exports alone — did not hold in that case. The value is now resolved as:
+> - `otel.project_name` from `.ai-conductor/config.yml` when present and non-blank, trimmed;
+> - otherwise `basename(projectRoot)`, unchanged from the amendment above.
+>
+> The override is an existing-block config key, not a new block: it joins `exporter`/`endpoint`/
+> `file`/`protocol` under `otel:` and flows to the visualizer through `ResolvedOtelConfig`, so
+> there is no second resolution path and no new construction site. It is deliberately an
+> operator-supplied name rather than an automatic disambiguator (a path hash): the value is a
+> query dimension operators type, so a readable name beats a collision-free but opaque one, and
+> the collision it repairs requires two same-named roots exporting to one backend. A blank,
+> whitespace-only, or absent value is not an error — it falls back to the basename and the run
+> proceeds, preserving the never-fails-a-run contract of Decision 5. The override changes only
+> the data-point `project` attribute: `service.name` stays the constant `ai-conductor` and the
+> Resource's `conductor.project` stays the absolute project root.
+
+> **Amended 2026-08-28 by #1938 (run identity leaves the label path):** the 2026-08-26 amendment
+> above placed the resolved run id on `service.instance.id` to make `target_info` joinable, and
+> inferred that keeping the run id out of data-point attributes kept backend series bounded. That
+> inference is false for the named Prometheus backend. Prometheus's OTLP receiver translates
+> `service.instance.id` into the `instance` label on **every** metric data point — verified
+> 2026-08-28 against the live collector and Prometheus: a probe export carrying
+> `service.instance.id` came back as an `instance` label on both the metric series and its
+> `target_info` row. A per-run value therefore mints a full set of series per run, which is
+> precisely the growth the amendment claimed to avoid. The green test that "proved" boundedness
+> inspected `InMemoryMetricExporter` data-point attributes, which sit before that translation and
+> structurally cannot observe it.
+>
+> The identity contract is revised as follows. Every other clause of the two amendments above
+> stands unchanged.
+> - `service.name` stays the constant `ai-conductor`, so the derived Prometheus `job` label stays
+>   `ai-conductor`.
+> - `service.instance.id` = `<project>/<feature>`, where `<project>` is the same resolved project
+>   name the data-point seam uses (`otel.project_name` when non-blank, else `basename(projectRoot)`)
+>   and `<feature>` is the feature slug. Either side falls back to `unknown` when unavailable; the
+>   value never fails a run, preserving Decision 5.
+> - The run id is **not** on any metric label path — not a data-point attribute, not
+>   `service.instance.id`, and not any other attribute of the metric Resource. `target_info`'s label
+>   set is the whole resource attribute set, so a run-varying resource attribute mints a
+>   `target_info` series per run just as surely as a data-point attribute would. The Resource is
+>   therefore signal-scoped: the metric provider receives only attributes that are stable for a
+>   feature's lifetime (`service.name`, `service.instance.id`, `conductor.project`,
+>   `conductor.feature`, `conductor.branch`), while the trace provider additionally receives
+>   `conductor.run.id` and `conductor.engine.version`. Traces are per-run by nature, so run
+>   correlation is unchanged there and nothing on the trace side is unbounded.
+> - Series growth is bounded by dimensions this design already pays for: the data-point
+>   `project`/`feature` attributes of the 2026-08-26 amendment carry the same two values that now
+>   compose the instance, so this placement adds no cardinality of its own.
+> - `target_info` becomes joinable per feature on `(job, instance)` — the goal the 2026-08-26
+>   amendment stated but did not reach, because a constant `job` with no `instance` collapses every
+>   run's `target_info` onto one match group and Prometheus refuses the join as ambiguous (verified
+>   2026-08-28 against the live backend). Because the metric Resource carries only feature-stable
+>   attributes, that row is one series per feature and does not accumulate. It answers "what is this
+>   feature", not "what happened on lap N" — run-level questions are a trace concern.
+> - **Correction, 2026-08-28.** The first draft of this amendment asserted that run-varying resource
+>   attributes were merely last-writer-wins on the `target_info` row. That is wrong, for the same
+>   reason the 2026-08-26 amendment was wrong, one level over: every resource attribute is part of
+>   `target_info`'s label set, so `conductor.run.id` on a shared Resource kept minting a series per
+>   run even after `service.instance.id` was re-keyed. Observed directly: 22 `target_info` series
+>   across 17 run ids on the live backend. The signal-scoped Resource above is the repair; the
+>   as-built gate caught the gap before it shipped.
+> - **Proof obligation.** A test asserts the exported Resource's `service.instance.id` directly. A
+>   data-point-attribute assertion cannot observe this contract and does not discharge it.
+>
+> **Why not `service.namespace`.** Prometheus derives `job` as `<service.namespace>/<service.name>`
+> when a namespace is set, so `service.namespace = <project>` with `service.instance.id = <feature>`
+> is the more idiomatic shape, and it was verified to work against the live backend. It is rejected
+> because the 2026-08-26 amendment holds that the project is a dimension and is never folded into
+> service identity; namespacing folds it into the derived `job` label, which is that same fold one
+> level down. The compound instance keeps service identity constant and confines this revision to a
+> single clause. The accepted cost is that `<project>` appears both in the instance and as a
+> data-point attribute, and that a compound instance key is unusual enough to invite a later
+> "cleanup" — this paragraph is the standing reason not to.
+>
+> **Unchanged.** The `MetricsRecorder` constructor-injected identity seam and its `project` and
+> `feature` data-point attributes are untouched, so concurrent features inheriting that seam need no
+> rework. The worktree-isolation claim below continues to hold: traces separate by
+> `conductor.run.id` on the trace Resource, and metrics separate by the `instance` label rather than
+> depending on it.
+
 ## Consequences
 
 **Positive**

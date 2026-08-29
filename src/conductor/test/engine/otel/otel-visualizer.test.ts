@@ -1,4 +1,4 @@
-// Covers: task:2, task:8
+// Covers: task:2, task:5, task:6, task:8
 /**
  * T9: OtelVisualizer — provider/processor setup (off hot path).
  * T17: hot-path guard — emit() resolves promptly even when the transport blocks.
@@ -15,6 +15,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
+import { createOtelVisualizer } from '../../../src/engine/otel/create-otel-visualizer.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
@@ -254,6 +255,129 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     await vis.stop();
     // After stop + forceFlush: spans must be in the exporter
     expect(spanExporter.getFinishedSpans().length).toBeGreaterThan(0);
+  });
+});
+
+describe('Task 5: visualizer identity wiring', () => {
+  let identityTempDir: string;
+  let identityPipelineDir: string;
+  let identitySpanExporter: InMemorySpanExporter;
+  let identityMetricExporter: InMemoryMetricExporter;
+  let identityEmitter: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    identityTempDir = await mkdtemp(join(tmpdir(), 'otel-vis-identity-'));
+    identityPipelineDir = join(identityTempDir, '.pipeline');
+    identitySpanExporter = new InMemorySpanExporter();
+    identityMetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    identityEmitter = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(identityTempDir, { recursive: true, force: true });
+  });
+
+  async function exportStepMetric(
+    feature: string,
+    project = join(identityTempDir, 'projects', 'nested-project'),
+    projectName?: string,
+  ) {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', project_name: projectName } },
+      identityPipelineDir,
+    );
+    const vis = createOtelVisualizer(
+      resolved,
+      {
+        spanExporter: identitySpanExporter,
+        metricExporter: identityMetricExporter,
+      },
+      identityEmitter,
+    );
+    expect(vis).not.toBeNull();
+    vis!.start(identityEmitter, {
+      runId: 'shared-resource-run-id',
+      feature,
+      project,
+      pipelineDir: identityPipelineDir,
+    });
+
+    await identityEmitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await identityEmitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await identityEmitter.emit({ type: 'feature_complete' });
+    await vis!.stop();
+
+    const durationMetric = identityMetricExporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+      .find((metric) => metric.descriptor.name === 'conductor.step.duration')!;
+    return {
+      dataPoint: durationMetric.dataPoints[0],
+      span: identitySpanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!,
+      metricResource: identityMetricExporter.getMetrics()[0].resource,
+    };
+  }
+
+  it('derives the metric project basename and shares the run resource identity with spans', async () => {
+    const exported = await exportStepMetric('nested-feature');
+
+    expect({
+      dataPoint: exported.dataPoint.attributes,
+      spanInstanceId: exported.span.resource.attributes['service.instance.id'],
+      metricInstanceId: exported.metricResource.attributes['service.instance.id'],
+    }).toEqual({
+      dataPoint: { step: 'build', project: 'nested-project', feature: 'nested-feature' },
+      spanInstanceId: 'nested-project/nested-feature',
+      metricInstanceId: 'nested-project/nested-feature',
+    });
+  });
+
+  it('exports a feature-stable metric resource while the span resource keeps the run id', async () => {
+    const exported = await exportStepMetric('nested-feature');
+
+    // The backend copies the metric Resource into `target_info`'s label set, so
+    // a run-varying attribute here mints one series per run — the defect the
+    // 2026-08-28 as-built review caught after `service.instance.id` was re-keyed.
+    expect(Object.keys(exported.metricResource.attributes).sort()).toEqual([
+      'conductor.branch',
+      'conductor.feature',
+      'conductor.project',
+      'service.instance.id',
+      'service.name',
+    ]);
+    expect(Object.values(exported.metricResource.attributes)).not.toContain('shared-resource-run-id');
+    expect(exported.span.resource.attributes['conductor.run.id']).toBe('shared-resource-run-id');
+  });
+
+  it('passes an unknown feature through to metric data points', async () => {
+    const exported = await exportStepMetric('unknown');
+
+    expect(exported.dataPoint.attributes).toEqual({
+      step: 'build',
+      project: 'nested-project',
+      feature: 'unknown',
+    });
+  });
+
+  it('uses configured names to distinguish same-basename roots without changing resource identity', async () => {
+    const firstProject = join(identityTempDir, 'tenant-a', 'shared');
+    const secondProject = join(identityTempDir, 'tenant-b', 'shared');
+    const first = await exportStepMetric('feature-a', firstProject, ' tenant-a ');
+    identityMetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    identitySpanExporter = new InMemorySpanExporter();
+    const second = await exportStepMetric('feature-b', secondProject, 'tenant-b');
+
+    expect({
+      firstProject: first.dataPoint.attributes['project'],
+      secondProject: second.dataPoint.attributes['project'],
+      serviceName: first.metricResource.attributes['service.name'],
+      conductorProject: first.metricResource.attributes['conductor.project'],
+    }).toEqual({
+      firstProject: 'tenant-a',
+      secondProject: 'tenant-b',
+      serviceName: 'ai-conductor',
+      conductorProject: firstProject,
+    });
   });
 });
 

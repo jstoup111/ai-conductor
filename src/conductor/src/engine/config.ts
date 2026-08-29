@@ -131,6 +131,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
   gate_code_validity: ['enabled'],
   retry_routing: ['enabled'],
+  otel: ['exporter', 'endpoint', 'file', 'protocol', 'project_name'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
   mermaid_renderer: ['preset', 'command', 'args', 'mode'],
 } as const;

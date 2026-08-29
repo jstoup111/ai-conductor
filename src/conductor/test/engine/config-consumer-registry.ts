@@ -32,6 +32,7 @@ const BUILD_PROGRESS_WATCHER = 'src/conductor/src/engine/build-progress-watcher.
 const FULL_SUITE_EXECUTOR = 'src/conductor/src/engine/full-suite-executor.ts';
 const FULL_SUITE_FINGERPRINT = 'src/conductor/src/engine/full-suite-fingerprint.ts';
 const HARNESS_COMMON = 'bin/lib/harness-common.sh';
+const OTEL_CONFIG = 'src/conductor/src/engine/otel/otel-config.ts';
 
 /**
  * Every documented config key maps to its OWN production consumer declaration
@@ -56,7 +57,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   ui_renderer: consumer('src/conductor/src/engine/plugin-loader.ts'),
   visualizers: consumer('src/conductor/src/index.ts'),
   memory_provider: consumer('src/conductor/src/engine/local-memory-provider.ts'),
-  otel: consumer('src/conductor/src/engine/otel/otel-config.ts'),
+  otel: consumer(OTEL_CONFIG),
   build_progress: consumer(BUILD_PROGRESS_WATCHER),
   provider_stream: consumer(STEP_RUNNERS),
   spec_owner: consumer('src/conductor/src/engine/owner-gate/identity.ts'),
@@ -174,6 +175,14 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   // ── build_review ──────────────────────────────────────────────────────────
   // `resolveBuildReviewConfig` is the only reader of the raw block and of every
   // per-rubric policy field; the coordinator consumes the resolved object.
+  // Nested OTel keys declare individually: `otel.project_name` reached the
+  // documented surface under the block-level declaration alone, which decision 4
+  // forbids (as-built AB-1).
+  'otel.exporter': consumer(OTEL_CONFIG),
+  'otel.endpoint': consumer(OTEL_CONFIG),
+  'otel.file': consumer(OTEL_CONFIG),
+  'otel.protocol': consumer(OTEL_CONFIG),
+  'otel.project_name': consumer(OTEL_CONFIG),
   'build_review.enabled': consumer(RESOLVED_CONFIG),
   'build_review.perTaskFloor': none(
     'retired rubric-container knob: validateConfig warns and deletes it before resolution, so no resolved config ever carries it (adr-2026-08-22-build-review-opt-in-rubric-container)',

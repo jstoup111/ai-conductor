@@ -38,6 +38,7 @@ import {
   type ResourceMetrics,
 } from '@opentelemetry/sdk-metrics';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
+import { basename } from 'node:path';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { ConductorEvent } from '../../types/events.js';
 import { otelEventTypes } from '../event-sinks.js';
@@ -168,6 +169,13 @@ export class OtelVisualizer implements VisualizerPlugin {
   private readonly exportTimeoutMillis: number;
   /** Compatibility only for legacy direct callers that omit start context. */
   private readonly legacyStartContext: VisualizerStartContext;
+  /**
+   * Configured `otel.project_name`, when the config is enabled and set it.
+   * Overrides the start context's project basename as the metric identity's
+   * `project` attribute, so two checkouts of the same repository can report
+   * distinct identities.
+   */
+  private readonly projectNameOverride?: string;
   private tracerProvider: BasicTracerProvider | null = null;
   private meterProvider: MeterProvider | null = null;
   private spanManager: SpanManager | null = null;
@@ -245,6 +253,7 @@ export class OtelVisualizer implements VisualizerPlugin {
       feature: ctx.feature,
       project: ctx.project,
     };
+    if (config.enabled && config.projectName) this.projectNameOverride = config.projectName;
   }
 
   /**
@@ -416,26 +425,38 @@ export class OtelVisualizer implements VisualizerPlugin {
   private initializeProviders(context: VisualizerStartContext): void {
     if (this.tracerProvider || this.meterProvider || this.spanManager || this.metricsRecorder) return;
 
-    const resource = buildResource({
+    const resourceContext = {
       pipelineDir: context.pipelineDir ?? '',
       runId: context.runId,
       feature: context.feature,
       project: context.project,
+      projectName: this.projectNameOverride ?? (context.project ? basename(context.project) : undefined),
       branch: context.branch,
       engineVersion: context.engineVersion,
-    });
+    };
+    // Two scopes, one context: the meter provider must not carry run-varying
+    // attributes, because the backend turns the metric Resource into
+    // `target_info`'s label set (adr-014, 2026-08-28 amendment).
+    const traceResource = buildResource(resourceContext, 'traces');
+    const metricResource = buildResource(resourceContext, 'metrics');
     this.tracerProvider = new BasicTracerProvider({
-      resource,
+      resource: traceResource,
       spanProcessors: [new BatchSpanProcessor(this.spanExporter, { exportTimeoutMillis: this.exportTimeoutMillis })],
     });
     const reader = new PeriodicExportingMetricReader({
       exporter: this.metricExporter,
       exportIntervalMillis: METRIC_EXPORT_INTERVAL_MS,
     });
-    this.meterProvider = new MeterProvider({ resource, readers: [reader] });
+    this.meterProvider = new MeterProvider({ resource: metricResource, readers: [reader] });
     const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
     const meter = this.meterProvider.getMeter('conductor', '1.0.0');
-    this.metricsRecorder = new MetricsRecorder(meter);
+    this.metricsRecorder = new MetricsRecorder(meter, {
+      // Identity is optional on the start context, and MetricsRecorder's own
+      // default for an absent value is 'unknown'. Mirror it here rather than
+      // emitting an empty attribute, which reads as a real identity downstream.
+      project: this.projectNameOverride ?? (context.project ? basename(context.project) : 'unknown'),
+      feature: context.feature ?? 'unknown',
+    });
     this.spanManager = new SpanManager(tracer, this.onWarning, {
       onStepClose: (step, durationMs, retryCount) => {
         const tokenUsage = this.pendingTokenUsage.get(step);
