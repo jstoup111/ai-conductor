@@ -164,6 +164,14 @@ describe('renderDaemonEvent', () => {
     })).toEqual(['↶ REWIND: build (operator; demoted build, test_suite, build_review)']);
   });
 
+  it.each([
+    [{ type: 'project_setup', ran: true, reason: 'no-marker' } as const, '· project setup ran (no-marker)'],
+    [{ type: 'project_setup', ran: false, reason: 'marker-valid' } as const, '· project setup skipped (marker-valid)'],
+    [{ type: 'project_setup', ran: false, reason: 'no-script' } as const, '· project setup skipped (no-script)'],
+  ])('renders project setup state and reason for %#', (event, expected) => {
+    expect(lines(event)).toEqual([expected]);
+  });
+
   it('renders plan-growth counts with each gate and the current cap', () => {
     expect(lines({
       type: 'plan_growth',

@@ -22,10 +22,12 @@
  * Two divergences between the two runners are deliberate and easy to erase by
  * copying one onto the other (ADR §1, §2):
  *
- * - **The absent-script path is silent on the teardown side** and logs a skip
- *   notice on the setup side. FR-4 promises a non-adopting project
- *   byte-identical log output, so teardown emits no line at all when
- *   `bin/teardown` is absent.
+ * - **The absent-script path is silent on the teardown side** and rides the
+ *   `project_setup` event on the setup side. FR-4 promises a non-adopting
+ *   project byte-identical log output, so teardown emits no line at all when
+ *   `bin/teardown` is absent; the setup side reports `no-script` on the event
+ *   spine and never writes a raw skip line
+ *   (adr-2026-08-26-setup-once-per-worktree-marker decision 3).
  * - **Only teardown is time-bound**, via `execa`'s `timeout` (default 120s,
  *   overridable by `teardown_timeout_seconds`). There is deliberately no way
  *   to disable the bound — an unbounded project script sits in the daemon's
@@ -41,6 +43,7 @@
  */
 import { execa } from 'execa';
 import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat, lstat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { PRE_COMMIT_HOOK, PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 import {
@@ -48,12 +51,93 @@ import {
   DOCS_GUARD_HOOK,
 } from './session-hook-assets.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
+import { resolveDispatchStartTimeoutSeconds } from './resolved-config.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEvent } from '../types/events.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
 
+const SETUP_MARKER_VERSION = 1;
+const SETUP_MARKER_PATH = join('.daemon', 'setup-ok.json');
+
+export interface SetupMarker {
+  version: typeof SETUP_MARKER_VERSION;
+  setupScriptHash: string;
+  baseSha: string;
+  /**
+   * The worktree's own HEAD when setup succeeded — provenance only
+   * (adr-2026-08-26-setup-once-per-worktree-marker, decision 1). It is
+   * deliberately NOT `baseSha`: the base is the resolved identity the gate
+   * compares, while HEAD carries the task commits the build has made on top of
+   * it, so the pair answers "prepared against which base, at which commit".
+   * Never read by `setupDecision`, and never used as a timing source.
+   */
+  preparedAtCommit: string;
+}
+
+/**
+ * Resolve the commit the worktree is actually being prepared at (its HEAD).
+ *
+ * Null when HEAD cannot be resolved (not a repository, unborn branch, git
+ * unavailable). The caller then declines to write the marker, which fails
+ * closed toward re-running setup on the next dispatch — the marker is only ever
+ * an assertion that a *known* code state was provisioned.
+ */
+async function resolvePreparedAtCommit(worktreePath: string): Promise<string | null> {
+  try {
+    const { stdout } = await execa('git', ['-C', worktreePath, 'rev-parse', 'HEAD']);
+    const sha = stdout.trim();
+    return sha.length > 0 ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Return a content-and-mode fingerprint for the project setup script. */
+export async function hashSetupScript(worktreePath: string): Promise<string | null> {
+  try {
+    const script = join(worktreePath, SETUP_SCRIPT);
+    const [contents, metadata] = await Promise.all([readFile(script), stat(script)]);
+    return createHash('sha256')
+      .update(contents)
+      .update(String(metadata.mode & 0o777))
+      .digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+/** Read a valid success marker, treating every malformed shape as absent. */
+export async function readSetupMarker(worktreePath: string): Promise<SetupMarker | null> {
+  try {
+    const raw = await readFile(join(worktreePath, SETUP_MARKER_PATH), 'utf-8');
+    const value: unknown = JSON.parse(raw);
+    if (
+      !value || typeof value !== 'object' ||
+      (value as { version?: unknown }).version !== SETUP_MARKER_VERSION ||
+      typeof (value as { setupScriptHash?: unknown }).setupScriptHash !== 'string' ||
+      typeof (value as { baseSha?: unknown }).baseSha !== 'string' ||
+      typeof (value as { preparedAtCommit?: unknown }).preparedAtCommit !== 'string'
+    ) return null;
+    return value as SetupMarker;
+  } catch {
+    return null;
+  }
+}
+
+/** Atomically persist a marker only after a successful project setup. */
+export async function writeSetupMarker(worktreePath: string, marker: SetupMarker): Promise<void> {
+  const path = join(worktreePath, SETUP_MARKER_PATH);
+  const tempPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+  await mkdir(join(worktreePath, '.daemon'), { recursive: true });
+  await writeFile(tempPath, `${JSON.stringify(marker)}\n`, 'utf-8');
+  await rename(tempPath, path);
+}
+
 /** Conventional, project-supplied teardown entrypoint run before worktree removal. */
 export const TEARDOWN_SCRIPT = join('bin', 'teardown');
+export const DISPATCH_START_SCRIPT = join('bin', 'dispatch-start');
 
 /**
  * Skills declaring `operator_only: true` in their SKILL.md frontmatter.
@@ -134,11 +218,23 @@ export interface SessionHookRepairOutcome {
  *   successful setup's output is dependency-manager chatter, and it dominated
  *   the daemon log (55% of lines) at no diagnostic value. Failures are
  *   unaffected: `SetupFailureError` still carries a 50-line output tail.
+ * @param opts.dispatchStart Opt in to the per-dispatch lifecycle hook. This is
+ *   restricted to daemon dispatch and setup-triage preparation by
+ *   adr-2026-08-26 decision 7; resolve worktrees retain preparation without it.
+ * @param opts.dispatchStartTimeoutSeconds Paired with `dispatchStart` and read
+ *   only when it is true, so resolve worktrees cannot acquire hook behavior.
  */
 export async function prepareWorktree(
   worktreePath: string,
   log?: (msg: string) => void,
-  opts?: { verbose?: boolean },
+  opts?: {
+    verbose?: boolean;
+    baseSha?: string;
+    force?: boolean;
+    events?: ConductorEventEmitter;
+    dispatchStart?: boolean;
+    dispatchStartTimeoutSeconds?: number;
+  },
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
   await writeNamespaceEnv(worktreePath, namespace, log);
@@ -146,7 +242,87 @@ export async function prepareWorktree(
   await writeGitHooksAndWire(worktreePath, log);
   await ensureSessionHooks(worktreePath, log);
   await excludeEngineArtifacts(worktreePath, log);
-  await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
+  const decision = await setupDecision(worktreePath, opts?.baseSha, opts?.force ?? false);
+  // The setup decision reaches the operator as a rendered `project_setup`
+  // event and nothing else. adr-2026-08-26 decision 3 forbids a parallel raw
+  // log write here: two channels for one fact drift, and only the event is
+  // visible to the persisted ledger every other consumer reads. The daemon log
+  // line is produced by the event's render sink, so removing these writes
+  // loses no operator-visible output.
+  await opts?.events?.emit({ type: 'project_setup', ran: decision.ran, reason: decision.reason });
+  let setupRan = false;
+  if (decision.ran) {
+    await rm(join(worktreePath, SETUP_MARKER_PATH), { force: true });
+    setupRan = await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
+  }
+  if (setupRan && opts?.baseSha) {
+    const [setupScriptHash, preparedAtCommit] = await Promise.all([
+      hashSetupScript(worktreePath),
+      resolvePreparedAtCommit(worktreePath),
+    ]);
+    if (setupScriptHash && preparedAtCommit) {
+      await writeSetupMarker(worktreePath, {
+        version: SETUP_MARKER_VERSION,
+        setupScriptHash,
+        baseSha: opts.baseSha,
+        preparedAtCommit,
+      });
+    } else {
+      log?.(
+        `setup marker not written (${setupScriptHash ? 'unresolved HEAD' : 'unreadable bin/setup'}) — setup re-runs next dispatch`,
+      );
+    }
+  }
+  if (opts?.dispatchStart) {
+    await runDispatchStart(worktreePath, log, {
+      verbose: opts.verbose,
+      timeoutSeconds: opts.dispatchStartTimeoutSeconds,
+    });
+  }
+}
+
+type SetupDecision = Extract<ConductorEvent, { type: 'project_setup' }>;
+
+/** Distinguish a missing marker from one that exists but cannot prove validity. */
+async function setupMarkerExists(worktreePath: string): Promise<boolean> {
+  try {
+    await lstat(join(worktreePath, SETUP_MARKER_PATH));
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
+/** A present but unreadable setup path is distinct from an absent script. */
+async function setupScriptExists(worktreePath: string): Promise<boolean> {
+  try {
+    await lstat(join(worktreePath, SETUP_SCRIPT));
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
+async function setupDecision(worktreePath: string, baseSha: string | undefined, force: boolean): Promise<SetupDecision> {
+  if (!await setupScriptExists(worktreePath)) {
+    return { type: 'project_setup', ran: false, reason: 'no-script' };
+  }
+  if (force) return { type: 'project_setup', ran: true, reason: 'forced' };
+  if (!baseSha) return { type: 'project_setup', ran: true, reason: 'no-marker' };
+  const [marker, setupScriptHash] = await Promise.all([
+    readSetupMarker(worktreePath),
+    hashSetupScript(worktreePath),
+  ]);
+  if (marker === null) {
+    return {
+      type: 'project_setup',
+      ran: true,
+      reason: await setupMarkerExists(worktreePath) ? 'marker-invalid' : 'no-marker',
+    };
+  }
+  if (setupScriptHash === null || marker.setupScriptHash !== setupScriptHash) return { type: 'project_setup', ran: true, reason: 'script-changed' };
+  if (marker.baseSha !== baseSha) return { type: 'project_setup', ran: true, reason: 'base-moved' };
+  return { type: 'project_setup', ran: false, reason: 'marker-valid' };
 }
 
 /**
@@ -180,7 +356,7 @@ async function excludeEngineArtifacts(
       // No exclude file yet — start fresh.
     }
     const lines = new Set(existing.split('\n').map((l) => l.trim()));
-    const wanted = ['.claude/'];
+    const wanted = ['.claude/', '.daemon/'];
     const missing = wanted.filter((w) => !lines.has(w));
     if (missing.length === 0) {
       return;
@@ -623,20 +799,61 @@ export async function runProjectTeardown(
   }
 }
 
-/** Run the project's `bin/setup` if present; no-op otherwise; throw on failure. */
+/** Run the optional per-dispatch lifecycle script; all failures are contained. */
+export async function runDispatchStart(
+  worktreePath: string,
+  log?: (msg: string) => void,
+  opts?: { verbose?: boolean; timeoutSeconds?: number },
+): Promise<void> {
+  const script = join(worktreePath, DISPATCH_START_SCRIPT);
+  const timeoutSeconds = opts?.timeoutSeconds ?? resolveDispatchStartTimeoutSeconds();
+  try { await access(script); } catch { return; }
+  try {
+    const result = await execa(script, [], { cwd: worktreePath, all: true, timeout: timeoutSeconds * 1000, env: { CI: 'true', [NAMESPACE_VAR]: sanitizeNamespace(basename(worktreePath)) } });
+    const lines = (result.all ?? '').split('\n').filter((line) => line.trim() !== '');
+    if (opts?.verbose) for (const line of lines) log?.(`dispatch-start: ${line}`);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    const text = err !== null && typeof err === 'object' && typeof (err as { all?: unknown }).all === 'string'
+      ? (err as { all: string }).all : detail;
+    const timedOut = (err as { timedOut?: unknown }).timedOut === true;
+    const prefix = timedOut ? `timed out in ${worktreePath} after ${timeoutSeconds} second(s)` : `failed in ${worktreePath}`;
+    log?.(`dispatch-start: ${prefix}: ${extractTail(text, 50)}`);
+  }
+}
+
+/**
+ * Run the project's `bin/setup`. Only reached when `setupDecision` already
+ * resolved `ran: true`, so an absent script is a failure here, not a no-op:
+ * the genuinely scriptless project is decided (and reported) upstream as
+ * `no-script` and never reaches this runner. Returns true on success; every
+ * failure throws `SetupFailureError`.
+ */
 async function runProjectSetup(
   worktreePath: string,
   namespace: string,
   log?: (msg: string) => void,
   verbose = false,
-): Promise<void> {
+): Promise<boolean> {
   const script = join(worktreePath, SETUP_SCRIPT);
 
   try {
     await access(script);
-  } catch {
-    log?.('no bin/setup — skipping project setup');
-    return;
+  } catch (err) {
+    // TOCTOU window: `setupDecision` observed this path with `lstat`, and the
+    // `project_setup` event has already told every consumer setup would run.
+    // If the script vanished or lost access in between, the emitted fact can
+    // no longer be honored — and adr-2026-08-26 decision 3 forbids correcting
+    // it with a raw `log()` write, which would be a second reporting channel
+    // contradicting the persisted one. Fail closed onto the setup-failure path
+    // `prepareWorktree`'s caller already handles: the run was attempted and
+    // could not proceed, so this is a real failure of an actual setup run
+    // (decision 4's triage trigger), never a silent skip.
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new SetupFailureError(
+      `project setup (${SETUP_SCRIPT}) became unavailable after the setup decision: ${detail}`,
+      detail,
+    );
   }
 
   log?.(`running ${SETUP_SCRIPT}`);
@@ -667,6 +884,7 @@ async function runProjectSetup(
       }
     }
     log?.('setup: ok');
+    return true;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     // Extract output tail from the error (last 50 lines of combined stdout/stderr).

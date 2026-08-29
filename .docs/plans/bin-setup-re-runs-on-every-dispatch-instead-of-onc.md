@@ -307,6 +307,35 @@ None — no migrations, no new dependencies.
 
 **Dependencies:** 11; 2
 
+### Task 13: A project with no `bin/setup` reports honestly
+**Story:** Story 1
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests: preparing a worktree whose project has no `bin/setup` emits `project_setup` with `ran: false` and a reason naming the absent script, for all three entry shapes — no marker and no `baseSha`, no marker with a `baseSha`, and `force: true`; and the daemon renders that event as a skip, not as `project setup ran`.
+2. Verify RED — today `setupDecision` (`worktree-prepare.ts:248-262`) returns `ran: true` before `runProjectSetup` discovers the script is absent (`:217`, no-script return at `:776-777`), so a scriptless project emits `{ran: true, reason: 'no-marker'}` on every dispatch and `daemon-cli.ts:2113` prints `· project setup ran (no-marker)`.
+3. Implement: probe for the setup script first in `setupDecision` and return `{ ran: false, reason: 'no-script' }` when it is absent, ahead of the `force` and missing-`baseSha` branches — with no script there is nothing for the triage force path of Task 8 to run, so `ran: false` is the honest answer there too.
+4. Add `'no-script'` to the `project_setup` reason union (`src/conductor/src/types/events.ts:178`), keeping the union closed as Task 4 requires.
+5. Distinguish an absent script from an unreadable one: `hashSetupScript` returning null must not be read as absence at `worktree-prepare.ts:262`, where it means the script changed.
+6. Verify GREEN with the raw `no bin/setup — skipping project setup` write **removed**, not preserved: adr-2026-08-26 decision 3's 2026-08-28 amendment reports the skip solely by emitting `project_setup {reason: 'no-script'}` and rendering it, and forbids a parallel `log()` call for the same fact. Every pre-existing worktree-prepare and daemon-render test passes unmodified.
+7. Commit: "fix(setup): a project with no bin/setup reports ran:false with reason no-script".
+
+**Done when:**
+- [ ] A scriptless project emits `project_setup {ran: false, reason: 'no-script'}` for the no-marker, marker-with-baseSha, and forced entry shapes.
+- [ ] The daemon renders that event as `project setup skipped (no-script)`.
+- [ ] The raw `no bin/setup — skipping project setup` write is gone and its absence is asserted (adr-2026-08-26 decision 3, 2026-08-28 amendment), and no marker is written for a scriptless project.
+- [ ] An unreadable-but-present setup script still reports `script-changed`, not `no-script`.
+- [ ] The reason union remains closed and every pre-existing reason keeps its meaning.
+
+**Files likely touched:**
+- src/conductor/src/engine/worktree-prepare.ts — script probe ahead of the decision branches
+- src/conductor/src/types/events.ts — `no-script` reason
+- src/conductor/src/daemon-cli.ts — renderer wording for the new reason
+- src/conductor/test/engine/worktree-prepare.test.ts — the three entry-shape tests
+- src/conductor/test/daemon-render.test.ts — render assertion
+
+**Dependencies:** Task 4; Task 5
+
 ## Task Dependency Graph
 
 ```
@@ -331,3 +360,18 @@ Task 10 ──> Task 11 ──> Task 12 (also after Task 2)
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a Done when block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s41-1: Remove the test-side masking that hid the forced-prepare wiring defect, without dropping any existing coverage: (a) src/conductor/test/engine/daemon-cli.test.ts:71-83 — keep the existing `force: true` / `verbose: true` option-shape assertions (plan Task 8's 'no site left unforced' proof) and extend them to require the resolved `baseSha` and the passed `events` emitter; (b) src/conductor/test/acceptance/setup-once-per-worktree.acceptance.test.ts:193-202 and :238-247 — re-point both cases at the real `createForcedSetupPrepare(prepareWorktree, ...)` with the production resolver/emitter arguments instead of the baseSha+events-injecting lambda, preserving every existing assertion in both (invocation counts, persisted `forced` event, park/`setup-still-failing`, quarantineRef, post-failure marker ENOENT — plan Task 9's delivered coverage); (c) add the missing forced-SUCCESS case: after a cold prepare writes a valid marker, run the forced triage prepare against a PASSING bin/setup and assert setup executed again AND the marker was rewritten with the resolved base, which is the criterion's unproven half.
+**Gate:** prd-audit
+**Rationale:** Every existing force test injects the arguments production omits, so the AB-2/AB-3 defects shipped invisibly: src/conductor/test/engine/daemon-cli.test.ts:71-83 asserts the constructed options are exactly `{ verbose: true, force: true }`, and both acceptance cases wrap the helper in `(path, log, options) => prepareWorktree(path, log, { ...options, baseSha, events })` (src/conductor/test/acceptance/setup-once-per-worktree.acceptance.test.ts:193-202 and :238-247), adding the very inputs `createForcedSetupPrepare` never supplies — and both exercise only a forced FAILURE, so the forced-success marker rewrite is uncovered entirely. This is assertion strength missing inside plan Task 8's existing Done-when ('Both injection sites verified by test or by an assertion on the constructed options') and Task 9's acceptance coverage, not a planning omission. Sibling sweep: those three sites are the only tests that construct the forced prepare (grep `createForcedSetupPrepare` across src/ and test/ returns exactly daemon-cli.ts:567,:1206 plus these); no other test reads the marker's fields beyond the acceptance `toContain(baseSha)` check at :225, which stays.
+**Criterion:** S4.1
+**Parent task:** 8
+**Done when:**
+- S4.1 is satisfied by this task.
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/worktree-prepare.ts:220-272 — make the per-dispatch lifecycle hook opt-in so it cannot reach resolve worktrees: add an explicit `dispatchStart?: boolean` option to prepareWorktree's opts (default false, documented as adr-2026-08-26 decision 7's boundary) and guard the runDispatchStart call at :268-271 on it; leave `dispatchStartTimeoutSeconds` as the paired option and document that it is only read when `dispatchStart` is true so the two cannot drift apart. Opt in at BOTH in-boundary production sites in the SAME task, because the option and its call sites are a matched set: src/conductor/src/engine/daemon-deps.ts:127-132 (normal feature dispatch, alongside the existing baseSha/events/dispatchStartTimeoutSeconds) and src/conductor/src/daemon-cli.ts:601 in `createForcedSetupPrepare` (setup triage, alongside the existing verbose/force/baseSha/events). Do NOT change src/conductor/src/engine/autoresolve.ts:325-326 or ci-fix.ts:468 — the default-off value is what restores their pre-feature preparation behavior, and withResolveWorktree's path-only injection signature (autoresolve.ts:298) must stay as-is. Preserve, do not replace, the coverage plan Task 12 delivered: keep the two-execution cadence assertion in `test/engine/worktree-prepare.test.ts:313-322` ('runs on every prepare, including marker-valid setup skips') and its marker-valid skip setup, updating only its prepareWorktree opts to pass `dispatchStart: true`; keep the direct runDispatchStart contract cases at :285-311 (Task 11) untouched. Keep `test/engine/daemon-deps.test.ts:186-189`'s existing `objectContaining({ baseSha, events, dispatchStartTimeoutSeconds })` assertion and EXTEND it to require `dispatchStart: true`; keep `test/engine/daemon-cli.test.ts:71-83`'s existing forced-prepare option-shape assertions and extend them the same way. Add the regression that would have caught AB-1: a test proving prepareWorktree with default opts (the autoresolve/ci-fix shape — path only, as at autoresolve.ts:325-326) does NOT execute a present, recording bin/dispatch-start.
+**Gate:** as-built
+**Rationale:** src/conductor/src/engine/worktree-prepare.ts:268-271 calls runDispatchStart unconditionally at the end of prepareWorktree, and src/conductor/src/engine/autoresolve.ts:39,325-326 binds that same prepareWorktree as withResolveWorktree's default, so autoresolve (autoresolve.ts:875) and CI-fix (ci-fix.ts:468) transient worktrees now run a consumer's bin/dispatch-start outside the daemon-dispatch/setup-triage boundary that adr-2026-08-26-setup-once-per-worktree-marker decision 7 fixes (.docs/decisions/adr-2026-08-26-setup-once-per-worktree-marker.md:121-123). The approved ADR is unchanged and authoritative and the as-built report classifies AB-1 REMEDIABLE with a code-fix resolution, so this is conforming implementation drift, not an architecture change; plan Task 12 ('Wire dispatch-start into every dispatch, after the setup gate', .docs/plans/bin-setup-re-runs-on-every-dispatch-instead-of-onc.md:290-308) owns exactly this wiring and admits scoping it to the approved paths. Sibling sweep of the same class (a shared preparation entry point leaking daemon-dispatch-only lifecycle behavior): production callers of prepareWorktree are exactly daemon-deps.ts:125-132 (normal dispatch, in boundary), daemon-cli.ts:589-602 createForcedSetupPrepare (setup triage, in boundary), and the autoresolve.ts:325-326 default reached by both autoresolve.ts:875 and ci-fix.ts:468 (out of boundary) — one opt-in fix covers both out-of-boundary reachers, and no other production entry point exists. The marker/skip half of the feature does NOT bleed and must not be touched: withResolveWorktree injects prepare with the path only (autoresolve.ts:298), so baseSha is undefined and setupDecision (worktree-prepare.ts:301) already returns ran:true/'no-marker', preserving pre-feature setup behavior for resolve worktrees. Found and excluded: createForcedSetupPrepare never passes dispatchStartTimeoutSeconds (daemon-cli.ts:601), so triage's in-boundary hook would use the default rather than the resolved config value; that is a separate configuration-threading gap no plan task admits and it is recorded here rather than fixed. Also excluded: the non-blocking diagram drift the report lists at .docs/architecture/2026-07-03-harness-daemon-profile.md:49-52,75-77 and .docs/architecture/bin-teardown-run-a-project-supplied-teardown-hook-.md:13-24, which are sealed .docs/ artifacts a build step may not amend.
+**Governing clause:** adr-2026-08-26-setup-once-per-worktree-marker decision 7
+**Done when:**
+- adr-2026-08-26-setup-once-per-worktree-marker decision 7 is satisfied by this task.

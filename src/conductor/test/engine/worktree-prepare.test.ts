@@ -10,11 +10,18 @@ import {
   sanitizeNamespace,
   SETUP_SCRIPT,
   TEARDOWN_SCRIPT,
+  DISPATCH_START_SCRIPT,
   NAMESPACE_VAR,
   SetupFailureError,
   OPERATOR_ONLY_SKILLS,
   runProjectTeardown,
+  hashSetupScript,
+  readSetupMarker,
+  writeSetupMarker,
+  runDispatchStart,
 } from '../../src/engine/worktree-prepare.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 import {
   PRE_DISPATCH_HOOK,
   DOCS_GUARD_HOOK,
@@ -46,6 +53,380 @@ describe('engine/worktree-prepare', () => {
     await writeFile(path, body, 'utf-8');
     await chmod(path, mode);
   }
+
+  /**
+   * A real local Git repository in the temp worktree. The marker's
+   * `preparedAtCommit` is resolved from the worktree's own HEAD, so Git is the
+   * boundary under test for every spec that expects a marker write.
+   */
+  async function initGitRepo(): Promise<string> {
+    await execFileAsync('git', ['init', '-b', 'main', dir]);
+    await execFileAsync('git', ['-C', dir, 'config', 'user.email', 'test@example.com']);
+    await execFileAsync('git', ['-C', dir, 'config', 'user.name', 'Test']);
+    await execFileAsync('git', ['-C', dir, 'config', 'commit.gpgsign', 'false']);
+    return commitEmpty('base');
+  }
+
+  async function commitEmpty(message: string): Promise<string> {
+    await execFileAsync('git', ['-C', dir, 'commit', '--allow-empty', '-q', '-m', message]);
+    const { stdout } = await execFileAsync('git', ['-C', dir, 'rev-parse', 'HEAD']);
+    return stdout.trim();
+  }
+
+  async function writeDispatchStart(body: string, mode = 0o755): Promise<void> {
+    await mkdir(join(dir, 'bin'), { recursive: true });
+    const path = join(dir, DISPATCH_START_SCRIPT);
+    await writeFile(path, body, 'utf-8');
+    await chmod(path, mode);
+  }
+
+  describe('setup success marker', () => {
+    it('writes and reads a versioned marker atomically', async () => {
+      const marker = {
+        version: 1 as const,
+        setupScriptHash: 'hash',
+        baseSha: 'base-sha',
+        preparedAtCommit: 'prepared-sha',
+      };
+
+      await writeSetupMarker(dir, marker);
+
+      expect(await readSetupMarker(dir)).toEqual(marker);
+      await expect(access(join(dir, '.daemon', 'setup-ok.json'))).resolves.toBeUndefined();
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['corrupt', '{not json'],
+      ['unknown version', JSON.stringify({ version: 2 })],
+    ])('returns null for a %s marker', async (_label, contents) => {
+      if (contents !== undefined) {
+        await mkdir(join(dir, '.daemon'), { recursive: true });
+        await writeFile(join(dir, '.daemon', 'setup-ok.json'), contents, 'utf-8');
+      }
+
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+    });
+
+    it('fingerprints setup content and mode, and returns null when absent', async () => {
+      await expect(hashSetupScript(dir)).resolves.toBeNull();
+
+      await writeSetup('#!/usr/bin/env bash\necho first\n', 0o755);
+      const first = await hashSetupScript(dir);
+      await writeFile(join(dir, SETUP_SCRIPT), '#!/usr/bin/env bash\necho second\n', 'utf-8');
+      const changedBytes = await hashSetupScript(dir);
+      await chmod(join(dir, SETUP_SCRIPT), 0o744);
+      const changedMode = await hashSetupScript(dir);
+
+      expect(first).not.toBeNull();
+      expect(changedBytes).not.toBe(first);
+      expect(changedMode).not.toBe(changedBytes);
+    });
+
+    it('skips setup only for a marker matching the script and resolved base', async () => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      const scriptHash = await hashSetupScript(dir);
+      await writeSetupMarker(dir, {
+        version: 1,
+        setupScriptHash: scriptHash!,
+        baseSha: 'base-a',
+        preparedAtCommit: 'provenance-only',
+      });
+
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+
+      await expect(access(join(dir, 'setup-count'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it.each([
+      ['no marker', undefined, 'base-a'],
+      ['corrupt marker', '{nope', 'base-a'],
+      ['unknown marker version', JSON.stringify({ version: 2 }), 'base-a'],
+      ['missing base SHA', undefined, undefined],
+    ])('runs setup fail-closed with %s', async (_label, markerContents, baseSha) => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      const scriptHash = await hashSetupScript(dir);
+      if (markerContents === undefined && baseSha === undefined) {
+        await writeSetupMarker(dir, {
+          version: 1,
+          setupScriptHash: scriptHash!,
+          baseSha: 'base-a',
+          preparedAtCommit: 'provenance-only',
+        });
+      } else if (markerContents !== undefined) {
+        await mkdir(join(dir, '.daemon'), { recursive: true });
+        await writeFile(join(dir, '.daemon', 'setup-ok.json'), markerContents, 'utf-8');
+      }
+
+      await prepareWorktree(dir, undefined, { baseSha });
+
+      expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('ran');
+    });
+
+    it('writes a marker only after successful setup and clears a stale marker before a forced failure', async () => {
+      const baseSha = await initGitRepo();
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+
+      await prepareWorktree(dir, undefined, { baseSha });
+
+      const marker = await readSetupMarker(dir);
+      expect(marker).toMatchObject({ baseSha, setupScriptHash: await hashSetupScript(dir) });
+
+      await writeSetup('#!/usr/bin/env bash\necho broken >&2\nexit 1\n');
+      await expect(prepareWorktree(dir, undefined, { baseSha, force: true }))
+        .rejects.toBeInstanceOf(SetupFailureError);
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+
+      await writeSetup('#!/usr/bin/env bash\necho reran >> setup-count\n');
+      await prepareWorktree(dir, undefined, { baseSha });
+      expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('reran');
+    });
+
+    it('stamps the marker with the worktree HEAD as provenance, never a copy of the base', async () => {
+      // Decision 1: `baseSha` is the identity the gate compares; the prepared
+      // commit is the separate fact of WHERE setup ran — which, once a build
+      // has made task commits, is ahead of the base it was cut from.
+      const baseSha = await initGitRepo();
+      await writeSetup('#!/usr/bin/env bash\ntrue\n');
+      const headSha = await commitEmpty('task: build progress past the base');
+
+      await prepareWorktree(dir, undefined, { baseSha });
+
+      expect(headSha).not.toBe(baseSha);
+      expect(await readSetupMarker(dir)).toMatchObject({ baseSha, preparedAtCommit: headSha });
+    });
+
+    it('writes no marker when the prepared commit cannot be resolved', async () => {
+      // Fail closed: without provenance the marker would assert a code state it
+      // cannot name, so setup simply re-runs on the next dispatch.
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      const log: string[] = [];
+
+      await prepareWorktree(dir, (message) => log.push(message), { baseSha: 'base-a' });
+
+      expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('ran');
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+      expect(log).toContainEqual(expect.stringContaining('setup marker not written'));
+    });
+
+    it.each([
+      ['no marker', async () => {}, 'no-marker'],
+      ['corrupt marker', async () => {
+        await mkdir(join(dir, '.daemon'), { recursive: true });
+        await writeFile(join(dir, '.daemon', 'setup-ok.json'), '{bad json', 'utf-8');
+      }, 'marker-invalid'],
+      ['changed script', async () => {
+        await writeSetupMarker(dir, { version: 1, setupScriptHash: 'stale', baseSha: 'base-a', preparedAtCommit: 'old' });
+      }, 'script-changed'],
+      ['moved base', async () => {
+        await writeSetupMarker(dir, { version: 1, setupScriptHash: (await hashSetupScript(dir))!, baseSha: 'base-old', preparedAtCommit: 'old' });
+      }, 'base-moved'],
+    ])('emits evidence-derived %s setup invalidation reason', async (_name, arrange, reason) => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      await arrange();
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('project_setup', (event) => {
+        seen.push(event);
+      });
+
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a', events });
+
+      expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('ran');
+      expect(seen).toEqual([{ type: 'project_setup', ran: true, reason }]);
+    });
+
+    it('forces setup despite a valid marker and emits forced', async () => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('project_setup', (event) => {
+        seen.push(event);
+      });
+
+      await prepareWorktree(dir, undefined, { baseSha: 'base-a', force: true, events });
+
+      expect((await readFile(join(dir, 'setup-count'), 'utf-8')).trim().split('\n')).toHaveLength(2);
+      expect(seen).toEqual([{ type: 'project_setup', ran: true, reason: 'forced' }]);
+    });
+
+    it.each([
+      ['without a marker or base SHA', {}],
+      ['without a marker with a base SHA', { baseSha: 'base-a' }],
+      ['when forced', { baseSha: 'base-a', force: true }],
+    ])('reports no-script %s', async (_shape, setupOpts) => {
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      const log: string[] = [];
+      events.on('project_setup', (event) => { seen.push(event); });
+
+      await prepareWorktree(dir, (message) => log.push(message), { ...setupOpts, events });
+
+      expect(seen).toEqual([{ type: 'project_setup', ran: false, reason: 'no-script' }]);
+      // adr-2026-08-26 decision 3: the reason rides the spine and nothing else
+      // reports it. A raw log write alongside the event is a second channel the
+      // ledger cannot see, so assert its absence rather than its content.
+      expect(log).not.toContain('no bin/setup — skipping project setup');
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+    });
+
+    it('keeps an unreadable-but-present setup script distinct from no-script', async () => {
+      await mkdir(join(dir, SETUP_SCRIPT), { recursive: true });
+      await writeSetupMarker(dir, {
+        version: 1,
+        setupScriptHash: 'old-hash',
+        baseSha: 'base-a',
+        preparedAtCommit: 'old',
+      });
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('project_setup', (event) => { seen.push(event); });
+
+      await expect(prepareWorktree(dir, undefined, { baseSha: 'base-a', events }))
+        .rejects.toBeInstanceOf(SetupFailureError);
+
+      expect(seen).toEqual([{ type: 'project_setup', ran: true, reason: 'script-changed' }]);
+    });
+  });
+
+  /**
+   * As-built AB-4. `setupDecision` probes `bin/setup` with `lstat`, the
+   * `project_setup` decision is emitted, and only then does `runProjectSetup`
+   * re-probe with `access` — a TOCTOU window in which the script can vanish or
+   * lose access after every consumer has been told setup would run. The
+   * emitter is awaited inside that exact window, so an async subscriber is the
+   * production seam that reproduces it deterministically (no sleeps, no racing
+   * writer). adr-2026-08-26 decision 3 forbids reporting that state on a
+   * second raw channel, so the branch must fail closed instead.
+   */
+  describe('setup script disappearing after the decision (AB-4)', () => {
+    it('fails closed, with no raw skip line, when bin/setup is removed mid-window', async () => {
+      await writeSetup('#!/usr/bin/env bash\ntouch setup-ran.marker\n');
+      const log: string[] = [];
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('project_setup', async (event) => {
+        seen.push(event);
+        await rm(join(dir, 'bin'), { recursive: true, force: true });
+      });
+
+      let raised: unknown;
+      try {
+        await prepareWorktree(dir, (m) => log.push(m), { baseSha: 'base-a', events });
+        throw new Error('should have rejected');
+      } catch (err) {
+        raised = err;
+      }
+
+      // Half one: the fail-closed signal the caller (daemon-runner) handles.
+      expect(raised).toBeInstanceOf(SetupFailureError);
+      expect((raised as SetupFailureError).message).toContain(
+        'became unavailable after the setup decision',
+      );
+      // Half two: no second, contradictory reporting channel for the same fact.
+      expect(log).not.toContain('no bin/setup — skipping project setup');
+      expect(log.some((l) => l.includes('skipping project setup'))).toBe(false);
+      expect(seen).toEqual([{ type: 'project_setup', ran: true, reason: 'no-marker' }]);
+      // Setup never ran, so no success marker may claim it did.
+      await expect(access(join(dir, 'setup-ran.marker'))).rejects.toThrow();
+      await expect(readSetupMarker(dir)).resolves.toBeNull();
+    });
+
+    it('fails closed, with no raw skip line, when bin/setup becomes inaccessible mid-window', async () => {
+      await writeSetup('#!/usr/bin/env bash\ntouch setup-ran.marker\n');
+      const log: string[] = [];
+      const events = new ConductorEventEmitter();
+      events.on('project_setup', async () => {
+        await chmod(join(dir, 'bin'), 0o000);
+      });
+
+      try {
+        let raised: unknown;
+        try {
+          await prepareWorktree(dir, (m) => log.push(m), { baseSha: 'base-a', events });
+          throw new Error('should have rejected');
+        } catch (err) {
+          raised = err;
+        }
+
+        expect(raised).toBeInstanceOf(SetupFailureError);
+        expect((raised as SetupFailureError).message).toContain(
+          'became unavailable after the setup decision',
+        );
+        expect(log).not.toContain('no bin/setup — skipping project setup');
+        expect(log.some((l) => l.includes('skipping project setup'))).toBe(false);
+      } finally {
+        await chmod(join(dir, 'bin'), 0o755);
+      }
+    });
+  });
+
+  describe('runDispatchStart', () => {
+    it('is silent when absent, receives the dispatch environment, and contains failure', async () => {
+      const log = vi.fn();
+      await expect(runDispatchStart(dir, log)).resolves.toBeUndefined();
+      expect(log).not.toHaveBeenCalled();
+
+      await writeDispatchStart(`#!/usr/bin/env node
+require('node:fs').writeFileSync('dispatch-start.json', JSON.stringify({ ci: process.env.CI, namespace: process.env.WORKTREE_NAMESPACE, cwd: process.cwd() }));
+`);
+      await expect(runDispatchStart(dir)).resolves.toBeUndefined();
+      expect(JSON.parse(await readFile(join(dir, 'dispatch-start.json'), 'utf-8'))).toEqual({
+        ci: 'true', namespace: sanitizeNamespace(basename(dir)), cwd: dir,
+      });
+
+      await writeDispatchStart('#!/usr/bin/env bash\necho hook-failed >&2\nexit 2\n');
+      await expect(runDispatchStart(dir, log)).resolves.toBeUndefined();
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining('dispatch-start: failed'));
+    });
+
+    it('kills a hanging hook at the explicit timeout, logs it, and lets the dispatch proceed', async () => {
+      // The hook records its own pid, then hangs far longer than any bounded
+      // test would tolerate. Node terminates on the default SIGTERM action, so
+      // the pid is reaped by the time execa's timeout rejection settles.
+      await writeDispatchStart(`#!/usr/bin/env node
+require('node:fs').writeFileSync('dispatch-start.pid', String(process.pid));
+setTimeout(() => {}, 600000);
+`);
+      const log = vi.fn();
+
+      const startedAt = Date.now();
+      await expect(runDispatchStart(dir, log, { timeoutSeconds: 0.5 })).resolves.toBeUndefined();
+      const elapsedMs = Date.now() - startedAt;
+
+      // Resolved on the explicit bound, not on some other (larger) timeout.
+      expect(elapsedMs).toBeLessThan(10_000);
+
+      // The child is gone: signalling a reaped pid throws ESRCH.
+      const pid = Number((await readFile(join(dir, 'dispatch-start.pid'), 'utf-8')).trim());
+      expect(Number.isInteger(pid)).toBe(true);
+      expect(() => process.kill(pid, 0)).toThrow();
+
+      // The log names the timeout (not a generic failure) and its bound.
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining('dispatch-start: timed out'));
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining('0.5 second(s)'));
+    });
+
+    it('does not run during default preparation for resolve worktrees', async () => {
+      await writeDispatchStart('#!/usr/bin/env bash\necho dispatch >> dispatch-count\n');
+
+      await prepareWorktree(dir);
+
+      await expect(access(join(dir, 'dispatch-count'))).rejects.toThrow();
+    });
+
+    it('runs on every opted-in prepare, including marker-valid setup skips', async () => {
+      const baseSha = await initGitRepo();
+      await writeSetup('#!/usr/bin/env bash\ntrue\n');
+      await writeDispatchStart('#!/usr/bin/env bash\necho dispatch >> dispatch-count\n');
+
+      await prepareWorktree(dir, undefined, { baseSha, dispatchStart: true });
+      await prepareWorktree(dir, undefined, { baseSha, dispatchStart: true });
+
+      expect((await readFile(join(dir, 'dispatch-count'), 'utf-8')).trim().split('\n')).toHaveLength(2);
+    });
+  });
 
   describe('runProjectTeardown', () => {
     it.each([undefined, { verbose: true }] as const)(
@@ -467,8 +848,12 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
     // No bin/setup must resolve cleanly without any special markers.
     const log: string[] = [];
     await expect(prepareWorktree(dir, (m) => log.push(m))).resolves.toBeUndefined();
-    // Should have written the namespace but not mentioned running setup.
-    expect(log.some((l) => l.includes('skipping project setup'))).toBe(true);
+    // adr-2026-08-26 decision 3: the setup decision is reported only as a
+    // rendered `project_setup` event. With no emitter supplied there is no
+    // second channel to fall back to, so the absent script is silent here —
+    // the emitted-reason path is covered where an emitter is injected.
+    expect(log.some((l) => l.includes('skipping project setup'))).toBe(false);
+    expect(log.some((l) => l.includes(`running ${SETUP_SCRIPT}`))).toBe(false);
     // .env should exist with the namespace.
     const env = await readFile(join(dir, '.env'), 'utf-8');
     expect(env).toContain(NAMESPACE_VAR);
@@ -654,6 +1039,85 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
         .split('\n')
         .some((line) => / M .*settings\.local\.json/.test(line));
       expect(trackedModifiedLocalSettings).toBe(false);
+    });
+  });
+
+  // Task 7 (adr-2026-08-26-setup-once-per-worktree-marker): the engine's own
+  // bookkeeping must never reach `git status --porcelain`. setup-triage
+  // classifies a worktree's tree from porcelain output, so a `.daemon/` entry
+  // there would mis-classify every prepared worktree as dirty and engage
+  // quarantine machinery on the marker the engine just wrote. These run in a
+  // REAL linked git worktree because `info/exclude` lives in the shared common
+  // dir, which is exactly the resolution `excludeEngineArtifacts` performs.
+  describe('engine artifact exclusion (Task 7)', () => {
+    let repoRoot: string;
+    let worktreeDir: string;
+
+    beforeEach(async () => {
+      repoRoot = await mkdtemp(join(tmpdir(), 'wt-prepare-exclude-repo-'));
+      await execFileAsync('git', ['init', '-b', 'main', repoRoot]);
+      await execFileAsync('git', ['-C', repoRoot, 'config', 'user.email', 'test@example.com']);
+      await execFileAsync('git', ['-C', repoRoot, 'config', 'user.name', 'Test']);
+      await execFileAsync('git', ['-C', repoRoot, 'config', 'commit.gpgsign', 'false']);
+      await writeFile(join(repoRoot, 'README.md'), '# scratch\n', 'utf-8');
+      await execFileAsync('git', ['-C', repoRoot, 'add', '.']);
+      await execFileAsync('git', ['-C', repoRoot, 'commit', '-q', '-m', 'chore: initial commit']);
+
+      worktreeDir = join(tmpdir(), `wt-prepare-exclude-wt-${Math.random().toString(36).slice(2)}`);
+      await execFileAsync('git', ['-C', repoRoot, 'worktree', 'add', '-q', worktreeDir, '-b', 'feature']);
+    });
+
+    afterEach(async () => {
+      await execFileAsync('git', ['-C', repoRoot, 'worktree', 'remove', '--force', worktreeDir])
+        .catch(() => undefined);
+      await rm(worktreeDir, { recursive: true, force: true });
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+
+    /** Locate the worktree's exclude file the same way git itself resolves it. */
+    async function excludeFilePath(): Promise<string> {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', worktreeDir, 'rev-parse', '--git-path', 'info/exclude'],
+      );
+      const rel = stdout.trim();
+      return rel.startsWith('/') ? rel : join(worktreeDir, rel);
+    }
+
+    async function writeWorktreeSetup(): Promise<void> {
+      await mkdir(join(worktreeDir, 'bin'), { recursive: true });
+      const script = join(worktreeDir, SETUP_SCRIPT);
+      await writeFile(script, '#!/usr/bin/env bash\ntrue\n', 'utf-8');
+      await chmod(script, 0o755);
+    }
+
+    it('leaves no .daemon/ entry in git status --porcelain after a marker is written', async () => {
+      await writeWorktreeSetup();
+      const { stdout: head } = await execFileAsync('git', ['-C', worktreeDir, 'rev-parse', 'HEAD']);
+
+      await prepareWorktree(worktreeDir, undefined, { baseSha: head.trim() });
+
+      // Guard against a vacuous assertion: the marker must actually exist, or
+      // porcelain has nothing to hide.
+      expect(await readSetupMarker(worktreeDir)).not.toBeNull();
+
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreeDir });
+      const daemonEntries = stdout.split('\n').filter((line) => line.includes('.daemon'));
+      expect(daemonEntries).toEqual([]);
+    });
+
+    it('appends each exclusion exactly once across repeated prepares', async () => {
+      await prepareWorktree(worktreeDir);
+      await prepareWorktree(worktreeDir);
+
+      const lines = (await readFile(await excludeFilePath(), 'utf-8'))
+        .split('\n')
+        .map((line) => line.trim());
+
+      // Both members of the exclusion set are pinned: a later edit that drops
+      // or duplicates either one is a porcelain regression.
+      expect(lines.filter((line) => line === '.daemon/')).toHaveLength(1);
+      expect(lines.filter((line) => line === '.claude/')).toHaveLength(1);
     });
   });
 

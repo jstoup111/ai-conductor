@@ -484,6 +484,34 @@ export const DEFAULT_AUTH_PARK_TIMEOUT_MINUTES = 60;
 /** Default bounded grace period for a project-supplied daemon teardown hook. */
 const DEFAULT_TEARDOWN_TIMEOUT_SECONDS = 120;
 
+/** Default bounded grace period for a project-supplied dispatch-start hook. */
+const DEFAULT_DISPATCH_START_TIMEOUT_SECONDS = 120;
+
+type DispatchStartTimeoutConfig = HarnessConfig & {
+  dispatch_start_timeout_seconds?: unknown;
+};
+
+/**
+ * Resolve the project dispatch-start hook timeout from HarnessConfig.
+ *
+ * A dispatch-start hook must always have a bounded grace period: absent values
+ * use the default, and invalid runtime values warn once before falling back to
+ * it.
+ */
+export function resolveDispatchStartTimeoutSeconds(config?: HarnessConfig): number {
+  const override = (config as DispatchStartTimeoutConfig | undefined)?.dispatch_start_timeout_seconds;
+  if (override === undefined) {
+    return DEFAULT_DISPATCH_START_TIMEOUT_SECONDS;
+  }
+  if (typeof override !== 'number' || !Number.isFinite(override) || override <= 0) {
+    console.warn(
+      `Invalid dispatch_start_timeout_seconds ${JSON.stringify(override)}; using default ${DEFAULT_DISPATCH_START_TIMEOUT_SECONDS}.`,
+    );
+    return DEFAULT_DISPATCH_START_TIMEOUT_SECONDS;
+  }
+  return override;
+}
+
 /**
  * Resolve the project teardown hook timeout from HarnessConfig.
  *

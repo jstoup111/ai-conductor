@@ -424,6 +424,38 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     });
   });
 
+  it('hands setup triage the feature emitter so forced setup re-runs ride the feature spine', async () => {
+    // adr-2026-08-26-setup-once-per-worktree-marker decision 3: triage's forced
+    // `prepareWorktree` emits `project_setup`, and it must land on the emitter
+    // `beginFeatureRun` opened for THIS feature — the one whose persister is
+    // writing the worktree's `events.jsonl` — not be dropped to a raw log line.
+    const featureEvents = new ConductorEventEmitter();
+    const featureDeps = deps({ done: false, halted: true, reason: 'paused' });
+    featureDeps.beginFeatureRun = () => ({
+      events: featureEvents,
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      stop: () => {},
+    });
+    featureDeps.prepareWorktree = async () => {
+      throw new SetupFailureError('setup failed', 'diagnostic output');
+    };
+    let receivedEvents: unknown = 'runSetupTriage never ran';
+    featureDeps.runSetupTriage = async (_error, _worktree, _item, _execution, _log, events) => {
+      receivedEvents = events;
+      return { kind: 'pass', outputTail: '' };
+    };
+    featureDeps.runConductor = async () => {};
+    featureDeps.daemon = true;
+
+    await makeRunFeature(featureDeps)({ slug: 'feature-a' });
+
+    expect(receivedEvents).toBe(featureEvents);
+  });
+
   it('routes setup, triage, and conductor execution through the feature logger', async () => {
     const featureLog = vi.fn();
     const setupFailure = new SetupFailureError('setup failed', 'diagnostic output');

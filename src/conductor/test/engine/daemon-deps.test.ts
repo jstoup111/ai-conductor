@@ -36,6 +36,7 @@ vi.mock('../../src/engine/worktree-prepare.js', () => ({
   runProjectTeardown,
 }));
 import { execa } from 'execa';
+import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import {
   isProcessed,
   readWorktreeOutcome,
@@ -166,6 +167,27 @@ describe('engine/daemon-deps', () => {
     } as unknown as Parameters<typeof makeFeatureRunnerDeps>[0]);
     expect(d.projectRoot).toBe('/home/user/code/my-project');
     expect(typeof d.runGh).toBe('function');
+  });
+
+  it('threads the resolved base, feature event emitter, and dispatch-start timeout into preparation', async () => {
+    vi.mocked(prepareWorktree).mockResolvedValue(undefined);
+    vi.mocked(execa).mockResolvedValue({ stdout: 'base-sha' } as Awaited<ReturnType<typeof execa>>);
+    const d = makeFeatureRunnerDeps({
+      projectRoot: dir,
+      worktreeBase: join(dir, '.worktrees'),
+      baseBranch: 'main',
+      dispatchStartTimeoutSeconds: 7,
+      runConductorInWorktree: async () => {},
+    });
+    const events = { emit: vi.fn() } as never;
+
+    await d.prepareWorktree!({ path: join(dir, 'feature'), branch: 'feat/feature' }, undefined, events);
+
+    expect(prepareWorktree).toHaveBeenCalledWith(
+      join(dir, 'feature'),
+      undefined,
+      expect.objectContaining({ baseSha: 'base-sha', events, dispatchStart: true, dispatchStartTimeoutSeconds: 7 }),
+    );
   });
 
   describe('createWorktree (idempotent retry)', () => {

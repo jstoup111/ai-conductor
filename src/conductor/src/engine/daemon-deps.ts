@@ -63,6 +63,8 @@ export interface RealDepsConfig {
   verbose?: boolean;
   /** Resolved bounded runtime for the project teardown hook. */
   teardownTimeoutSeconds?: number;
+  /** Resolved bounded runtime for the project dispatch-start hook. */
+  dispatchStartTimeoutSeconds?: number;
   /** Deterministic setup-failure triage (adr-2026-07-09-setup-failure-triage), daemon-only. */
   runSetupTriage?: (
     error: SetupFailureError,
@@ -70,6 +72,7 @@ export interface RealDepsConfig {
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
     log?: (message: string) => void,
+    events?: ConductorEventEmitter,
   ) => Promise<TriageOutcome>;
 }
 
@@ -119,8 +122,16 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
     // each project translate the namespace into its own shared/namespaced infra.
-    prepareWorktree: (wt, log) =>
-      prepareWorktree(wt.path, log ?? cfg.log, { verbose: cfg.verbose ?? false }),
+    prepareWorktree: async (wt, log, events) => {
+      const baseSha = await resolveDaemonBaseSha(cfg.projectRoot, cfg.baseBranch);
+      await prepareWorktree(wt.path, log ?? cfg.log, {
+        verbose: cfg.verbose ?? false,
+        baseSha,
+        events,
+        dispatchStart: true,
+        dispatchStartTimeoutSeconds: cfg.dispatchStartTimeoutSeconds,
+      });
+    },
 
     runConductor: (wt, item, providerExecution, featureEvents, log, sessionId) =>
       cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents, log, sessionId),
@@ -206,6 +217,32 @@ async function resolveWorktreeBase(projectRoot: string, baseBranch: string): Pro
     return remote;
   } catch {
     return baseBranch;
+  }
+}
+
+/**
+ * The base SHA the setup marker is keyed on
+ * (adr-2026-08-26-setup-once-per-worktree-marker, decision 2).
+ *
+ * Every path that may write the marker resolves it HERE — the ordinary dispatch
+ * prepare and setup-triage's forced verification runs alike. Two resolutions
+ * that could drift would silently break the gate: a forced run stamping a
+ * different base than the next dispatch computes reads as `base-moved` and
+ * re-runs setup forever.
+ *
+ * `undefined` when the base cannot be resolved; `prepareWorktree` then writes no
+ * marker at all, leaving the gate fail-closed.
+ */
+export async function resolveDaemonBaseSha(
+  projectRoot: string,
+  baseBranch: string,
+): Promise<string | undefined> {
+  try {
+    const base = await resolveWorktreeBase(projectRoot, baseBranch);
+    return (await execa('git', ['rev-parse', '--verify', base], { cwd: projectRoot })).stdout.trim();
+  } catch {
+    // Missing base evidence deliberately leaves the marker gate fail-closed.
+    return undefined;
   }
 }
 

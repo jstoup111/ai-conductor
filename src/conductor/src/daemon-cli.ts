@@ -27,6 +27,7 @@ import {
 } from './engine/ci-fix.js';
 import {
   resolveRebaseResolutionAttempts,
+  resolveDispatchStartTimeoutSeconds,
   resolveSelfHostConfig,
   resolveTeardownTimeoutSeconds,
 } from './engine/resolved-config.js';
@@ -116,6 +117,7 @@ import {
   repairProcessed,
   makeFeatureRunnerDeps,
   makeWatchHaltClearedSeam,
+  resolveDaemonBaseSha,
 } from './engine/daemon-deps.js';
 import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
@@ -559,6 +561,60 @@ export function buildProgressReKickDeps(
       ]);
       return liveResolvedCount > lastResolvedCount;
     },
+  };
+}
+
+/**
+ * Construct the setup retry used by both setup-triage stages. Triage must
+ * re-run setup even when a prior dispatch left a valid success marker.
+ *
+ * `force: true` only bypasses the gate. The verification run is a real,
+ * observable preparation, so it carries the same two things an ordinary
+ * dispatch prepare does (adr-2026-08-26-setup-once-per-worktree-marker,
+ * decisions 3 and 4):
+ *
+ * - the **resolved base SHA**, so a forced run that SUCCEEDS rewrites the
+ *   marker and the next dispatch can skip setup. Without it `prepareWorktree`
+ *   writes no marker and triage's repair is invisible to the gate. It is
+ *   resolved from `base` — a required parameter, not an option — through the
+ *   same `resolveDaemonBaseSha` the dispatch path uses, so the two can never
+ *   stamp different bases, and so a caller cannot silently omit it.
+ * - the **feature emitter**, so the `forced` reason rides the event spine into
+ *   the feature's own `events.jsonl` and its rendered daemon log line, instead
+ *   of falling back to a raw log write.
+ *
+ * The base is resolved per invocation: triage may commit a quarantine between
+ * two verification runs, and each run stamps the base as it stands when it runs.
+ */
+export function createForcedSetupPrepare(
+  prepare: typeof prepareWorktree,
+  log: ((message: string) => void) | undefined,
+  verbose: boolean,
+  base: {
+    projectRoot: string;
+    baseBranch: string;
+    events?: ConductorEventEmitter;
+    /**
+     * The other half of the `dispatchStart` contract. `dispatchStart` and
+     * `dispatchStartTimeoutSeconds` are a matched pair: opting in without the
+     * resolved timeout drops the project's configured
+     * `dispatch_start_timeout_seconds` and silently bounds the hook at
+     * `worktree-prepare.ts`'s hardcoded default instead. Bound here so both
+     * triage stages share one value with the ordinary dispatch path.
+     */
+    dispatchStartTimeoutSeconds?: number;
+  },
+): (worktreePath: string) => Promise<void> {
+  return async (worktreePath) => {
+    const baseSha = await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
+    await prepare(worktreePath, log, {
+      verbose,
+      force: true,
+      baseSha,
+      events: base.events,
+      dispatchStart: true,
+      dispatchStartTimeoutSeconds: base.dispatchStartTimeoutSeconds,
+    });
   };
 }
 
@@ -1186,6 +1242,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     item: BacklogItem,
     providerExecution = createProviderExecution(),
     featureLog = log,
+    featureEvents?: ConductorEventEmitter,
   ) => {
     // Kill-switch for testing: prevent actual LLM dispatch
     if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
@@ -1195,9 +1252,24 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // Create a git runner rooted at the worktree path
     const git: GitRunner = makeGitRunner(worktree.path);
 
-    // Inject prepareWorktree for retry after quarantine
-    const runPrepare = (worktreePath: string) =>
-      prepareWorktree(worktreePath, featureLog, { verbose: config?.daemon_verbose ?? false });
+    // Inject prepareWorktree for retry after quarantine. The base binding is
+    // what makes a successful verification rewrite the setup marker, and the
+    // feature emitter is what puts its `forced` reason on this feature's own
+    // event spine — both stages' `runPrepare` is this one callback.
+    const runPrepare = createForcedSetupPrepare(
+      prepareWorktree,
+      featureLog,
+      config?.daemon_verbose ?? false,
+      {
+        projectRoot,
+        baseBranch,
+        events: featureEvents,
+        // Same resolved value the ordinary dispatch path threads into
+        // makeFeatureRunnerDeps below, so triage's hook and dispatch's hook
+        // can never be bounded differently.
+        dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
+      },
+    );
 
     // Triage stage 1: run-triage (TS-2/TS-3)
     // Classify tree state and route: clean → pass, dirty → quarantine+retry
@@ -1273,6 +1345,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     memoryProvider,
     log,
     verbose: config?.daemon_verbose ?? false,
+    dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
     teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
     runSetupTriage,
   });
@@ -2120,6 +2193,9 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'project_setup':
+      log(`${dot} project setup ${event.ran ? 'ran' : 'skipped'} (${event.reason})`);
+      break;
     case 'operator_rewind':
       log(
         `${chalk.yellow('↶ REWIND:')} ${event.target} (operator; demoted ${event.demoted.join(', ') || 'none'})`,

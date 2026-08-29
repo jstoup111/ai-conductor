@@ -116,6 +116,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'operator_rewind',
+  'project_setup',
   'plan_growth',
   'config_deprecated_key',
   'contained_live_checkout_drift',
@@ -154,6 +155,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'operator_rewind',
+  'project_setup',
   'plan_growth',
   'contained_live_checkout_drift',
   'self_host_containment_verdict',

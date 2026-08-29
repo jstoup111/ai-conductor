@@ -17,6 +17,11 @@ import { access, chmod, mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+const execFileAsync = promisify(execFile);
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
@@ -24,7 +29,12 @@ import { acquireScratchHome } from '../../src/engine/self-host/provider-scratch.
 import type { ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
-import { renderDaemonEvent, runDaemonMode } from '../../src/daemon-cli.js';
+import {
+  createForcedSetupPrepare,
+  renderDaemonEvent,
+  runDaemonMode,
+} from '../../src/daemon-cli.js';
+import type { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -51,6 +61,90 @@ class RecordingConductStateStore implements ConductStateStore<ConductState> {
     return this.result;
   }
 }
+
+describe('daemon setup-triage prepare wiring', () => {
+  // Real local Git: the base SHA the forced prepare stamps into the setup
+  // marker is resolved from the project root's refs, so the resolution itself
+  // is the boundary under test. No third party is reachable.
+  let projectRoot: string;
+
+  async function git(...args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['-C', projectRoot, ...args]);
+    return stdout.trim();
+  }
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'forced-setup-prepare-'));
+    await execFileAsync('git', ['init', '-b', 'main', projectRoot]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await git('commit', '--allow-empty', '-m', 'base');
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('binds the resolved base SHA and the feature emitter into the forced prepare', async () => {
+    const prepare = vi.fn(async () => {});
+    const log = vi.fn();
+    const events = new ConductorEventEmitter();
+    const runPrepare = createForcedSetupPrepare(
+      prepare as typeof prepareWorktree,
+      log,
+      true,
+      { projectRoot, baseBranch: 'main', events, dispatchStartTimeoutSeconds: 300 },
+    );
+
+    await runPrepare('/worktrees/after-quarantine');
+    await runPrepare('/worktrees/after-fix');
+
+    const baseSha = await git('rev-parse', 'main');
+    // Both triage stages share this callback, and each run must carry the base
+    // (so a success rewrites the marker) and the emitter (so `forced` rides the
+    // spine) — not just `force`.
+    //
+    // `dispatchStartTimeoutSeconds` is the other half of the `dispatchStart`
+    // hook contract: without it `runDispatchStart` silently falls back to the
+    // hardcoded 120s default and the project's configured value never reaches
+    // the setup-triage path. 300 is deliberately NOT the default, so a
+    // regression that drops the forwarding fails here instead of passing on a
+    // coincidental match.
+    expect(prepare).toHaveBeenNthCalledWith(
+      1,
+      '/worktrees/after-quarantine',
+      log,
+      { verbose: true, force: true, baseSha, events, dispatchStart: true, dispatchStartTimeoutSeconds: 300 },
+    );
+    expect(prepare).toHaveBeenNthCalledWith(
+      2,
+      '/worktrees/after-fix',
+      log,
+      { verbose: true, force: true, baseSha, events, dispatchStart: true, dispatchStartTimeoutSeconds: 300 },
+    );
+  });
+
+  it('re-resolves the base on every verification run', async () => {
+    const prepare = vi.fn(async () => {});
+    const runPrepare = createForcedSetupPrepare(
+      prepare as typeof prepareWorktree,
+      undefined,
+      false,
+      { projectRoot, baseBranch: 'main' },
+    );
+
+    await runPrepare('/worktrees/before-advance');
+    const firstBase = await git('rev-parse', 'main');
+    await git('commit', '--allow-empty', '-m', 'base advances mid-triage');
+    await runPrepare('/worktrees/after-advance');
+    const secondBase = await git('rev-parse', 'main');
+
+    expect(secondBase).not.toBe(firstBase);
+    expect(prepare.mock.calls.map((call) => (call as unknown as [string, unknown, { baseSha?: string }])[2].baseSha))
+      .toEqual([firstBase, secondBase]);
+  });
+});
 
 describe('daemon state-store command boundary (Task 17)', () => {
   it('records daemon base-state updates through the shared mutation port', async () => {

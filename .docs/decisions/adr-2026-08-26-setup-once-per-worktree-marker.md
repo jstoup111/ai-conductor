@@ -86,11 +86,21 @@ Option A, with these binding sub-decisions:
 3. **Reasons ride the spine.** A new `ConductorEvent` variant `project_setup` with
    `{ ran: boolean, reason }` where `reason` is a closed union:
    `no-marker | script-changed | base-moved | marker-invalid | forced` (ran: true) or
-   `marker-valid` (ran: false). Declared exhaustively in `EVENT_SINKS` (render + persist).
+   `marker-valid | no-script` (ran: false). Declared exhaustively in `EVENT_SINKS`
+   (render + persist).
    The emitter is threaded into `prepareWorktree` (widening the dep signature); emission
    happens after `beginFeatureRun` starts the per-worktree persister, so the fact lands in the
    feature's own `events.jsonl`. The daemon log line comes from the rendered event, not a
    parallel raw log write.
+   > **Amended 2026-08-28 by operator decision:** the original union had six members and no
+   > way to describe a consumer repository that has no `bin/setup` at all. That is a real,
+   > reachable state — setup did not run, and none of the five `ran: true` reasons applies,
+   > while the sole `ran: false` reason `marker-valid` would assert a valid marker that was
+   > never consulted. `no-script` is therefore admitted as a seventh member, `ran: false`.
+   > This widens the union only; it does not relax the rest of this decision. The prohibition
+   > on a parallel raw log write stands, and the absent-script skip is reported by emitting
+   > `project_setup` with `reason: 'no-script'` and rendering that event — never by a direct
+   > `log()` call alongside it.
 4. **Triage force path.** `prepareWorktree` gains `opts.force: boolean`; the setup-triage
    `runPrepare` injections pass `force: true` (and a forced run that succeeds rewrites the
    marker). This keeps triage's verification re-runs (`retryPrepareAfterQuarantine`,

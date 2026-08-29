@@ -103,6 +103,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup',
     'step_heartbeat_stall_minutes', 'stale_claim_window_hours',
     'provider_preparation_timeout_minutes', 'teardown_timeout_seconds',
+    'dispatch_start_timeout_seconds',
   ],
   defaults: ['model', 'effort', 'max_retries', 'escalate'],
   phases: ['model', 'effort', 'max_retries', 'escalate', 'by_tier'],
