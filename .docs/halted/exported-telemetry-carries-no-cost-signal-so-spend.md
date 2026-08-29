@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-29T11:36:56.220Z
 Slug: exported-telemetry-carries-no-cost-signal-so-spend
 Class: needs-human
 Halting step: prd_audit
