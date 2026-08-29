@@ -347,7 +347,7 @@ export function renderCanonicalFullHelp(): string {
       'compose/brain idea→spec loop (`compose`; `engineer` is a deprecated alias, and `compose --help` shows its full command reference)',
     )
     .replace(/^  engineer(\s)/m, '  compose$1')
-    .replaceAll('conduct engineer', 'conduct compose')
+    .replaceAll('ai-conductor engineer', 'ai-conductor compose')
     .replace('Supervisor engineer:', 'Compose:')
     .replaceAll('`engineer worktree`', '`compose worktree`')
     .replaceAll('`engineer land`', '`compose land`');
