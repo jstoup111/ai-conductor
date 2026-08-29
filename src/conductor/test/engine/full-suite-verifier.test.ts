@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:7, task:8, task:9, task:13
+// Covers: task:1, task:4, task:6, task:7, task:8, task:9, task:10, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -1196,6 +1196,120 @@ describe('FullSuiteVerifier', () => {
         bound: 5,
       },
       launches: 1,
+    });
+  });
+
+  it('starts a new drift epoch when an exhausted source budget reruns and passes', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-reset-drift-epoch-');
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  verification:',
+        '    drift_budget:',
+        '      source: 5',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFullSuiteEvidence(projectRoot, {
+      ...attestedPassEvidence(projectRoot),
+      driftLedger: [{
+        at: '2026-08-29T09:00:00.000Z',
+        headSha: 'previous-epoch-head',
+        categories: {
+          additional_inputs: 0,
+          dependencies: 0,
+          environment: 0,
+          migrations: 0,
+          project_config: 0,
+          source: 3,
+          test_infrastructure: 0,
+          tests: 0,
+        },
+      }],
+    });
+    const gitCalls: string[][] = [];
+    let passedRerun = false;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: passedRerun ? 'sha256:post-rerun' : 'sha256:exhausted',
+          headSha: passedRerun ? 'post-rerun-head' : 'rerun-head',
+          categoryFingerprints: {
+            ...CATEGORY_FINGERPRINTS,
+            source: passedRerun ? 'category:source:post-rerun' : 'category:source:exhausted',
+          },
+        },
+      }),
+      git: async (args) => {
+        gitCalls.push(args);
+        if (args[0] === 'diff') {
+          return {
+            exitCode: 0,
+            stdout: passedRerun
+              ? 'src/post-rerun.ts\n'
+              : Array.from({ length: 6 }, (_, index) => `src/${index}.ts`).join('\n'),
+            stderr: '',
+          };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      execute: async () => {
+        passedRerun = true;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-29T10:00:00.000Z',
+          endedAt: '2026-08-29T10:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+      worktreeStatus: async () => '',
+    });
+
+    const rerun = await verifier.ensure();
+    const evidenceAfterRerun = await readFullSuiteEvidence(projectRoot);
+    const postRerunInspection = await verifier.inspect();
+
+    expect({ rerun, evidenceAfterRerun, postRerunInspection, gitCalls }).toEqual({
+      rerun: expect.objectContaining({
+        status: 'EXECUTED',
+        evidence: expect.objectContaining({
+          provenanceHeadSha: 'rerun-head',
+          driftLedger: [],
+        }),
+      }),
+      evidenceAfterRerun: {
+        usable: true,
+        evidence: expect.objectContaining({
+          provenanceHeadSha: 'rerun-head',
+          driftLedger: [],
+        }),
+      },
+      postRerunInspection: expect.objectContaining({
+        status: 'PRESERVED_WITHIN_BUDGET',
+        evidence: expect.objectContaining({
+          provenanceHeadSha: 'rerun-head',
+          driftLedger: [expect.objectContaining({
+            headSha: 'post-rerun-head',
+            categories: expect.objectContaining({ source: 1 }),
+          })],
+        }),
+      }),
+      gitCalls: [
+        ['diff', '--name-only', 'attested-head..HEAD'],
+        ['status', '--porcelain'],
+        ['diff', '--name-only', 'rerun-head..HEAD'],
+        ['status', '--porcelain'],
+      ],
     });
   });
 
