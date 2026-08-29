@@ -265,13 +265,17 @@ canonical `composer` skill, canonical `ai-conductor` binary — with deprecated 
 **Type:** negative-path
 
 **Steps:**
-1. RED: assert the guard exits non-zero when its scanner is unavailable — run `test/test_no_legacy_cli_references.sh` with `rg` masked off `PATH` and require a non-zero exit naming the missing scanner; today it prints PASS and exits 0.
-2. RED: plant a non-allowlisted `conduct-ts` reference under each newly covered path and require the guard to fail on each.
-3. GREEN: drop the `|| true` after the scan, add an explicit `command -v rg` precondition that exits non-zero naming the missing tool, treat any scanner exit other than 0 (match) or 1 (no match) as fatal, and extend the scanned set to `bin/lib/`, `README.md`, `HARNESS.md`, `docs/reference/cli.md`, and `docs/reference/skills.md`.
-4. Re-run `test/test_harness_integrity.sh` and confirm check 12b now reports a real scan.
+1. RED: assert the guard still performs a real scan when `rg` is unavailable — run `test/test_no_legacy_cli_references.sh` with `rg` masked off `PATH` and require it to detect a planted non-allowlisted reference; today it prints PASS and exits 0 without scanning anything.
+2. RED: assert the guard fails closed when **no** scanner resolves — mask both `rg` and `grep` off `PATH` and require a non-zero exit naming the missing scanners.
+3. RED: plant a non-allowlisted `conduct-ts` reference under each newly covered path and require the guard to fail on each, under both scanner backends.
+4. GREEN: drop the `|| true` after the scan and select a scanner explicitly — prefer `rg -n --no-heading --fixed-strings`, else `grep -rInH --fixed-strings --exclude-dir=node_modules`, which emits the same `path:line:text` shape and the same 0-match / 1-no-match / >1-error exit grammar; exit non-zero naming both tools when neither resolves.
+5. GREEN: treat any scanner exit other than 0 (match) or 1 (no match) as fatal, and extend the scanned set to `bin/lib/`, `README.md`, `HARNESS.md`, `docs/reference/cli.md`, and `docs/reference/skills.md`.
+6. Re-run `test/test_harness_integrity.sh` and confirm check 12b now reports a real scan.
 
 **Done when:**
-- With `rg` absent from `PATH`, the guard exits non-zero and names the missing scanner instead of printing PASS.
+- With `rg` absent from `PATH` the guard scans via `grep` and still fails on a planted non-allowlisted reference, asserted by test — ripgrep stays optional rather than becoming a hard dependency of the validation suite.
+- With both `rg` and `grep` absent the guard exits non-zero and names the missing scanners instead of printing PASS.
+- Both backends produce the same `path:line:text` hit shape, so the allowlist matches identically under either, asserted by running the planted-reference cases under both.
 - A planted non-allowlisted `conduct-ts` reference under each scanned path makes the guard fail, demonstrated per path.
 - A scanner exit status other than 0 or 1 is fatal, so a failing scan can never be read as a clean tree.
 - `bash -n` and `test/lint_shell.sh` pass on the changed script.

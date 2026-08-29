@@ -31,7 +31,7 @@ feature's own diff.
 | task | task-10 | story-4 | covered | Task 10 explicitly cites Story 4. |
 | task | task-11 | story-4 | covered | Task 11 explicitly cites Story 4. |
 | task | task-12 | story-4 | covered | Task 12 explicitly cites Story 4. |
-| task | task-13 | story-4 | covered | Task 13 explicitly cites Story 4; makes the S4.3 guard fail-closed and widens its scanned set. |
+| task | task-13 | story-4 | covered | Task 13 explicitly cites Story 4; makes the S4.3 guard fail-closed over an rg-or-grep scanner and widens its scanned set. |
 | task | task-14 | story-4 | covered | Task 14 explicitly cites Story 4; repoints the harness-internal config read and the operator entry-point docs. |
 | task | task-15 | story-4 | covered | Task 15 explicitly cites Story 4; makes the canonical verb open the composer prompt. |
 | task | task-16 | story-4 | covered | Task 16 explicitly cites Story 4; delivers the two reference pages the Documentation Upkeep rule requires. |
