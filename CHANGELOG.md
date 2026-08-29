@@ -22,6 +22,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon runs now route wholly remediable as-built architecture-review findings through one bounded build remediation lap, while design findings halt for human input. ([implementation PR #1908](https://github.com/jstoup111/ai-conductor/pull/1908)).
 - Adds configurable visualizer plugins that receive Conductor event streams. ([implementation PR #1958](https://github.com/jstoup111/ai-conductor/pull/1958)).
 - OpenTelemetry traces distinguish completed, halted, and terminated conductor runs. ([implementation PR #1997](https://github.com/jstoup111/ai-conductor/pull/1997)).
+- `bin/install --check` now warns when ripgrep is missing, since several shell tests silently skip their coverage without it. ([implementation PR #2030](https://github.com/jstoup111/ai-conductor/pull/2030)).
 
 ### Changed
 
@@ -29,6 +30,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Require Node.js 26 and update the conductor and recorder dependency stacks. ([implementation PR #1797](https://github.com/jstoup111/ai-conductor/pull/1797)).
 - Enforce plan-task coverage for every story acceptance criterion. ([implementation PR #1847](https://github.com/jstoup111/ai-conductor/pull/1847)).
 - Unifies provider dispatch so every invocation records complete execution outcomes and usage. ([implementation PR #1871](https://github.com/jstoup111/ai-conductor/pull/1871)).
+- Introduces the canonical ai-conductor compose workflow and ai-conductor launcher while retaining deprecated compatibility aliases. ([implementation PR #2023](https://github.com/jstoup111/ai-conductor/pull/2023)).
 
 ### Removed
 
@@ -142,6 +144,10 @@ for config in ~/.ai-conductor/config.yml .ai-conductor/config.yml; do
   [ -f "$config" ] || continue
   yq -i 'del(.defaults.by_tier, .complexity.default_tier, .harness_self_host.skill_relink_preflight, .auth_park_timeout_minutes)' "$config"
 done
+```
+
+```bash migration
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
 ```
 
 ## [0.104.0] - 2026-08-22
