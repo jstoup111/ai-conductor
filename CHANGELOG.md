@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-08-28
+## [1.0.0] - 2026-08-29
 
 ### Added
 
@@ -75,6 +75,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Harness configuration now rejects settings without runtime consumers and accepts supported custom-step controls. ([implementation PR #1957](https://github.com/jstoup111/ai-conductor/pull/1957)).
 - A PR whose Migration section explains the migration in prose alongside its runnable fence is no longer rejected by the release-metadata gate, and no longer loops the FINISH release-metadata restore. ([implementation PR #2012](https://github.com/jstoup111/ai-conductor/pull/2012)).
 - Prevent non-S daemon candidates with malformed coherence mappings from being silently lost and report actionable parse details. ([implementation PR #1945](https://github.com/jstoup111/ai-conductor/pull/1945)).
+- `bin/install` and `bin/install --check` now fail with exit 1 when the conduct-ts engine cannot be built or is missing, instead of reporting a successful install with no engine. ([implementation PR #2017](https://github.com/jstoup111/ai-conductor/pull/2017)).
 
 ## Migration
 
