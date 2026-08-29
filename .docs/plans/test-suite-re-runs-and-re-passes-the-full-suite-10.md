@@ -469,7 +469,7 @@ None — all work is inside `src/conductor` plus one template and one skill file
 
 ### Task 20: Bootstrap asks the two verification questions
 **Story:** 8
-**Type:** happy-path
+**Type:** infrastructure
 
 **Steps:**
 1. Edit `skills/bootstrap/SKILL.md` step 1b-i: interactively ask the verification mode and drift-budget preset questions and pass the answers as the Task 19 flags; in auto mode record the strict preset without prompting; the hand-authoring prohibition sentence stays intact.
