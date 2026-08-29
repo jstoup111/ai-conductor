@@ -225,6 +225,7 @@ import {
 import {
   FINISH_PUBLICATION_PROGRESS_ALLOWANCE,
   nonRetryablePublicationReason,
+  renderProseHumanRequiredDetail,
   routeFinishPublicationDisposition,
   type PublicationDisposition,
   type PublicationTransition,
@@ -1302,6 +1303,12 @@ export interface StepRunOptions {
    * infer which job it has.
    */
   finishProsePass?: 'author' | 'judge';
+  /**
+   * Concrete objection from the prior judgment of the retained PR revision.
+   * Present only for a bounded authoring revision lap; omitted when the body
+   * has not been authored yet.
+   */
+  revisionGuidance?: string;
   /**
    * Concurrent-group branch dispatch only: whether this branch dispatch
    * should resume `sessionId` above (true on retry) or start it fresh
@@ -2746,8 +2753,14 @@ export class Conductor {
       // mandate: the step runner selects the authoring instruction block, so
       // the provider is told to write the prose from the diff rather than to
       // grade prose that was never written.
-      dispatchAuthoring: async (_request) =>
-        this.stepRunner.run('finish', state, { ...options, finishProsePass: 'author' }),
+      dispatchAuthoring: async (request) =>
+        this.stepRunner.run('finish', state, {
+          ...options,
+          finishProsePass: 'author',
+          ...(request.revisionGuidance === undefined
+            ? {}
+            : { revisionGuidance: request.revisionGuidance }),
+        }),
       emit: async (event) => this.events.emit(event),
     });
     return {
@@ -7602,6 +7615,39 @@ export class Conductor {
         let progressAttempts = 0;
         let publicationProgressAttempts = 0;
         let lastPublicationTransition: PublicationTransition | undefined;
+        let lastPublicationRetryDetail: string | undefined;
+        const consumeFinishPublicationProgress = async (
+          transition: PublicationTransition,
+        ): Promise<boolean> => {
+          publicationProgressAttempts++;
+          lastPublicationTransition = transition;
+          if (publicationProgressAttempts < FINISH_PUBLICATION_PROGRESS_ALLOWANCE) return true;
+
+          const baseReason =
+            `FINISH publication progress allowance exhausted after ` +
+            `${publicationProgressAttempts} transition(s); last transition: ` +
+            `${lastPublicationTransition}. Human review required.`;
+          const reason = lastPublicationTransition === 'author_pr_prose' ||
+              lastPublicationTransition === 'judge_pr_prose'
+            ? renderProseHumanRequiredDetail(
+              lastPublicationTransition,
+              baseReason,
+              lastPublicationRetryDetail,
+            )
+            : baseReason +
+              (lastPublicationRetryDetail === undefined
+                ? ''
+                : ` Detail: ${lastPublicationRetryDetail}`);
+          await this.saveConductorStepStatus(state, 'finish', 'failed');
+          await this.haltSerialExecution({
+            reason,
+            haltClass: 'needs-human',
+            persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+          });
+          process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
+          return false;
+        };
         // HEAD sha captured at build-step entry for per-attempt liveness
         // telemetry and stall classification.
         const [headShaBeforeBuild, treeHashBeforeBuild]: [string | null, string | null] =
@@ -8356,32 +8402,23 @@ export class Conductor {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'complete' });
               result.success = true;
             }
-            if (route.kind === 'progress_finish') {
+            if (route.kind === 'progress_finish' || route.kind === 'revision_progress_finish') {
               // A completed publication transition advances FINISH's own
-              // state machine; it is neither a failure nor a retry. Re-enter
-              // immediately without consuming this step's attempt budget.
-              publicationProgressAttempts++;
-              lastPublicationTransition = route.transition;
-              if (publicationProgressAttempts >= FINISH_PUBLICATION_PROGRESS_ALLOWANCE) {
-                const reason =
-                  `FINISH publication progress allowance exhausted after ` +
-                  `${publicationProgressAttempts} transition(s); last transition: ` +
-                  `${lastPublicationTransition}. Human review required.`;
-                await this.saveConductorStepStatus(state, 'finish', 'failed');
-                await this.haltSerialExecution({
-                  reason,
-                  haltClass: 'needs-human',
-                  persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
-                });
-                process.off('SIGINT', sigintHandler);
-                process.off('SIGTERM', sigterm);
-                return;
+              // state machine; it is neither a failure nor a retry. A judged
+              // deficiency carries its objection through the typed revision
+              // progress route. Re-enter immediately without consuming this
+              // step's attempt budget.
+              if (route.kind === 'revision_progress_finish') {
+                lastPublicationRetryDetail = route.detail;
               }
+              if (!(await consumeFinishPublicationProgress(route.transition))) return;
               attempt--;
               continue;
             }
             if (route.kind === 'retry_finish') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_finish' });
+              lastPublicationRetryDetail = route.detail;
+
               lastError = `FINISH publication retry: ${route.reason}`;
               retryHint = `${lastError}. Retry only the incomplete publication transition.`;
 

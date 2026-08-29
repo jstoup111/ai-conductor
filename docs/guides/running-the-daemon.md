@@ -271,8 +271,11 @@ What the draft window does and does not mean:
   is never asked to grade a body nobody wrote. Only after prose is accepted does the coordinator write
   and push the shipped record and mark the PR ready for review. That order is deliberate: the shipped
   record is the daemon backlog's dedup key, so committing it before the prose survived used to make a
-  prose halt permanently un-redispatchable. It re-enters FINISH after each verified transition, so a
-  retry resumes instead of replaying publication effects.
+  prose halt permanently un-redispatchable. When the judgment finds an authored body structurally
+  incomplete, FINISH re-observes that exact revision and routes it back to `author_pr_prose` with the
+  judgment's objection, rather than treating the author→judge lap as an ordinary retry. It re-enters
+  FINISH after each verified transition, so a revision or retry resumes instead of replaying
+  publication effects.
 - **The placeholder body already has the right shape.** It is the `/pr` body template — `## Why`,
   `## What Changed`, `## Testing`, and the `Closes` reference — with each section explicitly marked
   "not yet authored", so a reader landing on the PR mid-build, and the FINISH authoring pass filling

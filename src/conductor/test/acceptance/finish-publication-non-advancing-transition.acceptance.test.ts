@@ -25,6 +25,7 @@
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -149,6 +150,30 @@ describe('Story 2 — non-advancing judgment stops on its first occurrence', () 
       publicationDispositions: ['human_required'],
       finishStatus: 'failed',
     });
+  });
+
+  it('keeps retry reconciliation for a genuinely unselectable non-prose transition', async () => {
+    const before: PublicationSnapshot = {
+      ...healthySnapshot(),
+      shippedRecord: 'missing',
+    };
+    const after = healthySnapshot();
+    let observations = 0;
+
+    const result = await advanceFinishPublication({
+      observe: async () => structuredClone(observations++ === 0 ? before : after),
+      effects: {
+        dispatchJudgment: vi.fn(),
+        // The retry begins with this effect unwired; an external completion
+        // makes its named write unselectable before reconciliation.
+      },
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: expect.stringContaining('write_shipped_record'),
+    }));
   });
 });
 
@@ -516,6 +541,66 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
     });
     const viewCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view');
     expect(viewCall?.join(' ')).toContain('labels');
+  });
+
+  it('keeps halt-state precedence over a persisted deficient verdict and never starts authoring', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-publication-halt-precedence-'));
+    roots.push(root);
+    const pipeline = join(root, '.pipeline');
+    await mkdir(pipeline, { recursive: true });
+    const stateFilePath = join(pipeline, 'conduct-state.json');
+    const state: ConductState = {
+      feature_desc: 'finish-publication-halt-precedence',
+      worktree_branch: 'feat/finish-publication-halt-precedence',
+      pr_url: PR_URL,
+      build_review: 'done',
+      test_suite: 'done',
+      manual_test: 'done',
+      architecture_review_as_built: 'done',
+    };
+    const pr = {
+      url: PR_URL,
+      title: 'feat: authored prose requiring revision',
+      body: 'Reader-facing prose remains present despite the remediation signal.',
+      isDraft: true,
+      labels: [{ name: 'needs-remediation' }],
+    };
+    const revision = `${pr.url}\u0000${JSON.stringify([pr.title, pr.body])}`;
+    const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+    await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+      version: 1,
+      records: {
+        [digest]: { kind: 'revision_required', reason: 'structurally_incomplete' },
+      },
+    }));
+    const dispatchAuthoring = vi.fn(async () => ({ success: true }));
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: root,
+      stateFilePath,
+      baseBranch: 'main',
+      git: async (args) => {
+        if (args[0] === 'remote') return { stdout: 'origin\n' };
+        if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/finish-publication-halt-precedence\n' };
+        throw new Error(`unexpected git command: ${args.join(' ')}`);
+      },
+      gh: async (args) => {
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pr) };
+        throw new Error(`unexpected gh command: ${args.join(' ')}`);
+      },
+      observeReleaseReadiness: async () => 'present',
+    });
+
+    const result = await coordinator.advance({
+      state,
+      mode: 'auto',
+      daemon: false,
+      dispatchJudgment: vi.fn(),
+      dispatchAuthoring,
+      emit: async () => {},
+    });
+
+    expect(result).toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
+    expect(dispatchAuthoring).not.toHaveBeenCalled();
   });
 
   it.each([

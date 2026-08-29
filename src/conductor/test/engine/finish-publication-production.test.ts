@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -20,6 +21,180 @@ import type { ConductState } from '../../src/types/index.js';
 const commandResult = { stdout: '' };
 
 describe('production FINISH publication composition', () => {
+  it.each([
+    ['structurally incomplete', { kind: 'revision_required', reason: 'structurally_incomplete' }, 'revision_required'],
+    ['placeholder', { kind: 'revision_required', reason: 'placeholder' }, 'revision_required'],
+    ['accepted', { kind: 'accepted' }, 'accepted'],
+  ] as const)('classifies the current persisted %s prose verdict as %s', async (_label, verdict, expectedProse) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-persisted-prose-'));
+    const observedProse: string[] = [];
+    const advanceFinishPublication = vi.fn(async (input: {
+      observe(): Promise<{ pr: { identity: string; prose?: string } }>;
+    }) => {
+      const snapshot = await input.observe();
+      if (snapshot.pr.identity === 'one') observedProse.push(snapshot.pr.prose!);
+      return { kind: 'advanced' as const, transition: 'judge_pr_prose' as const };
+    });
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const prUrl = 'https://github.com/acme/widget/pull/2006';
+      const title = 'feat: repair publication prose';
+      const body = 'A reader-facing explanation of the completed feature.';
+      const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
+      const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+        version: 1,
+        records: { [digest]: verdict },
+      }));
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return commandResult;
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: true, labels: [] }) };
+          }
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await coordinator.advance({
+        state: {
+          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto', daemon: true,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
+      });
+
+      expect(observedProse).toEqual([expectedProse]);
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      label: 'halt signals before a stored deficient verdict',
+      labels: [{ name: 'needs-remediation' }],
+      storedVerdict: { kind: 'revision_required', reason: 'structurally_incomplete' },
+      expectedProse: 'halt',
+    },
+    {
+      label: 'a stored halt-reason verdict never enters the revision lap',
+      storedVerdict: { kind: 'revision_required', reason: 'halt' },
+      expectedProse: 'stale',
+    },
+    {
+      label: 'an edited body whose digest no longer matches the verdict',
+      persistedBody: 'The body that the judge found incomplete.',
+      storedVerdict: { kind: 'revision_required', reason: 'structurally_incomplete' },
+      expectedProse: 'stale',
+    },
+    {
+      label: 'a malformed judgment store degrades to a fresh stale judgment',
+      malformedStore: true,
+      expectedProse: 'stale',
+    },
+    {
+      label: 'an engine-floored body before a coincidental stored verdict',
+      body: `${PR_BODY_FLOOR_MARKER}\n\nDraft opened automatically.`,
+      storedVerdict: { kind: 'revision_required', reason: 'placeholder' },
+      expectedProse: 'placeholder',
+    },
+  ] as const)('pins judgment-store precedence for $label', async (fixture) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-prose-precedence-'));
+    const observedProse: string[] = [];
+    const advanceFinishPublication = vi.fn(async (input: {
+      observe(): Promise<{ pr: { identity: string; prose?: string } }>;
+    }) => {
+      const snapshot = await input.observe();
+      if (snapshot.pr.identity === 'one') observedProse.push(snapshot.pr.prose!);
+      return { kind: 'advanced' as const, transition: 'judge_pr_prose' as const };
+    });
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const prUrl = 'https://github.com/acme/widget/pull/2006';
+      const title = 'feat: repair publication prose';
+      const body = fixture.body ?? 'A reader-facing explanation of the completed feature.';
+      const persistedBody = fixture.persistedBody ?? body;
+      if (fixture.malformedStore) {
+        await writeFile(join(pipeline, 'prose-judgment.json'), '{not json');
+      } else if (fixture.storedVerdict) {
+        const revision = `${prUrl}\u0000${JSON.stringify([title, persistedBody])}`;
+        const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+        await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+          version: 1,
+          records: { [digest]: fixture.storedVerdict },
+        }));
+      }
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return commandResult;
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return { stdout: JSON.stringify({
+              url: prUrl, title, body, isDraft: true, labels: fixture.labels ?? [],
+            }) };
+          }
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto', daemon: true,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
+
+      expect(observedProse).toEqual([fixture.expectedProse]);
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('upserts accepted build-review risk into the retained PR and blocks unrenderable records', async () => {
     const finding = canonicalizeBuildReviewFindingIdentity({
       rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
@@ -1067,8 +1242,8 @@ describe('production FINISH publication composition', () => {
     ['timed_out', { success: true, publicationDisposition: { kind: 'timed_out' } }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }],
     ['provider_unavailable', { success: true, publicationDisposition: { kind: 'provider_unavailable' } }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }],
     ['undecodable', { success: true, output: 'not a judgment result' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_malformed_response' }],
-    ['incompleteness', { success: true, publicationDisposition: { kind: 'revision_required', reason: 'structurally_incomplete' } }, { kind: 'human_required', reason: 'publication_transition_unmoved', detail: 'The author_pr_prose retry cannot run because the fresh publication observation selects judge_pr_prose.' }],
-    ['raw-placeholder', { success: true, output: '{"kind":"revision_required","reason":"placeholder"}' }, { kind: 'human_required', reason: 'publication_transition_unmoved', detail: 'The author_pr_prose retry cannot run because the fresh publication observation selects judge_pr_prose.' }],
+    ['incompleteness', { success: true, publicationDisposition: { kind: 'revision_required', reason: 'structurally_incomplete' } }, { kind: 'publication_revision_progress', transition: 'author_pr_prose' }],
+    ['raw-placeholder', { success: true, output: '{"kind":"revision_required","reason":"placeholder"}' }, { kind: 'publication_revision_progress', transition: 'author_pr_prose' }],
   ])('maps each $0 prose judgment response without readying or recording the PR', async (_label, judgmentResponse, expected) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-judgment-outcome-'));
     try {

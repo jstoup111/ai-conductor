@@ -86,7 +86,9 @@ export type PublicationPullRequest =
   | {
       identity: 'one';
       url: string;
-      prose: 'accepted' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      /** The persisted objection for this exact judged-deficient revision, when available. */
+      revisionGuidance?: string;
       /** A machine-readable `needs-remediation` signal, distinct from prose judgment. */
       halted?: true;
       ready: boolean;
@@ -125,7 +127,9 @@ export type PullRequestObservation =
   | {
       state: 'one';
       url: string;
-      prose: 'accepted' | 'stale' | 'placeholder' | 'halt';
+      prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt';
+      /** Persisted objection for this exact judged-deficient PR revision. */
+      revisionGuidance?: string;
       /** The observer found a `needs-remediation` title, label, or body marker. */
       halted?: true;
       ready: boolean;
@@ -286,6 +290,9 @@ function mapPullRequest(
         identity: 'one',
         url: observation.url,
         prose: observation.prose,
+        ...(observation.revisionGuidance === undefined
+          ? {}
+          : { revisionGuidance: observation.revisionGuidance }),
         ...(observation.halted === true ? { halted: true } : {}),
         ready: observation.ready,
       };
@@ -407,7 +414,10 @@ export function nextFinishPublicationTransition(
   // carries the engine's own body-floor marker and "not yet authored" sections.
   // Nothing can judge prose that was never written, so author it FIRST. The
   // judgment transition therefore only ever sees authored prose.
-  if (snapshot.pr.prose === 'placeholder') {
+  if (
+    snapshot.pr.prose === 'placeholder' ||
+    snapshot.pr.prose === 'revision_required'
+  ) {
     return 'author_pr_prose';
   }
 
@@ -447,7 +457,17 @@ export type HumanRequiredReason =
 export type PublicationDisposition =
   | { kind: 'complete' }
   | { kind: 'publication_progress'; transition: PublicationTransition }
-  | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
+  | {
+      kind: 'publication_revision_progress';
+      transition: 'author_pr_prose';
+      detail?: string;
+    }
+  | {
+      kind: 'publication_retry';
+      transition: PublicationTransition;
+      reason: string;
+      detail?: string;
+    }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | { kind: 'implementation_invalid'; evidence: string }
   | { kind: 'human_required'; reason: HumanRequiredReason; detail?: string };
@@ -456,7 +476,8 @@ export type PublicationDisposition =
 export type FinishPublicationRoute =
   | { kind: 'complete' }
   | { kind: 'progress_finish'; transition: PublicationTransition }
-  | { kind: 'retry_finish'; reason: string }
+  | { kind: 'revision_progress_finish'; transition: 'author_pr_prose'; detail?: string }
+  | { kind: 'retry_finish'; reason: string; detail?: string }
   | { kind: 'retry_build'; evidence: string }
   | { kind: 'halt'; reason: string };
 
@@ -572,10 +593,6 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'authoring_effect_unavailable',
     'authoring_dispatch_failed',
     'authoring_not_verified_after_pass',
-    // The judgment pass observed prose the deterministic classifier accepted as
-    // authored but the reader-facing verdict did not. Authoring — not a human —
-    // is the remedy, so the coordinator routes back to it rather than halting.
-    'authoring_required_after_judgment',
   ],
   write_shipped_record: [
     'publication_transition_indeterminate',
@@ -700,11 +717,18 @@ export function routeFinishPublicationDisposition(
       return { kind: 'complete' };
     case 'publication_progress':
       return { kind: 'progress_finish', transition: disposition.transition };
+    case 'publication_revision_progress':
+      return {
+        kind: 'revision_progress_finish',
+        transition: disposition.transition,
+        ...(disposition.detail === undefined ? {} : { detail: disposition.detail }),
+      };
     case 'publication_retry':
       if ('condition' in disposition) return PUBLICATION_CONDITION_ROUTES[disposition.condition.code];
       return {
         kind: 'retry_finish',
         reason: disposition.reason,
+        ...(disposition.detail === undefined ? {} : { detail: disposition.detail }),
       };
     case 'implementation_invalid':
       return {
@@ -730,12 +754,27 @@ function isExactDisposition(
       return hasOnly('kind');
     case 'publication_progress':
       return hasOnly('kind', 'transition') && isPublicationTransition(value.transition);
+    case 'publication_revision_progress':
+      return (
+        (hasOnly('kind', 'transition') || hasOnly('kind', 'transition', 'detail')) &&
+        value.transition === 'author_pr_prose' &&
+        (value.detail === undefined || (typeof value.detail === 'string' && value.detail.trim().length > 0))
+      );
     case 'publication_retry':
       if (hasOnly('kind', 'transition', 'reason')) {
         return (
           isPublicationTransition(value.transition) &&
           typeof value.reason === 'string' &&
           PUBLICATION_RETRY_REASONS[value.transition].includes(value.reason)
+        );
+      }
+      if (hasOnly('kind', 'transition', 'reason', 'detail')) {
+        return (
+          isPublicationTransition(value.transition) &&
+          typeof value.reason === 'string' &&
+          PUBLICATION_RETRY_REASONS[value.transition].includes(value.reason) &&
+          typeof value.detail === 'string' &&
+          value.detail.trim().length > 0
         );
       }
       return (
@@ -1001,6 +1040,8 @@ export type PrProseAuthoringRequest = {
   pullRequestUrl: string;
   authoringScope: readonly ['title', 'body'];
   maximumPasses: 1;
+  /** Concrete objection from the prior judgment of this exact PR revision. */
+  revisionGuidance?: string;
 };
 
 /**
@@ -1037,27 +1078,35 @@ type PrWithJudgmentNeeded = Extract<PublicationPullRequest, { identity: 'one' }>
 };
 
 type PrWithAuthoringNeeded = Extract<PublicationPullRequest, { identity: 'one' }> & {
-  prose: 'placeholder';
+  prose: 'placeholder' | 'revision_required';
 };
 
 /**
  * A typed predicate protects the expensive boundary: accepted observed prose
  * is final for this pass, while a stale or incomplete observation earns one
- * request. A placeholder body is excluded — it has no prose to judge and is
- * routed to the authoring transition instead. The predicate performs no
+ * request. Placeholder and already-revision-required bodies are excluded —
+ * they need authoring, not another judgment. The predicate performs no
  * provider work itself.
  */
 function isPrProseJudgmentNeeded(
   pr: PublicationPullRequest,
 ): pr is PrWithJudgmentNeeded {
-  return pr.identity === 'one' && pr.prose !== 'accepted' && pr.prose !== 'placeholder';
+  return (
+    pr.identity === 'one' &&
+    pr.prose !== 'accepted' &&
+    pr.prose !== 'placeholder' &&
+    pr.prose !== 'revision_required'
+  );
 }
 
-/** The deterministic complement: an unauthored body needs an authoring pass. */
+/** The deterministic complement: unauthored or judged-deficient prose needs authoring. */
 function isPrProseAuthoringNeeded(
   pr: PublicationPullRequest,
 ): pr is PrWithAuthoringNeeded {
-  return pr.identity === 'one' && pr.prose === 'placeholder';
+  return (
+    pr.identity === 'one' &&
+    (pr.prose === 'placeholder' || pr.prose === 'revision_required')
+  );
 }
 
 function prProseAuthoringRequest(pr: PrWithAuthoringNeeded): PrProseAuthoringRequest {
@@ -1066,6 +1115,7 @@ function prProseAuthoringRequest(pr: PrWithAuthoringNeeded): PrProseAuthoringReq
     pullRequestUrl: pr.url,
     authoringScope: ['title', 'body'],
     maximumPasses: 1,
+    ...(pr.revisionGuidance === undefined ? {} : { revisionGuidance: pr.revisionGuidance }),
   };
 }
 
@@ -1130,12 +1180,14 @@ export interface AdvanceFinishPublicationInput {
 export type AdvanceFinishPublicationResult =
   | { kind: 'complete' }
   | { kind: 'advanced'; transition: PublicationTransition }
+  | { kind: 'publication_revision_progress'; transition: 'author_pr_prose'; detail?: string }
   | { kind: 'implementation_invalid'; evidence: string }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | {
       kind: 'publication_retry';
       transition: PublicationTransition;
       reason: string;
+      detail?: string;
     }
   | {
       kind: 'publication_retry';
@@ -1198,7 +1250,7 @@ async function coalescePublicationEffect(
   }
 }
 
-function mapPrProseJudgmentResult(
+export function mapPrProseJudgmentResult(
   result: PrProseJudgmentResult,
 ): AdvanceFinishPublicationResult {
   switch (result.kind) {
@@ -1245,21 +1297,23 @@ function mapPrProseJudgmentResult(
           // judge was never equipped to perform. Bounded by the publication
           // progress allowance, so a non-converging pair still halts.
           return {
-            kind: 'publication_retry',
+            kind: 'publication_revision_progress',
             transition: 'author_pr_prose',
-            reason: 'authoring_required_after_judgment',
+            ...(result.detail === undefined ? {} : { detail: result.detail }),
           };
       }
   }
 }
 
 /**
- * A retry must name the transition a fresh authoritative observation would
+ * A transition-bearing retry or revision-progress result must name the transition a fresh authoritative observation would
  * actually dispatch. Otherwise re-entering FINISH cannot perform the work the
  * retry promises and would only consume its bounded retry allowance.
  */
 async function reconcileSelectablePublicationRetry(
-  retry: Extract<AdvanceFinishPublicationResult, { kind: 'publication_retry' }> & {
+  retry: Extract<AdvanceFinishPublicationResult, {
+    kind: 'publication_retry' | 'publication_revision_progress';
+  }> & {
     transition: PublicationTransition;
   },
   observe: AdvanceFinishPublicationInput['observe'],
@@ -1282,12 +1336,17 @@ async function reconcileSelectablePublicationRetry(
   const selectedTransition = nextFinishPublicationTransition(freshSnapshot);
   if (selectedTransition === retry.transition) return retry;
 
+  const detail =
+    `The ${retry.transition} retry cannot run because the fresh publication ` +
+    `observation selects ${selectedTransition}.`;
   return {
     kind: 'human_required',
     reason: 'publication_transition_unmoved',
-    detail:
-      `The ${retry.transition} retry cannot run because the fresh publication ` +
-      `observation selects ${selectedTransition}.`,
+    detail: renderProseHumanRequiredDetail(
+      retry.transition,
+      detail,
+      freshSnapshot.pr.identity === 'one' ? freshSnapshot.pr.revisionGuidance : undefined,
+    ),
   };
 }
 
@@ -1338,10 +1397,15 @@ export async function advancedPublicationTransition(
   if (movement === 'unmoved') {
     const dimension = PUBLICATION_TRANSITION_DIMENSIONS[transition];
     const value = publicationTransitionDimensionValue(dimension, after);
+    const detail = `The ${transition} transition left ${dimension} unchanged at ${String(value)}.`;
     return {
       kind: 'human_required',
       reason: 'publication_transition_unmoved',
-      detail: `The ${transition} transition left ${dimension} unchanged at ${String(value)}.`,
+      detail: renderProseHumanRequiredDetail(
+        transition,
+        detail,
+        before.pr.identity === 'one' ? before.pr.revisionGuidance : undefined,
+      ),
     };
   }
 
@@ -1349,6 +1413,26 @@ export async function advancedPublicationTransition(
     type: 'finish_publication_transition', phase: 'completed', transition,
   });
   return { kind: 'advanced', transition };
+}
+
+/**
+ * Keep the three prose-specific human exits aligned: an unchanged authoring
+ * or judgment pass and the FINISH progress allowance halt all name the
+ * originating judgment when the observed revision carried one. Other
+ * publication transitions deliberately retain their existing text.
+ */
+export function renderProseHumanRequiredDetail(
+  transition: PublicationTransition,
+  detail: string,
+  revisionGuidance: string | undefined,
+): string {
+  if (
+    (transition !== 'author_pr_prose' && transition !== 'judge_pr_prose') ||
+    revisionGuidance === undefined
+  ) {
+    return detail;
+  }
+  return `${detail} Detail: ${revisionGuidance}`;
 }
 
 function publicationTransitionDimensionMovement(
@@ -1393,6 +1477,7 @@ function publicationTransitionDimensionValue(
 function publicationPrProse(snapshot: PublicationSnapshot):
   | PublicationPullRequest['identity']
   | 'accepted'
+  | 'revision_required'
   | 'stale'
   | 'placeholder'
   | 'halt'
@@ -1424,9 +1509,12 @@ export async function advanceFinishPublication(
   // An indeterminate post-effect observation cannot establish its owned
   // dimension. It remains a bounded retry rather than proof that the named
   // transition is no longer selectable.
-  return result.kind === 'publication_retry' &&
-    'transition' in result &&
-    result.reason !== 'publication_transition_indeterminate'
+  return (
+    result.kind === 'publication_revision_progress' ||
+    (result.kind === 'publication_retry' &&
+      'transition' in result &&
+      result.reason !== 'publication_transition_indeterminate')
+  )
     ? reconcileSelectablePublicationRetry(result, input.observe)
     : result;
 }
@@ -1615,7 +1703,10 @@ async function advanceFinishPublicationUnreconciled(
         };
       }
 
-      if (result.kind === 'publication_retry' && 'transition' in result) {
+      if (
+        result.kind === 'publication_revision_progress' ||
+        (result.kind === 'publication_retry' && 'transition' in result)
+      ) {
         return result;
       }
       if (result.kind !== 'advanced') return result;

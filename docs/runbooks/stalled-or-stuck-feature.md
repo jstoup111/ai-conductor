@@ -339,7 +339,8 @@ A FINISH publication failure or non-converging progress halts one of four ways, 
   Human review required.` — FINISH made verified publication progress, so none of the step retry
   budget was spent. The separate progress allowance reached its 14-transition bound (two passes over
   each of the seven publication transitions) before the publication state converged, and this is a
-  `needs-human` halt.
+  `needs-human` halt. When the last prose transition follows a judged-deficient revision, the halt
+  also ends with `Detail: <judge objection>`.
 - A plain-prose sentence with no `FINISH publication …` prefix, e.g. `The PR prose judgment was
   refused and requires an operator decision. Next action: Review the refusal and decide how to
   continue publication.` and, when the provider supplied one, a trailing `Detail: <provider text>`.
@@ -358,8 +359,8 @@ A FINISH publication failure or non-converging progress halts one of four ways, 
 daemon log. Fourteen verified transitions without convergence means the publication state machine is
 cycling or an external publication state is not settling; do not clear the HALT merely to repeat the
 same cycle. An `author_pr_prose` / `judge_pr_prose` alternation means the authoring pass keeps
-producing prose the judgment pass rejects — read the PR body and fix it by hand rather than
-re-running the pair.
+producing prose the judgment pass rejects. The `Detail:` text on a prose-related halt is the judgment
+for the exact rejected revision; use it with the current PR body to correct the prose before resuming.
 
 **Recovery:** reconcile the cited transition and the external PR/remote state until the next FINISH
 entry can converge. Only then clear the HALT using [the resume

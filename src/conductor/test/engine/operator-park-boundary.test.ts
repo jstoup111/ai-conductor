@@ -124,7 +124,7 @@ describe('operator park boundary contract', () => {
       guard: serialGuard,
       end: serialDispatch + 'this.stepRunner.run('.length,
     });
-    const reviewedHelperDispatchAllowlist = [
+    const reviewedHelperDispatchAllowlist: Array<string | RegExp> = [
       "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
       'return this.stepRunner.run(name, state, { retryReason: retryHint });',
       'return await this.stepRunner.run(name, state, { retryReason: retryHint });',
@@ -133,7 +133,7 @@ describe('operator park boundary contract', () => {
       // The two bounded FINISH prose passes. Both are reached only from inside
       // the already-park-guarded FINISH dispatch.
       "this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' })",
-      "this.stepRunner.run('finish', state, { ...options, finishProsePass: 'author' })",
+      /this\.stepRunner\.run\(\s*'finish',\s*state,\s*\{\s*\.\.\.options,\s*finishProsePass:\s*'author',\s*\.\.\.\(request\.revisionGuidance\s*===\s*undefined\s*\?\s*\{\}\s*:\s*\{\s*revisionGuidance:\s*request\.revisionGuidance\s*\}\s*\),\s*\}\s*\)/,
     ];
     const dispatchPrimitives = [
       'this.stepRunner.run(',
@@ -149,11 +149,12 @@ describe('operator park boundary contract', () => {
       const guarded = guardedSegments.some(
         (segment) => offset > segment.guard && offset < segment.end,
       );
-      const reviewedHelper = reviewedHelperDispatchAllowlist.some((allowed) =>
-        conductorSource
-          .slice(Math.max(0, offset - 40), offset + allowed.length + 40)
-          .includes(allowed),
-      );
+      const reviewedHelper = reviewedHelperDispatchAllowlist.some((allowed) => {
+        const sourceAtDispatch = conductorSource.slice(Math.max(0, offset - 40));
+        return typeof allowed === 'string'
+          ? sourceAtDispatch.slice(0, allowed.length + 80).includes(allowed)
+          : allowed.test(sourceAtDispatch);
+      });
       return !guarded && !reviewedHelper;
     });
 

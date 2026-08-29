@@ -810,6 +810,7 @@ export class DefaultStepRunner implements StepRunner {
       autonomous,
       opts?.retryReason,
       opts?.finishProsePass,
+      opts?.revisionGuidance,
       state.complexity_tier,
     );
 
@@ -2624,6 +2625,7 @@ export class DefaultStepRunner implements StepRunner {
     autonomous: boolean,
     retryReason?: string,
     finishProsePass?: 'author' | 'judge',
+    revisionGuidance?: string,
     tier?: ComplexityTier,
   ): Promise<string> {
     const stepDef = this.stepRegistry.find((candidate) => candidate.name === step)
@@ -2698,6 +2700,22 @@ export class DefaultStepRunner implements StepRunner {
     // coordinator selected this pass deterministically. The judgment pass is
     // never asked to author, and this pass is never asked to grade.
     if (step === 'finish' && finishProsePass === 'author') {
+      if (revisionGuidance !== undefined) {
+        prompt +=
+          '\n\nFINISH PR PROSE REVISION — the retained pull request needs a focused reader-facing prose revision. ' +
+          `The prior prose judge's objection is:\n> ${revisionGuidance}\n\n` +
+          'Revise the retained PR title and body in place to address that objection. Read the full diff of this ' +
+          'feature branch against its base branch, plus the feature specification, plan, and story artifacts, then ' +
+          'follow this repository\'s PR authoring contract — the `pr` skill (Claude Code invokes it as `/pr`; Codex ' +
+          'invokes it as `$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
+          '`Closes` reference), preserve any release metadata already present, and make the prose specific to the ' +
+          'delivered behavior. Change nothing else: do not create, push, merge, or ready a pull request, do not alter ' +
+          'labels, shipment evidence, or completion files, and do not commit. The publication coordinator re-reads ' +
+          'the pull request afterwards and judges the prose in a separate pass; it owns every mechanical transition ' +
+          'and records the final outcome.';
+        if (retryReason) prompt = `RETRY: ${retryReason}\n${prompt}`;
+        return prompt;
+      }
       prompt +=
         '\n\nFINISH PR PROSE AUTHORING — the retained pull request still carries the engine-seeded ' +
         'placeholder body, so there is no prose to judge yet. Write it. Read the full diff of this ' +
@@ -2725,6 +2743,7 @@ export class DefaultStepRunner implements StepRunner {
         'You may repair only that title/body, at most once, then return exactly one JSON object: ' +
         '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
         '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
+        'For every revision_required verdict, include a concrete `detail` describing what is deficient. ' +
         'Do not create, push, merge, or ready a PR; do not alter labels, shipment evidence, or completion files. ' +
         'If the body is unauthored placeholder text, return revision_required with reason placeholder and stop: ' +
         'the coordinator owns a separate authoring pass for that, so you are never asked to write prose here. ' +

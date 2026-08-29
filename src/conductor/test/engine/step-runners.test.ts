@@ -2420,6 +2420,44 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).not.toContain('finish-record');
   });
 
+  it('finish revision-lap authoring pass quotes the judge objection without calling the body a placeholder', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      pipelineDir: '/wt/feature-x/.pipeline',
+    });
+    const guidance = 'Explain how a failed rebase is recovered without losing completed work.';
+
+    await runner.run('finish', emptyState, {
+      finishProsePass: 'author',
+      revisionGuidance: guidance,
+    });
+
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('FINISH PR PROSE REVISION');
+    expect(opts.systemPrompt).toContain(guidance);
+    expect(opts.systemPrompt).not.toContain('still carries the engine-seeded placeholder body');
+    expect(opts.systemPrompt).not.toContain('no prose to judge yet');
+    expect(opts.systemPrompt).toContain('do not create, push, merge, or ready a pull request');
+    expect(opts.systemPrompt).toContain('do not alter labels, shipment evidence, or completion files');
+    expect(opts.systemPrompt).toContain('The publication coordinator re-reads the pull request afterwards');
+  });
+
+  it('finish authoring pass without revision guidance keeps the placeholder-authoring prompt', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      pipelineDir: '/wt/feature-x/.pipeline',
+    });
+
+    await runner.run('finish', emptyState, { finishProsePass: 'author' });
+
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('FINISH PR PROSE AUTHORING');
+    expect(opts.systemPrompt).toContain('still carries the engine-seeded placeholder body');
+    expect(opts.systemPrompt).not.toContain('FINISH PR PROSE REVISION');
+  });
+
   it('finish judgment pass keeps the bounded verdict contract and defers unauthored bodies', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {

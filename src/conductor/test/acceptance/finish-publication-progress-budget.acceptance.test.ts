@@ -13,6 +13,8 @@
  * makes no GitHub, provider, process, or network calls.
  *
  * Acceptance classification:
+ *   - #2006 Story 4: spec-covered here through bounded non-converging and
+ *     converging author-then-judge revision laps (Covers: S4.1, S4.2, S4.4, task:9).
  *   - Stories 2 and 5: spec-covered here through the full FINISH accounting
  *     flow, including the observed healthy establish/write/establish revisit.
  *   - Story 3: spec-covered here through the bounded re-entry and HALT flow.
@@ -38,6 +40,7 @@ import { Conductor } from '../test-conductor.js';
 const PUBLICATION_TRANSITIONS = [
   'establish_pr',
   'verify_release_readiness',
+  'author_pr_prose',
   'write_shipped_record',
   'judge_pr_prose',
   'ready_pr',
@@ -49,9 +52,15 @@ type PublicationTransition = (typeof PUBLICATION_TRANSITIONS)[number];
 type ScenarioDisposition =
   | { kind: 'publication_progress'; transition: PublicationTransition }
   | {
+      kind: 'publication_revision_progress';
+      transition: 'author_pr_prose';
+      detail?: string;
+    }
+  | {
       kind: 'publication_retry';
       transition: PublicationTransition;
       reason: 'presentation_repair_failed';
+      detail?: string;
     }
   | { kind: 'complete' };
 
@@ -212,5 +221,71 @@ describe('FINISH publication progress accounting', () => {
     await expect(readFile(join(result.root, '.pipeline/HALT.class'), 'utf8')).resolves.toBe(
       'needs-human',
     );
+  });
+
+  // Covers: S4.1, S4.2, task:9
+  it('bounds an always-deficient author-judge revision lap and preserves the last objection', async () => {
+    const objection = 'The PR body still omits the concrete validation evidence.';
+    const nonConvergingLap = Array.from(
+      { length: 14 },
+      (): readonly ScenarioDisposition[] => [
+        {
+          kind: 'publication_revision_progress',
+          transition: 'author_pr_prose',
+          detail: objection,
+        },
+        { kind: 'publication_progress', transition: 'author_pr_prose' },
+      ],
+    ).flat();
+
+    const result = await runFinishScenario(nonConvergingLap);
+
+    // A judged deficiency and its resulting authoring pass are both FINISH
+    // publication advances. Together they spend the pre-existing allowance;
+    // neither may fall back to the ordinary retry budget.
+    expect(result.advanceCalls).toBe(14);
+    expect(result.retryReasons).toEqual([]);
+    expect(result.completedTransitions).toHaveLength(7);
+    expect(result.completedTransitions).toEqual(
+      Array.from({ length: 7 }, () => 'author_pr_prose'),
+    );
+    await expect(readFile(join(result.root, '.pipeline/HALT'), 'utf8')).resolves.toMatch(
+      new RegExp(`progress allowance exhausted after 14 transition\\(s\\);[\\s\\S]*${objection}`),
+    );
+    await expect(readFile(join(result.root, '.pipeline/HALT.class'), 'utf8')).resolves.toBe(
+      'needs-human',
+    );
+  });
+
+  // Covers: S4.4, task:9
+  it('publishes after the second revision is accepted without exhausting the allowance', async () => {
+    const convergingLap: readonly ScenarioDisposition[] = [
+      {
+        kind: 'publication_revision_progress',
+        transition: 'author_pr_prose',
+        detail: 'The first revision needs a concrete validation section.',
+      },
+      { kind: 'publication_progress', transition: 'author_pr_prose' },
+      { kind: 'publication_progress', transition: 'judge_pr_prose' },
+      { kind: 'publication_progress', transition: 'write_shipped_record' },
+      { kind: 'publication_progress', transition: 'ready_pr' },
+      { kind: 'publication_progress', transition: 'record_outcome' },
+      { kind: 'complete' },
+    ];
+
+    const result = await runFinishScenario(convergingLap);
+
+    expect(result.advanceCalls).toBe(convergingLap.length);
+    expect(result.retryReasons).toEqual([]);
+    expect(result.completedTransitions).toEqual([
+      'author_pr_prose',
+      'judge_pr_prose',
+      'write_shipped_record',
+      'ready_pr',
+      'record_outcome',
+    ]);
+    await expect(readFile(join(result.root, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 });
