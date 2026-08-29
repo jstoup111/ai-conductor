@@ -1706,6 +1706,12 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
     }
   }
 
+  const verificationError = validateTestSuiteVerification(
+    raw.verification,
+    raw.scoped_command,
+  );
+  if (verificationError) return verificationError;
+
   raw.verification = resolveTestSuiteVerification(raw.verification);
 
   return null;
@@ -1722,12 +1728,79 @@ const TEST_SUITE_DRIFT_CATEGORIES: readonly TestSuiteDriftCategory[] = [
   'tests',
 ];
 
+const UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES = new Set<TestSuiteDriftCategory>([
+  'dependencies',
+  'environment',
+  'migrations',
+  'project_config',
+]);
+
 const DEFAULT_TEST_SUITE_DRIFT_BUDGET: Record<
   TestSuiteDriftCategory,
   TestSuiteDriftBudgetBound
 > = Object.fromEntries(
   TEST_SUITE_DRIFT_CATEGORIES.map((category) => [category, 'none']),
 ) as Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>;
+
+function validateTestSuiteVerification(
+  raw: unknown,
+  scopedCommand: unknown,
+): ConfigError | null {
+  if (!isPlainObject(raw)) return null;
+
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS['test_suite.verification']);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in test_suite.verification: "${key}"` };
+    }
+  }
+
+  if (raw.mode !== undefined && raw.mode !== 'aggregate' && raw.mode !== 'scoped') {
+    return {
+      type: 'validation_error',
+      message: `test_suite.verification.mode ${JSON.stringify(raw.mode)} must be "aggregate" or "scoped"`,
+    };
+  }
+
+  if (raw.mode === 'scoped' && scopedCommand === undefined) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.scoped_command must be configured when test_suite.verification.mode is "scoped"',
+    };
+  }
+
+  if (!isPlainObject(raw.drift_budget)) return null;
+
+  for (const [category, bound] of Object.entries(raw.drift_budget)) {
+    if (!TEST_SUITE_DRIFT_CATEGORIES.includes(category as TestSuiteDriftCategory)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown test_suite.verification.drift_budget category "${category}". Valid categories: ${TEST_SUITE_DRIFT_CATEGORIES.join(', ')}`,
+      };
+    }
+    if (
+      UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES.has(category as TestSuiteDriftCategory) &&
+      bound !== 'none'
+    ) {
+      return {
+        type: 'validation_error',
+        message: `test_suite.verification.drift_budget.${category} is unbudgetable`,
+      };
+    }
+    if (
+      bound !== 'none' &&
+      bound !== 'unlimited' &&
+      (typeof bound !== 'number' || !Number.isInteger(bound) || bound <= 0)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `test_suite.verification.drift_budget.${category} must be a positive integer, "none", or "unlimited"; got ${JSON.stringify(bound)}`,
+      };
+    }
+  }
+
+  return null;
+}
 
 function resolveTestSuiteVerification(raw: unknown): TestSuiteVerificationConfig {
   const verification = isPlainObject(raw) ? raw : {};
