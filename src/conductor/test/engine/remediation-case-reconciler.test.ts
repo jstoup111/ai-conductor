@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
+import { classifyRemediationCaseReuse, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
+import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
 import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
 
@@ -42,6 +43,15 @@ const ACTION_CASE = {
   effect: { kind: 'action', route: 'build', tasks: [{ title: 'Cover the changed behavior' }] },
 } as const;
 
+function durableAction(overrides: Partial<RemediationCaseRecord> = {}): RemediationCaseRecord {
+  return {
+    id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'Fix it.', confidence: 'high', resolution: 'open',
+    sources: [{ sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: RECORDED_AT }],
+    effect: { id: 'effect-1', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+    ...overrides,
+  };
+}
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, {
     recursive: true,
@@ -50,6 +60,15 @@ afterEach(async () => {
 });
 
 describe('remediation case reconciler', () => {
+  it.each([
+    ['interrupted unattempted action resumes', durableAction(), new Set<string>(), 'resume'],
+    ['attempted action halts regardless of changed-tree facts outside the durable identity', durableAction(), new Set(['case-1']), 'halt-repeat'],
+    ['resolved action regression halts before a second route', durableAction({ resolution: 'resolved' }), new Set<string>(), 'halt-regression'],
+    ['deferred and rejected bindings reuse without another action route', { ...durableAction(), disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' } }, new Set(['case-1']), 'reuse'],
+  ] as const)('%s', (_label, record, attempted, expected) => {
+    expect(classifyRemediationCaseReuse(record, attempted)).toBe(expected);
+  });
+
   it('stamps engine-owned case and effect ids for a new proposed case', async () => {
     const projectRoot = await createProjectRoot();
     const result = await reconcileRemediationCases(new RemediationCaseStore(projectRoot, FEATURE), {
