@@ -89,6 +89,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_member_evidence_reused: { render: true, persist: true, audit: false, otel: false },
   build_member_evidence_recomputed: { render: true, persist: true, audit: false, otel: false },
   kickback: { render: true, persist: true, audit: true, otel: true },
+  kickback_budget_adjustment_authorized: { render: true, persist: true, audit: true, otel: true },
   loop_halt: { render: true, persist: true, audit: true, otel: true },
   over_scope_decision: { render: false, persist: true, audit: false, otel: false },
   halt_marker_write_failed: { render: true, persist: true, audit: true, otel: false },

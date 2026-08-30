@@ -746,6 +746,22 @@ export type ConductorEvent =
       kickback_outcome?: string;
     }
   | {
+      /** An operator authorized one cumulative kickback-budget adjustment. */
+      type: 'kickback_budget_adjustment_authorized';
+      adjustmentId: string;
+      feature: string;
+      gate: 'build_review';
+      kind: 'reset' | 'raise';
+      beforeCount: number;
+      afterCount: number;
+      beforeLimit: number;
+      afterLimit: number;
+      operator: string;
+      rationale: string;
+      /** The durable authorization timestamp, shared with the adjustment record. */
+      at: string;
+    }
+  | {
       /** The gate loop stopped without converging (kickback/stuck cap). */
       type: 'loop_halt';
       step?: StepName;
