@@ -170,7 +170,7 @@ describe('authorized cumulative-cap recovery returns to normal daemon ownership'
       events: new ConductorEventEmitter(),
       mode: 'default',
       daemon: true,
-      fromStep: 'build',
+      resume: true,
       maxRetries: 1,
       baseBranch: 'main',
       worktreeBranch: `feat/${SLUG}`,
