@@ -645,6 +645,31 @@ conductor.
 
 **Dependencies:** Task 1, Task 6, Task 7, Task 8, Task 18, Task 19
 
+### Task 21: Emit reconciliation, effect, and semantic-repeat occurrences from the coordinator
+**Story:** Story 11 (event path)
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing coordinator tests with an injected event sink asserting that a case which reconciles, reserves and applies an effect, fails an effect, and halts on a semantic repeat emits `remediation_case_reconciled`, `remediation_effect_reserved`, `remediation_effect_applied`, `remediation_effect_failed`, and `remediation_semantic_repeat_halt` through the injected port (RED — the port's type does not admit them today).
+2. Verify the focused tests fail (RED).
+3. Widen the coordinator's optional `emit` port from the three adjudication members to the full set of remediation case-lifecycle members already declared in `ConductorEvent`, and emit each occurrence at the point the coordinator performs it — reconciliation, effect reserve, effect apply, effect failure, and semantic-repeat halt.
+4. Verify the focused tests pass (GREEN), and confirm the existing adjudication start/completion/failure assertions from Task 15 still hold.
+5. Commit with message: "feat(events): emit remediation case lifecycle occurrences".
+
+**Done when:**
+
+1. A coordinator run that reconciles a case emits `remediation_case_reconciled` through the injected port.
+2. A coordinator run that reserves, applies, and fails an effect emits `remediation_effect_reserved`, `remediation_effect_applied`, and `remediation_effect_failed` at those points.
+3. A coordinator run that halts on a semantic repeat emits `remediation_semantic_repeat_halt`.
+4. The coordinator's `emit` port type admits every remediation case-lifecycle member of `ConductorEvent`, so a declared occurrence cannot be unreachable from the coordinator.
+5. Task 15's existing start/completion/failure emission assertions remain green, and no second event file, writer, or channel appears in the diff.
+
+**Files:**
+- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — widened emit port and occurrence emission
+- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — injected-sink occurrence assertions
+
+**Dependencies:** Task 14, Task 15
+
 ## Task Dependency Graph
 
 ```text
@@ -662,9 +687,13 @@ conductor.
 7, 15, 16, 17 -> 18
 12, 13, 16, 17, 18 -> 19
 1, 6, 7, 8, 18, 19 -> 20
+14, 15 -> 21
 ```
 
 All dependencies are acyclic. Tasks 1, 2, 7, 10, 11, and 14 may start independently.
+
+Task 21 closes the Story 11 event path: Task 14 declares the occurrence types and their
+sinks, and Task 21 is what actually emits them, so a declared occurrence cannot stay unreachable.
 
 ## Integration Points
 
