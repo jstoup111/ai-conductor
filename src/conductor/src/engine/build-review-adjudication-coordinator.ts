@@ -54,10 +54,21 @@ export async function coordinateBuildReviewAdjudication(input: {
   });
   if (!reconciled.ok) return { ok: false, detail: reconciled.reason === 'store-failure' ? `case store ${reconciled.storeReason}` : `case reconciliation ${reconciled.reason}` };
 
+  // Reconciliation preserves proposed-case order for engine-stamped additions;
+  // explicit existing bindings retain their own durable id. This derives the
+  // local mapping without making a provider-visible identity API.
+  const newlyStamped = reconciled.state.cases.slice(prior.state.cases.length);
+  let newIndex = 0;
+  const caseIdsByRef = new Map<string, string>();
+  for (const proposed of graph.graph.cases) {
+    const id = proposed.case.existingCaseId ?? newlyStamped[newIndex++]?.id;
+    if (id) caseIdsByRef.set(proposed.case.caseRef, id);
+  }
+
   const tasksByCaseId = new Map<string, readonly { readonly title: string }[]>();
   for (const proposed of graph.graph.cases) {
     if (proposed.case.disposition !== 'act') continue;
-    const caseId = reconciled.caseIdsByRef.get(proposed.case.caseRef);
+    const caseId = caseIdsByRef.get(proposed.case.caseRef);
     if (!caseId || proposed.case.effect.kind !== 'action') return { ok: false, detail: 'action case identity was not reconciled' };
     tasksByCaseId.set(caseId, proposed.case.effect.tasks);
   }
@@ -70,7 +81,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   if (input.tracker && input.repo && input.fileIssue) {
     for (const proposed of graph.graph.cases) {
       if (proposed.case.disposition !== 'defer' || proposed.case.effect.kind !== 'deferral') continue;
-      const caseId = reconciled.caseIdsByRef.get(proposed.case.caseRef);
+      const caseId = caseIdsByRef.get(proposed.case.caseRef);
       if (!caseId) return { ok: false, detail: 'deferral case identity was not reconciled' };
       const deferred = await applyBuildReviewDeferralEffect({
         projectRoot: input.projectRoot, feature: input.feature, store, caseId, effect: proposed.case.effect as RemediationCaseDeferralEffect,

@@ -31,12 +31,24 @@ export type RemediationCaseReconciliationRejection =
   | 'id-collision';
 
 export type ReconcileRemediationCasesResult =
-  | { readonly ok: true; readonly state: RemediationCaseStoreState; readonly caseIdsByRef: ReadonlyMap<string, string> }
+  | { readonly ok: true; readonly state: RemediationCaseStoreState }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
   | { readonly ok: false; readonly reason: 'store-failure'; readonly storeReason: RemediationCaseStoreFailureReason };
 
+/** Explicit durable bindings, never prose similarity or tree movement, decide reuse. */
+export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression';
+
+export function classifyRemediationCaseReuse(
+  record: RemediationCaseRecord,
+  attemptedCaseIds: ReadonlySet<string>,
+): RemediationCaseReuseDisposition {
+  if (record.disposition !== 'act') return 'reuse';
+  if (record.resolution === 'resolved') return 'halt-regression';
+  return attemptedCaseIds.has(record.id) ? 'halt-repeat' : 'resume';
+}
+
 type Reconciliation =
-  | { readonly ok: true; readonly state: RemediationCaseStoreState; readonly changed: boolean; readonly caseIdsByRef: ReadonlyMap<string, string> }
+  | { readonly ok: true; readonly state: RemediationCaseStoreState; readonly changed: boolean }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection };
 
 function isDurableId(value: string): boolean {
@@ -79,7 +91,6 @@ function reconcileState(
   const referencedExisting = new Set<string>();
   const replacements = new Map<string, RemediationCaseRecord>();
   const additions: RemediationCaseRecord[] = [];
-  const caseIdsByRef = new Map<string, string>();
 
   for (const proposed of input.graph.cases) {
     const { case: caseRow, sources } = proposed;
@@ -105,7 +116,6 @@ function reconcileState(
         })),
         effect: effectFor(caseRow, effectId),
       });
-      caseIdsByRef.set(caseRow.caseRef, caseId);
       continue;
     }
 
@@ -117,7 +127,6 @@ function reconcileState(
     if (referencedExisting.has(existingCaseId)) return { ok: false, reason: 'duplicate-case-binding' };
     if (existing.disposition !== caseRow.disposition) return { ok: false, reason: 'illegal-disposition-transition' };
     referencedExisting.add(existingCaseId);
-    caseIdsByRef.set(caseRow.caseRef, existingCaseId);
 
     const appendedSources = [...existing.sources];
     for (const source of sources) {
@@ -148,7 +157,7 @@ function reconcileState(
     }
     return replacement;
   });
-  return { ok: true, state: { ...state, cases: [...cases, ...additions] }, changed, caseIdsByRef };
+  return { ok: true, state: { ...state, cases: [...cases, ...additions] }, changed };
 }
 
 /**
@@ -167,6 +176,6 @@ export async function reconcileRemediationCases(
   });
   if (!mutation.ok) return { ok: false, reason: 'store-failure', storeReason: mutation.reason };
   return mutation.value.ok
-    ? { ok: true, state: mutation.value.state, caseIdsByRef: mutation.value.caseIdsByRef }
+    ? { ok: true, state: mutation.value.state }
     : mutation.value;
 }
