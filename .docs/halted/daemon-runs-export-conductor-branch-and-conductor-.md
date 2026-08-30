@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-30T18:41:04.462Z
 Slug: daemon-runs-export-conductor-branch-and-conductor-
 Class: needs-human
 Halting step: prd_audit
