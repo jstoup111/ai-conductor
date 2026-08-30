@@ -46,6 +46,38 @@ export interface SpecHashResult {
  * storiesIncluded is reported as false so callers can distinguish "no
  * stories yet" from "stories present but empty."
  */
+/**
+ * The plan's `**Stories:**` reference, as a repository-relative path.
+ *
+ * Both sides of the spec-hash contract resolve stories through this one
+ * function, because they must agree byte for byte: the shipped-record writer
+ * reads the path from the working tree, the shipment-evidence validator reads
+ * it out of a commit, and any difference in what they consider "the reference"
+ * produces a `shipped-record-hash-mismatch` that refuses every finish.
+ *
+ * Plans write the reference three ways, and the markdown-link form is the
+ * common one. Parsing only the bare form captured the link's TEXT — `[accepted`
+ * from `**Stories:** [accepted stories](../stories/x.md)` — which the writer
+ * merely failed to open (falling back to the stem, hashing plan + stories)
+ * while `git show <commit>:[accepted` treated it as a glob pathspec, exited 0
+ * with zero bytes, and made the validator hash plan + nothing. Returning
+ * undefined here is what routes both sides to the identical stem fallback.
+ */
+export function parseStoriesReference(planContent: string): string | undefined {
+  const line = planContent.match(/^[ \t]*\*\*Stories:\*\*[ \t]*(.+)$/im)?.[1]?.trim();
+  if (!line) return undefined;
+
+  // `[label](path)` — the link target is the reference, never the label.
+  const link = line.match(/^\[[^\]]*\]\(\s*<?([^)\s>]+)>?\s*\)/)?.[1];
+  const bare = line.match(/^`?([^\s`]+)`?/)?.[1];
+  const reference = link ?? bare;
+  if (!reference) return undefined;
+
+  // A reference that resolves to nothing is not a reference. Callers fall back
+  // to the slug stem rather than hashing an empty stories half.
+  return reference.length > 0 ? reference : undefined;
+}
+
 export function specHash(
   planBytes: Buffer,
   storiesBytes: Buffer | null | undefined

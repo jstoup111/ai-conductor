@@ -19,6 +19,45 @@ afterEach(async () => {
 });
 
 describe('evaluateShipmentEvidence', () => {
+  it('resolves the stories half through a markdown-link Stories reference, matching the writer', async () => {
+    // The regression: `**Stories:** [label](path)` captured the LABEL. The
+    // shipped-record writer failed to open `[label` on the filesystem and fell
+    // back to the slug stem, hashing plan + stories; the validator ran
+    // `git show <commit>:[label`, which git resolves as a glob pathspec and
+    // exits 0 with zero bytes, so it hashed plan + nothing. Every finish then
+    // refused with shipped-record-hash-mismatch.
+    const repoDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-stories-link-'));
+    scratchDirs.push(repoDir);
+    const slug = 'linked-stories';
+    const pr = 'https://github.com/acme/conductor/pull/2080';
+    const stories = '# Stories\n\nS1 the criterion.\n';
+    const plan = `# Linked stories\n\n**Stories:** [accepted stories](../stories/${slug}.md)\n`;
+    // The record is written with the hash the WRITER computes: plan + stories.
+    const hash = specHash(Buffer.from(plan), Buffer.from(stories)).digest;
+
+    await initTestRepo(repoDir);
+    await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
+    await mkdir(join(repoDir, '.docs/stories'), { recursive: true });
+    await mkdir(join(repoDir, '.docs/shipped'), { recursive: true });
+    await writeFile(join(repoDir, `.docs/plans/${slug}.md`), plan);
+    await writeFile(join(repoDir, `.docs/stories/${slug}.md`), stories);
+    await writeFile(
+      join(repoDir, `.docs/shipped/${slug}.md`),
+      renderShippedRecord({ slug, specHash: hash, pr, shipped: '2026-08-30' }),
+    );
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', 'feat: linked stories'], { cwd: repoDir });
+    const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    const commit = stdout.trim();
+
+    const verdict = await evaluateShipmentEvidence(
+      { repoDir, slug, implementationPr: pr, candidateCommit: commit },
+      { githubRunner: async () => ({ url: pr, headRefOid: commit }) },
+    );
+
+    expect(verdict).toMatchObject({ kind: 'valid', slug, pr, hash });
+  });
+
   it('returns the exact checked durable evidence for a pushed record on the candidate commit', async () => {
     const repoDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-valid-'));
     scratchDirs.push(repoDir);

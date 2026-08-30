@@ -28,6 +28,7 @@ import {
   appendBuildReviewAcceptedRisk,
   appendBuildReviewReducedCoverageEvidence,
   appendBuildReviewMetrics,
+  parseStoriesReference,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
@@ -82,10 +83,12 @@ async function readStoriesBytes(
   slug: string,
   planContent: string,
 ): Promise<Buffer | null> {
-  const m = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im);
-  if (m && !isAbsolute(m[1])) {
+  const reference = parseStoriesReference(planContent);
+  if (reference && !isAbsolute(reference)) {
     try {
-      return await readFile(join(cwd, m[1]));
+      const stories = await readFile(join(cwd, reference));
+      // Symmetry with the validator: a zero-byte read is not the stories file.
+      if (stories.length > 0) return stories;
     } catch {
       /* fall through to the stem fallback */
     }
