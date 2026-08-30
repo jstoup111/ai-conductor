@@ -690,7 +690,7 @@ async function main(): Promise<void> {
 
   // Memory setup subcommand (`conduct memory setup [dir]`, adr-2026-06-29-shared-memory-store-placement-and-durability) runs
   // NON-INTERACTIVELY and exits — creates/migrates the canonical per-project
-  // store + .memory symlink. Dispatched first so bin/conduct can call it
+  // store + .memory symlink. Dispatched first before the pipeline begins.
   // before the interactive pipeline or Claude sessions start.
   const memoryCmd = detectMemoryCommand(process.argv);
   if (memoryCmd) {

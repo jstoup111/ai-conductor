@@ -9,7 +9,7 @@ nav_order: 2
 Every command, subcommand, flag, and exit code of the `ai-conductor` engine. Commands are grouped
 operator-first: the ones you type, then the ones the engine invokes on your behalf.
 
-The legacy bash `bin/conduct` is deprecated and is not documented here — use `ai-conductor`.
+The supported launcher is `ai-conductor`; the removed legacy Bash CLI is not documented here.
 
 ## Launcher
 
