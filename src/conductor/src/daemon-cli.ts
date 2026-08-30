@@ -84,7 +84,7 @@ import {
   type DaemonLogSink,
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
-import { runDaemon, type BacklogItem, type DaemonResult } from './engine/daemon.js';
+import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
 import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import {
@@ -173,7 +173,12 @@ import type { PrMergeState } from './engine/pr-labels.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
-import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
+import {
+  readRestartPending,
+  consumeOnBoot,
+  recordRestartPendingDrain,
+  type RestartIntent,
+} from './engine/restart-marker.js';
 import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
 import { createEpisodeHaltTracker } from './engine/episode-halt-tracker.js';
 
@@ -336,6 +341,8 @@ export interface DaemonModeOptions {
    * Tests inject a fake to verify the exit call is made.
    */
   exitProcess?: (code: number) => void;
+  /** Injectable executor boundary for daemon composition tests. */
+  runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
   /**
    * Task 3: Show completed (PROCESSED) features in the startup dashboard's
    * console output. Defaults to false/undefined — the persisted log sink
@@ -691,6 +698,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // console stays uncluttered for live watching.
     writePersisted: (line) => logSink?.write(formatDaemonLogLine(stripAnsi(line))),
   });
+  // daemon.ts is also used as a plain core, where its `[daemon]` messages are
+  // meaningful. Its daemon-mode renderer already owns that prefix, though, so
+  // normalize only the core-to-renderer bridge to one durable/live prefix.
+  const daemonCoreLog = (message: string): void =>
+    log(message.startsWith('[daemon] ') ? message.slice('[daemon] '.length) : message);
 
   // Task 17: Create the transition-aware discovery logger
   // Logs fetch failures/recovery only on state transitions
@@ -1419,7 +1431,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       })(item);
     },
   });
-  const runFeature = makeRunFeature(deps);
+  const runFeature = opts.runFeature ?? makeRunFeature(deps);
 
   const continuous = opts.continuous ?? false;
   // Continuous with no ceiling at all runs unbounded — surface that loudly
@@ -1717,9 +1729,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         }
       },
       runFeature,
-      featureExecution: { createWorkOrder, executor },
+      // An explicit runFeature is the composition-test executor boundary. The
+      // normal production path continues through the WorkOrder executor.
+      ...(opts.runFeature ? {} : { featureExecution: { createWorkOrder, executor } }),
       featureLog: featureLogFor,
-      log,
+      log: daemonCoreLog,
       staleEngineChecker,
       requestRestart,
       // Rebuild the engine from source before each dispatch (self-host only) so
@@ -2173,6 +2187,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         const intent = await readRestartPending(projectRoot);
         return intent !== null;
       },
+      recordRestartPendingDrain: async (slugs) => {
+        await recordRestartPendingDrain(projectRoot, slugs);
+      },
       // Task T28: trigger self-restart when marker is pending (injected from supervisor/bare-run).
       triggerSelfRestart: opts.triggerSelfRestart,
       // Queued supervisor restarts rebuild/relink only for the harness self-host.
@@ -2234,7 +2251,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // #561 (Story 1): only force a clean process exit when this completion was
   // driven by a SIGTERM-requested drain — ordinary (non-signal) completion
   // keeps today's return-and-let-the-event-loop-drain behavior.
-  if (teardownWasRequested) {
+  if (teardownWasRequested || result.restartPendingConsumed) {
     (opts.exitProcess ?? process.exit)(0);
   }
   return result;
