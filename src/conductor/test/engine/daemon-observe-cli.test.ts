@@ -304,7 +304,12 @@ describe('engine/daemon-observe-cli', () => {
   describe('computeStatusRow — restart-pending + two-layer liveness (FR-9/FR-12, T33)', () => {
     async function writeRestartMarker(
       repo: string,
-      intent: { requestedAt?: string; requestedBy?: string; blockingSlug?: string } | string = {},
+      intent: {
+        requestedAt?: string;
+        requestedBy?: string;
+        blockingSlug?: string;
+        drainSlugs?: string[];
+      } | string = {},
     ): Promise<void> {
       await mkdir(join(repo, '.daemon'), { recursive: true });
       const body =
@@ -335,6 +340,19 @@ describe('engine/daemon-observe-cli', () => {
       const out: string[] = [];
       await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
       expect(out.join('\n')).toContain('restart-pending (waiting on feat-widgets)');
+    });
+
+    it('renders every worker in a persisted restart drain set via runDaemonStatus', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writeRestartMarker(repo, { drainSlugs: ['feat-a', 'feat-b'] });
+      const registryPath = join(root, 'registry.json');
+      await writeFile(registryPath, JSON.stringify([record('repo', repo)]), 'utf8');
+
+      const out: string[] = [];
+      await runDaemonStatus({ registryPath, kill: ALIVE, out: (line) => out.push(line) });
+      expect(out.join('\n')).toContain('restart-pending (waiting on feat-a, feat-b)');
     });
 
     it('does not consume the restart marker — it remains present across repeated status reads', async () => {

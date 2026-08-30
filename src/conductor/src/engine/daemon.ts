@@ -481,6 +481,12 @@ export interface DaemonDeps {
    */
   hasRestartPending?: () => Promise<boolean>;
   /**
+   * Records the active drain set on the existing durable restart intent so
+   * read-only daemon status can show every feature the queued restart awaits.
+   * Absent for the pure core and non-daemon callers.
+   */
+  recordRestartPendingDrain?: (slugs: readonly string[]) => Promise<void>;
+  /**
    * Task 13 (queued-restart relink wiring): Relink harness skills before firing
    * the self-restart trigger at the idle boundary. Called BEFORE triggerSelfRestart
    * to ensure fresh skills are available in the restarted daemon. If relink fails,
@@ -591,6 +597,8 @@ export type DaemonStopReason =
 export interface DaemonResult {
   processed: FeatureOutcome[];
   stoppedReason: DaemonStopReason;
+  /** The bare-run path consumed RESTART-PENDING and must exit after lock release. */
+  restartPendingConsumed?: true;
 }
 
 /** A runFeature promise tagged with its slug so a race can identify the winner. */
@@ -843,11 +851,13 @@ export async function runDaemon(
     () => deps.rateLimitEpisode?.active?.() ?? false,
     idlePollMs,
     now,
+    () => claims.list(),
   );
   const workers: Array<{ slug: string; tagged: Tagged; settled: boolean }> = [];
   // Task T28: track whether the restart trigger has been successfully called
   // in this run. Once successful, don't retry (the respawn would exit the process).
   let restartTriggeredSuccessfully = false;
+  let restartPendingConsumed = false;
   // Task 21: track whether a stale-engine restart request has been made in this
   // run. Once requested, don't retry (the restart would exit the process).
   let staleEngineRestartRequested = false;
@@ -1047,6 +1057,53 @@ export async function runDaemon(
     deps.staleEngineChecker !== undefined; // gate 4: checker armed
 
   /**
+   * A queued restart or stale running engine is discovered while workers are
+   * active, but root-changing recovery remains deferred to the drained
+   * boundary. DaemonMaintenance owns that state and captures the drain set;
+   * this loop only performs the observation and bare daemon announcement.
+   */
+  const beginDrain = async (reason: 'restart-pending' | 'stale-engine'): Promise<void> => {
+    const wasDraining = maintenance.isDraining();
+    const drain = maintenance.beginDrain(reason);
+    if (!wasDraining) {
+      if (drain.reason === 'restart-pending' && deps.recordRestartPendingDrain) {
+        try {
+          await deps.recordRestartPendingDrain(drain.slugs);
+        } catch (err) {
+          log(
+            `[daemon] failed to record restart drain set: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+      log(`[daemon] drain started: ${drain.reason}`);
+    }
+  };
+
+  const observeBusyDrainRequest = async (): Promise<void> => {
+    if (maintenance.isDraining() || inFlight.size === 0) return;
+
+    if (deps.hasRestartPending) {
+      try {
+        if (await deps.hasRestartPending()) {
+          await beginDrain('restart-pending');
+          return;
+        }
+      } catch (err) {
+        log(
+          `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`,
+        );
+      }
+    }
+
+    if (!staleGatesArmed || !deps.staleEngineChecker) return;
+    if (deps.staleEngineChecker.check() !== 'stale') return;
+
+    const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
+    const suppressed = deps.isSuppressed ? await deps.isSuppressed(targetIdentity) : false;
+    if (!suppressed) await beginDrain('stale-engine');
+  };
+
+  /**
    * Rebuild the engine from the current source, then restart if it is now
    * stale. Returns true when a restart was requested — in production
    * `requestRestart` has already exited the process; the return value only
@@ -1157,12 +1214,14 @@ export async function runDaemon(
     if (stopReason) break;
 
     // Fill the pool while slots are free.
-    if (inFlight.size < concurrency) {
+    if (inFlight.size < concurrency && (!maintenance.isDraining() || maintenance.isDrained())) {
       // FR-1 (Task 11): re-poll the pause predicate every iteration (including
       // idle ticks) so a pause lifted mid-run resumes dispatch at the next
       // boundary. Paused → no NEW item is picked this tick; in-flight work
       // (handled below/at drain) is completely unaffected.
-      const paused = await checkPaused();
+      // A drain reaches this same boundary at zero active claims, but must not
+      // select a replacement item before its pending restart action runs.
+      const paused = maintenance.isDraining() || (await checkPaused());
 
       // Task 13 (FR-6): re-poll the build-auth credential gate every
       // iteration, same cadence as `checkPaused`. Missing → no NEW item is
@@ -1324,6 +1383,7 @@ export async function runDaemon(
                     await deps.consumeRestartPending();
                     log('[daemon] restart marker consumed; exiting cleanly');
                     restartTriggeredSuccessfully = true;
+                    restartPendingConsumed = true;
                     // Break from the loop to exit cleanly with the current processed results
                     return 'backlog_drained';
                   } catch (err) {
@@ -1355,6 +1415,13 @@ export async function runDaemon(
         // If all gates pass, call the checker. On 'stale' verdict, (Task 13) call
         // requestRestart. If ANY gate fails, skip the check and continue idle behavior.
           async (episodeActive): Promise<DaemonStopReason | null> => {
+            if (maintenance.drain()?.reason === 'stale-engine') {
+              if (episodeActive) {
+                log('[daemon] stale engine drain reached boundary during episode; deferring restart request');
+                return null;
+              }
+              return (await rebuildAndMaybeRestartForStaleEngine()) ? 'engine_restart' : null;
+            }
             const isSharedMode = !options.once; // continuous mode = shared/not-once
             const shouldCheckStale =
               isSharedMode && // gate 1: continuous mode (not once)
@@ -1460,6 +1527,10 @@ export async function runDaemon(
       }
     }
 
+    // Observe restart conditions only after the claim attempt. A drain begun
+    // here stops the next free slot from being filled after a worker settles.
+    await observeBusyDrainRequest();
+
     // Workers are running. Race their completion against the poll timer so
     // busy pools still execute the scheduler-owned periodic sweep; a timer
     // tick never mutates an in-flight WorkOrder. This is outside the free-slot
@@ -1492,5 +1563,9 @@ export async function runDaemon(
   // on daemon exit/shutdown, same lifecycle discipline as the HALT watchers.
   disposeBuildAuthWatcher?.();
 
-  return { processed, stoppedReason: stopReason ?? 'backlog_drained' };
+  return {
+    processed,
+    stoppedReason: stopReason ?? 'backlog_drained',
+    ...(restartPendingConsumed ? { restartPendingConsumed: true as const } : {}),
+  };
 }

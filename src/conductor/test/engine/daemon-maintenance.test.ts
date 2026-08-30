@@ -1,4 +1,4 @@
-// Covers: task:11, task:12
+// Covers: task:11, task:12, task:14
 import { describe, expect, it, vi } from 'vitest';
 import {
   DaemonMaintenance,
@@ -6,9 +6,28 @@ import {
 } from '../../src/engine/daemon-maintenance.js';
 import type { FeatureExecutor } from '../../src/engine/feature-executor.js';
 import { rekickSweep } from '../../src/engine/daemon-rekick.js';
+import type { WorkClaims } from '../../src/engine/work-claims.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
 
 const maintenanceTrace = vi.hoisted(() => ({ operations: [] as DaemonMaintenanceOperation[] }));
+
+function trackedClaims(attempts: string[]): WorkClaims {
+  const active = new Set<string>();
+  return {
+    claim(slug) {
+      attempts.push(slug);
+      if (active.has(slug)) return false;
+      active.add(slug);
+      return true;
+    },
+    release(slug) {
+      active.delete(slug);
+    },
+    list() {
+      return [...active];
+    },
+  };
+}
 
 vi.mock('../../src/engine/daemon-maintenance.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-maintenance.js')>();
@@ -270,5 +289,139 @@ describe('engine/daemon-maintenance', () => {
 
     expect(sweepContexts).toContainEqual({ first: true, second: true });
     expect(result.processed.map((outcome) => outcome.slug).sort()).toEqual(['first', 'second']);
+  });
+
+  it('drains two stale-engine workers before rebuilding and restarting exactly once', async () => {
+    const claimAttempts: string[] = [];
+    const started: string[] = [];
+    const logs: string[] = [];
+    const events: string[] = [];
+    let releaseWorkers: (() => void) | undefined;
+    let staleChecks = 0;
+    let rebuildCalls = 0;
+    const workersReleased = new Promise<void>((resolve) => {
+      releaseWorkers = resolve;
+    });
+    const rebuildEngine = vi.fn(async () => {
+      rebuildCalls++;
+      // The serial pre-dispatch freshness check is outside this drain test.
+      // Only the stale-detected drain rebuild is part of the required order.
+      if (rebuildCalls > 1) events.push('rebuild');
+    });
+    const requestRestart = vi.fn(async () => {
+      events.push('restart');
+      return { fired: true };
+    });
+
+    const result = await runDaemon(
+      {
+        discoverBacklog: async () => [
+          { slug: 'first' },
+          { slug: 'second' },
+          { slug: 'later' },
+        ],
+        runFeature: async (item) => {
+          started.push(item.slug);
+          if (item.slug === 'later') return { slug: item.slug, status: 'done' as const };
+          await workersReleased;
+          events.push(`finished:${item.slug}`);
+          return { slug: item.slug, status: 'done' as const };
+        },
+        claims: trackedClaims(claimAttempts),
+        staleEngineChecker: {
+          check: () => (staleChecks++ === 0 ? 'current' : 'stale'),
+          capturedIdentity: () => 'engine-before',
+          targetIdentity: () => 'engine-after',
+        },
+        rebuildEngine,
+        requestRestart,
+        sleep: async () => {
+          releaseWorkers?.();
+        },
+        log: (line) => logs.push(line),
+      },
+      {
+        concurrency: 2,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      },
+    );
+
+    expect({
+      started,
+      claimAttempts,
+      events,
+      restarts: requestRestart.mock.calls.length,
+      stopReason: result.stoppedReason,
+      drainLogs: logs.filter((line) => line.startsWith('[daemon] drain started:')),
+    }).toEqual({
+      started: ['first', 'second'],
+      restarts: 1,
+      stopReason: 'engine_restart',
+      claimAttempts: ['first', 'second'],
+      events: ['finished:first', 'finished:second', 'rebuild', 'restart'],
+      drainLogs: ['[daemon] drain started: stale-engine'],
+    });
+  });
+
+  it('drains a busy queued restart before consuming its marker and exiting', async () => {
+    const claimAttempts: string[] = [];
+    const started: string[] = [];
+    const events: string[] = [];
+    const recordedDrainSets: string[][] = [];
+    let releaseWorkers: (() => void) | undefined;
+    const workersReleased = new Promise<void>((resolve) => {
+      releaseWorkers = resolve;
+    });
+
+    const result = await runDaemon(
+      {
+        discoverBacklog: async () => [
+          { slug: 'first' },
+          { slug: 'second' },
+          { slug: 'later' },
+        ],
+        runFeature: async (item) => {
+          started.push(item.slug);
+          if (item.slug === 'later') return { slug: item.slug, status: 'done' as const };
+          await workersReleased;
+          events.push(`finished:${item.slug}`);
+          return { slug: item.slug, status: 'done' as const };
+        },
+        claims: trackedClaims(claimAttempts),
+        hasRestartPending: async () => true,
+        recordRestartPendingDrain: async (slugs) => {
+          recordedDrainSets.push([...slugs]);
+        },
+        consumeRestartPending: async () => {
+          events.push('marker-consumed');
+        },
+        sleep: async () => {
+          releaseWorkers?.();
+        },
+        log: (line) => events.push(line),
+      },
+      { concurrency: 2, once: false, maxIdlePolls: 1 },
+    );
+
+    expect({
+      started,
+      claimAttempts,
+      recordedDrainSets,
+      stopReason: result.stoppedReason,
+      restartPendingConsumed: result.restartPendingConsumed,
+      markerAfterWorkers: events.indexOf('marker-consumed') > events.lastIndexOf('finished:second'),
+      drainLogs: events.filter((line) => line.startsWith('[daemon] drain started:')),
+    }).toEqual({
+      started: ['first', 'second'],
+      claimAttempts: ['first', 'second'],
+      recordedDrainSets: [['first', 'second']],
+      stopReason: 'backlog_drained',
+      restartPendingConsumed: true,
+      markerAfterWorkers: true,
+      drainLogs: ['[daemon] drain started: restart-pending'],
+    });
   });
 });

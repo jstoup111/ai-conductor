@@ -13,6 +13,15 @@ export type DaemonMaintenanceOperation =
   | 'sweep'
   | 'episode-end-sweep';
 
+/** A dispatcher-only restart request that must wait for current work to finish. */
+export type DaemonDrainReason = 'restart-pending' | 'stale-engine';
+
+/** Snapshot of the active claims held when the dispatcher stopped claiming. */
+export interface DaemonDrainState {
+  readonly reason: DaemonDrainReason;
+  readonly slugs: readonly string[];
+}
+
 type MaintenancePolicy = 'drained' | 'busy-allowed';
 
 const maintenancePolicies: Record<DaemonMaintenanceOperation, MaintenancePolicy> = {
@@ -28,16 +37,38 @@ const maintenancePolicies: Record<DaemonMaintenanceOperation, MaintenancePolicy>
 export class DaemonMaintenance {
   private wasEpisodeActive = false;
   private lastRefreshAt: number | null = null;
+  private drainState: DaemonDrainState | undefined;
 
   constructor(
     private readonly activeWorkCount: () => number,
     private readonly isEpisodeActive: () => boolean = () => false,
     private readonly refreshIntervalMs = 0,
     private readonly now: () => number = Date.now,
+    private readonly activeWorkSlugs: () => readonly string[] = () => [],
   ) {}
 
   isDrained(): boolean {
     return this.activeWorkCount() === 0;
+  }
+
+  /**
+   * Stops the dispatcher from making further claims until the current workers
+   * have reached the drained boundary. The first request wins for this process;
+   * it is the action that will own the single restart at that boundary.
+   */
+  beginDrain(reason: DaemonDrainReason): DaemonDrainState {
+    if (!this.drainState) {
+      this.drainState = { reason, slugs: [...this.activeWorkSlugs()] };
+    }
+    return this.drainState;
+  }
+
+  isDraining(): boolean {
+    return this.drainState !== undefined;
+  }
+
+  drain(): DaemonDrainState | undefined {
+    return this.drainState;
   }
 
   async startup(rekick: () => Promise<void>, sweep: () => Promise<void>): Promise<void> {
