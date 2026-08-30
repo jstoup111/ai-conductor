@@ -108,6 +108,24 @@ describe('build-review adjudication context', () => {
     })).toMatchObject({ ok: true, context: { currentSources: [], priorCases: [] } });
   });
 
+  it('stops before dispatch when operator-unresolved sources exceed the current-source bound', () => {
+    const current = aggregate(...Array.from(
+      { length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources + 1 },
+      (_value, index) => finding(`unresolved-${index}`),
+    ));
+
+    expect(assembleBuildReviewAdjudicationContext({ aggregate: current, priorCases: [] })).toEqual({
+      ok: false,
+      stop: {
+        code: 'field-overflow',
+        subject: 'current-source',
+        field: 'currentSources',
+        limit: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources,
+        actual: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources + 1,
+      },
+    });
+  });
+
   it('excludes infrastructure results rather than treating them as remediation sources', () => {
     const mixed = joinBuildReviewRubricOutcomes({
       lapId,
