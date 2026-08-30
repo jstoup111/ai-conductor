@@ -76,6 +76,10 @@ describe('remediation case store', () => {
 
   it.each([
     ['a foreign feature', { ...CASE_STATE, feature: { ...FEATURE, feature: 'other-feature' } }, 'foreign-feature'],
+    ['a foreign case domain', {
+      ...CASE_STATE,
+      cases: [{ ...CASE_STATE.cases[0], domain: 'prd_audit' }],
+    }, 'foreign-domain'],
     ['an unsupported state version', { ...CASE_STATE, version: 'v2' }, 'unknown-version'],
     ['a mismatched action effect', {
       ...CASE_STATE,

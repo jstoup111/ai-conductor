@@ -80,6 +80,7 @@ export type RemediationCaseStoreFailureReason =
   | 'malformed-json'
   | 'unknown-version'
   | 'foreign-feature'
+  | 'foreign-domain'
   | 'malformed-state'
   | 'lock-timeout'
   | 'lock-failed'
@@ -169,19 +170,23 @@ function parseEffect(value: unknown, disposition: RemediationCaseDisposition): R
   return undefined;
 }
 
-function parseCase(value: unknown): RemediationCaseRecord | undefined {
+function parseCase(value: unknown):
+  | { readonly ok: true; readonly record: RemediationCaseRecord }
+  | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
   if (!isRecord(value) || !exactKeys(value, [
     'id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect',
-  ]) || !boundedString(value.id, MAX_REFERENCE_LENGTH) || value.domain !== 'build_review' ||
+  ])) return { ok: false, reason: 'malformed-state' };
+  if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
+  if (!boundedString(value.id, MAX_REFERENCE_LENGTH) ||
     !oneOf(value.disposition, ['act', 'defer', 'reject'] as const) ||
     !oneOf(value.priority, ['critical', 'high', 'medium', 'low'] as const) ||
     !boundedString(value.rationale) || !oneOf(value.confidence, ['high', 'medium', 'low'] as const) ||
     !oneOf(value.resolution, ['open', 'resolved'] as const) || !Array.isArray(value.sources) ||
-    value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE) return undefined;
+    value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE) return { ok: false, reason: 'malformed-state' };
   const sources = value.sources.map(parseSourceLink);
   const effect = parseEffect(value.effect, value.disposition);
-  if (sources.some((source) => source === undefined) || effect === undefined) return undefined;
-  return {
+  if (sources.some((source) => source === undefined) || effect === undefined) return { ok: false, reason: 'malformed-state' };
+  return { ok: true, record: {
     id: value.id,
     domain: 'build_review',
     disposition: value.disposition,
@@ -191,20 +196,23 @@ function parseCase(value: unknown): RemediationCaseRecord | undefined {
     resolution: value.resolution,
     sources: sources as RemediationCaseSourceLink[],
     effect,
-  };
+  } };
 }
 
 function parseState(value: unknown):
   | { readonly ok: true; readonly state: RemediationCaseStoreState }
-  | { readonly ok: false; readonly reason: 'unknown-version' | 'malformed-state' } {
+  | { readonly ok: false; readonly reason: 'unknown-version' | 'foreign-domain' | 'malformed-state' } {
   if (!isRecord(value) || !exactKeys(value, ['version', 'feature', 'cases'])) return { ok: false, reason: 'malformed-state' };
   if (value.version !== STORE_VERSION) return { ok: false, reason: 'unknown-version' };
   const feature = parseFeature(value.feature);
   if (!feature || !Array.isArray(value.cases) || value.cases.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
-  const cases = value.cases.map(parseCase);
-  return cases.some((entry) => entry === undefined)
-    ? { ok: false, reason: 'malformed-state' }
-    : { ok: true, state: { version: STORE_VERSION, feature, cases: cases as RemediationCaseRecord[] } };
+  const cases: RemediationCaseRecord[] = [];
+  for (const caseValue of value.cases) {
+    const parsed = parseCase(caseValue);
+    if (!parsed.ok) return parsed;
+    cases.push(parsed.record);
+  }
+  return { ok: true, state: { version: STORE_VERSION, feature, cases } };
 }
 
 function isMissing(error: unknown): boolean {
