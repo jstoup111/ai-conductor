@@ -1,3 +1,4 @@
+// Covers: task:4
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,6 +18,7 @@ import { isOperatorParked, removeOperatorPark } from '../../src/engine/park-mark
 import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
 import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
+import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 
 function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -63,6 +65,112 @@ function makeSetupTriageParkingRunner(
 }
 
 describe('engine/daemon — runDaemon', () => {
+  it('uses injected claims to make repeated fill passes dispatch an eligible feature once', async () => {
+    const claims = new InMemoryWorkClaims();
+    let finishFeature: (() => void) | undefined;
+    let observedDispatch: (() => void) | undefined;
+    const dispatched = new Promise<void>((resolve) => {
+      observedDispatch = resolve;
+    });
+    const feature = new Promise<void>((resolve) => {
+      finishFeature = resolve;
+    });
+    let dispatches = 0;
+
+    const daemon = runDaemon({
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature: async (item) => {
+        dispatches += 1;
+        observedDispatch?.();
+        expect(claims.list()).toEqual([item.slug]);
+        await feature;
+        return { slug: item.slug, status: 'done' };
+      },
+      claims,
+    } as DaemonDeps, { concurrency: 3, once: true });
+
+    await dispatched;
+    expect(claims.list()).toEqual(['f0']);
+    finishFeature?.();
+    await expect(daemon).resolves.toMatchObject({
+      processed: [{ slug: 'f0', status: 'done' }],
+      stoppedReason: 'backlog_drained',
+    });
+    expect({ dispatches, activeClaims: claims.list() }).toEqual({
+      dispatches: 1,
+      activeClaims: [],
+    });
+  });
+
+  it('keeps a churning backlog exactly-once across three fill and collect cycles', async () => {
+    const claims = new InMemoryWorkClaims();
+    const calls = new Map<string, number>();
+    let discovery = 0;
+    const backlog = items(3);
+
+    const result = await runDaemon({
+      discoverBacklog: async () => {
+        const rotation = discovery++ % backlog.length;
+        return [...backlog.slice(rotation), ...backlog.slice(0, rotation)];
+      },
+      runFeature: async (item) => {
+        expect(claims.list()).toContain(item.slug);
+        calls.set(item.slug, (calls.get(item.slug) ?? 0) + 1);
+        return { slug: item.slug, status: 'done' };
+      },
+      claims,
+    } as DaemonDeps, { concurrency: 3, once: true });
+
+    expect({
+      calls: [...calls.entries()].sort(),
+      processed: result.processed.map(({ slug, status }) => ({ slug, status })).sort((a, b) => a.slug.localeCompare(b.slug)),
+      activeClaims: claims.list(),
+    }).toEqual({
+      calls: [['f0', 1], ['f1', 1], ['f2', 1]],
+      processed: [
+        { slug: 'f0', status: 'done' },
+        { slug: 'f1', status: 'done' },
+        { slug: 'f2', status: 'done' },
+      ],
+      activeClaims: [],
+    });
+  });
+
+  it('with a fresh claims registry after restart dispatches each unfinished feature once', async () => {
+    const completed = new Set<string>();
+    const calls = new Map<string, number>();
+    const runFeature = async (item: BacklogItem, claims: InMemoryWorkClaims) => {
+      expect(claims.list()).toContain(item.slug);
+      calls.set(item.slug, (calls.get(item.slug) ?? 0) + 1);
+      completed.add(item.slug);
+      return { slug: item.slug, status: 'done' as const };
+    };
+    const beforeRestartClaims = new InMemoryWorkClaims();
+    const beforeRestart = await runDaemon({
+      discoverBacklog: staticBacklog(items(2)),
+      runFeature: (item) => runFeature(item, beforeRestartClaims),
+      claims: beforeRestartClaims,
+    } as DaemonDeps, { concurrency: 3, once: true });
+    const afterRestartClaims = new InMemoryWorkClaims();
+    const afterRestart = await runDaemon({
+      discoverBacklog: async () => items(3).filter((item) => !completed.has(item.slug)),
+      runFeature: (item) => runFeature(item, afterRestartClaims),
+      claims: afterRestartClaims,
+    } as DaemonDeps, { concurrency: 3, once: true });
+
+    expect({
+      beforeRestart: beforeRestart.processed.map((outcome) => outcome.slug).sort(),
+      afterRestart: afterRestart.processed.map((outcome) => outcome.slug).sort(),
+      calls: [...calls.entries()].sort(),
+      claims: [beforeRestartClaims.list(), afterRestartClaims.list()],
+    }).toEqual({
+      beforeRestart: ['f0', 'f1'],
+      afterRestart: ['f2'],
+      calls: [['f0', 1], ['f1', 1], ['f2', 1]],
+      claims: [[], []],
+    });
+  });
+
   it('processes the whole backlog once (concurrency 1) and drains', async () => {
     const deps: DaemonDeps = {
       discoverBacklog: staticBacklog(items(3)),
