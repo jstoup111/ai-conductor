@@ -138,6 +138,22 @@ describe('remediation case reconciler', () => {
     expect(result).toMatchObject({ ok: true, state: { cases: [{ id: 'case-1', resolution: 'resolved' }] } });
   });
 
+  it('keeps an absent open action case open without recorded BUILD attempt evidence', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await reconcileRemediationCases(store, {
+      graph: graph(ACTION_CASE), recordedAt: RECORDED_AT, generateId: generatedIds('case-1', 'effect-1'),
+    });
+
+    const result = await reconcileRemediationCases(store, {
+      graph: { sourceOutcomes: [], cases: [] },
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: () => 'must-not-be-used',
+    });
+
+    expect(result).toMatchObject({ ok: true, state: { cases: [{ id: 'case-1', resolution: 'open' }] } });
+  });
+
   it.each([
     ['unknown', 'missing-case', undefined, 'unknown-case-binding'],
     ['foreign', 'foreign-case', ['foreign-case'], 'foreign-case-binding'],
