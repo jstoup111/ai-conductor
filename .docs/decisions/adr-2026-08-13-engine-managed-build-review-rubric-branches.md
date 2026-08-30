@@ -129,6 +129,13 @@ failure. A successful test command in the reverted-production checkout is eviden
 tests stayed green and therefore blocks Tautology unless an approved exception applies. A normal
 test failure is the expected RED evidence and is not an infrastructure failure.
 
+> **Amended 2026-08-30 by #2051:** a completed nonzero exit is recorded as a neutral fact rather
+> than automatic RED evidence; whether it supports sensitivity is judged by the testQuality
+> reviewer from the excerpt as the `counterfactualSensitivity` field
+> (adr-2026-08-30-counterfactual-sensitivity-judged-not-exit-coded). A genuine test failure on the
+> reverted tree remains creditable RED evidence — via that judgement, not exit-code fiat — and is
+> still not an infrastructure failure.
+
 The engine derives changed-test selectors from the diff's closed affected-test path rules and forms
 the reverted-production patch from the remaining changed production paths. An unclassifiable or
 empty selector set follows the existing explicit exception/fail-closed rules; it never widens to the

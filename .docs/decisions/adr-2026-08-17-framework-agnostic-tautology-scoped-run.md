@@ -115,6 +115,14 @@ demonstrably failed without the diff, which is exactly what the counterfactual a
 mechanical distinction there would require re-introducing the output parsing this decision removes.
 The distinction survives where it is meaningful — in the excerpt the judge reads.
 
+> **Amended 2026-08-30 by #2051:** the distinction is now drawn — still without any engine output
+> parsing — by the judge, whose excerpt reading lands as the schema-constrained
+> `counterfactualSensitivity` field (`supports | indeterminate | not-applicable`) under
+> adr-2026-08-30-counterfactual-sensitivity-judged-not-exit-coded. A completed nonzero exit is a
+> neutral recorded fact, no longer sensitivity-RED by exit code alone; D2–D4's
+> exit-code-decides-RED reading is superseded by that ADR. The mechanical-fault lane
+> (launch/timeout/signal) and the no-output-parsing prohibition are unchanged.
+
 **Why the excerpt rides the spine.** Outcome 5 asks that the output stay retrievable "from the
 feature's `.pipeline/` evidence", which invites persisting it under
 `.pipeline/build-review-preflight/`. That directory is the disposable checkout and is removed on
