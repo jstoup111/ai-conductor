@@ -249,6 +249,72 @@ export type ConductorEvent =
       /** Unbound Covers declarations seen in the frozen test-quality scope. */
       unresolvedMarkers?: readonly { selector: string; reference: string }[];
     }
+  | {
+      /** A post-join remediation judgement is about to run for one build-review lap. */
+      type: 'remediation_adjudication_started';
+      domain: 'build_review';
+      lapId: string;
+    }
+  | {
+      /** A valid remediation judgement was fully reconciled for one build-review lap. */
+      type: 'remediation_adjudication_completed';
+      domain: 'build_review';
+      lapId: string;
+      caseIds: readonly string[];
+      effectIds: readonly string[];
+    }
+  | {
+      /** A remediation judgement could not be completed and remains fail-closed. */
+      type: 'remediation_adjudication_failed';
+      domain: 'build_review';
+      lapId: string;
+      reason: string;
+    }
+  | {
+      /** One canonical remediation case was reconciled against the current lap. */
+      type: 'remediation_case_reconciled';
+      domain: 'build_review';
+      lapId: string;
+      caseId: string;
+      resolution: 'open' | 'resolved';
+    }
+  | {
+      /** One idempotent remediation effect was reserved before execution. */
+      type: 'remediation_effect_reserved';
+      domain: 'build_review';
+      lapId: string;
+      caseId: string;
+      effectId: string;
+      effectKind: 'action' | 'deferral';
+    }
+  | {
+      /** One reserved remediation effect completed successfully. */
+      type: 'remediation_effect_applied';
+      domain: 'build_review';
+      lapId: string;
+      caseId: string;
+      effectId: string;
+      effectKind: 'action' | 'deferral';
+    }
+  | {
+      /** One reserved remediation effect failed and remains blocking. */
+      type: 'remediation_effect_failed';
+      domain: 'build_review';
+      lapId: string;
+      caseId: string;
+      effectId: string;
+      effectKind: 'action' | 'deferral';
+      reason: string;
+    }
+  | {
+      /** A previously attempted or resolved case reappeared and halted routing. */
+      type: 'remediation_semantic_repeat_halt';
+      domain: 'build_review';
+      lapId: string;
+      caseId: string;
+      effectId?: string;
+      reason: 'already-attempted' | 'regressed';
+    }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | { type: 'step_started'; step: StepName; index: number }
   | {
