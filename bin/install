@@ -1341,25 +1341,7 @@ install() {
 
   report_selected_provider_readiness
 
-  # 3. Symlink conduct script
-  local conduct_source="${HARNESS_DIR}/bin/conduct"
-  local conduct_target="${LOCAL_BIN}/conduct"
-
-  if [ -L "$conduct_target" ]; then
-    local current
-    current=$(readlink -f "$conduct_target" 2>/dev/null || echo "")
-    if [ "$current" != "$conduct_source" ]; then
-      ln -sfn "$conduct_source" "$conduct_target" || warn "conduct symlink update failed"
-      ok "Updated conduct script symlink"
-    else
-      ok "conduct script already current"
-    fi
-  else
-    ln -sfn "$conduct_source" "$conduct_target" || warn "conduct symlink failed"
-    ok "Installed conduct script to ${conduct_target}"
-  fi
-
-  # 3a. Build conduct-ts (npm ci + npm run build) so the dist bundle reflects
+  # 3. Build conduct-ts (npm ci + npm run build) so the dist bundle reflects
   # this harness version before we symlink it. This runs for installs and updates.
   # A build failure (no npm, wrong Node) is deferred, not ignored: `|| true`
   # only keeps `set -e` from aborting here so the remaining steps still install,
@@ -1367,7 +1349,7 @@ install() {
   # of install() exits non-zero on it.
   build_conduct_ts || true
 
-  # 3b. Symlink conduct-ts (TypeScript conductor) if the dist bundle exists.
+  # 3a. Symlink the TypeScript entrypoints if the dist bundle exists.
   # conduct-ts is the engine-layer rewrite of conduct; users opt in today by
   # invoking `conduct-ts` explicitly. The bundle is produced by
   # `npm run build` inside src/conductor/ (step 3a above); skip the symlink if
@@ -1376,9 +1358,25 @@ install() {
   local conduct_ts_target="${LOCAL_BIN}/conduct-ts"
   local ai_conductor_source="${HARNESS_DIR}/bin/ai-conductor"
   local ai_conductor_target="${LOCAL_BIN}/ai-conductor"
+  local conduct_source="${HARNESS_DIR}/bin/ai-conductor"
+  local conduct_target="${LOCAL_BIN}/conduct"
   local conduct_ts_dist="${HARNESS_DIR}/src/conductor/dist/index.js"
 
   if [ -f "$conduct_ts_dist" ]; then
+    if [ -L "$conduct_target" ]; then
+      local current_conduct
+      current_conduct=$(readlink -f "$conduct_target" 2>/dev/null || echo "")
+      if [ "$current_conduct" != "$conduct_source" ]; then
+        ln -sfn "$conduct_source" "$conduct_target" || warn "conduct symlink update failed"
+        ok "Updated conduct script symlink"
+      else
+        ok "conduct script already current"
+      fi
+    else
+      ln -sfn "$conduct_source" "$conduct_target" || warn "conduct symlink failed"
+      ok "Installed conduct script to ${conduct_target}"
+    fi
+
     if [ -L "$ai_conductor_target" ]; then
       local current_ai_conductor
       current_ai_conductor=$(readlink -f "$ai_conductor_target" 2>/dev/null || echo "")

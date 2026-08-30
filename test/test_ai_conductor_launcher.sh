@@ -206,10 +206,18 @@ run_install() {
 
 run_install
 INSTALLED_CANONICAL="$INSTALL_HOME/.local/bin/ai-conductor"
+INSTALLED_CONDUCT="$INSTALL_HOME/.local/bin/conduct"
 assert "completed install creates the ai-conductor symlink" \
   "$([ "$INSTALL_STATUS" -eq 0 ] && [ -L "$INSTALLED_CANONICAL" ] && echo 0 || echo 1)"
 assert "installed ai-conductor resolves to the canonical launcher" \
   "$([ "$(readlink -f "$INSTALLED_CANONICAL")" = "$CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
+assert "installed conduct resolves to the canonical launcher" \
+  "$([ "$(readlink -f "$INSTALLED_CONDUCT")" = "$CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
+
+CONDUCT_INODE=$(stat -c '%i' "$INSTALLED_CONDUCT")
+run_install
+assert "current conduct symlink remains untouched on reinstall" \
+  "$([ "$(stat -c '%i' "$INSTALLED_CONDUCT")" = "$CONDUCT_INODE" ] && printf '%s\\n' "$INSTALL_STDOUT" | grep -Fq 'conduct script already current' && echo 0 || echo 1)"
 
 rm -f "$INSTALLED_CANONICAL"
 ln -s "$TMPDIR_ROOT/stale-ai-conductor" "$INSTALLED_CANONICAL"
