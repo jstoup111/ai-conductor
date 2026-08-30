@@ -102,4 +102,75 @@ describe('wireOtelVisualizer', () => {
       await rm(pipelineDir, { recursive: true, force: true });
     }
   });
+
+  it('exports omitted resolution inputs as not-supplied while retaining explicit unresolved values', async () => {
+    const omittedPipelineDir = await mkdtemp(join(tmpdir(), 'otel-wire-omitted-'));
+    const unresolvedPipelineDir = await mkdtemp(join(tmpdir(), 'otel-wire-unresolved-'));
+    const omittedEvents = new ConductorEventEmitter();
+    const unresolvedEvents = new ConductorEventEmitter();
+    const omittedExporter = new InMemorySpanExporter();
+    const unresolvedExporter = new InMemorySpanExporter();
+    const config = { otel: { exporter: 'otlp' as const, endpoint: 'http://fake-collector:4318' } };
+
+    buildExporters
+      .mockReturnValueOnce({
+        spanExporter: omittedExporter,
+        metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+      })
+      .mockReturnValueOnce({
+        spanExporter: unresolvedExporter,
+        metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+      });
+
+    try {
+      const omitted = wireOtelVisualizer(
+        config,
+        {
+          pipelineDir: omittedPipelineDir,
+          runId: 'omitted-run',
+          feature: 'otel-wire',
+          project: 'ai-conductor',
+        } as OtelWireContext,
+        omittedEvents,
+      );
+      const unresolved = wireOtelVisualizer(
+        config,
+        {
+          pipelineDir: unresolvedPipelineDir,
+          runId: 'unresolved-run',
+          feature: 'otel-wire',
+          project: 'ai-conductor',
+          branch: undefined,
+          engineVersion: undefined,
+        },
+        unresolvedEvents,
+      );
+
+      await omittedEvents.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await unresolvedEvents.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await omittedEvents.emit({ type: 'feature_complete', featureDesc: 'otel-wire' });
+      await unresolvedEvents.emit({ type: 'feature_complete', featureDesc: 'otel-wire' });
+      await omitted?.stop();
+      await unresolved?.stop();
+
+      expect({
+        omitted: omittedExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')
+          ?.resource.attributes,
+        unresolved: unresolvedExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')
+          ?.resource.attributes,
+      }).toMatchObject({
+        omitted: {
+          'conductor.branch': 'not-supplied',
+          'conductor.engine.version': 'not-supplied',
+        },
+        unresolved: {
+          'conductor.branch': 'unresolved',
+          'conductor.engine.version': 'unresolved',
+        },
+      });
+    } finally {
+      await rm(omittedPipelineDir, { recursive: true, force: true });
+      await rm(unresolvedPipelineDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -14,9 +14,9 @@ export interface ResourceContext {
   project?: string;
   /** Resolved project identity for service.instance.id. Defaults to 'unknown'. */
   projectName?: string;
-  /** Git branch for the active run. Defaults to 'unknown'. */
+  /** Git branch: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
   branch?: string;
-  /** Harness engine version for the active run. Defaults to 'unknown'. */
+  /** Engine version: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
   engineVersion?: string;
   /**
    * Override the run id. When supplied, the session-id file and generated id
