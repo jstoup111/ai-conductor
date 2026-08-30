@@ -19,7 +19,9 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
   if [[ ! "$line" =~ ^\.docs/ ]]; then
     docs_only=false
-    break
+    # Keep draining stdin instead of breaking: exiting early closes the pipe
+    # while the writer is still emitting a large path list, and the resulting
+    # SIGPIPE fails the caller under pipefail.
   fi
 done
 
