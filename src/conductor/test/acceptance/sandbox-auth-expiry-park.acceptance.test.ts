@@ -146,61 +146,6 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     return readFile(join(dir, HALT_MARKER), 'utf-8').catch(() => null);
   }
 
-  // Task 10: refreshSandboxCredentials removed; Task 11 will re-implement via daemon token re-read
-  it.skip('TR-3 happy: authFailure parks, credentials refresh re-copies into the SAME sandbox, resumes with zero retry-budget burn — even across a repeated auth failure', async () => {
-    await writeOperatorCreds(operatorDir, Date.now() + 3_600_000); // fresh — isolates from TR-2 pre-flight
-    let generation = 0;
-
-    let buildCalls = 0;
-    const runner: StepRunner = {
-      selfHostRunId: () => 'sandbox-auth-expiry-park-run',
-      run: vi.fn(async (step): Promise<StepRunResult> => {
-        if (step !== 'build') return { success: true };
-        buildCalls++;
-        // Rotated-but-invalid token: pre-flight sees a fresh expiresAt but the
-        // real invocation still fails twice before a genuine refresh lands.
-        if (buildCalls <= 2) return { success: false, authFailure: true } as AuthResult;
-        return { success: true };
-      }),
-    };
-
-    const sleepFn = vi.fn(async () => {
-      generation++;
-      await writeOperatorCreds(operatorDir, Date.now() + 3_600_000, { gen: generation });
-    });
-
-    const guardrails = makeGuardrails();
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-      projectRoot: dir,
-      fromStep: 'build',
-      mode: 'auto',
-      daemon: true,
-      selfHost: true,
-      maxRetries: 1, // budget would be exhausted by even ONE incorrectly-charged park
-      sleepFn,
-      selfHostGuardrails: guardrails,
-    });
-
-    await conductor.run();
-
-    expect(buildCalls).toBe(3);
-    expect(await haltBody()).toBeNull(); // never parked-out to HALT
-    expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1); // reused, not re-provisioned
-
-    expect(sandboxCredsAtTeardown).not.toBeNull();
-    const sandboxCreds = JSON.parse(sandboxCredsAtTeardown as string);
-    const operatorCreds = JSON.parse(
-      await readFile(join(operatorDir, '.credentials.json'), 'utf-8'),
-    );
-    // Mandatory re-copy: the reused sandbox's copy must track the operator's
-    // LATEST refreshed generation, never the stale one captured at provision time.
-    expect(sandboxCreds.gen).toBe(operatorCreds.gen);
-    expect(sandboxCreds.gen).toBeGreaterThan(0);
-  });
-
   it('TR-2 happy: expired credentials park BEFORE provisioning or spawning anything, then dispatch proceeds once refreshed', async () => {
     await writeOperatorCreds(operatorDir, Date.now() - 1000); // expired
 

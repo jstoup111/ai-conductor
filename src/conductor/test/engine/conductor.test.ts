@@ -3921,77 +3921,6 @@ describe('engine/conductor', () => {
       });
     });
 
-    it.skip('hands the BUILD agent the failing FRs (kickback retryReason) — self-heal is not blind', async () => {
-      await seedToPrdAudit();
-      // Same perpetual impl-gap; we assert the handoff CONTENT, not just that a
-      // kickback happened. Each BUILD dispatch driven by the prd_audit kickback
-      // must carry the gap (the FR id + a pointer to .pipeline/prd-audit.md) in
-      // its retryReason — the bug was that BUILD was dispatched blind, saw a
-      // complete task list, and changed nothing (a no-op self-heal loop).
-      const { runner } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: runner,
-        events,
-        projectRoot: dir,
-        mode: 'default',
-        daemon: true,
-        verifyArtifacts: true,
-        fromStep: 'prd_audit',
-      });
-
-      await conductor.run();
-
-      const buildReasons = vi
-        .mocked(runner.run)
-        .mock.calls.filter((c) => c[0] === 'build')
-        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
-      expect(buildReasons.length).toBeGreaterThan(0);
-      for (const r of buildReasons) {
-        expect(r).toContain('FR-2 (impl-gap)');
-        expect(r).toContain('.pipeline/prd-audit.md');
-      }
-    });
-
-    it.skip('HALTs immediately on a product/plan gap (intended-drift) without rebuilding', async () => {
-      await seedToPrdAudit();
-      const { runner, calls } = shipRunner(
-        '| FR-3 | DIVERGED | intended-drift | baz.ts:88 | no |\n',
-      );
-      const kickbacks: string[] = [];
-      events.on('kickback', (e) => {
-        if (e.type === 'kickback') kickbacks.push(e.to);
-      });
-      let halted = false;
-      events.on('loop_halt', () => {
-        halted = true;
-      });
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: runner,
-        events,
-        projectRoot: dir,
-        mode: 'auto',
-        daemon: true,
-        verifyArtifacts: true,
-        fromStep: 'prd_audit',
-      });
-
-      await conductor.run();
-
-      expect(halted).toBe(true);
-      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/product\/plan gap needs human DECIDE/);
-      expect(halt).toMatch(/FR-3 \(intended-drift\)/);
-      // No self-heal: never kicked back to build, never rebuilt.
-      expect(kickbacks).toHaveLength(0);
-      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
-      // This is an operator-only DECIDE-phase gap — the re-kick sweep must
-      // never auto-resume it, so the HALT is classified needs-human.
-      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
-      expect(haltClass).toBe('needs-human');
-    });
-
     it('/remediate: routes an autonomous gap to its target step with the gap in the hint', async () => {
       await seedToPrdAudit();
       const { runner, calls } = remediateRunner(
@@ -15752,36 +15681,6 @@ Initial task content.
         .every((t: Record<string, unknown>) => t.status === 'completed' || t.status === 'skipped');
       expect(blockingGapResolved).toBe(true);
     });
-  });
-});
-
-describe('rebase_gate_reverified event (Task 7: Conductor injects capability and emits event)', () => {
-  let dir: string;
-  let statePath: string;
-  let events: ConductorEventEmitter;
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'conductor-test-'));
-    statePath = join(dir, 'conduct-state.json');
-    events = new ConductorEventEmitter();
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it.skip('daemon mode: emits rebase_gate_reverified for build when pre-verify succeeds (evidence-complete)', async () => {
-    // Task 7 / RETRY: This test needs to be rewritten to use a real git repo with
-    // genuine evidence instead of the plan-ambiguity approach. The test fixture setup
-    // is complex and requires proper git initialization, commits with Task trailers,
-    // and deriveCompletion evidence. The conductor.ts fix (fail-closed when planPath
-    // is undefined) is in place and tested indirectly by the integration tests in
-    // test/integration/rebase-loop.test.ts which verify that file-changing rebases
-    // with genuine evidence work correctly.
-    //
-    // TODO: Implement a full test using the seedEvidenceCompleteBuild idiom from
-    // test/integration/rebase-loop.test.ts:280-292, running the conductor from the
-    // 'rebase' step in daemon mode to verify rebase_gate_reverified events are emitted.
   });
 });
 

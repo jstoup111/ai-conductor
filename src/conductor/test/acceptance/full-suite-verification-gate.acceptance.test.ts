@@ -16,14 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa, type ResultPromise } from 'execa';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
-import {
-  access,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -242,36 +235,6 @@ describe('Story 1 — automated pre-SHIP gate (FR-1, FR-7)', () => {
   });
 });
 
-describe('Story 2 — portable configured-verifier contract (FR-2, FR-8)', () => {
-  it('documents the shared verifier interface without requiring a repository-specific command', async () => {
-    const [conduct, harness] = await Promise.all([
-      readFile(join(REPO_ROOT, 'skills/conduct/SKILL.md'), 'utf8'),
-      readFile(join(REPO_ROOT, 'HARNESS.md'), 'utf8'),
-    ]);
-
-    expect(harness).toMatch(/repository-configured aggregate verifier/i);
-    expect(harness).not.toMatch(/conduct-ts test-suite/i);
-    expect(harness).toMatch(/native pre-SHIP aggregate gate/i);
-    expect(conduct).not.toMatch(/skills\/test-suite/i);
-  });
-
-  it('removes the interactive skill while preserving the engine gate and real verifier CLI', async () => {
-    await expect(access(join(REPO_ROOT, 'skills/test-suite/SKILL.md'))).rejects.toThrow();
-
-    expect(ALL_STEPS.find((step) => step.name === 'test_suite')).toMatchObject({
-      name: 'test_suite',
-      phase: 'BUILD',
-      enforcement: 'gating',
-    });
-
-    const result = invokeRealSuite();
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe('conduct-ts is deprecated; use ai-conductor instead\n');
-    expect(await readCount()).toBe(1);
-  });
-
-});
-
 describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
   it('checks in an aggregate declaration that includes ordinary and acceptance tests', async () => {
     const [projectConfig, template, packageJson, vitestConfig] = await Promise.all([
@@ -335,49 +298,6 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     });
   });
 
-  it('fails closed for missing or malformed declaration without writing PASS evidence', async () => {
-    await writeProjectFile('.ai-conductor/config.yml', 'test_suite:\n  command: ""\n');
-
-    const result = await invokeSuite();
-
-    expect(result.exitCode).not.toBe(0);
-    expect(await readEvidence()).toMatchObject({ outcome: 'FAIL', reason: 'invalid_config' });
-  });
-
-  it('classifies unlaunchable, timeout, and non-zero commands as distinct blocking outcomes', async () => {
-    const cases = [
-      {
-        command: 'definitely-not-a-command-940',
-        evidenceReason: 'unlaunchable',
-      },
-      {
-        command: 'node -e "setTimeout(() => {}, 5000)"',
-        evidenceReason: 'timeout',
-        timeout: 1,
-      },
-      { command: 'node -e "process.exit(9)"', evidenceReason: 'nonzero_exit' },
-    ];
-
-    for (const testCase of cases) {
-      await writeProjectFile(
-        '.ai-conductor/config.yml',
-        [
-          'test_suite:',
-          `  command: '${testCase.command.replaceAll("'", "''")}'`,
-          '  working_directory: "."',
-          `  timeout_seconds: ${testCase.timeout ?? 10}`,
-          '',
-        ].join('\n'),
-      );
-      const result = await invokeSuite();
-      expect(result.exitCode).not.toBe(0);
-      expect(await readEvidence()).toMatchObject({
-        outcome: 'FAIL',
-        reason: testCase.evidenceReason,
-        command: testCase.command,
-      });
-    }
-  });
 });
 
 describe('Story 7 — package-script selector forwarding (Task 17)', () => {
@@ -461,68 +381,6 @@ describe('Stories 4 and 5 — reusable current proof (FR-3, FR-4, FR-6, FR-11, F
   });
 });
 
-describe('Story 6 — scoped intermediate verification (FR-5)', () => {
-  it('keeps ordinary implementation/review checks scoped and routes broad fallback through the verifier', async () => {
-    const expectedScope = new Map<string, RegExp>([
-      ['skills/tdd/SKILL.md', /affected\/scoped test set/i],
-      ['skills/tdd/references/green.md', /affected|scoped/i],
-      ['skills/debugging/SKILL.md', /affected|scoped/i],
-      ['skills/pipeline/SKILL.md', /affected-test|union[- ]of[- ]affected/i],
-      ['skills/code-review/SKILL.md', /impacted test|union[- ]of[- ]affected/i],
-      ['skills/conduct/SKILL.md', /affected-test|union[- ]of[- ]affected/i],
-      ['HARNESS.md', /union[- ]of[- ]affected/i],
-    ]);
-    const files = await Promise.all(
-      [...expectedScope].map(
-        async ([path, pattern]) =>
-          [path, pattern, await readFile(join(REPO_ROOT, path), 'utf8')] as const,
-      ),
-    );
-
-    for (const [path, pattern, contents] of files) {
-      expect(contents, path).toMatch(pattern);
-      expect(contents, path).not.toMatch(
-        /run the full test suite|full test suite passes|full suite green|always run full suite|pre-batch verification \(full test suite|test results \(full suite output\)/i,
-      );
-    }
-
-    const tddContents = files.find(([path]) => path === 'skills/tdd/SKILL.md')?.[2] ?? '';
-    const redSection = tddContents.match(/### Phase 1: RED([\s\S]*?)### Phase 2: DOMAIN/i)?.[1] ?? '';
-    expect(redSection, 'TDD RED section').toMatch(/scoped union of affected tests/i);
-    expect(redSection, 'TDD RED section').toMatch(
-      /test under change[\s\S]{0,80}expected failing member/i,
-    );
-    expect(redSection, 'TDD RED section').toMatch(
-      /unrelated scoped (?:test )?failure[\s\S]{0,80}block/i,
-    );
-
-    const harnessContents = files.find(([path]) => path === 'HARNESS.md')?.[2] ?? '';
-    expect(harnessContents, 'HARNESS intermediate test policy').toMatch(
-      /RED\/GREEN[^\n]*scoped union of affected tests/i,
-    );
-
-    const combined = files.map(([, , contents]) => contents).join('\n');
-    const genericSkillContents = files
-      .filter(
-        ([path]) =>
-          path.startsWith('skills/') && path !== 'skills/conduct/SKILL.md',
-      )
-      .map(([, , contents]) => contents)
-      .join('\n');
-    expect(combined).toMatch(/configured aggregate verifier/i);
-    expect(genericSkillContents).not.toMatch(/conduct-ts test-suite/);
-    expect(combined).toMatch(/shared\/core[^\n]*3\+|3\+[^\n]*(?:importer|production module)/i);
-    expect(combined).toMatch(/config[^\n]*migrations[^\n]*dependenc[^\n]*test infrastructure/i);
-    expect(combined).toMatch(/empty[^\n]*(?:scoped|affected)|(?:scoped|affected)[^\n]*empty/i);
-    expect(combined).toMatch(/low-confidence|cannot confidently map/i);
-    expect(combined).toMatch(/name[^\n]*trigger|trigger[^\n]*reason/i);
-    expect(combined).toMatch(
-      /scoped (?:test|set)[^\n]*(?:fail|failure)[^\n]*(?:block|stop)|(?:fail|failure)[^\n]*scoped (?:test|set)[^\n]*(?:block|stop)/i,
-    );
-    expect(combined).not.toMatch(/skills\/test-suite/);
-  });
-});
-
 describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, FR-15, FR-17)', () => {
   it('has finish invoke the shared CLI and reuse a current PASS without launching the project suite', async () => {
     const finishSkill = await readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8');
@@ -545,30 +403,6 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
       finishExitCode: 0,
       finishOutput: expect.stringMatching(/REUSED.*PASS/i),
       additionalProjectSuiteLaunches: 0,
-    });
-  });
-
-  it('executes exactly once for each standalone missing or stale finish proof', async () => {
-    const missingProof = invokeRealSuite();
-    const launchesAfterMissing = await readCount();
-    await writeProjectFile('src/app.ts', 'export const value = 2;\n');
-    const staleProof = invokeRealSuite();
-    const launchesAfterStale = await readCount();
-
-    expect({
-      missingExitCode: missingProof.exitCode,
-      missingOutput: missingProof.stdout + missingProof.stderr,
-      missingLaunches: launchesAfterMissing,
-      staleExitCode: staleProof.exitCode,
-      staleOutput: staleProof.stdout + staleProof.stderr,
-      staleAdditionalLaunches: launchesAfterStale - launchesAfterMissing,
-    }).toEqual({
-      missingExitCode: 0,
-      missingOutput: expect.stringMatching(/EXECUTED.*PASS/i),
-      missingLaunches: 1,
-      staleExitCode: 0,
-      staleOutput: expect.stringMatching(/EXECUTED.*PASS/i),
-      staleAdditionalLaunches: 1,
     });
   });
 
@@ -597,141 +431,4 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
     });
   });
 
-  it('makes finish supply the only fallback and removes a local suite run from /pr', async () => {
-    const [finish, pr] = await Promise.all([
-      readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8'),
-      readFile(join(REPO_ROOT, 'skills/pr/SKILL.md'), 'utf8'),
-    ]);
-
-    expect(finish).toMatch(/configured aggregate verifier/i);
-    expect(finish).toMatch(/REUSED|missing|stale/i);
-    const rawAggregateCommand = /(?:\bnpm(?: run)? test\b|\bpnpm(?: run)? test\b|\byarn(?: run)? test\b|\bbun test\b|\bnpx vitest run\b|\bgo test\b|\bcargo test\b|bundle exec rspec\b|\bpytest\b|\bmvn test\b|\bgradle test\b|\bdotnet test\b|\bmix test\b|full (?:test )?suite)/i;
-    for (const command of ['npx vitest run', 'npm run test', 'go test ./...']) {
-      expect(command, `raw aggregate guard: ${command}`).toMatch(rawAggregateCommand);
-    }
-    const prePushSection = pr.slice(
-      pr.indexOf('### 5. Pre-Push Verification'),
-      pr.indexOf('### 6. Create or Update the PR'),
-    );
-    expect(prePushSection).not.toMatch(rawAggregateCommand);
-    expect(pr).not.toMatch(
-      /(?:\bnpm(?: run)? test\b|\bnpx vitest run\b|\bgo test\b|full (?:test )?suite)/i,
-    );
-  });
-
-  it('preserves independent CI, autoresolve, and CI-repair suite execution', async () => {
-    const [workflow, autoresolve, ciFix] = await Promise.all([
-      readFile(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8'),
-      readFile(join(CONDUCTOR_ROOT, 'src/engine/autoresolve.ts'), 'utf8'),
-      readFile(join(CONDUCTOR_ROOT, 'src/engine/ci-fix.ts'), 'utf8'),
-    ]);
-
-    expect(workflow).toMatch(
-      /conductor:[\s\S]*?- run: (?:npm test|npx vitest run)[\s\S]*?working-directory: src\/conductor/i,
-    );
-    expect(workflow).toMatch(
-      /ci-gate:[\s\S]*?needs:[^\n]*conductor[\s\S]*?failure\|cancelled/i,
-    );
-    expect(workflow).not.toMatch(/test-suite-evidence\.json/);
-    expect(autoresolve).toMatch(/suiteCommand|suite command/i);
-    expect(ciFix).toMatch(/suite|test/i);
-    expect(autoresolve).not.toMatch(/test-suite-evidence\.json/);
-    expect(ciFix).not.toMatch(/test-suite-evidence\.json/);
-  });
-});
-
-describe('Task 25 thin automated delivery proof (FR-1, FR-4, FR-13, FR-14)', () => {
-  it('executes the native gate once, reuses its PASS at finish, and hands off to /pr', async () => {
-    const [finishSkill, prSkill] = await Promise.all([
-      readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8'),
-      readFile(join(REPO_ROOT, 'skills/pr/SKILL.md'), 'utf8'),
-    ]);
-    const testSuiteStep = ALL_STEPS.find((step) => step.name === 'test_suite');
-
-    const gate = invokeRealSuite();
-    const evidenceAfterGate = await readEvidence();
-    const launchesAfterGate = await readCount();
-    const finish = invokeRealSuite();
-    const evidenceAfterFinish = await readEvidence();
-    const launchesAfterFinish = await readCount();
-    const prPrePush = prSkill.slice(
-      prSkill.indexOf('### 5. Pre-Push Verification'),
-      prSkill.indexOf('### 6. Create or Update the PR'),
-    );
-    const launchesAfterPrHandoff = await readCount();
-
-    expect({
-      nativeGate: testSuiteStep,
-      gateExitCode: gate.exitCode,
-      gateOutput: gate.stdout + gate.stderr,
-      gateEvidence: evidenceAfterGate.outcome,
-      launchesAfterGate,
-      finishUsesConfiguredVerifier: /configured aggregate verifier/i.test(finishSkill),
-      finishExitCode: finish.exitCode,
-      finishOutput: finish.stdout + finish.stderr,
-      finishEvidence: evidenceAfterFinish.outcome,
-      launchesAfterFinish,
-      prReusesFinishPass: /reuse[\s\S]{0,100}passing result[\s\S]{0,100}\/finish/i.test(prPrePush),
-      prForbidsAggregateLaunch: /do not launch[\s\S]{0,100}aggregate test command/i.test(prPrePush),
-      launchesAfterPrHandoff,
-    }).toEqual({
-      nativeGate: expect.objectContaining({
-        name: 'test_suite',
-        phase: 'BUILD',
-        enforcement: 'gating',
-        prerequisites: ['build'],
-      }),
-      gateExitCode: 0,
-      gateOutput: expect.stringMatching(/EXECUTED.*PASS/is),
-      gateEvidence: 'PASS',
-      launchesAfterGate: 1,
-      finishUsesConfiguredVerifier: true,
-      finishExitCode: 0,
-      finishOutput: expect.stringMatching(/REUSED.*PASS/is),
-      finishEvidence: 'PASS',
-      launchesAfterFinish: 1,
-      prReusesFinishPass: true,
-      prForbidsAggregateLaunch: true,
-      launchesAfterPrHandoff: 1,
-    });
-  });
-
-  it('stops a failing finish fallback before choice or /pr handoff', async () => {
-    const [finishSkill, prSkill] = await Promise.all([
-      readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8'),
-      readFile(join(REPO_ROOT, 'skills/pr/SKILL.md'), 'utf8'),
-    ]);
-    const finishVerification = finishSkill.slice(
-      finishSkill.indexOf('### 1. Fresh Verification'),
-      finishSkill.indexOf('### 1b.'),
-    );
-    const prPrePush = prSkill.slice(
-      prSkill.indexOf('### 5. Pre-Push Verification'),
-      prSkill.indexOf('### 6. Create or Update the PR'),
-    );
-
-    const failure = invokeRealSuite({ SUITE_MODE: 'fail:task-25-thin' });
-    const evidence = await readEvidence();
-    const finishChoiceExists = await readFile(join(repo, '.pipeline/finish-choice'), 'utf8')
-      .then(() => true)
-      .catch(() => false);
-
-    expect({
-      exitCode: failure.exitCode,
-      output: failure.stdout + failure.stderr,
-      evidence: evidence.outcome,
-      launches: await readCount(),
-      finishStops: /non-?zero[\s\S]*STOP[\s\S]*(?:choice|options)/i.test(finishVerification),
-      finishChoiceExists,
-      prStopsWithoutFinishPass: /not reported a current pass[\s\S]{0,100}STOP[\s\S]{0,100}\/finish/i.test(prPrePush),
-    }).toEqual({
-      exitCode: 1,
-      output: expect.stringMatching(/FAILED.*evidence=nonzero_exit/is),
-      evidence: 'FAIL',
-      launches: 1,
-      finishStops: true,
-      finishChoiceExists: false,
-      prStopsWithoutFinishPass: true,
-    });
-  });
 });

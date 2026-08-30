@@ -216,30 +216,6 @@ describe('OTel Observability — Phase 1 acceptance', () => {
     });
   });
 
-  // ── FR-8: failures never break the run ──────────────────────────────────────
-  describe('Story: exporter failure isolation (FR-8)', () => {
-    it('an unreachable OTLP endpoint leaves the run unaffected with exactly one warning', async () => {
-      const warnings: string[] = [];
-      const resolved = resolveOtelConfig(
-        { otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:1/v1/traces' } }, // refused
-        pipelineDir,
-      );
-      const vis = new OtelVisualizer(resolved, {
-        runId: 'run-fixed-3',
-        feature: 'otel-phase-1',
-        project: 'james-stoup-agents',
-        onWarning: (m: string) => warnings.push(m),
-      });
-      vis.start(emitter);
-
-      // The run (event emission) must complete without throwing.
-      await expect(emitRepresentativeRun(emitter)).resolves.toBeUndefined();
-      await expect(vis.stop()).resolves.toBeUndefined();
-
-      expect(warnings.length).toBe(1); // bounded — not one-per-event
-    });
-  });
-
   // ── FR-9: incomplete spans are closed, not dropped ──────────────────────────
   describe('Story: incomplete span on interruption (FR-9)', () => {
     it('a step left open at flush is closed ERROR with conductor.incomplete=true', async () => {

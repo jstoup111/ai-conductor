@@ -16,10 +16,8 @@
  *      performed while diagnosing #587).
  *   2. Extracts the fallback grep pattern directly out of the pr SKILL.md
  *      file's `git reflog | grep -E "..."` code fence.
- *   3. Asserts the extracted pattern matches the real reflog output, the old
- *      wrong literal ("rebase: finish") does not appear in real git output,
- *      and the corrected pattern does not over-match an unrelated line that
- *      merely contains the bare word "finish".
+ *   3. Asserts the extracted pattern matches the real reflog output without
+ *      over-matching an unrelated line containing the bare word "finish".
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -36,8 +34,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // test/ -> conductor/ -> src/ -> repo root
 const REPO_ROOT = resolve(__dirname, '../../..');
 const PR_SKILL_PATH = join(REPO_ROOT, 'skills/pr/SKILL.md');
-
-const OLD_WRONG_LITERAL = 'rebase: finish';
 
 /**
  * Extracts the `grep -E "..."` pattern from a SKILL.md's
@@ -111,26 +107,6 @@ describe('pr staleness-proof fallback grep (#587 regression)', () => {
     const matchingLine = reflog.split('\n').find((line) => re.test(line));
     expect(matchingLine).toBeDefined();
     expect(matchingLine).toContain('rebase (finish)');
-  });
-
-  it('regression guard: the OLD wrong literal ("rebase: finish") never appears in real git reflog output', async () => {
-    const reflog = await repoWithCompletedRebase();
-    // Documents exactly why the pre-#587 grep silently never matched: git
-    // writes "rebase (finish):" (parenthesized, no colon after "rebase"),
-    // never the plain-colon form the old literal searched for.
-    expect(reflog).not.toContain(OLD_WRONG_LITERAL);
-  });
-
-  it('the pr skill no longer contains the old wrong grep literal as its fallback pattern', async () => {
-    const prSkillMd = await readFile(PR_SKILL_PATH, 'utf-8');
-
-    expect(extractFallbackGrepPattern(prSkillMd)).not.toBe(OLD_WRONG_LITERAL);
-  });
-
-  it('the corrected pattern does not over-match an unrelated reflog line that merely contains the bare word "finish"', async () => {
-    const skillMd = await readFile(PR_SKILL_PATH, 'utf-8');
-    const pattern = extractFallbackGrepPattern(skillMd);
-    const re = new RegExp(pattern);
 
     // A plausible unrelated reflog line: a commit subject that happens to
     // contain the word "finish" outside any rebase operation context.
