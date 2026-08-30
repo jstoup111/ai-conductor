@@ -1375,6 +1375,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       return makeRunFeature({
         ...deps,
         createWorktree: (slug) => deps.createWorktree(slug, order),
+        prepareWorktree: (wt, log, events) => deps.prepareWorktree!(wt, log, events, order),
       })(item);
     },
   });
