@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-30T01:22:21.862Z
 Slug: test-suite-re-runs-and-re-passes-the-full-suite-10
 Class: protected-artifact
 Halting step: test_suite
