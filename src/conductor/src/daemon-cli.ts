@@ -101,6 +101,8 @@ import {
   resolveDaemonCommandConcurrency,
 } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
+import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
+import { buildWorkOrder } from './engine/work-order.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
 import { resolveSpecPrUrl } from './engine/pr-labels.js';
@@ -1334,6 +1336,48 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
     runSetupTriage,
   });
+  const workOrderItems = new Map<string, BacklogItem>();
+  const createWorkOrder = async (item: BacklogItem) => {
+    const baseSha = await resolveDaemonBaseSha(projectRoot, baseBranch);
+    if (!baseSha) {
+      throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
+    }
+    workOrderItems.set(item.slug, item);
+    return buildWorkOrder(
+      {
+        repository: basename(projectRoot),
+        slug: item.slug,
+        baseSha,
+        documentRefs: [
+          `.docs/stories/${item.slug}.md`,
+          `.docs/plans/${item.slug}.md`,
+        ],
+      },
+      async (args) => {
+        try {
+          const { stdout, stderr } = await execFile('git', [...args], { cwd: projectRoot });
+          return { exitCode: 0, stdout, stderr };
+        } catch (error) {
+          const failure = error as { code?: number; stdout?: string; stderr?: string };
+          return {
+            exitCode: typeof failure.code === 'number' ? failure.code : 1,
+            stdout: failure.stdout ?? '',
+            stderr: failure.stderr ?? '',
+          };
+        }
+      },
+    );
+  };
+  const executor = createInProcessFeatureExecutor({
+    run: async (order) => {
+      const item = workOrderItems.get(order.slug);
+      if (!item) throw new Error(`daemon executor received unknown work order: ${order.slug}`);
+      return makeRunFeature({
+        ...deps,
+        createWorktree: (slug) => deps.createWorktree(slug, order),
+      })(item);
+    },
+  });
   const runFeature = makeRunFeature(deps);
 
   const continuous = opts.continuous ?? false;
@@ -1633,6 +1677,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         }
       },
       runFeature,
+      featureExecution: { createWorkOrder, executor },
       featureLog: featureLogFor,
       log,
       staleEngineChecker,

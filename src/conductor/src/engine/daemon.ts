@@ -18,6 +18,8 @@ import type { ComplexityTier, Track } from '../types/index.js';
 import { Waker } from './waker.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import { InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
+import type { FeatureExecutor } from './feature-executor.js';
+import type { WorkOrder } from './work-order.js';
 
 type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
 
@@ -203,6 +205,14 @@ export interface DaemonDeps {
    *  halts — return `{status:'halted'}` — but a thrown error is caught and
    *  recorded as `{status:'error'}` so the pool survives. */
   runFeature: (item: BacklogItem) => Promise<FeatureOutcome>;
+  /**
+   * Dispatcher/executor seam. Both sides travel together so an order builder
+   * can never be configured without an executor (or vice versa).
+   */
+  featureExecution?: {
+    createWorkOrder: (item: BacklogItem) => Promise<WorkOrder>;
+    executor: FeatureExecutor;
+  };
   /**
    * The daemon-run-scoped authority for active feature dispatches. An omitted
    * registry gets the in-memory default, while tests and future composition
@@ -604,7 +614,7 @@ type Tagged = Promise<{ slug: string; outcome: FeatureOutcome }>;
 export async function guardedDispatchWith(
   item: BacklogItem,
   isParked: ((slug: string) => boolean | Promise<boolean>) | undefined,
-  onDispatch: (item: BacklogItem) => boolean | void,
+  onDispatch: (item: BacklogItem) => boolean | void | Promise<boolean | void>,
   log: (msg: string) => void,
 ): Promise<boolean> {
   let parked = false;
@@ -617,7 +627,7 @@ export async function guardedDispatchWith(
     log(`park: skipped dispatch of ${item.slug} — operator-parked`);
     return false;
   }
-  return onDispatch(item) !== false;
+  return (await onDispatch(item)) !== false;
 }
 
 export async function runDaemon(
@@ -864,7 +874,7 @@ export async function runDaemon(
     return null;
   };
 
-  const dispatch = (item: BacklogItem): boolean => {
+  const dispatch = async (item: BacklogItem): Promise<boolean> => {
     if (!claims.claim(item.slug)) return false;
     const featureLog = deps.featureLog?.(item.slug) ?? log;
     // Task 16: Detect if this is a re-dispatch (slug was parked)
@@ -881,8 +891,15 @@ export async function runDaemon(
     } else {
       featureLog(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
     }
-    const tagged: Tagged = deps
-      .runFeature(item)
+    const runFeature = async (): Promise<FeatureOutcome> => {
+      if (deps.featureExecution) {
+        return deps.featureExecution.executor.execute(
+          await deps.featureExecution.createWorkOrder(item),
+        );
+      }
+      return deps.runFeature(item);
+    };
+    const tagged: Tagged = runFeature()
       .then((outcome) => ({ slug: item.slug, outcome }))
       .catch((err) => ({
         slug: item.slug,
