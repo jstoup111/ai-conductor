@@ -193,6 +193,16 @@ describe('engine/resolved-config', () => {
       expect(resolved.scopeContainmentEnforced).toBe(true);
     });
 
+    it.each([
+      [undefined, true],
+      [{ adjudication: { enabled: false } }, false],
+      [{ adjudication: { enabled: true } }, true],
+    ] as const)('resolves default-on adjudication from %j', (buildReview, enabled) => {
+      const config = buildReview === undefined ? undefined : { build_review: buildReview } as HarnessConfig;
+
+      expect(resolveBuildReviewConfig(config).adjudication.enabled).toBe(enabled);
+    });
+
     it('resolves a closed rubric policy map by inheriting the outer policy, applying independent overrides, and clamping fan-out', () => {
       const config = {
         llm_provider: ['claude', 'codex'],

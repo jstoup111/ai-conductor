@@ -682,6 +682,12 @@ export type BuildReviewRubricsConfig = Partial<
   Record<BuildReviewRubricId, BuildReviewRubricConfig>
 >;
 
+/** Default-on compatibility switch for post-join remediation adjudication. */
+export interface BuildReviewAdjudicationConfig {
+  /** Run one post-join remediation judgement for unresolved content findings. Default: true. */
+  enabled?: boolean;
+}
+
 /**
  * Configuration for the default-on `build_review` judgement gate. Legacy
  * fields retain their tolerant per-key parsing; the rubric execution subtree
@@ -697,6 +703,8 @@ export interface BuildReviewConfig {
   scopeContainmentEnforced?: boolean;
   /** Maximum concurrently-dispatched enabled rubric branches. Default: 5. */
   maxParallel?: number;
+  /** Default-on post-join remediation adjudication. */
+  adjudication?: BuildReviewAdjudicationConfig;
   /** Closed per-rubric enablement and execution-policy overrides. */
   rubrics?: BuildReviewRubricsConfig;
 }

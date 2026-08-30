@@ -2476,6 +2476,7 @@ steps:
         defaults: {
           enabled: true,
           maxParallel: 1,
+          adjudication: { enabled: true },
           rubrics: {
             testQuality: { enabled: false },
           },
@@ -2483,6 +2484,7 @@ steps:
         configured: {
           enabled: true,
           maxParallel: 1,
+          adjudication: { enabled: true },
           rubrics: {
             testQuality: {
               enabled: true,
@@ -2553,7 +2555,12 @@ steps:
         warnings: result.warnings,
         deprecatedKeys: result.deprecatedKeys,
       }).toEqual({
-        build_review: { enabled: false, maxParallel: 1, rubrics: { testQuality: { enabled: false } } },
+        build_review: {
+          enabled: false,
+          maxParallel: 1,
+          adjudication: { enabled: true },
+          rubrics: { testQuality: { enabled: false } },
+        },
         warnings: ['build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).'],
         deprecatedKeys: [{
           key: 'build_review.perTaskFloor',
@@ -2573,6 +2580,30 @@ steps:
       }).toEqual({
         build_review: expect.objectContaining({ enabled: true, scopeContainmentEnforced: true }),
         warnings: [],
+      });
+    });
+
+    it.each([
+      ['absent', {}, true],
+      ['explicit false', { adjudication: { enabled: false } }, false],
+      ['explicit true', { adjudication: { enabled: true } }, true],
+    ])('resolves build_review.adjudication.enabled for %s', (_label, buildReview, enabled) => {
+      const result = validateConfig({ build_review: buildReview });
+
+      expect(result.ok && result.config.build_review?.adjudication).toEqual({ enabled });
+      expect(result.ok && result.warnings).toEqual([]);
+    });
+
+    it.each([
+      [{ adjudication: false }, 'build_review.adjudication must be an object'],
+      [{ adjudication: { enabled: 'yes' } }, 'build_review.adjudication.enabled must be a boolean'],
+      [{ adjudication: { unknown: true } }, 'Unknown key in build_review.adjudication: "unknown"'],
+    ])('rejects invalid build_review adjudication config %#', (buildReview, message) => {
+      const result = validateConfig({ build_review: buildReview });
+
+      expect(result).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message },
       });
     });
 
