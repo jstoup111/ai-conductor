@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-30T10:28:20.323Z
 Slug: v1-0-cutover-remove-bin-conduct-make-the-ts-cli-ai
 Class: needs-human
 Halting step: unknown
