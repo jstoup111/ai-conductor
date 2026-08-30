@@ -702,11 +702,30 @@ The `conductor.run.outcomes` counter increments once when an opened root run rea
 terminal paths. Its `outcome` attribute uses the same `complete`, `halted`, and `terminated` taxonomy,
 so dashboards can chart terminal runs without deriving counts from trace-query metrics.
 
-Step-level metrics include `conductor.step.cost`, a USD counter emitted only for a finite `costUsd`.
-Its attributes are `step`, `model` when known, and `source` when known (`provider` or `rate-card`);
-an absent, `NaN`, or infinite cost produces no cost point. `conductor.step.dispatches` adds one point
-for every closed step with `step` and `metering` attributes. `metering` is `fully-metered`,
+Dispatch metrics use the same projection as the shipped-record cost rollup. Every invoked
+`provider_attempt` contributes one `conductor.step.dispatches` point, including failed attempts; an
+unavailable provider that was never invoked does not. A successful attempt suppresses its matching
+`step_completed` compatibility record, while an unmatched completion remains a legacy fallback. This
+keeps OTel dispatch counts, token totals, and costs aligned with `## Cost` in the shipped record.
+
+`conductor.step.cost` is a USD counter emitted only when that authoritative dispatch carries a finite
+`costUsd`. Its attributes are `step`, `model` when known, and `source` when known (`provider` or
+`rate-card`); an absent, `NaN`, or infinite cost produces no cost point. Every dispatch still emits
+`conductor.step.dispatches` with `step` and a `metering` attribute of `fully-metered`,
 `cost-unmetered`, or `unmetered`, so the absence of a cost series is not ambiguous.
+
+At feature closeout, `feature_usage_total` also exports `conductor.feature.cost`, a USD gauge carrying
+the exact current shipped-record rollup total. Its `cost_complete` attribute is false when any dispatch
+lacks token evidence or finite cost evidence. Dashboards should use this gauge for cumulative feature
+cost instead of reconstructing a lifetime total from the process-local `conductor.step.cost` counter,
+which can reset when the daemon or collector restarts. Prometheus commonly normalizes this instrument
+to `conductor_feature_cost_usd`; for example:
+
+```promql
+max by (feature) (
+  last_over_time(conductor_feature_cost_usd{project=~"$project"}[$__range])
+)
+```
 
 | Key | Type | Required | Allowed | Default |
 | --- | --- | --- | --- | --- |

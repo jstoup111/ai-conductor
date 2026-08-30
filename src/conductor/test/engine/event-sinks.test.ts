@@ -257,6 +257,8 @@ describe('event sink subscriptions', () => {
       'step_started',
       'step_completed',
       'step_failed',
+      'provider_attempt',
+      'feature_usage_total',
       'step_retry',
       'gate_verdict',
       'kickback',
