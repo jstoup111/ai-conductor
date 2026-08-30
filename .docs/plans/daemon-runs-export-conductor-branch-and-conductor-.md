@@ -98,10 +98,37 @@ Tighten the existing OTel wiring boundary so branch and engine-version resolutio
 
 **Dependencies:** Task 2
 
+### Task 4: Forward identity property presence through the visualizer seam
+
+**Story:** Story 2 runtime-omission criterion
+**Type:** negative-path
+
+**Steps:**
+1. Add a failing case to `otel-wire.test.ts` that wires the visualizer with enabled OTel, an in-memory span exporter, and a context omitting both `branch` and `engineVersion`, asserting the exported `conductor.run` trace Resource carries `not-supplied` for each (RED — it reports `unresolved` today).
+2. Build `resourceContext` in `initializeProviders` so `branch` and `engineVersion` keys exist only when the incoming context supplies them, leaving every other property unchanged.
+3. Correct the stale `ResourceContext` doc comments for `branch` and `engineVersion`, which still say "Defaults to 'unknown'" and describe no current code path.
+4. Run `otel-wire.test.ts` and `resource.test.ts` through `ai-conductor scoped-run`; verify the omission case reports `not-supplied`, a supplied-but-unresolvable value still reports `unresolved`, and disabled OTel remains non-blocking (GREEN).
+5. Commit with message: "Report caller omission as not-supplied at the visualizer seam"
+
+**Done when:**
+
+1. Wiring the visualizer with a context omitting both identity properties exports `not-supplied` for each scoped attribute.
+2. A context supplying an empty or unresolvable value still exports `unresolved`, so the two outcomes stay distinct at the runtime seam.
+3. The disabled-OTel no-export case and the existing supplied-value assertions remain green.
+4. No `ResourceContext` doc comment claims a `'unknown'` default that no code path produces.
+
+**Files:**
+- `src/conductor/src/engine/otel/otel-visualizer.ts`
+- `src/conductor/src/engine/otel/resource.ts`
+- `src/conductor/test/otel-wire.test.ts`
+
+**Dependencies:** Task 1
+
 ## Task Dependency Graph
 
 ```text
 Task 1 → Task 2 → Task 3
+Task 1 → Task 4
 ```
 
 ## Integration Points
@@ -109,6 +136,7 @@ Task 1 → Task 2 → Task 3
 - After Task 1: Resource export can diagnose resolved, unresolved, and omitted scoped identity without changing signal cardinality.
 - After Task 2: Every supported interactive/shared OTel caller must supply both resolution results.
 - After Task 3: Daemon dispatches satisfy the strict contract with their feature branch and executing engine build.
+- After Task 4: The runtime visualizer seam distinguishes a caller omission from a failed resolution, so an operator can tell a wiring defect from an environment one.
 
 ## Story Coverage
 
@@ -123,7 +151,7 @@ Task 1 → Task 2 → Task 3
 | Attempted resolution failure reports `unresolved` without throwing | Pure Resource unit cases for both scoped fields | Task 1 |
 | Successful resolution reports its value | Pure Resource unit cases plus supported wiring cases | Tasks 1, 2 |
 | Supported caller omission is rejected | Test-covering typecheck of the strict OTel context | Task 2 |
-| Runtime omission reports `not-supplied` without throwing | Pure Resource unit cases for both scoped fields | Task 1 |
+| Runtime omission reports `not-supplied` without throwing | Pure Resource unit cases for the builder, plus a visualizer wiring case proving the runtime seam preserves property absence | Tasks 1, 4 |
 
 Every criterion is diff-local: only this feature's changes to Resource normalization and the two supported OTel entry points can change these outcomes.
 
