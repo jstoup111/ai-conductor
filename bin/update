@@ -13,6 +13,10 @@ set -euo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# True only under `--auto`, the advisory startup check. A major upgrade is
+# reported but never applied from there — see major_update_gate.
+UPDATE_AUTO_MODE=false
+
 # Not a git checkout — nothing to check/update/configure. Bail before even
 # sourcing harness-common.sh so a harness install missing bin/lib (or any
 # other non-git tree bin/update happens to run inside) still exits cleanly.
@@ -97,6 +101,51 @@ semver_lt() {
   [ "$hi" = "$b" ]
 }
 
+# True when moving from $1 to $2 crosses a semver MAJOR boundary. Per this
+# harness's own semver rules a MAJOR is a breaking change to skill contracts,
+# the CLI, or the settings.json schema, so it is the one upgrade that must not
+# be accepted by reflex. `0.x → 1.0` counts: the leading component differs.
+# Anything not shaped vX.Y.Z (an undeterminable baseline, a main@<sha>
+# identity) is not a major crossing — those channels have no semver to compare.
+is_major_upgrade() {
+  local from="${1#v}" to="${2#v}"
+  [[ "$from" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  [[ "$to" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  [ "${from%%.*}" != "${to%%.*}" ]
+}
+
+# Approval gate for a MAJOR upgrade. Returns 0 to proceed, 1 to stop.
+#
+# A non-major upgrade returns 0 immediately and keeps the ordinary [y/n] flow
+# below it untouched. A major upgrade is never applied from the startup
+# auto-check (`--auto`) — it is reported and left for a deliberate `bin/update`
+# — and an interactive run must type the target version rather than one key.
+# $3 is the manual command a non-interactive caller should run instead.
+major_update_gate() {
+  local from=$1 to=$2 manual_hint=$3 typed=""
+
+  is_major_upgrade "$from" "$to" || return 0
+
+  echo ""
+  warn "MAJOR update ${from} → ${to} — may break skill contracts, the CLI, or the settings.json schema."
+
+  if [ "$UPDATE_AUTO_MODE" = true ]; then
+    info "Not applied automatically. Run: cd ${HARNESS_DIR} && bin/update"
+    return 1
+  fi
+  if [ ! -t 0 ]; then
+    warn "No TTY — run: ${manual_hint}"
+    return 1
+  fi
+
+  read -r -p "  Type ${to} to confirm this major update (or 'n' to skip): " typed
+  if [ "${typed#v}" = "${to#v}" ] && [ -n "$typed" ]; then
+    return 0
+  fi
+  log "Skipping update"
+  return 1
+}
+
 # Run bin/migrate for the accepted update, then write the new currentVersion
 # back to config and re-launch conduct. On failure, roll back the checkout.
 apply_harness_update() {
@@ -178,16 +227,22 @@ check_harness_update_tagged() {
   render_changelog_range "$baseline" "$latest_tag"
   echo ""
 
-  if [ ! -t 0 ]; then
-    warn "No TTY — run: cd ${HARNESS_DIR} && git checkout ${latest_tag} && bin/migrate"
-    return 0
+  local manual_hint="cd ${HARNESS_DIR} && git checkout ${latest_tag} && bin/migrate"
+  if is_major_upgrade "$baseline" "$latest_tag"; then
+    # The typed confirmation inside the gate IS this update's approval; the
+    # ordinary [y/n] must not also run and re-ask with one key.
+    major_update_gate "$baseline" "$latest_tag" "$manual_hint" || return 0
+  else
+    if [ ! -t 0 ]; then
+      warn "No TTY — run: ${manual_hint}"
+      return 0
+    fi
+    read -r -p "  Update to ${latest_tag}? [y/n]: " choice
+    case "$choice" in
+      [yY]) ;;
+      *) log "Skipping update"; return 0 ;;
+    esac
   fi
-
-  read -r -p "  Update to ${latest_tag}? [y/n]: " choice
-  case "$choice" in
-    [yY]) ;;
-    *) log "Skipping update"; return 0 ;;
-  esac
 
   local rollback_ref
   rollback_ref=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD")
@@ -262,20 +317,32 @@ check_harness_update_stable() {
   else
     warn "Harness stable update available"
   fi
-  if [ ! -t 0 ]; then
-    if [ "$detached" = true ]; then
-      warn "No TTY — run: cd ${HARNESS_DIR} && git checkout -B stable ${remote_head} && bin/migrate"
-    else
-      warn "No TTY — run: cd ${HARNESS_DIR} && git pull --ff-only origin stable && bin/migrate"
-    fi
-    return 0
+  local manual_hint="cd ${HARNESS_DIR} && git pull --ff-only origin stable && bin/migrate"
+  if [ "$detached" = true ]; then
+    manual_hint="cd ${HARNESS_DIR} && git checkout -B stable ${remote_head} && bin/migrate"
   fi
 
-  read -r -p "$prompt" choice
-  case "$choice" in
-    [yY]) ;;
-    *) log "Skipping update"; return 0 ;;
-  esac
+  # The installed release this move starts from. A detached recovery has
+  # local_head == remote_head, so from == to and the gate correctly no-ops:
+  # re-attaching the branch is not a version change.
+  local stable_from
+  stable_from=$(git -C "$HARNESS_DIR" describe --tags --exact-match "$local_head" --match 'v*.*.*' 2>/dev/null || echo "")
+  [ -n "$stable_from" ] || stable_from=$(conductor_cfg_get currentVersion "" 2>/dev/null || echo "")
+
+  if is_major_upgrade "$stable_from" "$target_version"; then
+    # The typed confirmation inside the gate IS this update's approval.
+    major_update_gate "$stable_from" "$target_version" "$manual_hint" || return 0
+  else
+    if [ ! -t 0 ]; then
+      warn "No TTY — run: ${manual_hint}"
+      return 0
+    fi
+    read -r -p "$prompt" choice
+    case "$choice" in
+      [yY]) ;;
+      *) log "Skipping update"; return 0 ;;
+    esac
+  fi
 
   local rollback_ref prior_version prior_checked_at
   rollback_ref=$local_head
@@ -457,6 +524,7 @@ case "${1:-}" in
   --auto)
     # Automatic checks are advisory: report an unavailable prerequisite but
     # never make the embedding startup path fail.
+    UPDATE_AUTO_MODE=true
     check_harness_update_auto || true
     sync_global_rate_card "$HARNESS_DIR"
     exit 0
