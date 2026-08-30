@@ -23,6 +23,8 @@ export interface KickbackGateEntry {
   cumulative: number;
   /** Remediation rounds authorized for this gate, independent of plan growth. */
   laps?: number;
+  /** Stable build-review work-order effects that already consumed this gate. */
+  chargedEffectIds?: string[];
   mechanicalFaults?: number;
   lastMechanicalFault?: KickbackLastMechanicalFault;
   treeHash: string | null;
@@ -106,6 +108,11 @@ export interface BumpKickbackGateResult {
   exhausted: boolean;
 }
 
+/** Result of applying a stable build-review effect to the kickback budget. */
+export type ChargeBuildReviewEffectResult =
+  | ({ status: 'charged' } & BumpKickbackGateResult)
+  | { status: 'already-charged'; entry: KickbackGateEntry };
+
 const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set(['count', 'resolvedBefore']);
 
 function isLapCountingValue(value: unknown): value is number | Record<string, number> {
@@ -160,6 +167,7 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
     typeof entry.count === 'number' &&
     (entry.cumulative === undefined || typeof entry.cumulative === 'number') &&
     (entry.laps === undefined || isNonNegativeInteger(entry.laps)) &&
+    (entry.chargedEffectIds === undefined || isChargedEffectIds(entry.chargedEffectIds)) &&
     (entry.mechanicalFaults === undefined || (
       typeof entry.mechanicalFaults === 'number' &&
       Number.isInteger(entry.mechanicalFaults) &&
@@ -171,6 +179,12 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
     typeof entry.priorVerdict === 'boolean' &&
     typeof entry.resolvedBefore === 'number'
   );
+}
+
+function isChargedEffectIds(value: unknown): value is string[] {
+  return Array.isArray(value) &&
+    value.every((effectId) => typeof effectId === 'string' && effectId.trim().length > 0) &&
+    new Set(value).size === value.length;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -262,7 +276,12 @@ function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedge
     gates: Object.fromEntries(
       Object.entries(ledger.gates).map(([gate, entry]) => [
         gate,
-        { ...entry, cumulative: entry.cumulative ?? 0, mechanicalFaults: entry.mechanicalFaults ?? 0 },
+        {
+          ...entry,
+          cumulative: entry.cumulative ?? 0,
+          mechanicalFaults: entry.mechanicalFaults ?? 0,
+          ...(gate === 'build_review' ? { chargedEffectIds: entry.chargedEffectIds ?? [] } : {}),
+        },
       ]),
     ),
   };
@@ -464,6 +483,28 @@ export function bumpKickbackGate(
   };
 }
 
+/**
+ * Charge one stable build-review effect. Replaying an already charged id is a
+ * no-op, so an interrupted work-order route cannot spend the same lap twice.
+ */
+export function chargeBuildReviewEffect(
+  entry: KickbackGateEntry | undefined,
+  effectId: string,
+  input: BumpKickbackGateInput,
+): ChargeBuildReviewEffectResult {
+  const chargedEffectIds = entry?.chargedEffectIds ?? [];
+  if (chargedEffectIds.includes(effectId)) {
+    return { status: 'already-charged', entry: entry! };
+  }
+
+  const result = bumpKickbackGate(entry, input);
+  return {
+    status: 'charged',
+    ...result,
+    entry: { ...result.entry, chargedEffectIds: [...chargedEffectIds, effectId] },
+  };
+}
+
 /** Load, update, and atomically persist one gate's durable kickback budget. */
 export async function bumpKickbackGateInLedger(
   projectRoot: string,
@@ -477,6 +518,25 @@ export async function bumpKickbackGateInLedger(
     ...ledger,
     gates: { ...ledger.gates, [gate]: result.entry },
   });
+
+  return result;
+}
+
+/** Load, idempotently charge, and atomically persist one build-review effect. */
+export async function chargeBuildReviewEffectInLedger(
+  projectRoot: string,
+  effectId: string,
+  input: BumpKickbackGateInput,
+): Promise<ChargeBuildReviewEffectResult> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const result = chargeBuildReviewEffect(ledger.gates.build_review, effectId, input);
+
+  if (result.status === 'charged') {
+    await writeKickbackLedger(projectRoot, {
+      ...ledger,
+      gates: { ...ledger.gates, build_review: result.entry },
+    });
+  }
 
   return result;
 }
@@ -510,6 +570,7 @@ export async function bumpMechanicalFaultsInLedger(
   const entry = ledger.gates[gate] ?? {
     count: 0,
     cumulative: 0,
+    ...(gate === 'build_review' ? { chargedEffectIds: [] } : {}),
     mechanicalFaults: 0,
     treeHash: null,
     lastReason: '',
