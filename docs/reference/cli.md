@@ -30,6 +30,31 @@ Node `>=26.0.0` when the asdf override is unavailable.
 `bin/intake-file`, `bin/intake-backfill`, and `bin/quarantine-engineer-signals` are separate entry
 points, not `ai-conductor` subcommands.
 
+## `ai-conductor --version`
+
+```bash
+ai-conductor --version
+ai-conductor -V
+ai-conductor version
+```
+
+Prints one line naming the installed harness and the engine build actually executing, then exits 0:
+
+```text
+ai-conductor 0.104.0 (engine 20260830T172539Z-76db750aa2a8)
+```
+
+The first value is the repo `VERSION` file; the second is the pinned `dist-versions/<id>` the launcher
+resolved — the same build id `daemon status` prints as `version:<id>` and a shipped record stamps as
+`engine_version`. Both are resolved relative to the running module, not the working directory, so the
+report is correct when the CLI is reached through the installed `~/.local/bin/ai-conductor` symlink.
+
+The command is advisory and never fails: an unreadable `VERSION` file reports `0.0.0`, and an
+unpublished dev/`tsx` run — which pins no `dist-versions/<id>` — reports `engine dev`. All three
+spellings must be the whole invocation; `ai-conductor daemon --version` is a daemon invocation, not a
+version request. Like every other unsanctioned command it is refused inside a daemon-managed session
+(see [Daemon-session refusal](#daemon-session-refusal)).
+
 ## `bin/install`
 
 ```bash
