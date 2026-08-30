@@ -383,6 +383,22 @@ export async function fastForwardRoot(
 
         // Emit full WARN if fingerprint changed or if this is the first call
         if (shouldEmitFull) {
+          if (plan.reason === 'no common candidate branch explains all files') {
+            const dirtyEntries = plan.classifications?.map(({ path }) => path).sort() ?? [];
+            const candidateBranches = [
+              ...new Set(
+                plan.classifications?.flatMap(({ allExplainedBy, explainedBy }) =>
+                  allExplainedBy?.length ? allExplainedBy : explainedBy ? [explainedBy] : [],
+                ) ?? [],
+              ),
+            ].sort();
+            log(
+              `WARN FAST_FORWARD_REFUSED_MULTI_BRANCH_LEAK: all-or-nothing heal refused; ` +
+                `dirty entries: ${dirtyEntries.join(', ')}; ` +
+                `candidate branches: ${candidateBranches.join(', ')}; ` +
+                `no files restored or deleted; skipping fast-forward.`,
+            );
+          }
           const warnMsg = renderLeakSuspectWarn(status.stdout, plan);
           log(warnMsg);
         } else {
