@@ -13,6 +13,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // resolves the SAME file at runtime via resolveHarnessVersion()).
 const HARNESS_VERSION = readFileSync(join(__dirname, '../../../../VERSION'), 'utf-8').trim();
 const HARNESS_MAJOR_MINOR = HARNESS_VERSION.split('.').slice(0, 2).join('.');
+const HARNESS_NEXT_MAJOR = Number(HARNESS_VERSION.split('.')[0]) + 1;
 
 describe('validateManifest', () => {
   describe('required fields', () => {
@@ -149,15 +150,16 @@ describe('validateManifest', () => {
       expect(result.harness_version).toBe(`^${HARNESS_MAJOR_MINOR}.0`);
     });
 
-    it('passes validation when harness_version is compatible (>=0.99.0 <1.0.0)', () => {
+    it(`passes validation when harness_version is a compatible bounded range (>=${HARNESS_MAJOR_MINOR}.0 <${HARNESS_NEXT_MAJOR}.0.0)`, () => {
+      const range = `>=${HARNESS_MAJOR_MINOR}.0 <${HARNESS_NEXT_MAJOR}.0.0`;
       const manifest = {
         kind: 'llm_provider',
         name: 'test',
         entrypoint: 'index.ts',
-        harness_version: '>=0.99.0 <1.0.0',
+        harness_version: range,
       };
       const result = validateManifest(manifest);
-      expect(result.harness_version).toBe('>=0.99.0 <1.0.0');
+      expect(result.harness_version).toBe(range);
     });
 
     it('passes validation when harness_version is not specified', () => {
