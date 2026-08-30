@@ -275,6 +275,7 @@ import {
   resolveStepConfig,
   resolveRebaseResolutionAttempts,
   resolveSelfHostConfig,
+  resolveDaemonConcurrency,
   resolveBuildReviewConfig,
   phaseForStep,
 } from './resolved-config.js';
@@ -1502,6 +1503,12 @@ export interface ConductorOptions {
   modelPolicy?: ProviderModelPolicy;
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
+  /**
+   * Resolved daemon executor-pool width. The daemon command layer supplies the
+   * CLI-or-config result; direct callers fall back to the validated config
+   * value. This fences compatibility dispatches that mutate process.env.
+   */
+  effectiveDaemonConcurrency?: number;
   projectRoot: string;
   /** Feature-scoped daemon logger; defaults to console warnings outside a feature run. */
   log?: (message: string) => void;
@@ -2151,6 +2158,7 @@ export class Conductor {
   private config: HarnessConfig;
   private readonly legacyModelPolicy?: ProviderModelPolicy;
   private readonly providerExecution?: ProviderExecutionContext;
+  private readonly effectiveDaemonConcurrency: number;
   private validationConcurrency: number;
   private projectRoot: string;
   private log?: (message: string) => void;
@@ -3153,6 +3161,8 @@ export class Conductor {
     this.config = opts.config ?? {};
     this.legacyModelPolicy = opts.modelPolicy;
     this.providerExecution = opts.providerExecution;
+    this.effectiveDaemonConcurrency =
+      opts.effectiveDaemonConcurrency ?? resolveDaemonConcurrency(this.config);
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
     this.log = opts.log;
@@ -4824,6 +4834,23 @@ export class Conductor {
       this.config.steps?.[name]?.llm_provider ?? this.config.llm_provider;
     const preferredBuildProvider = normalizeProviderSelection(stepSelection)[0];
     const sh = selfHostConfig;
+
+    // Compatibility runners do not have ProviderExecutionContext and therefore
+    // still scope provider configuration by mutating process.env below. That
+    // operation is safe only while the daemon is serial. Modern dispatches use
+    // candidate-local invocation env instead and remain eligible for a pool.
+    if (
+      !this.providerExecution &&
+      preferredBuildProvider !== 'codex' &&
+      this.effectiveDaemonConcurrency > 1
+    ) {
+      return {
+        success: false,
+        output:
+          'LEGACY_NO_PROVIDER_EXECUTION_CONCURRENCY_REFUSAL: legacy no-providerExecution dispatch mutates process-global provider environment and cannot run with effective daemon concurrency ' +
+          `${this.effectiveDaemonConcurrency} (requires 1).`,
+      };
+    }
 
     if (!sh.sandboxBuildEnv) {
       return {

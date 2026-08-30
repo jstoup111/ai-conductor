@@ -1118,6 +1118,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       config,
       modelPolicy: selectedRuntime.policy,
       providerExecution,
+      effectiveDaemonConcurrency: daemonConcurrency.concurrency,
       projectRoot: wt.path,
       acceptanceRedExec: createProductionAcceptanceRedExec(),
       // Daemon FINISH shares the same engine-owned coordinator as foreground
