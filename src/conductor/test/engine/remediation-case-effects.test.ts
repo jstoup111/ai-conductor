@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
 import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
 const feature = { version: 'v1', repository: 'repo', feature: 'feature' } as const;
@@ -74,5 +74,65 @@ describe('remediation case effects', () => {
     })).resolves.toMatchObject({ ok: true, status: 'applied' });
     expect(find).toHaveBeenCalledWith(remediationEffectMarker('effect-1'), 'acme/repo', root);
     expect(fileIssue).not.toHaveBeenCalled();
+  });
+
+  it('renders a bounded structured intake body and files distinct effect markers independently', async () => {
+    const effect = { kind: 'deferral', title: 'Deferred', body: 'Observed behavior', exclusionRationale: 'outside current plan' } as const;
+    expect(renderBuildReviewDeferralIssue(effect, 'case rationale', 'effect-1')).toContain('## Observed');
+    expect(renderBuildReviewDeferralIssue(effect, 'case rationale', 'effect-1')).toContain('## Desired Outcome');
+    expect(renderBuildReviewDeferralIssue(effect, 'case rationale', 'effect-1')).toContain(remediationEffectMarker('effect-1'));
+
+    const store = await storeWith({ version: 'v1', feature, cases: [
+      {
+        id: 'case-1', domain: 'build_review', disposition: 'defer', priority: 'low', rationale: 'case rationale', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'source-1', outcome: 'deferred', recordedAt: '2026-08-30T00:00:00.000Z' }],
+        effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' },
+      },
+      {
+        id: 'case-2', domain: 'build_review', disposition: 'defer', priority: 'low', rationale: 'case rationale', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'source-2', outcome: 'deferred', recordedAt: '2026-08-30T00:00:00.000Z' }],
+        effect: { id: 'effect-2', kind: 'deferral', status: 'reserved' },
+      },
+    ] });
+    const fileIssue = vi.fn()
+      .mockResolvedValueOnce({ issueUrl: 'https://github.test/acme/repo/issues/1' })
+      .mockResolvedValueOnce({ issueUrl: 'https://github.test/acme/repo/issues/2' });
+    const tracker = { findIssueByEffectMarker: vi.fn().mockResolvedValue(null) } as never;
+    for (const caseId of ['case-1', 'case-2']) {
+      await expect(applyBuildReviewDeferralEffect({
+        projectRoot: root, feature, store, caseId, effect, repo: 'acme/repo', tracker, fileIssue,
+      })).resolves.toMatchObject({ ok: true, status: 'applied' });
+    }
+    expect(fileIssue).toHaveBeenCalledTimes(2);
+    expect(fileIssue.mock.calls[0]?.[0].body).toContain(remediationEffectMarker('effect-1'));
+    expect(fileIssue.mock.calls[1]?.[0].body).toContain(remediationEffectMarker('effect-2'));
+  });
+
+  it('recovers after remote create succeeds before the local issue reference persists', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [{
+      id: 'case-1', domain: 'build_review', disposition: 'defer', priority: 'low', rationale: 'case rationale', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'source-1', outcome: 'deferred', recordedAt: '2026-08-30T00:00:00.000Z' }],
+      effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' },
+    }] });
+    const mutableStore = store as unknown as { atomicReplace: (state: RemediationCaseStoreState) => Promise<unknown> };
+    const atomicReplace = mutableStore.atomicReplace.bind(store);
+    let failOnce = true;
+    mutableStore.atomicReplace = async (state) => {
+      if (failOnce) {
+        failOnce = false;
+        return { ok: false, reason: 'atomic-replace-failed' };
+      }
+      return atomicReplace(state);
+    };
+    const effect = { kind: 'deferral', title: 'Deferred', body: 'Observed behavior', exclusionRationale: 'outside current plan' } as const;
+    const tracker = { findIssueByEffectMarker: vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('https://github.test/acme/repo/issues/12') } as never;
+    const fileIssue = vi.fn().mockResolvedValue({ issueUrl: 'https://github.test/acme/repo/issues/12' });
+    const input = { projectRoot: root, feature, store, caseId: 'case-1', effect, repo: 'acme/repo', tracker, fileIssue };
+
+    await expect(applyBuildReviewDeferralEffect(input)).resolves.toMatchObject({ ok: false, reason: 'case store atomic-replace-failed' });
+    await expect(applyBuildReviewDeferralEffect(input)).resolves.toMatchObject({ ok: true, status: 'applied' });
+    expect(fileIssue).toHaveBeenCalledTimes(1);
   });
 });
