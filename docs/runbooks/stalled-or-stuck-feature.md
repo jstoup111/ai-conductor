@@ -96,7 +96,7 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 
 | Class | Meaning | Cleared by the re-kick sweep? |
 | --- | --- | --- |
-| `needs-human` | Only an operator can resolve it. | No — skipped on every sweep. |
+| `needs-human` | Only an operator can resolve it. A detail naming a remediation-planner mismatch is a plan gap wearing this class; see [the remediation planner disagreed with the parsed findings](#the-remediation-planner-disagreed-with-the-parsed-findings). | No — skipped on every sweep. |
 | `plan-gap` | `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | Yes, on a base-branch advance; verification refuses again if the violation remains. |
@@ -811,6 +811,42 @@ re-runs BUILD and every later step. Nothing outside the feature moves.
 **How to confirm:** the next dispatch re-enters BUILD rather than re-writing the same halt, and the
 audit that raised the gap passes its criterion on the following lap. `git show
 <feature-branch>:.docs/halted/<slug>.md` reads `Status: resolved`.
+
+### The remediation planner disagreed with the parsed findings
+
+**Symptom:** `.pipeline/HALT.class` is `needs-human` — not `plan-gap` — and the detail reads:
+
+```text
+Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation
+planner findings do not exactly match parsed REMEDIABLE findings. Unexpected: S2.4.
+```
+
+The remediation planner proposes one gap per finding, and the engine requires that set to match the
+admitted findings exactly: each one bound either to an as-built `REMEDIABLE` row or to a `prd_audit`
+finding. The three words name which way it diverged:
+
+| Word | Meaning |
+| --- | --- |
+| `Unexpected: <id>` | The planner proposed remediation for an id that is in neither admitted set. |
+| `Missing: <id>` | An admitted finding the planner proposed nothing for. |
+| `Duplicate: <id>` | The planner proposed the same finding more than once. |
+
+**`Unexpected` on a criterion id is the common case, and it is a plan gap.** A criterion graded
+`PLAN_GAP` in `.pipeline/prd-audit.md` is unmet with no active task owning it, so it is not an
+admitted finding — but it reads to the planner like work to schedule, and the planner writes tasks
+for it. Compare the `FIXABLE` rows in the same table: those carry a parent task and are admitted.
+
+Watch for one defect graded by both gates. In the example above, the as-built review's only
+`REMEDIABLE` finding said the same thing as `S2.4` — a story outcome with no runtime path that can
+produce it — so the planner reasonably wrote a single remediation covering both, and the exact-match
+check refused it. When the two gates indict one defect, that is a signal the **story** overpromises
+what the approved design delivers, not that the plan is missing a task.
+
+**Recover through [the plan-gap recovery](#the-halt-is-a-plan-gap)** — read the gap, amend the
+artifact it indicts (usually the story here), update the coherence rows in the same commit, reseal,
+then `ai-conductor rewind --to build`. `Missing` and `Duplicate` are planner faults rather than plan
+gaps: no artifact is wrong, so re-dispatch the step and let the planner re-run against the same
+findings.
 
 ### Worktree preparation failed to install the preventive git hook
 
