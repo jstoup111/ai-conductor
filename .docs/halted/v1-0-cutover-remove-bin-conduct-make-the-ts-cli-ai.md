@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-08-30T02:56:14.676Z
+Status: halted
 Slug: v1-0-cutover-remove-bin-conduct-make-the-ts-cli-ai
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-v1-0-cutover-remove-bin-conduct-make-the-ts-cli-ai
-Head SHA: a92daf5ae7260432caa048f198d5f3eafe66fd69
-Halted at: 2026-08-30T02:52:12.610Z
+Head SHA: ed7a137a02d4e4c7db56aeeed1bbcef04d95a21d
+Halted at: 2026-08-30T04:39:33.331Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-prd-audit halted: needs human DECIDE — PLAN_GAP on S2.1, S2.2, S2.4.
+A FINISH publication transition did not change the state it owns. Next action: Inspect the listed transition and state, resolve why it is unchanged, then retry FINISH. Detail: The judge_pr_prose transition left pr.prose unchanged at stale.
 ```
