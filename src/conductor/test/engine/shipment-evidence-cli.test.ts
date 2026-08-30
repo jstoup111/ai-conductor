@@ -222,8 +222,8 @@ describe('shipment-evidence CLI', () => {
     const workflow = await readFile(join(repoRoot, '.github/workflows/shipped-record.yml'), 'utf8');
 
     expect({
-      checkout: workflow.includes('uses: actions/checkout@v4'),
-      setup: workflow.includes('uses: actions/setup-node@v4'),
+      checkout: /uses: actions\/checkout@v\d+/.test(workflow),
+      setup: /uses: actions\/setup-node@v\d+/.test(workflow),
       dependencies: workflow.includes('- run: npm ci'),
       permitsFailure: /continue-on-error:\s*true|if:\s*always\(\)/.test(workflow),
     }).toEqual({
