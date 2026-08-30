@@ -28,6 +28,8 @@ export async function coordinateBuildReviewAdjudication(input: {
   readonly feature: BuildReviewFeatureIdentity;
   readonly aggregate: BuildReviewAggregate;
   readonly operatorResolvedFindingIds: ReadonlySet<string>;
+  /** Re-reads the separate operator authority before every provider boundary. */
+  readonly resolveOperatorResolvedFindingIds?: () => Promise<ReadonlySet<string>>;
   readonly mechanical: BuildReviewMechanicalState;
   readonly judge: (context: unknown) => Promise<RemediationCaseJudgement>;
   readonly chargeInput: BumpKickbackGateInput;
@@ -41,13 +43,20 @@ export async function coordinateBuildReviewAdjudication(input: {
 }): Promise<BuildReviewAdjudicationCoordinatorResult> {
   const sources = projectBuildReviewAggregateSources(input.aggregate);
   if (!sources) return { ok: false, detail: 'invalid raw aggregate source projection' };
-  const currentSources = sources.filter((source) => !input.operatorResolvedFindingIds.has(source.findingId));
-  // Operator authority is terminal for an all-resolved content lap.  In
-  // particular, do not turn it into an empty model prompt or case-store read.
-  if (currentSources.length === 0) {
+  const operatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> =>
+    input.resolveOperatorResolvedFindingIds ? input.resolveOperatorResolvedFindingIds() : input.operatorResolvedFindingIds;
+  const routeIfAllOperatorResolved = (resolved: ReadonlySet<string>): BuildReviewAdjudicationCoordinatorResult | undefined => {
+    if (sources.some((source) => !resolved.has(source.findingId))) return undefined;
     const transition = reduceBuildReviewAdjudication({ currentSourceIds: [], cases: [], mechanical: input.mechanical });
     return { ok: true, route: transition.route, detail: transition.reason, remainingMechanical: transition.remainingMechanical };
-  }
+  };
+  let resolved: ReadonlySet<string>;
+  try { resolved = await operatorResolvedFindingIds(); } catch { return { ok: false, detail: 'operator disposition state is unavailable' }; }
+  const initialOperatorRoute = routeIfAllOperatorResolved(resolved);
+  if (initialOperatorRoute) return initialOperatorRoute;
+  let currentSources = sources.filter((source) => !resolved.has(source.findingId));
+  // Operator authority is terminal for an all-resolved content lap.  In
+  // particular, do not turn it into an empty model prompt or case-store read.
   const fail = async (detail: string): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     await input.emit?.({ type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail });
     return { ok: false, detail };
@@ -56,12 +65,29 @@ export async function coordinateBuildReviewAdjudication(input: {
   const prior = await store.read();
   if (!prior.ok) return fail(`case store ${prior.reason}`);
   const context = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: input.operatorResolvedFindingIds,
+    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved,
   });
   if (!context.ok) return fail(`adjudication context ${context.stop.code}`);
+  // A disposition arriving while the case store was read wins before the one
+  // provider dispatch.  Rebuild the complete projection rather than letting
+  // the provider see an obsolete source.
+  try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+  const preDispatchOperatorRoute = routeIfAllOperatorResolved(resolved);
+  if (preDispatchOperatorRoute) return preDispatchOperatorRoute;
+  currentSources = sources.filter((source) => !resolved.has(source.findingId));
+  const freshContext = assembleBuildReviewAdjudicationContext({
+    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved,
+  });
+  if (!freshContext.ok) return fail(`adjudication context ${freshContext.stop.code}`);
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
   let judgement: RemediationCaseJudgement;
-  try { judgement = await input.judge(context.context); } catch { return fail('remediate judgement failed'); }
+  try { judgement = await input.judge(freshContext.context); } catch { return fail('remediate judgement failed'); }
+  // Do not reconcile or effect a provider result after a late exact operator
+  // acceptance made every source non-autonomous.
+  try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+  const postJudgeOperatorRoute = routeIfAllOperatorResolved(resolved);
+  if (postJudgeOperatorRoute) return postJudgeOperatorRoute;
+  if (sources.some((source) => resolved.has(source.findingId))) return fail('operator disposition changed during adjudication');
   const graph = validateRemediationCaseGraph(currentSources.map((source) => source.findingId), judgement);
   if (!graph.ok) return fail(`invalid remediation judgement ${graph.reason}`);
   const reconciled = await reconcileRemediationCases(store, {

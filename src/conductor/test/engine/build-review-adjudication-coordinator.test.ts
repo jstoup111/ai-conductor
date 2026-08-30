@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -99,5 +99,19 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toEqual({ ok: false, detail: 'remediate judgement failed' });
     expect(events).toEqual(['remediation_adjudication_started', 'remediation_adjudication_failed']);
+  });
+
+  it('re-reads late exact operator authority before it can reserve an autonomous effect', async () => {
+    const root = await projectRoot();
+    const resolutions = [new Set<string>(), new Set<string>(), new Set([sourceId])];
+    const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift()!);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), resolveOperatorResolvedFindingIds,
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(3);
+    await expect(access(join(root, '.pipeline', 'build-review-work-order.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
