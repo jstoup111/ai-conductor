@@ -30,6 +30,8 @@ import {
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
+import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { planContractPointers, priorAttemptPointers } from './remediation-context-pointers.js';
 import type { CoverageBindingPayloadError } from './step-runners.js';
@@ -10353,6 +10355,75 @@ export class Conductor {
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = i - 1; // for-loop i++ re-lands on build_review
                   continue;
+                }
+                const aggregate = parseBuildReviewAggregate(verdictRaw);
+                // The compatibility selector lives at the conductor boundary:
+                // scalar/legacy verdicts retain the historical raw route, while
+                // a current raw aggregate defaults to the post-join path.
+                if (aggregate && resolveBuildReviewConfig(this.config).adjudication.enabled) {
+                  const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
+                    this.projectRoot,
+                    verdictRaw,
+                    { emit: async (event) => { await this.events.emit(event); } },
+                  );
+                  if (!effective.ok) {
+                    const reason = `build_review adjudication halted: ${effective.reason}`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    await this.emitLoopHalt(reason);
+                    return;
+                  }
+                  const mechanical = effective.effective.infrastructureFailureRubrics.length === 0 ? 'healthy' : 'retry';
+                  const adjudication = await coordinateBuildReviewAdjudication({
+                    projectRoot: this.projectRoot,
+                    feature: effective.feature,
+                    aggregate,
+                    operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
+                    mechanical,
+                    chargeInput: {
+                      treeHash: await currentTreeHash(this.projectRoot),
+                      resolvedCount: await countResolvedTasks(this.projectRoot),
+                      reason: buildReviewFailureDetails(parsed).join('\n') || 'build_review adjudicated action',
+                    },
+                    judge: async (context) => {
+                      const dispatched = await this.stepRunner.run('remediate', state, {
+                        retryReason: `Adjudicate this complete build-review context only; write case-v1 remediation output.\n${JSON.stringify(context)}`,
+                      });
+                      if (!dispatched.success) throw new Error('remediate dispatch failed');
+                      const judgement = await readRemediationCaseJudgement(this.projectRoot, state.session_started_at);
+                      if (!judgement.ok) throw new Error(judgement.reason);
+                      return judgement.judgement;
+                    },
+                  });
+                  if (!adjudication.ok || adjudication.route === 'halt') {
+                    const reason = `build_review adjudication halted: ${adjudication.detail}`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    await this.emitLoopHalt(reason);
+                    return;
+                  }
+                  if (adjudication.route === 'pass') {
+                    await this.saveConductorStepStatus(state, step.name, 'done');
+                    continue;
+                  }
+                  if (adjudication.route === 'build') {
+                    const ledger = await readKickbackLedger(this.projectRoot);
+                    const count = ledger.gates.build_review?.count ?? 1;
+                    await emitTracked({ type: 'kickback', from: 'build_review', to: 'build', evidence: adjudication.detail, count });
+                    pendingRetryHints.set('build', `build_review adjudication: ${adjudication.detail}`);
+                    if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
+                    await captureKickbackToBuildContext('build_review');
+                    const navigationIndex = await this.navigateStateBack(state, 'build', steps);
+                    await this.commitStateChanges(
+                      state,
+                      'restage BUILD review after adjudicated kickback',
+                      filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
+                    );
+                    i = navigationIndex - 1;
+                    continue;
+                  }
+                  // A pure mechanical retry deliberately retains the existing
+                  // raw mechanical lane below; it never invokes the judge again.
                 }
                 const failureDetails = buildReviewFailureDetails(parsed);
                 let kickbackLedgerBeforeConsumption: KickbackLedger | undefined;
