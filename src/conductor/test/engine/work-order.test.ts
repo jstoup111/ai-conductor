@@ -1,7 +1,15 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { createHash } from 'node:crypto';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildWorkOrder } from '../../src/engine/work-order.js';
+import {
+  buildWorkOrder,
+  materializeWorkOrder,
+  WorkOrderBaseShaMissingError,
+  WorkOrderManifestMismatchError,
+} from '../../src/engine/work-order.js';
 
 describe('engine/work-order', () => {
   it('round-trips a fully populated order with a ref-and-hash document manifest', async () => {
@@ -86,4 +94,92 @@ describe('engine/work-order', () => {
       });
     },
   );
+
+  it('rejects a changed manifest document before creating its worktree', async () => {
+    const baseSha = 'a'.repeat(40);
+    const ref = '.docs/plans/parallel-dispatch.md';
+    const expectedContents = '# Approved plan';
+    const actualContents = '# Changed after dispatch';
+    const gitCalls: string[][] = [];
+    const temporaryRoot = await mkdtemp(join(tmpdir(), 'work-order-'));
+    const worktreePath = join(temporaryRoot, 'feature-worktree');
+    const order = {
+      repository: 'jstoup/ai-conductor',
+      slug: 'parallel-dispatch',
+      baseSha,
+      manifest: [
+        {
+          ref,
+          contentHash: `sha256:${createHash('sha256').update(expectedContents).digest('hex')}`,
+        },
+      ],
+    };
+
+    try {
+      let caught: unknown;
+      try {
+        await materializeWorkOrder(order, worktreePath, async (args) => {
+          gitCalls.push([...args]);
+          if (args[0] === 'cat-file') {
+            return { exitCode: 0, stdout: '', stderr: '' };
+          }
+          if (args[0] === 'show' && args[1] === `${baseSha}:${ref}`) {
+            return { exitCode: 0, stdout: actualContents, stderr: '' };
+          }
+          return { exitCode: 1, stdout: '', stderr: 'unexpected git call' };
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(WorkOrderManifestMismatchError);
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toContain(ref);
+      await expect(stat(worktreePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(gitCalls.some(([command, subcommand]) => command === 'worktree' && subcommand === 'add')).toBe(false);
+    } finally {
+      await rm(temporaryRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('rejects an unavailable base SHA before resolving manifests or creating its worktree', async () => {
+    const baseSha = 'b'.repeat(40);
+    const gitCalls: string[][] = [];
+    const temporaryRoot = await mkdtemp(join(tmpdir(), 'work-order-'));
+    const worktreePath = join(temporaryRoot, 'feature-worktree');
+    const order = {
+      repository: 'jstoup/ai-conductor',
+      slug: 'parallel-dispatch',
+      baseSha,
+      manifest: [
+        {
+          ref: '.docs/plans/not-needed.md',
+          contentHash: `sha256:${createHash('sha256').update('# Irrelevant').digest('hex')}`,
+        },
+      ],
+    };
+
+    try {
+      let caught: unknown;
+      try {
+        await materializeWorkOrder(order, worktreePath, async (args) => {
+          gitCalls.push([...args]);
+          return args[0] === 'cat-file' && args[1] === '-e' && args[2] === baseSha
+            ? { exitCode: 1, stdout: '', stderr: 'missing base' }
+            : { exitCode: 1, stdout: '', stderr: 'manifest should not resolve' };
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(WorkOrderBaseShaMissingError);
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toContain(baseSha);
+      expect(gitCalls).toEqual([['cat-file', '-e', baseSha]]);
+      await expect(stat(worktreePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(gitCalls.some(([command, subcommand]) => command === 'worktree' && subcommand === 'add')).toBe(false);
+    } finally {
+      await rm(temporaryRoot, { force: true, recursive: true });
+    }
+  });
 });

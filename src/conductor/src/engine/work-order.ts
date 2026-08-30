@@ -29,6 +29,20 @@ export interface WorkOrderGitResult {
 /** Injected Git boundary so work-order construction remains unit-testable. */
 export type WorkOrderGitRunner = (args: readonly string[]) => Promise<WorkOrderGitResult>;
 
+export class WorkOrderManifestMismatchError extends Error {
+  constructor(ref: string) {
+    super(`work-order manifest content hash mismatch: ${ref}`);
+    this.name = 'WorkOrderManifestMismatchError';
+  }
+}
+
+export class WorkOrderBaseShaMissingError extends Error {
+  constructor(baseSha: string) {
+    super(`work-order base SHA does not exist: ${baseSha}`);
+    this.name = 'WorkOrderBaseShaMissingError';
+  }
+}
+
 export interface BuildWorkOrderInput {
   repository: string;
   slug: string;
@@ -67,4 +81,31 @@ export async function buildWorkOrder(
     baseSha: input.baseSha,
     manifest,
   };
+}
+
+/**
+ * Verifies a work order's pinned inputs, then creates its isolated worktree.
+ */
+export async function materializeWorkOrder(
+  order: WorkOrder,
+  worktreePath: string,
+  git: WorkOrderGitRunner,
+): Promise<void> {
+  const baseResult = await git(['cat-file', '-e', order.baseSha]);
+  if (baseResult.exitCode !== 0) {
+    throw new WorkOrderBaseShaMissingError(order.baseSha);
+  }
+
+  for (const entry of order.manifest) {
+    const result = await git(['show', `${order.baseSha}:${entry.ref}`]);
+    const contentHash = `sha256:${createHash('sha256').update(result.stdout).digest('hex')}`;
+    if (result.exitCode !== 0 || contentHash !== entry.contentHash) {
+      throw new WorkOrderManifestMismatchError(entry.ref);
+    }
+  }
+
+  const worktreeResult = await git(['worktree', 'add', worktreePath, order.baseSha]);
+  if (worktreeResult.exitCode !== 0) {
+    throw new Error(`could not create worktree at ${worktreePath}: ${worktreeResult.stderr}`);
+  }
 }
