@@ -123,8 +123,8 @@ describe('buildResource', () => {
         'conductor.run.id': 'explicit-run-id',
         'conductor.feature': 'explicit-feature',
         'conductor.project': '/workspace/explicit-project',
-        'conductor.branch': 'unknown',
-        'conductor.engine.version': 'unknown',
+        'conductor.branch': 'not-supplied',
+        'conductor.engine.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
@@ -132,8 +132,8 @@ describe('buildResource', () => {
         'conductor.run.id': 'persisted-run-id',
         'conductor.feature': 'persisted-feature',
         'conductor.project': '/workspace/persisted-project',
-        'conductor.branch': 'unknown',
-        'conductor.engine.version': 'unknown',
+        'conductor.branch': 'not-supplied',
+        'conductor.engine.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
@@ -141,8 +141,8 @@ describe('buildResource', () => {
         'conductor.run.id': 'run-1',
         'conductor.feature': 'f',
         'conductor.project': 'p',
-        'conductor.branch': 'unknown',
-        'conductor.engine.version': 'unknown',
+        'conductor.branch': 'not-supplied',
+        'conductor.engine.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
@@ -150,8 +150,8 @@ describe('buildResource', () => {
         'conductor.run.id': 'run-2',
         'conductor.feature': 'unknown',
         'conductor.project': 'p',
-        'conductor.branch': 'unknown',
-        'conductor.engine.version': 'unknown',
+        'conductor.branch': 'not-supplied',
+        'conductor.engine.version': 'not-supplied',
       },
     ]);
   });
@@ -193,6 +193,35 @@ describe('buildResource', () => {
   it('conductor.feature defaults to "unknown" when not supplied', () => {
     const resource = buildResource({ pipelineDir, project: 'p' });
     expect(resource.attributes['conductor.feature']).toBe('unknown');
+  });
+
+  describe('scoped identity resolution', () => {
+    it('distinguishes resolved, explicit-unresolved, and omitted branch and engine identity without throwing', () => {
+      const resolved = { pipelineDir, branch: 'feat/resolved', engineVersion: 'v1' };
+      const unresolved = { pipelineDir, branch: undefined, engineVersion: undefined };
+      const omitted = { pipelineDir };
+
+      expect(() => buildResource(resolved, 'traces')).not.toThrow();
+      expect(() => buildResource(unresolved, 'traces')).not.toThrow();
+      expect(() => buildResource(omitted, 'traces')).not.toThrow();
+
+      expect(buildResource(resolved, 'traces').attributes).toMatchObject({
+        'conductor.branch': 'feat/resolved',
+        'conductor.engine.version': 'v1',
+      });
+      expect(buildResource(unresolved, 'traces').attributes).toMatchObject({
+        'conductor.branch': 'unresolved',
+        'conductor.engine.version': 'unresolved',
+      });
+      expect(buildResource(omitted, 'traces').attributes).toMatchObject({
+        'conductor.branch': 'not-supplied',
+        'conductor.engine.version': 'not-supplied',
+      });
+      expect(buildResource(unresolved, 'metrics').attributes['conductor.branch']).toBe('unresolved');
+      expect(buildResource(omitted, 'metrics').attributes['conductor.branch']).toBe('not-supplied');
+      expect(buildResource(unresolved, 'metrics').attributes['conductor.engine.version']).toBeUndefined();
+      expect(buildResource(omitted, 'metrics').attributes['conductor.engine.version']).toBeUndefined();
+    });
   });
 
   // Story 2: the metric Resource is feature-stable. Prometheus folds the whole
