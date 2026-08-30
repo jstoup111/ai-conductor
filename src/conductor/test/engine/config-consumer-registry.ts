@@ -192,6 +192,8 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   ),
   'build_review.scopeContainmentEnforced': consumer(RESOLVED_CONFIG),
   'build_review.maxParallel': consumer(RESOLVED_CONFIG),
+  'build_review.adjudication': consumer(RESOLVED_CONFIG),
+  'build_review.adjudication.enabled': consumer(RESOLVED_CONFIG),
   'build_review.rubrics': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.enabled': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.llm_provider': consumer(RESOLVED_CONFIG),

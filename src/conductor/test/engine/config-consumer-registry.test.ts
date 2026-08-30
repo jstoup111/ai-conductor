@@ -24,6 +24,7 @@ describe('config consumer registry', () => {
       'steps.parallel',
       'steps.by_tier',
       'build_review',
+      'build_review.adjudication',
       'build_review.rubrics',
       'ci_watch',
       'kickback_escalation',
@@ -69,6 +70,13 @@ describe('config consumer registry', () => {
       'test_suite.verification.drift_budget': {
         consumer: 'src/conductor/src/engine/full-suite-verifier.ts',
       },
+    });
+  });
+
+  it('declares resolved-config as the adjudication switch consumer', () => {
+    expect(configConsumerRegistry).toMatchObject({
+      'build_review.adjudication': { consumer: 'src/conductor/src/engine/resolved-config.ts' },
+      'build_review.adjudication.enabled': { consumer: 'src/conductor/src/engine/resolved-config.ts' },
     });
   });
 
