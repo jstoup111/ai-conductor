@@ -318,13 +318,13 @@ bin/migrate
 ./bin/install --uninstall
 ```
 
-> **Known limitation.** `--uninstall` removes only the harness-owned skill symlinks, the
-> `HARNESS.md` links, and `~/.local/bin/conduct`. It leaves `~/.local/bin/ai-conductor`, the 18
+> **Known limitation.** `--uninstall` removes the harness-owned skill symlinks, the
+> `HARNESS.md` links, and all three installer-owned launchers: `conduct`, `conduct-ts`, and
+> `ai-conductor`. It still leaves 18
 > permission entries and 10 hook commands written into `~/.claude/settings.json`, all of
 > `~/.ai-conductor/`, and any legacy `~/.claude/ai-conductor.config.json` or
 > `~/.claude/ai-conductor.config.json.migrated` artifact. If you then delete the checkout,
 > those hooks point at a directory that no longer exists and every Claude Code session in every
-> project runs them. Remove `~/.local/bin/ai-conductor` and strip the harness entries from
-> `~/.claude/settings.json` by hand — see
+> project runs them. Strip the harness entries from `~/.claude/settings.json` by hand — see
 > [reference/settings-and-hooks.md](reference/settings-and-hooks.md).
 > Tracked in [#1004](https://github.com/jstoup111/ai-conductor/issues/1004).
