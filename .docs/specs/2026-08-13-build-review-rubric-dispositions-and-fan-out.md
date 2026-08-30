@@ -63,6 +63,13 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 - **FR-7:** The authoritative gate passes only when every enabled rubric passes after accepted
   findings are applied; skipped rubrics do not count as passes or failures.
 
+> **Amended 2026-08-29 by
+> `adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication`:** raw rubric verdicts are
+> never rewritten or fabricated as PASS. For the effective outer verdict, an enabled
+> rubric's raw finding may also be resolved by a source-complete autonomous case outcome
+> (`defer | reject | merge`) after operator dispositions run. Infrastructure still blocks unless it
+> heals or has exact current operator reduced coverage.
+
 > **Amended 2026-08-14 by PR #1577:** the 2026-08-13 `missing-entry-points` rendering is retired
 > with the Wiring rubric. A lap with no valid judged rubric still cannot pass.
 - **FR-8:** A rubric execution or provider failure blocks the gate and is distinguished from a
@@ -123,6 +130,14 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 
 - Authorization, finding identity, disposition application, concurrency limits, result joining,
   and metric calculation must be deterministic; model judgement is limited to rubric evaluation.
+
+> **Amended 2026-08-29 by
+> `adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication`:** model judgement is limited
+> to independent rubric evaluation plus one schema-constrained post-join `remediate`
+> judgement for semantic case binding, `act | defer | reject | merge`, and priority. Raw finding
+> identity, branch validation, joining, operator authorization, source completeness, durable ids,
+> budget accounting, effect application, and effective-verdict reduction remain deterministic.
+
 - Concurrent operator and daemon activity must not corrupt or misattribute disposition state.
 - Provider-specific execution differences must preserve the same rubric, finding, disposition, and
   outer-verdict behavior.
