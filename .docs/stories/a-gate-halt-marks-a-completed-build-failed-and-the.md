@@ -78,12 +78,19 @@ failure of the step's work.
 - Given a validation-group member halts for a human, when the group outcome is committed, then completed sibling steps keep their own verdicts unchanged
 
 #### Negative Paths
-- Given a build_review verdict is FAIL, when the gate routes kickback-to-build, then the routing, kickback counting, and lap accounting behave exactly as on current main with no refusal recorded
+- Given a build_review raw verdict is FAIL, when post-join adjudication produces a valid newly
+  actionable BUILD work order, then the routing, kickback counting, lap accounting, and absence of a
+  refusal behave exactly as on current main for the one actual route
+- Given a build_review raw verdict is FAIL but every valid case is deferred, rejected, merged, or
+  already operator-resolved, when the effective outcome settles, then no BUILD kickback is recorded
+  and the judging step is not mislabeled `refused`
 - Given a validation step's runner itself crashes, when retries exhaust, then that step is recorded `failed`, not `refused`
 
 ### Done When
 - [ ] A unit test drives an as-built plan-gap halt and asserts the judging step reads `refused`, the HALT class is unchanged, and sibling statuses are untouched
-- [ ] A regression test asserts a build_review FAIL still routes to build with unchanged kickback-ledger counts
+- [ ] A regression test asserts a newly actionable build_review outcome still routes to build with
+      unchanged per-route kickback-ledger counts; a handled non-action outcome records no route and no
+      refusal
 
 ## Story 4: Refusals are visible on the event spine and in operator rendering
 
