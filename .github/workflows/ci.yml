@@ -13,7 +13,7 @@ jobs:
     outputs:
       docs_only: ${{ steps.docsonly.outputs.docs_only }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: docsonly
@@ -33,7 +33,7 @@ jobs:
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Installed explicitly so integrity checks 1b and 9d enforce here rather
       # than degrading to their "tool absent" paths on a runner image change.
       # A stalled Ubuntu mirror must not consume the workflow's six-hour ceiling.
@@ -62,7 +62,7 @@ jobs:
       # integrity job needs src/conductor's dependencies installed — without
       # them every probe invocation fails as "could not execute", which reads
       # as a guard failure rather than a missing tool.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: src/conductor/.tool-versions
           cache: npm
@@ -76,7 +76,7 @@ jobs:
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Keep this independent gate resilient to the same transient mirror stalls.
       - name: Install ShellCheck
         run: |
@@ -105,8 +105,8 @@ jobs:
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version-file: src/conductor/.tool-versions
           cache: npm
@@ -121,8 +121,8 @@ jobs:
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version-file: src/conductor/.tool-versions
           cache: npm
@@ -141,10 +141,10 @@ jobs:
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: src/conductor/.tool-versions
           cache: npm
@@ -171,7 +171,7 @@ jobs:
   links:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: lycheeverse/lychee-action@v2
         with:
           # Settings (offline-only, CHANGELOG.md excluded) live in lychee.toml.
