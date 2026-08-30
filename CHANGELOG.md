@@ -89,6 +89,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - As-built remediation now resolves governing clauses that cite ADR decisions written as ATX headings, instead of halting needs-human. ([implementation PR #2053](https://github.com/jstoup111/ai-conductor/pull/2053)).
 - A prd_audit remediation cap halt now lists the as-built findings that participated in the same validation-group round, instead of dropping them silently. ([implementation PR #2059](https://github.com/jstoup111/ai-conductor/pull/2059)).
 - OTEL cost and dispatch metrics now match shipped-record rollups, including failed provider attempts. ([implementation PR #2063](https://github.com/jstoup111/ai-conductor/pull/2063)).
+- A stable-channel checkout left detached by an older updater is recovered onto the stable branch instead of silently stopping updates. ([implementation PR #2082](https://github.com/jstoup111/ai-conductor/pull/2082)).
 
 ## Migration
 
