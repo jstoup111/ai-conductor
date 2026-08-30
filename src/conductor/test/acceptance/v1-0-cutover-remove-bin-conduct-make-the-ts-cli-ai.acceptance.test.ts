@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const INSTALLER = join(REPO_ROOT, 'bin', 'install');
-const LEGACY_CONDUCT = join(REPO_ROOT, 'bin', 'conduct');
 const CANONICAL_LAUNCHER = join(REPO_ROOT, 'bin', 'ai-conductor');
 
 describe('acceptance: conduct migrates onto the only TS CLI', () => {
@@ -54,7 +53,7 @@ describe('acceptance: conduct migrates onto the only TS CLI', () => {
     );
     await Promise.all([chmod(npm, 0o755), chmod(codex, 0o755), chmod(mktemp, 0o755)]);
 
-    await symlink(LEGACY_CONDUCT, conduct);
+    await symlink(join(scratch, 'legacy-conduct'), conduct);
     env = {
       ...process.env,
       HOME: home,
@@ -70,7 +69,7 @@ describe('acceptance: conduct migrates onto the only TS CLI', () => {
   });
 
   it('replaces a legacy install and dispatches help through the TS launcher with one warning', async () => {
-    expect(await readlink(conduct)).toBe(LEGACY_CONDUCT);
+    expect(await readlink(conduct)).toBe(join(scratch, 'legacy-conduct'));
 
     const install = spawnSync(
       INSTALLER,
