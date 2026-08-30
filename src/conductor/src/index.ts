@@ -1039,6 +1039,10 @@ async function main(): Promise<void> {
   // --help were all dispatched above, so anything here targets the pipeline.)
   const { isInline, rest } = detectInline(process.argv);
   if (!isInline) {
+    const bareCommand = process.argv[2];
+    if (bareCommand && !bareCommand.startsWith('-') && !/\s/.test(bareCommand)) {
+      console.error(`error: unknown command '${bareCommand}'`);
+    }
     console.error(
       'conduct: the inline SDLC pipeline now runs under the `inline` subcommand.\n' +
         '  Run:        conduct inline "<feature description>"\n' +

@@ -333,6 +333,23 @@ describe('CLI', () => {
       expect(rest).toEqual(['node', 'conduct', 'URL shortener']);
     });
 
+    it('names a bare unknown command while preserving bare-feature guidance', async () => {
+      const invoke = (args: string[]) => execa(
+        process.execPath,
+        ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), ...args],
+        { reject: false },
+      );
+
+      const unknownCommand = await invoke(['deploy']);
+      expect(unknownCommand.exitCode).toBe(1);
+      expect(unknownCommand.stderr).toContain("error: unknown command 'deploy'");
+
+      const bareFeature = await invoke(['URL shortener']);
+      expect(bareFeature.exitCode).toBe(1);
+      expect(bareFeature.stderr).toContain('conduct: the inline SDLC pipeline now runs under the `inline` subcommand.');
+      expect(bareFeature.stderr).not.toContain('error: unknown command');
+    });
+
     it('reports non-inline for a bare state flag', () => {
       expect(detectInline(['node', 'conduct', '--status']).isInline).toBe(false);
     });
