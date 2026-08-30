@@ -2067,6 +2067,58 @@ describe('prd_audit kickback', () => {
   });
 
   /**
+   * AB-R12 widened clause resolution to the bolded `**D<n>` form, but 15 of
+   * this repo's APPROVED ADRs — including
+   * `adr-2026-08-19-tree-attesting-gates-recheck-before-dispatch` and
+   * `adr-2026-08-28-test-suite-drift-budget-and-verification-mode` — write
+   * their decisions as ATX headings (`### D4 — ...`). The `^\s*` anchor cannot
+   * step over the leading `#`, so every heading-form decision stayed uncitable
+   * and its REMEDIABLE finding halted needs-human. `templates/adr.md.template`
+   * prescribes no decision shape, so the heading form is not a defect in the
+   * ADR — the consumer must accept what the template permits.
+   */
+  it('resolves a governing clause against an ATX-heading ADR decision', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-clause-atx-heading-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const adrStem = 'adr-2026-08-29-atx-heading-architecture';
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.docs', 'decisions'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 1: Existing approved work\n');
+    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
+      '# ADR: ATX-heading architecture',
+      '**Status:** APPROVED',
+      '',
+      '## Decision',
+      '',
+      '### D1 — The eight categories become a closed vocabulary',
+      '',
+      'Prose for the first decision.',
+      '',
+      '#### D2 — A deeper heading level still cites',
+      '',
+      'Prose for the second decision.',
+      '',
+      '## Consequences',
+      '',
+      '- Something else entirely.',
+    ].join('\n'));
+
+    const plan = await readFile(planPath, 'utf8');
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 1`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 1` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 2`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 2` });
+    // Still fails closed: absent decisions, and D1 never matches D10.
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 3`))
+      .resolves.toBeNull();
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 10`))
+      .resolves.toBeNull();
+  });
+
+  /**
    * Every REMEDIABLE clause authored in the wild backticks its stem
    * (`` `adr-x` + Decision 4 ``). The grammar is anchored on a bare identifier,
    * so the leading backtick failed the match before any ADR lookup ran and the
