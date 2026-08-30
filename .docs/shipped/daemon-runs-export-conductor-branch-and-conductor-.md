@@ -4,6 +4,12 @@ spec_hash: fee20cccb7c2b303bf0d38c3101ac4a235d91ec1c8a6c3657ba7b877367537aa
 pr: https://github.com/jstoup111/ai-conductor/pull/2080
 shipped: 2026-08-30
 engine_version: 20260830T193718Z-76db750aa2a8
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/esm-globals-safety.test.ts:1-48 — new repo-wide AST scan asserting every `src/**/*.ts` use of `__dirname`/`__filename` has a top-level binding; no plan task lists this file"
+    accepted: false
 ---
 
 ## Cost
