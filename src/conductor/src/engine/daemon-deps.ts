@@ -18,6 +18,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
+import { WorktreeLifecycleQueue } from './worktree.js';
 import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
 import { escalateBuildFailure } from './build-failure-escalation.js';
 import { makeGitRunner } from './rebase.js';
@@ -92,6 +93,9 @@ const WARNED_SUBDIR = '.daemon/warned';
 /** Concrete (git/fs) implementation of the feature-runner primitives. */
 export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerDeps {
   const processedDir = join(cfg.projectRoot, PROCESSED_SUBDIR);
+  // The dispatcher owns this queue for its lifetime. All linked worktree
+  // add/remove operations share cfg.projectRoot's `.git` bookkeeping.
+  const worktreeLifecycle = new WorktreeLifecycleQueue();
 
   return {
     log: cfg.log,
@@ -112,7 +116,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
     // FR-16: production gh runner for clear-on-success label ops.
     runGh: makeProductionGh(),
 
-    createWorktree: async (slug, order?: WorkOrder) => {
+    createWorktree: async (slug, order?: WorkOrder) => worktreeLifecycle.run(async () => {
       const branch = `feat/daemon-${slug}`;
       const path = join(cfg.worktreeBase, slug);
       const root = cfg.projectRoot;
@@ -131,7 +135,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
         log: cfg.log,
       });
       return { path: p, branch: b };
-    },
+    }),
 
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
@@ -158,10 +162,12 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
         verbose: cfg.verbose ?? false,
         timeoutSeconds: cfg.teardownTimeoutSeconds,
       });
-      await execa('git', ['worktree', 'remove', '--force', wt.path], {
-        cwd: cfg.projectRoot,
-      }).catch(() => {
-        /* best-effort cleanup */
+      await worktreeLifecycle.run(async () => {
+        await execa('git', ['worktree', 'remove', '--force', wt.path], {
+          cwd: cfg.projectRoot,
+        }).catch(() => {
+          /* best-effort cleanup */
+        });
       });
     },
 
