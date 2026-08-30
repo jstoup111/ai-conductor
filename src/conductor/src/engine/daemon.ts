@@ -196,10 +196,10 @@ export interface DaemonDeps {
    * Features eligible to run: stories + plan present, not yet at .pipeline/DONE.
    *
    * `refresh` requests a remote refresh (e.g. `git fetch origin <default>`) before
-   * discovery. The pool sets it ONLY when fully idle with no local work left to start
-   * — i.e. "between work, looking for more". While features are in flight (or local
-   * queued work remains), discovery runs with `refresh:false` so a build is never
-   * re-based onto specs that landed on origin mid-run.
+   * discovery. Local discovery remains cheap; when it finds no eligible item in a
+   * free slot, maintenance may refresh at the poll interval even while executors
+   * run. Dispatched work is pinned to its WorkOrder base SHA, so root movement does
+   * not re-base an in-flight build.
    */
   discoverBacklog: (opts: { refresh: boolean }) => Promise<BacklogItem[]>;
   /** Run one feature to DONE/HALT in isolation. Must not throw for normal
@@ -437,7 +437,7 @@ export interface DaemonDeps {
    * `sha`. Clears markers only — issues NO dispatch (FR-8). The per-feature
    * FR-9 bound lives inside the wired impl.
    */
-  rekickSweep?: (sha: string) => Promise<void>;
+  rekickSweep?: (sha: string, context: DaemonSweepContext) => Promise<void>;
   /**
    * Task 18 (ADR-013): optional reconciliation hook for halt-PR state.
    * Invoked on startup and once per idle poll tick, BEFORE sweepMergeableLabels
@@ -841,8 +841,10 @@ export async function runDaemon(
   const maintenance = new DaemonMaintenance(
     () => inFlight.size,
     () => deps.rateLimitEpisode?.active?.() ?? false,
+    idlePollMs,
+    now,
   );
-  const workers: Array<{ slug: string; tagged: Tagged }> = [];
+  const workers: Array<{ slug: string; tagged: Tagged; settled: boolean }> = [];
   // Task T28: track whether the restart trigger has been successfully called
   // in this run. Once successful, don't retry (the respawn would exit the process).
   let restartTriggeredSuccessfully = false;
@@ -914,7 +916,14 @@ export async function runDaemon(
           reason: err instanceof Error ? err.message : String(err),
         },
       }));
-    workers.push({ slug: item.slug, tagged });
+    const worker = { slug: item.slug, tagged, settled: false };
+    // Preserve an already-settled outcome across a timer sweep. Without this
+    // bit a zero-delay test clock can repeatedly win the Promise.race below,
+    // starving collection even though an executor has completed.
+    void tagged.then(() => {
+      worker.settled = true;
+    });
+    workers.push(worker);
     return true;
   };
 
@@ -1017,7 +1026,9 @@ export async function runDaemon(
     // A genuine advance only re-kicks when there is a prior SHA to advance FROM;
     // a null seed is first-run init (record, no sweep — FR-5).
     if (lastSeenSha != null) {
-      await deps.rekickSweep?.(current);
+      await deps.rekickSweep?.(current, {
+        isFeatureInFlight: (slug) => inFlight.has(slug),
+      });
     }
     lastSeenSha = current;
     await deps.writePersistedBaseSha?.(current);
@@ -1178,8 +1189,8 @@ export async function runDaemon(
 
       let next: BacklogItem | undefined;
       if (!paused && !episodeActive && !buildAuthMissing) {
-        // Local-only discovery first (no remote fetch): cheap, and it keeps a build
-        // from being re-based onto specs that landed on origin while work is running.
+        // Local-only discovery first (no remote fetch): cheap, and it preserves
+        // the common path when a slot can be filled without origin I/O.
         const parkedBeforeLocal = new Set(parked);
         next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
         // pickEligible's "durable HALT from a prior run" branch adds directly to
@@ -1189,23 +1200,25 @@ export async function runDaemon(
           if (!parkedBeforeLocal.has(slug)) registerWatcher(slug);
         }
 
-        // Only when fully idle (nothing running) AND nothing left locally do we reach
-        // out to origin for newly-merged specs — "drained, now find more".
-        if (!next && maintenance.isDrained()) {
+        // With no local candidate, maintenance may refresh origin into this free
+        // slot. The scheduler rate-limits the busy path to the poll interval;
+        // WorkOrders keep already-dispatched work pinned to its original base.
+        if (!next) {
           const refreshed = await maintenance.refreshAndRekick(
             () => deps.discoverBacklog({ refresh: true }),
             () => maybeRekick(false),
           );
-          if (!refreshed) continue;
-          // FR-6: the refresh above already fetched origin, so the discovery ref is
-          // current — re-read the base SHA WITHOUT a second fetch and, on a genuine
-          // advance, re-kick before consuming the backlog so a freshly-cleared
-          // marker is un-parked in THIS iteration (its dispatch still flows through
-          // the existing un-park path, FR-8 — the sweep issues none).
-          const parkedBeforeRefresh = new Set(parked);
-          next = await pickEligible({ items: refreshed }, pickCtx);
-          for (const slug of parked) {
-            if (!parkedBeforeRefresh.has(slug)) registerWatcher(slug);
+          if (refreshed !== undefined) {
+            // FR-6: the refresh above already fetched origin, so the discovery ref is
+            // current — re-read the base SHA WITHOUT a second fetch and, on a genuine
+            // advance, re-kick before consuming the backlog so a freshly-cleared
+            // marker is un-parked in THIS iteration (its dispatch still flows through
+            // the existing un-park path, FR-8 — the sweep issues none).
+            const parkedBeforeRefresh = new Set(parked);
+            next = await pickEligible({ items: refreshed }, pickCtx);
+            for (const slug of parked) {
+              if (!parkedBeforeRefresh.has(slug)) registerWatcher(slug);
+            }
           }
         }
       }
@@ -1445,7 +1458,21 @@ export async function runDaemon(
 
         continue;
       }
-      // Workers still running — wait for one, then re-evaluate.
+    }
+
+    // Workers are running. Race their completion against the poll timer so
+    // busy pools still execute the scheduler-owned periodic sweep; a timer
+    // tick never mutates an in-flight WorkOrder. This is outside the free-slot
+    // branch: a full pool is exactly the case that must still sweep.
+    if (workers.some((worker) => worker.settled)) {
+      await collectOne();
+      continue;
+    }
+    const workerCompleted = Promise.race(workers.map(({ tagged }) => tagged)).then(() => true);
+    const pollElapsed = sleep(idlePollMs).then(() => false);
+    if (!(await Promise.race([workerCompleted, pollElapsed]))) {
+      await maintenance.afterBusyPoll(sweepBestEffort);
+      continue;
     }
 
     await collectOne();

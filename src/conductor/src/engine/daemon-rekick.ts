@@ -97,6 +97,12 @@ export interface RekickSweepDeps {
    * through to the existing FR-9 guard and canonical clear path).
    */
   readHaltClass?: (slug: string) => Promise<HaltDisposition>;
+  /**
+   * Dispatcher-owned active-work predicate. A base advance may re-kick halted
+   * worktrees beside active executors, but it must never touch an in-flight
+   * slug's rebase or HALT marker.
+   */
+  isFeatureInFlight?: (slug: string) => boolean;
 }
 
 export interface RekickSweepResult {
@@ -134,6 +140,12 @@ export async function rekickSweep(
   }
 
   for (const slug of slugs) {
+    if (deps.isFeatureInFlight?.(slug)) {
+      skipped.push(slug);
+      log(`re-kick ${slug}: skipped — in-flight`);
+      continue;
+    }
+
     // Operator-park: a human-placed halt must survive re-kick unconditionally.
     // Checked FIRST — ahead of isProcessed and the SHA guard — so a parked
     // worktree is never touched (no abort/clear/sentinel/lastRekickSha).

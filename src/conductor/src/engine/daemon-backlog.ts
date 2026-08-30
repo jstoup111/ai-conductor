@@ -179,10 +179,10 @@ async function probeBehindOrigin(
  * from a possibly-stale working tree (which diverged whenever local lagged
  * origin), the daemon keeps its local default branch current and builds from it.
  *
- * Called on the daemon's idle poll ONLY (`refresh === true`) — never while
- * features are in flight — so an in-flight build is never advanced mid-run. It
- * also never touches worktree checkouts: those are separate working trees, so a
- * fast-forward of the main checkout cannot disturb a running feature.
+ * Called through the dispatcher maintenance policy when `refresh === true`,
+ * including a free slot while other executors run. In-flight orders pin their
+ * base SHA and this operation never touches worktree checkouts, so advancing
+ * the main checkout cannot re-base or otherwise disturb a running feature.
  *
  * SAFE by construction — side-effecting but it never clobbers operator state and
  * NEVER throws:
