@@ -1,3 +1,4 @@
+// Covers: S5.1, S5.2, S5.3, S5.4, task:8
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

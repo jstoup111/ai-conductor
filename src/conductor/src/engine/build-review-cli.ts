@@ -1,4 +1,4 @@
-import { readFile as readFileDefault, realpath as realpathDefault } from 'node:fs/promises';
+import { readFile as readFileDefault } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,8 +6,7 @@ import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggr
 import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { parseBuildReviewLapId } from './build-review-domain.js';
-import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
-import { resolveMainRepoRoot } from './park-marker.js';
+import { resolveNamedFeatureWorktree, type NamedFeatureWorktreeResolverDeps } from './feature-worktree-resolver.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
 import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, readKickbackLedger, type KickbackGateEntry } from './kickback-ledger.js';
 import type { BuildReviewRubricId } from '../types/config.js';
@@ -18,7 +17,7 @@ export interface BuildReviewFindingsCommand {
   readonly format: 'human' | 'json';
 }
 
-export interface BuildReviewFindingsDeps {
+export interface BuildReviewFindingsDeps extends NamedFeatureWorktreeResolverDeps {
   readonly cwd?: string;
   readonly resolveMainRoot?: (cwd: string) => Promise<string>;
   readonly realpath?: (path: string) => Promise<string>;
@@ -148,26 +147,12 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
   ].join('\n');
 }
 
-type ResolvedCliFeature = {
-  readonly worktree: string;
-  readonly feature: BuildReviewFeatureIdentity;
-};
-
 /** The CLI and live runner must address the same canonical feature state. */
 async function resolveCliFeature(
   command: Pick<BuildReviewFindingsCommand, 'feature'>,
-  deps: Pick<BuildReviewFindingsDeps, 'cwd' | 'resolveMainRoot' | 'realpath'>,
-): Promise<ResolvedCliFeature | undefined> {
-  try {
-    const resolveMainRoot = deps.resolveMainRoot ?? resolveMainRepoRoot;
-    const realpath = deps.realpath ?? realpathDefault;
-    const root = await resolveMainRoot(deps.cwd ?? process.cwd());
-    const worktree = await realpath(join(root, '.worktrees', command.feature));
-    const feature = await resolveBuildReviewFeatureIdentity(worktree, { resolveMainRoot, realpath });
-    return feature?.feature === command.feature ? { worktree, feature } : undefined;
-  } catch {
-    return undefined;
-  }
+  deps: Pick<BuildReviewFindingsDeps, 'cwd' | keyof NamedFeatureWorktreeResolverDeps>,
+) {
+  return resolveNamedFeatureWorktree({ cwd: deps.cwd, feature: command.feature }, deps);
 }
 
 /** Read only current feature artifacts; this deliberately never constructs a pipeline or state lease. */
