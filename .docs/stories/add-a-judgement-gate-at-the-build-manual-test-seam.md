@@ -122,12 +122,6 @@ As the objective gate layer, I want `CUSTOM_COMPLETION_PREDICATES.build_review` 
 
 As the loop, I want a FAIL verdict to re-open `build` with the grader's reasons as retry hints so that the rebuild targets the defect instead of guessing.
 
-**Scope:** With default-on post-join adjudication, a raw FAIL first reaches the existing `remediate`
-judge. The criteria below apply when its validated effective outcome contains a new `act` work order,
-or when adjudication is disabled by its compatibility flag. The durable work-order evidence replaces
-raw grader reasons as retry context. Deferred, rejected, merged-only, and operator-resolved outcomes
-do not route to BUILD.
-
 ### Acceptance Criteria
 
 #### Happy Path
@@ -154,12 +148,7 @@ do not route to BUILD.
 
 **Requirement:** TS-6 (ADR decision 6; #324 acceptance criteria)
 
-As the operator, I want the build → build_review → build cycle capped so that persistently actionable
-review work burns bounded tokens and surfaces to a human.
-
-**Counter scope:** “FAIL arrives” below means the effective transition admits a new actionable BUILD
-work order. Raw FAILs handled without a BUILD route do not consume this counter. An equivalent
-already-attempted case halts as semantic no-progress without either a second charge or a free route.
+As the operator, I want the build → build_review → build cycle capped so that a persistently failing grader burns bounded tokens and surfaces to a human.
 
 ### Acceptance Criteria
 
