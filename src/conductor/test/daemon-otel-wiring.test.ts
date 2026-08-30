@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
@@ -196,7 +197,7 @@ async function dispatchWithSessionId(
 
 describe('daemon OTel visualizer wiring', () => {
   it('exports the daemon module engine identity for source and installed builds', async () => {
-    const daemonSource = await readFile(new URL('../src/daemon-cli.ts', import.meta.url), 'utf8');
+    const daemonModuleDirectory = dirname(fileURLToPath(new URL('../src/daemon-cli.ts', import.meta.url)));
     const engineVersions: unknown[] = [];
     for (const engineVersion of ['dev', 'installed-engine-id']) {
       const spanExporter = new InMemorySpanExporter();
@@ -223,7 +224,8 @@ describe('daemon OTel visualizer wiring', () => {
       engineVersions.push(spanExporter.getFinishedSpans()[0]?.resource.attributes['conductor.engine.version']);
     }
 
-    expect(daemonSource).toContain('const __dirname = dirname(fileURLToPath(import.meta.url));');
+    expect(resolveEngineVersion).toHaveBeenNthCalledWith(1, daemonModuleDirectory);
+    expect(resolveEngineVersion).toHaveBeenNthCalledWith(2, daemonModuleDirectory);
     expect(engineVersions).toEqual(['dev', 'installed-engine-id']);
   });
 
