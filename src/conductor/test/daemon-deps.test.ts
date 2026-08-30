@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, unlink, rename, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import chokidar from 'chokidar';
 
 const MOD_PATH = '../src/engine/daemon-deps.js';
 
@@ -15,6 +16,32 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
     throw new Error(`expected export "${name}" to be a function (not yet implemented)`);
   }
   return fn as (...args: any[]) => any;
+}
+
+async function startHaltWatcher(
+  watchHaltCleared: (...args: any[]) => () => void,
+  worktreeBase: string,
+  slug: string,
+  onCleared: () => void,
+): Promise<() => void> {
+  const realWatch = chokidar.watch.bind(chokidar);
+  let ready: Promise<void> | undefined;
+  const watchSpy = vi.spyOn(chokidar, 'watch').mockImplementation(((...args: Parameters<typeof chokidar.watch>) => {
+    const watcher = realWatch(...args);
+    ready = new Promise((resolve, reject) => {
+      watcher.once('ready', resolve);
+      watcher.once('error', reject);
+    });
+    return watcher;
+  }) as typeof chokidar.watch);
+
+  try {
+    const dispose = watchHaltCleared(worktreeBase, slug, onCleared);
+    await ready;
+    return dispose;
+  } finally {
+    watchSpy.mockRestore();
+  }
 }
 
 describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
@@ -45,12 +72,9 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // Track if onCleared was called
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
+    const dispose = await startHaltWatcher(watchHaltCleared, tempDir, slug, () => {
       onClearedCalled = true;
     });
-
-    // Give the watcher time to set up
-    await new Promise((r) => setTimeout(r, 100));
 
     // Delete the HALT file
     await unlink(join(pipelineDir, 'HALT'));
@@ -79,12 +103,9 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // Track if onCleared was called
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
+    const dispose = await startHaltWatcher(watchHaltCleared, tempDir, slug, () => {
       onClearedCalled = true;
     });
-
-    // Give the watcher time to set up
-    await new Promise((r) => setTimeout(r, 100));
 
     // Rename HALT to HALT.cleared (what the rekick flow does)
     await rename(haltPath, join(pipelineDir, 'HALT.cleared'));
@@ -113,12 +134,9 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // Track if onCleared was called
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
+    const dispose = await startHaltWatcher(watchHaltCleared, tempDir, slug, () => {
       onClearedCalled = true;
     });
-
-    // Give the watcher time to set up
-    await new Promise((r) => setTimeout(r, 100));
 
     // Dispose the watcher
     dispose();
@@ -183,12 +201,9 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // Track if onCleared was called
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
+    const dispose = await startHaltWatcher(watchHaltCleared, tempDir, slug, () => {
       onClearedCalled = true;
     });
-
-    // Give the watcher time to set up
-    await new Promise((r) => setTimeout(r, 100));
 
     // Create a sibling file in .pipeline to trigger a watcher event
     // but the HALT file still exists
@@ -252,11 +267,9 @@ describe('watchHaltCleared — halt_cleared audit record with cause attribution 
     await writeFile(join(pipelineDir, 'HALT'), 'halted\n', 'utf-8');
 
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
+    const dispose = await startHaltWatcher(watchHaltCleared, tempDir, slug, () => {
       onClearedCalled = true;
     });
-
-    await new Promise((r) => setTimeout(r, 100));
     await unlink(join(pipelineDir, 'HALT'));
 
     await vi.waitFor(() => expect(onClearedCalled).toBe(true), { timeout: 2000 });
@@ -282,11 +295,9 @@ describe('watchHaltCleared — halt_cleared audit record with cause attribution 
     await writeFile(haltPath, 'halted\n', 'utf-8');
 
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
+    const dispose = await startHaltWatcher(watchHaltCleared, tempDir, slug, () => {
       onClearedCalled = true;
     });
-
-    await new Promise((r) => setTimeout(r, 100));
     await rename(haltPath, join(pipelineDir, 'HALT.cleared'));
 
     await vi.waitFor(() => expect(onClearedCalled).toBe(true), { timeout: 2000 });
