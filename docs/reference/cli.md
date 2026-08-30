@@ -584,14 +584,23 @@ inline refusal and exits 1.
 
 ```bash
 ai-conductor config init
+ai-conductor config init [--test-suite-mode <aggregate|scoped>] [--test-suite-drift-budget <strict|tolerant>]
 ```
 
 Initializes the current Git repository's `.ai-conductor/config.yml` from
 `templates/project-config.yml.template`. A first run prints the created path and exits 0. If the
 file already exists, it reports that path, preserves the file byte-for-byte, and exits 0.
 
+When either verification option is present, the command records a `test_suite` block in the new
+config. `--test-suite-mode aggregate` is the default; `scoped` also writes a `scoped_command` with
+the required `{selectors}` placeholder. `--test-suite-drift-budget strict` is the default and
+tolerates no drift; `tolerant` permits unlimited `additional_inputs` drift and up to 20 changed
+`source` paths. Supplying one option uses the default for the other. See
+[test_suite configuration](configuration.md#test_suite) for the resulting fields and constraints.
+
 The command exits 1 without writing when the current directory is not a Git repository or when the
-template cannot be resolved or written.
+template cannot be resolved or written. Invalid option values exit 1 without creating a config:
+the modes are `aggregate` and `scoped`, and the drift-budget presets are `strict` and `tolerant`.
 
 ## `ai-conductor config read` / `ai-conductor config write` / `ai-conductor config set`
 
