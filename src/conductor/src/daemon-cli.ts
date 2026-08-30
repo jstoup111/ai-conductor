@@ -78,6 +78,9 @@ import {
   formatDaemonFeatureTag,
   createDaemonModeLogger,
   createFeatureDaemonLogger,
+  createOwnershipAwareDaemonLogger,
+  formatDaemonConsoleTeeLine,
+  withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
@@ -734,7 +737,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const teeConsoleLine = (level: string, args: unknown[]): void => {
     try {
       const line = args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ');
-      logSink?.write(formatDaemonLogLine(`[${level}] ${stripAnsi(line)}`));
+      logSink?.write(formatDaemonLogLine(formatDaemonConsoleTeeLine(level, stripAnsi(line))));
     } catch {
       // Best-effort: the tee must never disrupt the warning path itself.
     }
@@ -925,6 +928,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     readStateFn: readState,
     projectRoot,
   };
+  const globalSubscriberLog = createOwnershipAwareDaemonLogger(log);
   const subscriber = registerBuiltins(registry, events, (event) => {
     // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
     // are already rendered, tagged, by that feature's own listeners
@@ -932,7 +936,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // TerminalSubscriber event types would double-print, once tagged and once
     // untagged.
     if (isForwardedFromFeature(event)) return;
-    renderDaemonEvent(event, log);
+    renderDaemonEvent(event, globalSubscriberLog);
   }, rendererOpts, config?.codex_doctor_timeout_seconds);
   registry.markInitialized();
   validateRegisteredProviderSelections({
@@ -1393,6 +1397,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     );
   };
   const executor = createInProcessFeatureExecutor({
+    withFeatureOwnership: withDaemonLogFeatureOwnership,
     run: async (order) => {
       const item = workOrderItems.get(order.slug);
       if (!item) throw new Error(`daemon executor received unknown work order: ${order.slug}`);
