@@ -73,39 +73,39 @@ distinguishable from one that has failed once.
 
 ---
 
-## Story 2: A passing build_review clears the cumulative count
+## Story 2: A passing build_review preserves the cumulative count until a qualifying rebase credit
 
-**Requirement:** CB-D2 (O3)
+**Requirement:** `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence` D1-D2 (O3)
 
-As an operator, I want a `build_review` PASS to wipe the accumulated lap count, so that a feature
-which converged and is later re-reviewed after a rebase does not inherit laps it already resolved.
+As an operator, I want a `build_review` PASS to preserve accumulated convergence laps while a rebase
+that actually invalidates the gate credits them, so that intermittent passes cannot evade the bound
+and a rebase does not charge the feature for obsolete review work.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given a `build_review` ledger entry with `cumulative: 4`, when `build_review` returns a PASS
-  verdict, then the entry's `cumulative` is `0`.
-- Given a `build_review` ledger entry with `cumulative: 4` and `count: 2`, when `build_review`
-  returns a PASS verdict, then `count` is still `2` — the PASS reset touches `cumulative` only.
-- Given a feature that passed `build_review` with `cumulative` reset to `0`, when a later rebase
-  invalidates the verdict and `build_review` runs again and FAILs, then the new kickback records
-  `cumulative: 1` rather than `5`.
+  verdict without a qualifying rebase invalidation, then the entry's `cumulative` remains 4.
+- Given that feature's approved `build_review` verdict is later invalidated by a qualifying rebase,
+  when the gate re-opens, then its convergence laps are credited to their empty state exactly once.
+- Given that credited feature then FAILs `build_review`, when the kickback is consumed, then the new
+  cumulative count is 1 rather than 5.
 
 #### Negative Paths
-- Given a `build_review` FAIL verdict, when the verdict is recorded, then `cumulative` is NOT
-  reset — only a PASS clears it.
-- Given no ledger file exists at all, when `build_review` returns a PASS, then the reset is a
-  no-op that completes without error and creates no spurious entry.
-- Given a `build_review` PASS, when the reset runs, then no other gate's entry in the `gates`
-  record is modified.
-- Given the ledger file is unreadable (permissions or corruption) at the moment of a PASS, when
-  the reset is attempted, then the failure does not interrupt the run or fail the passing step.
+- Given a `build_review` FAIL verdict, when the verdict is recorded, then the cumulative count
+  advances normally rather than receiving a credit.
+- Given a `build_review` PASS but no rebase invalidation, when step completion runs, then no gate's
+  convergence state is credited or reset.
+- Given a rebase preserves `build_review`, when the preserved verdict remains in force, then no
+  convergence credit is issued.
+- Given one qualifying rebase credit was already applied, when later semantic failures occur, then
+  the same rebase does not credit the feature again.
 
 ### Done When
-- [ ] A `build_review` PASS path calls the cumulative reset, verified by a test asserting the
-      entry reads `cumulative: 0, count: 2` afterwards.
-- [ ] A test asserts a FAIL verdict leaves `cumulative` untouched.
-- [ ] A test asserts the reset is a safe no-op against a missing ledger.
+- [ ] A `build_review` PASS without qualifying invalidation leaves `cumulative: 4` unchanged.
+- [ ] A qualifying rebase credits the convergence state exactly once and the next semantic failure
+      records cumulative count 1.
+- [ ] Preserved-rebase and repeated-credit cases issue no credit.
 
 ---
 
