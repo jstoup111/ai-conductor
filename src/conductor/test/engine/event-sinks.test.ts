@@ -116,6 +116,10 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'test_suite_verification',
+  // S7.5: the budget basis on a post-rebase preservation is only observable
+  // if it reaches .pipeline/events.jsonl — its sibling rebase_gate_invalidated
+  // is already persisted, so an unpersisted preservation reads as silence.
+  'rebase_gate_preserved',
   'operator_rewind',
   'project_setup',
   'plan_growth',
@@ -130,7 +134,6 @@ const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
   'rebase_noop',
   'rebase_mergeable_skip',
   'rebase_gate_reverified',
-  'rebase_gate_preserved',
   'rebase_citation_residue',
   'rebase_resolution_attempt',
   'rebase_resolution_succeeded',

@@ -101,7 +101,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   rebase_mergeable_skip: { render: true, persist: false, audit: false, otel: false },
   rebase_changed: { render: false, persist: true, audit: false, otel: false },
   rebase_gate_reverified: { render: false, persist: false, audit: false, otel: false },
-  rebase_gate_preserved: { render: false, persist: false, audit: false, otel: false },
+  rebase_gate_preserved: { render: false, persist: true, audit: false, otel: false },
   rebase_gate_invalidated: { render: false, persist: true, audit: false, otel: false },
   rebase_conflict_halt: { render: true, persist: true, audit: false, otel: false },
   rebase_citation_residue: { render: false, persist: false, audit: false, otel: false },
