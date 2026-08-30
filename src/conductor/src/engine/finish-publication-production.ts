@@ -581,13 +581,25 @@ export function createProductionFinishPublicationCoordinator(
           },
           recordOutcome: async (request) => {
             if (request.choice === 'pr') await projectAcceptedRiskToRetainedPr(request.prUrl);
-            await recordFinish(
+            // finish-record signals every fail-closed refusal as a non-zero exit
+            // code, never a throw. Discarding it turned a refusal into a silent
+            // no-op, so the loop halted on the generic "record_outcome left
+            // outcomeRecord unchanged at missing" with the actual reason only
+            // ever reaching the daemon log. Raise it so the failure is
+            // attributed to the recorder that refused.
+            const exitCode = await recordFinish(
               request.choice === 'pr'
                 ? { kind: 'record', choice: 'pr', prUrl: request.prUrl, pipelineDir }
                 : { kind: 'record', choice: 'keep', pipelineDir },
               deps.projectRoot,
               finishRecordRunners,
             );
+            if (exitCode !== 0) {
+              throw new Error(
+                `finish-record refused to record the ${request.choice} outcome (exit ${exitCode}); `
+                  + 'see the finish-record diagnostic in the run log for the refusal reason',
+              );
+            }
           },
         },
       });

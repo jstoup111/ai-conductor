@@ -2,7 +2,7 @@ import { access } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { execa } from 'execa';
 import type { GhRunner } from './pr-labels.js';
-import { parseShippedRecord, specHash } from './shipped-record.js';
+import { parseShippedRecord, parseStoriesReference, specHash } from './shipped-record.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 
 export type ShipmentEvidenceResult =
@@ -408,12 +408,16 @@ async function readStoriesBytes(
   planBytes: Buffer,
   commit: string,
 ): Promise<Buffer | null | ShipmentEvidenceRefusal> {
-  const planContent = planBytes.toString('utf8');
-  const reference = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im)?.[1];
+  const reference = parseStoriesReference(planBytes.toString('utf8'));
   if (reference && !isAbsolute(reference)) {
     const stories = await readEvidenceFile(readFile, reference, commit);
     if (isRefusal(stories)) return stories;
-    if (stories !== null) return stories;
+    // A zero-byte read is not the stories file. `git show <commit>:<pathspec>`
+    // exits 0 with no output for a reference git resolves as a glob, so
+    // length is the only signal that separates "read it" from "matched
+    // nothing" — and accepting the empty buffer here silently drops the
+    // stories half of the spec hash.
+    if (stories !== null && stories.length > 0) return stories;
   }
   return readEvidenceFile(readFile, `.docs/stories/${slug}.md`, commit);
 }

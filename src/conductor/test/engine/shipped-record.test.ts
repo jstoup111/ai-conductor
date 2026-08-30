@@ -16,6 +16,7 @@ import {
   listShippedRecords,
   makeIsProcessed,
   appendTimingSection,
+  parseStoriesReference,
 } from '../../src/engine/shipped-record.js';
 import { parseCostBlock } from '../../src/engine/kpi-report.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
@@ -786,5 +787,29 @@ describe('backfill (Story 6): one-time shipped-record generation', () => {
 
     expect(parsed.slug).toBe(stem);
     expect(parsed.specHash).toBe('unknown');
+  });
+});
+
+describe('parseStoriesReference', () => {
+  // Both sides of the spec-hash contract resolve stories through this, so a
+  // form parsed differently by writer and validator refuses every finish.
+  it.each([
+    ['plain path', '**Stories:** .docs/stories/f.md', '.docs/stories/f.md'],
+    ['inline code', '**Stories:** `.docs/stories/f.md` (accepted stories)', '.docs/stories/f.md'],
+    ['markdown link', '**Stories:** [accepted stories](../stories/f.md) — reviewed', '../stories/f.md'],
+    ['angle-bracketed link', '**Stories:** [s](<../stories/f.md>)', '../stories/f.md'],
+  ])('resolves the %s form to its target', (_label, line, expected) => {
+    expect(parseStoriesReference(`# Plan\n\n${line}\n`)).toBe(expected);
+  });
+
+  it('never returns the link label', () => {
+    // The regression: `[accepted` was captured as the path, which the writer
+    // failed to open and `git show` resolved as an empty glob match.
+    expect(parseStoriesReference('**Stories:** [accepted stories](../stories/f.md)'))
+      .not.toBe('[accepted');
+  });
+
+  it('returns undefined when the plan declares no Stories line', () => {
+    expect(parseStoriesReference('# Plan\n\nNo reference here.\n')).toBeUndefined();
   });
 });
