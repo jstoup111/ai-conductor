@@ -4,6 +4,13 @@ spec_hash: 211c838192cc35de38160a3a22b4e5a21f33b39ecc61519fbc18e47cbb3f494c
 pr: https://github.com/jstoup111/ai-conductor/pull/2032
 shipped: 2026-08-30
 engine_version: 20260830T004837Z-9b0dcf6b399a
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-28-test-suite-drift-budget-and-verification-mode decision 4"
+    outcome: remediated
+    summary: "Preservation still writes inside `resolveInspection`, and production callers do not carry one inspection result through a distinct caller-owned recording seam."
 ---
 
 ## Cost
