@@ -1804,6 +1804,68 @@ run_update "$REPO" "$HOME_DIR"
 assert "diverged: exits 0 without pulling" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "diverged: HEAD unchanged" "$([ "$(git -C "$REPO" rev-parse HEAD)" = "$BEFORE_SHA" ] && echo 0 || echo 1)"
 
+# ── Major-version approval gate ───────────────────────────────────────────────
+# A MAJOR crossing is the one upgrade this harness's own semver rules call
+# breaking, so it must not be applied by the advisory startup check and must
+# not be accepted with a single keypress.
+
+# Tagged channel, MAJOR available under --auto: reported, never applied.
+PAIR=$(make_main_repo "major-auto-tagged")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" tag v0.104.0
+git -C "$REPO" push -q origin main v0.104.0
+git -C "$REPO" checkout -q v0.104.0
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.104.0
+run_update "$REPO" "$HOME_DIR" --set-channel tagged
+git -C "$REPO" checkout -q main
+git -C "$REPO" commit -q --allow-empty -m "v1.0.0"
+git -C "$REPO" tag v1.0.0
+git -C "$REPO" push -q origin main v1.0.0
+git -C "$REPO" checkout -q v0.104.0
+BEFORE_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+run_update_tty "$REPO" "$HOME_DIR" y --auto
+assert "major/--auto: reports the major crossing and applies nothing" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$BEFORE_SHA" ] && \
+     printf '%s' "$OUT" | grep -q "MAJOR update v0.104.0 . v1.0.0" && echo 0 || echo 1)"
+assert "major/--auto: names the deliberate command instead of prompting" \
+  "$( printf '%s' "$OUT" | grep -q "bin/update" && ! printf '%s' "$OUT" | grep -q "\[y/n\]" && echo 0 || echo 1)"
+
+# Tagged channel, MAJOR, interactive: a bare "y" is not approval.
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "major/interactive: a single y does not apply the update" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$BEFORE_SHA" ] && echo 0 || echo 1)"
+
+# Tagged channel, MAJOR, interactive: typing the version applies it.
+# Reset first: without this the case would pass vacuously whenever an earlier
+# case in this group had already applied the update.
+git -C "$REPO" checkout -q v0.104.0
+set_current_version "$HOME_DIR" v0.104.0
+run_update_tty "$REPO" "$HOME_DIR" v1.0.0
+assert "major/interactive: typing the target version applies the update" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" rev-parse HEAD)" != "$BEFORE_SHA" ] && \
+     [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v1.0.0" ] && echo 0 || echo 1)"
+
+# A non-major upgrade keeps the ordinary one-key flow.
+PAIR=$(make_main_repo "major-gate-minor")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" tag v1.0.0
+git -C "$REPO" push -q origin main v1.0.0
+git -C "$REPO" checkout -q v1.0.0
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v1.0.0
+run_update "$REPO" "$HOME_DIR" --set-channel tagged
+git -C "$REPO" checkout -q main
+git -C "$REPO" commit -q --allow-empty -m "v1.1.0"
+git -C "$REPO" tag v1.1.0
+git -C "$REPO" push -q origin main v1.1.0
+git -C "$REPO" checkout -q v1.0.0
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "non-major: a single y still applies the update" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v1.1.0" ] && echo 0 || echo 1)"
+
 assert "CHANGELOG carries a Migration block for the flag rename" \
   "$(awk '/^## \[Unreleased\]/{f=1} f&&/^## Migration/{print;exit}' "$HARNESS_DIR/CHANGELOG.md" | grep -q "Migration" && echo 0 || echo 1)"
 

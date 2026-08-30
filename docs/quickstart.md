@@ -297,6 +297,19 @@ bin/update
 git pull --ff-only origin stable && bin/migrate
 ```
 
+A **major** version crossing — `v0.104.0 → v1.0.0`, or any change to the leading semver
+component — is held to a stricter approval than an ordinary update, because a major is by
+definition a breaking change to skill contracts, the CLI, or the `settings.json` schema:
+
+- The startup `--auto` check reports that one is available and stops there. It never applies a
+  major update, so a breaking upgrade cannot be accepted by reflex at the start of a session.
+- An attended `bin/update` requires typing the target version (`v1.0.0`) to confirm. A bare `y`
+  does not apply it.
+- With no TTY, the command to run is printed and nothing is applied, as with any other update.
+
+Ordinary patch and minor updates keep the single `[y/n]` prompt. The `main` channel has no semver
+identity to compare, so it is unaffected.
+
 If a stable checkout ends up in detached HEAD — a pre-v1 updater moved stable installs with
 `git checkout vX.Y.Z` — `bin/update` offers to re-attach the `stable` branch instead of stopping.
 Answer the prompt, or run the `git checkout -B stable <sha> && bin/migrate` command it prints when
