@@ -8,6 +8,12 @@ import {
   type BuildReviewInfrastructureFailureReason,
 } from './build-review-domain.js';
 import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js';
+import {
+  createConductStateLease,
+  type ConductStateLease,
+  type ConductStateLeaseFailureKind,
+  type ConductStateLeaseOptions,
+} from './conduct-state-lease.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {
@@ -119,6 +125,16 @@ interface PersistedKickbackLedger {
 }
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
+
+export type MutateKickbackLedgerResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; kind: 'acquire'; leaseKind: ConductStateLeaseFailureKind; message: string }
+  | { ok: false; kind: 'commit' | 'release'; message: string };
+
+export interface MutateKickbackLedgerOptions {
+  lease?: ConductStateLease;
+  leaseOptions?: ConductStateLeaseOptions;
+}
 
 /** A gate may be kicked back to BUILD this many times for one progress state. */
 export const MAX_KICKBACKS_PER_GATE = 2;
@@ -393,6 +409,51 @@ export async function writeKickbackLedger(
     await rename(tempPath, ledgerPath);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Serialize a read-modify-write against the feature-local ledger. New leases
+ * commit the write only after ownership is checked; the legacy fallback keeps
+ * injected compatibility handles usable while still surfacing release loss.
+ */
+export async function mutateKickbackLedger<T>(
+  projectRoot: string,
+  mutate: (ledger: KickbackLedger) => T | Promise<T>,
+  options: MutateKickbackLedgerOptions = {},
+): Promise<MutateKickbackLedgerResult<T>> {
+  const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
+  const lease = options.lease ?? createConductStateLease(ledgerPath, {
+    label: 'kickback-ledger',
+    ...options.leaseOptions,
+  });
+  const acquired = await lease.acquire();
+  if (!acquired.ok) {
+    return { ok: false, kind: 'acquire', leaseKind: acquired.kind, message: acquired.message };
+  }
+
+  const ledger = await readKickbackLedger(projectRoot);
+  if (acquired.handle.commit) {
+    const committed = await acquired.handle.commit(async () => {
+      const value = await mutate(ledger);
+      await writeKickbackLedger(projectRoot, ledger);
+      return value;
+    });
+    return committed.ok
+      ? { ok: true, value: committed.value }
+      : { ok: false, kind: 'commit', message: committed.message };
+  }
+
+  try {
+    const value = await mutate(ledger);
+    await writeKickbackLedger(projectRoot, ledger);
+    const released = await acquired.handle.release();
+    return released.ok
+      ? { ok: true, value }
+      : { ok: false, kind: 'release', message: released.message };
+  } catch (error) {
+    await acquired.handle.release().catch(() => undefined);
     throw error;
   }
 }

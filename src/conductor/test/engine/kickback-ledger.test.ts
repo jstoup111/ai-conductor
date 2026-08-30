@@ -1,8 +1,10 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { createConductStateLease, type ConductStateLease } from '../../src/engine/conduct-state-lease.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -20,6 +22,7 @@ import {
   recordGrowth,
   readGrowth,
   readKickbackLedger,
+  mutateKickbackLedger,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
@@ -34,6 +37,106 @@ describe('kickback-ledger', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  describe('leased mutations', () => {
+    const firstEntry: KickbackGateEntry = {
+      count: 1,
+      cumulative: 1,
+      mechanicalFaults: 0,
+      treeHash: null,
+      lastReason: 'first writer',
+      priorVerdict: true,
+      resolvedBefore: 0,
+    };
+
+    it('allows one contender to commit and returns a typed timeout to the other', async () => {
+      let permitFirstCommit: (() => void) | undefined;
+      const firstCommitPermitted = new Promise<void>((resolve) => { permitFirstCommit = resolve; });
+      let firstHasLease: (() => void) | undefined;
+      const firstLeaseAcquired = new Promise<void>((resolve) => { firstHasLease = resolve; });
+
+      const first = mutateKickbackLedger(dir, async (ledger) => {
+        firstHasLease?.();
+        await firstCommitPermitted;
+        ledger.gates.first = firstEntry;
+        return 'first';
+      }, { leaseOptions: { newToken: () => 'first-writer' } });
+      await firstLeaseAcquired;
+
+      const second = await mutateKickbackLedger(dir, (ledger) => {
+        ledger.gates.second = { ...firstEntry, lastReason: 'second writer' };
+        return 'second';
+      }, {
+        leaseOptions: {
+          newToken: () => 'second-writer',
+          processIsLive: () => true,
+          waitTimeoutMs: 0,
+        },
+      });
+      permitFirstCommit?.();
+
+      await expect(first).resolves.toEqual({ ok: true, value: 'first' });
+      expect(second).toEqual({
+        ok: false,
+        kind: 'acquire',
+        leaseKind: 'timeout',
+        message: expect.stringContaining('owner pid'),
+      });
+      await expect(readKickbackLedger(dir)).resolves.toEqual({
+        version: 1,
+        gates: { first: firstEntry },
+      });
+    });
+
+    it('refuses malformed ownership without invoking the mutation or changing ledger bytes', async () => {
+      const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+      const originalBytes = '{"version":1,"gates":{}}\n';
+      await mkdir(`${ledgerPath}.lease`, { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(ledgerPath, originalBytes);
+      await writeFile(`${ledgerPath}.lease/owner.json`, '{ malformed owner');
+      const mutate = vi.fn((ledger: KickbackLedger) => {
+        ledger.gates.unreachable = firstEntry;
+      });
+
+      await expect(mutateKickbackLedger(dir, mutate, {
+        leaseOptions: { waitTimeoutMs: 0, processIsLive: () => false },
+      })).resolves.toEqual({
+        ok: false,
+        kind: 'acquire',
+        leaseKind: 'recovery_refused',
+        message: expect.stringContaining('owner metadata is invalid'),
+      });
+      expect({ mutateCalls: mutate.mock.calls.length, bytes: await readFile(ledgerPath, 'utf8') }).toEqual({
+        mutateCalls: 0,
+        bytes: originalBytes,
+      });
+    });
+
+    it('returns a typed commit failure without applying a mutation after ownership is lost', async () => {
+      const originalBytes = '{"version":1,"gates":{}}\n';
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), originalBytes);
+      const lostOwnershipLease: ConductStateLease = {
+        acquire: async () => ({
+          ok: true,
+          handle: {
+            release: async () => ({ ok: true }),
+            commit: async () => ({ ok: false, message: 'Kickback-ledger lease ownership was lost before commit' }),
+          },
+        }),
+      };
+
+      await expect(mutateKickbackLedger(dir, (ledger) => {
+        ledger.gates.unreachable = firstEntry;
+      }, { lease: lostOwnershipLease })).resolves.toEqual({
+        ok: false,
+        kind: 'commit',
+        message: 'Kickback-ledger lease ownership was lost before commit',
+      });
+      await expect(readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8')).resolves.toBe(originalBytes);
+    });
   });
 
   it('returns an empty ledger when the ledger file is absent', async () => {

@@ -28,6 +28,12 @@ export interface ConductStateLeaseOwner {
 
 export interface ConductStateLeaseHandle {
   release(): Promise<{ ok: true } | { ok: false; message: string }>;
+  /**
+   * Check ownership, run one durable write while the lease is still held, then
+   * release it. This is for stores whose mutation must not begin once lease
+   * ownership is already ambiguous.
+   */
+  commit?<T>(write: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; message: string }>;
 }
 
 export type ConductStateLeaseFailureKind =
@@ -367,6 +373,21 @@ export function createConductStateLease(
                 return { ok: true };
               } catch (error) {
                 return { ok: false, message: `Unable to release ${leaseName} lease: ${errorMessage(error)}` };
+              }
+            },
+            async commit<T>(write: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; message: string }> {
+              try {
+                if (await filesystem.readOwner(ownerPath(leasePath)) !== serializedOwner) {
+                  return { ok: false, message: `${leaseTitle} lease ownership was lost before commit` };
+                }
+                if (await filesystem.readRecoveryClaim(recoveryClaimPath(leasePath)) !== null) {
+                  return { ok: false, message: `${leaseTitle} lease recovery is in progress` };
+                }
+                const value = await write();
+                await filesystem.releaseDirectory(leasePath);
+                return { ok: true, value };
+              } catch (error) {
+                return { ok: false, message: `Unable to commit ${leaseName} lease: ${errorMessage(error)}` };
               }
             },
           },
