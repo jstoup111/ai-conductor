@@ -3,7 +3,9 @@ import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
+  type BuildReviewFindingAnchor,
   type BuildReviewLapId,
+  type BuildReviewRubricContractVersion,
   type BuildReviewInfrastructureFailure,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
@@ -63,6 +65,17 @@ export interface BuildReviewEffectiveVerdict {
   readonly unresolvedFindingIds: readonly string[];
   readonly skippedRubrics: readonly BuildReviewRubricId[];
   readonly infrastructureFailureRubrics: readonly BuildReviewRubricId[];
+}
+
+/** Raw, registry-neutral content preserved by the mechanical aggregate join. */
+export interface BuildReviewRawSourceProjection {
+  readonly rubric: BuildReviewRubricId;
+  readonly findingId: string;
+  readonly contractVersion: BuildReviewRubricContractVersion;
+  readonly concernKind: string;
+  readonly anchor: BuildReviewFindingAnchor;
+  readonly summary: string;
+  readonly evidenceLocations: readonly string[];
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -255,6 +268,40 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     ...(source.reducedCoverageEvidence !== undefined ? { reducedCoverageEvidence: source.reducedCoverageEvidence as string } : {}),
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
   };
+}
+
+/**
+ * Projects every raw adjudicable content finding without changing the stored
+ * aggregate shape. Coverage failures are intentionally excluded: they are not
+ * semantic sources for the post-join remediate judgement.
+ */
+export function projectBuildReviewAggregateSources(value: unknown): readonly BuildReviewRawSourceProjection[] | undefined {
+  const aggregate = parseBuildReviewAggregate(value);
+  if (!aggregate) return undefined;
+  const sources: BuildReviewRawSourceProjection[] = [];
+  for (const rubric of RUBRICS) {
+    const result = aggregate.results[rubric];
+    if (result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric,
+        contractVersion: result.contractVersion,
+        concernKind: finding.concernKind,
+        anchor: finding.anchor,
+      });
+      if (!identity) return undefined;
+      sources.push(Object.freeze({
+        rubric,
+        findingId: identity.id,
+        contractVersion: result.contractVersion,
+        concernKind: finding.concernKind,
+        anchor: finding.anchor,
+        summary: finding.summary,
+        evidenceLocations: Object.freeze([...finding.evidenceLocations]),
+      }));
+    }
+  }
+  return Object.freeze(sources);
 }
 
 /**
