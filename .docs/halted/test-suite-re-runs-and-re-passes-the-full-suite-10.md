@@ -2,17 +2,18 @@
 
 Status: halted
 Slug: test-suite-re-runs-and-re-passes-the-full-suite-10
-Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Class: protected-artifact
+Halting step: test_suite
+Phase: BUILD
 Branch: feat/daemon-test-suite-re-runs-and-re-passes-the-full-suite-10
-Head SHA: a87f4921eb2574ba059bedeb373be0c8b2a681cf
-Halted at: 2026-08-30T00:26:37.947Z
+Head SHA: bc8aabea6abfe603660b70db1dad0eea12ce212e
+Halted at: 2026-08-30T01:14:52.141Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation cannot resolve governing clause(s): AB-1: adr-2026-08-28-test-suite-drift-budget-and-verification-mode decision 4; AB-2: adr-2026-08-28-test-suite-drift-budget-and-verification-mode decision 7. A REMEDIABLE row cites exactly one clause: an APPROVED ADR filename stem plus its decision number, or one task id from this feature's plan.
+Protected artifact changed: .docs/plans/test-suite-re-runs-and-re-passes-the-full-suite-10.md
+Feature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.
 ```
