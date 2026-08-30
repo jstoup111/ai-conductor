@@ -1372,6 +1372,8 @@ install() {
       else
         ok "conduct script already current"
       fi
+    elif [ -e "$conduct_target" ]; then
+      warn "conduct script — foreign entry preserved"
     else
       ln -sfn "$conduct_source" "$conduct_target" || warn "conduct symlink failed"
       ok "Installed conduct script to ${conduct_target}"

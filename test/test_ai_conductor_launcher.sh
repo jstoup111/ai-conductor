@@ -219,6 +219,12 @@ run_install
 assert "current conduct symlink remains untouched on reinstall" \
   "$([ "$(stat -c '%i' "$INSTALLED_CONDUCT")" = "$CONDUCT_INODE" ] && printf '%s\\n' "$INSTALL_STDOUT" | grep -Fq 'conduct script already current' && echo 0 || echo 1)"
 
+rm "$INSTALLED_CONDUCT"
+printf 'FOREIGN OPERATOR SCRIPT\n' > "$INSTALLED_CONDUCT"
+run_install
+assert "install preserves a foreign conduct entry with a warning" \
+  "$([ "$INSTALL_STATUS" -eq 0 ] && [ -f "$INSTALLED_CONDUCT" ] && [ "$(<"$INSTALLED_CONDUCT")" = 'FOREIGN OPERATOR SCRIPT' ] && printf '%s\\n' "$INSTALL_STDOUT" | grep -Fq 'conduct script — foreign entry preserved' && echo 0 || echo 1)"
+
 rm -f "$INSTALLED_CANONICAL"
 ln -s "$TMPDIR_ROOT/stale-ai-conductor" "$INSTALLED_CANONICAL"
 run_install
