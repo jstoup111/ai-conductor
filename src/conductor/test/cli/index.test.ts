@@ -1,4 +1,4 @@
-// Covers: task:10, task:12
+// Covers: task:9, task:10, task:12
 
 import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
@@ -12,9 +12,25 @@ import {
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
   detectBuildReviewRecordReducedCoverageCommand,
+  detectKickbackBudgetCommand,
 } from '../../src/cli.js';
 
 describe('CLI', () => {
+  it('lists all guarded kickback-budget command forms in full help', () => {
+    const help = renderFullHelp();
+    expect(help).toContain('ai-conductor kickback-budget inspect');
+    expect(help).toContain('ai-conductor kickback-budget reset');
+    expect(help).toContain('ai-conductor kickback-budget raise');
+    expect(help).toContain('--feature <slug>');
+    expect(help).toContain('--format <format>');
+    expect(help).toContain('--amount <amount>');
+    expect(help).toContain('--rationale <text>');
+  });
+
+  it('rejects an unknown kickback-budget verb before any command can be dispatched', () => {
+    expect(detectKickbackBudgetCommand(['node', 'conduct', 'kickback-budget', 'unknown'])).toBeNull();
+  });
+
   it('detects only the explicit read-only build-review findings grammar', () => {
     expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings', '--feature', 'review-rubrics', '--json']))
       .toEqual({ kind: 'findings', feature: 'review-rubrics', format: 'json' });

@@ -159,6 +159,85 @@ export type BuildReviewRecordReducedCoverageDispatch = {
   readonly rationale: string;
 };
 
+export type KickbackBudgetInspectDispatch = {
+  readonly kind: 'inspect';
+  readonly feature: string;
+  readonly format: 'human' | 'json';
+};
+
+export type KickbackBudgetResetDispatch = {
+  readonly kind: 'reset';
+  readonly feature: string;
+  readonly rationale: string;
+};
+
+export type KickbackBudgetRaiseDispatch = {
+  readonly kind: 'raise';
+  readonly feature: string;
+  readonly amount: number;
+  readonly rationale: string;
+};
+
+export type KickbackBudgetDispatch =
+  | KickbackBudgetInspectDispatch
+  | KickbackBudgetResetDispatch
+  | KickbackBudgetRaiseDispatch;
+
+/** Rationale length is bounded before a recovery command can reach mutation dispatch. */
+export const KICKBACK_BUDGET_RATIONALE_MAX_LENGTH = 1_000;
+
+const FEATURE_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+function isKickbackBudgetRationale(value: string | undefined): value is string {
+  return value !== undefined && value.trim().length > 0 && value.length <= KICKBACK_BUDGET_RATIONALE_MAX_LENGTH;
+}
+
+/**
+ * Detect the closed, pre-boot kickback budget grammar. This parser performs no
+ * filesystem work, so rejected input cannot reach a mutation path.
+ */
+export function detectKickbackBudgetCommand(argv: string[]): KickbackBudgetDispatch | null {
+  if (argv[2] !== 'kickback-budget') return null;
+  const [command, ...args] = argv.slice(3);
+  const feature = (flag: string): string | undefined => {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+  };
+
+  if (command === 'inspect') {
+    const selectedFeature = feature('--feature');
+    const formatIndex = args.indexOf('--format');
+    const format = formatIndex >= 0 ? args[formatIndex + 1] : 'human';
+    const expected = formatIndex >= 0
+      ? ['--feature', selectedFeature, '--format', format]
+      : ['--feature', selectedFeature];
+    if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) ||
+      !selectedFeature || !FEATURE_SLUG_PATTERN.test(selectedFeature) || (format !== 'human' && format !== 'json')) return null;
+    return { kind: 'inspect', feature: selectedFeature, format };
+  }
+
+  const selectedFeature = feature('--feature');
+  const rationale = feature('--rationale');
+  if (command === 'reset') {
+    const expected = ['--feature', selectedFeature, '--rationale', rationale];
+    if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) ||
+      !selectedFeature || !FEATURE_SLUG_PATTERN.test(selectedFeature) || !isKickbackBudgetRationale(rationale)) return null;
+    return { kind: 'reset', feature: selectedFeature, rationale };
+  }
+
+  if (command === 'raise') {
+    const rawAmount = feature('--amount');
+    const expected = ['--feature', selectedFeature, '--amount', rawAmount, '--rationale', rationale];
+    const amount = rawAmount === undefined ? Number.NaN : Number(rawAmount);
+    if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) ||
+      !selectedFeature || !FEATURE_SLUG_PATTERN.test(selectedFeature) || !isKickbackBudgetRationale(rationale) ||
+      !Number.isSafeInteger(amount) || amount <= 0) return null;
+    return { kind: 'raise', feature: selectedFeature, amount, rationale };
+  }
+
+  return null;
+}
+
 /** Detect the read-only `build-review findings --feature <slug> [--json]` command. */
 export function detectBuildReviewFindingsCommand(argv: string[]): BuildReviewFindingsDispatch | null {
   if (argv[2] !== 'build-review' || argv[3] !== 'findings') return null;
@@ -648,6 +727,28 @@ export function createProgram(): Command {
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--rubric <rubric>', 'Mechanically failed rubric')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');
+
+  // Pre-boot dispatch is added separately; these declarations keep all three
+  // bounded forms discoverable without Commander owning their execution.
+  const kickbackBudget = program
+    .command('kickback-budget')
+    .description('Inspect or operator-authorize recovery of one feature’s cumulative build-review budget');
+  kickbackBudget
+    .command('inspect')
+    .description('Inspect one feature’s budget without mutation')
+    .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .option('--format <format>', 'Output format: human (default) or json');
+  kickbackBudget
+    .command('reset')
+    .description('Reset one exhausted cumulative budget from an interactive terminal')
+    .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .requiredOption('--rationale <text>', 'Non-blank operator rationale (maximum 1000 characters)');
+  kickbackBudget
+    .command('raise')
+    .description('Raise one exhausted cumulative budget from an interactive terminal')
+    .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .requiredOption('--amount <amount>', 'Positive safe integer allowance increase')
+    .requiredOption('--rationale <text>', 'Non-blank operator rationale (maximum 1000 characters)');
 
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. Orchestrates the sweep
