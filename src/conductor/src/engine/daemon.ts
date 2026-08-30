@@ -20,6 +20,7 @@ import type { RateLimitEpisode } from './rate-limit-episode.js';
 import { InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
 import type { FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
+import { DaemonMaintenance } from './daemon-maintenance.js';
 
 type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
 
@@ -837,6 +838,10 @@ export async function runDaemon(
       return claims.list().length;
     },
   };
+  const maintenance = new DaemonMaintenance(
+    () => inFlight.size,
+    () => deps.rateLimitEpisode?.active?.() ?? false,
+  );
   const workers: Array<{ slug: string; tagged: Tagged }> = [];
   // Task T28: track whether the restart trigger has been successfully called
   // in this run. Once successful, don't retry (the respawn would exit the process).
@@ -1020,10 +1025,8 @@ export async function runDaemon(
 
   // Startup advance check: refresh so a base that moved on origin while the
   // daemon was DOWN is caught (FR-5 downtime-advance path).
-  await maybeRekick(true);
-
   // FR-14: sweep mergeable labels on startup (after reconciliation).
-  await sweepBestEffort();
+  await maintenance.startup(() => maybeRekick(true), sweepBestEffort);
 
   // Stale-engine restart gate chain (Task 12, gates 1-4) — constant per run.
   const staleGatesArmed =
@@ -1110,10 +1113,6 @@ export async function runDaemon(
   };
 
   let stopReason: DaemonStopReason | null = null;
-  // Task 20: Track episode state to detect when it ends so we can sweep
-  // episode-caused HALTs and recover them via the existing rekick path.
-  let wasEpisodeActive = false;
-
   // Set whenever the dispatch-boundary preflight (`rebuildAndMaybeRestartForStaleEngine`)
   // has run its full refresh/rebuild/check/suppression chain this run. The
   // idle-boundary stale re-check further below is redundant once the preflight
@@ -1192,14 +1191,17 @@ export async function runDaemon(
 
         // Only when fully idle (nothing running) AND nothing left locally do we reach
         // out to origin for newly-merged specs — "drained, now find more".
-        if (!next && inFlight.size === 0) {
-          const refreshed = await deps.discoverBacklog({ refresh: true });
+        if (!next && maintenance.isDrained()) {
+          const refreshed = await maintenance.refreshAndRekick(
+            () => deps.discoverBacklog({ refresh: true }),
+            () => maybeRekick(false),
+          );
+          if (!refreshed) continue;
           // FR-6: the refresh above already fetched origin, so the discovery ref is
           // current — re-read the base SHA WITHOUT a second fetch and, on a genuine
           // advance, re-kick before consuming the backlog so a freshly-cleared
           // marker is un-parked in THIS iteration (its dispatch still flows through
           // the existing un-park path, FR-8 — the sweep issues none).
-          await maybeRekick(false);
           const parkedBeforeRefresh = new Set(parked);
           next = await pickEligible({ items: refreshed }, pickCtx);
           for (const slug of parked) {
@@ -1220,8 +1222,6 @@ export async function runDaemon(
           stopReason = 'engine_restart';
           break;
         }
-        // Task 20: Update episode state when dispatching
-        wasEpisodeActive = episodeActive;
         // Task 1 (#651): re-check park immediately before this dispatch — closes
         // the selection→dispatch race opened by the rebuild/restart await above.
         const dispatched = await guardedDispatch(next);
@@ -1233,7 +1233,7 @@ export async function runDaemon(
         // re-picking the same parked slug.
       }
       // Nothing new to start.
-      if (inFlight.size === 0) {
+      if (maintenance.isDrained()) {
         // Task T28/T30: at idle boundary, check for pending restart marker and either
         // fire the supervisor trigger (T28) or consume in bare-run (T30).
         // This check happens BEFORE the once/idle-timeout checks so restart is honored
@@ -1243,15 +1243,15 @@ export async function runDaemon(
         // - T30 (bare-run): triggerSelfRestart is absent, consume marker and exit cleanly
         // The daemon continues normally if supervisor trigger fails (no crash on failure).
         // Once the trigger succeeds, we never retry (the respawn would exit the process).
-        if (!restartTriggeredSuccessfully && deps.hasRestartPending) {
-          try {
-            const hasRestart = await deps.hasRestartPending();
-            if (hasRestart) {
-              // Task 21 (#392): never fire restart triggers while a rate-limit
-              // episode is active — a respawn mid-episode discards the shared
-              // backoff state and re-enters the API storm.
-              const episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
-
+        const maintenanceStopReason = await maintenance.idleBoundary<DaemonStopReason>(
+          async (episodeActive): Promise<DaemonStopReason | null> => {
+            if (!restartTriggeredSuccessfully && deps.hasRestartPending) {
+              try {
+                const hasRestart = await deps.hasRestartPending();
+                if (hasRestart) {
+                // Task 21 (#392): never fire restart triggers while a rate-limit
+                // episode is active — a respawn mid-episode discards the shared
+                // backoff state and re-enters the API storm.
               if (!episodeActive) {
                 // T28 path: supervisor mode — fire respawn trigger
                 if (deps.triggerSelfRestart) {
@@ -1312,8 +1312,7 @@ export async function runDaemon(
                     log('[daemon] restart marker consumed; exiting cleanly');
                     restartTriggeredSuccessfully = true;
                     // Break from the loop to exit cleanly with the current processed results
-                    stopReason = 'backlog_drained';
-                    break;
+                    return 'backlog_drained';
                   } catch (err) {
                     log(
                       `[daemon] bare-run consume failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
@@ -1324,13 +1323,15 @@ export async function runDaemon(
                 // Episode is active: defer the restart trigger but keep the marker
                 log('[daemon] restart marker present but episode active; deferring trigger');
               }
+                }
+              } catch (err) {
+                log(
+                  `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`,
+                );
+              }
             }
-          } catch (err) {
-            log(
-              `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`,
-            );
-          }
-        }
+            return null;
+          },
 
         // Task 12: stale-engine detection gate chain. Evaluate gates in order:
         // 1. continuous mode (NOT once-mode)
@@ -1340,24 +1341,25 @@ export async function runDaemon(
         // 5. (Task 11 addition) not suppressed
         // If all gates pass, call the checker. On 'stale' verdict, (Task 13) call
         // requestRestart. If ANY gate fails, skip the check and continue idle behavior.
-        const isSharedMode = !options.once; // continuous mode = shared/not-once
-        const shouldCheckStale =
-          isSharedMode && // gate 1: continuous mode (not once)
-          options.isSelfHost === true && // gate 2: self-host enabled
-          options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
-          deps.staleEngineChecker !== undefined; // gate 4: checker armed
+          async (episodeActive): Promise<DaemonStopReason | null> => {
+            const isSharedMode = !options.once; // continuous mode = shared/not-once
+            const shouldCheckStale =
+              isSharedMode && // gate 1: continuous mode (not once)
+              options.isSelfHost === true && // gate 2: self-host enabled
+              options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
+              deps.staleEngineChecker !== undefined; // gate 4: checker armed
 
         // One-shot consume: only the very next idle-boundary reach after a
         // preflight-covered stale evaluation is skipped (#598 Task 15) — a
         // later genuine staleness change is still observed on subsequent ticks.
-        const skipStaleCheckThisTick = staleAlreadyHandledByPreflight;
-        staleAlreadyHandledByPreflight = false;
+            const skipStaleCheckThisTick = staleAlreadyHandledByPreflight;
+            staleAlreadyHandledByPreflight = false;
 
-        if (shouldCheckStale && deps.staleEngineChecker && !skipStaleCheckThisTick) {
-          const verdict = deps.staleEngineChecker.check();
+            if (shouldCheckStale && deps.staleEngineChecker && !skipStaleCheckThisTick) {
+              const verdict = deps.staleEngineChecker.check();
 
           // Task 13: Handle stale verdict with in-flight re-verify
-          if (verdict === 'stale') {
+              if (verdict === 'stale') {
             // Task 11: Check if this identity is suppressed before proceeding.
             // Suppressed identities hold (no restart request) and log once per session.
             const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
@@ -1372,8 +1374,6 @@ export async function runDaemon(
               // Re-verify that inFlight is still empty before requesting restart.
               // A task could have been added between the verdict check and now.
               if (inFlight.size === 0) {
-                // Task 21: Check if episode is active before requesting restart
-                const episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
                 if (episodeActive) {
                   // Defer restart request while episode is active
                   log('[daemon] stale engine detected but episode active; deferring restart request');
@@ -1391,8 +1391,7 @@ export async function runDaemon(
                     // Only break if restart was actually fired. If fired: false,
                     // the restart request was aborted and the loop retries at the next idle boundary.
                     if (result.fired) {
-                      stopReason = 'engine_restart';
-                      break;
+                      return 'engine_restart';
                     }
                     // If fired: false, fall through to continue idle polling and retry
                   }
@@ -1401,7 +1400,14 @@ export async function runDaemon(
               // If inFlight not empty, someone added a task while we checked.
               // Fall through to next iteration; will not enter idle branch again.
             }
-          }
+              }
+            }
+            return null;
+          },
+        );
+        if (maintenanceStopReason) {
+          stopReason = maintenanceStopReason;
+          break;
         }
 
         if (options.once) {
@@ -1423,22 +1429,19 @@ export async function runDaemon(
         // fully-idle discovery will use refresh:true). The dummy test sleep never
         // resolves, so only wake can unblock test-mode daemons.
         await Promise.race([sleep(idlePollMs), waker.armed()]);
-        // FR-14: sweep once per idle poll tick.
-        await sweepBestEffort();
-
-        // Task 20: Episode-end sweep. Detect when an active episode becomes
-        // inactive and sweep for episode-caused HALTs to recover them via rekick.
-        const isEpisodeActive = deps.rateLimitEpisode?.active?.() ?? false;
-        if (wasEpisodeActive && !isEpisodeActive && deps.sweepEpisodeHalts) {
-          try {
-            await deps.sweepEpisodeHalts(deps.isParked);
-          } catch (err) {
-            log(
-              `[daemon] sweepEpisodeHalts error: ${err instanceof Error ? err.message : String(err)}`,
-            );
+        // FR-14: sweep once per idle poll tick, then recover episode-caused
+        // HALTs if the maintenance scheduler observed the episode end.
+        await maintenance.afterIdlePoll(sweepBestEffort, async () => {
+          if (deps.sweepEpisodeHalts) {
+            try {
+              await deps.sweepEpisodeHalts(deps.isParked);
+            } catch (err) {
+              log(
+                `[daemon] sweepEpisodeHalts error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
           }
-        }
-        wasEpisodeActive = isEpisodeActive;
+        });
 
         continue;
       }
