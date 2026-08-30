@@ -37,10 +37,10 @@ TS CLI so that the removal loses no needed capability.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a harness project, when the operator runs `conduct --status`, then the TS dashboard/status output renders and exits 0
-- Given a project with TS engine state, when the operator runs `conduct --reset` or `conduct --cleanup`, then the TS implementations execute against the engine's own state files
+- Given a harness project, when the operator runs `conduct inline --status`, then the TS dashboard/status output renders and exits 0
+- Given a project with TS engine state, when the operator runs `conduct inline --reset` or `conduct inline --cleanup`, then the TS implementations execute against the engine's own state files
 - Given the standalone update CLI, when the operator runs `bin/update --set-channel stable` followed by an update check, then channel selection and update flow work with no bash-conduct involvement
-- Given a project directory without a canonical memory store, when a TS pipeline run starts (inline or daemon dispatch), then the canonical memory-store setup (`memory setup` semantics, adr-2026-06-29-shared-memory-store-placement-and-durability) runs idempotently before any session touches `.memory/`
+- Given a project directory without a canonical memory store, when an inline TS pipeline run starts, then the canonical memory-store setup (`memory setup` semantics, adr-2026-06-29-shared-memory-store-placement-and-durability) runs idempotently before any session touches `.memory/`
 
 #### Negative Paths
 - Given the cutover is complete, when the operator invokes `conduct --auto`, then the CLI exits non-zero before any pipeline step with the existing guided rejection naming `daemon start` and the daemon guide (per the shipped remove-the-unattended-one-shot-inline-run spec; the flag runs nothing)
@@ -51,7 +51,7 @@ TS CLI so that the removal loses no needed capability.
 - [ ] A CLI test asserts `--auto`'s guided non-zero rejection and unknown-option failures for `--step`, `--log`, `--output`
 - [ ] Existing TS tests for `--status`, `--reset`, `--cleanup`, and unknown-argument guarding pass unchanged or extended
 - [ ] `bin/update` channel flow tests (test_bin_update.sh) pass with no bin/conduct present
-- [ ] A test proves the TS run path invokes the idempotent memory-store setup (setup performed when absent, no-op when present, non-zero setup never aborts the run)
+- [ ] A test proves the inline TS run path invokes the idempotent memory-store setup (setup performed when absent, no-op when present, non-zero setup never aborts the run)
 
 ## Story 3: The validation suite passes without the legacy CLI
 
