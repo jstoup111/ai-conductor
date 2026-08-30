@@ -212,6 +212,7 @@ import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
   FullSuiteVerifier,
+  type FullSuiteInspectionResult,
   type FullSuiteVerifierResult,
 } from './full-suite-verifier.js';
 import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
@@ -1493,7 +1494,8 @@ export interface ConductorOptions {
   /** Feature-scoped daemon logger; defaults to console warnings outside a feature run. */
   log?: (message: string) => void;
   /** Injectable native aggregate-suite verifier; production uses FullSuiteVerifier. */
-  fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
+  fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
+    Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   /** Test seam for the disposition-aware build_review completion join. */
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   /** Feature description — used by the engine-run worktree step to name the
@@ -1877,6 +1879,28 @@ async function refreshPostFinishShippedRecord({
   }
 }
 
+function testSuiteBudgetVerdict(inspection: FullSuiteInspectionResult) {
+  if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+    const categories = inspection.evidence.driftLedger?.at(-1)?.categories;
+    return categories === undefined
+      ? undefined
+      : { outcome: 'preserved_within_budget' as const, categories };
+  }
+  if (
+    inspection.status === 'STALE' &&
+    (inspection.reason === 'drift_budget_exceeded' || inspection.reason === 'unbudgetable_drift')
+  ) {
+    return {
+      outcome: 'rerun_required' as const,
+      reason: inspection.reason,
+      category: inspection.category,
+      count: inspection.count,
+      bound: inspection.bound,
+    };
+  }
+  return undefined;
+}
+
 export class Conductor {
   private stateFilePath: string;
   /** Current run state, retained so terminal events can be step-stamped. */
@@ -2110,7 +2134,8 @@ export class Conductor {
    * the grant. No durable artifact is written by the daemon.
    */
   private readonly remediationDecideReentryTargets = new Set<StepName>();
-  private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
+  private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
+    Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
@@ -5944,14 +5969,34 @@ export class Conductor {
             step.treeAttestingCompletion
           ) {
             try {
+              let fullSuiteInspection: FullSuiteInspectionResult | undefined;
+              const completionContext = await this.completionCtx(state);
+              if (step.name === 'test_suite' && completionContext.fullSuiteInspect) {
+                const inspect = completionContext.fullSuiteInspect;
+                completionContext.fullSuiteInspect = async () => {
+                  const inspection = await inspect();
+                  fullSuiteInspection = inspection;
+                  return inspection;
+                };
+              }
               const completion = await checkStepCompletion(
                 this.projectRoot,
                 step.name,
-                await this.completionCtx(state),
+                completionContext,
               );
               if (!completion.done) {
                 // Continue into the ordinary scheduling and dispatch path.
               } else {
+                if (fullSuiteInspection?.status === 'PRESERVED_WITHIN_BUDGET') {
+                  await this.recordFullSuitePreservation(fullSuiteInspection);
+                  const budgetVerdict = testSuiteBudgetVerdict(fullSuiteInspection);
+                  await emitTracked({
+                    type: 'test_suite_verification',
+                    freshness: { status: 'CURRENT' },
+                    mode: fullSuiteInspection.evidence.mode ?? 'aggregate',
+                    ...(budgetVerdict === undefined ? {} : { budgetVerdict }),
+                  });
+                }
                 continue;
               }
             } catch {
@@ -11163,11 +11208,11 @@ export class Conductor {
   private async runTestSuiteStep(): Promise<StepRunResult> {
     this.retainedFullSuiteInspection = undefined;
     const inspection = await this.fullSuiteVerifier.inspect();
-    if (inspection.status === 'STALE') {
-      await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
-    }
-    const verification = await this.fullSuiteVerifier.ensure();
+    const verification = await this.fullSuiteVerifier.ensure(inspection);
     if (verification.status === 'FAILED') {
+      if (inspection.status === 'STALE') {
+        await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
+      }
       return {
         success: false,
         output: verification.message,
@@ -11187,6 +11232,23 @@ export class Conductor {
         fullSuiteVerification: verification,
       };
     }
+    if (inspection.status === 'STALE' || inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+      if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+        await this.recordFullSuitePreservation(inspection);
+      }
+      const budgetVerdict = testSuiteBudgetVerdict(inspection);
+      await this.events.emit({
+        type: 'test_suite_verification',
+        freshness: inspection.status === 'PRESERVED_WITHIN_BUDGET'
+          ? { status: 'CURRENT' }
+          : inspection,
+        mode: verification.evidence.mode ?? 'aggregate',
+        ...(budgetVerdict === undefined ? {} : { budgetVerdict }),
+        ...(verification.evidence.executionBasis === 'scoped-empty-selection-aggregate'
+          ? { executionBasis: 'scoped-empty-selection-aggregate' as const }
+          : {}),
+      });
+    }
     this.retainedFullSuiteInspection = {
       status: 'CURRENT',
       evidence: verification.evidence,
@@ -11197,6 +11259,7 @@ export class Conductor {
         member: 'test_suite',
         decision: 'reuse',
         basis: 'fingerprint-match',
+        mode: verification.evidence.mode ?? 'aggregate',
       });
     } else {
       await this.events.emit({
@@ -11213,6 +11276,15 @@ export class Conductor {
       output: `Full test suite ${verification.status}`,
       fullSuiteVerification: verification,
     };
+  }
+
+  private async recordFullSuitePreservation(
+    inspection: Extract<FullSuiteInspectionResult, { status: 'PRESERVED_WITHIN_BUDGET' }>,
+  ): Promise<void> {
+    if (this.fullSuiteVerifier.recordPreservation === undefined) {
+      throw new Error('Full-suite verifier does not expose the required preservation recording seam');
+    }
+    await this.fullSuiteVerifier.recordPreservation(inspection);
   }
 
   /**
@@ -11954,7 +12026,16 @@ export class Conductor {
     // Task 7: Inject pre-verify capability for daemon build gate-first re-verify.
     // Closure checks build completion objectively (via evidence) after file-changing rebase.
     // Non-daemon call site (line 2872) keeps today's behavior with no preVerify.
-    const preVerify = async (step: string) => {
+    const preVerify = async (step: StepName) => {
+      if (step === 'test_suite') {
+        const inspection = await this.fullSuiteVerifier.inspect();
+        if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+          await this.recordFullSuitePreservation(inspection);
+        }
+        return inspection.status === 'PRESERVED_WITHIN_BUDGET'
+          ? { done: true, preservationBasis: 'test_suite_drift_budget' as const }
+          : { done: inspection.status === 'CURRENT' };
+      }
       if (step !== 'build') return { done: false };
       const ctx = await this.completionCtx(state);
       if (!ctx.planPath) {
@@ -11984,7 +12065,7 @@ export class Conductor {
     // Task 8: emit rebase_gate_invalidated for each judged gate that
     // classifyGateInvalidation decided to invalidate, with the specific
     // matched delta paths that justified invalidating THAT gate.
-    await emitGateInvalidationEvents(this.events, outcome, ranManualTest);
+    await emitGateInvalidationEvents(this.events, outcome, ranManualTest, verdict.preserved ?? []);
 
     if (sealRejectionReason) {
       await writeSealHalt(this.projectRoot, sealRejectionReason, this.events);

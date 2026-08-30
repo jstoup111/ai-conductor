@@ -78,6 +78,8 @@ export type FullSuiteFileHasher = (absolutePath: string) => Promise<string>;
 export interface FullSuiteFingerprintOptions {
   projectRoot: string;
   testSuite: TestSuiteConfig;
+  /** Resolved feature-surface test selectors for scoped verification identity. */
+  scopedSelectors?: string[];
   environmentValues?: NodeJS.ProcessEnv;
   /** Test seam for deterministic unreadable/hash-failure coverage. */
   fileHasher?: FullSuiteFileHasher;
@@ -247,12 +249,13 @@ function updateFields(
   for (const hash of hashes) updateField(hash, name, value);
 }
 
-function fingerprintCategory(
+export function classifyFullSuiteFingerprintPath(
   path: string,
-  explicitlyDeclared: boolean,
+  explicitlyDeclared = false,
 ): FullSuitePersistedFingerprintCategory {
   if (explicitlyDeclared) return 'additional_inputs';
   const normalized = path.toLowerCase();
+  if (normalized === ENVIRONMENT_KEY_PATH) return 'environment';
   const base = posix.basename(normalized);
   if (normalized.startsWith('.ai-conductor/')) return 'project_config';
   if (
@@ -445,6 +448,20 @@ async function expandDeclaredInput(projectRoot: string, declaration: string): Pr
   }
 }
 
+/**
+ * Expands declared full-suite inputs into the concrete path membership that
+ * receives the `additional_inputs` fingerprint category.
+ */
+export async function expandFullSuiteDeclaredInputMembership(
+  projectRoot: string,
+  declarations: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const expanded = await Promise.all(
+    declarations.map((declaration) => expandDeclaredInput(projectRoot, declaration)),
+  );
+  return new Set(expanded.flat());
+}
+
 async function normalizedWorkingDirectory(
   projectRoot: string,
   workingDirectory?: string,
@@ -505,13 +522,20 @@ function normalizeSuiteConfig(
   testSuite: TestSuiteConfig,
   normalizedInputs: string[],
   workingDirectory: string,
+  scopedSelectors: string[],
 ): string {
-  return JSON.stringify({
+  const normalized = {
     command: testSuite.command,
     working_directory: workingDirectory,
     timeout_seconds: testSuite.timeout_seconds ?? null,
     inputs: sortedUnique(normalizedInputs),
     environment: sortedUnique(testSuite.environment ?? []),
+  };
+  if (testSuite.verification?.mode !== 'scoped') return JSON.stringify(normalized);
+  return JSON.stringify({
+    ...normalized,
+    scoped_command: testSuite.scoped_command,
+    selectors: sortedUnique(scopedSelectors),
   });
 }
 
@@ -575,6 +599,7 @@ async function calculateFingerprint(
   const {
     projectRoot,
     testSuite,
+    scopedSelectors = [],
     environmentValues = process.env,
     fileHasher = streamedFileDigest,
   } = options;
@@ -584,12 +609,12 @@ async function calculateFingerprint(
     testSuite.working_directory,
   );
 
-  const [headSha, trackedOutput, untrackedOutput, expandedInputs, environmentDigest] =
+  const [headSha, trackedOutput, untrackedOutput, requiredPaths, environmentDigest] =
     await Promise.all([
       gitOutput(projectRoot, ['rev-parse', 'HEAD']),
       gitOutput(projectRoot, ['ls-files', '-z']),
       gitOutput(projectRoot, ['ls-files', '--others', '--exclude-standard', '-z']),
-      Promise.all(normalizedInputs.map((input) => expandDeclaredInput(projectRoot, input))),
+      expandFullSuiteDeclaredInputMembership(projectRoot, normalizedInputs),
       environmentFingerprint(projectRoot, testSuite.environment ?? [], environmentValues),
     ]);
 
@@ -597,7 +622,6 @@ async function calculateFingerprint(
     ...nulSeparatedPaths(trackedOutput),
     ...nulSeparatedPaths(untrackedOutput),
   ].filter(isFullSuiteProjectInput);
-  const requiredPaths = new Set(expandedInputs.flat());
   const paths = sortedUnique([...broadPaths, ...requiredPaths]);
 
   const hash = createHash('sha256');
@@ -613,14 +637,14 @@ async function calculateFingerprint(
   updateFields(
     [hash, categoryHashes.project_config],
     'test_suite',
-    normalizeSuiteConfig(testSuite, normalizedInputs, workingDirectory),
+    normalizeSuiteConfig(testSuite, normalizedInputs, workingDirectory, scopedSelectors),
   );
 
   updateField(hash, 'environment_commitment', environmentDigest);
 
   for (const path of paths) {
     const required = requiredPaths.has(path);
-    const category = fingerprintCategory(path, required);
+    const category = classifyFullSuiteFingerprintPath(path, required);
     await updatePathIdentity(
       [hash, categoryHashes[category]],
       projectRoot,

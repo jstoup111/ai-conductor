@@ -192,8 +192,6 @@ carries an explicit recorded decision instead of an unstated default.
 
 #### Happy Path
 - Given `conduct-ts config init` invoked with a mode flag and a budget preset flag, when it writes the config, then the generated file contains a `test_suite.verification` block matching the flags
-- Given the bootstrap skill running interactively, when it reaches config generation, then it asks the operator the mode and budget questions and passes the answers as `config init` flags
-- Given bootstrap running in auto mode, when it reaches config generation, then it records the strict preset (today's behavior) without prompting
 
 #### Negative Paths
 - Given `config init` invoked with flags in a repo whose config already exists, when it runs, then it refuses to clobber exactly as today and the existing config is unchanged

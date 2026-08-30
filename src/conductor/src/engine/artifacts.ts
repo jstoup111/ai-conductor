@@ -3548,7 +3548,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `full-suite completion inspection failed: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
-    if (inspection.status === 'CURRENT') return { done: true };
+    if (
+      inspection.status === 'CURRENT' ||
+      inspection.status === 'PRESERVED_WITHIN_BUDGET'
+    ) return { done: true };
     if (inspection.status === 'STALE') {
       return {
         done: false,

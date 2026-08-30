@@ -1,5 +1,4 @@
-// Covers: task:2
-// Covers: task:1, task:3
+// Covers: task:1, task:2, task:3
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -1091,6 +1090,253 @@ steps:
   });
 
   describe('test_suite config block', () => {
+    it('resolves aggregate verification with an all-none drift budget', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    mode: aggregate\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok && result.config.test_suite?.verification).toEqual({
+        mode: 'aggregate',
+        drift_budget: {
+          additional_inputs: 'none',
+          dependencies: 'none',
+          environment: 'none',
+          migrations: 'none',
+          project_config: 'none',
+          source: 'none',
+          test_infrastructure: 'none',
+          tests: 'none',
+        },
+      });
+    });
+
+    it('resolves declared budgetable drift bounds exactly', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    drift_budget:\n      source: 20\n      tests: none\n      test_infrastructure: unlimited\n      additional_inputs: 3\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok && result.config.test_suite?.verification).toEqual({
+        mode: 'aggregate',
+        drift_budget: {
+          additional_inputs: 3,
+          dependencies: 'none',
+          environment: 'none',
+          migrations: 'none',
+          project_config: 'none',
+          source: 20,
+          test_infrastructure: 'unlimited',
+          tests: 'none',
+        },
+      });
+    });
+
+    it('resolves scoped verification when the scoped command is valid', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  scoped_command: npx vitest run {selectors}\n  verification:\n    mode: scoped\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok && result.config.test_suite?.verification?.mode).toBe('scoped');
+    });
+
+    it('rejects scoped verification without test_suite.scoped_command', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    mode: scoped\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite\.scoped_command/),
+        },
+      });
+    });
+
+    it('rejects a non-object test_suite.verification block', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification: []\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite\.verification/),
+        },
+      });
+    });
+
+    it('rejects a non-object test_suite.verification.drift_budget block', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    drift_budget: []\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite\.verification\.drift_budget/),
+        },
+      });
+    });
+
+    it('rejects an unknown drift_budget category and lists the valid categories', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    drift_budget:\n      deploys: 1\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(
+            /deploys.*additional_inputs.*dependencies.*environment.*migrations.*project_config.*source.*test_infrastructure.*tests/i,
+          ),
+        },
+      });
+    });
+
+    it.each(['dependencies', 'environment', 'migrations', 'project_config'])(
+      'rejects unbudgetable drift_budget category %s',
+      async (category) => {
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          `test_suite:\n  command: npm test\n  verification:\n    drift_budget:\n      ${category}: 1\n`,
+        );
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: `test_suite.verification.drift_budget.${category} is unbudgetable`,
+          },
+        });
+      },
+    );
+
+    it.each(['dependencies', 'environment', 'migrations', 'project_config'])(
+      'rejects explicit none for unbudgetable drift_budget category %s',
+      async (category) => {
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          `test_suite:\n  command: npm test\n  verification:\n    drift_budget:\n      ${category}: none\n`,
+        );
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: `test_suite.verification.drift_budget.${category} is unbudgetable`,
+          },
+        });
+      },
+    );
+
+    it.each([
+      ['zero', 0],
+      ['a negative value', -1],
+      ['a non-integer value', 1.5],
+    ])('rejects %s drift_budget bounds with the full key and value', async (_name, bound) => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        `test_suite:\n  command: npm test\n  verification:\n    drift_budget:\n      source: ${bound}\n`,
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(
+            new RegExp(`test_suite\\.verification\\.drift_budget\\.source.*${bound}`),
+          ),
+        },
+      });
+    });
+
+    it('rejects an invalid verification mode and lists aggregate and scoped', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    mode: selective\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/selective.*aggregate.*scoped/i),
+        },
+      });
+    });
+
+    it('rejects an unknown verification key by name', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  verification:\n    retries: 2\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/retries/i),
+        },
+      });
+    });
+
+    it('defaults absent verification to aggregate mode with an all-none drift budget', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok && result.config.test_suite?.verification).toEqual({
+        mode: 'aggregate',
+        drift_budget: {
+          additional_inputs: 'none',
+          dependencies: 'none',
+          environment: 'none',
+          migrations: 'none',
+          project_config: 'none',
+          source: 'none',
+          test_infrastructure: 'none',
+          tests: 'none',
+        },
+      });
+    });
+
     it('loads and exposes an optional scoped_command template', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),
@@ -1162,18 +1408,39 @@ steps:
       expect(result.config.test_suite?.scoped_command).toBeUndefined();
     });
 
-    it('accepts an aggregate suite declaration with every supported field', () => {
+    it('accepts an aggregate suite declaration with every configurable drift budget', () => {
       const testSuite = {
         command: 'npm test',
         working_directory: 'src/conductor',
         timeout_seconds: 1800,
         inputs: ['test-support/**'],
         environment: ['CI', 'DATABASE_URL'],
+        verification: {
+          mode: 'aggregate',
+          drift_budget: {
+            additional_inputs: 'none',
+            source: 'none',
+            test_infrastructure: 'none',
+            tests: 'none',
+          },
+        },
       };
 
       const result = validateConfig({ test_suite: testSuite });
 
-      expect(result.ok && result.config.test_suite).toEqual(testSuite);
+      expect(result.ok && result.config.test_suite).toEqual({
+        ...testSuite,
+        verification: {
+          ...testSuite.verification,
+          drift_budget: {
+            ...testSuite.verification.drift_budget,
+            dependencies: 'none',
+            environment: 'none',
+            migrations: 'none',
+            project_config: 'none',
+          },
+        },
+      });
     });
 
     it.each([

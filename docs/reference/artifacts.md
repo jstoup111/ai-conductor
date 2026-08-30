@@ -647,7 +647,7 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 
 `ConductorEvent` defines **96 variants** across **95** event types (`self_host_containment_verdict`
 declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
-subscribes to the **68** event types marked `persist: true` in `event-sinks.ts` and writes only
+subscribes to the **69** event types marked `persist: true` in `event-sinks.ts` and writes only
 those:
 
 `contained_live_checkout_drift`, `self_host_containment_verdict`, `containment_check_unresolved`,
@@ -668,7 +668,7 @@ those:
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
 `verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_stall`, `build_progress`,
 `build_no_progress`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
-`parallel_failure`, `build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
+`parallel_failure`, `test_suite_verification`, `build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
 `loop_halt`, `halt_marker_write_failed`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_invalidated`,
 `rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`, and `acceptance_red`.
 
@@ -695,6 +695,11 @@ The BUILD-member settle events carry only a member, decision, and closed basis c
 `fingerprint-mismatch`, or `fresh-evidence-required`. They make reuse observable without becoming a
 second validity authority; the BUILD group join still decides round satisfaction.
 
+`test_suite_verification` records the resolved verification mode and, when applicable, the closed
+drift-budget verdict. A scoped evaluation that has no test selectors records the explicit
+`scoped-empty-selection-aggregate` basis, proving the aggregate verifier ran rather than a silent
+empty scoped command. Older records without these additive fields remain parseable.
+
 A `build` step's `step_completed` event carries two build-only witnesses, `treeBefore`/`treeAfter`
 (absent on every other step and on events from an older engine). Both the daemon-log renderer and
 the interactive renderer use them to annotate the line with the tree movement observed for that
@@ -714,7 +719,7 @@ Halt occurrences are consumed by `cost-rollup.halts`, the shipped record's `## C
 `ai-conductor kpi`, and the engineer-loop signal assembler. `ai-conductor inline --report` renders
 neither halt nor kickback tables.
 
-> **Known limitation.** The other 27 event types — including `gate_verdict`, `loop_converged`,
+> **Known limitation.** The other 26 event types — including `gate_verdict`, `loop_converged`,
 > `auto_park`, `zero_work_product`, `unattributed_dispatch`, `halt_cleared`, `ci_failed`, and every
 > remaining `rebase_*` variant not listed above — are emitted for real but never persisted, because
 > the emitter dispatches only to handlers registered for that exact type. `loop_halt`,

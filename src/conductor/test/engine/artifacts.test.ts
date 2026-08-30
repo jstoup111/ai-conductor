@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, task:1, task:10
+// Covers: S1.1, S1.2, S1.3, task:1, task:6, task:10
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
@@ -905,6 +905,22 @@ describe('engine/artifacts', () => {
   });
 
   describe('checkStepCompletion: test_suite current-PASS predicate', () => {
+    it('accepts evidence preserved within the declared drift budget', async () => {
+      const inspect = vi.fn(async () => ({
+        status: 'PRESERVED_WITHIN_BUDGET' as const,
+        evidence: {} as import('../../src/engine/full-suite-evidence.js').FullSuitePassEvidence,
+      }));
+
+      const result = await checkStepCompletion(dir, 'test_suite', {
+        fullSuiteInspect: inspect,
+      });
+
+      expect({ result, inspectCalls: inspect.mock.calls.length }).toEqual({
+        result: { done: true },
+        inspectCalls: 1,
+      });
+    });
+
     it('rejects stale evidence through inspection without launching verification', async () => {
       await createFile('.pipeline/test-suite-evidence.json', JSON.stringify({ outcome: 'PASS' }));
       const inspect = vi.fn(async () => ({ status: 'STALE', reason: 'fingerprint_mismatch' } as const));

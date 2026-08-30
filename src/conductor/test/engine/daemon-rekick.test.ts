@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+// Covers: task:12
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -28,6 +29,7 @@ import { checkAndAutoPark } from '../../src/engine/daemon-auto-park.js';
 import { isOperatorParked, __resetResolveCacheForTests, reconcileStrandedParkMarkers } from '../../src/engine/park-marker.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -2077,6 +2079,43 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       res: 'rebased',
       reverified: expect.arrayContaining([{ step: 'test_suite', skippedDispatch: true }]),
     });
+  });
+
+  it('inspects a budget-preserved test suite once and carries its basis into the preserved event', async () => {
+    await initFeatureRepo(['1', '2'], ['1', '2']);
+    await advanceBaseWithCode();
+    const inspect = vi.spyOn(FullSuiteVerifier.prototype, 'inspect').mockResolvedValue({
+      status: 'PRESERVED_WITHIN_BUDGET' as const,
+      evidence: {} as import('../../src/engine/full-suite-evidence.js').FullSuitePassEvidence,
+    });
+    const recordPreservation = vi.spyOn(FullSuiteVerifier.prototype, 'recordPreservation')
+      .mockResolvedValue(undefined);
+    const preserved: Array<{ gate: string; basis?: string }> = [];
+    events.on('rebase_gate_preserved', (event) => {
+      if (event.type !== 'rebase_gate_preserved') return;
+      preserved.push({ gate: event.gate, basis: event.basis });
+    });
+
+    try {
+      const res = await resumeRebaseFirst({
+        worktreePath: dir,
+        localBase: 'main',
+        events,
+        ranManualTest: false,
+      });
+
+      expect({ res, inspectCalls: inspect.mock.calls.length, recordCalls: recordPreservation.mock.calls.length, preserved }).toEqual({
+        res: 'rebased',
+        inspectCalls: 1,
+        recordCalls: 1,
+        preserved: expect.arrayContaining([
+          { gate: 'test_suite', basis: 'test_suite_drift_budget' },
+        ]),
+      });
+    } finally {
+      inspect.mockRestore();
+      recordPreservation.mockRestore();
+    }
   });
 
   it('still invalidates the non-tree-attesting downstream gates on the same rebase', async () => {

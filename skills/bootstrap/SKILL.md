@@ -66,10 +66,26 @@ a single set of Docker services. See Step 1c for the `.env` boundary pattern tha
 
 For every bootstrap mode, confirm the project is a git repository before continuing:
 `git rev-parse --is-inside-work-tree`. If it is not, initialize it with `git init -b main`
-as described in Step 1b. Then invoke the deterministic, idempotent project-config writer:
+as described in Step 1b. Then invoke the deterministic, idempotent project-config writer. In
+interactive mode, ask:
+
+1. "Which test-suite verification mode should this project use: `aggregate` (run the full suite) or
+   `scoped` (run the configured scoped command for selected tests)?" Pass the answer as
+   `--test-suite-mode <aggregate|scoped>`.
+2. "Which drift-budget preset should this project use: `strict` (no tolerated drift) or `tolerant`
+   (up to 20 source paths and unlimited additional inputs)?" Pass the answer as
+   `--test-suite-drift-budget <strict|tolerant>`.
+
+Use both answers when invoking the writer:
 
 ```bash
-ai-conductor config init
+ai-conductor config init --test-suite-mode <aggregate|scoped> --test-suite-drift-budget <strict|tolerant>
+```
+
+In auto mode, do not prompt; record the strict preset with aggregate verification:
+
+```bash
+ai-conductor config init --test-suite-mode aggregate --test-suite-drift-budget strict
 ```
 
 Never hand-author `.ai-conductor/config.yml` and never copy a config from the harness checkout.

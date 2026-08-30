@@ -60,6 +60,10 @@ describe('test-suite CLI adapter', () => {
       { kind: 'guide' },
       {
         verifier: {
+          // Output/exit-code fakes: STALE means no preservation to record,
+          // so these assert the same contract they always did.
+          inspect: async () => ({ status: 'STALE' as const, reason: 'source_changed' as const }),
+          recordPreservation: async () => {},
           ensure: async () => {
             verifierInvoked = true;
             throw new Error('verifier must not run for malformed argv');
@@ -87,6 +91,10 @@ describe('test-suite CLI adapter', () => {
         {
           projectRoot: '/fixture/project',
           verifier: {
+            // Output/exit-code fakes: STALE means no preservation to record,
+            // so these assert the same contract they always did.
+            inspect: async () => ({ status: 'STALE' as const, reason: 'source_changed' as const }),
+            recordPreservation: async () => {},
             ensure: async () => status === 'EXECUTED'
               ? {
                   status,
@@ -126,6 +134,10 @@ describe('test-suite CLI adapter', () => {
       { kind: 'run' },
       {
         verifier: {
+          // Output/exit-code fakes: STALE means no preservation to record,
+          // so these assert the same contract they always did.
+          inspect: async () => ({ status: 'STALE' as const, reason: 'source_changed' as const }),
+          recordPreservation: async () => {},
           ensure: async () => ({
             status: 'FAILED' as const,
             reason,
@@ -153,6 +165,10 @@ describe('test-suite CLI adapter', () => {
       { kind: 'run' },
       {
         verifier: {
+          // Output/exit-code fakes: STALE means no preservation to record,
+          // so these assert the same contract they always did.
+          inspect: async () => ({ status: 'STALE' as const, reason: 'source_changed' as const }),
+          recordPreservation: async () => {},
           ensure: async () => ({
             status: 'FAILED' as const,
             reason: 'nonzero_exit' as const,
@@ -172,5 +188,68 @@ describe('test-suite CLI adapter', () => {
         ),
       ],
     });
+  });
+
+  /**
+   * Task 22: adr-2026-08-28 D4 makes the drift budget cumulative against the
+   * attested PASS so a feature "cannot ratchet unlimited drift through
+   * repeated small preservations". The ledger append is that mechanism, so
+   * every caller that ACTS on a preservation records it exactly once through
+   * the caller-owned seam. The CLI called ensure() alone, which returns
+   * REUSED for both CURRENT and PRESERVED_WITHIN_BUDGET and records nothing —
+   * so a CLI preservation left the ledger short and the next measurement
+   * restarted from a stale baseline.
+   */
+  it('records a within-budget preservation exactly once through the seam', async () => {
+    const cli = await import('../../src/engine/test-suite-cli.js');
+    const output: string[] = [];
+    const evidence = { mode: 'aggregate' } as never;
+    const inspection = { status: 'PRESERVED_WITHIN_BUDGET' as const, evidence };
+    const recorded: unknown[] = [];
+    let ensureSawInspection: unknown;
+    let inspectCalls = 0;
+
+    const exitCode = await cli.dispatchTestSuiteCommand(
+      { kind: 'run' },
+      {
+        verifier: {
+          inspect: async () => { inspectCalls++; return inspection; },
+          ensure: async (passed?: unknown) => {
+            ensureSawInspection = passed;
+            return { status: 'REUSED' as const, evidence };
+          },
+          recordPreservation: async (i: unknown) => { recorded.push(i); },
+        },
+        print: (line: string) => output.push(line),
+      } as never,
+    );
+
+    expect(exitCode).toBe(0);
+    // Recorded once, from the same inspection the decision was made on.
+    expect(recorded).toEqual([inspection]);
+    // One inspection only — no re-inspect to recover a result already held.
+    expect(inspectCalls).toBe(1);
+    expect(ensureSawInspection).toBe(inspection);
+  });
+
+  it('records nothing when the evidence is already CURRENT', async () => {
+    const cli = await import('../../src/engine/test-suite-cli.js');
+    const output: string[] = [];
+    const evidence = { mode: 'aggregate' } as never;
+    const recorded: unknown[] = [];
+
+    const exitCode = await cli.dispatchTestSuiteCommand(
+      { kind: 'run' },
+      {
+        verifier: {
+          inspect: async () => ({ status: 'CURRENT' as const, evidence }),
+          ensure: async () => ({ status: 'REUSED' as const, evidence }),
+          recordPreservation: async (i: unknown) => { recorded.push(i); },
+        },
+        print: (line: string) => output.push(line),
+      } as never,
+    );
+
+    expect({ exitCode, recorded }).toEqual({ exitCode: 0, recorded: [] });
   });
 });

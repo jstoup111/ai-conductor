@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { loadConfig } from './config.js';
+import { execa } from 'execa';
+import {
+  loadConfig,
+  UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES,
+  type UnbudgetableTestSuiteDriftCategory,
+} from './config.js';
 import {
   FULL_SUITE_EVIDENCE_VERSION,
   readFullSuiteEvidence,
@@ -15,6 +21,8 @@ import {
 } from './full-suite-evidence.js';
 import {
   FULL_SUITE_FINGERPRINT_CATEGORIES,
+  classifyFullSuiteFingerprintPath,
+  expandFullSuiteDeclaredInputMembership,
   fingerprintFullSuiteInputs,
   type FullSuiteFingerprintCategory,
   type FullSuiteFingerprint,
@@ -27,27 +35,58 @@ import {
   type FullSuiteExecutionFailure,
   type FullSuiteExecutionResult,
 } from './full-suite-executor.js';
+import {
+  runScopedCommand,
+  type ScopedRunRunner,
+} from './scoped-run.js';
+import { changedPathsBetween, originDefaultBranch } from './rebase.js';
 import { worktreeStatus } from './worktree-shared.js';
 import type { AggregateTestSuiteConfig, TestSuiteConfig } from '../types/config.js';
 
 export type FullSuiteStaleReason =
   | Exclude<FullSuiteEvidenceUnusableReason, 'io_error'>
+  | 'drift_budget_exceeded'
   | 'fingerprint_mismatch'
   | 'additional_inputs_changed'
   | 'dependencies_changed'
+  | 'drift_measurement_indeterminate'
+  | 'evidence_version_stale'
   | 'environment_changed'
   | 'migrations_changed'
   | 'multiple_categories_changed'
   | 'project_config_changed'
   | 'source_changed'
   | 'test_infrastructure_changed'
-  | 'tests_changed';
+  | 'tests_changed'
+  | 'unbudgetable_drift';
 
-export interface FullSuiteStaleInspection {
-  status: 'STALE';
-  reason: FullSuiteStaleReason;
-  changedCategories?: FullSuiteFingerprintCategory[];
-}
+type FullSuiteBudgetBound = 'none' | number;
+
+type FullSuiteUnbudgetableCategory = Extract<
+  FullSuiteFingerprintCategory,
+  UnbudgetableTestSuiteDriftCategory
+>;
+
+export type FullSuiteStaleInspection =
+  | {
+      status: 'STALE';
+      reason: Exclude<FullSuiteStaleReason, 'drift_budget_exceeded' | 'unbudgetable_drift'>;
+      changedCategories?: FullSuiteFingerprintCategory[];
+    }
+  | {
+      status: 'STALE';
+      reason: 'drift_budget_exceeded';
+      category: FullSuiteFingerprintCategory;
+      count: number;
+      bound: FullSuiteBudgetBound;
+    }
+  | {
+      status: 'STALE';
+      reason: 'unbudgetable_drift';
+      category: FullSuiteUnbudgetableCategory;
+      count: number;
+      bound: 'none';
+    };
 
 export type FullSuiteVerifierResult =
   | {
@@ -66,6 +105,7 @@ export type FullSuiteVerifierResult =
 
 export type FullSuiteInspectionResult =
   | { status: 'CURRENT'; evidence: FullSuitePassEvidence }
+  | { status: 'PRESERVED_WITHIN_BUDGET'; evidence: FullSuitePassEvidence }
   | FullSuiteStaleInspection
   | { status: 'FAILED'; reason: FullSuiteFailureReason; message: string };
 
@@ -82,7 +122,57 @@ export interface FullSuiteVerifierOptions {
   writeEvidence?: typeof writeFullSuiteEvidence;
   /** Test seam for bounded lock timing and liveness probes. */
   lock?: FullSuiteLockOptions;
+  /** Test seam for Git-backed drift measurement. */
+  git?: FullSuiteGitRunner;
+  /** Test seam for the fingerprint-time worktree observation. */
+  worktreeStatus?: typeof worktreeStatus;
+  /** Test seam; production uses the engine-owned scoped-run process adapter. */
+  scopedRunner?: ScopedRunRunner;
 }
+
+export interface FullSuiteGitResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** A Git runner rooted at the verifier's project directory. */
+export type FullSuiteGitRunner = (args: string[]) => Promise<FullSuiteGitResult>;
+
+export type FullSuiteScopedSelection =
+  | { status: 'SELECTED'; selectors: string[] }
+  | { status: 'EMPTY' };
+
+/**
+ * Derive scoped test selectors from the current feature's merge-base surface.
+ * Selector paths stay framework-agnostic; execution belongs to scoped-run.
+ */
+export async function deriveFullSuiteScopedSelection(
+  git: FullSuiteGitRunner,
+): Promise<FullSuiteScopedSelection> {
+  try {
+    const branch = await originDefaultBranch(git);
+    if (!branch) return { status: 'EMPTY' };
+
+    const mergeBase = await git(['merge-base', `origin/${branch}`, 'HEAD']);
+    const base = mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : '';
+    if (!base) return { status: 'EMPTY' };
+
+    const selectors = (await changedPathsBetween(git, base, 'HEAD')).filter(
+      (path) => classifyFullSuiteFingerprintPath(path) === 'tests',
+    );
+    return selectors.length === 0 ? { status: 'EMPTY' } : { status: 'SELECTED', selectors };
+  } catch {
+    return { status: 'EMPTY' };
+  }
+}
+
+export type FullSuiteDriftMeasurement =
+  | {
+      status: 'MEASURED';
+      categoryCounts: Record<FullSuiteFingerprintCategory, number>;
+    }
+  | { status: 'INDETERMINATE' };
 
 export interface FullSuiteLockOptions {
   waitTimeoutMs?: number;
@@ -103,6 +193,7 @@ export interface FullSuiteLockOptions {
 interface FullSuiteVerificationContext {
   testSuite: AggregateTestSuiteConfig;
   fingerprint: FullSuiteFingerprint;
+  selection: FullSuiteScopedSelection;
   worktreeClean?: boolean;
 }
 
@@ -117,7 +208,10 @@ type FullSuiteInspectionFailure = Extract<FullSuiteInspectionResult, { status: '
 
 type ResolvedInspection =
   | {
-      inspection: Extract<FullSuiteInspectionResult, { status: 'CURRENT' | 'STALE' }>;
+      inspection: Extract<
+        FullSuiteInspectionResult,
+        { status: 'CURRENT' | 'PRESERVED_WITHIN_BUDGET' | 'STALE' }
+      >;
       context: FullSuiteVerificationContext;
     }
   | {
@@ -572,13 +666,81 @@ async function acquireFullSuiteLock(
 }
 
 export class FullSuiteVerifier {
+  /**
+   * Inspection is deliberately read-only. Keep its execution context in memory
+   * so an actor can hand its one resolved result to ensure() without asking the
+   * verifier to inspect the tree a second time.
+   */
+  private readonly resolvedInspections = new WeakMap<object, ResolvedInspection>();
+  private readonly recordedPreservations = new WeakSet<object>();
+
   constructor(private readonly options: FullSuiteVerifierOptions) {}
 
-  async inspect(): Promise<FullSuiteInspectionResult> {
-    return (await this.resolveInspection()).inspection;
+  /**
+   * Measures every path that changed after a PASS's attested HEAD, including
+   * paths still dirty in the worktree. A failed Git observation never returns
+   * a partial count, because later freshness policy must fail closed.
+   */
+  async measureDriftFromAttestedPass(
+    provenanceHeadSha: string,
+    explicitlyDeclaredPaths: ReadonlySet<string> = new Set(),
+  ): Promise<FullSuiteDriftMeasurement> {
+    const git = this.options.git ?? productionFullSuiteGitRunner(this.options.projectRoot);
+    try {
+      const diff = await git(['diff', '--name-only', `${provenanceHeadSha}..HEAD`]);
+      if (diff.exitCode !== 0) return { status: 'INDETERMINATE' };
+
+      const status = await git(['status', '--porcelain']);
+      if (status.exitCode !== 0) return { status: 'INDETERMINATE' };
+
+      const ignored = explicitlyDeclaredPaths.size === 0
+        ? { exitCode: 0, stdout: '', stderr: '' }
+        : await git(['ls-files', '--others', '--ignored', '--exclude-standard']);
+      if (ignored.exitCode !== 0) return { status: 'INDETERMINATE' };
+
+      const paths = new Set([
+        ...newlineSeparatedPaths(diff.stdout),
+        ...porcelainPaths(status.stdout),
+        ...newlineSeparatedPaths(ignored.stdout).filter((path) => explicitlyDeclaredPaths.has(path)),
+      ]);
+      const categoryCounts = Object.fromEntries(
+        FULL_SUITE_FINGERPRINT_CATEGORIES.map((category) => [category, 0]),
+      ) as Record<FullSuiteFingerprintCategory, number>;
+      for (const path of paths) {
+        const category = classifyFullSuiteFingerprintPath(path, explicitlyDeclaredPaths.has(path));
+        categoryCounts[category] += 1;
+      }
+      return { status: 'MEASURED', categoryCounts };
+    } catch {
+      return { status: 'INDETERMINATE' };
+    }
   }
 
-  async ensure(): Promise<FullSuiteVerifierResult> {
+  async inspect(): Promise<FullSuiteInspectionResult> {
+    const resolved = await this.resolveInspection();
+    this.resolvedInspections.set(resolved.inspection, resolved);
+    return resolved.inspection;
+  }
+
+  /** Persist one already-inspected preservation at the caller-owned boundary. */
+  async recordPreservation(
+    inspection: Extract<FullSuiteInspectionResult, { status: 'PRESERVED_WITHIN_BUDGET' }>,
+  ): Promise<void> {
+    if (this.recordedPreservations.has(inspection)) return;
+    const resolved = this.resolvedInspections.get(inspection);
+    if (resolved === undefined || !('context' in resolved)) {
+      throw new Error('Cannot record a full-suite preservation that was not resolved by this verifier');
+    }
+    const { environment = process.env, writeEvidence = writeFullSuiteEvidence } = this.options;
+    await writeEvidence(
+      this.options.projectRoot,
+      inspection.evidence,
+      declaredEnvironmentValues(resolved.context.testSuite, environment),
+    );
+    this.recordedPreservations.add(inspection);
+  }
+
+  async ensure(inspection?: FullSuiteInspectionResult): Promise<FullSuiteVerifierResult> {
     const acquired = await acquireFullSuiteLock(
       this.options.projectRoot,
       this.options.lock,
@@ -590,7 +752,7 @@ export class FullSuiteVerifier {
         message: acquired.message,
       };
     }
-    const result = await this.ensureLocked();
+    const result = await this.ensureLocked(inspection);
     const released = await acquired.handle.release();
     if (!released.ok) {
       return {
@@ -603,7 +765,7 @@ export class FullSuiteVerifier {
     return result;
   }
 
-  private async ensureLocked(): Promise<FullSuiteVerifierResult> {
+  private async ensureLocked(inspection?: FullSuiteInspectionResult): Promise<FullSuiteVerifierResult> {
     const {
       projectRoot,
       environment = process.env,
@@ -613,7 +775,9 @@ export class FullSuiteVerifier {
     } = this.options;
 
     try {
-      const resolved = await this.resolveInspection();
+      const resolved = inspection === undefined
+        ? await this.resolveInspection()
+        : this.resolvedInspections.get(inspection) ?? await this.resolveInspection();
       if (!('context' in resolved)) {
         const failure = resolved.inspection;
         if (failure.reason === 'internal_error') return failure;
@@ -658,14 +822,27 @@ export class FullSuiteVerifier {
         }
         return { ...failure, message, evidence: persisted.evidence };
       }
-      if (resolved.inspection.status === 'CURRENT') {
+      if (
+        resolved.inspection.status === 'CURRENT' ||
+        resolved.inspection.status === 'PRESERVED_WITHIN_BUDGET'
+      ) {
         return { status: 'REUSED', evidence: resolved.inspection.evidence };
       }
 
       const { testSuite, fingerprint, worktreeClean } = resolved.context;
       const freshness = resolved.inspection;
       const secretValues = declaredEnvironmentValues(testSuite, environment);
-      const execution = await execute({ projectRoot, testSuite, environment });
+      const verificationMode = testSuite.verification?.mode ?? 'aggregate';
+      const selection = resolved.context.selection;
+      const execution = verificationMode === 'scoped' && selection.status === 'SELECTED'
+        ? await executeScopedFullSuite({
+          projectRoot,
+          testSuite,
+          environment,
+          selectors: selection.selectors,
+          runner: this.options.scopedRunner,
+        })
+        : await execute({ projectRoot, testSuite, environment });
       if (!execution.ok) {
         const evidence = buildFailEvidence(fingerprint, execution, worktreeClean);
         try {
@@ -730,6 +907,15 @@ export class FullSuiteVerifier {
         exitCode: execution.exitCode,
         stdout: execution.stdout,
         stderr: execution.stderr,
+        mode: verificationMode,
+        selectors: verificationMode === 'scoped' && selection.status === 'SELECTED'
+          ? selection.selectors
+          : [],
+        executionBasis: verificationMode === 'scoped'
+          ? selection.status === 'SELECTED'
+            ? 'scoped'
+            : 'scoped-empty-selection-aggregate'
+          : 'aggregate',
       };
       try {
         await writeEvidence(projectRoot, evidence, secretValues);
@@ -776,6 +962,7 @@ export class FullSuiteVerifier {
       environment = process.env,
       fingerprint = fingerprintFullSuiteInputs,
       readEvidence = readFullSuiteEvidence,
+      worktreeStatus: inspectWorktreeStatus = worktreeStatus,
     } = this.options;
 
     try {
@@ -810,9 +997,18 @@ export class FullSuiteVerifier {
         };
       }
       const aggregateTestSuite: AggregateTestSuiteConfig = testSuite as AggregateTestSuiteConfig;
+      const verificationMode = aggregateTestSuite.verification?.mode ?? 'aggregate';
+      const selection = verificationMode === 'scoped'
+        ? await deriveFullSuiteScopedSelection(
+          this.options.git ?? productionFullSuiteGitRunner(projectRoot),
+        )
+        : { status: 'EMPTY' as const };
       const fingerprintResult = await fingerprint({
         projectRoot,
         testSuite: aggregateTestSuite,
+        ...(verificationMode === 'scoped'
+          ? { scopedSelectors: selection.status === 'SELECTED' ? selection.selectors : [] }
+          : {}),
         environmentValues: environment,
       });
       if (!fingerprintResult.ok) {
@@ -835,7 +1031,8 @@ export class FullSuiteVerifier {
       const context = {
         testSuite: aggregateTestSuite,
         fingerprint: fingerprintResult.fingerprint,
-        worktreeClean: await fingerprintTimeWorktreeCleanliness(projectRoot),
+        selection,
+        worktreeClean: await fingerprintTimeWorktreeCleanliness(projectRoot, inspectWorktreeStatus),
       };
       const persisted = await readEvidence(projectRoot);
       if (!persisted.usable) {
@@ -849,16 +1046,70 @@ export class FullSuiteVerifier {
           };
         }
         return {
-          inspection: { status: 'STALE', reason: persisted.reason },
+          inspection: {
+            status: 'STALE',
+            reason: persisted.reason === 'unsupported_version'
+              ? 'evidence_version_stale'
+              : persisted.reason,
+          },
+          context,
+        };
+      }
+      if (persisted.evidence.mode !== verificationMode) {
+        return {
+          inspection: { status: 'STALE', reason: 'fingerprint_mismatch' },
           context,
         };
       }
       if (persisted.evidence.fingerprint !== fingerprintResult.fingerprint.digest) {
+        let declaredInputMembership: ReadonlySet<string>;
+        try {
+          declaredInputMembership = await expandFullSuiteDeclaredInputMembership(
+            projectRoot,
+            aggregateTestSuite.inputs ?? [],
+          );
+        } catch {
+          return {
+            inspection: { status: 'STALE', reason: 'drift_measurement_indeterminate' },
+            context,
+          };
+        }
+        const measurement = await this.measureDriftFromAttestedPass(
+          persisted.evidence.provenanceHeadSha,
+          declaredInputMembership,
+        );
+        if (measurement.status === 'INDETERMINATE') {
+          return {
+            inspection: { status: 'STALE', reason: 'drift_measurement_indeterminate' },
+            context,
+          };
+        }
+        const driftRejection = driftBudgetRejection(
+          measurement,
+          aggregateTestSuite,
+          changedFingerprintCategories(persisted.evidence, fingerprintResult.fingerprint),
+        );
+        if (!driftRejection) {
+          const evidence: FullSuitePassEvidence = {
+            ...persisted.evidence,
+            fingerprint: fingerprintResult.fingerprint.digest,
+            categoryFingerprints: fingerprintResult.fingerprint.categoryFingerprints,
+            driftLedger: [
+              ...(persisted.evidence.driftLedger ?? []),
+              {
+                at: new Date().toISOString(),
+                headSha: fingerprintResult.fingerprint.headSha,
+                categories: measurement.categoryCounts,
+              },
+            ],
+          };
+          return {
+            inspection: { status: 'PRESERVED_WITHIN_BUDGET', evidence },
+            context,
+          };
+        }
         return {
-          inspection: changedFingerprintInspection(
-            persisted.evidence,
-            fingerprintResult.fingerprint,
-          ),
+          inspection: driftRejection,
           context,
         };
       }
@@ -913,14 +1164,186 @@ function buildFailEvidence(
   };
 }
 
+interface ExecuteScopedFullSuiteOptions {
+  projectRoot: string;
+  testSuite: AggregateTestSuiteConfig;
+  environment: NodeJS.ProcessEnv;
+  selectors: string[];
+  runner?: ScopedRunRunner;
+}
+
+async function executeScopedFullSuite({
+  projectRoot,
+  testSuite,
+  environment,
+  selectors,
+  runner = productionScopedRunRunner(projectRoot, environment),
+}: ExecuteScopedFullSuiteOptions): Promise<FullSuiteExecutionResult> {
+  const cwd = resolve(projectRoot, testSuite.working_directory ?? '.');
+  const startedAt = new Date();
+  let command = testSuite.scoped_command ?? '';
+  const result = await runScopedCommand({
+    template: testSuite.scoped_command,
+    selectors: selectors.map((selector) => rebaseScopedSelector(selector, projectRoot, cwd)),
+    cwd,
+    timeoutMs: (testSuite.timeout_seconds ?? 30 * 60) * 1_000,
+    runner: async (scopedCommand, options) => {
+      command = scopedCommand;
+      return runner(scopedCommand, options);
+    },
+  });
+  const endedAt = new Date();
+  const common = {
+    command,
+    cwd,
+    startedAt: startedAt.toISOString(),
+    endedAt: endedAt.toISOString(),
+    durationMs: endedAt.getTime() - startedAt.getTime(),
+    stdout: '',
+    stderr: result.reason === 'passed' ? '' : result.message,
+  };
+  if (result.reason === 'passed') {
+    return { ok: true, ...common, exitCode: 0 };
+  }
+  if (result.reason === 'timeout') {
+    return { ok: false, ...common, reason: 'timeout', exitCode: null, signal: null };
+  }
+  if (result.reason === 'launch_failure' || result.reason === 'unavailable') {
+    return { ok: false, ...common, reason: 'unlaunchable', exitCode: 127, signal: null };
+  }
+  return {
+    ok: false,
+    ...common,
+    reason: 'nonzero_exit',
+    exitCode: result.exitCode,
+    signal: null,
+  };
+}
+
+/**
+ * Scoped selectors are derived as project-root-relative feature paths. Keep
+ * the scoped CLI's established runner-directory contract when this verifier
+ * executes the same interface directly.
+ */
+function rebaseScopedSelector(
+  selector: string,
+  projectRoot: string,
+  cwd: string,
+): string {
+  if (selector.startsWith('-') || isAbsolute(selector)) return selector;
+  if (existsSync(resolve(cwd, selector))) return selector;
+  const fromRoot = resolve(projectRoot, selector);
+  if (!existsSync(fromRoot)) return selector;
+  const rebased = relative(cwd, fromRoot);
+  return rebased === '' ? selector : rebased;
+}
+
+function productionScopedRunRunner(
+  projectRoot: string,
+  environment: NodeJS.ProcessEnv,
+): ScopedRunRunner {
+  return async (command, { signal, cwd }) => {
+    const result = await execa(command, {
+      cwd: cwd ?? projectRoot,
+      env: environment,
+      extendEnv: false,
+      shell: true,
+      reject: false,
+      cancelSignal: signal,
+    });
+    return result.exitCode ?? 1;
+  };
+}
+
+function productionFullSuiteGitRunner(projectRoot: string): FullSuiteGitRunner {
+  return async (args) => {
+    const result = await execa('git', args, { cwd: projectRoot, reject: false });
+    return {
+      exitCode: result.exitCode ?? 1,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  };
+}
+
+function newlineSeparatedPaths(stdout: string): string[] {
+  return stdout.split('\n').filter((path) => path.length > 0);
+}
+
+function porcelainPaths(stdout: string): string[] {
+  return newlineSeparatedPaths(stdout)
+    .filter((line) => line.length >= 4)
+    .map((line) => line.slice(3));
+}
+
 async function fingerprintTimeWorktreeCleanliness(
   projectRoot: string,
+  inspectWorktreeStatus: typeof worktreeStatus = worktreeStatus,
 ): Promise<boolean | undefined> {
   try {
-    return (await worktreeStatus(projectRoot)).length === 0;
+    return (await inspectWorktreeStatus(projectRoot)).length === 0;
   } catch {
     return undefined;
   }
+}
+
+function driftBudgetRejection(
+  measurement: Extract<FullSuiteDriftMeasurement, { status: 'MEASURED' }>,
+  testSuite: AggregateTestSuiteConfig,
+  fingerprintChangedCategories: FullSuiteFingerprintCategory[],
+): FullSuiteStaleInspection | undefined {
+  if (!hasDeclaredDriftAllowance(testSuite)) {
+    return changedFingerprintInspectionFromCategories(fingerprintChangedCategories);
+  }
+  const measuredCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
+    (category) => measurement.categoryCounts[category] > 0,
+  );
+  const driftedCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
+    (category) => fingerprintChangedCategories.includes(category) || measuredCategories.includes(category),
+  );
+  const unbudgetableCategory = driftedCategories.find(
+    (category): category is FullSuiteUnbudgetableCategory =>
+      UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES.includes(
+        category as FullSuiteUnbudgetableCategory,
+      ),
+  );
+  if (unbudgetableCategory) {
+    return {
+      status: 'STALE',
+      reason: 'unbudgetable_drift',
+      category: unbudgetableCategory,
+      count: measurement.categoryCounts[unbudgetableCategory],
+      bound: 'none',
+    };
+  }
+
+  if (
+    fingerprintChangedCategories.length === 0 ||
+    fingerprintChangedCategories.some((category) => measurement.categoryCounts[category] === 0)
+  ) {
+    return changedFingerprintInspectionFromCategories(fingerprintChangedCategories);
+  }
+
+  for (const category of fingerprintChangedCategories) {
+    const count = measurement.categoryCounts[category];
+    const bound = testSuite.verification?.drift_budget[category] ?? 'none';
+    if (bound !== 'unlimited' && (bound === 'none' || count > bound)) {
+      return {
+        status: 'STALE',
+        reason: 'drift_budget_exceeded',
+        category,
+        count,
+        bound,
+      };
+    }
+  }
+  return undefined;
+}
+
+function hasDeclaredDriftAllowance(testSuite: AggregateTestSuiteConfig): boolean {
+  return Object.values(testSuite.verification?.drift_budget ?? {}).some(
+    (bound) => bound !== 'none',
+  );
 }
 
 function buildPreflightFailEvidence(
@@ -958,7 +1381,7 @@ function declaredEnvironmentValues(
 
 const CATEGORY_STALE_REASONS: Record<
   FullSuiteFingerprintCategory,
-  FullSuiteStaleReason
+  Exclude<FullSuiteStaleReason, 'drift_budget_exceeded' | 'unbudgetable_drift'>
 > = {
   additional_inputs: 'additional_inputs_changed',
   dependencies: 'dependencies_changed',
@@ -974,11 +1397,23 @@ function changedFingerprintInspection(
   persisted: FullSuitePassEvidence,
   current: FullSuiteFingerprint,
 ): FullSuiteStaleInspection {
-  const changedCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
+  return changedFingerprintInspectionFromCategories(changedFingerprintCategories(persisted, current));
+}
+
+function changedFingerprintCategories(
+  persisted: FullSuitePassEvidence,
+  current: FullSuiteFingerprint,
+): FullSuiteFingerprintCategory[] {
+  return FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
     (category) =>
       persisted.categoryFingerprints[category] !==
       current.categoryFingerprints[category],
   );
+}
+
+function changedFingerprintInspectionFromCategories(
+  changedCategories: FullSuiteFingerprintCategory[],
+): FullSuiteStaleInspection {
   if (changedCategories.length === 1) {
     return {
       status: 'STALE',

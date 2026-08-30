@@ -1,3 +1,4 @@
+// Covers: task:21
 import { describe, expect, it } from 'vitest';
 import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';
 import {
@@ -34,6 +35,7 @@ describe('config consumer registry', () => {
       'architecture_review_as_built.checks',
       'assess',
       'test_suite',
+      'test_suite.verification',
       'build_progress',
       'provider_stream',
       'build_progress_halt',
@@ -56,6 +58,17 @@ describe('config consumer registry', () => {
       );
     },
   );
+
+  it('declares verifier consumers for test-suite verification settings', () => {
+    expect(configConsumerRegistry).toMatchObject({
+      'test_suite.verification.mode': {
+        consumer: 'src/conductor/src/engine/full-suite-verifier.ts',
+      },
+      'test_suite.verification.drift_budget': {
+        consumer: 'src/conductor/src/engine/full-suite-verifier.ts',
+      },
+    });
+  });
 
   it('requires an explained reason for every none declaration', () => {
     for (const [key, declaration] of Object.entries(configConsumerRegistry)) {

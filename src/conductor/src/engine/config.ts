@@ -17,6 +17,9 @@ import type {
   MarkdownViewerConfig,
   MermaidRendererConfig,
   BuildProgressConfig,
+  TestSuiteDriftBudgetBound,
+  TestSuiteDriftCategory,
+  TestSuiteVerificationConfig,
 } from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
 import { ALL_STEPS, OUT_OF_BAND_STEPS, getStepDefinition } from './steps.js';
@@ -125,7 +128,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'architecture_review_as_built.remediation': ['enabled'],
   'architecture_review_as_built.checks': ['tiers'],
   assess: ['stale_after_days', 'stale_after_commits'],
-  test_suite: ['command', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment'],
+  test_suite: ['command', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
+  'test_suite.verification': ['mode', 'drift_budget'],
   build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled'],
   provider_stream: ['min_interval_ms'],
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
@@ -773,7 +777,7 @@ export function validateConfig(
 
   // test_suite — the project-owned aggregate verification operation.
   if (obj.test_suite !== undefined) {
-    const err = validateTestSuiteBlock(obj.test_suite, projectRoot);
+    const err = validateTestSuiteBlock(obj.test_suite, projectRoot, materializeDefaults);
     if (err) return { ok: false, error: err };
   }
 
@@ -1611,7 +1615,11 @@ function validateAssessBlock(raw: unknown): ConfigError | null {
   return null;
 }
 
-function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError | null {
+function validateTestSuiteBlock(
+  raw: unknown,
+  projectRoot: string | undefined,
+  materializeDefaults: boolean,
+): ConfigError | null {
   if (!isPlainObject(raw)) {
     return { type: 'validation_error', message: 'test_suite must be an object' };
   }
@@ -1702,7 +1710,139 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
     }
   }
 
+  const verificationError = validateTestSuiteVerification(
+    raw.verification,
+    raw.scoped_command,
+  );
+  if (verificationError) return verificationError;
+
+  if (materializeDefaults) {
+    raw.verification = resolveTestSuiteVerification(raw.verification);
+  }
+
   return null;
+}
+
+const TEST_SUITE_DRIFT_CATEGORIES: readonly TestSuiteDriftCategory[] = [
+  'additional_inputs',
+  'dependencies',
+  'environment',
+  'migrations',
+  'project_config',
+  'source',
+  'test_infrastructure',
+  'tests',
+];
+
+export const UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES = [
+  'dependencies',
+  'environment',
+  'migrations',
+  'project_config',
+] as const satisfies readonly TestSuiteDriftCategory[];
+
+export type UnbudgetableTestSuiteDriftCategory =
+  (typeof UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES)[number];
+
+const DEFAULT_TEST_SUITE_DRIFT_BUDGET: Record<
+  TestSuiteDriftCategory,
+  TestSuiteDriftBudgetBound
+> = Object.fromEntries(
+  TEST_SUITE_DRIFT_CATEGORIES.map((category) => [category, 'none']),
+) as Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>;
+
+function validateTestSuiteVerification(
+  raw: unknown,
+  scopedCommand: unknown,
+): ConfigError | null {
+  if (raw === undefined) return null;
+  if (!isPlainObject(raw)) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.verification must be an object',
+    };
+  }
+
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS['test_suite.verification']);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in test_suite.verification: "${key}"` };
+    }
+  }
+
+  if (raw.mode !== undefined && raw.mode !== 'aggregate' && raw.mode !== 'scoped') {
+    return {
+      type: 'validation_error',
+      message: `test_suite.verification.mode ${JSON.stringify(raw.mode)} must be "aggregate" or "scoped"`,
+    };
+  }
+
+  if (raw.mode === 'scoped' && scopedCommand === undefined) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.scoped_command must be configured when test_suite.verification.mode is "scoped"',
+    };
+  }
+
+  if (raw.drift_budget === undefined) return null;
+  if (!isPlainObject(raw.drift_budget)) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.verification.drift_budget must be an object',
+    };
+  }
+
+  for (const [category, bound] of Object.entries(raw.drift_budget)) {
+    if (!TEST_SUITE_DRIFT_CATEGORIES.includes(category as TestSuiteDriftCategory)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown test_suite.verification.drift_budget category "${category}". Valid categories: ${TEST_SUITE_DRIFT_CATEGORIES.join(', ')}`,
+      };
+    }
+    if (
+      UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES.includes(
+        category as UnbudgetableTestSuiteDriftCategory,
+      )
+    ) {
+      return {
+        type: 'validation_error',
+        message: `test_suite.verification.drift_budget.${category} is unbudgetable`,
+      };
+    }
+    if (
+      bound !== 'none' &&
+      bound !== 'unlimited' &&
+      (typeof bound !== 'number' || !Number.isInteger(bound) || bound <= 0)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `test_suite.verification.drift_budget.${category} must be a positive integer, "none", or "unlimited"; got ${JSON.stringify(bound)}`,
+      };
+    }
+  }
+
+  return null;
+}
+
+function resolveTestSuiteVerification(raw: unknown): TestSuiteVerificationConfig {
+  const verification = isPlainObject(raw) ? raw : {};
+  const rawBudget = isPlainObject(verification.drift_budget) ? verification.drift_budget : {};
+  const mode = verification.mode === 'scoped' ? 'scoped' : 'aggregate';
+
+  return {
+    mode,
+    drift_budget: Object.fromEntries(
+      TEST_SUITE_DRIFT_CATEGORIES.map((category) => {
+        const bound = rawBudget[category];
+        return [
+          category,
+          bound === 'none' || bound === 'unlimited' || typeof bound === 'number'
+            ? bound
+            : DEFAULT_TEST_SUITE_DRIFT_BUDGET[category],
+        ];
+      }),
+    ) as Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>,
+  };
 }
 
 function existingRealPathEscapesRoot(projectRoot: string, candidate: string): boolean {

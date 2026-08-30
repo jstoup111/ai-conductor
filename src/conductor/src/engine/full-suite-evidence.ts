@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import {
   FULL_SUITE_FINGERPRINT_CATEGORIES,
   type FullSuiteCategoryFingerprints,
+  type FullSuiteFingerprintCategory,
 } from './full-suite-fingerprint.js';
 
-export const FULL_SUITE_EVIDENCE_VERSION = 3 as const;
+export const FULL_SUITE_EVIDENCE_VERSION = 4 as const;
 export const FULL_SUITE_EVIDENCE_PATH = '.pipeline/test-suite-evidence.json';
 export const FULL_SUITE_DIAGNOSTIC_LIMIT = 16_384;
 export const FULL_SUITE_TRUNCATION_MARKER = '\n...[output truncated]...\n';
@@ -24,14 +25,47 @@ export type FullSuiteFailureReason =
   | 'internal_error';
 
 type FullSuiteNonSignalFailureReason = Exclude<FullSuiteFailureReason, 'signal'>;
+/**
+ * Callers can still construct legacy-shaped in-memory fixtures while this
+ * version bump rolls through the suite. Persistence always stamps v4 and
+ * readers never treat v3 as current.
+ */
+type FullSuiteEvidenceWriteVersion = typeof FULL_SUITE_EVIDENCE_VERSION | 3;
+
+export type FullSuiteEvidenceMode = 'aggregate' | 'scoped';
+
+/** The closed execution route that produced a PASS. */
+export type FullSuiteExecutionBasis =
+  | 'aggregate'
+  | 'scoped'
+  | 'scoped-empty-selection-aggregate';
+
+export type FullSuiteDriftCategoryCounts = Record<
+  FullSuiteFingerprintCategory,
+  number
+>;
+
+export interface FullSuiteDriftLedgerEntry {
+  at: string;
+  headSha: string;
+  categories: FullSuiteDriftCategoryCounts;
+}
 
 export interface FullSuitePassEvidence {
-  version: typeof FULL_SUITE_EVIDENCE_VERSION;
+  version: FullSuiteEvidenceWriteVersion;
   outcome: 'PASS';
   reason: 'exit_zero';
   fingerprint: string;
   categoryFingerprints: FullSuiteCategoryFingerprints;
   provenanceHeadSha: string;
+  /** Defaults to aggregate on write for callers that do not select scoped verification. */
+  mode?: FullSuiteEvidenceMode;
+  /** Defaults to an empty list on write for aggregate verification. */
+  selectors?: string[];
+  /** Defaults from the recorded mode; scoped-empty records its aggregate fallback explicitly. */
+  executionBasis?: FullSuiteExecutionBasis;
+  /** Starts empty for a new PASS epoch; later tasks append drift observations. */
+  driftLedger?: FullSuiteDriftLedgerEntry[];
   worktreeClean?: boolean;
   command: string | null;
   workingDirectory: string | null;
@@ -44,7 +78,7 @@ export interface FullSuitePassEvidence {
 }
 
 interface FullSuiteFailEvidenceBase {
-  version: typeof FULL_SUITE_EVIDENCE_VERSION;
+  version: FullSuiteEvidenceWriteVersion;
   outcome: 'FAIL';
   fingerprint: string | null;
   provenanceHeadSha: string | null;
@@ -206,6 +240,36 @@ function isCategoryFingerprints(value: unknown): value is FullSuiteCategoryFinge
       isNonEmptyString(value[category]));
 }
 
+function isDriftCategoryCounts(value: unknown): value is FullSuiteDriftCategoryCounts {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === FULL_SUITE_FINGERPRINT_CATEGORIES.length &&
+    FULL_SUITE_FINGERPRINT_CATEGORIES.every((category) =>
+      Number.isInteger(value[category]) && (value[category] as number) >= 0);
+}
+
+function isDriftLedgerEntry(value: unknown): value is FullSuiteDriftLedgerEntry {
+  return isRecord(value) &&
+    isIsoTimestamp(value.at) &&
+    isNonEmptyString(value.headSha) &&
+    isDriftCategoryCounts(value.categories);
+}
+
+function isPassMode(value: unknown): value is FullSuiteEvidenceMode {
+  return value === 'aggregate' || value === 'scoped';
+}
+
+function isOptionalExecutionBasis(value: unknown): value is FullSuiteExecutionBasis | undefined {
+  return value === undefined ||
+    value === 'aggregate' ||
+    value === 'scoped' ||
+    value === 'scoped-empty-selection-aggregate';
+}
+
+function isSelectors(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(isNonEmptyString);
+}
+
 function isPassEvidence(
   value: Record<string, unknown>,
 ): value is Record<string, unknown> & FullSuitePassEvidence {
@@ -216,6 +280,10 @@ function isPassEvidence(
     isNonEmptyString(value.fingerprint) &&
     isCategoryFingerprints(value.categoryFingerprints) &&
     isNonEmptyString(value.provenanceHeadSha) &&
+    isPassMode(value.mode) &&
+    isSelectors(value.selectors) &&
+    isOptionalExecutionBasis(value.executionBasis) &&
+    Array.isArray(value.driftLedger) && value.driftLedger.every(isDriftLedgerEntry) &&
     isOptionalBoolean(value.worktreeClean) &&
     isNullableBoundedNonEmptyString(value.command) &&
     isNullableBoundedNonEmptyString(value.workingDirectory) &&
@@ -271,6 +339,14 @@ export async function writeFullSuiteEvidence(
       : sanitizeFullSuiteDiagnosticOutput(evidence.workingDirectory, secretValues) || null;
     const persisted: FullSuiteEvidence = {
       ...evidence,
+      version: FULL_SUITE_EVIDENCE_VERSION,
+      ...(evidence.outcome === 'PASS'
+        ? {
+            mode: evidence.mode ?? 'aggregate',
+            selectors: evidence.selectors ?? [],
+            driftLedger: evidence.driftLedger ?? [],
+          }
+        : {}),
       command,
       workingDirectory,
       stdout: sanitizeFullSuiteDiagnosticOutput(evidence.stdout, secretValues),

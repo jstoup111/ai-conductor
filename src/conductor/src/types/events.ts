@@ -676,6 +676,23 @@ export type ConductorEvent =
         status: 'CURRENT' | 'STALE';
         reason?: string;
       };
+      /** Optional to preserve parsing of events emitted before verification modes existed. */
+      mode?: 'aggregate' | 'scoped';
+      /** Present only when the inspection made a drift-budget verdict. */
+      budgetVerdict?:
+        | {
+            outcome: 'preserved_within_budget';
+            categories: Record<string, number>;
+          }
+        | {
+            outcome: 'rerun_required';
+            reason: 'drift_budget_exceeded' | 'unbudgetable_drift';
+            category: string;
+            count: number;
+            bound: 'none' | number;
+          };
+      /** Records the non-silent aggregate fallback for a scoped empty selector set. */
+      executionBasis?: 'scoped-empty-selection-aggregate';
     }
   | {
       /**
@@ -687,6 +704,8 @@ export type ConductorEvent =
       member: 'test_suite';
       decision: 'reuse';
       basis: 'fingerprint-match';
+      /** Optional to preserve parsing of events emitted before verification modes existed. */
+      mode?: 'aggregate' | 'scoped';
     }
   | {
       /**
@@ -836,6 +855,8 @@ export type ConductorEvent =
       gate: StepName;
       surface: string[];
       deltaConsidered: string[];
+      /** A bounded test-suite drift evaluation retained its existing PASS. */
+      basis?: 'test_suite_drift_budget';
     }
   | {
       /**

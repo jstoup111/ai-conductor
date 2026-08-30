@@ -16,6 +16,8 @@ build_review:
 #   working_directory: .
 #   timeout_seconds: 1800
 
+# CONFIG_INIT_TEST_SUITE_VERIFICATION
+
 # --- Per-step overrides (optional) -------------------------------------------
 # steps:
 #   explore:
