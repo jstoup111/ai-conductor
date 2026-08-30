@@ -1678,6 +1678,120 @@ run_update "$REPO" "$HOME_DIR"
 assert "stable diverged: refuses the remote release without mutating checkout or version" \
   "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
 
+# A stable install updated by a pre-v1 `bin/update` was left in detached HEAD by
+# that updater's `git checkout vX.Y.Z`. The branch guard used to end the check
+# there, silently and permanently, so recovery re-attaches the stable branch.
+PAIR=$(make_main_repo "stable-detached-lineage")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+
+WORK="$TMP_ROOT/stable-detached-lineage-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+STABLE_DETACHED_SHA=$(git -C "$WORK" rev-parse HEAD)
+# Reproduce the old updater's outcome: checked out at the release tag, off the branch.
+git -C "$REPO" fetch -q --tags origin stable
+git -C "$REPO" checkout -q --detach "$STABLE_DETACHED_SHA"
+git -C "$WORK" commit -q --allow-empty -m "v0.5.0"
+git -C "$WORK" tag v0.5.0
+git -C "$WORK" push -q origin stable v0.5.0
+STABLE_RELEASE_SHA=$(git -C "$WORK" rev-parse HEAD)
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "stable detached on the stable lineage: re-attaches the branch, advances to the tagged release, migrates, and records its version" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_RELEASE_SHA" ] && [ "$(git -C "$REPO" rev-parse stable)" = "$STABLE_RELEASE_SHA" ] && [ -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.5.0" ] && echo 0 || echo 1)"
+
+# The state the old updater actually leaves behind the moment it finishes:
+# detached exactly at origin/stable. There is nothing to fast-forward, but the
+# detachment is still the defect, so re-attaching is the whole repair.
+PAIR=$(make_main_repo "stable-detached-current")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+
+WORK="$TMP_ROOT/stable-detached-current-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+STABLE_RELEASE_SHA=$(git -C "$WORK" rev-parse HEAD)
+git -C "$REPO" fetch -q --tags origin stable
+git -C "$REPO" checkout -q --detach "$STABLE_RELEASE_SHA"
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "stable detached at the current release: re-attaches the branch without moving HEAD" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_RELEASE_SHA" ] && [ "$(git -C "$REPO" rev-parse stable)" = "$STABLE_RELEASE_SHA" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.4.0" ] && echo 0 || echo 1)"
+
+# A detached HEAD that is not part of origin/stable's ancestry is a deliberate
+# checkout, not this defect. It must stay exactly as silent as before.
+PAIR=$(make_main_repo "stable-detached-unrelated")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+
+WORK="$TMP_ROOT/stable-detached-unrelated-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+git -C "$REPO" checkout -q --detach HEAD
+git -C "$REPO" commit -q --allow-empty -m "deliberate detached work"
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "stable detached off the stable lineage: leaves the deliberate checkout untouched and silent" \
+  "$( [ "$CODE" -eq 0 ] && [ -z "$(git -C "$REPO" branch --show-current)" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && ! printf '%s\n' "$OUT" | grep -Eqi 'detach|stable update available' && echo 0 || echo 1)"
+
+# Without a TTY the recovery is an instruction, not a mutation — and the
+# instruction has to be the one that re-attaches, not the fast-forward pull.
+PAIR=$(make_main_repo "stable-detached-no-tty")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+
+WORK="$TMP_ROOT/stable-detached-no-tty-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+STABLE_ORIGINAL_SHA=$(git -C "$WORK" rev-parse HEAD)
+git -C "$REPO" fetch -q --tags origin stable
+git -C "$REPO" checkout -q --detach "$STABLE_ORIGINAL_SHA"
+git -C "$WORK" commit -q --allow-empty -m "v0.5.0"
+git -C "$WORK" tag v0.5.0
+git -C "$WORK" push -q origin stable v0.5.0
+
+run_update "$REPO" "$HOME_DIR"
+assert "stable detached without a TTY: prints the re-attach command without mutating the checkout" \
+  "$( [ "$CODE" -eq 0 ] && [ -z "$(git -C "$REPO" branch --show-current)" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$OUT" | grep -q 'git checkout -B stable' && echo 0 || echo 1)"
+
 PAIR=$(make_main_repo "s4-diverged")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
 HOME_DIR=$(make_isolated_home)

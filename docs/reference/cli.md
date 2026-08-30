@@ -59,6 +59,15 @@ semver tag, requires a clean local `stable` checkout and a fast-forward relation
 before fast-forwarding to that captured commit and running `bin/migrate`. An untagged target is rejected
 before local mutation. If migration fails after the fast-forward, the updater restores the prior `stable`
 branch head and recorded version.
+
+A stable checkout left in detached HEAD — as a pre-v1 updater's `git checkout vX.Y.Z` did — is
+recovered rather than skipped. When HEAD is detached and is an ancestor of (or equal to)
+`origin/stable`, the updater offers to re-attach the `stable` branch at the approved release commit,
+then runs `bin/migrate`; without a TTY it prints `git checkout -B stable <sha> && bin/migrate`
+instead. The offer is made even when HEAD already equals `origin/stable`, because the detachment is
+itself the defect. A detached HEAD outside `origin/stable`'s ancestry is a deliberate checkout and is
+left untouched, and every other guard — exact semver tag, clean worktree, and applying only the
+approved SHA — is unchanged.
 `tagged` follows semver tag checkouts; `main` follows every merge to the development branch.
 
 ## `bin/migrate`
