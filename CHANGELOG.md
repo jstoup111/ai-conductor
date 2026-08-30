@@ -11,6 +11,159 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-30
+
+### Added
+
+- An operator-actionable halt (needs-human, plan-gap, or protected-artifact) off the default branch now leaves a committed, best-effort-pushed halt record at `.docs/halted/<slug>.md` that survives a recreated worktree and updates to resolved when the halt clears. ([implementation PR #1845](https://github.com/jstoup111/ai-conductor/pull/1845)).
+- Codex dispatches are now priced from a committed per-model rate card (`.ai-conductor/rate-card.json`, maintained by `conduct rate-card refresh`), so a mixed-provider feature reports its real cost instead of a Claude-only figure; dispatches whose cost cannot be established are named explicitly on the finish usage line. ([implementation PR #1858](https://github.com/jstoup111/ai-conductor/pull/1858)).
+- Plan specifications now require every task to declare two to five nonblank completion checks before landing. ([implementation PR #1866](https://github.com/jstoup111/ai-conductor/pull/1866)).
+- Adds a guided workflow for safely removing obsolete code and verifying remaining references. ([implementation PR #1899](https://github.com/jstoup111/ai-conductor/pull/1899)).
+- Daemon runs now route wholly remediable as-built architecture-review findings through one bounded build remediation lap, while design findings halt for human input. ([implementation PR #1908](https://github.com/jstoup111/ai-conductor/pull/1908)).
+- Adds configurable visualizer plugins that receive Conductor event streams. ([implementation PR #1958](https://github.com/jstoup111/ai-conductor/pull/1958)).
+- OpenTelemetry traces distinguish completed, halted, and terminated conductor runs. ([implementation PR #1997](https://github.com/jstoup111/ai-conductor/pull/1997)).
+- `bin/install --check` now warns when ripgrep is missing, since several shell tests silently skip their coverage without it. ([implementation PR #2030](https://github.com/jstoup111/ai-conductor/pull/2030)).
+- Adds configurable test-suite verification modes and drift budgets that preserve valid full-suite evidence. ([implementation PR #2032](https://github.com/jstoup111/ai-conductor/pull/2032)).
+- A major version update is no longer applied by the startup auto-check and requires typing the target version to confirm. ([implementation PR #2083](https://github.com/jstoup111/ai-conductor/pull/2083)).
+- `ai-conductor --version` now reports the installed harness version. ([implementation PR #2081](https://github.com/jstoup111/ai-conductor/pull/2081)).
+
+### Changed
+
+- build_review no longer judges plan conformance, scope, or mechanism soundness — prd_audit now owns scope-as-intent grading with bounded remediation, and a new as-built architecture review owns design conformance, both running on every feature regardless of tier or track; build_review keeps only an opt-in test-quality rubric. ([implementation PR #1824](https://github.com/jstoup111/ai-conductor/pull/1824)).
+- Require Node.js 26 and update the conductor and recorder dependency stacks. ([implementation PR #1797](https://github.com/jstoup111/ai-conductor/pull/1797)).
+- Enforce plan-task coverage for every story acceptance criterion. ([implementation PR #1847](https://github.com/jstoup111/ai-conductor/pull/1847)).
+- Unifies provider dispatch so every invocation records complete execution outcomes and usage. ([implementation PR #1871](https://github.com/jstoup111/ai-conductor/pull/1871)).
+- Introduces the canonical ai-conductor compose workflow and ai-conductor launcher while retaining deprecated compatibility aliases. ([implementation PR #2023](https://github.com/jstoup111/ai-conductor/pull/2023)).
+
+### Removed
+
+- Removed ineffective TDD RED/GREEN model configuration keys; configured tdd blocks are now rejected as unknown step settings. ([implementation PR #1910](https://github.com/jstoup111/ai-conductor/pull/1910)).
+- Retire the retrospective skill, command, and delivery-time closeout obligations. ([implementation PR #1946](https://github.com/jstoup111/ai-conductor/pull/1946)).
+- Removes the unattended inline --auto one-shot and directs unattended runs to the daemon, and fixes an intake-ledger lease failure when a lease was released while another process probed the owner's liveness. ([implementation PR #1974](https://github.com/jstoup111/ai-conductor/pull/1974)).
+- Removes the retired `wiring_check` BUILD step and its configuration key. ([implementation PR #1942](https://github.com/jstoup111/ai-conductor/pull/1942)).
+- The `conduct` launcher now runs the TypeScript CLI and warns to use `ai-conductor`. ([implementation PR #2052](https://github.com/jstoup111/ai-conductor/pull/2052)).
+
+### Fixed
+
+- A build_review rubric prompt larger than 128 KiB no longer fails to start on the Claude provider, which previously exhausted the mechanical fault allowance and halted the feature. ([implementation PR #1821](https://github.com/jstoup111/ai-conductor/pull/1821)).
+- Codex dispatches can now reach the network inside their sandbox, so steps that use `gh` or `git push` no longer fail as approval denials. ([implementation PR #1828](https://github.com/jstoup111/ai-conductor/pull/1828)).
+- Remediation tasks may no longer order a removal that drops coverage a completed plan task delivered — the removal must name the surviving plan task or criterion and carry its replacement. ([implementation PR #1829](https://github.com/jstoup111/ai-conductor/pull/1829)).
+- Remediation tasks that change one side of a duplicated enumeration, registry, or id list must now name the counterpart or derive both from one source, so the pair cannot silently diverge. ([implementation PR #1830](https://github.com/jstoup111/ai-conductor/pull/1830)).
+- Remediation tasks now sweep for sibling sites of the same defect class and for what a removal orphans, bounded to sites an existing plan task admits, so a repaired defect stops reappearing at the next site on the following audit cycle. ([implementation PR #1837](https://github.com/jstoup111/ai-conductor/pull/1837)).
+- A steps: override for an out-of-band step (remediate, bootstrap, assess, attribution_verify) is accepted instead of being rejected as a custom step missing 'after'. ([implementation PR #1843](https://github.com/jstoup111/ai-conductor/pull/1843)).
+- An OVER_SCOPE prd-audit finding the operator has accepted now satisfies the prd_audit gate instead of blocking it until the oscillation cap halts the run. ([implementation PR #1854](https://github.com/jstoup111/ai-conductor/pull/1854)).
+- Codex-routed steps that dispatch through the streaming path no longer fail with "Codex self-host isolation is unavailable"; the streaming runtime wrapper now preserves every provider capability, including self-host provisioning and readiness. ([implementation PR #1855](https://github.com/jstoup111/ai-conductor/pull/1855)).
+- FINISH no longer halts on an authored PR body that still carries the SHIP-entry draft note; floor classification is decided by body content rather than by the presence of engine boilerplate. ([implementation PR #1856](https://github.com/jstoup111/ai-conductor/pull/1856)).
+- Repository documentation maintenance now uses the supported Codex Terra model instead of falling back to Claude Sonnet. ([implementation PR #1860](https://github.com/jstoup111/ai-conductor/pull/1860)).
+- Lets operators decide every visible over-scope criterion in one clear, while refused criteria remain blocked with their rationale recorded. ([implementation PR #1873](https://github.com/jstoup111/ai-conductor/pull/1873)).
+- Daemon builds now report prerequisite-blocked steps and validator refusals accurately instead of marking their work as failed. ([implementation PR #1870](https://github.com/jstoup111/ai-conductor/pull/1870)).
+- TDD-authored tests now declare Covers markers, so the build_review test-quality rubric reviews them instead of passing vacuously on an empty scope. ([implementation PR #1877](https://github.com/jstoup111/ai-conductor/pull/1877)).
+- Daemon help now lists every supported dispatcher command, including pause and resume. ([implementation PR #1878](https://github.com/jstoup111/ai-conductor/pull/1878)).
+- Validates feature-scoped artifact stems before landing a spec. ([implementation PR #1893](https://github.com/jstoup111/ai-conductor/pull/1893)).
+- Manual testing now warns instead of blocking when browser automation dependencies are unavailable, while continuing curl checks and preserving real application failures. ([implementation PR #1902](https://github.com/jstoup111/ai-conductor/pull/1902)).
+- Restored configurable gate code-validity behavior and reliable Claude rate-limit hook handling. ([implementation PR #1914](https://github.com/jstoup111/ai-conductor/pull/1914)).
+- SHIP validation retries verdict reports from an earlier dispatch instead of routing their stale findings. ([implementation PR #1891](https://github.com/jstoup111/ai-conductor/pull/1891)).
+- The daemon now identifies the actual invalid as-built verdict defect instead of always reporting a plan gap. ([implementation PR #1919](https://github.com/jstoup111/ai-conductor/pull/1919)).
+- Implicitly invocable skills now stay within their lifecycle boundaries instead of activating on ordinary change, planning, review, or question prompts. ([implementation PR #1924](https://github.com/jstoup111/ai-conductor/pull/1924)).
+- Daemon discovery no longer rejects valid coherence artifacts whose table mixes six-cell criterion rows with five-cell legacy rows. ([implementation PR #1926](https://github.com/jstoup111/ai-conductor/pull/1926)).
+- As-built review remediation now resolves a governing clause written with backticks or bold around its ADR stem, and accepts the documented `<stem> + <decision number>` form, instead of halting for a human. ([implementation PR #1959](https://github.com/jstoup111/ai-conductor/pull/1959)).
+- PRD audits now safely parse, validate, and route no-owner over-scope findings. ([implementation PR #1909](https://github.com/jstoup111/ai-conductor/pull/1909)).
+- Remediation plans now accept case-variant criterion IDs and report actionable admission failures. ([implementation PR #1969](https://github.com/jstoup111/ai-conductor/pull/1969)).
+- Test-quality preflight failures now retain their bounded diagnostics so exhausted build reviews remain actionable. ([implementation PR #1970](https://github.com/jstoup111/ai-conductor/pull/1970)).
+- Ensure OpenTelemetry exports from daemon-dispatched builds include stable feature and run identity. ([implementation PR #1973](https://github.com/jstoup111/ai-conductor/pull/1973)).
+- Remediation planner keys each gap by the auditor's finding id, so autonomously-remediable findings route instead of halting on an id mismatch. ([implementation PR #1977](https://github.com/jstoup111/ai-conductor/pull/1977)).
+- daemon-triage classifies plan-gap halts instead of reporting them as mechanical, and the stalled-feature runbook carries the amend-reseal-rewind recovery. ([implementation PR #1980](https://github.com/jstoup111/ai-conductor/pull/1980)).
+- The build_review testQuality preflight creates the parent directory when restoring a merge-base file whose directory the diff deleted, so a deletion no longer fails the preflight. ([implementation PR #1982](https://github.com/jstoup111/ai-conductor/pull/1982)).
+- Provides explicit OpenTelemetry duration buckets through 30 minutes for step and closeout histograms. ([implementation PR #1985](https://github.com/jstoup111/ai-conductor/pull/1985)).
+- Skipped SHIP steps now remain skipped when a build kickback restages downstream work. ([implementation PR #2003](https://github.com/jstoup111/ai-conductor/pull/2003)).
+- The post-FINISH shipment audit no longer refuses a ship when the engine's own post-finish cost/time commit has moved the branch past the head GitHub still reports. ([implementation PR #2010](https://github.com/jstoup111/ai-conductor/pull/2010)).
+- Build-review compatibility checks now prevent retired-rubric enumerations from drifting across engine and documentation representations. ([implementation PR #2004](https://github.com/jstoup111/ai-conductor/pull/2004)).
+- Harness configuration now rejects settings without runtime consumers and accepts supported custom-step controls. ([implementation PR #1957](https://github.com/jstoup111/ai-conductor/pull/1957)).
+- A PR whose Migration section explains the migration in prose alongside its runnable fence is no longer rejected by the release-metadata gate, and no longer loops the FINISH release-metadata restore. ([implementation PR #2012](https://github.com/jstoup111/ai-conductor/pull/2012)).
+- Prevent non-S daemon candidates with malformed coherence mappings from being silently lost and report actionable parse details. ([implementation PR #1945](https://github.com/jstoup111/ai-conductor/pull/1945)).
+- `bin/install` and `bin/install --check` now fail with exit 1 when the conduct-ts engine cannot be built or is missing, instead of reporting a successful install with no engine. ([implementation PR #2017](https://github.com/jstoup111/ai-conductor/pull/2017)).
+- The as-built architecture review now judges its plan-gap outcome against the approved, sealed story criteria instead of superseded intake capture, so a deliberate story narrowing no longer halts a feature whose acceptance criteria all pass. ([implementation PR #2018](https://github.com/jstoup111/ai-conductor/pull/2018)).
+- FINISH now returns prose-revision feedback to its author and completes the bounded revision loop without exhausting retries. ([implementation PR #2015](https://github.com/jstoup111/ai-conductor/pull/2015)).
+- Daemon project setup now runs only when the worktree setup marker is no longer valid. ([implementation PR #1968](https://github.com/jstoup111/ai-conductor/pull/1968)).
+- OpenTelemetry metrics now retain a stable per-feature identity across daemon dispatches. ([implementation PR #1971](https://github.com/jstoup111/ai-conductor/pull/1971)).
+- OpenTelemetry now exports reliable completed, halted, and terminated run outcome counts for dashboards. ([implementation PR #2024](https://github.com/jstoup111/ai-conductor/pull/2024)).
+- Codex dispatches are priced from a global rate card at ~/.ai-conductor/rate-card.json (symlinked by bin/install and bin/update to the harness checkout's committed card), which takes precedence over per-project cards. ([implementation PR #2029](https://github.com/jstoup111/ai-conductor/pull/2029)).
+- As-built remediation now resolves governing clauses that cite ADR decisions written as ATX headings, instead of halting needs-human. ([implementation PR #2053](https://github.com/jstoup111/ai-conductor/pull/2053)).
+- A prd_audit remediation cap halt now lists the as-built findings that participated in the same validation-group round, instead of dropping them silently. ([implementation PR #2059](https://github.com/jstoup111/ai-conductor/pull/2059)).
+- OTEL cost and dispatch metrics now match shipped-record rollups, including failed provider attempts. ([implementation PR #2063](https://github.com/jstoup111/ai-conductor/pull/2063)).
+- A stable-channel checkout left detached by an older updater is recovered onto the stable branch instead of silently stopping updates. ([implementation PR #2082](https://github.com/jstoup111/ai-conductor/pull/2082)).
+- A plan that references its stories with a markdown link no longer fails the finish step with a shipped-record hash mismatch. ([implementation PR #2089](https://github.com/jstoup111/ai-conductor/pull/2089)).
+
+## Migration
+
+```bash migration
+# build_review's scope, completeness, rootCause (and tautology) rubrics are
+# retired; only an opt-in test-quality rubric remains in the container.
+# Their skill directories (skills/build-review-scope,
+# skills/build-review-completeness, skills/build-review-root-cause,
+# skills/build-review-tautology) are removed from the harness and a new
+# skills/build-review-test-quality is added.
+#
+# A normal harness update (bin/conduct's built-in update flow, which runs
+# bin/migrate) already re-runs `bin/install --update` and prunes the stale
+# skill symlinks automatically — no manual symlink cleanup is required.
+#
+# Existing `build_review.rubrics.<scope|completeness|rootCause|tautology|
+# wiring|causalIntegrity>` keys in .ai-conductor/config.yml or project
+# config are accepted as no-ops with a one-time notice; they never fail
+# config loading or halt a run. Review your config afterward, since those
+# rubrics will simply stop running — if you relied on them, the questions
+# they used to ask are now owned by prd_audit (scope-as-intent, with bounded
+# remediation) and the new as-built architecture review (design
+# conformance), both of which now run on every feature regardless of
+# complexity tier or work track. See the new `prd_audit` and
+# `architecture_review_as_built` sections in docs/reference/configuration.md
+# for their keys and defaults.
+echo "No required action beyond a normal 'bin/conduct' update — review build_review.rubrics config afterward."
+```
+
+```bash migration
+asdf install nodejs 26.7.0
+ASDF_NODEJS_VERSION=26.7.0 "${HARNESS_DIR}/bin/install" --update
+```
+
+```bash migration
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
+```
+
+```bash migration
+printf "%s\n" "The retro command and skill are retired. Remove retro invocations and steps.retro entries from your automation and configuration before upgrading."
+```
+
+```bash migration
+config=.ai-conductor/config.yml
+[ -f "$config" ] || exit 0
+tmp=$(mktemp)
+awk '
+  /^steps:[[:space:]]*$/ { in_steps = 1 }
+  in_steps && /^  wiring_check:[[:space:]]*$/ { dropping = 1; next }
+  dropping && /^  [^[:space:]]/ { dropping = 0 }
+  !dropping { print }
+' "$config" > "$tmp"
+mv "$tmp" "$config"
+```
+
+```bash migration
+for config in ~/.ai-conductor/config.yml .ai-conductor/config.yml; do
+  [ -f "$config" ] || continue
+  yq -i 'del(.defaults.by_tier, .complexity.default_tier, .harness_self_host.skill_relink_preflight, .auth_park_timeout_minutes)' "$config"
+done
+```
+
+```bash migration
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
+```
+
+```bash migration
+"$HARNESS_DIR/bin/install"
+test "$(readlink -f "$HOME/.local/bin/conduct")" = "$HARNESS_DIR/bin/ai-conductor"
+```
+
 ## [0.104.0] - 2026-08-22
 
 ### Added
