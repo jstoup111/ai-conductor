@@ -136,8 +136,8 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
     // each project translate the namespace into its own shared/namespaced infra.
-    prepareWorktree: async (wt, log, events) => {
-      const baseSha = await resolveDaemonBaseSha(cfg.projectRoot, cfg.baseBranch);
+    prepareWorktree: async (wt, log, events, order) => {
+      const baseSha = order?.baseSha ?? await resolveDaemonBaseSha(cfg.projectRoot, cfg.baseBranch);
       await prepareWorktree(wt.path, log ?? cfg.log, {
         verbose: cfg.verbose ?? false,
         baseSha,

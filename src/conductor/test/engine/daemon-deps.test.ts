@@ -196,6 +196,36 @@ describe('engine/daemon-deps', () => {
     );
   });
 
+  it('threads the dispatched work order pin into preparation without resolving the moving branch tip', async () => {
+    vi.mocked(prepareWorktree).mockResolvedValue(undefined);
+    const d = makeFeatureRunnerDeps({
+      projectRoot: dir,
+      worktreeBase: join(dir, '.worktrees'),
+      baseBranch: 'main',
+      runConductorInWorktree: async () => {},
+    });
+    const order = {
+      repository: 'owner/repository',
+      slug: 'feature',
+      baseSha: 'dispatched-pin',
+      manifest: [],
+    };
+
+    await d.prepareWorktree!(
+      { path: join(dir, 'feature'), branch: 'feat/feature' },
+      undefined,
+      undefined,
+      order,
+    );
+
+    expect(prepareWorktree).toHaveBeenCalledWith(
+      join(dir, 'feature'),
+      undefined,
+      expect.objectContaining({ baseSha: 'dispatched-pin' }),
+    );
+    expect(execa).not.toHaveBeenCalled();
+  });
+
   describe('createWorktree (idempotent retry)', () => {
     const mockExeca = vi.mocked(execa);
     const slug = 'feat-x';
