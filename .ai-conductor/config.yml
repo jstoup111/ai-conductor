@@ -76,6 +76,32 @@ test_suite:
   scoped_command: './node_modules/.bin/vitest run {selectors}'
   working_directory: src/conductor
   timeout_seconds: 1800
+  # One full-suite run per feature, then hold that PASS across small laps.
+  #
+  # `aggregate` stays the mode deliberately. `scoped` derives its selectors
+  # from the feature's changed *test* paths only, so a source change that
+  # breaks an untouched test would not be executed by the build loop's only
+  # regression gate.
+  #
+  # The budget is a count of changed files since the attested PASS, per
+  # category. Within budget the PASS is preserved and nothing re-runs; over
+  # it, the aggregate command runs again and re-attests. The v1.0 cutover
+  # build dispatched `test_suite` five times at ~4m20s each — roughly 22
+  # minutes — while its individual commits touched 1-2 files, occasionally
+  # 5-7. Six holds the PASS across an ordinary remediation lap and re-attests
+  # on a large one.
+  #
+  # `source` is the catch-all classification, so `docs/`, `.docs/`, `bin/`,
+  # `skills/`, and `HARNESS.md` churn in the SHIP tail counts against it
+  # exactly as engine code does; the budget cannot tell them apart. Left
+  # undeclared, `dependencies`, `environment`, `migrations`, and
+  # `project_config` remain `none` — those are unbudgetable and always
+  # re-run.
+  verification:
+    mode: aggregate
+    drift_budget:
+      source: 6
+      tests: 3
 
 # Per-step overrides.
 #
