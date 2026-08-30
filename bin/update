@@ -337,7 +337,13 @@ check_harness_update_main() {
 dispatch_update_channel() {
   local channel
   if ! channel=$(conductor_cfg_get updateChannel tagged); then
-    if ! command -v conduct-ts &>/dev/null; then
+    # A failed read means either the CLI is absent (decline) or the config is
+    # unreadable while the CLI works (degrade to the default channel). Probe
+    # the CLI `conductor_cfg_get` actually resolves — probing the retired
+    # `conduct-ts` name made the degrade path depend on a stale global install.
+    local cli
+    cli="$(conductor_cli)"
+    if ! command -v "$cli" &>/dev/null; then
       warn "Update check declined: conductor configuration could not be read."
       return 1
     fi
