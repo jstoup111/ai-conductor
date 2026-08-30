@@ -183,6 +183,12 @@ export class AuditTrailWriter {
           cause: `${event.from} evidence: ${event.evidence}`,
           ...(event.kickback_outcome ? { kickback_outcome: event.kickback_outcome } : {}),
         };
+      case 'kickback_budget_adjustment_authorized':
+        return {
+          origin: 'build_review',
+          event: event.type,
+          cause: `${event.kind} ${event.adjustmentId}: ${event.beforeCount}/${event.beforeLimit} → ${event.afterCount}/${event.afterLimit}`,
+        };
       case 'loop_halt':
         return { origin: event.step ?? 'build', event: 'intervention', cause: event.reason };
       case 'halt_marker_write_failed':

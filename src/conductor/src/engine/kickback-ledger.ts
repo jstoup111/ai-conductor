@@ -554,13 +554,12 @@ export async function recordGrowth(
     throw new Error('plan growth must have non-negative counts whose gate total equals added');
   }
 
-  const ledger = await readKickbackLedger(projectRoot);
   const cap = options.cap ?? growth.added;
   const recorded = withRemaining(growth, cap);
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    growth: { authored: growth.authored, added: growth.added, byGate: { ...growth.byGate } },
+  const result = await mutateKickbackLedger(projectRoot, (ledger) => {
+    ledger.growth = { authored: growth.authored, added: growth.added, byGate: { ...growth.byGate } };
   });
+  if (!result.ok) throw new Error(`Unable to record plan growth: ${result.message}`);
   await options.events?.emit({ type: 'plan_growth', ...recorded });
   return recorded;
 }
@@ -599,7 +598,7 @@ export function bumpKickbackGate(
 
   return {
     entry: nextEntry,
-    cumulativeExhausted: nextEntry.cumulative > MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+    cumulativeExhausted: nextEntry.cumulative > (nextEntry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW),
     exhausted: !madeProgress && previous.count >= MAX_KICKBACKS_PER_GATE,
   };
 }
@@ -610,14 +609,13 @@ export async function bumpKickbackGateInLedger(
   gate: string,
   input: BumpKickbackGateInput,
 ): Promise<BumpKickbackGateResult> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const result = bumpKickbackGate(ledger.gates[gate], input);
-
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    gates: { ...ledger.gates, [gate]: result.entry },
+  let result: BumpKickbackGateResult | undefined;
+  const mutation = await mutateKickbackLedger(projectRoot, (ledger) => {
+    result = bumpKickbackGate(ledger.gates[gate], input);
+    ledger.gates[gate] = result.entry;
   });
-
+  if (!mutation.ok) throw new Error(`Unable to consume kickback budget: ${mutation.message}`);
+  if (!result) throw new Error('Unable to consume kickback budget: mutation produced no result');
   return result;
 }
 /** Purely consume one build-review mechanical-fault allowance. */
@@ -646,22 +644,21 @@ export async function bumpMechanicalFaultsInLedger(
   gate: string,
   fault?: KickbackLastMechanicalFault,
 ): Promise<KickbackGateEntry> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const entry = ledger.gates[gate] ?? {
-    count: 0,
-    cumulative: 0,
-    mechanicalFaults: 0,
-    treeHash: null,
-    lastReason: '',
-    priorVerdict: true,
-    resolvedBefore: 0,
-  };
-
-  const nextEntry = bumpMechanicalFaults(entry, fault);
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    gates: { ...ledger.gates, [gate]: nextEntry },
+  let nextEntry: KickbackGateEntry | undefined;
+  const mutation = await mutateKickbackLedger(projectRoot, (ledger) => {
+    const entry = ledger.gates[gate] ?? {
+      count: 0,
+      cumulative: 0,
+      mechanicalFaults: 0,
+      treeHash: null,
+      lastReason: '',
+      priorVerdict: true,
+      resolvedBefore: 0,
+    };
+    nextEntry = bumpMechanicalFaults(entry, fault);
+    ledger.gates[gate] = nextEntry;
   });
-
+  if (!mutation.ok) throw new Error(`Unable to consume mechanical allowance: ${mutation.message}`);
+  if (!nextEntry) throw new Error('Unable to consume mechanical allowance: mutation produced no entry');
   return nextEntry;
 }

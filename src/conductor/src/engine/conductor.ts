@@ -237,6 +237,7 @@ import {
   bumpKickbackGateInLedger,
   clearKickbackLedger,
   creditKickbackGateLaps,
+  mutateKickbackLedger,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   readGrowth,
@@ -732,28 +733,21 @@ async function recordRemediationGateAppend(
   budget: RemediationGateAppendBudget,
   events: PlanGrowthEventSink,
 ): Promise<void> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const existing = ledger.gates[budget.gate];
-  const next: KickbackGateEntry & { laps: number } = {
-    ...(existing ?? {
-      count: 0,
-      cumulative: 0,
-      treeHash: null,
-      lastReason: '',
-      priorVerdict: true,
-      resolvedBefore: 0,
-    }),
-    laps: budget.priorLaps + (budget.taskCount > 0 ? 1 : 0),
-  };
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    gates: { ...ledger.gates, [budget.gate]: next },
+  const mutation = await mutateKickbackLedger(projectRoot, (ledger) => {
+    const existing = ledger.gates[budget.gate];
+    ledger.gates[budget.gate] = {
+      ...(existing ?? {
+        count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+      }),
+      laps: budget.priorLaps + (budget.taskCount > 0 ? 1 : 0),
+    } as KickbackGateEntry;
   });
+  if (!mutation.ok) throw new Error(`Unable to record remediation append: ${mutation.message}`);
   if (budget.growthTaskCount === 0) return;
   // Earlier gate updates in a consolidated validation group are now durable;
   // merge them before recording this gate rather than replacing their growth
   // snapshot captured before the shared append.
-  const growth = ledger.growth ?? budget.growth;
+  const growth = (await readKickbackLedger(projectRoot)).growth ?? budget.growth;
   const priorGateGrowth = growth.byGate[budget.gate] ?? 0;
   await recordGrowth(
     projectRoot,
@@ -2269,17 +2263,17 @@ export class Conductor {
   }
 
   private async persistPendingAsBuiltRemediationFindings(): Promise<void> {
-    const ledger = await readKickbackLedger(this.projectRoot);
-    await writeKickbackLedger(this.projectRoot, {
-      ...ledger,
-      pendingAsBuiltRemediationFindings: [...this.pendingAsBuiltRemediationFindings.values()],
+    const mutation = await mutateKickbackLedger(this.projectRoot, (ledger) => {
+      ledger.pendingAsBuiltRemediationFindings = [...this.pendingAsBuiltRemediationFindings.values()];
     });
+    if (!mutation.ok) throw new Error(`Unable to persist pending findings: ${mutation.message}`);
   }
 
   private async clearPendingAsBuiltRemediationFindings(): Promise<void> {
-    const ledger = await readKickbackLedger(this.projectRoot);
-    const { pendingAsBuiltRemediationFindings: _pending, ...cleared } = ledger;
-    await writeKickbackLedger(this.projectRoot, cleared);
+    const mutation = await mutateKickbackLedger(this.projectRoot, (ledger) => {
+      delete ledger.pendingAsBuiltRemediationFindings;
+    });
+    if (!mutation.ok) throw new Error(`Unable to clear pending findings: ${mutation.message}`);
   }
 
   private async projectPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
@@ -5746,13 +5740,9 @@ export class Conductor {
         currentTreeHash(this.projectRoot),
         countResolvedTasks(this.projectRoot),
       ]);
-      const ledger = await readKickbackLedger(this.projectRoot);
-      const existing = ledger.gates[sourceGate];
-      await writeKickbackLedger(this.projectRoot, {
-        ...ledger,
-        gates: {
-          ...ledger.gates,
-          [sourceGate]: {
+      const mutation = await mutateKickbackLedger(this.projectRoot, (ledger) => {
+        const existing = ledger.gates[sourceGate];
+        ledger.gates[sourceGate] = {
             ...existing,
             count: existing?.count ?? 0,
             cumulative: existing?.cumulative ?? 0,
@@ -5760,9 +5750,9 @@ export class Conductor {
             lastReason: existing?.lastReason ?? '',
             priorVerdict: false, // active D2 baseline: kickback began on a failing gate
             resolvedBefore,
-          },
-        },
+        };
       });
+      if (!mutation.ok) throw new Error(`Unable to capture kickback baseline: ${mutation.message}`);
     };
 
     /**
@@ -5779,13 +5769,11 @@ export class Conductor {
       if (!ctx || ctx.priorVerdict) return { halt: false };
       // Consume the baseline before checking it. A later, unrelated failure
       // must not reuse this one even if the current check throws or halts.
-      await writeKickbackLedger(this.projectRoot, {
-        ...ledger,
-        gates: {
-          ...ledger.gates,
-          [sourceGate]: { ...ctx, priorVerdict: true },
-        },
+      const mutation = await mutateKickbackLedger(this.projectRoot, (latest) => {
+        const current = latest.gates[sourceGate];
+        if (current) current.priorVerdict = true;
       });
+      if (!mutation.ok) throw new Error(`Unable to consume kickback baseline: ${mutation.message}`);
       const [treeAfter, resolvedAfter] = await Promise.all([
         currentTreeHash(this.projectRoot),
         countResolvedTasks(this.projectRoot),
@@ -10055,8 +10043,20 @@ export class Conductor {
                   if (await reenterBuildReviewIfEffectivePass()) continue;
                   const reason =
                     `build_review cumulative kickback cap exceeded (cumulative ` +
-                    `${kickback.entry.cumulative}, cap ${MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
+                    `${kickback.entry.cumulative}, cap ${kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
                     `${kickback.entry.lastReason || 'no reasons recorded'}`;
+                  const exhausted = await mutateKickbackLedger(this.projectRoot, (ledger) => {
+                    const entry = ledger.gates.build_review;
+                    if (!entry) throw new Error('build-review budget disappeared before cap halt');
+                    entry.exhaustedEvidence = {
+                      gate: 'build_review',
+                      count: entry.cumulative,
+                      limit: entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                      generation: `${Date.now()}-${entry.cumulative}`,
+                      latestReason: entry.lastReason,
+                    };
+                  });
+                  if (!exhausted.ok) throw new Error(`Unable to persist cumulative cap evidence: ${exhausted.message}`);
                   const markerResult = await this.writeHaltMarker(reason + '\n', 'needs-human');
                   if (markerResult.status === 'failed') {
                     this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);

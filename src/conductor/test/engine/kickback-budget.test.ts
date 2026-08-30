@@ -1,11 +1,16 @@
 // Covers: task:2
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   deriveKickbackBudgetView,
   renderKickbackBudgetViewHuman,
   renderKickbackBudgetViewJson,
+  applyKickbackBudgetMutation,
 } from '../../src/engine/kickback-budget.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { KickbackGateEntry } from '../../src/engine/kickback-ledger.js';
 
 function entry(overrides: Partial<KickbackGateEntry> = {}): KickbackGateEntry {
@@ -111,5 +116,28 @@ describe('kickback budget view', () => {
       availability: 'unavailable',
       entries: [],
     });
+  });
+});
+
+describe('kickback budget recovery transaction', () => {
+  it('records one reset authorization and preserves the feature-local effective limit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kickback-budget-mutation-'));
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify({ version: 1, gates: {
+        build_review: entry({ cumulative: 6, effectiveLimit: 8, adjustments: [], exhaustedEvidence: {
+          gate: 'build_review', count: 6, limit: 8, generation: 'g-1', latestReason: 'repeat',
+        } }),
+      } }));
+      const adjustmentId = 'reset-1-2-3-4';
+      await expect(applyKickbackBudgetMutation(root, 'feature', 'operator', 'obsolete episode', { kind: 'reset' }, 'g-1', adjustmentId))
+        .resolves.toMatchObject({ ok: true, adjustment: { id: adjustmentId, afterCount: 0, afterLimit: 8 } });
+      await expect(readKickbackLedger(root)).resolves.toMatchObject({ gates: { build_review: {
+        cumulative: 0, effectiveLimit: 8, adjustments: [{ id: adjustmentId, kind: 'reset' }],
+        resumeAuthorization: { adjustmentId, generation: 'g-1' },
+      } } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -1,8 +1,108 @@
 import {
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+  mutateKickbackLedger,
   type KickbackBudgetAdjustment,
   type KickbackGateEntry,
 } from './kickback-ledger.js';
+import { appendKickbackBudgetAuthorization } from './closeout-events.js';
+import { randomUUID } from 'node:crypto';
+
+export type KickbackBudgetMutation = { kind: 'reset' } | { kind: 'raise'; amount: number };
+export type KickbackBudgetMutationResult =
+  | { ok: true; adjustment: KickbackBudgetAdjustment }
+  | { ok: false; message: string };
+
+/**
+ * Applies one already-authorized recovery to the exact exhausted build-review
+ * generation.  The pending record makes an event-write interruption
+ * inspectable; a retry with the same adjustment id is idempotent at the event
+ * boundary and the final ledger update is serialized by the ledger lease.
+ */
+export async function applyKickbackBudgetMutation(
+  projectRoot: string,
+  feature: string,
+  operator: string,
+  rationale: string,
+  mutation: KickbackBudgetMutation,
+  expectedGeneration: string,
+  adjustmentId = randomUUID(),
+): Promise<KickbackBudgetMutationResult> {
+  let adjustment: KickbackBudgetAdjustment | undefined;
+  const staged = await mutateKickbackLedger(projectRoot, (ledger) => {
+    const entry = ledger.gates.build_review;
+    const evidence = entry?.exhaustedEvidence;
+    if (!entry || !evidence || evidence.generation !== expectedGeneration || entry.cumulative !== evidence.count ||
+      (entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW) !== evidence.limit) {
+      throw new Error('the current cumulative-cap evidence no longer matches this recovery request');
+    }
+    const beforeLimit = entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW;
+    const afterLimit = mutation.kind === 'raise' ? beforeLimit + mutation.amount : beforeLimit;
+    if (!Number.isSafeInteger(afterLimit) || afterLimit <= 0) throw new Error('the requested allowance is unsafe');
+    adjustment = {
+      id: adjustmentId, kind: mutation.kind, beforeCount: entry.cumulative,
+      afterCount: mutation.kind === 'reset' ? 0 : entry.cumulative,
+      beforeLimit, afterLimit, operator, rationale, at: new Date().toISOString(),
+    };
+    entry.pendingAdjustment = { ...adjustment, generation: expectedGeneration };
+  });
+  if (!staged.ok || !adjustment) return { ok: false, message: staged.ok ? 'unable to stage recovery' : staged.message };
+
+  const appended = await appendKickbackBudgetAuthorization(projectRoot, {
+    type: 'kickback_budget_adjustment_authorized', adjustmentId: adjustment.id, feature, gate: 'build_review',
+    kind: adjustment.kind, beforeCount: adjustment.beforeCount, afterCount: adjustment.afterCount,
+    beforeLimit: adjustment.beforeLimit, afterLimit: adjustment.afterLimit, operator, rationale, at: adjustment.at,
+  });
+  if (!appended.ok) return { ok: false, message: appended.message };
+
+  const committed = await mutateKickbackLedger(projectRoot, (ledger) => {
+    const entry = ledger.gates.build_review;
+    if (!entry?.pendingAdjustment || entry.pendingAdjustment.id !== adjustment!.id) {
+      throw new Error('the staged recovery is no longer current');
+    }
+    entry.cumulative = adjustment!.afterCount;
+    entry.effectiveLimit = adjustment!.afterLimit;
+    entry.adjustments = [...(entry.adjustments ?? []), adjustment!];
+    delete entry.pendingAdjustment;
+    delete entry.exhaustedEvidence;
+    entry.resumeAuthorization = { adjustmentId: adjustment!.id, gate: 'build_review', haltClass: 'needs-human', generation: expectedGeneration };
+  });
+  return committed.ok ? { ok: true, adjustment } : { ok: false, message: committed.message };
+}
+
+/** Finish an interrupted staged adjustment only when its same-schema event can
+ * be recorded idempotently.  A conflicting or unreadable event leaves the
+ * protective pending state intact for a later operator investigation. */
+export async function reconcilePendingKickbackBudgetAdjustment(
+  projectRoot: string,
+  feature: string,
+): Promise<KickbackBudgetMutationResult | undefined> {
+  let pending: KickbackBudgetAdjustment & { generation: string } | undefined;
+  const snapshot = await mutateKickbackLedger(projectRoot, (ledger) => {
+    pending = ledger.gates.build_review?.pendingAdjustment;
+  });
+  if (!snapshot.ok) return { ok: false, message: snapshot.message };
+  if (!pending) return undefined;
+  const appended = await appendKickbackBudgetAuthorization(projectRoot, {
+    type: 'kickback_budget_adjustment_authorized', adjustmentId: pending.id, feature, gate: 'build_review',
+    kind: pending.kind, beforeCount: pending.beforeCount, afterCount: pending.afterCount,
+    beforeLimit: pending.beforeLimit, afterLimit: pending.afterLimit,
+    operator: pending.operator, rationale: pending.rationale, at: pending.at,
+  });
+  if (!appended.ok) return { ok: false, message: appended.message };
+  const committed = await mutateKickbackLedger(projectRoot, (ledger) => {
+    const entry = ledger.gates.build_review;
+    if (!entry?.pendingAdjustment || entry.pendingAdjustment.id !== pending!.id) {
+      throw new Error('the pending recovery changed during reconciliation');
+    }
+    entry.cumulative = pending!.afterCount;
+    entry.effectiveLimit = pending!.afterLimit;
+    entry.adjustments = [...(entry.adjustments ?? []), pending!];
+    entry.resumeAuthorization = { adjustmentId: pending!.id, gate: 'build_review', haltClass: 'needs-human', generation: pending!.generation };
+    delete entry.pendingAdjustment;
+    delete entry.exhaustedEvidence;
+  });
+  return committed.ok ? { ok: true, adjustment: pending } : { ok: false, message: committed.message };
+}
 
 export interface KickbackBudgetAdjustmentsView {
   availability: 'available' | 'unavailable';

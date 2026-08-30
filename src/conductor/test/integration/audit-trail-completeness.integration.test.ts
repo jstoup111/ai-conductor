@@ -134,6 +134,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_member_evidence_reused: 'not-audited-by-design',
   build_member_evidence_recomputed: 'not-audited-by-design',
   kickback: 'friction-mapped',
+  kickback_budget_adjustment_authorized: 'friction-mapped',
   loop_halt: 'friction-mapped',
   over_scope_decision: 'not-audited-by-design',
   halt_marker_write_failed: 'friction-mapped',
@@ -421,6 +422,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     basis: 'recorded-head-versus-current-head',
   },
   kickback: { type: 'kickback', from: 'conflict_check', to: 'architecture_review', evidence: 'missing seam', count: 1 },
+  kickback_budget_adjustment_authorized: {
+    type: 'kickback_budget_adjustment_authorized', adjustmentId: 'adjustment-1', feature: 'recovery',
+    gate: 'build_review', kind: 'reset', beforeCount: 6, afterCount: 0, beforeLimit: 5, afterLimit: 5,
+    operator: 'operator', rationale: 'obsolete findings', at: '2026-08-30T00:00:00.000Z',
+  },
   loop_halt: { type: 'loop_halt', reason: 'kickback cap exceeded' },
   over_scope_decision: {
     type: 'over_scope_decision',

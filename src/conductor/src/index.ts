@@ -1,6 +1,6 @@
 export * from './types/index.js';
 export { wireOtelVisualizer } from './engine/otel/wire.js';
-export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
 export { runReleasePrAction } from './engine/release-pr-action.js';
@@ -66,6 +66,7 @@ import {
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
   detectBuildReviewRecordReducedCoverageCommand,
+  detectKickbackBudgetCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
   detectPlanProtectedTargetsCommand,
@@ -80,6 +81,7 @@ import {
   type CLIOptions,
 } from './cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
+import { dispatchKickbackBudgetInspect, dispatchKickbackBudgetMutation } from './engine/kickback-budget-cli.js';
 import type { ConductState, StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
@@ -621,6 +623,14 @@ async function main(): Promise<void> {
   // pipeline or daemon handler.
   if (detectVersionCommand(process.argv)) {
     process.exitCode = await dispatchVersionCommand({ moduleDir: __dirname });
+    return;
+  }
+
+  const kickbackBudgetCmd = detectKickbackBudgetCommand(process.argv);
+  if (kickbackBudgetCmd) {
+    process.exitCode = kickbackBudgetCmd.kind === 'inspect'
+      ? await dispatchKickbackBudgetInspect(kickbackBudgetCmd)
+      : await dispatchKickbackBudgetMutation(kickbackBudgetCmd);
     return;
   }
 
