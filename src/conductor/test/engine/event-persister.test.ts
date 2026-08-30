@@ -190,6 +190,72 @@ describe('EventPersister', () => {
     ]);
   });
 
+  it('persists remediation case lifecycle occurrences through the existing event ledger', async () => {
+    const lifecycle = [
+      { type: 'remediation_adjudication_started', domain: 'build_review', lapId: 'lap-1' },
+      {
+        type: 'remediation_adjudication_completed',
+        domain: 'build_review',
+        lapId: 'lap-1',
+        caseIds: ['case-1'],
+        effectIds: ['effect-1'],
+      },
+      { type: 'remediation_adjudication_failed', domain: 'build_review', lapId: 'lap-1', reason: 'invalid-result' },
+      {
+        type: 'remediation_case_reconciled',
+        domain: 'build_review',
+        lapId: 'lap-1',
+        caseId: 'case-1',
+        resolution: 'open',
+      },
+      {
+        type: 'remediation_effect_reserved',
+        domain: 'build_review',
+        lapId: 'lap-1',
+        caseId: 'case-1',
+        effectId: 'effect-1',
+        effectKind: 'action',
+      },
+      {
+        type: 'remediation_effect_applied',
+        domain: 'build_review',
+        lapId: 'lap-1',
+        caseId: 'case-1',
+        effectId: 'effect-1',
+        effectKind: 'action',
+      },
+      {
+        type: 'remediation_effect_failed',
+        domain: 'build_review',
+        lapId: 'lap-1',
+        caseId: 'case-1',
+        effectId: 'effect-1',
+        effectKind: 'action',
+        reason: 'intake-unavailable',
+      },
+      {
+        type: 'remediation_semantic_repeat_halt',
+        domain: 'build_review',
+        lapId: 'lap-1',
+        caseId: 'case-1',
+        effectId: 'effect-1',
+        reason: 'already-attempted',
+      },
+    ] satisfies ConductorEvent[];
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    for (const event of lifecycle) await emitter.emit(event);
+
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8')).trim().split('\n').map((line) => {
+      const { ts: _ts, ...record } = JSON.parse(line);
+      return record;
+    });
+    expect(records).toEqual(lifecycle);
+  });
+
   it('round-trips the scoped-empty aggregate route on the existing verification event', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();
