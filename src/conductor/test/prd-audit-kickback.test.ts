@@ -274,6 +274,8 @@ async function createAsBuiltRemediationCapFixture(input: {
   remediationEnabled?: boolean;
   /** Add a validated prd_audit FIXABLE finding + its evidence, for mixed rounds. */
   withPrdEvidence?: boolean;
+  /** Seed prd_audit's own lap counter, to exhaust THAT gate in a mixed round. */
+  prdAuditPriorLaps?: number;
 }) {
   const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-cap-'));
   dirs.push(root);
@@ -313,22 +315,41 @@ async function createAsBuiltRemediationCapFixture(input: {
       '| S1.1 | FIXABLE | 1 | FR-1 | not implemented |',
     ].join('\n'));
   }
-  if (input.priorLaps !== undefined || input.priorGrowthAdded !== undefined) {
+  if (
+    input.priorLaps !== undefined
+    || input.priorGrowthAdded !== undefined
+    || input.prdAuditPriorLaps !== undefined
+  ) {
     await writeKickbackLedger(root, {
       version: 1,
-      gates: input.priorLaps === undefined
-        ? {}
-        : {
-            architecture_review_as_built: {
-              count: 0,
-              cumulative: 0,
-              treeHash: null,
-              lastReason: '',
-              priorVerdict: true,
-              resolvedBefore: 0,
-              laps: input.priorLaps,
-            },
-          },
+      gates: {
+        ...(input.priorLaps === undefined
+          ? {}
+          : {
+              architecture_review_as_built: {
+                count: 0,
+                cumulative: 0,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: true,
+                resolvedBefore: 0,
+                laps: input.priorLaps,
+              },
+            }),
+        ...(input.prdAuditPriorLaps === undefined
+          ? {}
+          : {
+              prd_audit: {
+                count: 0,
+                cumulative: 0,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: true,
+                resolvedBefore: 0,
+                laps: input.prdAuditPriorLaps,
+              },
+            }),
+      },
       ...(input.priorGrowthAdded === undefined
         ? {}
         : {
@@ -1458,6 +1479,33 @@ describe('prd_audit kickback', () => {
     expect(growthEvents).toEqual([expect.objectContaining({
       type: 'plan_growth', added: 1, byGate: { architecture_review_as_built: 1 },
     })]);
+  });
+
+  /**
+   * adr-2026-08-25 decision 4: a `kickback-cap` terminal lists EVERY finding.
+   * The prd_audit exit rendered only its own criteria, so in a mixed
+   * validation-group round the participating as-built findings — already
+   * dispositioned by remediate — vanished from the halt body and the operator
+   * saw no sign they had been routed and discarded. Its sibling exits (the
+   * as-built cap and the shared-growth cap) both render them.
+   */
+  it('lists as-built findings too when the prd_audit lap cap halts a mixed round', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({
+      withPrdEvidence: true,
+      prdAuditPriorLaps: 1,
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    expect(fixture.outcome.detail).toContain('prd_audit remediation lap cap reached (1/1)');
+    // Its own finding is still named.
+    expect(fixture.outcome.detail).toContain('S1.1');
+    // And so is every as-built finding that participated in the same round.
+    for (const finding of fixture.findings) {
+      expect(fixture.outcome.detail).toContain(
+        `${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`,
+      );
+    }
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
   });
 
   it('halts a second as-built remediation lap before appending and lists every finding', async () => {
