@@ -155,6 +155,7 @@ import {
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { readHaltClass } from './engine/halt-marker.js';
+import { consumeKickbackResumeAuthorization } from './engine/kickback-budget.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
 import type { PrMergeState } from './engine/pr-labels.js';
@@ -1544,6 +1545,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // Real disposition read wired into the sweep: mechanical/legacy HALTs use
     // the canonical clear path; needs-human/unclassified HALTs are retained.
     readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
+    consumeKickbackResumeAuthorization: (slug) =>
+      consumeKickbackResumeAuthorization(join(worktreeBase, slug)),
     lastRekickSha,
     log,
     hasWarned: (slug) => hasWarned(projectRoot, slug),

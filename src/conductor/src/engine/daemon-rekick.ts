@@ -97,6 +97,12 @@ export interface RekickSweepDeps {
    * through to the existing FR-9 guard and canonical clear path).
    */
   readHaltClass?: (slug: string) => Promise<HaltDisposition>;
+  /**
+   * Consumes the one-use authorization for an exact cumulative-cap halt.
+   * This runs only after operator-park and shipped-work checks, immediately
+   * before ordinary needs-human retention.
+   */
+  consumeKickbackResumeAuthorization?: (slug: string) => Promise<{ authorized: boolean; generation?: string }>;
 }
 
 export interface RekickSweepResult {
@@ -190,6 +196,17 @@ export async function rekickSweep(
         haltClass = await deps.readHaltClass(slug);
       } catch {
         /* best-effort: an unreadable class is retained as unclassified */
+      }
+      if (haltClass === 'needs-human' && deps.consumeKickbackResumeAuthorization) {
+        try {
+          const authorization = await deps.consumeKickbackResumeAuthorization(slug);
+          if (authorization.authorized) {
+            log(`re-kick ${slug}: consumed cumulative-cap authorization${authorization.generation ? ` (${authorization.generation})` : ''}`);
+            haltClass = 'mechanical';
+          }
+        } catch (err) {
+          log(`re-kick ${slug}: cumulative-cap authorization check FAILED (${errMsg(err)}); retaining halt`);
+        }
       }
       if (isOperatorActionHalt(haltClass)) {
         skipped.push(slug);

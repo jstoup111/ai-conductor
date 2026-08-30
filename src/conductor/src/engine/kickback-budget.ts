@@ -63,7 +63,6 @@ export async function applyKickbackBudgetMutation(
     entry.effectiveLimit = adjustment!.afterLimit;
     entry.adjustments = [...(entry.adjustments ?? []), adjustment!];
     delete entry.pendingAdjustment;
-    delete entry.exhaustedEvidence;
     entry.resumeAuthorization = { adjustmentId: adjustment!.id, gate: 'build_review', haltClass: 'needs-human', generation: expectedGeneration };
   });
   return committed.ok ? { ok: true, adjustment } : { ok: false, message: committed.message };
@@ -99,9 +98,28 @@ export async function reconcilePendingKickbackBudgetAdjustment(
     entry.adjustments = [...(entry.adjustments ?? []), pending!];
     entry.resumeAuthorization = { adjustmentId: pending!.id, gate: 'build_review', haltClass: 'needs-human', generation: pending!.generation };
     delete entry.pendingAdjustment;
-    delete entry.exhaustedEvidence;
   });
   return committed.ok ? { ok: true, adjustment: pending } : { ok: false, message: committed.message };
+}
+
+/** Consume only a live authorization whose durable evidence still describes
+ * the same exhausted build-review generation. */
+export async function consumeKickbackResumeAuthorization(
+  projectRoot: string,
+): Promise<{ authorized: boolean; generation?: string }> {
+  let generation: string | undefined;
+  const result = await mutateKickbackLedger(projectRoot, (ledger) => {
+    const entry = ledger.gates.build_review;
+    const authorization = entry?.resumeAuthorization;
+    const evidence = entry?.exhaustedEvidence;
+    if (!entry || !authorization || !evidence ||
+      authorization.gate !== 'build_review' || authorization.haltClass !== 'needs-human' ||
+      authorization.generation !== evidence.generation) return false;
+    generation = authorization.generation;
+    delete entry.resumeAuthorization;
+    return true;
+  });
+  return result.ok && result.value ? { authorized: true, generation } : { authorized: false };
 }
 
 export interface KickbackBudgetAdjustmentsView {
