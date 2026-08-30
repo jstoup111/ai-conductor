@@ -45,7 +45,7 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
 
     // Isolate the `dispatch` closure body and confirm the call lives inside it.
     const dispatchMatch = source.match(
-      /const dispatch = \(item: BacklogItem\): void => \{[\s\S]*?\n  \};/,
+      /const dispatch = \(item: BacklogItem\): boolean => \{[\s\S]*?\n  \};/,
     );
     expect(dispatchMatch, 'expected to locate the `dispatch` closure body').toBeTruthy();
     expect(dispatchMatch![0]).toMatch(/\.runFeature\(/);
