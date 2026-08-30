@@ -54,11 +54,14 @@ export async function applyBuildReviewActionEffects(input: {
   readonly tasksByCaseId: ReadonlyMap<string, readonly { readonly title: string }[]>;
   readonly chargeInput: BumpKickbackGateInput;
   readonly workOrderId?: () => string;
+  /** Testable I/O boundaries; production defaults retain the durable adapters. */
+  readonly publishWorkOrder?: typeof publishBuildReviewWorkOrder;
+  readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
 }): Promise<RemediationEffectResult> {
   const mutation = await input.store.mutate<RemediationEffectResult>(async (state) => {
     const actionCases = state.cases.filter(isActionCase);
     if (actionCases.length === 0) return { value: { ok: false as const, reason: 'no open action effects' } };
-    const pending = actionCases.filter((record) => record.effect.kind === 'action' && record.effect.status !== 'applied');
+    const pending = actionCases.filter((record) => record.effect.kind === 'action' && record.effect.status === 'reserved');
     if (pending.length === 0) return { value: { ok: true as const, status: 'already-applied' as const, effectId: actionCases[0]!.effect.id } };
     const cases: BuildReviewWorkOrderCase[] = [];
     for (const record of actionCases) {
@@ -68,14 +71,29 @@ export async function applyBuildReviewActionEffects(input: {
     }
     const primaryEffectId = actionCases[0]!.effect.kind === 'action' ? actionCases[0]!.effect.id : '';
     const workOrderId = input.workOrderId?.() ?? randomUUID();
-    const published = await publishBuildReviewWorkOrder(input.projectRoot, {
+    const failPending = (diagnostic: string): RemediationCaseStoreState => replaceCases(state, (record) =>
+      record.effect.kind === 'action' && record.effect.status === 'reserved'
+        ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'failed', diagnostic } }
+        : record,
+    );
+    const published = await (input.publishWorkOrder ?? publishBuildReviewWorkOrder)(input.projectRoot, {
       version: 'v1', domain: 'build_review', feature: input.feature, effectId: primaryEffectId,
       cases: orderBuildReviewActionCases(cases),
     });
-    if (!published.ok) return { value: { ok: false as const, reason: `work-order ${published.reason}` } };
-    const charged = await chargeBuildReviewEffectInLedger(input.projectRoot, primaryEffectId, input.chargeInput);
+    if (!published.ok) {
+      const diagnostic = `work-order ${published.reason}`;
+      return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
+    }
+    let charged: Awaited<ReturnType<typeof chargeBuildReviewEffectInLedger>>;
+    try {
+      charged = await (input.chargeEffect ?? chargeBuildReviewEffectInLedger)(input.projectRoot, primaryEffectId, input.chargeInput);
+    } catch (error) {
+      const diagnostic = `build-review effect charge failed: ${error instanceof Error ? error.message : String(error)}`;
+      return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
+    }
     if (charged.status === 'charged' && (charged.exhausted || charged.cumulativeExhausted)) {
-      return { value: { ok: false as const, reason: 'build-review kickback budget exhausted' } };
+      const diagnostic = 'build-review kickback budget exhausted';
+      return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
     }
     const next = replaceCases(state, (record) => record.effect.kind === 'action' && record.resolution === 'open'
       ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'applied', workOrderId } }

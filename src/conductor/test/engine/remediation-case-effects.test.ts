@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -33,6 +33,30 @@ describe('remediation case effects', () => {
     await expect(applyBuildReviewActionEffects(input)).resolves.toMatchObject({ ok: true, status: 'already-applied', effectId: 'effect-1' });
     const read = await store.read();
     expect(read.ok && read.state.cases[0]?.effect).toEqual({ id: 'effect-1', kind: 'action', status: 'applied', workOrderId: 'order-1' });
+  });
+
+  it('records failed action effects without writing the active plan when the charge is exhausted', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [{
+      id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'repair', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'source-1', outcome: 'acted', recordedAt: '2026-08-30T00:00:00.000Z' }],
+      effect: { id: 'effect-1', kind: 'action', status: 'reserved' },
+    }] });
+    const planPath = join(root, 'active-plan.md');
+    await writeFile(planPath, 'original plan\n');
+    const publishWorkOrder = vi.fn().mockResolvedValue({ ok: true, workOrder: {} });
+    const chargeEffect = vi.fn().mockResolvedValue({
+      status: 'charged', exhausted: true, cumulativeExhausted: false, entry: {},
+    });
+
+    await expect(applyBuildReviewActionEffects({
+      projectRoot: root, feature, store, tasksByCaseId: new Map([['case-1', [{ title: 'Repair the regression' }]]]),
+      chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-1' }, workOrderId: () => 'order-1',
+      publishWorkOrder, chargeEffect,
+    })).resolves.toMatchObject({ ok: false, reason: 'build-review kickback budget exhausted' });
+
+    const read = await store.read();
+    expect(read.ok && read.state.cases[0]?.effect).toEqual(expect.objectContaining({ status: 'failed' }));
+    await expect(readFile(planPath, 'utf8')).resolves.toBe('original plan\n');
   });
 
   it('reuses an exact deferred issue marker instead of filing a duplicate', async () => {
