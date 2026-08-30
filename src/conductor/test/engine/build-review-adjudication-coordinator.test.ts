@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
+import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -47,6 +50,23 @@ function actionJudgement(): RemediationCaseJudgement {
   };
 }
 
+function deferralJudgement(): RemediationCaseJudgement {
+  return {
+    mode: 'case-v1', domain: 'build_review',
+    sourceOutcomes: [{ sourceId, outcome: 'deferred', caseRef: 'case-1' }],
+    cases: [{
+      caseRef: 'case-1', disposition: 'defer', priority: 'low', confidence: 'high', rationale: 'This needs a separately planned change.',
+      effect: { kind: 'deferral', title: 'Track the build-review finding', body: 'The changed test is insensitive.', exclusionRationale: 'It belongs outside this feature.' },
+    }],
+  };
+}
+
+type RemediationCaseLifecycleEvent = Extract<ConductorEvent, {
+  type: 'remediation_adjudication_started' | 'remediation_adjudication_completed' | 'remediation_adjudication_failed'
+    | 'remediation_case_reconciled' | 'remediation_effect_reserved' | 'remediation_effect_applied'
+    | 'remediation_effect_failed' | 'remediation_semantic_repeat_halt';
+}>;
+
 function input(root: string, judge: (context: unknown) => Promise<RemediationCaseJudgement>) {
   return {
     projectRoot: root, feature, aggregate, operatorResolvedFindingIds: new Set<string>(), mechanical: 'healthy' as const, judge,
@@ -73,7 +93,10 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toMatchObject({ ok: true, route: 'build', trace: expect.stringContaining('case-durable') });
     expect(judge).toHaveBeenCalledTimes(1);
-    expect(events).toEqual(['remediation_adjudication_started', 'remediation_adjudication_completed']);
+    expect(events).toEqual([
+      'remediation_adjudication_started', 'remediation_case_reconciled', 'remediation_effect_reserved',
+      'remediation_effect_applied', 'remediation_adjudication_completed',
+    ]);
   });
 
   it('bypasses provider and case state when every current source is operator-resolved', async () => {
@@ -113,5 +136,61 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(result).toMatchObject({ ok: true, route: 'pass' });
     expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(3);
     await expect(access(join(root, '.pipeline', 'build-review-work-order.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('emits a failed deferral effect through the same coordinator event port', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => deferralJudgement()),
+      tracker: { findIssueByEffectMarker: async () => { throw new Error('tracker unavailable'); } } as unknown as EffectMarkerTrackerClient,
+      repo: 'acme/conductor',
+      fileIssue: async () => ({ issueUrl: 'https://example.test/issues/1' }),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'deferred intake failed: tracker unavailable' });
+    expect(events.map((event) => event.type)).toEqual([
+      'remediation_adjudication_started', 'remediation_case_reconciled', 'remediation_effect_reserved',
+      'remediation_effect_failed', 'remediation_adjudication_failed',
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_effect_failed', caseId: 'case-durable', effectId: 'effect-durable', effectKind: 'deferral',
+      reason: 'deferred intake failed: tracker unavailable',
+    }));
+  });
+
+  it('emits a semantic-repeat halt when an already-resolved action case is bound again', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await store.replace({
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The test needs a focused assertion.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const repeated: RemediationCaseJudgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-durable' }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => repeated),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-durable' });
+    expect(events.map((event) => event.type)).toEqual([
+      'remediation_adjudication_started', 'remediation_case_reconciled',
+      'remediation_semantic_repeat_halt', 'remediation_adjudication_failed',
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'regressed',
+    }));
   });
 });
