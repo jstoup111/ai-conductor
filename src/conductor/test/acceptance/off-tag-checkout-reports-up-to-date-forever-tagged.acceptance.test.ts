@@ -2,8 +2,8 @@
  * Acceptance specs for
  * .docs/stories/off-tag-checkout-reports-up-to-date-forever-tagged.md (#1437).
  *
- * These specs drive the real `bin/update` and `bin/conduct --update` entry
- * points against local Git repositories. The config CLI and migration command
+ * These specs drive the real `bin/update` entry point against local Git
+ * repositories. The config CLI and migration command
  * are faithful process-boundary fakes; no network or third-party service is
  * reached.
  *
@@ -11,9 +11,9 @@
  * - Story 1: unit-covered (one resolver operation; plan Tasks 1-2).
  * - Stories 2-8: acceptance-covered (check, decide, report, and persist).
  * - Story 9: unit-covered (one installer identity operation; plan Task 11).
- * - Story 10: acceptance-covered (both public entry points must agree).
+ * - Story 10: removed with the legacy `bin/conduct` entry point.
  *
- * Production entry points covered: bin/update and bin/conduct --update.
+ * Production entry point covered: bin/update.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -33,9 +33,7 @@ import { dirname, join } from 'node:path';
 
 const REPO_ROOT = process.env.OFF_TAG_ACCEPTANCE_REPO_ROOT ?? join(process.cwd(), '..', '..');
 const REAL_UPDATE = join(REPO_ROOT, 'bin', 'update');
-const REAL_CONDUCT = join(REPO_ROOT, 'bin', 'conduct');
 const REAL_AI_CONDUCTOR = join(REPO_ROOT, 'bin', 'ai-conductor');
-const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
 const REAL_COMMON = join(REPO_ROOT, 'bin', 'lib', 'harness-common.sh');
 
 interface CommandResult {
@@ -46,7 +44,6 @@ interface CommandResult {
 interface HarnessFixture {
   root: string;
   update: string;
-  conduct: string;
   remote: string;
 }
 
@@ -94,17 +91,13 @@ async function makeHarness(name: string): Promise<HarnessFixture> {
   const lib = join(bin, 'lib');
   const remote = join(scratch, `${name}-origin.git`);
   const update = join(bin, 'update');
-  const conduct = join(bin, 'conduct');
 
   await mkdir(lib, { recursive: true });
   await copyFile(REAL_UPDATE, update);
-  await copyFile(REAL_CONDUCT, conduct);
   await copyFile(REAL_COMMON, join(lib, 'harness-common.sh'));
   await chmod(update, 0o755);
-  await chmod(conduct, 0o755);
 
   await symlink(REAL_AI_CONDUCTOR, join(bin, 'ai-conductor'));
-  await symlink(REAL_CONDUCT_TS, join(bin, 'conduct-ts'));
 
   await writeFile(join(bin, 'migrate'), '#!/usr/bin/env bash\nexit 0\n', 'utf8');
   await chmod(join(bin, 'migrate'), 0o755);
@@ -123,7 +116,7 @@ async function makeHarness(name: string): Promise<HarnessFixture> {
   await git(scratch, 'init', '-q', '--bare', remote);
   await git(root, 'remote', 'add', 'origin', remote);
 
-  return { root, update, conduct, remote };
+  return { root, update, remote };
 }
 
 async function commit(root: string, message: string): Promise<string> {
@@ -152,11 +145,10 @@ async function makeHome(
 async function runEntry(
   fixture: HarnessFixture,
   home: string,
-  entry: 'update' | 'conduct' = 'update',
   options: { tty?: boolean; input?: string } = {},
 ): Promise<CommandResult> {
-  const executable = entry === 'update' ? fixture.update : fixture.conduct;
-  const args = entry === 'update' ? [] : ['--update'];
+  const executable = fixture.update;
+  const args: string[] = [];
   const env = { ...process.env };
   delete env.CONDUCT_DAEMON_SESSION;
   const commandOptions = {
@@ -186,41 +178,6 @@ async function configValue(home: string, key: string): Promise<string> {
 
 function identityLines(output: string): string[] {
   return output.split('\n').filter((line) => /identity/i.test(line));
-}
-
-function decisionOutput(entry: 'update' | 'conduct', output: string): string {
-  if (entry === 'update') {
-    return output;
-  }
-  return output.replace(
-    /\x1b\[[0-9;]*m\[conduct\]\x1b\[0m Forcing harness update check\.\.\.\r?\n/,
-    '',
-  );
-}
-
-function decisionConfig(config: string): string {
-  return config.replace(/^(\s*last_checked_at:\s*).*/m, '$1<recorded>');
-}
-
-async function assertTaggedEntryParity(
-  fixture: HarnessFixture,
-  name: string,
-  fields: Record<string, string>,
-  options: { tty?: boolean; input?: string } = {},
-): Promise<void> {
-  const updateHome = await makeHome(`${name}-update`, fields);
-  const conductHome = await makeHome(`${name}-conduct`, fields);
-  const before = await git(fixture.root, 'rev-parse', 'HEAD');
-
-  const update = await runEntry(fixture, updateHome, 'update', options);
-  const conduct = await runEntry(fixture, conductHome, 'conduct', options);
-
-  expect(conduct.exitCode).toBe(update.exitCode);
-  expect(decisionOutput('conduct', conduct.output)).toBe(decisionOutput('update', update.output));
-  expect(decisionConfig(await readFile(join(conductHome, '.ai-conductor', 'config.yml'), 'utf8'))).toBe(
-    decisionConfig(await readFile(join(updateHome, '.ai-conductor', 'config.yml'), 'utf8')),
-  );
-  expect(await git(fixture.root, 'rev-parse', 'HEAD')).toBe(before);
 }
 
 describe('off-tag checkout reports its real update identity (#1437)', () => {
@@ -257,21 +214,15 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
     await git(fixture.root, 'tag', 'v0.4.0');
     await publish(fixture);
     await git(fixture.root, 'checkout', '-q', offTag);
-    const updateHome = await makeHome('past-with-newer-update', { update_channel: 'tagged' });
-    const conductHome = await makeHome('past-with-newer-conduct', { update_channel: 'tagged' });
+    const home = await makeHome('past-with-newer', { update_channel: 'tagged' });
+    const result = await runEntry(fixture, home);
 
-    const update = await runEntry(fixture, updateHome);
-    const conduct = await runEntry(fixture, conductHome, 'conduct');
-
-    for (const result of [update, conduct]) {
-      expect(result.exitCode).toBe(0);
-      expect(result.output).toMatch(/identity.*v0\.3\.0\+1.*checkout/i);
-      expect(result.output).toMatch(/v0\.3\.0 → v0\.4\.0/);
-      expect(result.output).toMatch(/git checkout.*v0\.4\.0.*bin\/migrate/is);
-      expect(result.output).not.toMatch(/Update to .*\[y\/n\]/i);
-    }
-    expect(await configValue(updateHome, 'current_version')).toBe('v0.3.0');
-    expect(await configValue(conductHome, 'current_version')).toBe('v0.3.0');
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toMatch(/identity.*v0\.3\.0\+1.*checkout/i);
+    expect(result.output).toMatch(/v0\.3\.0 → v0\.4\.0/);
+    expect(result.output).toMatch(/git checkout.*v0\.4\.0.*bin\/migrate/is);
+    expect(result.output).not.toMatch(/Update to .*\[y\/n\]/i);
+    expect(await configValue(home, 'current_version')).toBe('v0.3.0');
     expect(await git(fixture.root, 'rev-parse', 'HEAD')).toBe(offTag);
   });
 
@@ -281,27 +232,18 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
     await commit(fixture.root, 'next release');
     await git(fixture.root, 'tag', 'v0.4.0');
     await publish(fixture);
-    const updateHome = await makeHome('exact-tag-update', {
+    const home = await makeHome('exact-tag', {
       update_channel: 'tagged',
       current_version: 'v9.9.9',
     });
-    const conductHome = await makeHome('exact-tag-conduct', {
-      update_channel: 'tagged',
-      current_version: 'v9.9.9',
-    });
+    const result = await runEntry(fixture, home);
 
-    const update = await runEntry(fixture, updateHome);
-    const conduct = await runEntry(fixture, conductHome, 'conduct');
-
-    for (const result of [update, conduct]) {
-      expect(result.exitCode).toBe(0);
-      expect(result.output).toMatch(/identity.*v0\.4\.0.*checked-out tag/i);
-      expect(result.output).toMatch(/up to date/i);
-      expect(result.output).not.toMatch(/commits past|update available|v9\.9\.9/);
-      expect(identityLines(result.output)).toHaveLength(1);
-    }
-    expect(await configValue(updateHome, 'current_version')).toBe('v0.4.0');
-    expect(await configValue(conductHome, 'current_version')).toBe('v0.4.0');
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toMatch(/identity.*v0\.4\.0.*checked-out tag/i);
+    expect(result.output).toMatch(/up to date/i);
+    expect(result.output).not.toMatch(/commits past|update available|v9\.9\.9/);
+    expect(identityLines(result.output)).toHaveLength(1);
+    expect(await configValue(home, 'current_version')).toBe('v0.4.0');
   });
 
   it('declines to guess when release tags exist but none is reachable from HEAD', async () => {
@@ -317,22 +259,14 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
       update_channel: 'tagged',
       current_version: 'v0.3.0',
     });
-    const conductHome = await makeHome('unreachable-tag-conduct', {
-      update_channel: 'tagged',
-    });
-
     const emptyResult = await runEntry(fixture, emptyHome);
     const recordedResult = await runEntry(fixture, recordedHome);
-    const conductResult = await runEntry(fixture, conductHome, 'conduct');
 
-    for (const result of [emptyResult, conductResult]) {
-      expect(result.exitCode).toBe(0);
-      expect(result.output).toMatch(/identity.*unverifiable/i);
-      expect(result.output).not.toMatch(/update available|update to/i);
-      expect(identityLines(result.output)).toHaveLength(1);
-    }
+    expect(emptyResult.exitCode).toBe(0);
+    expect(emptyResult.output).toMatch(/identity.*unverifiable/i);
+    expect(emptyResult.output).not.toMatch(/update available|update to/i);
+    expect(identityLines(emptyResult.output)).toHaveLength(1);
     expect(await configValue(emptyHome, 'current_version')).toBe('');
-    expect(await configValue(conductHome, 'current_version')).toBe('');
 
     expect(recordedResult.exitCode).toBe(0);
     expect(recordedResult.output).toMatch(/identity.*unverifiable/i);
@@ -374,53 +308,4 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
     expect(identityLines(result.output)).toHaveLength(1);
   });
 
-  it('keeps bin/update and bin/conduct exactly aligned for every tagged decision', async () => {
-    const undeterminable = await makeHarness('entry-parity-undeterminable');
-    await git(undeterminable.root, 'tag', 'v0.4.0');
-    await publish(undeterminable);
-    await git(undeterminable.root, 'checkout', '-q', '--orphan', 'orphan');
-    await git(undeterminable.root, 'commit', '-q', '--allow-empty', '-m', 'orphan checkout');
-    await assertTaggedEntryParity(undeterminable, 'entry-parity-undeterminable', {
-      update_channel: 'tagged',
-      current_version: 'v0.3.0',
-    });
-
-    const postRelease = await makeHarness('entry-parity-post-release');
-    await git(postRelease.root, 'tag', 'v0.4.0');
-    await commit(postRelease.root, 'post-release');
-    await publish(postRelease);
-    await assertTaggedEntryParity(postRelease, 'entry-parity-post-release', {
-      update_channel: 'tagged',
-    });
-
-    const upToDate = await makeHarness('entry-parity-up-to-date');
-    await git(upToDate.root, 'tag', 'v0.4.0');
-    await publish(upToDate);
-    await assertTaggedEntryParity(upToDate, 'entry-parity-up-to-date', {
-      update_channel: 'tagged',
-      current_version: 'v9.9.9',
-    });
-
-    const offer = await makeHarness('entry-parity-offer');
-    await git(offer.root, 'tag', 'v0.3.0');
-    const offTag = await commit(offer.root, 'between releases');
-    await commit(offer.root, 'next release');
-    await git(offer.root, 'tag', 'v0.4.0');
-    await publish(offer);
-    await git(offer.root, 'checkout', '-q', offTag);
-    await assertTaggedEntryParity(offer, 'entry-parity-offer', { update_channel: 'tagged' });
-
-    const prompt = await makeHarness('entry-parity-prompt');
-    await git(prompt.root, 'tag', 'v0.3.0');
-    await commit(prompt.root, 'next release');
-    await git(prompt.root, 'tag', 'v0.4.0');
-    await publish(prompt);
-    await git(prompt.root, 'checkout', '-q', 'v0.3.0');
-    await assertTaggedEntryParity(
-      prompt,
-      'entry-parity-prompt',
-      { update_channel: 'tagged' },
-      { tty: true, input: 'n\n' },
-    );
-  });
 });
