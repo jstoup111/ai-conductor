@@ -263,7 +263,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
           // re-run.
           source: 6,
           test_infrastructure: 'none',
-          tests: 6,
+          tests: 3,
         },
       },
     });

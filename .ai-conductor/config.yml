@@ -101,7 +101,7 @@ test_suite:
     mode: aggregate
     drift_budget:
       source: 6
-      tests: 6
+      tests: 3
 
 # Per-step overrides.
 #
