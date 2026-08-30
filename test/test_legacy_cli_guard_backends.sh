@@ -75,6 +75,7 @@ make_fixture() {
   : > "$fixture/HARNESS.md"
   : > "$fixture/docs/reference/cli.md"
   : > "$fixture/docs/reference/skills.md"
+  mkdir -p "$(dirname "$fixture/$planted_path")"
   printf 'non-allowlisted conduct-ts reference\n' > "$fixture/$planted_path"
   printf '%s\n' "$fixture"
 }
@@ -139,6 +140,27 @@ assert 'grep fallback rejects planted bin/conduct reference' "$(
   [ "$grep_exit" -ne 0 ] && [[ "$grep_output" == *"$expected_hit"* ]] && echo 0 || echo 1
 )"
 assert 'both backends agree for planted bin/conduct reference' "$(
+  [ "$rg_exit" -eq "$grep_exit" ] && [ "$rg_output" = "$grep_output" ] && echo 0 || echo 1
+)"
+
+fixture=$(make_fixture removed-cli-self-host 'src/conductor/src/engine/self-host/release-gate.ts')
+mkdir -p "$fixture/src/conductor/src/engine/self-host"
+printf "%s\n" "  'bin/conduct CLI'," > "$fixture/src/conductor/src/engine/self-host/release-gate.ts"
+printf "%s\n" "const liveInvocation = 'bin/conduct';" >> "$fixture/src/conductor/src/engine/self-host/release-gate.ts"
+
+run_guard "$RG_PATH" "$fixture"
+rg_exit=$GUARD_EXIT
+rg_output=$GUARD_OUTPUT
+
+run_guard "$GREP_PATH" "$fixture"
+grep_exit=$GUARD_EXIT
+grep_output=$GUARD_OUTPUT
+
+expected_hit="src/conductor/src/engine/self-host/release-gate.ts:2:const liveInvocation = 'bin/conduct';"
+assert 'grep fallback rejects a non-contract bin/conduct reference in an allowlisted self-host source file' "$(
+  [ "$grep_exit" -ne 0 ] && [[ "$grep_output" == *"$expected_hit"* ]] && echo 0 || echo 1
+)"
+assert 'both backends reject the planted self-host bin/conduct reference identically' "$(
   [ "$rg_exit" -eq "$grep_exit" ] && [ "$rg_output" = "$grep_output" ] && echo 0 || echo 1
 )"
 

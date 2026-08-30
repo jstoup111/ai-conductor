@@ -177,8 +177,17 @@ while IFS= read -r hit; do
     *bin/conduct-ts*) continue ;;
   esac
 
-  case "$path" in
-    src/conductor/src/engine/self-host/release-gate.ts|src/conductor/src/engine/self-host/version-signal.ts)
+  case "$path:$text" in
+    # Canonical breaking-surface contract: the label, its documentation, and
+    # the two classifiers' exact path comparisons.
+    "src/conductor/src/engine/self-host/release-gate.ts:  'bin/conduct CLI',"|\
+    'src/conductor/src/engine/self-host/release-gate.ts: * schema / hook wiring / skill symlink targets / bin/conduct CLI). A null change'|\
+    "src/conductor/src/engine/self-host/release-gate.ts:      if (p === 'bin/conduct') surfaces.add(CANONICAL_BREAKING_SURFACES[0]);"|\
+    'src/conductor/src/engine/self-host/version-signal.ts:// - MAJOR: breaking surfaces (bin/conduct, hooks, skill symlink targets, settings)'|\
+    "src/conductor/src/engine/self-host/version-signal.ts:      if (p === 'bin/conduct') {"|\
+    "src/conductor/src/engine/self-host/version-signal.ts:        if (!breakingFiles.has('bin/conduct CLI')) {"|\
+    "src/conductor/src/engine/self-host/version-signal.ts:          breakingFiles.set('bin/conduct CLI', new Set());"|\
+    "src/conductor/src/engine/self-host/version-signal.ts:        breakingFiles.get('bin/conduct CLI')!.add(path);")
       ;;
     *)
       printf 'non-allowlisted bin/conduct reference: %s\n' "$hit" >&2
