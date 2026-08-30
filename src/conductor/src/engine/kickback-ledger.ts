@@ -17,10 +17,53 @@ export interface KickbackLastMechanicalFault {
   lapId: string;
 }
 
+export type KickbackBudgetAdjustmentKind = 'reset' | 'raise';
+
+/** An attributed operator decision that changed one cumulative budget. */
+export interface KickbackBudgetAdjustment {
+  id: string;
+  kind: KickbackBudgetAdjustmentKind;
+  beforeCount: number;
+  afterCount: number;
+  beforeLimit: number;
+  afterLimit: number;
+  operator: string;
+  rationale: string;
+  at: string;
+}
+
+/** Typed evidence for the exact cumulative cap terminal condition. */
+export interface KickbackExhaustedEvidence {
+  gate: 'build_review';
+  count: number;
+  limit: number;
+  generation: string;
+  latestReason: string;
+}
+
+/** Crash-recovery journal entry, bound to the cap generation it was approved for. */
+export interface PendingKickbackBudgetAdjustment extends KickbackBudgetAdjustment {
+  generation: string;
+}
+
+/** Authority the daemon consumes only for one exact, live cap halt. */
+export interface KickbackResumeAuthorization {
+  adjustmentId: string;
+  gate: 'build_review';
+  haltClass: 'needs-human';
+  generation: string;
+}
+
 /** Durable state for a gate's cross-dispatch kickback budget. */
 export interface KickbackGateEntry {
   count: number;
   cumulative: number;
+  effectiveLimit?: number;
+  /** Absent means legacy history is unavailable, rather than known-empty. */
+  adjustments?: KickbackBudgetAdjustment[];
+  exhaustedEvidence?: KickbackExhaustedEvidence;
+  pendingAdjustment?: PendingKickbackBudgetAdjustment;
+  resumeAuthorization?: KickbackResumeAuthorization;
   mechanicalFaults?: number;
   lastMechanicalFault?: KickbackLastMechanicalFault;
   treeHash: string | null;
@@ -148,23 +191,83 @@ function isLastMechanicalFault(value: unknown): value is KickbackLastMechanicalF
     typeof fault.lapId === 'string' && fault.lapId.trim().length > 0;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function isKickbackBudgetAdjustment(value: unknown): value is KickbackBudgetAdjustment {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const adjustment = value as Record<string, unknown>;
+  return (
+    isNonEmptyString(adjustment.id) &&
+    (adjustment.kind === 'reset' || adjustment.kind === 'raise') &&
+    isNonNegativeInteger(adjustment.beforeCount) &&
+    isNonNegativeInteger(adjustment.afterCount) &&
+    isPositiveSafeInteger(adjustment.beforeLimit) &&
+    isPositiveSafeInteger(adjustment.afterLimit) &&
+    isNonEmptyString(adjustment.operator) &&
+    isNonEmptyString(adjustment.rationale) &&
+    isNonEmptyString(adjustment.at)
+  );
+}
+
+function isKickbackExhaustedEvidence(value: unknown): value is KickbackExhaustedEvidence {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const evidence = value as Record<string, unknown>;
+  return evidence.gate === 'build_review' &&
+    isNonNegativeInteger(evidence.count) &&
+    isPositiveSafeInteger(evidence.limit) &&
+    isNonEmptyString(evidence.generation) &&
+    isNonEmptyString(evidence.latestReason);
+}
+
+function isPendingKickbackBudgetAdjustment(value: unknown): value is PendingKickbackBudgetAdjustment {
+  return isKickbackBudgetAdjustment(value) &&
+    isNonEmptyString((value as unknown as Record<string, unknown>).generation);
+}
+
+function isKickbackResumeAuthorization(value: unknown): value is KickbackResumeAuthorization {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const authorization = value as Record<string, unknown>;
+  return isNonEmptyString(authorization.adjustmentId) &&
+    authorization.gate === 'build_review' &&
+    authorization.haltClass === 'needs-human' &&
+    isNonEmptyString(authorization.generation);
+}
+
 function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntry {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
   const entry = value as Record<string, unknown>;
   return (
-    typeof entry.count === 'number' &&
-    (entry.cumulative === undefined || typeof entry.cumulative === 'number') &&
+    isNonNegativeInteger(entry.count) &&
+    (entry.cumulative === undefined || isNonNegativeInteger(entry.cumulative)) &&
+    (entry.effectiveLimit === undefined || isPositiveSafeInteger(entry.effectiveLimit)) &&
+    (entry.adjustments === undefined || (
+      Array.isArray(entry.adjustments) &&
+      entry.adjustments.every(isKickbackBudgetAdjustment) &&
+      new Set(entry.adjustments.map((adjustment) => adjustment.id)).size === entry.adjustments.length
+    )) &&
+    (entry.exhaustedEvidence === undefined || isKickbackExhaustedEvidence(entry.exhaustedEvidence)) &&
+    (entry.pendingAdjustment === undefined || isPendingKickbackBudgetAdjustment(entry.pendingAdjustment)) &&
+    (entry.resumeAuthorization === undefined || isKickbackResumeAuthorization(entry.resumeAuthorization)) &&
     (entry.mechanicalFaults === undefined || (
-      typeof entry.mechanicalFaults === 'number' &&
-      Number.isInteger(entry.mechanicalFaults) &&
-      entry.mechanicalFaults >= 0
+      isNonNegativeInteger(entry.mechanicalFaults)
     )) &&
     (entry.lastMechanicalFault === undefined || isLastMechanicalFault(entry.lastMechanicalFault)) &&
     (typeof entry.treeHash === 'string' || entry.treeHash === null) &&
     typeof entry.lastReason === 'string' &&
     typeof entry.priorVerdict === 'boolean' &&
-    typeof entry.resolvedBefore === 'number'
+    isNonNegativeInteger(entry.resolvedBefore) &&
+    !(
+      entry.exhaustedEvidence !== undefined &&
+      entry.pendingAdjustment !== undefined &&
+      entry.exhaustedEvidence.generation !== entry.pendingAdjustment.generation
+    )
   );
 }
 

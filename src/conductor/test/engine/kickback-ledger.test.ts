@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -209,7 +210,8 @@ describe('kickback-ledger', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(legacyLedger));
 
-    await expect(readKickbackLedger(dir)).resolves.toEqual({
+    const loaded = await readKickbackLedger(dir);
+    expect(loaded).toEqual({
       ...legacyLedger,
       gates: {
         build_review: {
@@ -219,6 +221,153 @@ describe('kickback-ledger', () => {
         },
       },
     });
+  });
+
+  it('preserves absent adjustment history on a legacy cumulative entry', async () => {
+    const legacyLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 4,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'legacy semantic failure',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(legacyLedger));
+
+    const loaded = await readKickbackLedger(dir);
+    expect(loaded).toEqual({
+      ...legacyLedger,
+      gates: {
+        build_review: {
+          ...legacyLedger.gates.build_review,
+          cumulative: 4,
+          mechanicalFaults: 0,
+        },
+      },
+    });
+    expect(loaded.gates.build_review?.cumulative).toBe(4);
+    expect(loaded.gates.build_review?.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW).toBe(
+      MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+    );
+    expect(loaded.gates.build_review).not.toHaveProperty('adjustments');
+  });
+
+  it('round-trips complete recoverable cumulative-budget state', async () => {
+    const ledger: KickbackLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 6,
+          mechanicalFaults: 1,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'latest semantic failure',
+          priorVerdict: false,
+          resolvedBefore: 7,
+          effectiveLimit: 8,
+          adjustments: [{
+            id: 'adjustment-1',
+            kind: 'raise',
+            beforeCount: 6,
+            afterCount: 6,
+            beforeLimit: 5,
+            afterLimit: 8,
+            operator: 'james',
+            rationale: 'the review scope expanded',
+            at: '2026-08-30T12:00:00.000Z',
+          }],
+          exhaustedEvidence: {
+            gate: 'build_review',
+            count: 6,
+            limit: 8,
+            generation: 'cap-generation-2',
+            latestReason: 'latest semantic failure',
+          },
+          pendingAdjustment: {
+            id: 'adjustment-2',
+            kind: 'reset',
+            beforeCount: 6,
+            afterCount: 0,
+            beforeLimit: 8,
+            afterLimit: 8,
+            operator: 'james',
+            rationale: 'the review contract was replaced',
+            at: '2026-08-30T12:01:00.000Z',
+            generation: 'cap-generation-2',
+          },
+          resumeAuthorization: {
+            adjustmentId: 'adjustment-1',
+            gate: 'build_review',
+            haltClass: 'needs-human',
+            generation: 'cap-generation-2',
+          },
+        },
+      },
+    };
+
+    await writeKickbackLedger(dir, ledger);
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual(ledger);
+  });
+
+  it.each([
+    ['blank adjustment identity', { id: ' ', kind: 'reset' }],
+    ['unsafe adjustment count', { id: 'adjustment-1', kind: 'reset', beforeCount: Number.MAX_SAFE_INTEGER + 1 }],
+  ])('rejects a %s in recoverable budget state', async (_name, invalidAdjustment) => {
+    const baseAdjustment = {
+      id: 'adjustment-1', kind: 'reset', beforeCount: 6, afterCount: 0,
+      beforeLimit: 5, afterLimit: 5, operator: 'james', rationale: 'reason', at: '2026-08-30T12:00:00.000Z',
+    };
+    const adjustment = {
+      ...baseAdjustment,
+      ...invalidAdjustment,
+    };
+    const malformedLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 6,
+          treeHash: null,
+          lastReason: 'latest semantic failure',
+          priorVerdict: false,
+          resolvedBefore: 7,
+          adjustments: [adjustment],
+        },
+      },
+    };
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(malformedLedger));
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  it('rejects conflicting pending and exhausted generations', async () => {
+    const malformedLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2, cumulative: 6, treeHash: null, lastReason: 'latest semantic failure', priorVerdict: false, resolvedBefore: 7,
+          exhaustedEvidence: { gate: 'build_review', count: 6, limit: 5, generation: 'cap-generation-1', latestReason: 'latest semantic failure' },
+          pendingAdjustment: {
+            id: 'adjustment-1', kind: 'reset', beforeCount: 6, afterCount: 0,
+            beforeLimit: 5, afterLimit: 5, operator: 'james', rationale: 'reason', at: '2026-08-30T12:00:00.000Z',
+            generation: 'cap-generation-2',
+          },
+        },
+      },
+    };
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(malformedLedger));
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
   });
 
   it('defaults a legacy build review entry without mechanical faults to zero', async () => {
