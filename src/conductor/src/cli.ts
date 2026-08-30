@@ -484,6 +484,12 @@ function registerCommands(program: Command): void {
 export function createProgram(): Command {
   const program = createBaseProgram();
 
+  // Version report. Declared here (not on the base program) because parseArgs
+  // parses the base program for the inline pipeline, and a commander-owned
+  // `--version` there would intercept before index.ts could dispatch. Both
+  // spellings are dispatched in index.ts (detectVersionCommand); these
+  // declarations exist so `--help` documents them.
+  program.option('-V, --version', 'Print the harness version and the pinned engine build, then exit');
   // Inline pipeline subcommand. This is the DEFAULT mode — running the SDLC
   // pipeline in the foreground (`ai-conductor inline "<feature>"`), the counterpart to
   // the background `daemon`. Dispatched in index.ts (detectInline) before the
@@ -494,6 +500,10 @@ export function createProgram(): Command {
       .command('inline')
       .description('Run the SDLC pipeline inline, in the foreground (the default mode)'),
   );
+
+  program
+    .command('version')
+    .description('Print the harness version and the pinned engine build, then exit');
 
   // Registry subcommands (Phase 9.2). These are NON-INTERACTIVE: they run to
   // completion and exit, rather than entering the interactive pipeline. The

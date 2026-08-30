@@ -103,6 +103,11 @@ import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveEngineVersion } from './engine/shipped-record.js';
+import {
+  detectVersionCommand,
+  dispatchVersionCommand,
+  resolveHarnessVersion,
+} from './engine/version-report.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { UISubscriber } from "./ui/types.js";
 import type {
@@ -401,30 +406,25 @@ export async function resolveDaemonProjectRoot(startCwd: string): Promise<string
   return resolved.root;
 }
 
-// Harness VERSION lookup: probes a few candidate locations because the
-// installed layout can be a symlink chain (~/.local/bin/conduct-ts →
-// <harness>/bin/conduct-ts → <harness>/src/conductor/dist/index.js).
-// Returns '0.0.0' on failure so `defaultHasMigration` returns false (no
-// re-bootstrap triggered).
+// Harness VERSION lookup for the migration check. Probes the invocation cwd
+// first, then falls back to the shared module-relative probe in
+// engine/version-report.ts — the installed layout is a symlink chain
+// (~/.local/bin/ai-conductor → <harness>/bin/ai-conductor →
+// <harness>/src/conductor/dist-versions/<id>/index.js), so only the running
+// module's own path identifies the harness. Returns '0.0.0' on failure so
+// `defaultHasMigration` returns false (no re-bootstrap triggered).
 async function readHarnessVersion(): Promise<string> {
-  // Resolve relative to the bundled entry: <harness>/src/conductor/dist/index.js
-  // or the dev path <harness>/src/conductor/src/index.ts. Either way VERSION
-  // is two levels up from the conductor package root.
-  const candidates = [
-    join(process.cwd(), 'VERSION'),
-    join(__dirname, '..', '..', '..', 'VERSION'),
-    join(__dirname, '..', '..', '..', '..', 'VERSION'),
-  ];
-  for (const path of candidates) {
-    try {
-      const raw = await readFile(path, 'utf-8');
-      const v = raw.trim();
-      if (/^\d+\.\d+\.\d+/.test(v)) return v;
-    } catch {
-      /* try next */
-    }
+  // A checkout the CLI was invoked from wins (the migration check is about the
+  // repo in hand); otherwise fall back to the shared module-relative probe that
+  // `--version` reports, so the two never drift.
+  try {
+    const raw = await readFile(join(process.cwd(), 'VERSION'), 'utf-8');
+    const v = raw.trim();
+    if (/^\d+\.\d+\.\d+/.test(v)) return v;
+  } catch {
+    /* fall through to the module-relative probe */
   }
-  return '0.0.0';
+  return resolveHarnessVersion(__dirname);
 }
 
 interface VisualizerStartContextInput {
@@ -613,6 +613,14 @@ async function main(): Promise<void> {
   if (!daemonSessionVerdict.allowed) {
     console.error(`Error: ${daemonSessionVerdict.message}`);
     process.exitCode = 1;
+    return;
+  }
+
+  // Version report (`ai-conductor --version` / `-V` / `version`). Read-only and
+  // dispatched before every other subcommand so it can never be shadowed by a
+  // pipeline or daemon handler.
+  if (detectVersionCommand(process.argv)) {
+    process.exitCode = await dispatchVersionCommand({ moduleDir: __dirname });
     return;
   }
 
