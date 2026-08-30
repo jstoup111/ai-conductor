@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { access, mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
@@ -165,6 +166,7 @@ import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/
 import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
 import { createEpisodeHaltTracker } from './engine/episode-halt-tracker.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFile = promisify(execFileCb);
 
 /**

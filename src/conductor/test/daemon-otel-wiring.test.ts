@@ -1,4 +1,4 @@
-// Covers: task:6, task:7, task:8, task:9
+// Covers: task:3, task:6, task:7, task:8, task:9
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
-import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { resolveOtelConfig } from '../src/engine/otel/otel-config.js';
 import { createOtelVisualizer } from '../src/engine/otel/create-otel-visualizer.js';
 import type { FeatureRunnerDeps, FeatureRunScope } from '../src/engine/daemon-runner.js';
@@ -15,6 +15,7 @@ type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVi
 type VisualizerPlugin = import('../src/types/plugin.js').VisualizerPlugin;
 type HarnessConfig = import('../src/types/config.js').HarnessConfig;
 type LoadMergedConfig = typeof import('../src/engine/config.js').loadMergedConfig;
+type ResolveEngineVersion = typeof import('../src/engine/shipped-record.js').resolveEngineVersion;
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -32,11 +33,16 @@ const fixture = vi.hoisted(() => ({
 }));
 const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null));
 const loadMergedConfig = vi.hoisted(() => vi.fn<LoadMergedConfig>());
+const resolveEngineVersion = vi.hoisted(() => vi.fn<ResolveEngineVersion>(() => 'dev'));
 
 vi.mock('../src/engine/otel/wire.js', () => ({ wireOtelVisualizer }));
 vi.mock('../src/engine/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/config.js')>();
   return { ...actual, loadMergedConfig };
+});
+vi.mock('../src/engine/shipped-record.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/shipped-record.js')>();
+  return { ...actual, resolveEngineVersion };
 });
 vi.mock('../src/engine/self-host/daemon-build-token.js', () => ({
   readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
@@ -138,6 +144,8 @@ beforeEach(() => {
   fixture.runnerSessionIds = [];
   loadMergedConfig.mockClear();
   wireOtelVisualizer.mockClear();
+  resolveEngineVersion.mockReset();
+  resolveEngineVersion.mockReturnValue('dev');
   wireOtelVisualizer.mockImplementation((config, context, events) => {
     if (!resolveOtelConfig(config, context.pipelineDir).enabled) return null;
     fixture.visualizerConstructions += 1;
@@ -187,6 +195,38 @@ async function dispatchWithSessionId(
 }
 
 describe('daemon OTel visualizer wiring', () => {
+  it('exports the daemon module engine identity for source and installed builds', async () => {
+    const daemonSource = await readFile(new URL('../src/daemon-cli.ts', import.meta.url), 'utf8');
+    const engineVersions: unknown[] = [];
+    for (const engineVersion of ['dev', 'installed-engine-id']) {
+      const spanExporter = new InMemorySpanExporter();
+      const metricExporter: PushMetricExporter = {
+        export(_metrics: ResourceMetrics, resultCallback: (result: ExportResult) => void) {
+          resultCallback({ code: ExportResultCode.SUCCESS });
+        },
+        async forceFlush(): Promise<void> {},
+        async shutdown(): Promise<void> {},
+      };
+      resolveEngineVersion.mockReturnValue(engineVersion);
+      fixture.emitOtelEvents = true;
+      wireOtelVisualizer.mockImplementation((config, context, events) => {
+        const visualizer = createOtelVisualizer(
+          resolveOtelConfig(config, context.pipelineDir),
+          { spanExporter, metricExporter },
+          events,
+        );
+        visualizer?.start(events, context);
+        return visualizer;
+      });
+
+      await dispatchWithSessionId();
+      engineVersions.push(spanExporter.getFinishedSpans()[0]?.resource.attributes['conductor.engine.version']);
+    }
+
+    expect(daemonSource).toContain('const __dirname = dirname(fileURLToPath(import.meta.url));');
+    expect(engineVersions).toEqual(['dev', 'installed-engine-id']);
+  });
+
   it('attaches the visualizer to the feature bus using the persisted read-only session ID', async () => {
     const { repo, pipelineDir } = await dispatchWithSessionId('persisted-dispatch-id');
 
@@ -250,7 +290,7 @@ describe('daemon OTel visualizer wiring', () => {
     });
   });
 
-  it('leaves an absent OTel configuration as the pre-visualizer feature dispatch', async () => {
+  it('leaves an absent OTel configuration without starting an exporter or listener', async () => {
     await dispatchWithSessionId(undefined, {});
 
     expect({
