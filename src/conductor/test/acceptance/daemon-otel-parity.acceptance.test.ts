@@ -32,6 +32,7 @@ import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { VisualizerFactoryContext } from '../../src/types/plugin.js';
+import type { OtelVisualizerStartContext } from '../../src/engine/otel/wire.js';
 
 let dirs: string[] = [];
 afterEach(async () => {
@@ -71,7 +72,7 @@ async function throughInteractive(events: ConductorEvent[]): Promise<unknown[]> 
   const exporter = new InMemorySpanExporter();
   buildExporters.mockReturnValueOnce({ spanExporter: exporter, metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE) });
   const emitter = new ConductorEventEmitter();
-  const context: VisualizerFactoryContext = { config, pipelineDir, emitter, startContext: { feature: 'interactive', project: 'test', pipelineDir } };
+  const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = { config, pipelineDir, emitter, startContext: { feature: 'interactive', project: 'test', pipelineDir, branch: undefined, engineVersion: undefined } };
   const visualizers = buildInteractiveVisualizers(new PluginRegistry(), config, context);
   for (const event of events) await emitter.emit(event);
   await Promise.all(visualizers.map((visualizer) => visualizer.stop()));

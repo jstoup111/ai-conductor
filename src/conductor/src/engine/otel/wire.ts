@@ -10,6 +10,16 @@ import type { ConductorEventEmitter } from '../../ui/events.js';
 import { resolveOtelConfig } from './otel-config.js';
 
 /**
+ * Identity resolution results required at supported OTel start boundaries.
+ * Explicit `undefined` records an attempted resolution that did not succeed.
+ */
+export interface OtelVisualizerStartContext extends VisualizerStartContext {
+  pipelineDir: string;
+  branch: string | undefined;
+  engineVersion: string | undefined;
+}
+
+/**
  * Create and start the OTel visualizer for one event stream.
  *
  * The built-in registry factory owns visualizer construction; this helper owns
@@ -18,7 +28,7 @@ import { resolveOtelConfig } from './otel-config.js';
  */
 export function wireOtelVisualizer(
   config: HarnessConfig,
-  context: VisualizerStartContext & { pipelineDir: string },
+  context: OtelVisualizerStartContext,
   events: ConductorEventEmitter,
 ): VisualizerPlugin | null {
   if (!resolveOtelConfig(config, context.pipelineDir).enabled) return null;

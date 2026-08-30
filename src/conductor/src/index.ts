@@ -102,6 +102,7 @@ import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { wireOtelVisualizer } from './engine/otel/wire.js';
+import type { OtelVisualizerStartContext } from './engine/otel/wire.js';
 import { resolveEngineVersion } from './engine/shipped-record.js';
 import {
   detectVersionCommand,
@@ -281,7 +282,7 @@ export function selectVisualizers(
 export function buildInteractiveVisualizers(
   registry: PluginRegistry,
   config: HarnessConfig,
-  context: VisualizerFactoryContext,
+  context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext },
 ): VisualizerPlugin[] {
   const started = buildVisualizers(
     selectVisualizers(registry, config, context),
@@ -432,14 +433,14 @@ interface VisualizerStartContextInput {
   project: string;
   feature?: string;
   pipelineDir: string;
-  branch?: string;
-  engineVersion?: string;
+  branch: string | undefined;
+  engineVersion: string | undefined;
 }
 
 /** Build identity for every visualizer without fabricating unavailable values. */
 export function createVisualizerStartContext(
   input: VisualizerStartContextInput,
-): VisualizerStartContext {
+): OtelVisualizerStartContext {
   return {
     runId: input.runId,
     project: input.project,
@@ -1431,7 +1432,7 @@ async function main(): Promise<void> {
 
   // Build configured visualizers plus OTel, whose shared helper retains
   // ownership of its `otel:` configuration gate and start lifecycle.
-  const visualizerContext: VisualizerFactoryContext = {
+  const visualizerContext: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
     config: config ?? {},
     pipelineDir,
     emitter: events,

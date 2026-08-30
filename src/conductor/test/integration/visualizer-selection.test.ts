@@ -1,4 +1,4 @@
-// Covers: task:5, task:6, task:9
+// Covers: task:2, task:5, task:6, task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execa } from 'execa';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -20,7 +20,53 @@ import type {
   VisualizerPlugin,
   VisualizerStartContext,
 } from '../../src/types/plugin.js';
+import type { OtelVisualizerStartContext } from '../../src/engine/otel/wire.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+type InteractiveOtelContext = Parameters<typeof buildInteractiveVisualizers>[2];
+
+const resolvedInteractiveOtelContext: InteractiveOtelContext = {
+  config: {},
+  pipelineDir: '/tmp/visualizer-selection',
+  emitter: new ConductorEventEmitter(),
+  startContext: {
+    pipelineDir: '/tmp/visualizer-selection',
+    branch: 'feature/visualizer-selection',
+    engineVersion: '1.2.3',
+  },
+};
+
+const unresolvedInteractiveOtelContext: InteractiveOtelContext = {
+  config: {},
+  pipelineDir: '/tmp/visualizer-selection',
+  emitter: new ConductorEventEmitter(),
+  startContext: {
+    pipelineDir: '/tmp/visualizer-selection',
+    branch: undefined,
+    engineVersion: undefined,
+  },
+};
+
+const missingInteractiveOtelBranch: InteractiveOtelContext = {
+  config: {},
+  pipelineDir: '/tmp/visualizer-selection',
+  emitter: new ConductorEventEmitter(),
+  // @ts-expect-error Supported interactive OTel wiring must receive branch resolution.
+  startContext: { pipelineDir: '/tmp/visualizer-selection', engineVersion: '1.2.3' },
+};
+
+const missingInteractiveOtelEngineVersion: InteractiveOtelContext = {
+  config: {},
+  pipelineDir: '/tmp/visualizer-selection',
+  emitter: new ConductorEventEmitter(),
+  // @ts-expect-error Supported interactive OTel wiring must receive engine-version resolution.
+  startContext: { pipelineDir: '/tmp/visualizer-selection', branch: 'feature/visualizer-selection' },
+};
+
+void resolvedInteractiveOtelContext;
+void unresolvedInteractiveOtelContext;
+void missingInteractiveOtelBranch;
+void missingInteractiveOtelEngineVersion;
 
 class FakeVisualizer implements VisualizerPlugin {
   readonly received: string[] = [];
@@ -56,7 +102,7 @@ function createFactoryContext(
   emitter: ConductorEventEmitter,
   visualizers?: string[],
   startContext: Partial<VisualizerStartContext> = {},
-): VisualizerFactoryContext {
+): VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } {
   return {
     config: { visualizers } as HarnessConfig,
     pipelineDir: '/tmp/visualizer-selection',
