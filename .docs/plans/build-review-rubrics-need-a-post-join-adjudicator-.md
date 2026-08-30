@@ -573,11 +573,15 @@ conductor.
 1. The bounded fixture observes exactly one adjudication dispatch, one first action charge/event, one BUILD navigation, and durable retry context, then terminates through its awaited sentinel.
 2. Non-action completion performs no BUILD navigation; pure and mixed mechanical cases take the transition table's routes and never fabricate PASS.
 3. Typed failure/HALT fixtures persist state and terminate without a provider, tracker, or navigation call beyond the failing boundary.
+4. The production conductor call supplies the coordinator's deferred-intake dependencies, so marker lookup, issue filing, and deferral completion are reachable from a real dispatch and not only from an injected fixture.
+5. A restart reads the durable order from `.pipeline/build-review-work-order.json` and recovers the accepted work order and BUILD navigation point; no clause is satisfied by an in-memory hint alone.
+6. The conductor distinguishes an exactly-covered infrastructure branch from an uncovered one, so a covered branch is not pinned to `mechanical-retry`.
+7. Every clause above is proven against the production call path; a bounded fixture observing the coordinator is necessary but never sufficient on its own.
 
 **Files:**
-- `src/conductor/src/engine/conductor.ts` — enabled raw-FAIL integration and transition application
+- `src/conductor/src/engine/conductor.ts` — enabled raw-FAIL integration, transition application, and the production coordinator call's dependency set
 - `src/conductor/src/engine/build-review-adjudication.ts` — conductor-facing result port
-- `src/conductor/src/engine/build-review-work-order.ts` — BUILD attempt/context hook
+- `src/conductor/src/engine/build-review-work-order.ts` — BUILD attempt/context hook and durable restart read
 - `src/conductor/test/engine/conductor-build-review-adjudication.test.ts` — bounded integration fixture
 
 **Dependencies:** Task 7, Task 15, Task 16, Task 17
