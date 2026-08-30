@@ -171,12 +171,12 @@ export function assembleBuildReviewAdjudicationContext(
 ): AssembleBuildReviewAdjudicationContextResult {
   const rawSources = projectBuildReviewAggregateSources(input.aggregate);
   if (!rawSources) return { ok: false, stop: { code: 'invalid-aggregate' } };
-  if (rawSources.length > LIMITS.maxCurrentSources) {
-    return { ok: false, stop: { code: 'field-overflow', subject: 'current-source', field: 'currentSources', limit: LIMITS.maxCurrentSources, actual: rawSources.length } };
+  const unresolvedSources = rawSources.filter((source) => !input.operatorResolvedFindingIds?.has(source.findingId));
+  if (unresolvedSources.length > LIMITS.maxCurrentSources) {
+    return { ok: false, stop: { code: 'field-overflow', subject: 'current-source', field: 'currentSources', limit: LIMITS.maxCurrentSources, actual: unresolvedSources.length } };
   }
   const currentSources: BuildReviewAdjudicationCurrentSource[] = [];
-  for (const source of rawSources) {
-    if (input.operatorResolvedFindingIds?.has(source.findingId)) continue;
+  for (const source of unresolvedSources) {
     const stop = validateCurrent(source);
     if (stop) return { ok: false, stop };
     currentSources.push(Object.freeze({ ...source, sourceId: `${source.rubric}:${source.findingId}` }));

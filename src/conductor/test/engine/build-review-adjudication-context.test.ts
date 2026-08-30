@@ -5,7 +5,7 @@ import {
   assembleBuildReviewAdjudicationContext,
   BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS,
 } from '../../src/engine/build-review-adjudication-context.js';
-import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 
@@ -92,6 +92,20 @@ describe('build-review adjudication context', () => {
       operatorResolvedFindingIds: new Set([all.context.currentSources[0]!.findingId]),
     });
     expect(resolved).toMatchObject({ ok: true, context: { priorCases: [], currentSources: [expect.objectContaining({ summary: finding('unresolved').summary })] } });
+  });
+
+  it('bounds only operator-unresolved sources, not the complete raw aggregate', () => {
+    const current = aggregate(...Array.from(
+      { length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources + 1 },
+      (_value, index) => finding(`resolved-${index}`),
+    ));
+    const rawSources = projectBuildReviewAggregateSources(current)!;
+
+    expect(assembleBuildReviewAdjudicationContext({
+      aggregate: current,
+      priorCases: [],
+      operatorResolvedFindingIds: new Set(rawSources.map((source) => source.findingId)),
+    })).toMatchObject({ ok: true, context: { currentSources: [], priorCases: [] } });
   });
 
   it('excludes infrastructure results rather than treating them as remediation sources', () => {
