@@ -81,6 +81,10 @@ describe('CLI', () => {
     expect(() => parseArgs(['node', 'conduct', 'feature', '--output'])).toThrow();
   });
 
+  it('rejects --log as an unknown option', () => {
+    expect(() => parseArgs(['node', 'conduct', 'feature', '--log'])).toThrow();
+  });
+
   it('no longer exposes step/output on CLIOptions', () => {
     const opts = parseArgs(['node', 'conduct', 'feature']);
     expect(opts).not.toHaveProperty('step');
