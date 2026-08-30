@@ -570,3 +570,28 @@ Linearizable order: 1, 3, 2, 4, 5, 21, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1
 **Governing clause:** adr-2026-08-28-test-suite-drift-budget-and-verification-mode decision 4
 **Done when:**
 - adr-2026-08-28-test-suite-drift-budget-and-verification-mode decision 4 is satisfied by this task.
+
+### Task 22: The test-suite CLI records its own preservation
+**Story:** 7
+**Type:** negative-path
+
+**Steps:**
+1. Write a failing CLI test: `ai-conductor test-suite` against a tree whose drift is within budget preserves the recorded PASS AND appends exactly one drift-ledger entry, so a later invocation measures cumulatively from the attested PASS rather than from a stale baseline.
+2. Verify the test fails (RED) — today `src/conductor/src/engine/test-suite-cli.ts:60-61` constructs its own FullSuiteVerifier and calls `ensure()` without retaining or recording the inspection.
+3. Implement: retain the resolved inspection and record it once through rem-as-built-rem-ab1-1's recording seam, exactly as the dispatched, completion, and rebase callers do. No second inspection, and no write inside any predicate path.
+4. Verify tests pass (GREEN).
+5. Commit: "fix(test-suite-cli): record the preservation through the caller-owned seam".
+
+**Done when:**
+- A CLI regression test proves one in-budget `ai-conductor test-suite` preservation appends exactly one drift-ledger entry
+- A repeated in-budget CLI invocation measures drift cumulatively against the attested PASS rather than the previous evaluation
+- A CURRENT (digest-match) CLI invocation records no ledger entry
+- The existing test-suite CLI output contract and exit codes are unchanged
+
+**Files likely touched:**
+- src/conductor/src/engine/test-suite-cli.ts — retain and record the inspection
+- src/conductor/test/engine/test-suite-cli.test.ts — CLI preservation regression test
+
+**Dependencies:** rem-as-built-rem-ab1-1
+
+**Operator note:** Authored by the operator on 2026-08-30 to resolve a needs-human plan gap. The build evaluator found this CLI preservation path unowned; both gates' remediation laps and the 5-task shared plan-growth allowance were already spent, so remediation could not append it itself. adr-2026-08-28 decision 4 makes the drift budget cumulative against the attested PASS specifically so a feature "cannot ratchet unlimited drift through repeated small preservations" — the ledger append is that mechanism, and a caller that preserves without recording defeats it. rem-as-built-rem-ab1-4's sibling sweep enumerated conductor.ts:11207, conductor.ts:5970-5996, conductor.ts:12016 and daemon-rekick.ts:382-399 as the acting callers and build-review-inputs.ts:525 as read-only, but did not reach test-suite-cli.ts:60 — this task closes that one omission and nothing else.
