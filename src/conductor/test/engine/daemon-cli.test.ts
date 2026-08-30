@@ -749,16 +749,17 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?shouldStop:\s*\(\)\s*=>\s*teardown\.shouldStop\(\),/);
   });
 
-  it('onForceRelease synchronously releases the lock and logs a greppable force-release line', () => {
+  it('scaled onForceRelease synchronously releases the lock and logs a greppable force-release line', () => {
     const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
 
     const teardownMatch = src.match(
-      /createDaemonTeardown\(\{([\s\S]*?)\n  \}\);/,
+      /createScaledDaemonTeardown\(\{([\s\S]*?)\n  \}\);/,
     );
     expect(teardownMatch).not.toBeNull();
     const teardownArgs = teardownMatch![1];
 
     expect(teardownArgs).toContain('onForceRelease');
+    expect(teardownArgs).toContain('liveExecutorCount');
     expect(teardownArgs).toContain('releaseBackstop()');
     expect(teardownArgs).toMatch(/force-release/);
   });
