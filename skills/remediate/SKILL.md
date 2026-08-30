@@ -37,6 +37,80 @@ kicks back to does that.
 **Run when `build_review` fails, or at SHIP when a prior audit BLOCKED — dispatched by the
 conductor on the blocking path.**
 
+## Engine-selected build_review case-v1 mode
+
+Use this branch **only when this engine context is the engine-stamped `build_review` `case-v1`
+context declaring `domain: "build_review"` and `mode: "case-v1"`**. It is one judgement by the
+existing `remediate` skill, not a new skill or a second dispatch. Do not create a skill or dispatch
+another agent. For every other context, including all SHIP and stall remediation, skip this section
+and follow the legacy gap-plan instructions below unchanged.
+
+### Supplied input — complete or stop
+
+Judge only the frozen, byte-bounded projection supplied in the engine context. Its exact input fields
+are:
+
+- `domain`: `build_review`.
+- `currentFindings`: every current operator-unresolved content finding, each with its rubric id,
+  stable finding id, anchor, summary, and evidence locations.
+- `priorCases`: all feature-local prior cases, each with outcome, source links, effect status, and
+  resolution evidence.
+- `planContract`: the active approved-plan contract that determines whether work is admitted.
+- `taskStatus`: the engine-supplied task-status evidence.
+- `effectPointers`: the engine-supplied prior effect and BUILD-attempt pointers.
+
+All feature-local prior cases must be present or stop: never infer, truncate, or silently ignore
+history. Every supplied current finding must receive exactly one source outcome. Use the supplied
+stable identifiers and evidence to make semantic judgements; do not match summaries as identity.
+
+Do not re-audit the source tree. Do not read sibling rubric prompts, inspect a different review
+artifact, or seek additional repository evidence. The engine already selected the scope, excluded exact
+operator-resolved findings, assembled all history, and bounded the input. If the supplied projection
+cannot support a justified judgement, return the required schema with the most supportable
+case-level disposition; do not substitute a legacy gap plan or invent missing evidence.
+
+### Required additive artifact
+
+Overwrite `.pipeline/remediation.json` with one JSON object using exactly these top-level keys:
+`mode`, `domain`, `sourceOutcomes`, `cases`. Set `mode` to `"case-v1"` and `domain` to
+`"build_review"`; do not add legacy `dispositions` or any other keys.
+
+`sourceOutcomes` contains one exact row with `sourceId`, `outcome`, `caseRef` for every and only the
+supplied `currentFindings` identifier. `outcome` is closed: `acted` | `deferred` | `rejected` | `merged`.
+Each `caseRef` is a provider-local reference to one canonical row in `cases`; it is not a durable id.
+Several source rows may reference one canonical case only when the judgement is that they are the same
+repair case.
+
+Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`, `priority`,
+`rationale`, `confidence`, `effect`:
+
+- `caseRef` is the provider-local reference used by source rows. `existingCaseId`, when supplied by
+  the engine in `priorCases`, may bind that existing case only.
+- `disposition` is closed: `act` | `defer` | `reject`.
+- `priority` is closed: `critical` | `high` | `medium` | `low`.
+- `rationale` is bounded, evidence-grounded prose explaining the judgement, and `confidence` is
+  closed: `high` | `medium` | `low`.
+- An `act` effect is exactly `{ "kind": "action", "route": "build", "tasks": [{ "title": "..." }] }`.
+  It contains one or more concrete, ordered, file-scoped task titles.
+- A `defer` effect is exactly `{ "kind": "deferral", "title": "...", "body": "...",
+  "exclusionRationale": "..." }`. Its `exclusionRationale` explains why no current plan task admits
+  the work.
+- A `reject` effect is exactly `{ "kind": "none" }` and its rationale explains why the raw finding
+  is non-actionable under the supplied rubric and plan contract.
+
+### Authority boundaries
+
+The provider must not mint durable case ids or effect ids. The engine validates the complete graph.
+The engine stamps durable ids, reconciles history, reserves and applies effects, publishes any work
+order, charges the kickback, and derives the effective route.
+
+Never omit, duplicate, or replace a supplied source outcome. A `merged` source is a trace outcome,
+not a case disposition; it still names its canonical `caseRef`. Never assert or create operator
+acceptance, and never treat an autonomous case outcome as accepted risk. Do not apply an effect,
+file an intake issue, navigate BUILD, charge a budget, or mutate durable state. Do not append to the
+approved plan. In this mode the only write is the schema-constrained `.pipeline/remediation.json`
+artifact.
+
 ## Practices
 
 ### 1. Load Input
