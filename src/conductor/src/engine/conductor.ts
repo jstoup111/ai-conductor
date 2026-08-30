@@ -4110,7 +4110,16 @@ export class Conductor {
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
-            detail: `prd_audit remediation ${capReason} before appending fix tasks. Findings: ${findingList}.`,
+            // adr-2026-08-25 D4: a cap terminal names the allowance AND every
+            // finding. In a mixed validation-group round remediate has already
+            // dispositioned the as-built findings, and this exit returns before
+            // the as-built budget is consulted — so without this they are
+            // routed and discarded with no trace in the halt body. Renders the
+            // same way the as-built and shared-growth exits do; the helper
+            // yields '' unless an as-built BLOCKED report actually participates.
+            detail: `prd_audit remediation ${capReason} before appending fix tasks. `
+              + `Findings: ${findingList}.`
+              + renderAsBuiltBlockedFindingDetail(asBuiltReport),
           };
         }
       }
