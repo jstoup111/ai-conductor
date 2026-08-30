@@ -167,6 +167,69 @@ describe('engine/autoresolve — in-flight serial guard across ticks (Task 18)',
     expect(elig.eligible).toBe(true);
   });
 
+  it('refuses active work-claim cleanup before removing a stale resolution worktree', async () => {
+    const slug = 'claimed-feature';
+    const stalePath = join(dir, '.worktrees', `resolve-${slug}`);
+    const staleMarker = join(stalePath, 'preserve-me');
+    const logs: string[] = [];
+    await mkdir(stalePath, { recursive: true });
+    await writeFile(staleMarker, 'stale resolution evidence\n');
+
+    await expect(
+      withResolveWorktree(
+        slug,
+        'feat/pr-1',
+        dir,
+        async () => ({ ok: true }),
+        undefined,
+        {
+          isFeatureInFlight: (candidate) => candidate === slug,
+          log: (message) => logs.push(message),
+        },
+      ),
+    ).rejects.toThrow(`active work claim for ${slug}`);
+
+    expect({
+      staleMarkerStillExists: await pathExists(staleMarker),
+      logs,
+    }).toEqual({
+      staleMarkerStillExists: true,
+      logs: [`[autoresolve] worktree removal refused ${slug} — reason: active work claim`],
+    });
+  });
+
+  it('refuses final resolution-worktree cleanup when a work claim appears during resolution', async () => {
+    const slug = 'claimed-during-resolution';
+    const worktreePath = join(dir, '.worktrees', `resolve-${slug}`);
+    const logs: string[] = [];
+    let claimed = false;
+
+    const result = await withResolveWorktree(
+      slug,
+      'feat/pr-1',
+      dir,
+      async () => {
+        claimed = true;
+        return { ok: true };
+      },
+      undefined,
+      {
+        isFeatureInFlight: (candidate) => candidate === slug && claimed,
+        log: (message) => logs.push(message),
+      },
+    );
+
+    expect({
+      result,
+      worktreeStillExists: await pathExists(worktreePath),
+      logs,
+    }).toEqual({
+      result: { ok: true },
+      worktreeStillExists: true,
+      logs: [`[autoresolve] worktree removal refused ${slug} — reason: active work claim`],
+    });
+  });
+
   it('provisions and tears down the resolve worktree without changing the retained feature worktree', async () => {
     const retained = await retainFeatureWorktree('pr-1');
     let resolvePathDuringRun = '';
