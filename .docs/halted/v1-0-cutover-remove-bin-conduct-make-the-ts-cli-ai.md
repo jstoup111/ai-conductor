@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-30T02:56:14.676Z
 Slug: v1-0-cutover-remove-bin-conduct-make-the-ts-cli-ai
 Class: plan-gap
 Halting step: prd_audit
