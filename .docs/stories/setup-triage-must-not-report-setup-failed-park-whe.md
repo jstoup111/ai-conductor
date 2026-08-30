@@ -10,29 +10,26 @@ park rendering).
 
 ---
 
-## Story 1: A setup-success-with-dirty-tree is never reported as "setup failed" (#582 fixture)
+## Story 1: Setup-success repair state is classified accurately (#582 fixture)
 
 **Requirement:** Issue #582 desired outcome 1 & 2
 
-As the daemon operator, I want a triage whose `bin/setup` re-run exited 0 but left the tree
-dirty to be surfaced accurately as a dirty-tree block — not as a setup failure — so that a
-healthy environment is never misattributed as a setup failure that hides the real cause.
+As the daemon operator, I want a triage whose `bin/setup` re-run exited 0 to distinguish a stable
+repair from setup-added drift, so that a valid repair can proceed and a rejected attempt is never
+misattributed as a setup failure.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the #582 shape — the stage-2 fix-session's `dispatchFixSession` resolves and `runPrepare`
-  (bin/setup) **succeeds** (exit 0), but `git status --porcelain` afterward reports
-  ` M src/conductor/src/engine/conductor.ts` — when `fixSession` settles, then the returned
-  outcome is `kind:'park'` with `contractOutcome:'dirty-tree-uncleaned'` (a discriminator
-  distinct from the setup-failure `'setup-still-failing'`) and a non-empty `outputTail` that
-  states the setup succeeded and the tree could not be cleaned (never the word combination
-  "setup failed").
-- Given that same park outcome routed through `makeRunFeature`'s daemon triage path, when the
-  feature reason and the `.pipeline/HALT` note are rendered, then neither contains the literal
-  `setup failed and parked after triage`; the reason names the dirty-tree cause and the
-  `contractOutcome: dirty-tree-uncleaned` line, and the daemon log line for this park is not the
-  bare setup-failure form.
+- Given the #582 shape — the stage-2 fix-session leaves
+  ` M src/conductor/src/engine/conductor.ts` without moving HEAD, and forced `runPrepare`
+  (bin/setup) **succeeds** without changing the captured Git tree — when `fixSession` settles,
+  then the engine commits exactly the captured repair, verifies a clean worktree, and returns
+  `kind:'fixed-pass'` rather than quarantining the repair.
+- Given forced setup succeeds but adds, removes, or changes Git-visible content relative to the
+  captured repair, when the resulting park is routed through `makeRunFeature`, then the reason,
+  `.pipeline/HALT`, and daemon log name setup drift and the preserved attempt; none reports that
+  setup failed.
 
 #### Negative Paths
 - Given the fix-session's `runPrepare` **throws** a `SetupFailureError` (genuine nonzero setup
@@ -42,58 +39,55 @@ healthy environment is never misattributed as a setup failure that hides the rea
 - Given the porcelain check after a successful `runPrepare` reports an **empty** tree, when
   `fixSession` settles, then the outcome is `kind:'fixed-pass'` exactly as today (no dirty-tree
   branch taken, no quarantine attempted).
+- Given the provider leaves commits plus uncommitted residue, when `fixSession` classifies the
+  attempt, then it preserves and parks with `mixed-commit-and-residue`; it never treats the setup
+  exit alone as proof that the repair is safe.
 
 ### Done When
 - [ ] An engine test drives `fixSession` with resolving dispatch + succeeding `runPrepare` +
-      dirty porcelain and asserts `kind:'park'`, `contractOutcome:'dirty-tree-uncleaned'`, and an
-      `outputTail` that does not contain "setup failed".
-- [ ] A daemon-runner test asserts the rendered feature reason and HALT note for that outcome
+      a byte-stable captured repair and asserts an exact engine commit plus `kind:'fixed-pass'`.
+- [ ] A daemon-runner test asserts a setup-drift park's rendered feature reason and HALT note
       contain neither `setup failed and parked after triage` nor a bare "setup failed", and do
-      contain the dirty-tree cause.
+      contain the drift cause and preservation evidence.
 - [ ] A test asserts a throwing `runPrepare` still yields `contractOutcome:'setup-still-failing'`.
 - [ ] A test asserts an empty porcelain after success still yields `fixed-pass`.
 
 ---
 
-## Story 2: The dirty-tree block quarantines ALL uncommitted paths, including tracked-modified
+## Story 2: Every rejected dirty repair is preserved completely before reset
 
 **Requirement:** Issue #582 desired outcome (capture) + hypothesis 2
 
-As the daemon operator, I want the residual uncommitted paths that survive the fix-session
-(including tracked-modified files like `conductor.ts`, which stage-1 quarantine missed because
-they went dirty afterward) to be preserved in the quarantine ref, so that a later re-dispatch
-reset can never silently discard them and I can recover them deliberately.
+As the daemon operator, I want a rejected fix-session attempt, including tracked modifications,
+provider commits, and untracked residue, preserved completely before any reset, so that rejection
+never silently discards work and I can recover it deliberately.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `fixSession` reaches the dirty-tree-after-setup-success branch with porcelain reporting
+- Given `fixSession` rejects an attempt for setup drift or mixed commits plus residue, including
   a tracked-modified path (` M src/conductor/src/engine/conductor.ts`) and an untracked stray
-  (`?? scratch.txt`), when the branch runs, then it captures **all** of those paths via the
-  existing quarantine mechanism (`git add -A` → commit → `git branch -f wip/setup-quarantine-<slug>`
-  → `reset --hard`), the returned outcome carries the resulting `quarantineRef`, and its
-  `preservedPaths` lists exactly the captured paths (tracked-modified included).
+  (`?? scratch.txt`), when preservation runs, then `wip/setup-quarantine-<slug>` reaches the
+  complete attempted state before any reset, the returned outcome carries that `quarantineRef`,
+  and `preservedPaths` lists every captured path.
 - Given a stage-1 quarantine ref `wip/setup-quarantine-<slug>` already exists (from the earlier
-  rotation that captured the 3 docs), when the dirty-tree branch quarantines, then the ref is
+  rotation that captured the 3 docs), when a rejected attempt is preserved, then the ref is
   refreshed (force-moved) to the new capture — the prior tip remains reachable via reflog — and
   the outcome names the refreshed ref.
 
 #### Negative Paths
-- Given the residual-stray quarantine itself fails (e.g. `git add -A` or the commit returns
-  nonzero), when the branch runs, then triage falls toward the current error-park behavior (never
-  toward data loss): the outcome is `kind:'park'` naming the preservation failure, and the tree
-  is not left in a half-reset state — matching stage-1's fail-toward-park discipline
-  (`setup-triage.ts` quarantine rollback paths).
+- Given preservation itself fails before the ref reaches the complete attempted state, when the
+  branch runs, then triage parks naming the preservation failure and performs no reset; an older
+  quarantine tip is never treated as proof that the current attempt is safe to discard.
 - Given `dispatchFixSession` throws (LLM dispatch failed) before any `runPrepare`, when
   `fixSession` settles, then it parks with the dispatch error and **no** quarantine is attempted
-  (unchanged) — the dirty-tree capture only runs on the setup-succeeded-but-dirty path.
+  (unchanged) — preservation runs only when the attempt produced Git-visible repair state.
 
 ### Done When
-- [ ] An engine test asserts the dirty-tree branch invokes the quarantine mechanism over a
-      porcelain that includes a tracked-modified path and asserts the outcome's `preservedPaths`
-      contains that tracked path and `quarantineRef` is set.
+- [ ] A real Git test rejects a mixed commit-plus-residue attempt, proves the quarantine ref
+      contains the complete attempted state, and asserts `preservedPaths` plus `quarantineRef`.
 - [ ] A test with a pre-existing quarantine ref asserts it is force-moved (refreshed), not
       duplicated or errored.
-- [ ] A test where the capture's `git add`/commit returns nonzero asserts a park naming the
-      preservation failure (no silent proceed, no data loss).
+- [ ] A test where ref refresh or capture returns nonzero asserts a park naming the preservation
+      failure and proves the attempted state was not reset.
 - [ ] A test asserts a throwing `dispatchFixSession` parks with no quarantine attempted.

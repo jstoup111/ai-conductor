@@ -97,16 +97,22 @@ fix-session, so committed breakage from a dead agent is repaired without an oper
 #### Happy Path
 - Given a daemon worktree failing `bin/setup` at a clean HEAD, when triage reaches the
   fix-session stage, then exactly ONE fix-session is dispatched whose prompt contains the
-  setup output tail, and after it returns the engine itself re-runs `bin/setup` and checks
-  the tree: setup exit 0 AND a clean tree (fix committed) ⇒ the feature dispatches normally.
+  setup output tail, and after it returns the engine itself force-runs `bin/setup` and checks
+  the complete Git state: setup exit 0 plus a verified no-tree-change repair, clean forward
+  provider commits, or an unchanged captured repair committed exactly by the engine ⇒ the
+  feature dispatches normally.
+- Given the fix-session leaves an uncommitted repair without moving HEAD, when forced setup
+  succeeds without changing its captured Git tree, then the engine commits exactly that tree,
+  verifies the new commit's original parent and clean worktree, and dispatches normally.
 
 #### Negative Paths
 - Given the fix-session returns claiming success but `bin/setup` still exits non-zero, when
   the engine verifies the contract, then the claim is ignored, the outcome is contract
   failure, and the HALT path is taken (agent reports are never trusted).
-- Given the fix-session leaves uncommitted changes (setup passes but tree dirty), when the
-  engine verifies the contract, then the contract fails (an unverifiable half-fix is not a
-  pass) and the HALT path is taken with the dirty paths named.
+- Given the fix-session rewrites history, mixes commits with residue, or forced setup changes
+  the captured repair, when the engine verifies the contract, then the attempt is rejected,
+  preserved before any reset, and routed to the HALT path with the rejection reason and
+  recoverable state named.
 - Given the fix-session dispatch itself throws (provider error, spawn failure), when triage
   handles it, then the outcome is contract failure routed to the HALT path — never an
   unhandled throw and never a second dispatch in this rotation.
@@ -117,8 +123,9 @@ fix-session, so committed breakage from a dead agent is repaired without an oper
 ### Done When
 - [ ] Tests drive triage with an injected fix-session seam (no real agent spawn; production
       spawn guarded by the env kill-switch convention) proving: one dispatch per rotation,
-      contract verified mechanically by re-running setup + tree-clean check, all three
-      negative outcomes route to HALT.
+      contract verified mechanically by forced setup + exact Git-state checks, a stable
+      uncommitted repair becomes an engine commit, and every rejected outcome preserves before
+      routing to HALT.
 - [ ] A test proves the fix-session prompt contains the setup output tail.
 
 ## Story: Triage failure HALTs with full evidence, never a silent discard

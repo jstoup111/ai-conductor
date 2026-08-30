@@ -49,3 +49,11 @@ This spec delivers the accurate-park branch: distinct outcome, accurate message,
 hypothesis #2 — the residual strays are quarantined (ALL uncommitted paths, incl.
 tracked-modified `conductor.ts`) so nothing is silently discarded. If the operator later wants
 proceed-on-clean-after-capture, that is a separate ADR-gated follow-up.
+
+> **Amended 2026-08-29 by #1346:** that separate ADR-gated follow-up is now approved in the
+> 2026-08-29 amendment to `adr-2026-07-09-setup-failure-triage`. A fix-session repair captured
+> before forced setup now proceeds through an engine-owned exact-tree commit when setup leaves it
+> byte-identical and every Git postcondition passes. Setup drift, mixed commit-plus-residue state,
+> rewritten history, and preservation or commit failures still preserve-before-reset and park with
+> accurate evidence. The original #582 behavior remains authoritative only for those rejected
+> attempts, not for a verified stable repair.
