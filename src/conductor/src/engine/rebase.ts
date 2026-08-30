@@ -1441,9 +1441,14 @@ export async function recordRebaseStepCompletion(
  * `matchedPaths` above (empty for a preserved gate, by construction — that
  * emptiness is precisely why it was preserved).
  *
- * A no-op when the outcome isn't a file-changing rebase, or `featureSurface`
- * is unavailable (classifyGateInvalidation cannot be applied — see the
- * fixed-set fallback in applyRebaseVerdicts).
+ * A no-op when the outcome isn't a file-changing rebase. When `featureSurface`
+ * is unavailable, `classifyGateInvalidation` cannot be applied — see the
+ * fixed-set fallback in applyRebaseVerdicts — so no classification-derived
+ * event is emitted. A `preverifiedPreserved` gate is still emitted on that
+ * path (S7.5): its preservation was established mechanically by the
+ * pre-verify, independently of F, so it is knowable when nothing else is.
+ * Omitting it left a real preservation invisible on the spine — neither
+ * invalidated nor preserved.
  */
 export async function emitGateInvalidationEvents(
   events: ConductorEventEmitter,
@@ -1451,7 +1456,23 @@ export async function emitGateInvalidationEvents(
   ranManualTest: boolean,
   preverifiedPreserved: ReadonlyArray<{ gate: StepName; basis: 'test_suite_drift_budget' }> = [],
 ): Promise<void> {
-  if (outcome.kind !== 'changed' || outcome.featureSurface === undefined) return;
+  if (outcome.kind !== 'changed') return;
+
+  if (outcome.featureSurface === undefined) {
+    // F is uncomputable: no declared surface and no delta partition exist, so
+    // the event carries the pre-verified fact alone rather than fabricating a
+    // surface it cannot derive.
+    for (const { gate, basis } of preverifiedPreserved) {
+      await events.emit({
+        type: 'rebase_gate_preserved',
+        gate,
+        surface: ['<feature surface uncomputable>'],
+        deltaConsidered: [],
+        basis,
+      });
+    }
+    return;
+  }
 
   const { invalidated, preserved } = classifyGateInvalidation(
     outcome.changedCodePaths,

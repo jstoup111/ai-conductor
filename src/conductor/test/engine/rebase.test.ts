@@ -1201,6 +1201,73 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(invalidated).not.toContain('test_suite');
   });
 
+  /**
+   * S7.5: when `featureSurface` is uncomputable, `applyRebaseVerdicts` falls
+   * back to legacy invalidate-all — but its pre-verify still runs, so a
+   * `test_suite` PASS can be preserved within budget on that very lap. The
+   * emitter returned before reading `preverifiedPreserved`, so that
+   * preservation reached the spine as nothing at all: no invalidation (it was
+   * not invalidated) and no preservation event either. The classification-
+   * derived events genuinely cannot be computed without F, but a
+   * pre-verified preservation is known independently of F and must still be
+   * observable with its budget basis.
+   */
+  it('S7.5: emits the preserved event with its basis when featureSurface is uncomputable', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/feature.ts'],
+      featureSurface: undefined,
+    };
+    const verdict = await applyRebaseVerdicts(dir, outcome, false, async (step) =>
+      step === 'test_suite'
+        ? { done: true, preservationBasis: 'test_suite_drift_budget' }
+        : { done: false },
+    );
+    const events = new ConductorEventEmitter();
+    const preserved: Array<Record<string, unknown>> = [];
+    const invalidated: string[] = [];
+    events.on('rebase_gate_preserved', (event) => {
+      if (event.type === 'rebase_gate_preserved') preserved.push(event);
+    });
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type === 'rebase_gate_invalidated') invalidated.push(event.gate);
+    });
+
+    await emitGateInvalidationEvents(events, outcome, false, verdict.preserved ?? []);
+
+    expect(preserved).toContainEqual(expect.objectContaining({
+      gate: 'test_suite',
+      basis: 'test_suite_drift_budget',
+    }));
+    // A preserved gate is never also reported invalidated.
+    expect(invalidated).not.toContain('test_suite');
+  });
+
+  /**
+   * S7.5 negative: with no pre-verified preservation there is nothing knowable
+   * without F, so the uncomputable-surface path stays the documented no-op —
+   * the fix must not start inventing classification events.
+   */
+  it('S7.5: stays a no-op on an uncomputable surface with no pre-verified preservation', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/feature.ts'],
+      featureSurface: undefined,
+    };
+    const events = new ConductorEventEmitter();
+    const seen: string[] = [];
+    events.on('rebase_gate_preserved', (event) => {
+      if (event.type === 'rebase_gate_preserved') seen.push(event.gate);
+    });
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type === 'rebase_gate_invalidated') seen.push(event.gate);
+    });
+
+    await emitGateInvalidationEvents(events, outcome, false, []);
+
+    expect(seen).toEqual([]);
+  });
+
   it('Task 6: delta-aware — feature runtime source changed → all judged gates invalidated including audits', async () => {
     const outcome: RebaseOutcome = {
       kind: 'changed',
