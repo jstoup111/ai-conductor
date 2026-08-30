@@ -32,6 +32,7 @@ describe('Conductor test-suite member evidence events', () => {
   ) {
     const events = new ConductorEventEmitter();
     const emitted: unknown[] = [];
+    const recordPreservation = vi.fn(async () => undefined);
     events.on('test_suite_verification', (event) => { emitted.push(event); });
     events.on('build_member_evidence_reused', (event) => { emitted.push(event); });
     events.on('build_member_evidence_recomputed', (event) => { emitted.push(event); });
@@ -43,6 +44,7 @@ describe('Conductor test-suite member evidence events', () => {
       fullSuiteVerifier: {
         inspect: async () => inspection,
         ensure: async () => verification,
+        recordPreservation,
       },
     });
 
@@ -421,6 +423,54 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
     expect(observed).toEqual(['build_review']);
     expect(inspect).toHaveBeenCalledTimes(1);
     expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it('records and emits a preserved completion recheck once, but neither for CURRENT', async () => {
+    const events = new ConductorEventEmitter();
+    const verificationEvents: unknown[] = [];
+    events.on('test_suite_verification', (event) => { verificationEvents.push(event); });
+
+    for (const inspection of [
+      { status: 'PRESERVED_WITHIN_BUDGET' as const, evidence: { driftLedger: [{ categories: { source: 1 } }] } as never },
+      { status: 'CURRENT' as const, evidence: {} as never },
+    ]) {
+      const stateFilePath = await installFixture('unsatisfied-verdict');
+      const inspect = vi.fn(async () => inspection);
+      const recordPreservation = vi.fn(async () => undefined);
+      const conductor = new Conductor({
+        projectRoot,
+        stateFilePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'build_review') throw new Error('stop after completion recheck');
+            return { success: true };
+          },
+        },
+        events,
+        resume: true,
+        verifyArtifacts: true,
+        fullSuiteVerifier: {
+          inspect,
+          ensure: vi.fn(async () => ({ status: 'REUSED' as const, evidence: {} as never })),
+          recordPreservation,
+        },
+      });
+
+      await conductor.run();
+
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(recordPreservation).toHaveBeenCalledTimes(
+        inspection.status === 'PRESERVED_WITHIN_BUDGET' ? 1 : 0,
+      );
+    }
+
+    expect(verificationEvents).toEqual([
+      expect.objectContaining({
+        type: 'test_suite_verification',
+        freshness: { status: 'CURRENT' },
+        budgetVerdict: { outcome: 'preserved_within_budget', categories: { source: 1 } },
+      }),
+    ]);
   });
 
   it('keeps an all-satisfied resume at its existing no-dispatch endpoint', async () => {

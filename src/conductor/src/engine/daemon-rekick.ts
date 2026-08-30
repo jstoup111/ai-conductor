@@ -380,6 +380,7 @@ export function makeRekickBuildPreVerify(
       };
     }
     let inspection: FullSuiteInspectionResult | undefined;
+    let verifier: FullSuiteVerifier | undefined;
     const completion = await checkStepCompletion(worktreePath, definition.name, {
       projectRoot: worktreePath,
       planPath,
@@ -387,13 +388,17 @@ export function makeRekickBuildPreVerify(
       ...(definition.name === 'test_suite'
         ? {
             fullSuiteInspect: async () => {
-              inspection = await new FullSuiteVerifier({ projectRoot: worktreePath }).inspect();
+              verifier = new FullSuiteVerifier({ projectRoot: worktreePath });
+              inspection = await verifier.inspect();
               return inspection;
             },
           }
         : {}),
     });
     if (definition.name !== 'test_suite' || !completion.done) return completion;
+    if (inspection?.status === 'PRESERVED_WITHIN_BUDGET') {
+      await verifier!.recordPreservation(inspection);
+    }
     return inspection?.status === 'PRESERVED_WITHIN_BUDGET'
       ? { ...completion, preservationBasis: 'test_suite_drift_budget' as const }
       : completion;

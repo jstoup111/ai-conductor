@@ -2088,6 +2088,8 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       status: 'PRESERVED_WITHIN_BUDGET' as const,
       evidence: {} as import('../../src/engine/full-suite-evidence.js').FullSuitePassEvidence,
     });
+    const recordPreservation = vi.spyOn(FullSuiteVerifier.prototype, 'recordPreservation')
+      .mockResolvedValue(undefined);
     const preserved: Array<{ gate: string; basis?: string }> = [];
     events.on('rebase_gate_preserved', (event) => {
       if (event.type !== 'rebase_gate_preserved') return;
@@ -2102,15 +2104,17 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
         ranManualTest: false,
       });
 
-      expect({ res, inspectCalls: inspect.mock.calls.length, preserved }).toEqual({
+      expect({ res, inspectCalls: inspect.mock.calls.length, recordCalls: recordPreservation.mock.calls.length, preserved }).toEqual({
         res: 'rebased',
         inspectCalls: 1,
+        recordCalls: 1,
         preserved: expect.arrayContaining([
           { gate: 'test_suite', basis: 'test_suite_drift_budget' },
         ]),
       });
     } finally {
       inspect.mockRestore();
+      recordPreservation.mockRestore();
     }
   });
 

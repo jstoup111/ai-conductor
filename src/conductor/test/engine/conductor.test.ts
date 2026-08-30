@@ -570,6 +570,7 @@ describe('engine/conductor', () => {
           evidence: preservedEvidence,
         }),
         ensure: vi.fn().mockResolvedValue({ status: 'REUSED' as const, evidence: preservedEvidence }),
+        recordPreservation: vi.fn().mockResolvedValue(undefined),
       };
       const runner = createMockStepRunner();
       const conductor = new Conductor({
@@ -591,6 +592,7 @@ describe('engine/conductor', () => {
       expect(runner.run).not.toHaveBeenCalled();
       expect(verifier.inspect).toHaveBeenCalledTimes(1);
       expect(verifier.ensure).toHaveBeenCalledTimes(1);
+      expect(verifier.recordPreservation).toHaveBeenCalledTimes(1);
       const finalState = await readState(statePath);
       expect(finalState.ok).toBe(true);
       if (!finalState.ok) throw new Error(finalState.error.message);

@@ -666,6 +666,14 @@ async function acquireFullSuiteLock(
 }
 
 export class FullSuiteVerifier {
+  /**
+   * Inspection is deliberately read-only. Keep its execution context in memory
+   * so an actor can hand its one resolved result to ensure() without asking the
+   * verifier to inspect the tree a second time.
+   */
+  private readonly resolvedInspections = new WeakMap<object, ResolvedInspection>();
+  private readonly recordedPreservations = new WeakSet<object>();
+
   constructor(private readonly options: FullSuiteVerifierOptions) {}
 
   /**
@@ -709,10 +717,30 @@ export class FullSuiteVerifier {
   }
 
   async inspect(): Promise<FullSuiteInspectionResult> {
-    return (await this.resolveInspection()).inspection;
+    const resolved = await this.resolveInspection();
+    this.resolvedInspections.set(resolved.inspection, resolved);
+    return resolved.inspection;
   }
 
-  async ensure(): Promise<FullSuiteVerifierResult> {
+  /** Persist one already-inspected preservation at the caller-owned boundary. */
+  async recordPreservation(
+    inspection: Extract<FullSuiteInspectionResult, { status: 'PRESERVED_WITHIN_BUDGET' }>,
+  ): Promise<void> {
+    if (this.recordedPreservations.has(inspection)) return;
+    const resolved = this.resolvedInspections.get(inspection);
+    if (resolved === undefined || !('context' in resolved)) {
+      throw new Error('Cannot record a full-suite preservation that was not resolved by this verifier');
+    }
+    const { environment = process.env, writeEvidence = writeFullSuiteEvidence } = this.options;
+    await writeEvidence(
+      this.options.projectRoot,
+      inspection.evidence,
+      declaredEnvironmentValues(resolved.context.testSuite, environment),
+    );
+    this.recordedPreservations.add(inspection);
+  }
+
+  async ensure(inspection?: FullSuiteInspectionResult): Promise<FullSuiteVerifierResult> {
     const acquired = await acquireFullSuiteLock(
       this.options.projectRoot,
       this.options.lock,
@@ -724,7 +752,7 @@ export class FullSuiteVerifier {
         message: acquired.message,
       };
     }
-    const result = await this.ensureLocked();
+    const result = await this.ensureLocked(inspection);
     const released = await acquired.handle.release();
     if (!released.ok) {
       return {
@@ -737,7 +765,7 @@ export class FullSuiteVerifier {
     return result;
   }
 
-  private async ensureLocked(): Promise<FullSuiteVerifierResult> {
+  private async ensureLocked(inspection?: FullSuiteInspectionResult): Promise<FullSuiteVerifierResult> {
     const {
       projectRoot,
       environment = process.env,
@@ -747,7 +775,9 @@ export class FullSuiteVerifier {
     } = this.options;
 
     try {
-      const resolved = await this.resolveInspection();
+      const resolved = inspection === undefined
+        ? await this.resolveInspection()
+        : this.resolvedInspections.get(inspection) ?? await this.resolveInspection();
       if (!('context' in resolved)) {
         const failure = resolved.inspection;
         if (failure.reason === 'internal_error') return failure;
@@ -932,7 +962,6 @@ export class FullSuiteVerifier {
       environment = process.env,
       fingerprint = fingerprintFullSuiteInputs,
       readEvidence = readFullSuiteEvidence,
-      writeEvidence = writeFullSuiteEvidence,
       worktreeStatus: inspectWorktreeStatus = worktreeStatus,
     } = this.options;
 
@@ -1074,11 +1103,6 @@ export class FullSuiteVerifier {
               },
             ],
           };
-          await writeEvidence(
-            projectRoot,
-            evidence,
-            declaredEnvironmentValues(aggregateTestSuite, environment),
-          );
           return {
             inspection: { status: 'PRESERVED_WITHIN_BUDGET', evidence },
             context,

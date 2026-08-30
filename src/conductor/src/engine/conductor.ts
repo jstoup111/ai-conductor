@@ -1494,7 +1494,8 @@ export interface ConductorOptions {
   /** Feature-scoped daemon logger; defaults to console warnings outside a feature run. */
   log?: (message: string) => void;
   /** Injectable native aggregate-suite verifier; production uses FullSuiteVerifier. */
-  fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
+  fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
+    Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   /** Test seam for the disposition-aware build_review completion join. */
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   /** Feature description — used by the engine-run worktree step to name the
@@ -2133,7 +2134,8 @@ export class Conductor {
    * the grant. No durable artifact is written by the daemon.
    */
   private readonly remediationDecideReentryTargets = new Set<StepName>();
-  private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
+  private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
+    Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
@@ -5986,6 +5988,7 @@ export class Conductor {
                 // Continue into the ordinary scheduling and dispatch path.
               } else {
                 if (fullSuiteInspection?.status === 'PRESERVED_WITHIN_BUDGET') {
+                  await this.recordFullSuitePreservation(fullSuiteInspection);
                   const budgetVerdict = testSuiteBudgetVerdict(fullSuiteInspection);
                   await emitTracked({
                     type: 'test_suite_verification',
@@ -11205,7 +11208,7 @@ export class Conductor {
   private async runTestSuiteStep(): Promise<StepRunResult> {
     this.retainedFullSuiteInspection = undefined;
     const inspection = await this.fullSuiteVerifier.inspect();
-    const verification = await this.fullSuiteVerifier.ensure();
+    const verification = await this.fullSuiteVerifier.ensure(inspection);
     if (verification.status === 'FAILED') {
       if (inspection.status === 'STALE') {
         await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
@@ -11230,6 +11233,9 @@ export class Conductor {
       };
     }
     if (inspection.status === 'STALE' || inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+      if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+        await this.recordFullSuitePreservation(inspection);
+      }
       const budgetVerdict = testSuiteBudgetVerdict(inspection);
       await this.events.emit({
         type: 'test_suite_verification',
@@ -11270,6 +11276,15 @@ export class Conductor {
       output: `Full test suite ${verification.status}`,
       fullSuiteVerification: verification,
     };
+  }
+
+  private async recordFullSuitePreservation(
+    inspection: Extract<FullSuiteInspectionResult, { status: 'PRESERVED_WITHIN_BUDGET' }>,
+  ): Promise<void> {
+    if (this.fullSuiteVerifier.recordPreservation === undefined) {
+      throw new Error('Full-suite verifier does not expose the required preservation recording seam');
+    }
+    await this.fullSuiteVerifier.recordPreservation(inspection);
   }
 
   /**
@@ -12014,6 +12029,9 @@ export class Conductor {
     const preVerify = async (step: StepName) => {
       if (step === 'test_suite') {
         const inspection = await this.fullSuiteVerifier.inspect();
+        if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+          await this.recordFullSuitePreservation(inspection);
+        }
         return inspection.status === 'PRESERVED_WITHIN_BUDGET'
           ? { done: true, preservationBasis: 'test_suite_drift_budget' as const }
           : { done: inspection.status === 'CURRENT' };

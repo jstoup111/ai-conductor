@@ -275,6 +275,7 @@ describe('test_suite native gate loop', () => {
       evidence,
     }));
     const ensure = vi.fn();
+    const recordPreservation = vi.fn(async () => undefined);
     const observed: unknown[] = [];
     const events = new ConductorEventEmitter();
     events.on('test_suite_verification', (event) => { observed.push(event); });
@@ -286,7 +287,7 @@ describe('test_suite native gate loop', () => {
       events,
       projectRoot,
       verifyArtifacts: true,
-      fullSuiteVerifier: { inspect, ensure },
+      fullSuiteVerifier: { inspect, ensure, recordPreservation },
     });
 
     await conductor.run();
@@ -294,11 +295,13 @@ describe('test_suite native gate loop', () => {
     expect({
       inspectCalls: inspect.mock.calls.length,
       ensureCalls: ensure.mock.calls.length,
+      recordCalls: recordPreservation.mock.calls.length,
       dispatched: run.mock.calls.map(([step]) => step),
       observed,
     }).toEqual({
       inspectCalls: 1,
       ensureCalls: 0,
+      recordCalls: 1,
       dispatched: [],
       observed: [{
         type: 'test_suite_verification',

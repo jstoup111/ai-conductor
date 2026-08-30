@@ -1243,9 +1243,22 @@ describe('FullSuiteVerifier', () => {
       worktreeStatus: async () => '',
     });
 
+    const evidenceBytesBeforeInspection = await readFile(
+      join(projectRoot, '.pipeline', 'test-suite-evidence.json'),
+      'utf8',
+    );
     const inspection = await verifier.inspect();
-    const ensured = await verifier.ensure();
+    const evidenceBytesAfterInspection = await readFile(
+      join(projectRoot, '.pipeline', 'test-suite-evidence.json'),
+      'utf8',
+    );
+    const ensured = await verifier.ensure(inspection);
+    if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+      await verifier.recordPreservation(inspection);
+    }
     const persisted = await readFullSuiteEvidence(projectRoot);
+
+    expect(evidenceBytesAfterInspection).toBe(evidenceBytesBeforeInspection);
 
     expect({ inspection, ensured: ensured.status, launches, persisted }).toEqual({
       inspection: {
@@ -1408,6 +1421,9 @@ describe('FullSuiteVerifier', () => {
     });
 
     const first = await verifier.inspect();
+    if (first.status === 'PRESERVED_WITHIN_BUDGET') {
+      await verifier.recordPreservation(first);
+    }
     const second = await verifier.inspect();
 
     expect({ first, second, gitCalls }).toEqual({
