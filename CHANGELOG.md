@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-08-29
+## [1.0.0] - 2026-08-30
 
 ### Added
 
@@ -84,6 +84,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - OpenTelemetry metrics now retain a stable per-feature identity across daemon dispatches. ([implementation PR #1971](https://github.com/jstoup111/ai-conductor/pull/1971)).
 - OpenTelemetry now exports reliable completed, halted, and terminated run outcome counts for dashboards. ([implementation PR #2024](https://github.com/jstoup111/ai-conductor/pull/2024)).
 - Codex dispatches are priced from a global rate card at ~/.ai-conductor/rate-card.json (symlinked by bin/install and bin/update to the harness checkout's committed card), which takes precedence over per-project cards. ([implementation PR #2029](https://github.com/jstoup111/ai-conductor/pull/2029)).
+- As-built remediation now resolves governing clauses that cite ADR decisions written as ATX headings, instead of halting needs-human. ([implementation PR #2053](https://github.com/jstoup111/ai-conductor/pull/2053)).
 
 ## Migration
 
