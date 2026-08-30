@@ -12,6 +12,10 @@ import { join } from 'node:path';
 import type { FeatureUsageTotals } from '../execution/provider-diagnostics.js';
 import type { TokenUsage } from '../execution/llm-provider.js';
 import { classifyMetering } from './metering.js';
+import {
+  DispatchMeteringTracker,
+  type DispatchMeteringObservation,
+} from './dispatch-metering.js';
 
 export interface CostRollup {
   tokens: { input: number; output: number; cacheRead: number; cacheCreation: number };
@@ -48,7 +52,7 @@ function zeroRollup(): CostRollup {
 
 function addDispatch(
   target: ProviderCostRollup,
-  event: Record<string, unknown>,
+  event: DispatchMeteringObservation,
 ): void {
   target.dispatches += 1;
   const tokenUsage = event.tokenUsage as TokenUsage | undefined;
@@ -125,45 +129,16 @@ export async function computeCostRollup(worktreeDir: string): Promise<CostRollup
     events.push(e);
   }
 
-  const unmatchedSuccessfulAttempts = new Map<string, number>();
+  const dispatchMetering = new DispatchMeteringTracker();
   for (const e of events) {
-    if (e.type === 'provider_attempt') {
-      if (e.invoked === true) {
-        addDispatch(rollup, e);
-        if (typeof e.provider === 'string') {
-          const providerRollup = providers[e.provider] ??= zeroUsageRollup();
-          addDispatch(providerRollup, e);
-          if (e.outcome === 'success' && typeof e.step === 'string') {
-            const key = `${e.step}\0${e.provider}`;
-            unmatchedSuccessfulAttempts.set(
-              key,
-              (unmatchedSuccessfulAttempts.get(key) ?? 0) + 1,
-            );
-          }
+    if (e.type === 'provider_attempt' || e.type === 'step_completed') {
+      const dispatch = dispatchMetering.observe(e);
+      if (dispatch) {
+        addDispatch(rollup, dispatch);
+        if (dispatch.provider) {
+          const providerRollup = providers[dispatch.provider] ??= zeroUsageRollup();
+          addDispatch(providerRollup, dispatch);
         }
-      }
-      continue;
-    }
-
-    if (e.type === 'step_completed') {
-      const provider =
-        typeof e.actualProvider === 'string' ? e.actualProvider : undefined;
-      const key =
-        provider && typeof e.step === 'string'
-          ? `${e.step}\0${provider}`
-          : undefined;
-      const matchingAttempts = key
-        ? (unmatchedSuccessfulAttempts.get(key) ?? 0)
-        : 0;
-      if (key && matchingAttempts > 0) {
-        unmatchedSuccessfulAttempts.set(key, matchingAttempts - 1);
-        continue;
-      }
-
-      addDispatch(rollup, e);
-      if (provider) {
-        const providerRollup = providers[provider] ??= zeroUsageRollup();
-        addDispatch(providerRollup, e);
       }
       continue;
     }

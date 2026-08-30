@@ -12,6 +12,8 @@ import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import { computeCostRollup } from '../../../src/engine/cost-rollup.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
 import { DURATION_BUCKET_BOUNDARIES_MS, MetricsRecorder } from '../../../src/engine/otel/metrics.js';
@@ -129,6 +131,7 @@ describe('Task 2: step-duration histogram advice', () => {
     const meter = {
       createHistogram,
       createCounter: vi.fn(),
+      createGauge: vi.fn(),
     } as unknown as Meter;
 
     new MetricsRecorder(meter);
@@ -152,6 +155,7 @@ describe('Task 3: closeout-duration histogram advice and descriptions', () => {
     const meter = {
       createHistogram,
       createCounter: vi.fn(),
+      createGauge: vi.fn(),
     } as unknown as Meter;
 
     new MetricsRecorder(meter);
@@ -711,6 +715,103 @@ describe('Task 4: unmetered close observability', () => {
     expect(findMetric(metricExporter, 'conductor.step.cost')?.dataPoints.filter(
       (dataPoint) => dataPoint.attributes['step'] === 'build',
     ) ?? []).toHaveLength(0);
+  });
+});
+
+// ── Shipped-record / OTel cost parity ───────────────────────────────────────
+
+describe('dispatch-cost parity with the shipped-record rollup', () => {
+  it('exports every invoked provider attempt exactly once, including failed attempts', async () => {
+    const persister = new EventPersister(join(pipelineDir, 'events.jsonl'), emitter);
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    persister.start();
+    vis.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await emitter.emit({
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'claude',
+        outcome: 'failure',
+        invoked: true,
+        model: 'opus',
+        tokenUsage: { input: 10, output: 1, costUsd: 0.2, costSource: 'provider' },
+      });
+      await emitter.emit({
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'codex',
+        outcome: 'unavailable',
+        invoked: false,
+        model: 'gpt-5.6-terra',
+      });
+      await emitter.emit({
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+        model: 'opus',
+        tokenUsage: { input: 20, output: 2, costUsd: 0.3, costSource: 'provider' },
+      });
+      await emitter.emit({
+        type: 'step_completed',
+        step: 'build',
+        status: 'done',
+        actualProvider: 'claude',
+        model: 'opus',
+        tokenUsage: { input: 20, output: 2, costUsd: 0.3, costSource: 'provider' },
+      });
+      await emitter.emit({ type: 'feature_complete' });
+    } finally {
+      persister.stop();
+      await vis.stop();
+    }
+
+    const rollup = await computeCostRollup(tempDir);
+    const otelCost = findMetric(metricExporter, 'conductor.step.cost')!.dataPoints
+      .reduce((sum, point) => sum + Number(point.value), 0);
+    const otelDispatches = findMetric(metricExporter, 'conductor.step.dispatches')!.dataPoints
+      .reduce((sum, point) => sum + Number(point.value), 0);
+
+    expect({ otelCost, otelDispatches }).toEqual({
+      otelCost: rollup.costUsd,
+      otelDispatches: rollup.dispatches,
+    });
+    expect(rollup).toMatchObject({
+      costUsd: 0.5,
+      dispatches: 2,
+      tokens: { input: 30, output: 3 },
+    });
+  });
+
+  it('exports the authoritative feature cost carried by feature_usage_total', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({
+      type: 'feature_usage_total',
+      dispatches: 4,
+      meteredDispatches: 3,
+      unmeteredDispatches: 1,
+      costUnmeteredDispatches: 1,
+      costUsd: 7.4679372,
+      inputTokens: 500,
+      outputTokens: 50,
+    });
+    await vis.stop();
+
+    expect(findMetric(metricExporter, 'conductor.feature.cost')?.dataPoints).toEqual([
+      expect.objectContaining({
+        value: 7.4679372,
+        attributes: {
+          project: 'test-project',
+          feature: 'test-feature',
+          cost_complete: false,
+        },
+      }),
+    ]);
   });
 });
 

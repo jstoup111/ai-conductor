@@ -606,7 +606,11 @@ normalized. Changing that computation is a breaking change to persisted identity
 `renderShippedRecordWithCost` appends a `## Cost` block after the closing fence
 (`input`, `output`, `cache_read`, `cache_creation`, `cost_usd`, `dispatches`, `retries`, `halts`,
 `unmetered`, and a `providers:` sub-block when non-empty). Appending is safe because the parser stops at
-the closing `---`.
+the closing `---`. Its dispatch ledger treats invoked `provider_attempt` events as authoritative,
+deduplicates their matching successful `step_completed` events, and retains unmatched completions as
+a legacy fallback. The OTel dispatch counters use this same projection. `feature_usage_total` carries
+the resulting whole-feature values to the OTel `conductor.feature.cost` gauge, so the exported gauge
+and a shipped record produced from the same event ledger have the same `cost_usd` value.
 
 A separate `## Time` block follows, computed and rendered independently of Cost so a timing failure
 never blocks either section. `state` is one of `measured`, `partial`, or `unavailable`. `measured`

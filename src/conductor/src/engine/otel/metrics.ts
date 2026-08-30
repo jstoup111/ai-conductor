@@ -1,17 +1,20 @@
 /**
- * MetricsRecorder — step duration/retry/token metrics for the OTel visualizer.
+ * MetricsRecorder — run, dispatch, step, and feature metrics for the OTel visualizer.
  *
  * Instruments (FR-5):
  *  - conductor.step.duration  — Histogram (ms, per step)
  *  - conductor.step.retries   — Counter (per step, only when retryCount > 0)
  *  - conductor.step.tokens    — Counter (per step × kind, only when tokenUsage present)
+ *  - conductor.step.cost      — Counter (per authoritative dispatch with finite cost)
+ *  - conductor.step.dispatches — Counter (per authoritative dispatch)
+ *  - conductor.feature.cost   — Gauge (authoritative shipped-record feature total)
  *  - conductor.run.outcomes   — Counter (once per opened run, by terminal outcome)
  *
  * All record/add calls are synchronous (enqueue to PeriodicExportingMetricReader).
  * TokenUsage absent → no data points (no NaN / zero-fill). Partial kinds
  * (input/output only) → only present kinds recorded.
  */
-import type { Attributes, Meter, Counter, Histogram } from '@opentelemetry/api';
+import type { Attributes, Meter, Counter, Gauge, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
 import type { RunOutcome } from './span-manager.js';
@@ -29,6 +32,7 @@ export class MetricsRecorder {
   private readonly tokensCounter: Counter;
   private readonly costCounter: Counter;
   private readonly dispatchesCounter: Counter;
+  private readonly featureCostGauge: Gauge;
   private readonly closeoutDurationHistogram: Histogram;
   private readonly runOutcomesCounter: Counter;
 
@@ -57,6 +61,10 @@ export class MetricsRecorder {
     this.dispatchesCounter = meter.createCounter('conductor.step.dispatches', {
       description: 'Number of conductor step dispatches classified by metering status',
     });
+    this.featureCostGauge = meter.createGauge('conductor.feature.cost', {
+      description: 'Authoritative shipped-record cost for a conductor feature',
+      unit: 'usd',
+    });
     this.closeoutDurationHistogram = meter.createHistogram('conductor.pipeline.closeout.duration', {
       description: 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
       unit: 'ms',
@@ -83,6 +91,7 @@ export class MetricsRecorder {
     retryCount: number,
     tokenUsage?: TokenUsage,
     model?: string,
+    recordDispatch = true,
   ): void {
     // Duration: always record (even 0 ms is a valid observation).
     this.durationHistogram.record(durationMs, this.withIdentity({ step }));
@@ -92,14 +101,25 @@ export class MetricsRecorder {
       this.retriesCounter.add(retryCount, this.withIdentity({ step }));
     }
 
-    this.dispatchesCounter.add(1, this.withIdentity({ step, metering: classifyMetering(tokenUsage) }));
+    if (recordDispatch) this.onDispatch(step, tokenUsage, model);
+  }
 
-    // Tokens: only when tokenUsage is present; only present kinds recorded.
-    if (tokenUsage !== undefined && tokenUsage !== null) {
-      this.recordTokens(step, tokenUsage, model);
-      this.recordCost(step, tokenUsage, model);
-    }
-    // tokenUsage absent → no token points (no NaN / zero-fill).
+  /** Record one dispatch selected by the shared shipped-record metering projection. */
+  onDispatch(step: string, tokenUsage?: TokenUsage, model?: string): void {
+    this.dispatchesCounter.add(1, this.withIdentity({ step, metering: classifyMetering(tokenUsage) }));
+    if (tokenUsage === undefined || tokenUsage === null) return;
+    this.recordTokens(step, tokenUsage, model);
+    this.recordCost(step, tokenUsage, model);
+  }
+
+  /** Record the exact whole-feature cost computed from the shipped-record ledger. */
+  onFeatureUsageTotal(event: Extract<ConductorEvent, { type: 'feature_usage_total' }>): void {
+    if (!Number.isFinite(event.costUsd)) return;
+    this.featureCostGauge.record(event.costUsd, this.withIdentity({
+      cost_complete:
+        event.unmeteredDispatches === 0
+        && (event.costUnmeteredDispatches ?? 0) === 0,
+    }));
   }
 
   /** Record a pipeline-owned closeout obligation as it is re-emitted on the bus. */
