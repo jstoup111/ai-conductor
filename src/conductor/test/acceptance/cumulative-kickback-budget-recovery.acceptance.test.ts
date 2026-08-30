@@ -24,19 +24,14 @@ import {
   rekickSweep,
   type RekickSweepDeps,
 } from '../../src/engine/daemon-rekick.js';
+import { consumeKickbackResumeAuthorization } from '../../src/engine/kickback-budget.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const SLUG = 'authorized-kickback-recovery';
 const BASE_SHA = 'a'.repeat(40);
-
-type AuthorizedCapResume = {
-  consumeKickbackResumeAuthorization: (slug: string) => Promise<{
-    authorized: boolean;
-    generation: string;
-  }>;
-};
 
 async function exists(path: string): Promise<boolean> {
   return access(path).then(
@@ -109,8 +104,7 @@ describe('authorized cumulative-cap recovery returns to normal daemon ownership'
     await writeFile(join(worktree, HALT_MARKER), 'build_review cumulative cap exceeded\n', 'utf8');
     await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'needs-human\n', 'utf8');
 
-    const authorizationReads: string[] = [];
-    const deps: RekickSweepDeps & AuthorizedCapResume = {
+    const deps: RekickSweepDeps = {
       listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
       readHaltReason: (slug) => readHaltReason(worktreeBase, slug),
       hasRebaseInProgress: async () => false,
@@ -122,17 +116,25 @@ describe('authorized cumulative-cap recovery returns to normal daemon ownership'
       isOperatorParked: async () => false,
       isProcessed: async () => false,
       readHaltClass: async () => 'needs-human',
-      consumeKickbackResumeAuthorization: async (slug) => {
-        authorizationReads.push(slug);
-        return { authorized: true, generation: 'cap-generation-1' };
-      },
+      consumeKickbackResumeAuthorization: (slug) =>
+        consumeKickbackResumeAuthorization(join(worktreeBase, slug)),
     };
 
     const sweep = await rekickSweep(deps, BASE_SHA);
 
-    expect(authorizationReads).toEqual([SLUG]);
     expect(sweep).toEqual({ cleared: [SLUG], skipped: [] });
     expect(await exists(join(worktree, HALT_MARKER))).toBe(false);
+    await expect(readKickbackLedger(worktree)).resolves.toMatchObject({
+      gates: { build_review: { exhaustedEvidence: { generation: 'cap-generation-1' } } },
+    });
+    expect((await readKickbackLedger(worktree)).gates.build_review?.resumeAuthorization).toBeUndefined();
+
+    // The authorization was consumed by the real ledger transaction, so a
+    // later needs-human sweep cannot clear a newly written marker.
+    await writeFile(join(worktree, HALT_MARKER), 'build_review cumulative cap exceeded again\n', 'utf8');
+    const secondSweep = await rekickSweep({ ...deps, lastRekickSha: new Map() }, 'b'.repeat(40));
+    expect(secondSweep).toEqual({ cleared: [], skipped: [SLUG] });
+    expect(await exists(join(worktree, HALT_MARKER))).toBe(true);
 
     const state: ConductState = {
       worktree: 'done',
