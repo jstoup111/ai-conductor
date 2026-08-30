@@ -23,6 +23,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Adds configurable visualizer plugins that receive Conductor event streams. ([implementation PR #1958](https://github.com/jstoup111/ai-conductor/pull/1958)).
 - OpenTelemetry traces distinguish completed, halted, and terminated conductor runs. ([implementation PR #1997](https://github.com/jstoup111/ai-conductor/pull/1997)).
 - `bin/install --check` now warns when ripgrep is missing, since several shell tests silently skip their coverage without it. ([implementation PR #2030](https://github.com/jstoup111/ai-conductor/pull/2030)).
+- Adds configurable test-suite verification modes and drift budgets that preserve valid full-suite evidence. ([implementation PR #2032](https://github.com/jstoup111/ai-conductor/pull/2032)).
 
 ### Changed
 
