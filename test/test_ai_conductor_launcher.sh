@@ -320,6 +320,28 @@ run_dist_failure_case missing
 run_dist_failure_case broken
 
 echo ""
+echo "=== ai-conductor launcher: uninstall ==="
+INSTALL_HOME="$TMPDIR_ROOT/uninstall-home"
+INSTALL_PATH="$NODE_STUBS:$INSTALL_HOME/.local/bin:/usr/bin:/bin"
+run_install
+set +e
+HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$HARNESS_DIR/bin/install" --uninstall --providers codex > "$TMPDIR_ROOT/uninstall-output" 2>&1
+UNINSTALL_STATUS=$?
+set -e
+assert "uninstall removes all installer-owned entrypoint links" \
+  "$([ "$UNINSTALL_STATUS" -eq 0 ] && [ ! -e "$INSTALL_HOME/.local/bin/conduct" ] && [ ! -e "$INSTALL_HOME/.local/bin/conduct-ts" ] && [ ! -e "$INSTALL_HOME/.local/bin/ai-conductor" ] && echo 0 || echo 1)"
+
+run_install
+rm "$INSTALL_HOME/.local/bin/conduct"
+printf 'foreign conduct\n' > "$INSTALL_HOME/.local/bin/conduct"
+set +e
+HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$HARNESS_DIR/bin/install" --uninstall --providers codex > "$TMPDIR_ROOT/foreign-uninstall-output" 2>&1
+UNINSTALL_STATUS=$?
+set -e
+assert "uninstall preserves a foreign conduct entry with a warning" \
+  "$([ "$UNINSTALL_STATUS" -eq 0 ] && [ -f "$INSTALL_HOME/.local/bin/conduct" ] && grep -Fq 'conduct script — foreign entry preserved' "$TMPDIR_ROOT/foreign-uninstall-output" && echo 0 || echo 1)"
+
+echo ""
 echo "=== Summary: ${PASS}/${TOTAL} passed ==="
 if [ "$FAIL" -gt 0 ]; then
   exit 1

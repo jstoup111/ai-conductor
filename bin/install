@@ -1561,10 +1561,26 @@ uninstall() {
   fi
   ok "Removed ${removed} skill symlinks"
 
-  if [ -L "${LOCAL_BIN}/conduct" ]; then
-    rm "${LOCAL_BIN}/conduct"
-    ok "Removed conduct script"
-  fi
+  local entrypoint expected_source
+  for entrypoint in conduct conduct-ts ai-conductor; do
+    case "$entrypoint" in
+      conduct|ai-conductor) expected_source="${HARNESS_DIR}/bin/ai-conductor" ;;
+      conduct-ts) expected_source="${HARNESS_DIR}/bin/ai-conductor" ;;
+    esac
+
+    target="${LOCAL_BIN}/${entrypoint}"
+    if [ -L "$target" ]; then
+      points_to=$(readlink -f "$target" 2>/dev/null || echo "")
+      if [ "$points_to" = "$expected_source" ]; then
+        rm -- "$target"
+        ok "Removed ${entrypoint} script"
+      else
+        warn "${entrypoint} script symlink points elsewhere, skipping"
+      fi
+    elif [ -e "$target" ]; then
+      warn "${entrypoint} script — foreign entry preserved"
+    fi
+  done
 
   echo ""
   echo -e "${GREEN}${BOLD}Uninstall complete.${NC}"
