@@ -10407,7 +10407,8 @@ export class Conductor {
                     emit: async (event) => { await this.events.emit(event); },
                   });
                   if (!adjudication.ok || adjudication.route === 'halt') {
-                    const reason = `build_review adjudication halted: ${adjudication.detail}`;
+                    const reason = `build_review adjudication halted: ${adjudication.detail}` +
+                      (adjudication.ok ? `\n${adjudication.trace}` : '');
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
                     await this.emitLoopHalt(reason);
@@ -10420,8 +10421,9 @@ export class Conductor {
                   if (adjudication.route === 'build') {
                     const ledger = await readKickbackLedger(this.projectRoot);
                     const count = ledger.gates.build_review?.count ?? 1;
-                    await emitTracked({ type: 'kickback', from: 'build_review', to: 'build', evidence: adjudication.detail, count });
-                    pendingRetryHints.set('build', `build_review adjudication: ${adjudication.detail}`);
+                    const evidence = `${adjudication.detail}\n${adjudication.trace}`;
+                    await emitTracked({ type: 'kickback', from: 'build_review', to: 'build', evidence, count });
+                    pendingRetryHints.set('build', `build_review adjudication: ${evidence}`);
                     if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
                     await captureKickbackToBuildContext('build_review');
                     const navigationIndex = await this.navigateStateBack(state, 'build', steps);
