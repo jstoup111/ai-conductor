@@ -237,7 +237,11 @@ observe.
 2. **Happy paths before negative paths** — Build the working flow, then test failure modes
 3. **Negative paths are explicit tasks** — Each negative path scenario gets its own task, not a "clean up error handling" catch-all
 4. **Integration points identified** — Mark tasks where components connect for the first time
-5. **Dependencies declared** — If Task 5 requires Task 3's model, say so
+5. **Dependencies declared** — If Task 5 requires Task 3's model, say so. Declare only genuine
+   dependencies and keep each task's `**Files likely touched:**` to the files it actually changes:
+   BUILD schedules by ready frontier and fans out independent tasks concurrently, so a dependency
+   that is merely narrative order, or a file set padded beyond the task's real reach, serializes
+   work that could have been delivered in parallel
 
 ### 5. Plan Format
 
