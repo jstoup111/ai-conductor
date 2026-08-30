@@ -17,6 +17,7 @@ import chalk from 'chalk';
 import type { ComplexityTier, Track } from '../types/index.js';
 import { Waker } from './waker.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
+import { InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
 
 type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
 
@@ -93,7 +94,7 @@ export interface PickEligibleBacklog {
 export interface PickEligibleCtx {
   inFlight: { has(slug: string): boolean };
   parked: Set<string>;
-  started: Set<string>;
+  started: { has(slug: string): boolean };
   isHalted?: (slug: string) => Promise<boolean>;
   /**
    * True while `slug` carries a durable `.daemon/parked/<slug>` operator-park
@@ -202,6 +203,12 @@ export interface DaemonDeps {
    *  halts — return `{status:'halted'}` — but a thrown error is caught and
    *  recorded as `{status:'error'}` so the pool survives. */
   runFeature: (item: BacklogItem) => Promise<FeatureOutcome>;
+  /**
+   * The daemon-run-scoped authority for active feature dispatches. An omitted
+   * registry gets the in-memory default, while tests and future composition
+   * roots can inject one to share/observe claims explicitly.
+   */
+  claims?: WorkClaims;
   /**
    * True while a previously-halted feature's HALT marker is still present.
    * Keeps a parked feature un-dispatched until a human clears it, then lets it
@@ -597,7 +604,7 @@ type Tagged = Promise<{ slug: string; outcome: FeatureOutcome }>;
 export async function guardedDispatchWith(
   item: BacklogItem,
   isParked: ((slug: string) => boolean | Promise<boolean>) | undefined,
-  onDispatch: (item: BacklogItem) => void,
+  onDispatch: (item: BacklogItem) => boolean | void,
   log: (msg: string) => void,
 ): Promise<boolean> {
   let parked = false;
@@ -610,8 +617,7 @@ export async function guardedDispatchWith(
     log(`park: skipped dispatch of ${item.slug} — operator-parked`);
     return false;
   }
-  onDispatch(item);
-  return true;
+  return onDispatch(item) !== false;
 }
 
 export async function runDaemon(
@@ -811,16 +817,30 @@ export async function runDaemon(
   };
 
   const processed: FeatureOutcome[] = [];
-  const inFlight = new Map<string, Tagged>();
+  const claims = deps.claims ?? new InMemoryWorkClaims();
+  // Claims are the single authority for whether a slug is active. The worker
+  // list only holds the promises needed to await outcomes; it never decides
+  // whether a feature may be dispatched.
+  const inFlight = {
+    has: (slug: string): boolean => claims.list().includes(slug),
+    get size(): number {
+      return claims.list().length;
+    },
+  };
+  const workers: Array<{ slug: string; tagged: Tagged }> = [];
   // Task T28: track whether the restart trigger has been successfully called
   // in this run. Once successful, don't retry (the respawn would exit the process).
   let restartTriggeredSuccessfully = false;
   // Task 21: track whether a stale-engine restart request has been made in this
   // run. Once requested, don't retry (the restart would exit the process).
   let staleEngineRestartRequested = false;
-  // Slugs dispatched this run, to prevent double-dispatch. Stays populated for
-  // the run's lifetime; `done`/`error` slugs remain permanently excluded.
-  const started = new Set<string>();
+  // Completed outcomes are the existing terminal record. `pickEligible` only
+  // consults it after the claims-backed active check and park handling, so the
+  // predicate order and parked re-dispatch behavior remain unchanged.
+  const started = {
+    has: (slug: string): boolean =>
+      processed.some((outcome) => outcome.slug === slug && outcome.status === 'done'),
+  };
   // Slugs that halted this run and are parked for a human. A parked slug is the
   // one exception to `started`'s permanent exclusion: it becomes eligible again
   // once its `.pipeline/HALT` marker is cleared, detected via the injected
@@ -844,12 +864,12 @@ export async function runDaemon(
     return null;
   };
 
-  const dispatch = (item: BacklogItem): void => {
+  const dispatch = (item: BacklogItem): boolean => {
+    if (!claims.claim(item.slug)) return false;
     const featureLog = deps.featureLog?.(item.slug) ?? log;
     // Task 16: Detect if this is a re-dispatch (slug was parked)
     const isResume = parked.has(item.slug);
 
-    started.add(item.slug);
     parked.delete(item.slug); // re-dispatching a cleared feature un-parks it
     // Dispose any existing watcher before re-dispatching (to avoid stale watchers
     // from the previous dispatch)
@@ -872,7 +892,8 @@ export async function runDaemon(
           reason: err instanceof Error ? err.message : String(err),
         },
       }));
-    inFlight.set(item.slug, tagged);
+    workers.push({ slug: item.slug, tagged });
+    return true;
   };
 
   // Task 1 (#651): park check immediately before every build-start, closing
@@ -886,8 +907,10 @@ export async function runDaemon(
     guardedDispatchWith(item, deps.isParked, dispatch, log);
 
   const collectOne = async (): Promise<void> => {
-    const { slug, outcome } = await Promise.race(inFlight.values());
-    inFlight.delete(slug);
+    const { slug, outcome } = await Promise.race(workers.map(({ tagged }) => tagged));
+    claims.release(slug);
+    const workerIndex = workers.findIndex((worker) => worker.slug === slug);
+    if (workerIndex >= 0) workers.splice(workerIndex, 1);
     processed.push(outcome);
     if (outcome.costTokens) totalCost += outcome.costTokens;
     // A halted OR errored feature is parked for a human, not finished. Both now
