@@ -1,5 +1,6 @@
 import {
   FullSuiteVerifier,
+  type FullSuiteInspectionResult,
   type FullSuiteVerifierResult,
 } from './full-suite-verifier.js';
 import type { FullSuiteFailureReason } from './full-suite-evidence.js';
@@ -25,7 +26,7 @@ export function detectTestSuiteCommand(argv: string[]): TestSuiteDispatch | null
 
 export interface TestSuiteDispatchDependencies {
   projectRoot?: string;
-  verifier?: { ensure: () => Promise<FullSuiteVerifierResult> };
+  verifier?: Pick<FullSuiteVerifier, 'inspect' | 'ensure' | 'recordPreservation'>;
   print?: (message: string) => void;
 }
 
@@ -58,7 +59,19 @@ export async function dispatchTestSuiteCommand(
 
   const projectRoot = dependencies.projectRoot ?? process.cwd();
   const verifier = dependencies.verifier ?? new FullSuiteVerifier({ projectRoot });
-  const result = await verifier.ensure();
+  // adr-2026-08-28 D4: the drift budget is cumulative against the attested
+  // PASS, and the ledger append is what makes it cumulative — so every caller
+  // that ACTS on a preservation records it exactly once, through the
+  // caller-owned seam. `ensure()` returns REUSED for both CURRENT and
+  // PRESERVED_WITHIN_BUDGET and writes nothing, so resolve the inspection
+  // here, hand that same result to `ensure()`, and record from it. One
+  // inspection only: a second would observe the first one's write and report
+  // CURRENT, losing the basis it was called to obtain.
+  const inspection: FullSuiteInspectionResult = await verifier.inspect();
+  const result = await verifier.ensure(inspection);
+  if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+    await verifier.recordPreservation(inspection);
+  }
   if (result.status === 'FAILED') {
     const freshness = result.freshness === undefined
       ? ''
