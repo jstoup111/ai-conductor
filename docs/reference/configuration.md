@@ -1008,6 +1008,7 @@ block is normalized in place; the resolved value is written back (`config.ts:111
 | Key | Type | Default | Status |
 | --- | --- | --- | --- |
 | `build_review.enabled` | boolean | `true` | Works |
+| `build_review.adjudication.enabled` | boolean | `true` | Strict nested rollout switch for post-join remediation adjudication |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
 | `build_review.rubrics` | object | `testQuality` off | Closed canonical map: `testQuality` only. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
@@ -1018,6 +1019,8 @@ Normalization contract:
 | --- | --- |
 | Absent or `null` | `{ enabled: true }`, no warning |
 | Valid `enabled` and/or `scopeContainmentEnforced` keys | Preserved; omitted `enabled` defaults to `true` |
+| Absent `adjudication` or `adjudication.enabled` | `{ enabled: true }`, no warning |
+| Non-object `adjudication`, non-boolean `adjudication.enabled`, or an unknown `adjudication` key | Hard validation error naming the exact `build_review.adjudication.*` path |
 | Non-object | `{ enabled: true }` plus one warning |
 | Unknown or invalid inner key | That key is omitted and warned by name; valid sibling keys are preserved |
 | `perTaskFloor` (any value) | Retired and ignored; a `config_deprecated_key` event is emitted naming `build_review.perTaskFloor` |

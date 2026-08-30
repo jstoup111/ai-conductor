@@ -88,9 +88,24 @@ const AFFECTED_CASES: AffectedCase[] = [
     userYaml: 'build_review:\n  rubrics:\n    testQuality:\n      enabled: false\n      effort: high\n',
     projectYaml: 'build_review:\n  rubrics:\n    testQuality:\n      enabled: true\n      effort: low\n',
     select: (config) => config.build_review,
-    userValue: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: false, effort: 'high' } } },
-    projectValue: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: true, effort: 'low' } } },
-    defaultValue: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: false } } },
+    userValue: {
+      enabled: true,
+      maxParallel: 1,
+      adjudication: { enabled: true },
+      rubrics: { testQuality: { enabled: false, effort: 'high' } },
+    },
+    projectValue: {
+      enabled: true,
+      maxParallel: 1,
+      adjudication: { enabled: true },
+      rubrics: { testQuality: { enabled: true, effort: 'low' } },
+    },
+    defaultValue: {
+      enabled: true,
+      maxParallel: 1,
+      adjudication: { enabled: true },
+      rubrics: { testQuality: { enabled: false } },
+    },
   },
   {
     name: 'auto_restart_on_stale_engine',
