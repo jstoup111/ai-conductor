@@ -10374,11 +10374,21 @@ export class Conductor {
                     return;
                   }
                   const mechanical = effective.effective.infrastructureFailureRubrics.length === 0 ? 'healthy' : 'retry';
+                  const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
+                    const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
+                      this.projectRoot,
+                      verdictRaw,
+                      { emit: async (event) => { await this.events.emit(event); } },
+                    );
+                    if (!latest.ok) throw new Error(latest.reason);
+                    return new Set(latest.effective.acceptedFindingIds);
+                  };
                   const adjudication = await coordinateBuildReviewAdjudication({
                     projectRoot: this.projectRoot,
                     feature: effective.feature,
                     aggregate,
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
+                    resolveOperatorResolvedFindingIds,
                     mechanical,
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
@@ -10394,6 +10404,7 @@ export class Conductor {
                       if (!judgement.ok) throw new Error(judgement.reason);
                       return judgement.judgement;
                     },
+                    emit: async (event) => { await this.events.emit(event); },
                   });
                   if (!adjudication.ok || adjudication.route === 'halt') {
                     const reason = `build_review adjudication halted: ${adjudication.detail}`;
