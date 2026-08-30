@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -320,6 +320,8 @@ describe('kickback-ledger', () => {
   it.each([
     ['blank adjustment identity', { id: ' ', kind: 'reset' }],
     ['unsafe adjustment count', { id: 'adjustment-1', kind: 'reset', beforeCount: Number.MAX_SAFE_INTEGER + 1 }],
+    ['non-canonical adjustment timestamp', { id: 'adjustment-1', kind: 'reset', at: '2026-08-30T08:00:00-04:00' }],
+    ['extended-year adjustment timestamp', { id: 'adjustment-1', kind: 'reset', at: '+010000-01-01T00:00:00.000Z' }],
   ])('rejects a %s in recoverable budget state', async (_name, invalidAdjustment) => {
     const baseAdjustment = {
       id: 'adjustment-1', kind: 'reset', beforeCount: 6, afterCount: 0,

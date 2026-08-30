@@ -199,6 +199,14 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
+/** Only a UTC ISO timestamp has an unambiguous lexical chronological order. */
+function isCanonicalTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const date = new Date(value);
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+    Number.isFinite(date.getTime()) && date.toISOString() === value;
+}
+
 function isKickbackBudgetAdjustment(value: unknown): value is KickbackBudgetAdjustment {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const adjustment = value as Record<string, unknown>;
@@ -211,7 +219,7 @@ function isKickbackBudgetAdjustment(value: unknown): value is KickbackBudgetAdju
     isPositiveSafeInteger(adjustment.afterLimit) &&
     isNonEmptyString(adjustment.operator) &&
     isNonEmptyString(adjustment.rationale) &&
-    isNonEmptyString(adjustment.at)
+    isCanonicalTimestamp(adjustment.at)
   );
 }
 
