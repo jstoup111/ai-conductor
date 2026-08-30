@@ -257,9 +257,13 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
           environment: 'none',
           migrations: 'none',
           project_config: 'none',
-          source: 'none',
+          // Declared budget: one aggregate run per feature, held across a
+          // lap that changes at most six files in either category. The four
+          // categories left at 'none' above are unbudgetable and always
+          // re-run.
+          source: 6,
           test_infrastructure: 'none',
-          tests: 'none',
+          tests: 6,
         },
       },
     });
