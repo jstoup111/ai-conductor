@@ -13,9 +13,9 @@ import {
 import type { KickbackBudgetDispatch, KickbackBudgetInspectDispatch } from '../cli.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { isOperatorParked, removeOperatorPark, writeOperatorPark } from './park-marker.js';
+import { acquireTemporaryOperatorPark } from './daemon-park-cli.js';
 import { makeMachineOwnerResolver } from './owner-gate/machine-identity.js';
-import { execa } from 'execa';
+import { makeProductionGh } from './tracker-client.js';
 
 /** Injectable read-only boundary for the pre-boot budget inspection command. */
 export interface KickbackBudgetInspectDeps extends NamedFeatureWorktreeResolverDeps {
@@ -73,9 +73,7 @@ export async function dispatchKickbackBudgetMutation(
     if (deps.isInteractive === false || !process.stdin.isTTY && deps.isInteractive === undefined) throw new Error('an interactive terminal is required');
     const resolved = await resolveNamedFeatureWorktree({ cwd: deps.cwd, feature: command.feature }, deps);
     if (!resolved) throw new Error('feature identity is unavailable');
-    const resolveOperator = deps.resolveOperator ?? makeMachineOwnerResolver(
-      async (args, options) => execa('gh', args, options), resolved.mainRoot,
-    );
+    const resolveOperator = deps.resolveOperator ?? makeMachineOwnerResolver(makeProductionGh(), resolved.mainRoot);
     const operator = await resolveOperator();
     if (!operator.resolved || !operator.id) throw new Error('machine operator identity is unavailable');
     const [haltClass, ledger] = await Promise.all([
@@ -84,14 +82,13 @@ export async function dispatchKickbackBudgetMutation(
     ]);
     const evidence = ledger.gates.build_review?.exhaustedEvidence;
     if (haltClass.trim() !== 'needs-human' || !evidence) throw new Error('the exact cumulative-cap halt is not current');
-    const alreadyParked = await isOperatorParked(resolved.mainRoot, command.feature);
-    if (!alreadyParked) await writeOperatorPark(resolved.mainRoot, command.feature);
+    const temporaryPark = await acquireTemporaryOperatorPark(resolved.mainRoot, command.feature);
     const reconciled = await reconcilePendingKickbackBudgetAdjustment(resolved.worktree, command.feature);
     if (reconciled && !reconciled.ok) throw new Error(reconciled.message);
     const result = await applyKickbackBudgetMutation(resolved.worktree, command.feature, operator.id, command.rationale,
       command.kind === 'reset' ? { kind: 'reset' } : { kind: 'raise', amount: command.amount }, evidence.generation);
     if (!result.ok) throw new Error(result.message);
-    if (!alreadyParked) await removeOperatorPark(resolved.mainRoot, command.feature);
+    await temporaryPark.release();
     print(`kickback-budget ${command.kind}: authorized ${result.adjustment.id}`);
     return 0;
   } catch (error) {

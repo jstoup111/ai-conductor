@@ -119,6 +119,15 @@ function parkedMarkerPath(root: string, slug: string): string {
  * are always visible to the daemon's gate at the main checkout root.
  */
 export async function writeOperatorPark(root: string, slug: string): Promise<void> {
+  await createOperatorPark(root, slug);
+}
+
+/**
+ * Create an operator park and report whether this caller won the exclusive
+ * creation race. Callers that need ownership (rather than idempotent parking)
+ * use this through daemon-park-cli's bounded recovery seam.
+ */
+export async function createOperatorPark(root: string, slug: string): Promise<boolean> {
   const mainRoot = await resolveMainRepoRoot(root);
   const dir = join(mainRoot, '.daemon', OPERATOR_PARKED_SUBDIR);
   await mkdir(dir, { recursive: true });
@@ -129,7 +138,7 @@ export async function writeOperatorPark(root: string, slug: string): Promise<voi
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
       // Already parked — writeOperatorPark is idempotent, so this is a no-op.
-      return;
+      return false;
     }
     throw err;
   }
@@ -138,6 +147,7 @@ export async function writeOperatorPark(root: string, slug: string): Promise<voi
   } finally {
     await handle.close();
   }
+  return true;
 }
 
 /**

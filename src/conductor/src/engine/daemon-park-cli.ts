@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
+import { createOperatorPark, writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
 import { removeWorktree } from './worktree-shared.js';
 import { runProjectTeardown } from './worktree-prepare.js';
@@ -25,6 +25,25 @@ import type { GitRunner, GhRunner } from './pr-labels.js';
 
 const execFile = promisify(execFileCb);
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * Acquire an operator park for a bounded recovery operation.  This is the
+ * sole mutation seam outside park-marker itself: callers receive a release
+ * capability only when this invocation created the marker, so an existing
+ * human park cannot be accidentally removed after recovery.
+ */
+export async function acquireTemporaryOperatorPark(
+  root: string,
+  slug: string,
+): Promise<{ readonly owned: boolean; release(): Promise<void> }> {
+  const owned = await createOperatorPark(root, slug);
+  return {
+    owned,
+    async release(): Promise<void> {
+      if (owned) await removeOperatorPark(root, slug);
+    },
+  };
+}
 
 /**
  * Resolve the main repo root (the parent of `.git`) from any cwd — the

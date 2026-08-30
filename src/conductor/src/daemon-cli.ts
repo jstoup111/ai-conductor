@@ -2345,6 +2345,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${chalk.bold.yellow(`↩ KICKBACK: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''}`)} (×${event.count})`,
       );
       break;
+    case 'kickback_budget_adjustment_authorized':
+      log(
+        `${dot} ${chalk.green('✓')} ${chalk.green(
+          `kickback budget ${event.kind} authorized for ${event.feature}: ` +
+          `count ${event.beforeCount} → ${event.afterCount}, limit ${event.beforeLimit} → ${event.afterLimit}`,
+        )}`,
+      );
+      break;
     case 'navigation_back':
       log(chalk.yellow(`↰ BACK: ${event.from} → ${event.to} (operator)`));
       break;

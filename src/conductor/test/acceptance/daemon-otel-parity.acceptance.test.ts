@@ -49,6 +49,7 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
   step_retry: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry' }],
   gate_verdict: [{ type: 'gate_verdict', step: 'build', satisfied: true }],
   kickback: [{ type: 'kickback', from: 'build', to: 'plan', count: 1 }],
+  kickback_budget_adjustment_authorized: [{ type: 'kickback_budget_adjustment_authorized', adjustmentId: 'adjustment-1', feature: 'feature-a', gate: 'build_review', kind: 'reset', beforeCount: 5, afterCount: 0, beforeLimit: 5, afterLimit: 5, operator: 'operator', rationale: 'fresh review basis', at: '2026-08-30T00:00:00.000Z' }],
   feature_complete: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'feature_complete', featureDesc: 'parity guard' }],
   loop_halt: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'loop_halt', reason: 'parity guard' }],
   build_progress: [{ type: 'build_progress', step: 'build', resolved: 1, total: 2 }],

@@ -371,6 +371,14 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     expect(backLine).not.toMatch(/\bKICKBACK\b/);
   });
 
+  it('renders a kickback budget authorization with its applied bounds', () => {
+    expect(lines({
+      type: 'kickback_budget_adjustment_authorized', adjustmentId: 'adjustment-1', feature: 'recovery',
+      gate: 'build_review', kind: 'raise', beforeCount: 5, afterCount: 5,
+      beforeLimit: 5, afterLimit: 8, operator: 'operator', rationale: 'need more review', at: '2026-08-30T00:00:00.000Z',
+    })).toEqual(['· ✓ kickback budget raise authorized for recovery: count 5 → 5, limit 5 → 8']);
+  });
+
   it('handles every event type declared renderable by the sink registry', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(here, '../../src/daemon-cli.ts'), 'utf8');
