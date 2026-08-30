@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# harness-common.sh — Shared helpers used by bin/conduct and bin/update.
+# harness-common.sh — Shared helpers used by the surviving shell entrypoints.
 #
-# Copied here (not moved) from bin/conduct so bin/update can source them
-# without depending on bin/conduct's internals. bin/conduct still defines
-# its own copies until #226 removes its update block — until then, any fix
-# made here should be mirrored there (and vice versa) to avoid drift.
+# This module is the permanent home for shell-side configuration and update
+# helpers used by bin/update and other harness maintenance commands.
 #
 # Requires: python3, and optionally PyYAML for harness_cfg_get/harness_cfg_set.
 

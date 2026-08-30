@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# test_bin_update.sh — Real-binary acceptance tests for `bin/update`, the
-# standalone self-update/channel CLI that replaces the update block ported
-# out of `bin/conduct` (327-470). See .docs/stories/port-self-update-flow.md
+# test_bin_update.sh — Real-binary acceptance tests for the standalone
+# `bin/update` self-update/channel CLI. See .docs/stories/port-self-update-flow.md
 # for the acceptance criteria this file encodes (Stories 1-9).
 #
 # Runs the ACTUAL bin/update (no mocks of the script under test) against a
@@ -397,18 +396,6 @@ run_update_without_conduct() {
   shift 2
   set +e
   OUT=$(cd "$repo" && AI_CONDUCTOR_ENGINE_BIN=ai-conductor HOME="$home" PATH="$MISSING_CONDUCT_PATH" "$repo/bin/update" "$@" < /dev/null 2>&1)
-  CODE=$?
-  set -e
-}
-
-# run_conduct_update <repo> <home> — exercise bin/conduct's retained update
-# path through its public --update entry point.
-run_conduct_update() {
-  local repo=$1 home=$2
-  cp "$HARNESS_DIR/bin/conduct" "$repo/bin/conduct"
-  chmod +x "$repo/bin/conduct"
-  set +e
-  OUT=$(cd "$repo" && HOME="$home" PATH="$repo/bin:$TEST_PATH" "$repo/bin/conduct" --update < /dev/null 2>&1)
   CODE=$?
   set -e
 }
@@ -1225,14 +1212,6 @@ assert "post-release newest tag: reports distance and baseline without prompting
   "$([ "$CODE" -eq 0 ] && [ -n "$OUT" ] && case "$OUT" in *"2 commits past v0.4.0"*) true;; *) false;; esac && case "$OUT" in *"Update to"*) false;; *) true;; esac && echo 0 || echo 1)"
 assert "post-release newest tag: stamps lastCheckedAt" "$([ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
 
-# bin/conduct retains its own update implementation. Its public --update path
-# must report a checkout that has advanced past the newest release instead of
-# silently treating it as current.
-HOME_DIR=$(make_isolated_home)
-run_conduct_update "$REPO" "$HOME_DIR"
-assert "bin/conduct post-release newest tag: reports distance and baseline" \
-  "$( [ "$CODE" -eq 0 ] && case "$OUT" in *"2 commits past v0.4.0"*) true;; *) false;; esac && echo 0 || echo 1)"
-
 # The checkout-derived baseline is a write-only migration cache. A
 # post-release display identity must never leak its +distance suffix into
 # currentVersion, and cache state must not influence the update decision.
@@ -1403,15 +1382,6 @@ assert "tagless bin/update: reports an unverifiable identity" \
 assert "tagless bin/update: offers no update" \
   "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
 assert "tagless bin/update: writes no currentVersion" \
-  "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
-
-HOME_DIR=$(make_isolated_home)
-run_conduct_update "$REPO" "$HOME_DIR"
-assert "tagless bin/conduct: reports an unverifiable identity" \
-  "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: unverifiable (source: none)' && echo 0 || echo 1)"
-assert "tagless bin/conduct: offers no update" \
-  "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
-assert "tagless bin/conduct: writes no currentVersion" \
   "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
 
 # ─── Story 5: no-TTY guidance ───────────────────────────────────────────────
