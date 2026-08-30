@@ -210,19 +210,41 @@ restore_stable_checkout() {
 check_harness_update_stable() {
   timeout 5 git -C "$HARNESS_DIR" fetch --tags --quiet origin stable 2>/dev/null || return 0
 
-  local branch local_head remote_head target_version
+  local branch local_head remote_head target_version detached=false
   branch=$(git -C "$HARNESS_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  [ "$branch" = "stable" ] || return 0
+  if [ "$branch" != "stable" ]; then
+    # A stable install updated by a pre-v1 bin/update was moved with
+    # `git checkout vX.Y.Z`, which leaves it in detached HEAD and off the
+    # branch. Returning here would silently and permanently end every later
+    # stable update for that install, so a detached HEAD is recovered onto the
+    # stable branch once the ancestry test below proves it is that lineage.
+    # Any other branch is still left alone.
+    [ "$branch" = "HEAD" ] || return 0
+    detached=true
+  fi
 
   local_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
   remote_head=$(git -C "$HARNESS_DIR" rev-parse origin/stable 2>/dev/null || echo "")
   [ -z "$remote_head" ] && return 0
+
+  # Ancestry is what makes a detached HEAD *this install's* stable lineage. It
+  # is tested before the tag guard below so a deliberate, unrelated detached
+  # checkout stays silent instead of inheriting stable's refusals.
+  if [ "$detached" = true ] &&
+    ! git -C "$HARNESS_DIR" merge-base --is-ancestor HEAD origin/stable 2>/dev/null; then
+    return 0
+  fi
+
   target_version=$(git -C "$HARNESS_DIR" describe --tags --exact-match "$remote_head" --match 'v*.*.*' 2>/dev/null || echo "")
   if ! [[ "$target_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     fail "Stable update refused: origin/stable must point to an exact semver vX.Y.Z tag"
     return 1
   fi
-  [ "$local_head" = "$remote_head" ] && return 0
+  # Already at the release: nothing to apply — unless HEAD is still detached,
+  # where re-attaching the branch is itself the whole repair.
+  if [ "$local_head" = "$remote_head" ] && [ "$detached" != true ]; then
+    return 0
+  fi
 
   if ! git -C "$HARNESS_DIR" merge-base --is-ancestor HEAD origin/stable 2>/dev/null; then
     return 0
@@ -233,13 +255,23 @@ check_harness_update_stable() {
   fi
 
   echo ""
-  warn "Harness stable update available"
+  local prompt="  Pull latest stable release? [y/n]: "
+  if [ "$detached" = true ]; then
+    warn "Stable checkout is detached from the stable branch — recovery available at ${target_version}"
+    prompt="  Re-attach the stable branch at ${target_version}? [y/n]: "
+  else
+    warn "Harness stable update available"
+  fi
   if [ ! -t 0 ]; then
-    warn "No TTY — run: cd ${HARNESS_DIR} && git pull --ff-only origin stable && bin/migrate"
+    if [ "$detached" = true ]; then
+      warn "No TTY — run: cd ${HARNESS_DIR} && git checkout -B stable ${remote_head} && bin/migrate"
+    else
+      warn "No TTY — run: cd ${HARNESS_DIR} && git pull --ff-only origin stable && bin/migrate"
+    fi
     return 0
   fi
 
-  read -r -p "  Pull latest stable release? [y/n]: " choice
+  read -r -p "$prompt" choice
   case "$choice" in
     [yY]) ;;
     *) log "Skipping update"; return 0 ;;
@@ -252,7 +284,15 @@ check_harness_update_stable() {
     return 1
   fi
   prior_checked_at=$(conductor_cfg_get lastCheckedAt "" 2>/dev/null || true)
-  if ! git -C "$HARNESS_DIR" merge --ff-only "$remote_head" >/dev/null 2>&1; then
+  # Both branches apply the SHA approved above, never a re-read of
+  # origin/stable, so a remote advance during the prompt cannot be picked up.
+  if [ "$detached" = true ]; then
+    if ! git -C "$HARNESS_DIR" checkout -B stable "$remote_head" >/dev/null 2>&1; then
+      fail "Re-attaching the stable branch failed — recover manually: cd ${HARNESS_DIR} && git checkout -B stable ${remote_head}"
+      return 1
+    fi
+    git -C "$HARNESS_DIR" branch --set-upstream-to=origin/stable stable >/dev/null 2>&1 || true
+  elif ! git -C "$HARNESS_DIR" merge --ff-only "$remote_head" >/dev/null 2>&1; then
     fail "Fast-forward to approved stable commit failed — update manually: cd ${HARNESS_DIR} && git merge --ff-only ${remote_head}"
     return 1
   fi

@@ -297,6 +297,11 @@ bin/update
 git pull --ff-only origin stable && bin/migrate
 ```
 
+If a stable checkout ends up in detached HEAD — a pre-v1 updater moved stable installs with
+`git checkout vX.Y.Z` — `bin/update` offers to re-attach the `stable` branch instead of stopping.
+Answer the prompt, or run the `git checkout -B stable <sha> && bin/migrate` command it prints when
+there is no TTY. A detached checkout you made yourself, off the `stable` lineage, is left alone.
+
 Choose the first-run channel during installation with `bin/install --channel tagged` (or `main` or
 `stable`), or set `AI_CONDUCTOR_CHANNEL` when passing a flag is inconvenient. The flag takes
 precedence over the environment variable; an unattended install with neither uses `stable`.
