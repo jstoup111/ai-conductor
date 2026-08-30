@@ -14,6 +14,8 @@
 export interface DaemonCommandOptions {
   /** Parallel workers (>= 1). Default 1. */
   concurrency: number;
+  /** True only when `--concurrency` occurred in argv, even if its value is 1. */
+  concurrencyExplicit?: boolean;
   /** Watch for changes (watch mode). Default true. */
   watch?: boolean;
   /** Stop after this many features (default: drain the backlog once). */
@@ -164,25 +166,37 @@ export function detectUnknownDaemonSubcommand(argv: string[]): string | null {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADR-014 / FR-13 — serial pool enforcement
+// adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting (as amended)
+// — daemon concurrency precedence.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Clamp the requested concurrency to 1 (serial). Real multi-feature concurrency
- * (tmux multi-pane) is out of scope for the current run-loop (ADR-014 / FR-13).
- * Emits a diagnostic via `log` ONCE when the requested value is > 1; silent when
- * requested is 1 or undefined (already serial — nothing to report).
- */
-export function clampDaemonConcurrency(
-  requested: number | undefined,
-  log: (m: string) => void,
-): number {
-  if (requested === undefined || requested <= 1) return 1;
-  log(
-    `concurrency clamped to 1 (serial — real concurrency is out of scope; ` +
-      `see .docs/plans/2026-06-29-daemon-tmux-supervisor.md)`,
-  );
-  return 1;
+export type DaemonConcurrencySource = 'flag' | 'config' | 'default';
+
+export interface DaemonConcurrencyResolution {
+  concurrency: number;
+  source: DaemonConcurrencySource;
+}
+
+/** Resolve daemon concurrency with an explicit CLI flag taking precedence. */
+export function resolveDaemonCommandConcurrency(
+  command: Pick<DaemonCommandOptions, 'concurrency' | 'concurrencyExplicit'>,
+  configured?: number,
+): DaemonConcurrencyResolution {
+  if (command.concurrencyExplicit === true) {
+    return { concurrency: command.concurrency, source: 'flag' };
+  }
+  if (configured !== undefined) {
+    return { concurrency: configured, source: 'config' };
+  }
+  return { concurrency: 1, source: 'default' };
+}
+
+/** Format the daemon startup line with its resolved concurrency provenance. */
+export function formatDaemonStartupLog(
+  resolution: DaemonConcurrencyResolution,
+  continuous: boolean,
+): string {
+  return `scanning backlog (concurrency ${resolution.concurrency}, source ${resolution.source}${continuous ? ', continuous' : ''})…`;
 }
 
 /**
@@ -204,6 +218,7 @@ export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null
 
   return {
     concurrency: intFlag(argv, '--concurrency', 1) ?? 1,
+    concurrencyExplicit: argv.includes('--concurrency') || undefined,
     watch: !argv.includes('--no-watch'),
     maxItems: intFlag(argv, '--max-items'),
     continuous: argv.includes('--continuous'),

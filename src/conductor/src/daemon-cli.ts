@@ -96,7 +96,10 @@ import { createGithubTrackerClient, makeProductionGh } from './engine/tracker-cl
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
-import { clampDaemonConcurrency } from './engine/daemon-command.js';
+import {
+  formatDaemonStartupLog,
+  resolveDaemonCommandConcurrency,
+} from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
@@ -635,6 +638,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     throw new Error(`Config error: ${configResult.error.message}`);
   }
   const config = configResult.ok ? configResult.config : undefined;
+  const daemonConcurrency = resolveDaemonCommandConcurrency(opts, config?.daemon_concurrency);
 
   // Backstop for every daemon launch path: refuse to run on a stale harness
   // install (missing/stale skill symlinks) — non-interactively, so it throws an
@@ -1369,9 +1373,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     );
   }
 
-  log(
-    `scanning backlog (concurrency ${opts.concurrency}${continuous ? ', continuous' : ''})…`,
-  );
+  log(formatDaemonStartupLog(daemonConcurrency, continuous));
 
   // Shared backlog discovery — used both by the pool and the startup dashboard's
   // ELIGIBLE group, so they stay in lockstep. `refresh` is true only when the pool
@@ -2125,7 +2127,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       shouldStop: () => teardown.shouldStop(),
     },
     {
-      concurrency: clampDaemonConcurrency(opts.concurrency, log),
+      concurrency: daemonConcurrency.concurrency,
       maxItems: opts.maxItems,
       maxTotalCostTokens: opts.maxCostTokens,
       maxRuntimeMs:
