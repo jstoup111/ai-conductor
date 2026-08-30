@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-08-30T03:37:26.892Z
 Slug: test-suite-re-runs-and-re-passes-the-full-suite-10
 Class: needs-human
 Halting step: unknown
