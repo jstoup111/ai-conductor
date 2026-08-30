@@ -99,6 +99,16 @@ export type RemediationCaseStoreLeaseResult<Value> =
   | { readonly ok: true; readonly value: Value }
   | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
 
+/** A leased read/modify/write operation may decline to replace state. */
+export interface RemediationCaseStoreMutation<Value> {
+  readonly value: Value;
+  readonly nextState?: RemediationCaseStoreState;
+}
+
+export type RemediationCaseStoreMutationResult<Value> =
+  | { readonly ok: true; readonly value: Value }
+  | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
+
 const defaultFilesystem: RemediationCaseStoreFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
@@ -307,6 +317,35 @@ export class RemediationCaseStore {
     if (!acquired.ok) return acquired;
     try {
       return await this.atomicReplace(parsed.state);
+    } finally {
+      await acquired.release();
+    }
+  }
+
+  /**
+   * Runs an admitted state transition under the same lease used for reads and
+   * replacements. Omitting `nextState` leaves the exact stored bytes intact.
+   */
+  async mutate<Value>(
+    operation: (state: RemediationCaseStoreState) => Promise<RemediationCaseStoreMutation<Value>>,
+  ): Promise<RemediationCaseStoreMutationResult<Value>> {
+    const acquired = await this.acquire();
+    if (!acquired.ok) return acquired;
+    try {
+      const loaded = await this.load();
+      if (!loaded.ok) return loaded;
+      const mutation = await operation(loaded.state);
+      if (!mutation.nextState) return { ok: true, value: mutation.value };
+
+      const parsed = parseState(mutation.nextState);
+      if (!parsed.ok) return parsed;
+      if (!sameFeature(parsed.state.feature, this.feature)) return { ok: false, reason: 'foreign-feature' };
+      const replaced = await this.atomicReplace(parsed.state);
+      return replaced.ok
+        ? { ok: true, value: mutation.value }
+        : replaced;
+    } catch {
+      return { ok: false, reason: 'lease-operation-failed' };
     } finally {
       await acquired.release();
     }
