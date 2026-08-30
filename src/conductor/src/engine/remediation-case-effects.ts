@@ -107,6 +107,32 @@ export function remediationEffectMarker(effectId: string): string {
   return `<!-- ai-conductor-remediation-effect:${effectId} -->`;
 }
 
+/**
+ * The intake adapter is the single sanitizer before tracker publication. This
+ * renderer supplies the fixed semantic sections and the stable recovery key.
+ */
+export function renderBuildReviewDeferralIssue(
+  effect: RemediationCaseDeferralEffect,
+  rationale: string,
+  effectId: string,
+): string {
+  return [
+    '## Observed',
+    effect.body,
+    '',
+    '## Impact',
+    rationale,
+    '',
+    '## Desired Outcome',
+    'Resolve the deferred build-review finding in a future planned change.',
+    '',
+    '## Hypotheses',
+    effect.exclusionRationale,
+    '',
+    remediationEffectMarker(effectId),
+  ].join('\n');
+}
+
 /** Exact-marker lookup precedes create; the marker makes a post-create crash recoverable. */
 export async function applyBuildReviewDeferralEffect(input: {
   readonly projectRoot: string;
@@ -130,7 +156,7 @@ export async function applyBuildReviewDeferralEffect(input: {
       if (!issueUrl) {
         const filed = await input.fileIssue({
           title: input.effect.title,
-          body: `${input.effect.body}\n\n${marker}`,
+          body: renderBuildReviewDeferralIssue(input.effect, deferral.rationale, deferral.effect.id),
           priority: record.priority,
         });
         issueUrl = filed.issueUrl;
