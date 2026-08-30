@@ -85,7 +85,11 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
-import { createDaemonTeardown } from './engine/daemon-teardown.js';
+import {
+  createDaemonTeardown,
+  type DaemonTeardown,
+  type DaemonTeardownOptions,
+} from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import {
   createRefreshThrottle,
@@ -206,6 +210,65 @@ export function createDiscoveryLogger(log: (msg: string) => void): DiscoveryLogg
         log(`[fetch] recovered`);
         lastState = 'succeeded';
       }
+    },
+  };
+}
+
+export interface ScaledDaemonTeardown extends DaemonTeardown {
+  /** Re-arm the remaining drain budget after one executor has settled. */
+  executorSettled(): void;
+}
+
+export interface ScaledDaemonTeardownOptions<T = ReturnType<typeof setTimeout>>
+  extends Omit<DaemonTeardownOptions<T>, 'timeoutMs'> {
+  /** The existing grace period granted to one in-flight executor. */
+  perExecutorTimeoutMs: number;
+  /** The live drain set; it is read each time the bound is armed. */
+  liveExecutorCount: () => number;
+}
+
+/**
+ * Give each executor in a SIGTERM drain one full grace period. The active
+ * controller is re-armed as executors settle, so a routine N-worker drain
+ * cannot consume a single worker's budget while it is making progress.
+ */
+export function createScaledDaemonTeardown<T = ReturnType<typeof setTimeout>>(
+  opts: ScaledDaemonTeardownOptions<T>,
+): ScaledDaemonTeardown {
+  let stopRequested = false;
+  let forceReleased = false;
+  let current: DaemonTeardown | undefined;
+
+  const arm = (): void => {
+    const liveExecutors = Math.max(1, opts.liveExecutorCount());
+    current = createDaemonTeardown<T>({
+      timeoutMs: opts.perExecutorTimeoutMs * liveExecutors,
+      onForceRelease: () => {
+        forceReleased = true;
+        opts.onForceRelease();
+      },
+      setTimer: opts.setTimer,
+      clearTimer: opts.clearTimer,
+    });
+    current.requestStop();
+  };
+
+  return {
+    requestStop(): void {
+      if (stopRequested) return;
+      stopRequested = true;
+      arm();
+    },
+    shouldStop(): boolean {
+      return stopRequested;
+    },
+    executorSettled(): void {
+      if (!stopRequested || forceReleased) return;
+      current?.cancel();
+      arm();
+    },
+    cancel(): void {
+      current?.cancel();
     },
   };
 }
@@ -800,35 +863,34 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   });
   if (worktreeBase === null) return;
 
+  // Task 22: Process-level SIGTERM handler for daemon mode. Track all in-flight
+  // rate-limit waits and conductors across N concurrent workers so one handler
+  // can abort, close ledgers, and coordinate the drain.
+  const allWaitSignals = new Set<AbortController>();
+  const activeConductors = new Set<Conductor>();
+  let shutdownRequested = false;
+
   // #561 (Story 1 + Story 3): SIGTERM must drain in-flight work before the
   // lock is released — force-exiting on SIGTERM (the old behavior) let a
   // second daemon race the pidfile while a conductor was still mid-write.
   // The teardown controller gives the daemon loop a bounded window to drain
   // (via shouldStop, wired into runDaemon below); if the drain doesn't
-  // finish within FORCE_RELEASE_TIMEOUT_MS, onForceRelease fires as a
+  // finish within its live-drain-set-scaled grace period, onForceRelease fires as a
   // last-resort backstop: release the lock synchronously and exit non-zero,
   // logged with a greppable marker for post-hoc forensics.
   const FORCE_RELEASE_TIMEOUT_MS = 30_000;
-  const teardown = createDaemonTeardown({
-    timeoutMs: FORCE_RELEASE_TIMEOUT_MS,
+  const teardown = createScaledDaemonTeardown({
+    perExecutorTimeoutMs: FORCE_RELEASE_TIMEOUT_MS,
+    liveExecutorCount: () => activeConductors.size,
     onForceRelease: () => {
       log(
-        `[daemon] teardown force-release: drain did not complete within ${FORCE_RELEASE_TIMEOUT_MS / 1000}s — releasing lock and exiting`,
+        `[daemon] teardown force-release: drain did not complete within its scaled ${FORCE_RELEASE_TIMEOUT_MS / 1000}s-per-executor bound — releasing lock and exiting`,
       );
       releaseBackstop();
       const exitProcess = opts.exitProcess ?? process.exit;
       exitProcess(1);
     },
   });
-
-  // Task 22: Process-level SIGTERM handler for daemon mode. Track all in-flight
-  // rate-limit waits across N concurrent conductors so a single process-level
-  // handler can abort them all and coordinate state saves before exit.
-  // Conductors running in daemon mode (daemon:true) will register their
-  // AbortControllers here instead of installing per-conductor handlers.
-  const allWaitSignals = new Set<AbortController>();
-  const activeConductors = new Set<Conductor>();
-  let shutdownRequested = false;
 
   // Task 22 / #561: Install ONE process-level SIGTERM handler (not N
   // per-conductor). When SIGTERM fires, abort all in-flight waits so they
@@ -1259,6 +1321,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     });
     } finally {
       activeConductors.delete(conductor);
+      teardown.executorSettled();
     }
 
   };
