@@ -159,25 +159,25 @@ failing in groups but passing in isolation.
 
 ## Test tiers
 
-585 `*.test.ts` files under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` and excludes
-`test/smoke/**` and `**/*.smoke.test.ts` (`src/conductor/vitest.config.ts:5-6`), so every tier below
-except smoke runs under a bare `npm test`.
+846 `*.test.ts` files live under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` and
+excludes `test/smoke/**` and `**/*.smoke.test.ts` (`src/conductor/vitest.config.ts:18-19`), so a bare
+`npm test` discovers 835 files and excludes the 11 opt-in smoke files.
 
 | Directory | Files | Covers | Run just this tier |
 | --- | --- | --- | --- |
-| `test/engine/` | 371 | Mirrors `src/engine/`, including subdirectories for `engineer/`, `engineer/intake/`, `self-host/`, `otel/`, `halt-issues/`, `owner-gate/`. | `npm test -- test/engine` |
-| `test/acceptance/` | 96 | Observable story and gate behavior across the minimum real internal path, with third-party boundaries faked. | `npm test -- test/acceptance` |
-| `test/` (top level) | 41 | Cross-cutting suites not owned by one layer: `wiring-*`, `build-progress-*`, `backlog-priority`, `config-validation`, and tests of the leak guards themselves. | `npm test -- 'test/*.test.ts'` |
-| `test/integration/` | 39 | Real collaboration between internal components; real temp files or local git only where git semantics are the subject. | `npm test -- test/integration` |
+| `test/engine/` | 494 | Mirrors `src/engine/`, including subdirectories for `engineer/`, `engineer/intake/`, `self-host/`, `otel/`, `halt-issues/`, `owner-gate/`. | `npm test -- test/engine` |
+| `test/acceptance/` | 175 | Observable story and gate behavior across the minimum real internal path, with third-party boundaries faked. | `npm test -- test/acceptance` |
+| `test/` (top level) | 71 | Cross-cutting suites not owned by one layer: `wiring-*`, `build-progress-*`, `backlog-priority`, `config-validation`, and tests of the leak guards themselves. | `npm test -- 'test/*.test.ts'` |
+| `test/integration/` | 41 | Real collaboration between internal components; real temp files or local git only where git semantics are the subject. | `npm test -- test/integration` |
 | `test/ui/` | 14 | Renderers, subscribers, dashboard snapshot and text, live region, prompt host. | `npm test -- test/ui` |
-| `test/execution/` | 11 | Provider adapters, the `LLMProvider` contract, token usage, rate-limit parsing, sessions. | `npm test -- test/execution` |
-| `test/smoke/` | 5 | Real binaries and real third parties. Excluded by default. | See [Smoke tests](#smoke-tests). |
-| `test/cli/` | 3 | `index.test.ts`, `mode-derivation.test.ts`, `report-flag.test.ts`. | `npm test -- test/cli` |
-| `test/structural/` | 2 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
-| `test/types/` | 2 | Type-level contracts: `plugin-kind.test.ts`, `test-suite-config-type.test.ts`. | `npm test -- test/types` |
-| `test/fixtures/` | 1 test + helpers | `git-repo.ts` and its test, plus child-process scripts and recorded session-hook payloads. | `npm test -- test/fixtures` |
+| `test/execution/` | 25 | Provider adapters, the `LLMProvider` contract, token usage, rate-limit parsing, sessions. | `npm test -- test/execution` |
+| `test/smoke/` | 4 | Real binaries and real third parties. Excluded by default; seven additional `*.smoke.test.ts` files live beside the subsystem they exercise. | See [Smoke tests](#smoke-tests). |
+| `test/cli/` | 6 | CLI entry-point and argument behavior. | `npm test -- test/cli` |
+| `test/structural/` | 8 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
+| `test/types/` | 3 | Type-level contracts. | `npm test -- test/types` |
+| `test/fixtures/` | 5 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
 
-Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with top-level `maxWorkers: 3`,
+Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with top-level `maxWorkers: 2`,
 `testTimeout: 20000`, `hookTimeout: 30000`, `environment: 'node'`. No reporter is configured in the file
 — it comes from the command line. Vitest 4 removed `poolOptions` and `minWorkers`; isolated generated
 smoke fixtures set `maxWorkers: 1`.

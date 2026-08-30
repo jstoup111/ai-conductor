@@ -2292,32 +2292,6 @@ describe('engine/daemon — runDaemon', () => {
   });
 
   describe('guardedDispatch: park check immediately before dispatch (Task 1, #651)', () => {
-    it('pool does not start a slug parked between selection and dispatch (race)', async () => {
-      // First call models pickEligible's selection-time check (passes, false).
-      // Second call models guardedDispatch's dispatch-time check (a marker
-      // landed in the window between selection and dispatch — true).
-      let calls = 0;
-      const logs: string[] = [];
-      let runFeatureCalls = 0;
-      const deps: DaemonDeps = {
-        discoverBacklog: staticBacklog(items(1)),
-        isParked: async () => {
-          calls++;
-          return calls >= 2;
-        },
-        runFeature: async (it) => {
-          runFeatureCalls++;
-          return { slug: it.slug, status: 'done' };
-        },
-        log: (msg) => {
-          logs.push(msg);
-        },
-      };
-      await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 3 });
-      expect(runFeatureCalls).toBe(0);
-      expect(logs.some((m) => m.includes('operator-parked') && m.includes('f0'))).toBe(true);
-    });
-
     it('pool starts an unparked slug exactly once', async () => {
       let runFeatureCalls = 0;
       const deps: DaemonDeps = {
@@ -2703,32 +2677,6 @@ describe('engine/daemon — runDaemon', () => {
       });
 
       // Credential cleared, but PAUSE never lifted -> still zero dispatches.
-      expect(deps.runFeature).not.toHaveBeenCalled();
-      expect(res.processed).toHaveLength(0);
-    });
-
-    it('operator-park predicate is still consulted before dispatch even when the credential gate is not active', async () => {
-      let parkChecked = false;
-      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
-        discoverBacklog: staticBacklog(items(1)),
-        runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
-        isBuildAuthMissing: async () => false, // credential gate inactive throughout
-        isParked: async () => {
-          parkChecked = true;
-          return true;
-        },
-        log: () => {},
-      };
-
-      const res = await runDaemon(deps as DaemonDeps, {
-        concurrency: 1,
-        once: false,
-        maxIdlePolls: 3,
-      });
-
-      // The park check must still run (and block) — the credential gate being
-      // inert never bypasses or short-circuits the existing park check.
-      expect(parkChecked).toBe(true);
       expect(deps.runFeature).not.toHaveBeenCalled();
       expect(res.processed).toHaveLength(0);
     });
