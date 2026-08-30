@@ -92,6 +92,6 @@ export async function coordinateBuildReviewAdjudication(input: {
   }
   const settled = await store.read();
   if (!settled.ok) return { ok: false, detail: `case store ${settled.reason}` };
-  const transition = reduceBuildReviewAdjudication({ currentSourceCount: currentSources.length, cases: settled.state.cases, mechanical: input.mechanical });
+  const transition = reduceBuildReviewAdjudication({ currentSourceIds: currentSources.map((source) => source.findingId), cases: settled.state.cases, mechanical: input.mechanical });
   return { ok: true, route: transition.route, detail: transition.reason, remainingMechanical: transition.remainingMechanical };
 }

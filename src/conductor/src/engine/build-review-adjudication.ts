@@ -25,22 +25,43 @@ function hasAppliedAction(record: RemediationCaseRecord): boolean {
   return record.resolution === 'open' && record.effect.kind === 'action' && record.effect.status === 'applied';
 }
 
+function currentSourceCoverageIsConsistent(
+  currentSourceIds: readonly string[],
+  cases: readonly RemediationCaseRecord[],
+): boolean {
+  const current = new Set(currentSourceIds);
+  if (current.size !== currentSourceIds.length) return false;
+  const outcomes = new Map<string, string>();
+  for (const record of cases) {
+    for (const source of record.sources) {
+      if (!current.has(source.sourceId)) continue;
+      const previous = outcomes.get(source.sourceId);
+      if (previous !== undefined && previous !== source.outcome) return false;
+      outcomes.set(source.sourceId, source.outcome);
+    }
+  }
+  return currentSourceIds.every((sourceId) => outcomes.has(sourceId));
+}
+
 /**
  * Derive an effective route from finalized durable case state.  This is kept
  * pure so the conductor cannot accidentally turn a partial effect into PASS.
  */
 export function reduceBuildReviewAdjudication(input: {
-  readonly currentSourceCount: number;
+  /** Exact current source identity is required to prove no stale case routes BUILD. */
+  readonly currentSourceIds: readonly string[];
   readonly cases: readonly RemediationCaseRecord[];
   readonly mechanical: BuildReviewMechanicalState;
 }): BuildReviewAdjudicationTransition {
-  if (input.currentSourceCount < 0) {
-    return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'invalid current source count' };
+  if (!currentSourceCoverageIsConsistent(input.currentSourceIds, input.cases)) {
+    return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'current remediation source coverage is incomplete or contradictory' };
   }
   if (input.cases.some(hasUnfinishedEffect)) {
     return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'remediation effect is not finalized' };
   }
-  if (input.cases.some(hasAppliedAction)) {
+  if (input.cases.some((record) =>
+    hasAppliedAction(record) && record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)),
+  )) {
     return {
       route: 'build',
       remainingMechanical: input.mechanical !== 'healthy',
@@ -52,9 +73,6 @@ export function reduceBuildReviewAdjudication(input: {
   }
   if (input.mechanical === 'retry') {
     return { route: 'mechanical-retry', remainingMechanical: true, reason: 'build-review infrastructure retry is pending' };
-  }
-  if (input.currentSourceCount > 0 && input.cases.length === 0) {
-    return { route: 'halt', remainingMechanical: false, reason: 'current findings have no finalized remediation cases' };
   }
   return { route: 'pass', remainingMechanical: false, reason: 'all current findings have finalized non-action outcomes' };
 }
