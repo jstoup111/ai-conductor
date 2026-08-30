@@ -71,7 +71,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       emit: async (event) => { events.push(event.type); },
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(result).toMatchObject({ ok: true, route: 'build', trace: expect.stringContaining('case-durable') });
     expect(judge).toHaveBeenCalledTimes(1);
     expect(events).toEqual(['remediation_adjudication_started', 'remediation_adjudication_completed']);
   });
@@ -84,7 +84,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       ...input(root, judge), operatorResolvedFindingIds: new Set([sourceId]),
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(result).toMatchObject({ ok: true, route: 'pass', trace: expect.stringContaining('operator-resolved') });
     expect(judge).not.toHaveBeenCalled();
   });
 

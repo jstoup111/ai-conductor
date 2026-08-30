@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { assembleBuildReviewAdjudicationContext } from './build-review-adjudication-context.js';
-import { reduceBuildReviewAdjudication, type BuildReviewMechanicalState } from './build-review-adjudication.js';
+import { reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
@@ -15,7 +15,7 @@ import type { RemediationCaseDeferralEffect } from './remediation-case-artifact.
 import type { ConductorEvent } from '../types/events.js';
 
 export type BuildReviewAdjudicationCoordinatorResult =
-  | { readonly ok: true; readonly route: 'pass' | 'build' | 'mechanical-retry' | 'halt'; readonly detail: string; readonly remainingMechanical: boolean }
+  | { readonly ok: true; readonly route: 'pass' | 'build' | 'mechanical-retry' | 'halt'; readonly detail: string; readonly trace: string; readonly remainingMechanical: boolean }
   | { readonly ok: false; readonly detail: string };
 
 /**
@@ -48,7 +48,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   const routeIfAllOperatorResolved = (resolved: ReadonlySet<string>): BuildReviewAdjudicationCoordinatorResult | undefined => {
     if (sources.some((source) => !resolved.has(source.findingId))) return undefined;
     const transition = reduceBuildReviewAdjudication({ currentSourceIds: [], cases: [], mechanical: input.mechanical });
-    return { ok: true, route: transition.route, detail: transition.reason, remainingMechanical: transition.remainingMechanical };
+    return { ok: true, route: transition.route, detail: transition.reason, trace: `route: ${transition.route}; all current sources are operator-resolved`, remainingMechanical: transition.remainingMechanical };
   };
   let resolved: ReadonlySet<string>;
   try { resolved = await operatorResolvedFindingIds(); } catch { return { ok: false, detail: 'operator disposition state is unavailable' }; }
@@ -139,5 +139,9 @@ export async function coordinateBuildReviewAdjudication(input: {
     caseIds: settled.state.cases.map((record) => record.id),
     effectIds: settled.state.cases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
   });
-  return { ok: true, route: transition.route, detail: transition.reason, remainingMechanical: transition.remainingMechanical };
+  return {
+    ok: true, route: transition.route, detail: transition.reason,
+    trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(settled.state.cases)}`,
+    remainingMechanical: transition.remainingMechanical,
+  };
 }
