@@ -135,4 +135,39 @@ describe('remediation case effects', () => {
     await expect(applyBuildReviewDeferralEffect(input)).resolves.toMatchObject({ ok: true, status: 'applied' });
     expect(fileIssue).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ['timeout during exact-marker lookup', 'lookup', new Error('request timed out')],
+    ['authentication failure while filing', 'file', new Error('authentication failed')],
+    ['rate limit while filing', 'file', new Error('API rate limit exceeded')],
+  ] as const)('keeps the deferred effect without an issue reference after %s', async (_name, boundary, failure) => {
+    const store = await storeWith({ version: 'v1', feature, cases: [{
+      id: 'case-1', domain: 'build_review', disposition: 'defer', priority: 'low', rationale: 'case rationale', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'source-1', outcome: 'deferred', recordedAt: '2026-08-30T00:00:00.000Z' }],
+      effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' },
+    }] });
+    const findIssueByEffectMarker = boundary === 'lookup'
+      ? vi.fn().mockRejectedValue(failure)
+      : vi.fn().mockResolvedValue(null);
+    const fileIssue = boundary === 'file'
+      ? vi.fn().mockRejectedValue(failure)
+      : vi.fn();
+
+    await expect(applyBuildReviewDeferralEffect({
+      projectRoot: root, feature, store, caseId: 'case-1', repo: 'acme/repo',
+      effect: { kind: 'deferral', title: 'Deferred', body: 'Observed behavior', exclusionRationale: 'outside current plan' },
+      tracker: { findIssueByEffectMarker } as never, fileIssue,
+    })).resolves.toEqual({ ok: false, reason: `deferred intake failed: ${failure.message}` });
+
+    expect(findIssueByEffectMarker).toHaveBeenCalledWith(remediationEffectMarker('effect-1'), 'acme/repo', root);
+    expect(fileIssue).toHaveBeenCalledTimes(boundary === 'file' ? 1 : 0);
+    const read = await store.read();
+    expect(read.ok).toBe(true);
+    if (!read.ok) throw new Error(`unexpected case store failure: ${read.reason}`);
+    const savedEffect = read.state.cases[0]?.effect;
+    expect(savedEffect?.kind).toBe('deferral');
+    if (savedEffect?.kind !== 'deferral') throw new Error('expected a deferred effect');
+    expect(savedEffect.status).toMatch(/^(reserved|failed)$/);
+    expect(savedEffect).not.toHaveProperty('issueUrl');
+  });
 });
