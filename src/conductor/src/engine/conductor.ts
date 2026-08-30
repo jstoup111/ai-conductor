@@ -10366,13 +10366,22 @@ export class Conductor {
                     verdictRaw,
                     { emit: async (event) => { await this.events.emit(event); } },
                   );
-                  if (!effective.ok) {
+                  // Old raw aggregate fixtures (and pre-adjudication callers)
+                  // have no worktree identity from which a feature-local case
+                  // store can be selected.  They retain the exact historical
+                  // raw lane.  Every other disposition/state failure is still
+                  // authoritative and therefore fail-closed.
+                  const legacyAdjudicationInput = !effective.ok
+                    ? effective.reason === 'build-review feature identity is unavailable'
+                    : !('feature' in effective) || effective.feature === undefined;
+                  if (!effective.ok && !legacyAdjudicationInput) {
                     const reason = `build_review adjudication halted: ${effective.reason}`;
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
                     await this.emitLoopHalt(reason);
                     return;
                   }
+                  if (effective.ok && !legacyAdjudicationInput) {
                   const mechanical = effective.effective.infrastructureFailureRubrics.length === 0 ? 'healthy' : 'retry';
                   const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
                     const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
@@ -10437,6 +10446,7 @@ export class Conductor {
                   }
                   // A pure mechanical retry deliberately retains the existing
                   // raw mechanical lane below; it never invokes the judge again.
+                  }
                 }
                 const failureDetails = buildReviewFailureDetails(parsed);
                 let kickbackLedgerBeforeConsumption: KickbackLedger | undefined;
