@@ -1,7 +1,10 @@
+// Covers: task:6
+import { execFile } from 'node:child_process';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { promisify } from 'node:util';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 const { watcherHandlers, watcher } = vi.hoisted(() => {
@@ -44,6 +47,9 @@ import {
   repairProcessed,
   watchHaltCleared,
 } from '../../src/engine/daemon-deps.js';
+import { buildWorkOrder } from '../../src/engine/work-order.js';
+
+const execFileAsync = promisify(execFile);
 
 describe('engine/daemon-deps', () => {
   let dir: string;
@@ -224,8 +230,11 @@ describe('engine/daemon-deps', () => {
         }
         if (args[0] === 'rev-parse') {
           // resolveWorktreeBase: succeed only when origin/<base> is present.
-          if (originRefExists) return { stdout: 'deadbeef' };
-          throw new Error('fatal: Needed a single revision');
+          if (args[args.length - 1] === 'origin/main') {
+            if (originRefExists) return { stdout: 'deadbeef' };
+            throw new Error('fatal: Needed a single revision');
+          }
+          return { stdout: 'cafebabe' };
         }
         if (args[0] === 'worktree' && args[1] === 'add') {
           addCalls.push(args);
@@ -238,16 +247,92 @@ describe('engine/daemon-deps', () => {
 
     beforeEach(() => mockExeca.mockReset());
 
+    it('materializes an S1-pinned work order after origin/main advances to S2', async () => {
+      const repository = join(dir, 'pinned-worktree-repository');
+      const worktreePath = join(repository, '.worktrees', 'pinned-feature');
+      const documentRef = '.docs/plans/pinned-feature.md';
+      const log = vi.fn();
+      const git = async (args: string[], cwd = repository) => {
+        const { stdout, stderr } = await execFileAsync('git', args, { cwd });
+        return { stdout: stdout.trim(), stderr: stderr.trim() };
+      };
+
+      try {
+        await mkdir(repository, { recursive: true });
+        await git(['init', '--initial-branch=main']);
+        await git(['config', 'user.email', 'daemon-test@example.test']);
+        await git(['config', 'user.name', 'Daemon Test']);
+        await mkdir(join(repository, '.docs', 'plans'), { recursive: true });
+        await writeFile(join(repository, documentRef), '# S1 plan\n');
+        await git(['add', '.']);
+        await git(['commit', '-m', 'S1']);
+        const s1 = (await git(['rev-parse', 'HEAD'])).stdout;
+        await git(['update-ref', 'refs/remotes/origin/main', s1]);
+        const order = await buildWorkOrder(
+          {
+            repository: 'owner/repository',
+            slug: 'pinned-feature',
+            baseSha: s1,
+            documentRefs: [documentRef],
+          },
+          async (args) => {
+            try {
+              const result = await git([...args]);
+              return { exitCode: 0, ...result };
+            } catch (error) {
+              const failure = error as { stdout?: string; stderr?: string };
+              return { exitCode: 1, stdout: failure.stdout ?? '', stderr: failure.stderr ?? '' };
+            }
+          },
+        );
+        await writeFile(join(repository, documentRef), '# S2 plan\n');
+        await git(['add', '.']);
+        await git(['commit', '-m', 'S2']);
+        const s2 = (await git(['rev-parse', 'HEAD'])).stdout;
+        await git(['update-ref', 'refs/remotes/origin/main', s2]);
+        mockExeca.mockImplementation((async (command: string, args: string[], options?: { cwd?: string }) => {
+          const result = await git(args, options?.cwd);
+          return result;
+        }) as unknown as typeof execa);
+
+        await makeFeatureRunnerDeps({
+          projectRoot: repository,
+          worktreeBase: join(repository, '.worktrees'),
+          baseBranch: 'main',
+          log,
+          runConductorInWorktree: async () => {},
+        }).createWorktree(
+          'pinned-feature',
+          order,
+        );
+
+        const [head, mergeBase] = await Promise.all([
+          git(['rev-parse', 'HEAD'], worktreePath),
+          git(['merge-base', 'HEAD', 'origin/main'], worktreePath),
+        ]);
+        expect({ orderBase: order.baseSha, head: head.stdout, mergeBase: mergeBase.stdout, tip: s2, logs: log.mock.calls }).toEqual({
+          orderBase: s1,
+          head: s1,
+          mergeBase: s1,
+          tip: s2,
+          logs: [[`[daemon] work claim pinned-feature pinned base ${s1}`]],
+        });
+      } finally {
+        mockExeca.mockReset();
+        await rm(repository, { recursive: true, force: true });
+      }
+    });
+
     it('creates a fresh branch+worktree off origin/<base> when neither exists', async () => {
       const { addCalls } = routeGit({ worktreeListed: false, branchExists: false });
       const wt = await deps(dir).createWorktree(slug);
       expect(wt.branch).toBe(`feat/daemon-${slug}`);
       expect(addCalls).toHaveLength(1);
-      expect(addCalls[0]).toContain('-b'); // fresh: -b <branch> <path> origin/main
-      // Forks from the remote-tracking tip, NOT local main, so the build starts
-      // from the latest fetched origin even when the root drifted off main.
-      expect(addCalls[0]).toContain('origin/main');
-      expect(addCalls[0]).not.toContain('main'); // bare 'main' is never the base now
+      expect(addCalls[0]).toContain('-b'); // fresh: -b <branch> <path> <pinned SHA>
+      // The remote-tracking tip is resolved to a SHA before the worktree is
+      // created, so a later origin advance cannot move this claim's base.
+      expect(addCalls[0]).toContain('deadbeef');
+      expect(addCalls[0]).not.toContain('origin/main');
     });
 
     it('falls back to local <base> when origin/<base> is unresolvable (local-only repo)', async () => {
@@ -259,7 +344,7 @@ describe('engine/daemon-deps', () => {
       await deps(dir).createWorktree(slug);
       expect(addCalls).toHaveLength(1);
       expect(addCalls[0]).toContain('-b');
-      expect(addCalls[0]).toContain('main'); // fell back to local main
+      expect(addCalls[0]).toContain('cafebabe'); // resolved the local main SHA
       expect(addCalls[0]).not.toContain('origin/main');
     });
 
