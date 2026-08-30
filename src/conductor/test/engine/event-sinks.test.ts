@@ -70,6 +70,17 @@ const REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES = [
   'remediation_disposition_rejected',
 ] satisfies Array<ConductorEvent['type']>;
 
+const REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES = [
+  'remediation_adjudication_started',
+  'remediation_adjudication_completed',
+  'remediation_adjudication_failed',
+  'remediation_case_reconciled',
+  'remediation_effect_reserved',
+  'remediation_effect_applied',
+  'remediation_effect_failed',
+  'remediation_semantic_repeat_halt',
+] satisfies Array<ConductorEvent['type']>;
+
 const RESEAL_EVENT_TYPES = [
   'protected_artifact_reseal',
   'protected_artifact_reseal_refused',
@@ -134,6 +145,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'provider_stream_progress',
   'self_host_containment_verdict',
   'over_scope_decision',
+  ...REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES,
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -362,6 +374,18 @@ describe('event sink subscriptions', () => {
       persister.stop();
       await rm(projectRoot, { recursive: true, force: true });
     }
+  });
+
+  it('declares every remediation case lifecycle occurrence for persistence without extra render, audit, or OTel subscriptions', () => {
+    const expected = { render: false, persist: true, audit: false, otel: false };
+
+    expect(
+      Object.fromEntries(
+        REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES.map((type) => [type, EVENT_SINKS[type]]),
+      ),
+    ).toEqual(Object.fromEntries(
+      REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES.map((type) => [type, expected]),
+    ));
   });
 
   it('persists loop_halt events through the emitter into the pipeline ledger', async () => {
