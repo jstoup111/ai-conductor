@@ -224,7 +224,7 @@ async function evaluateEligibilityGates(
   if (await isFeatureInFlight(entry.slug)) {
     return {
       eligible: false,
-      reason: `active feature run for ${entry.slug}; resolution deferred`,
+      reason: `active work claim for ${entry.slug}; resolution worktree deferred`,
     };
   }
 
@@ -263,6 +263,16 @@ export function isResolutionInFlight(): boolean {
 }
 
 /**
+ * Read-only daemon ownership seam for transient resolution-worktree cleanup.
+ * The lifecycle checks it again at removal time so an eligibility-to-cleanup
+ * race cannot delete a worktree a feature executor has since claimed.
+ */
+export interface ResolveWorktreeLiveness {
+  isFeatureInFlight?: IsFeatureInFlight;
+  log?: (message: string) => void;
+}
+
+/**
  * Provision a transient worktree for conflict resolution, run the provided
  * function inside it, and always tear it down (even on failure).
  *
@@ -296,7 +306,21 @@ export async function withResolveWorktree<T>(
   repoCwd: string,
   fn: (worktreePath: string) => Promise<T>,
   prepareWorktree?: (worktreePath: string) => Promise<void>,
+  liveness: ResolveWorktreeLiveness = {},
 ): Promise<T> {
+  const removalRefused = async (): Promise<boolean> => {
+    if (!(await liveness.isFeatureInFlight?.(slug))) return false;
+    liveness.log?.(`[autoresolve] worktree removal refused ${slug} — reason: active work claim`);
+    return true;
+  };
+
+  // A crashed resolution can leave a stale transient path behind. Do not reap
+  // it if the daemon claimed this slug between sweep eligibility and lifecycle
+  // setup; continuing would turn that race into a destructive remove.
+  if (await removalRefused()) {
+    throw new Error(`active work claim for ${slug}; resolution worktree removal refused`);
+  }
+
   // Serial guard: prevent concurrent operations on the same slug
   if (inFlightSlugs.has(slug)) {
     throw new Error(`resolution already in flight for slug ${slug}; concurrent worktree add rejected`);
@@ -334,12 +358,14 @@ export async function withResolveWorktree<T>(
     // (thrown error / escalation), so the next tick can dispatch again.
     resolutionInFlight = false;
 
-    try {
-      await execa('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoCwd });
-    } catch (err) {
-      // Log but don't throw on cleanup failure; the primary goal is to remove
-      // the in-flight marker so future attempts aren't blocked
-      console.error(`failed to remove resolution worktree at ${worktreePath}:`, err);
+    if (!(await removalRefused())) {
+      try {
+        await execa('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoCwd });
+      } catch (err) {
+        // Log but don't throw on cleanup failure; the primary goal is to remove
+        // the in-flight marker so future attempts aren't blocked
+        console.error(`failed to remove resolution worktree at ${worktreePath}:`, err);
+      }
     }
   }
 }
@@ -867,6 +893,8 @@ export async function resolveConflictingPr(
     runSuite: (projectRoot: string) => Promise<{ exitCode: number; durationMs: number; configured: boolean }>;
     resolver: RebaseResolver;
     log: (msg: string) => void;
+    /** Re-check active daemon ownership at each resolution-worktree removal. */
+    isFeatureInFlight?: IsFeatureInFlight;
   },
 ): Promise<{ kind: 'refreshed' | 'escalated' }> {
   const { prUrl, slug, repoCwd } = entry;
@@ -995,5 +1023,5 @@ export async function resolveConflictingPr(
     // Success
     logOutcome(log, prUrl, 'lease-push', 'refreshed');
     return { kind: 'refreshed' };
-  });
+  }, undefined, { isFeatureInFlight: deps.isFeatureInFlight, log });
 }

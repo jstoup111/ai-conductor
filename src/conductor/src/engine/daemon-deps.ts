@@ -27,6 +27,35 @@ import type { WorkOrder } from './work-order.js';
 import type { SetupFailureError } from './worktree-prepare.js';
 import type { TriageOutcome } from './setup-triage.js';
 import type { OperatorParkedTermination } from './conductor.js';
+import type { WorkClaims } from './work-claims.js';
+
+/** Read-only liveness view of the daemon's active work-claim registry. */
+export type IsWorkClaimActive = (slug: string) => boolean;
+
+/**
+ * Keep every maintenance boundary on the daemon's one active-work authority.
+ * A claim is intentionally process-local: after a restart, durable worktree
+ * state drives re-dispatch as before.
+ */
+export function makeWorkClaimLivenessPredicate(claims: WorkClaims): IsWorkClaimActive {
+  return (slug) => claims.list().includes(slug);
+}
+
+/**
+ * Turns active-claim liveness into a worktree-removal decision. The refusal is
+ * deliberately loud and stable so `daemon logs` can identify why a terminal
+ * worktree was retained for the running executor.
+ */
+export function makeWorktreeRemovalPredicate(
+  isWorkClaimActive: IsWorkClaimActive,
+  log: (message: string) => void,
+): (slug: string) => boolean {
+  return (slug) => {
+    if (!isWorkClaimActive(slug)) return true;
+    log(`[daemon] worktree removal refused ${slug} — reason: active work claim`);
+    return false;
+  };
+}
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */

@@ -43,10 +43,13 @@ import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import {
   isProcessed,
   readWorktreeOutcome,
+  makeWorkClaimLivenessPredicate,
+  makeWorktreeRemovalPredicate,
   makeFeatureRunnerDeps,
   repairProcessed,
   watchHaltCleared,
 } from '../../src/engine/daemon-deps.js';
+import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import { buildWorkOrder } from '../../src/engine/work-order.js';
 
 const execFileAsync = promisify(execFile);
@@ -62,6 +65,29 @@ describe('engine/daemon-deps', () => {
     await rm(dir, { recursive: true, force: true });
     watcherHandlers.clear();
     watcher.on.mockClear();
+  });
+
+  describe('work-claim liveness predicate', () => {
+    it('refuses removal for an active claim with a greppable reason, while allowing an unclaimed slug', () => {
+      const claims = new InMemoryWorkClaims();
+      const log = vi.fn();
+      claims.claim('active-feature');
+
+      const isWorkClaimActive = makeWorkClaimLivenessPredicate(claims);
+      const canRemove = makeWorktreeRemovalPredicate(isWorkClaimActive, log);
+
+      expect({
+        active: canRemove('active-feature'),
+        inactive: canRemove('inactive-feature'),
+        logs: log.mock.calls.map(([message]) => message),
+      }).toEqual({
+        active: false,
+        inactive: true,
+        logs: [
+          '[daemon] worktree removal refused active-feature — reason: active work claim',
+        ],
+      });
+    });
   });
 
   describe('watchHaltCleared halt record supersession', () => {

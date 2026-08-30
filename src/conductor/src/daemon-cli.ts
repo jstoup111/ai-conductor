@@ -125,9 +125,12 @@ import {
   markWarned,
   repairProcessed,
   makeFeatureRunnerDeps,
+  makeWorkClaimLivenessPredicate,
+  makeWorktreeRemovalPredicate,
   makeWatchHaltClearedSeam,
   resolveDaemonBaseSha,
 } from './engine/daemon-deps.js';
+import { InMemoryWorkClaims } from './engine/work-claims.js';
 import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
@@ -1327,6 +1330,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     );
   };
 
+  // The same registry backs dispatcher claims and every maintenance liveness
+  // check. A sweep may observe a terminal PR while its executor still owns the
+  // worktree; that worktree must remain until the claim is released.
+  const workClaims = new InMemoryWorkClaims();
+  const isWorkClaimActive = makeWorkClaimLivenessPredicate(workClaims);
+  const canRemoveWorktree = makeWorktreeRemovalPredicate(isWorkClaimActive, log);
+
   const deps = makeFeatureRunnerDeps({
     projectRoot,
     worktreeBase,
@@ -1614,6 +1624,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
   const result = await runDaemon(
     {
+      claims: workClaims,
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
       sweepProviderScratch: () => sweepFeatureWorktreeScratch({
@@ -1910,17 +1921,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
-      sweepMergeableLabels: async (activity) => {
+      sweepMergeableLabels: async () => {
         await sweepMergeableLabels({
           projectRoot,
           log,
           teardownWorktree: deps.teardownWorktree,
+          canRemoveWorktree,
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).
           autoresolve: {
             enabled: config?.mergeable_autoresolve?.enabled ?? false,
-            isEligible: makeAutoresolveEligibility(config, activity.isFeatureInFlight, log),
+            isEligible: makeAutoresolveEligibility(config, isWorkClaimActive, log),
             dispatch: async (entry) => {
               log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
 
@@ -2023,7 +2035,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
                     attemptCap,
                   },
-                  { runGh: ghRunner, runSuite, resolver, log },
+                  { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive },
                 );
 
                 log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
