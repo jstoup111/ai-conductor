@@ -227,7 +227,7 @@ function renderVerificationBlock(selection: TestSuiteVerificationSelection): str
     .join('\n');
 
   return [
-    '# Test-suite verification answer recorded by conduct-ts config init.',
+    '# Test-suite verification answer recorded by ai-conductor config init.',
     'test_suite:',
     '  command: npm test',
     scopedCommand.trimEnd(),
