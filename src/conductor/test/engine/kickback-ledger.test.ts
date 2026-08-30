@@ -13,6 +13,8 @@ import {
   bumpMechanicalFaults,
   bumpKickbackGate,
   bumpKickbackGateInLedger,
+  chargeBuildReviewEffect,
+  chargeBuildReviewEffectInLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
@@ -216,6 +218,7 @@ describe('kickback-ledger', () => {
           ...legacyLedger.gates.build_review,
           cumulative: 0,
           mechanicalFaults: 0,
+          chargedEffectIds: [],
         },
       },
     });
@@ -245,9 +248,64 @@ describe('kickback-ledger', () => {
         build_review: {
           ...legacyLedger.gates.build_review,
           mechanicalFaults: 0,
+          chargedEffectIds: [],
         },
       },
     });
+  });
+
+  it('normalizes a legacy entry without charged effect ids to an empty set', async () => {
+    const legacyLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 1,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'provider was unavailable',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(legacyLedger));
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { build_review: { chargedEffectIds: [] } },
+    });
+  });
+
+  it.each([
+    'effect-1',
+    ['effect-1', 'effect-1'],
+    ['effect-1', ''],
+    ['effect-1', 2],
+  ])('treats a malformed charged effect id collection %j as a corrupt ledger', async (chargedEffectIds) => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 1,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'provider was unavailable',
+          priorVerdict: false,
+          resolvedBefore: 7,
+          chargedEffectIds,
+        },
+      },
+    }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('corrupt ledger'));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it.each(['3', null, -1, 1.5])('rejects a malformed mechanical-fault count of %j', async (mechanicalFaults) => {
@@ -600,6 +658,95 @@ describe('kickback-ledger', () => {
         atCap: atCap.cumulativeExhausted,
         beyondCap: beyondCap.cumulativeExhausted,
       }).toEqual({ cap: 5, atCap: false, beyondCap: true });
+    });
+  });
+
+  describe('chargeBuildReviewEffect', () => {
+    const input = {
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      resolvedCount: 4,
+      reason: 'new actionable remediation work order',
+    };
+
+    it('charges a stable effect once and reports replays without changing the counters', () => {
+      const first = chargeBuildReviewEffect(undefined, 'effect-build-review-1', input);
+      const replay = chargeBuildReviewEffect(first.entry, 'effect-build-review-1', input);
+
+      expect(first).toMatchObject({
+        status: 'charged',
+        entry: { count: 1, cumulative: 1, chargedEffectIds: ['effect-build-review-1'] },
+      });
+      expect(replay).toMatchObject({
+        status: 'already-charged',
+        entry: { count: 1, cumulative: 1, chargedEffectIds: ['effect-build-review-1'] },
+      });
+    });
+
+    it('charges a distinct stable effect against the existing per-tree and cumulative caps', () => {
+      const first = chargeBuildReviewEffect(undefined, 'effect-build-review-1', input);
+      const second = chargeBuildReviewEffect(first.entry, 'effect-build-review-2', input);
+
+      expect(second).toMatchObject({
+        status: 'charged',
+        entry: {
+          count: 2,
+          cumulative: 2,
+          chargedEffectIds: ['effect-build-review-1', 'effect-build-review-2'],
+        },
+        exhausted: false,
+        cumulativeExhausted: false,
+      });
+    });
+
+    it('preserves the existing cap outcomes when a distinct effect exceeds them', () => {
+      const entry: KickbackGateEntry = {
+        count: 2,
+        cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+        mechanicalFaults: 0,
+        treeHash: input.treeHash,
+        lastReason: 'prior work order',
+        priorVerdict: true,
+        resolvedBefore: input.resolvedCount,
+        chargedEffectIds: ['effect-build-review-1'],
+      };
+
+      expect(chargeBuildReviewEffect(entry, 'effect-build-review-2', input)).toMatchObject({
+        status: 'charged',
+        entry: { count: 2, cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW + 1 },
+        exhausted: true,
+        cumulativeExhausted: true,
+      });
+    });
+
+    it('persists a charge across restart and does not mutate counters for its duplicate id', async () => {
+      const first = await chargeBuildReviewEffectInLedger(dir, 'effect-build-review-1', input);
+      const replay = await chargeBuildReviewEffectInLedger(dir, 'effect-build-review-1', input);
+
+      expect(first.status).toBe('charged');
+      expect(replay).toMatchObject({
+        status: 'already-charged',
+        entry: { count: 1, cumulative: 1, chargedEffectIds: ['effect-build-review-1'] },
+      });
+      await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+        gates: {
+          build_review: {
+            count: 1,
+            cumulative: 1,
+            chargedEffectIds: ['effect-build-review-1'],
+          },
+        },
+      });
+    });
+
+    it('preserves charged effects when rebase credit clears lap counters', () => {
+      const charged = chargeBuildReviewEffect(undefined, 'effect-build-review-1', input);
+      if (charged.status !== 'charged') throw new Error('first effect must charge');
+
+      expect(creditKickbackGateLaps(charged.entry)).toMatchObject({
+        count: 1,
+        cumulative: 0,
+        chargedEffectIds: ['effect-build-review-1'],
+      });
     });
   });
 

@@ -321,7 +321,10 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
 
       await settleBuildReview('PASS');
 
-      expect((await readKickbackLedger(dir)).gates.build_review).toEqual(initialEntry);
+      expect((await readKickbackLedger(dir)).gates.build_review).toEqual({
+        ...initialEntry,
+        chargedEffectIds: [],
+      });
     });
   });
 
@@ -522,7 +525,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     const failEntry = await runVerdict('FAIL');
 
     expect([passEntry, failEntry]).toEqual([
-      initialEntry,
+      { ...initialEntry, chargedEffectIds: [] },
       expect.objectContaining({ cumulative: initialEntry.cumulative + 1 }),
     ]);
   });
