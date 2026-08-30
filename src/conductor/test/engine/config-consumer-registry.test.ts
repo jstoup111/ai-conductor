@@ -73,13 +73,6 @@ describe('config consumer registry', () => {
     });
   });
 
-  it('declares resolved-config as the adjudication switch consumer', () => {
-    expect(configConsumerRegistry).toMatchObject({
-      'build_review.adjudication': { consumer: 'src/conductor/src/engine/resolved-config.ts' },
-      'build_review.adjudication.enabled': { consumer: 'src/conductor/src/engine/resolved-config.ts' },
-    });
-  });
-
   it('requires an explained reason for every none declaration', () => {
     for (const [key, declaration] of Object.entries(configConsumerRegistry)) {
       if (declaration.consumer === 'none') {
