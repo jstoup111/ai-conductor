@@ -39,6 +39,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Retire the retrospective skill, command, and delivery-time closeout obligations. ([implementation PR #1946](https://github.com/jstoup111/ai-conductor/pull/1946)).
 - Removes the unattended inline --auto one-shot and directs unattended runs to the daemon, and fixes an intake-ledger lease failure when a lease was released while another process probed the owner's liveness. ([implementation PR #1974](https://github.com/jstoup111/ai-conductor/pull/1974)).
 - Removes the retired `wiring_check` BUILD step and its configuration key. ([implementation PR #1942](https://github.com/jstoup111/ai-conductor/pull/1942)).
+- The `conduct` launcher now runs the TypeScript CLI and warns to use `ai-conductor`. ([implementation PR #2052](https://github.com/jstoup111/ai-conductor/pull/2052)).
 
 ### Fixed
 
@@ -151,6 +152,11 @@ done
 
 ```bash migration
 "${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
+```
+
+```bash migration
+"$HARNESS_DIR/bin/install"
+test "$(readlink -f "$HOME/.local/bin/conduct")" = "$HARNESS_DIR/bin/ai-conductor"
 ```
 
 ## [0.104.0] - 2026-08-22
