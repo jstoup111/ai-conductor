@@ -92,6 +92,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A prd_audit remediation cap halt now lists the as-built findings that participated in the same validation-group round, instead of dropping them silently. ([implementation PR #2059](https://github.com/jstoup111/ai-conductor/pull/2059)).
 - OTEL cost and dispatch metrics now match shipped-record rollups, including failed provider attempts. ([implementation PR #2063](https://github.com/jstoup111/ai-conductor/pull/2063)).
 - A stable-channel checkout left detached by an older updater is recovered onto the stable branch instead of silently stopping updates. ([implementation PR #2082](https://github.com/jstoup111/ai-conductor/pull/2082)).
+- A plan that references its stories with a markdown link no longer fails the finish step with a shipped-record hash mismatch. ([implementation PR #2089](https://github.com/jstoup111/ai-conductor/pull/2089)).
 
 ## Migration
 
