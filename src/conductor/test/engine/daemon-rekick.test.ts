@@ -54,6 +54,9 @@ function fakeDeps(opts: {
   readHaltClass?: (
     slug: string,
   ) => Promise<'needs-human' | 'mechanical' | 'legacy' | 'unclassified'>;
+  consumeKickbackResumeAuthorization?: (
+    slug: string,
+  ) => Promise<{ authorized: boolean; generation?: string }>;
 }): { deps: RekickSweepDeps; trace: Trace } {
   const trace: Trace = { events: [], cleared: new Set() };
   const warned = opts.warned ?? new Set<string>();
@@ -89,6 +92,14 @@ function fakeDeps(opts: {
           readHaltClass: async (slug: string) => {
             trace.events.push(`readHaltClass:${slug}`);
             return opts.readHaltClass!(slug);
+          },
+      }
+      : {}),
+    ...(opts.consumeKickbackResumeAuthorization
+      ? {
+          consumeKickbackResumeAuthorization: async (slug: string) => {
+            trace.events.push(`consumeKickbackResumeAuthorization:${slug}`);
+            return opts.consumeKickbackResumeAuthorization!(slug);
           },
         }
       : {}),
@@ -202,6 +213,42 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       (e) => e.startsWith('log:') && e.includes('m') && e.includes('mechanical'),
     );
     expect(logLine).toBeDefined();
+  });
+
+  it('consumes an exact cumulative-cap authorization before retaining needs-human, then clears once', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['authorized-cap'],
+      readHaltClass: async () => 'needs-human',
+      consumeKickbackResumeAuthorization: async () => ({
+        authorized: true,
+        generation: 'cap-generation-1',
+      }),
+    });
+
+    const result = await rekickSweep(deps, SHA_B);
+
+    expect(result).toEqual({ cleared: ['authorized-cap'], skipped: [] });
+    expect(trace.events).toContain('consumeKickbackResumeAuthorization:authorized-cap');
+    expect(trace.events).toContain('clear:authorized-cap');
+    expect(trace.events.find((event) => event.includes('consumed cumulative-cap authorization')))
+      .toContain('cap-generation-1');
+  });
+
+  it.each([
+    ['missing authorization', async () => ({ authorized: false })],
+    ['authorization lookup failure', async () => { throw new Error('ledger unavailable'); }],
+  ])('retains a needs-human halt when %s', async (_caseName, consumeKickbackResumeAuthorization) => {
+    const { deps, trace } = fakeDeps({
+      halted: ['cap'],
+      readHaltClass: async () => 'needs-human',
+      consumeKickbackResumeAuthorization,
+    });
+
+    const result = await rekickSweep(deps, SHA_B);
+
+    expect(result).toEqual({ cleared: [], skipped: ['cap'] });
+    expect(trace.events).toContain('consumeKickbackResumeAuthorization:cap');
+    expect(trace.events).not.toContain('clear:cap');
   });
 
   it('applies the four-way halt disposition matrix and logs each slug with its disposition', async () => {
