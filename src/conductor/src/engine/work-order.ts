@@ -16,6 +16,7 @@ export interface ManifestEntry {
 export interface WorkOrder {
   repository: string;
   slug: string;
+  /** Immutable base commit captured when the dispatcher claims this work. */
   baseSha: string;
   manifest: ManifestEntry[];
 }
