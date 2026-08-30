@@ -2056,6 +2056,44 @@ export async function removeBuildReviewVerdict(dir: string): Promise<void> {
 }
 
 /**
+ * Guard for the daemon's build_review→build kickback route (#1740 follow-up):
+ * a FAIL aggregate whose `lapId` no longer matches `lap-<HEAD>` graded a
+ * PRIOR lap's code, so its findings must never drive a kickback — the
+ * completion predicate above already scores it "no fresh verdict", and this
+ * helper enforces the same rule at the raw-verdict kickback read, which
+ * otherwise re-raises already-fixed findings forever.
+ *
+ * When the stored aggregate is a strict aggregate, non-PASS, and belongs to a
+ * prior lap: the verdict artifact is deleted (final, exactly like the
+ * stale-mirage disposition — the next build_review dispatch must write a
+ * brand-new verdict) and the lap mismatch is returned for telemetry. In every
+ * other case — legacy scalar verdict, current-lap aggregate, or a failed HEAD
+ * probe (advisory: never discard evidence on an indeterminate probe) — the
+ * artifact is left untouched and `null` is returned.
+ */
+export async function discardStaleLapBuildReviewFail(
+  dir: string,
+  verdictRaw: unknown,
+  git?: GitRunner,
+): Promise<{ storedLapId: string; currentLapId: string } | null> {
+  const aggregate = parseBuildReviewAggregate(verdictRaw);
+  if (!aggregate || aggregate.verdict === 'PASS') return null;
+  try {
+    const head = await (git ?? makeGitRunner(dir))(['rev-parse', 'HEAD']);
+    const sha = head.exitCode === 0 ? head.stdout.trim() : '';
+    if (!sha) return null;
+    const currentLapId = `lap-${sha}`;
+    if (aggregate.lapId === currentLapId) return null;
+    await removeBuildReviewVerdict(dir).catch(() => {
+      /* best-effort removal — the returned mismatch still suppresses the kickback */
+    });
+    return { storedLapId: aggregate.lapId, currentLapId };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Which rubric category the grader flagged, when the verdict is FAIL. All
  * fields optional — a grader may flag one, several, or (rarely) none of the
  * categories while still returning FAIL with free-form `reasons`.

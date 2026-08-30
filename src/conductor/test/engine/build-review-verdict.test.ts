@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BUILD_REVIEW_VERDICT,
   canonicalizeBuildReviewGraderVerdict,
+  discardStaleLapBuildReviewFail,
   validateBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -595,4 +596,77 @@ describe('engine/build-review verdict wiring contract', () => {
       });
     },
   );
+});
+
+describe('engine/build-review stale-lap FAIL discard (daemon kickback guard)', () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  const gitAtHead = (sha: string | null) => (async (args: string[]) => {
+    if (args[0] === 'rev-parse' && sha !== null) {
+      return { exitCode: 0, stdout: `${sha}\n`, stderr: '' };
+    }
+    return { exitCode: 128, stdout: '', stderr: 'fatal' };
+  });
+
+  function failAggregate(lap: string): unknown {
+    const lapId = parseBuildReviewLapId(lap)!;
+    return joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:fixture',
+      results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:fixture',
+          contractVersion: 'v3',
+          findings: [{
+            concernKind: 'test-insensitive', summary: 'Prior-lap finding',
+            evidenceLocations: ['test/old.test.ts:1'],
+            anchor: { rubric: 'testQuality', locus: { path: 'test/old.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
+          }],
+          verdict: 'FAIL',
+        },
+      },
+    });
+  }
+
+  async function writeAggregate(aggregate: unknown): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-stale-lap-'));
+    dirs.push(dir);
+    const path = join(dir, BUILD_REVIEW_VERDICT);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify(aggregate));
+    return dir;
+  }
+
+  it('discards a prior-lap FAIL aggregate and reports the lap mismatch', async () => {
+    const dir = await writeAggregate(failAggregate('lap-previous'));
+    const result = await discardStaleLapBuildReviewFail(dir, failAggregate('lap-previous'), gitAtHead('current'));
+    expect(result).toEqual({ storedLapId: 'lap-previous', currentLapId: 'lap-current' });
+    await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps a current-lap FAIL aggregate for the kickback route', async () => {
+    const dir = await writeAggregate(failAggregate('lap-current'));
+    const result = await discardStaleLapBuildReviewFail(dir, failAggregate('lap-current'), gitAtHead('current'));
+    expect(result).toBeNull();
+    await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).resolves.toBeTruthy();
+  });
+
+  it('never discards a legacy scalar FAIL verdict', async () => {
+    const legacy = { verdict: 'FAIL', reasons: ['legacy reason'], rubric: { testQuality: true } };
+    const dir = await writeAggregate(legacy);
+    const result = await discardStaleLapBuildReviewFail(dir, legacy, gitAtHead('current'));
+    expect(result).toBeNull();
+    await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).resolves.toBeTruthy();
+  });
+
+  it('preserves the aggregate when the HEAD probe fails (advisory guard)', async () => {
+    const dir = await writeAggregate(failAggregate('lap-previous'));
+    const result = await discardStaleLapBuildReviewFail(dir, failAggregate('lap-previous'), gitAtHead(null));
+    expect(result).toBeNull();
+    await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).resolves.toBeTruthy();
+  });
 });
