@@ -88,7 +88,7 @@ import {
   createStalenessWarner,
   probeStampedShaBehindOrigin,
 } from './engine/engine-refresh.js';
-import { makeIsProcessed } from './engine/shipped-record.js';
+import { makeIsProcessed, resolveEngineVersion } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
 import { createGithubTrackerClient, makeProductionGh } from './engine/tracker-client.js';
@@ -995,6 +995,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       runId: persistedSessionId?.trim() || sessionId,
       feature: item.slug,
       project: projectRoot,
+      branch: worktree.branch,
+      engineVersion: resolveEngineVersion(__dirname),
     }, featureEvents);
     const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);

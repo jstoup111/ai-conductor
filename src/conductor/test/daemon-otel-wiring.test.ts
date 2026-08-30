@@ -197,6 +197,8 @@ describe('daemon OTel visualizer wiring', () => {
         feature: 'feature-a',
         project: repo,
         runId: 'persisted-dispatch-id',
+        branch: 'feat/feature-a',
+        engineVersion: 'dev',
       }),
       fixture.scopes[0]?.events,
     );
