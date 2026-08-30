@@ -3,8 +3,8 @@ set -euo pipefail
 
 # migrate — Post-update migration runner for the james-stoup-agents harness.
 #
-# Invoked by bin/conduct after an update is accepted (tagged or main channel).
-# Self-configuring: reads the current ("from") version from the schema-owned
+# Invoked after an accepted update (tagged or main channel). Self-configuring:
+# reads the current ("from") version from the schema-owned
 # `conductor:` block and the target ("to") version from the harness repo's
 # VERSION file (or the checked-out tag).
 #

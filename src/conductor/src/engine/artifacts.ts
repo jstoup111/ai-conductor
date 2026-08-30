@@ -1053,7 +1053,7 @@ async function verdictFreshnessFor(
  *
  * Mirrors the bash conductor's behavior for the `build` step, which reads
  * `.pipeline/task-status.json` and requires every task's status to be
- * `completed` (lines 775–811, 1765–1784 of bin/conduct).
+ * `completed` in the legacy implementation.
  */
 export const FINISH_CHOICE_MARKER = '.pipeline/finish-choice';
 export const FINISH_CHOICE_VALUES = ['pr', 'merge-local', 'keep', 'discard'] as const;

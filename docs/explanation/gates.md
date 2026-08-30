@@ -458,7 +458,7 @@ with no `Done when:` blocks — closes tasks on the prior evidence rule instead 
 
 The total number of tasks a plan can accumulate after approval is bounded by the authored count plus the
 capped remediation additions from `prd_audit` and enabled as-built review remediation (FR-18). Each
-gate has its own remediation-lap cap, but both draw from the same plan-growth allowance. `conduct daemon
+gate has its own remediation-lap cap, but both draw from the same plan-growth allowance. `ai-conductor daemon
 status` prints a `PLAN GROWTH [<slug>]:` line per in-progress feature — authored count, added count
 broken down by gate, and tasks remaining under the cap (FR-19; see [`daemon status`](../reference/cli.md#daemon-status)).
 
@@ -473,7 +473,7 @@ derivation is scoped to that rework hint; `/remediate` dispatches are triggered 
 as-built review, `finish` verification, and build stalls instead.
 
 Every exit from a `build_review` FAIL block consults the disposition store using the effective verdict, not
-only the raw aggregate that first reported the FAIL. An operator `conduct build-review accept` can land
+only the raw aggregate that first reported the FAIL. An operator `ai-conductor build-review accept` can land
 while the remediation planner is composing rework from that raw aggregate (a window of minutes); when
 every graded finding is accepted at routing time, the composed rework is dropped and `build_review`
 re-lands instead. Its re-run settles from cache, applies the dispositions, and re-dispatches only

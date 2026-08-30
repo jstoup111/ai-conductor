@@ -1,6 +1,6 @@
 // ── Auto-update-check — ai-conductor startup wiring for `bin/update --auto` ───
 //
-// Re-homes the auto-check that used to run inside `bin/conduct`
+// Re-homes the auto-check that used to run inside the legacy Bash CLI.
 // (`check_harness_update`) onto `ai-conductor` startup, now that the check logic
 // itself has moved to the standalone `bin/update` script (port-self-update-flow,
 // T1-T4). Story 7: `autoCheck=true` → spawn `bin/update --auto` before the

@@ -690,7 +690,7 @@ async function main(): Promise<void> {
 
   // Memory setup subcommand (`conduct memory setup [dir]`, adr-2026-06-29-shared-memory-store-placement-and-durability) runs
   // NON-INTERACTIVELY and exits — creates/migrates the canonical per-project
-  // store + .memory symlink. Dispatched first so bin/conduct can call it
+  // store + .memory symlink. Dispatched first before the pipeline begins.
   // before the interactive pipeline or Claude sessions start.
   const memoryCmd = detectMemoryCommand(process.argv);
   if (memoryCmd) {
@@ -1039,6 +1039,10 @@ async function main(): Promise<void> {
   // --help were all dispatched above, so anything here targets the pipeline.)
   const { isInline, rest } = detectInline(process.argv);
   if (!isInline) {
+    const bareCommand = process.argv[2];
+    if (bareCommand && !bareCommand.startsWith('-') && !/\s/.test(bareCommand)) {
+      console.error(`error: unknown command '${bareCommand}'`);
+    }
     console.error(
       'conduct: the inline SDLC pipeline now runs under the `inline` subcommand.\n' +
         '  Run:        conduct inline "<feature description>"\n' +

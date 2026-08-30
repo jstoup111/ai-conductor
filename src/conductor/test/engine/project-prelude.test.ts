@@ -23,6 +23,11 @@ import {
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { dispatchMemorySetup } from '../../src/engine/memory-cli.js';
+
+vi.mock('../../src/engine/memory-cli.js', () => ({
+  dispatchMemorySetup: vi.fn().mockResolvedValue(0),
+}));
 
 function createMockProvider(): LLMProvider {
   return {
@@ -234,6 +239,21 @@ describe('runProjectPrelude (happy paths)', () => {
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+    vi.mocked(dispatchMemorySetup).mockReset();
+    vi.mocked(dispatchMemorySetup).mockResolvedValue(0);
+  });
+
+  it('initializes the canonical memory store once and continues after a setup failure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(dispatchMemorySetup).mockResolvedValueOnce(1);
+
+    await runProjectPrelude(dir, createMockProvider(), 'session-1', {}, {
+      harnessVersion: '1.0.0',
+    });
+
+    expect(dispatchMemorySetup).toHaveBeenCalledTimes(1);
+    expect(dispatchMemorySetup).toHaveBeenCalledWith({ kind: 'setup', dir });
+    expect(warn).toHaveBeenCalledWith('[prelude] memory-store setup failed; continuing');
   });
 
   it('routes bootstrap and assess by their exact configured providers with fresh scopes', async () => {

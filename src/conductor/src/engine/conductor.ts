@@ -1539,7 +1539,7 @@ export interface ConductorOptions {
   selfHostGuardrails?: SelfHostGuardrails;
   /**
    * Maximum auto-retries before a failing step (including artifact miss)
-   * escalates to the recovery menu. Matches `max_retries=3` in bin/conduct.
+   * escalates to the recovery menu.
    * Default: 3.
    */
   maxRetries?: number;
@@ -7628,7 +7628,7 @@ export class Conductor {
 
         // Retry loop: auto-retry on step-runner failure OR completion-gate miss,
         // up to `maxRetries` attempts total. Only after the budget is exhausted
-        // do we escalate to the recovery menu. Matches bash bin/conduct's
+        // do we escalate to the recovery menu.
         // max_retries=3 behavior.
         let attempt = 0;
         let lastError: string = '';
@@ -8231,7 +8231,7 @@ export class Conductor {
           }
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
-          // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
+          // retry budget.
           // Task 10: Integrate episode coordinator for deadline-aware backoff.
           // Task 18: Deadline-first — use parsed timezone-aware deadline if available.
           if (result.rateLimited) {
@@ -8279,7 +8279,7 @@ export class Conductor {
           }
 
           // Stale session: reset + retry without burning budget
-          // (matches bin/conduct:645–663 stale-session detection).
+          // stale-session detection.
           if (result.sessionExpired) {
             await emitTracked({
               type: 'session_reset',

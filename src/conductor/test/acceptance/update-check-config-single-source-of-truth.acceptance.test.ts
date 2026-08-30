@@ -4,8 +4,8 @@
  *
  * These specs drive the real public command entry points. They deliberately do
  * not import the proposed config-set detector, scalar writer, bash accessors,
- * or legacy seed: a direct helper test could pass while bin/update, bin/conduct,
- * or the conduct-ts dispatch chain remained wired to the legacy JSON.
+ * or legacy seed: a direct helper test could pass while bin/update or the
+ * conduct-ts dispatch chain remained wired to the legacy JSON.
  *
  * Story-flow classification:
  * - ST-1400-1: multi-step (write/dispatch, then read observable config state)
@@ -15,8 +15,8 @@
  * - ST-1400-5: unit-covered by its dedicated integrity-check fixture
  * - ST-1400-6: unit/static-covered by deletion and documentation checks
  *
- * Production entry points covered: bin/update --auto / --set-channel,
- * bin/conduct --set-channel, and bin/conduct-ts config set / config read.
+ * Production entry points covered: bin/update --auto / --set-channel and
+ * bin/conduct-ts config set / config read.
  * No third-party service is called; git is replaced with a deterministic fake.
  */
 
@@ -40,7 +40,6 @@ import { load as loadYaml } from 'js-yaml';
 const REPO_ROOT = join(process.cwd(), '..', '..');
 const REAL_AI_CONDUCTOR = join(REPO_ROOT, 'bin', 'ai-conductor');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
-const REAL_CONDUCT = join(REPO_ROOT, 'bin', 'conduct');
 const REAL_UPDATE = join(REPO_ROOT, 'bin', 'update');
 const REAL_COMMON = join(REPO_ROOT, 'bin', 'lib', 'harness-common.sh');
 
@@ -53,7 +52,6 @@ interface CommandResult {
 interface FixtureHarness {
   root: string;
   update: string;
-  conduct: string;
   gitLog: string;
   env: NodeJS.ProcessEnv;
 }
@@ -102,15 +100,12 @@ async function makeHarness(options: { withConductor?: boolean } = {}): Promise<F
   const bin = join(root, 'bin');
   const lib = join(bin, 'lib');
   const update = join(bin, 'update');
-  const conduct = join(bin, 'conduct');
   const gitLog = join(scratch, 'git-calls.log');
   await mkdir(join(root, '.git'), { recursive: true });
   await mkdir(lib, { recursive: true });
   await copyFile(REAL_UPDATE, update);
-  await copyFile(REAL_CONDUCT, conduct);
   await copyFile(REAL_COMMON, join(lib, 'harness-common.sh'));
   await chmod(update, 0o755);
-  await chmod(conduct, 0o755);
 
   if (options.withConductor !== false) {
     await symlink(REAL_AI_CONDUCTOR, join(bin, 'ai-conductor'));
@@ -128,7 +123,6 @@ async function makeHarness(options: { withConductor?: boolean } = {}): Promise<F
   return {
     root,
     update,
-    conduct,
     gitLog,
     env: {
       ...process.env,
@@ -181,7 +175,7 @@ describe('update-check config uses one schema-owned surface (#1400)', () => {
     });
   });
 
-  it('keeps both real update CLIs on the YAML surface instead of recreating legacy JSON', async () => {
+  it('keeps bin/update on the YAML surface instead of recreating legacy JSON', async () => {
     const harness = await makeHarness();
     const env = {
       ...harness.env,
@@ -191,117 +185,11 @@ describe('update-check config uses one schema-owned surface (#1400)', () => {
     const updateResult = await run(harness.update, ['--set-channel', 'main'], env);
     expect(updateResult.exitCode).toBe(0);
 
-    const conductResult = await run(REAL_CONDUCT, ['--set-channel', 'tagged'], env);
-    expect(conductResult.exitCode).toBe(0);
-
     const config = parsedConfig(
       await readFile(join(home, '.ai-conductor', 'config.yml'), 'utf8'),
     );
-    expect(config).toMatchObject({ conductor: { update_channel: 'tagged' } });
+    expect(config).toMatchObject({ conductor: { update_channel: 'main' } });
     expect(existsSync(join(home, '.claude', 'ai-conductor.config.json'))).toBe(false);
-  });
-
-  it('keeps legacy bin/conduct on stable branch semantics without detaching to a tag', async () => {
-    const harness = await makeHarness();
-    await writeUserConfig(
-      'conductor:\n  auto_check: true\n  current_version: v1.2.3\n',
-    );
-    const approvedSha = '2222222222222222222222222222222222222222';
-    const installedSha = '1111111111111111111111111111111111111111';
-    await writeFile(
-      join(harness.root, 'bin', 'git'),
-      `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$FAKE_GIT_LOG"
-args=("$@")
-if [ "\${args[0]:-}" = '-C' ]; then
-  args=("\${args[@]:2}")
-fi
-case "\${args[*]}" in
-  'rev-parse --is-inside-work-tree') echo true ;;
-  'status --porcelain') ;;
-  fetch*origin*stable*) ;;
-  'rev-parse origin/stable') echo '${approvedSha}' ;;
-  describe*${approvedSha}*) echo v1.2.4 ;;
-  'rev-parse HEAD') echo '${installedSha}' ;;
-  'rev-parse --abbrev-ref HEAD') echo stable ;;
-  'branch --show-current') echo stable ;;
-  'merge-base --is-ancestor ${installedSha} ${approvedSha}') exit 0 ;;
-  *) exit 0 ;;
-esac
-`,
-      'utf8',
-    );
-
-    const setResult = await run(harness.conduct, ['--set-channel', 'stable'], harness.env);
-    const updateResult = await run(harness.conduct, ['--update'], harness.env);
-    const config = parsedConfig(
-      await readFile(join(home, '.ai-conductor', 'config.yml'), 'utf8'),
-    ) as { conductor?: { update_channel?: unknown } };
-    const gitCalls = await readFile(harness.gitLog, 'utf8').catch(() => '');
-
-    expect({
-      setExit: setResult.exitCode,
-      updateExit: updateResult.exitCode,
-      channel: config.conductor?.update_channel,
-      fetchedStable: /fetch .*origin stable/.test(gitCalls),
-      detachedToTag: /checkout .*?(?:tags\/|v\d)/.test(gitCalls),
-    }).toEqual({
-      setExit: 0,
-      updateExit: 0,
-      channel: 'stable',
-      fetchedStable: true,
-      detachedToTag: false,
-    });
-  });
-
-  it('re-execs legacy bin/conduct exactly once after a stable update changes HEAD', async () => {
-    const harness = await makeHarness();
-    await writeUserConfig(
-      'conductor:\n  update_channel: stable\n  auto_check: true\n  current_version: v1.2.3\n',
-    );
-    const headState = join(scratch, 'fake-head');
-    const updateCount = join(scratch, 'update-invocations');
-    await writeFile(headState, 'old-head\n', 'utf8');
-    await writeFile(updateCount, '0\n', 'utf8');
-    await writeFile(
-      join(harness.root, 'bin', 'git'),
-      `#!/usr/bin/env bash
-args=("$@")
-if [ "\${args[0]:-}" = '-C' ]; then
-  args=("\${args[@]:2}")
-fi
-case "\${args[*]}" in
-  'rev-parse HEAD') cat '${headState}' ;;
-  *) exit 0 ;;
-esac
-`,
-      'utf8',
-    );
-    await writeFile(
-      harness.update,
-      `#!/usr/bin/env bash
-count=$(cat '${updateCount}')
-count=$((count + 1))
-printf '%s\\n' "$count" > '${updateCount}'
-if [ "$count" -eq 1 ]; then
-  printf 'new-head\\n' > '${headState}'
-fi
-exit 0
-`,
-      'utf8',
-    );
-
-    const result = await run(harness.conduct, ['--update'], harness.env);
-
-    expect({
-      exitCode: result.exitCode,
-      updateInvocations: Number((await readFile(updateCount, 'utf8')).trim()),
-      finalHead: (await readFile(headState, 'utf8')).trim(),
-    }).toEqual({
-      exitCode: 0,
-      updateInvocations: 2,
-      finalHead: 'new-head',
-    });
   });
 
   it('seeds live legacy identity before a fresh write, renames the seed, and preserves unrelated YAML', async () => {
@@ -384,47 +272,4 @@ exit 0
     expect(existsSync(harness.gitLog)).toBe(false);
   });
 
-  it('lets ordinary bin/conduct startup continue after an unreadable advisory config', async () => {
-    // ST-1400-4's non-failing-caller requirement. `conduct` runs under
-    // `set -euo pipefail`, so an advisory config read that exits non-zero
-    // used to take the whole CLI down before argument handling ran: the
-    // operator saw only the prerequisite warning and exit 1, with no sign
-    // that `conduct` had understood the command at all.
-    const harness = await makeHarness({ withConductor: false });
-    await writeUserConfig('conductor:\n  auto_check: true\n');
-    const env = {
-      ...harness.env,
-      PATH: `${join(harness.root, 'bin')}:/usr/bin:/bin`,
-    };
-
-    const result = await run(harness.conduct, ['--resume'], env);
-    const output = `${result.stdout}\n${result.stderr}`;
-
-    // Reports the prerequisite, once — not swallowed, not repeated per read.
-    expect(output).toMatch(/ai-conductor is required to read conductor configuration/);
-    expect(output.match(/ai-conductor is required to read/g)).toHaveLength(1);
-    // ...and still reaches normal CLI handling, which is the observable that
-    // separates "declined the update check" from "died during startup".
-    expect(output).toMatch(/Feature description required/);
-    // No assertion on harness.gitLog here: continuing into normal startup is
-    // the point, and that path legitimately shells out to git.
-  });
-
-  it('keeps an explicit bin/conduct --update strict when the config cannot be read', async () => {
-    // The containment above is scoped to the advisory startup call. When the
-    // update check *is* the requested operation, an unreadable config must
-    // still fail: silently declining would look like "already up to date".
-    const harness = await makeHarness({ withConductor: false });
-    await writeUserConfig('conductor:\n  auto_check: true\n');
-    const env = {
-      ...harness.env,
-      PATH: `${join(harness.root, 'bin')}:/usr/bin:/bin`,
-    };
-
-    const result = await run(harness.conduct, ['--update'], env);
-
-    expect(result.exitCode).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/ai-conductor/i);
-    expect(existsSync(harness.gitLog)).toBe(false);
-  });
 });

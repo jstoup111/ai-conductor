@@ -111,7 +111,7 @@ write that marker; repair the target directory or permissions first, then re-run
 `NEVER-STARTED` is not a halt: the dashboard found no readable `conduct-state.json`, and the feature
 remains dispatchable. Do not reclaim or unpark it merely to make it run. For a retained row, follow
 its `remedy:` line: an open PR needs no action until it lands; a closed, unknown, or legacy PR state
-can be handled with `conduct daemon reclaim-worktree <slug>` when reclaim is appropriate.
+can be handled with `ai-conductor daemon reclaim-worktree <slug>` when reclaim is appropriate.
 
 ### 2. Classify the stall
 
@@ -313,7 +313,7 @@ gh pr list --head <branch> --base <base> --state open --json url,state
   `[ship-draft-pr] branch lookup for <branch> …` and treat it as a bug.
 - **Empty, but a PR exists in `--state all`.** It is closed or merged. That is not a draft the finish
   step may flip or rewrite — open a fresh PR for the branch, or land the work as already-shipped via
-  `conduct shipped-record`.
+  `ai-conductor shipped-record`.
 - **Empty entirely.** No PR was ever opened; check whether the branch reached origin (`git push`
   failures are logged as `[ship-draft-pr] push of <branch> failed`) and push it.
 
@@ -468,7 +468,7 @@ bounded by the `build_progress_halt` block. Defaults: enabled, `attempt_ceiling:
 The `▶ build <resolved>/<total>` line counts a task as resolved when its `.pipeline/task-status.json`
 row reads `completed`/`skipped` **or** a commit on the branch carries its `Task: <id>` trailer — the
 same union the build completion gate routes on. Nothing writes those rows back mid-build except the
-`pipeline` skill's explicit `conduct task done`, so on a run where the agent only stamps trailers the
+`pipeline` skill's explicit `ai-conductor task done`, so on a run where the agent only stamps trailers the
 rows stay `pending` and the trailers are what moves the number. A `resolved` count that does not
 advance while `commitCount` keeps ticking therefore means work is landing without task attribution —
 check the commit trailers before treating it as a stall.

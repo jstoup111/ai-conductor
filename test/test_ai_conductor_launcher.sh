@@ -155,9 +155,17 @@ LEGACY_STATUS=$CAPTURE_STATUS
 LEGACY_STDOUT=$CAPTURE_STDOUT
 LEGACY_STDERR=$CAPTURE_STDERR
 
+ln -s "$SUCCESS_DIR/bin/ai-conductor" "$SUCCESS_DIR/bin/conduct"
+capture "$SUCCESS_DIR/bin/conduct" daemon status
+CONDUCT_STATUS=$CAPTURE_STATUS
+CONDUCT_STDOUT=$CAPTURE_STDOUT
+CONDUCT_STDERR=$CAPTURE_STDERR
+
 assert "canonical launcher exits successfully" "$([ "$CANONICAL_STATUS" -eq 0 ] && echo 0 || echo 1)"
 assert "legacy alias keeps the canonical exit contract" "$([ "$LEGACY_STATUS" -eq "$CANONICAL_STATUS" ] && echo 0 || echo 1)"
+assert "conduct alias keeps the canonical exit contract" "$([ "$CONDUCT_STATUS" -eq "$CANONICAL_STATUS" ] && echo 0 || echo 1)"
 assert "both names execute the same resolved dist entrypoint" "$([ "$LEGACY_STDOUT" = "$CANONICAL_STDOUT" ] && echo 0 || echo 1)"
+assert "conduct alias executes the canonical resolved dist entrypoint" "$([ "$CONDUCT_STDOUT" = "$CANONICAL_STDOUT" ] && echo 0 || echo 1)"
 case "$CANONICAL_STDOUT" in
   *"ENTRYPOINT:"*"dist-versions/v123/index.js"*) assert "entrypoint is pinned below dist-versions" 0 ;;
   *) echo "$CANONICAL_STDOUT"; assert "entrypoint is pinned below dist-versions" 1 ;;
@@ -171,8 +179,11 @@ fi
 assert "canonical launcher emits no deprecation warning" "$([ -z "$CANONICAL_STDERR" ] && echo 0 || echo 1)"
 WARNING_COUNT=$(printf '%s\n' "$LEGACY_STDERR" | grep -Fxc 'conduct-ts is deprecated; use ai-conductor instead' || true)
 assert "legacy alias emits exactly one replacement warning" "$([ "$WARNING_COUNT" -eq 1 ] && echo 0 || echo 1)"
+WARNING_COUNT=$(printf '%s\n' "$CONDUCT_STDERR" | grep -Fxc 'conduct is deprecated; use ai-conductor instead' || true)
+assert "conduct alias emits exactly one replacement warning" "$([ "$WARNING_COUNT" -eq 1 ] && echo 0 || echo 1)"
 assert_no_stdout_warning "canonical launcher never writes a warning to stdout" "$CANONICAL_STDOUT"
 assert_no_stdout_warning "legacy alias never writes a warning to stdout" "$LEGACY_STDOUT"
+assert_no_stdout_warning "conduct alias never writes a warning to stdout" "$CONDUCT_STDOUT"
 
 echo ""
 echo "=== ai-conductor launcher: installation ==="
@@ -195,10 +206,24 @@ run_install() {
 
 run_install
 INSTALLED_CANONICAL="$INSTALL_HOME/.local/bin/ai-conductor"
+INSTALLED_CONDUCT="$INSTALL_HOME/.local/bin/conduct"
 assert "completed install creates the ai-conductor symlink" \
   "$([ "$INSTALL_STATUS" -eq 0 ] && [ -L "$INSTALLED_CANONICAL" ] && echo 0 || echo 1)"
 assert "installed ai-conductor resolves to the canonical launcher" \
   "$([ "$(readlink -f "$INSTALLED_CANONICAL")" = "$CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
+assert "installed conduct resolves to the canonical launcher" \
+  "$([ "$(readlink -f "$INSTALLED_CONDUCT")" = "$CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
+
+CONDUCT_INODE=$(stat -c '%i' "$INSTALLED_CONDUCT")
+run_install
+assert "current conduct symlink remains untouched on reinstall" \
+  "$([ "$(stat -c '%i' "$INSTALLED_CONDUCT")" = "$CONDUCT_INODE" ] && printf '%s\\n' "$INSTALL_STDOUT" | grep -Fq 'conduct script already current' && echo 0 || echo 1)"
+
+rm "$INSTALLED_CONDUCT"
+printf 'FOREIGN OPERATOR SCRIPT\n' > "$INSTALLED_CONDUCT"
+run_install
+assert "install preserves a foreign conduct entry with a warning" \
+  "$([ "$INSTALL_STATUS" -eq 0 ] && [ -f "$INSTALLED_CONDUCT" ] && [ "$(<"$INSTALLED_CONDUCT")" = 'FOREIGN OPERATOR SCRIPT' ] && printf '%s\\n' "$INSTALL_STDOUT" | grep -Fq 'conduct script — foreign entry preserved' && echo 0 || echo 1)"
 
 rm -f "$INSTALLED_CANONICAL"
 ln -s "$TMPDIR_ROOT/stale-ai-conductor" "$INSTALLED_CANONICAL"
@@ -299,6 +324,28 @@ echo ""
 echo "=== ai-conductor launcher: dist failures ==="
 run_dist_failure_case missing
 run_dist_failure_case broken
+
+echo ""
+echo "=== ai-conductor launcher: uninstall ==="
+INSTALL_HOME="$TMPDIR_ROOT/uninstall-home"
+INSTALL_PATH="$NODE_STUBS:$INSTALL_HOME/.local/bin:/usr/bin:/bin"
+run_install
+set +e
+HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$HARNESS_DIR/bin/install" --uninstall --providers codex > "$TMPDIR_ROOT/uninstall-output" 2>&1
+UNINSTALL_STATUS=$?
+set -e
+assert "uninstall removes all installer-owned entrypoint links" \
+  "$([ "$UNINSTALL_STATUS" -eq 0 ] && [ ! -e "$INSTALL_HOME/.local/bin/conduct" ] && [ ! -e "$INSTALL_HOME/.local/bin/conduct-ts" ] && [ ! -e "$INSTALL_HOME/.local/bin/ai-conductor" ] && echo 0 || echo 1)"
+
+run_install
+rm "$INSTALL_HOME/.local/bin/conduct"
+printf 'foreign conduct\n' > "$INSTALL_HOME/.local/bin/conduct"
+set +e
+HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$HARNESS_DIR/bin/install" --uninstall --providers codex > "$TMPDIR_ROOT/foreign-uninstall-output" 2>&1
+UNINSTALL_STATUS=$?
+set -e
+assert "uninstall preserves a foreign conduct entry with a warning" \
+  "$([ "$UNINSTALL_STATUS" -eq 0 ] && [ -f "$INSTALL_HOME/.local/bin/conduct" ] && grep -Fq 'conduct script — foreign entry preserved' "$TMPDIR_ROOT/foreign-uninstall-output" && echo 0 || echo 1)"
 
 echo ""
 echo "=== Summary: ${PASS}/${TOTAL} passed ==="

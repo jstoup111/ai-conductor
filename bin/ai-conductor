@@ -4,9 +4,14 @@
 # path lookup breaks).
 set -e
 INVOKED_NAME="$(basename "$0")"
-if [ "$INVOKED_NAME" = "conduct-ts" ]; then
-  echo "conduct-ts is deprecated; use ai-conductor instead" >&2
-fi
+case "$INVOKED_NAME" in
+  conduct-ts)
+    echo "conduct-ts is deprecated; use ai-conductor instead" >&2
+    ;;
+  conduct)
+    echo "conduct is deprecated; use ai-conductor instead" >&2
+    ;;
+esac
 
 REAL_PATH="$(readlink -f "$0")"
 BIN_DIR="$(dirname "$REAL_PATH")"

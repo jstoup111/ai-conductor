@@ -9,7 +9,8 @@ nav_order: 2
 Every command, subcommand, flag, and exit code of the `ai-conductor` engine. Commands are grouped
 operator-first: the ones you type, then the ones the engine invokes on your behalf.
 
-The legacy bash `bin/conduct` is deprecated and is not documented here — use `ai-conductor`.
+The supported launcher is `ai-conductor`. The installed `conduct` alias resolves to that launcher,
+prints a one-line deprecation warning, and remains available only during the migration window.
 
 ## Launcher
 
@@ -470,7 +471,7 @@ under the root `.daemon/` directory even when invoked from a nested package or l
 | --- | --- | --- |
 | `-D`, `--detach` | `start` | Skips the auto-attach. Parsed on every verb but only meaningful here. |
 | `--write` | `connect` | Requests a read-write attach instead of the default read-only. Ignored elsewhere — `debug` is already read-write. |
-| `--attach-into <target>` | `start`, `connect`, `debug` | Delivers the attach into an already-open tmux pane elsewhere on the same tmux server — a session, `session:window`, or `session:window.pane` target string — instead of taking over this process's own controlling terminal. Fixes running any of these from a shell that is itself already inside a tmux client, which otherwise hits tmux's own nesting guard (`sessions should be nested with care, unset $TMUX to force`): the attach command is typed into the target pane via `tmux send-keys`, wrapped in `env -u TMUX` so tmux does not refuse it there. Never touches this process's own stdio, so it works with no TTY and bypasses `start`'s `--detach`/no-TTY skip. Example: `conduct daemon connect --write --attach-into mywindow:1.0` to view-and-drive the daemon in a specific pane you already have open. |
+| `--attach-into <target>` | `start`, `connect`, `debug` | Delivers the attach into an already-open tmux pane elsewhere on the same tmux server — a session, `session:window`, or `session:window.pane` target string — instead of taking over this process's own controlling terminal. Fixes running any of these from a shell that is itself already inside a tmux client, which otherwise hits tmux's own nesting guard (`sessions should be nested with care, unset $TMUX to force`): the attach command is typed into the target pane via `tmux send-keys`, wrapped in `env -u TMUX` so tmux does not refuse it there. Never touches this process's own stdio, so it works with no TTY and bypasses `start`'s `--detach`/no-TTY skip. Example: `ai-conductor daemon connect --write --attach-into mywindow:1.0` to view-and-drive the daemon in a specific pane you already have open. |
 | `--all` | `pause`, `resume`, `restart` | Applies the verb to every registered repo instead of the cwd repo. Not listed in `--help`. |
 | `<name>…` | `pause`, `resume`, `restart` | Bare tokens after the verb select named repos from the registry. Not listed in `--help`. |
 

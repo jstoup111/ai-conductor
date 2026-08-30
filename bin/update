@@ -1,17 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# update — Standalone self-update/channel CLI for the harness, ported out of
-# bin/conduct's update block (see .docs/plans/port-self-update-flow.md and
-# .docs/stories/port-self-update-flow.md). bin/conduct still retains its own
-# copy of the update flow until #226 removes it.
-#
-# Sequencing note for #226: that follow-up issue must delete the update block
-# (check_harness_update/apply_harness_update/set_update_channel/etc., plus
-# any duplicated helper copy still inline in bin/conduct rather than sourced
-# from bin/lib/harness-common.sh) from bin/conduct. #226 must NOT remove this
-# file (bin/update) or bin/lib/harness-common.sh — they are the new permanent
-# homes for this logic.
+# update — Standalone self-update/channel CLI for the harness.
+# bin/update and bin/lib/harness-common.sh are the permanent homes for this
+# shell-side maintenance flow.
 #
 # Usage:
 #   update                          — force an update check now, bypassing the autoCheck gate
@@ -31,7 +23,7 @@ fi
 # shellcheck source=bin/lib/harness-common.sh
 source "${HARNESS_DIR}/bin/lib/harness-common.sh"
 
-# ─── Update check functions (ported verbatim from bin/conduct) ────────────
+# ─── Update check functions ───────────────────────────────────────────────
 
 # Render the CHANGELOG.md blocks strictly between from_ver (exclusive) and
 # to_ver (inclusive) using the user's configured markdown viewer. Writes to
@@ -345,7 +337,13 @@ check_harness_update_main() {
 dispatch_update_channel() {
   local channel
   if ! channel=$(conductor_cfg_get updateChannel tagged); then
-    if ! command -v conduct-ts &>/dev/null; then
+    # A failed read means either the CLI is absent (decline) or the config is
+    # unreadable while the CLI works (degrade to the default channel). Probe
+    # the CLI `conductor_cfg_get` actually resolves — probing the retired
+    # `conduct-ts` name made the degrade path depend on a stale global install.
+    local cli
+    cli="$(conductor_cli)"
+    if ! command -v "$cli" &>/dev/null; then
       warn "Update check declined: conductor configuration could not be read."
       return 1
     fi

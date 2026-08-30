@@ -12,8 +12,7 @@
  *   2. Otherwise (no `.memory/` yet or already a symlink): invoke
  *      `ensureMemoryStore` to create the canonical store + symlink. Idempotent.
  *
- * The caller in `bin/conduct` (run_bootstrap) invokes this once at bootstrap
- * time. No other code in bin/conduct creates .memory/ directly — this is the
+ * The project prelude invokes this once before pipeline startup. This is the
  * SINGLE LIVE PATH for memory initialisation.
  */
 

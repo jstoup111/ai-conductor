@@ -22,6 +22,7 @@ import {
   executeProviderCandidates,
   type ProviderExecutionContext,
 } from './provider-execution.js';
+import { dispatchMemorySetup } from './memory-cli.js';
 
 const exec = promisify(execCb);
 
@@ -95,6 +96,18 @@ export async function runProjectPrelude(
     bootstrapExecuted: false,
     assessExecuted: false,
   };
+
+  try {
+    const setupExit = await dispatchMemorySetup({ kind: 'setup', dir: projectRoot });
+    if (setupExit !== 0) {
+      console.warn('[prelude] memory-store setup failed; continuing');
+    }
+  } catch (error) {
+    console.warn(
+      '[prelude] memory-store setup failed; continuing: ' +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
 
   // --- Bootstrap -----------------------------------------------------------
   const bootstrapMarker = await readBootstrapMarker(projectRoot);

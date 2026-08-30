@@ -126,6 +126,8 @@ while IFS= read -r hit; do
     # The following build and link messages describe the supported legacy alias.
     'bin/install:# ─── conduct-ts build ─────────────────────────────────────────────────────────')
       ;;
+    'bin/install:  # 3. Build conduct-ts (npm ci + npm run build) so the dist bundle reflects')
+      ;;
     'bin/install:# Return 0 if the active Node satisfies conduct-ts'"'"'s >=26 requirement. The repo')
       ;;
     'bin/install:  echo -e "${BOLD}conduct-ts${NC}"')
@@ -138,12 +140,61 @@ while IFS= read -r hit; do
       ;;
     bin/install:*'conduct-ts bundle'*|bin/install:*'conduct-ts dependencies'*|bin/install:*'conduct-ts requires Node'*|bin/install:*'build conduct-ts'*|bin/install:*'build conduct_ts'*|bin/install:*'cannot build conduct-ts'*|bin/install:*'conduct-ts not built'*|bin/install:*'conduct-ts not installed'*|bin/install:*'conduct-ts symlink'*|bin/install:*'conduct-ts script'*|bin/install:*'conduct-ts is the engine-layer'*|bin/install:*'invoking `conduct-ts` explicitly.'*|bin/install:*'conduct-ts symlink cannot'*|bin/install:*'Installation incomplete — conduct-ts was not installed.'*|bin/install:*'CONDUCT_TS_FAILURE'*|bin/install:*'node_supports_conduct_ts'*|bin/install:*'build_conduct_ts'*|bin/install:*'local conduct_ts_'*|bin/install:*'current_ts='*|bin/install:*'${HARNESS_DIR}/bin/conduct-ts'*|bin/install:*'${LOCAL_BIN}/conduct-ts'*|bin/install:*'Skills, permissions and hooks are installed and usable, but conduct-ts is'*|bin/install:*'whole failed. Restate the cause here: the diagnosis in the conduct-ts'*)
       ;;
+    bin/install:*'for entrypoint in conduct conduct-ts ai-conductor'*|bin/install:*'conduct-ts) expected_source'*)
+      ;;
     *)
       printf 'non-allowlisted conduct-ts reference: %s\n' "$hit" >&2
       failures=1
       ;;
   esac
 done <<< "$scan_output"
+
+set +e
+if [ "$scanner" = rg ]; then
+  removed_cli_output=$(cd "$HARNESS_DIR" && rg -n --no-heading --fixed-strings 'bin/conduct' src/conductor/src hooks skills bin README.md HARNESS.md docs/reference/cli.md docs/reference/skills.md)
+else
+  removed_cli_output=$(cd "$HARNESS_DIR" && grep -rInH --fixed-strings --exclude-dir=node_modules 'bin/conduct' src/conductor/src hooks skills bin README.md HARNESS.md docs/reference/cli.md docs/reference/skills.md)
+fi
+removed_cli_exit=$?
+set -e
+
+case "$removed_cli_exit" in
+  0) ;;
+  1) removed_cli_output='' ;;
+  *)
+    printf 'legacy CLI reference guard: %s removed-CLI scan failed (exit %s)\n' "$scanner" "$removed_cli_exit" >&2
+    exit "$removed_cli_exit"
+    ;;
+esac
+
+while IFS= read -r hit; do
+  [ -n "$hit" ] || continue
+  path=${hit%%:*}
+  remainder=${hit#*:}
+  text=${remainder#*:}
+
+  case "$text" in
+    *bin/conduct-ts*) continue ;;
+  esac
+
+  case "$path:$text" in
+    # Canonical breaking-surface contract: the label, its documentation, and
+    # the two classifiers' exact path comparisons.
+    "src/conductor/src/engine/self-host/release-gate.ts:  'bin/conduct CLI',"|\
+    'src/conductor/src/engine/self-host/release-gate.ts: * schema / hook wiring / skill symlink targets / bin/conduct CLI). A null change'|\
+    "src/conductor/src/engine/self-host/release-gate.ts:      if (p === 'bin/conduct') surfaces.add(CANONICAL_BREAKING_SURFACES[0]);"|\
+    'src/conductor/src/engine/self-host/version-signal.ts:// - MAJOR: breaking surfaces (bin/conduct, hooks, skill symlink targets, settings)'|\
+    "src/conductor/src/engine/self-host/version-signal.ts:      if (p === 'bin/conduct') {"|\
+    "src/conductor/src/engine/self-host/version-signal.ts:        if (!breakingFiles.has('bin/conduct CLI')) {"|\
+    "src/conductor/src/engine/self-host/version-signal.ts:          breakingFiles.set('bin/conduct CLI', new Set());"|\
+    "src/conductor/src/engine/self-host/version-signal.ts:        breakingFiles.get('bin/conduct CLI')!.add(path);")
+      ;;
+    *)
+      printf 'non-allowlisted bin/conduct reference: %s\n' "$hit" >&2
+      failures=1
+      ;;
+  esac
+done <<< "$removed_cli_output"
 
 if [ "$failures" -ne 0 ]; then
   exit 1
