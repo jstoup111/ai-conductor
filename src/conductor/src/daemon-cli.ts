@@ -655,8 +655,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // self-heal lives at `daemon start`.
   const ensureFresh = opts.ensureFresh ?? (() => ensureInstallFresh({ interactive: false }));
   // The local branch worktrees fork from and discovery reads. Resolve origin's
-  // real default (main/master/trunk) rather than hardcoding 'main'; the daemon
-  // fast-forwards this branch on each idle poll (see fastForwardRoot).
+  // real default (main/master/trunk) rather than hardcoding 'main'; dispatcher
+  // maintenance fast-forwards this branch at its refresh policy boundary (see
+  // fastForwardRoot).
   const baseBranch =
     opts.baseBranch ?? (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
   // Tee every daemon log line to a file so the daemon stays observable via
@@ -1437,11 +1438,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   log(formatDaemonStartupLog(daemonConcurrency, continuous));
 
   // Shared backlog discovery — used both by the pool and the startup dashboard's
-  // ELIGIBLE group, so they stay in lockstep. `refresh` is true only when the pool
-  // is fully idle: there we fast-forward the local default branch to origin so
-  // newly merged specs become present (and discoverable on the local tree). While
-  // builds are in flight (`refresh:false`) there is NO fetch/ff, so an in-flight
-  // build is never advanced onto specs that merged mid-run.
+  // ELIGIBLE group, so they stay in lockstep. Dispatcher maintenance uses
+  // `refresh:true` at its rate-limited policy boundary, including a free slot
+  // while executors run; WorkOrders pin active builds to their claimed base.
   //
   // ADR-014: the discoverTick closure is now encapsulated in a WorkSource adapter
   // so the run-loop is decoupled from direct fs/git I/O and tests can inject fakes.
@@ -1891,15 +1890,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         );
       },
       // FR-4: resolve the base-branch tip SHA from the SAME local default branch
-      // the backlog reads. On idle refresh we fast-forward it first so the SHA
-      // reflects origin's latest (driving ADR-013 re-kick when main advances).
+      // the backlog reads. A scheduler-approved refresh fast-forwards it first
+      // so the SHA reflects origin's latest (driving ADR-013 re-kick on advance).
       resolveBaseSha: async ({ refresh }) => {
         if (refresh) await fastForwardRoot(projectRoot, log, undefined, discoveryLogger);
         return readBaseSha(makeGitRunner(projectRoot), baseBranch);
       },
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
-      rekickSweep: async (sha) => {
+      rekickSweep: async (sha, context) => {
         // Reconcile stranded park markers at the TOP of the sweep so the same
         // sweep that moves them also skips them (#486).
         await reconcileStrandedParkMarkers(projectRoot, log);
@@ -1910,6 +1909,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           {
             ...rekickDeps,
             isProcessed: makeIsProcessed(processedDir, gitTreeSource(projectRoot, baseBranch)),
+            isFeatureInFlight: context.isFeatureInFlight,
           },
           sha,
         );

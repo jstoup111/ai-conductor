@@ -1,10 +1,9 @@
 /**
  * Dispatcher-owned maintenance scheduling policies.
  *
- * At the serial default every operation retains the daemon loop's former
- * `inFlight.size === 0` gate. Later concurrency work changes individual
- * policies here instead of scattering new pool-state predicates through the
- * dispatcher loop.
+ * Policies that may safely run beside executors live here, rather than
+ * scattering pool-state predicates through the dispatcher loop. Refreshes
+ * only move the root checkout; dispatched work is pinned to its own order.
  */
 export type DaemonMaintenanceOperation =
   | 'refresh'
@@ -14,24 +13,27 @@ export type DaemonMaintenanceOperation =
   | 'sweep'
   | 'episode-end-sweep';
 
-type MaintenancePolicy = 'drained';
+type MaintenancePolicy = 'drained' | 'busy-allowed';
 
-const serialPolicies: Record<DaemonMaintenanceOperation, MaintenancePolicy> = {
-  refresh: 'drained',
-  rekick: 'drained',
+const maintenancePolicies: Record<DaemonMaintenanceOperation, MaintenancePolicy> = {
+  refresh: 'busy-allowed',
+  rekick: 'busy-allowed',
   'restart-pending': 'drained',
   'stale-engine': 'drained',
-  sweep: 'drained',
+  sweep: 'busy-allowed',
   'episode-end-sweep': 'drained',
 };
 
 /** Schedules shared dispatcher maintenance without exposing executor state. */
 export class DaemonMaintenance {
   private wasEpisodeActive = false;
+  private lastRefreshAt: number | null = null;
 
   constructor(
     private readonly activeWorkCount: () => number,
     private readonly isEpisodeActive: () => boolean = () => false,
+    private readonly refreshIntervalMs = 0,
+    private readonly now: () => number = Date.now,
   ) {}
 
   isDrained(): boolean {
@@ -47,10 +49,17 @@ export class DaemonMaintenance {
     refresh: () => Promise<T>,
     rekick: () => Promise<void>,
   ): Promise<T | undefined> {
+    if (!this.refreshDue()) return undefined;
     const refreshed = await this.run('refresh', refresh);
     if (refreshed === undefined) return undefined;
+    this.lastRefreshAt = this.now();
     await this.run('rekick', rekick);
     return refreshed;
+  }
+
+  /** Runs the timer-driven sweep while executors occupy every pool slot. */
+  async afterBusyPoll(sweep: () => Promise<void>): Promise<void> {
+    await this.run('sweep', sweep);
   }
 
   async idleBoundary<T extends string>(
@@ -86,9 +95,16 @@ export class DaemonMaintenance {
   }
 
   private permits(operation: DaemonMaintenanceOperation): boolean {
-    switch (serialPolicies[operation]) {
+    switch (maintenancePolicies[operation]) {
       case 'drained':
         return this.isDrained();
+      case 'busy-allowed':
+        return true;
     }
+  }
+
+  private refreshDue(): boolean {
+    if (this.lastRefreshAt === null) return true;
+    return this.now() - this.lastRefreshAt >= this.refreshIntervalMs;
   }
 }
