@@ -96,6 +96,12 @@ interface AssignedIssue {
  *
  */
 export interface TrackerClient {
+  /** Locate a previously-created intake issue whose body contains this exact hidden effect marker. */
+  findIssueByEffectMarker?(
+    marker: string,
+    repo: string,
+    cwd: string,
+  ): Promise<string | null>;
   /** `gh api repos/<owner>/<repo>/issues/<number>` — returns label names. */
   getIssueLabels(repo: string, number: number, cwd: string): Promise<string[]>;
   /** `gh issue view <owner/repo#number> --json state` — raw stdout JSON. */
@@ -131,6 +137,10 @@ export interface TrackerClient {
   createLabel(repo: string, name: string, cwd: string): Promise<void>;
   /** `gh api --method DELETE repos/<repo>/issues/<number>/labels/<name>` — remove a label via REST. */
   removeIssueLabel(repo: string, number: number, label: string, cwd: string): Promise<void>;
+}
+
+export interface EffectMarkerTrackerClient extends TrackerClient {
+  findIssueByEffectMarker(marker: string, repo: string, cwd: string): Promise<string | null>;
 }
 
 /** Error thrown when a `GhRunner` invocation rejects; carries argv/stderr/exit-code and, if
@@ -204,8 +214,34 @@ function parseJsonOrThrow<T>(operation: string, stdout: string): T {
 }
 
 /** Construct a `TrackerClient` backed by the GitHub `gh` CLI via the given runner. */
-export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
+export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTrackerClient {
   return {
+    async findIssueByEffectMarker(marker, repo, cwd) {
+      const args = [
+        'issue',
+        'list',
+        '--state',
+        'all',
+        '--search',
+        `${JSON.stringify(marker)} in:body`,
+        '--json',
+        'url,body',
+        '--limit',
+        '2',
+        '-R',
+        repo,
+      ];
+      const { stdout } = await runOrThrow(runner, args, { cwd });
+      const issues = parseJsonOrThrow<Array<{ url?: unknown; body?: unknown }>>(
+        'findIssueByEffectMarker',
+        stdout || '[]',
+      );
+      const matchingIssue = issues.find(
+        (issue) => typeof issue.url === 'string' && typeof issue.body === 'string' && issue.body.includes(marker),
+      );
+      return typeof matchingIssue?.url === 'string' ? matchingIssue.url : null;
+    },
+
     async getIssueLabels(repo, number, cwd) {
       const { stdout } = await runOrThrow(runner, ['api', `repos/${repo}/issues/${number}`], {
         cwd,
