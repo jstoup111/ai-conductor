@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-30T21:18:57.710Z
 Slug: build-review-rubrics-need-a-post-join-adjudicator-
 Class: plan-gap
 Halting step: prd_audit
