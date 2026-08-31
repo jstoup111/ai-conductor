@@ -270,6 +270,8 @@ async function createAsBuiltRemediationCapFixture(input: {
   priorGrowthAdded?: number;
   appendCap?: number;
   plannerFindingIds?: string[];
+  /** Findings the planner dispositions `halt` (needs a human, no plan growth). */
+  plannerHaltFindingIds?: string[];
   /** Decision 6 kill switch. Default true, matching production. */
   remediationEnabled?: boolean;
   /** Add a validated prd_audit FIXABLE finding + its evidence, for mixed rounds. */
@@ -374,7 +376,16 @@ async function createAsBuiltRemediationCapFixture(input: {
                 tasks: [{ id: 'prd-fix', title: 'Satisfy S1.1' }],
               }]
             : []),
-          ...(input.plannerFindingIds ?? findings.map((finding) => finding.id)).map((id) => ({
+          ...(input.plannerHaltFindingIds ?? []).map((id) => ({
+          id,
+          disposition: 'halt',
+          category: 'architectural-clarity',
+          rationale: `${id} needs a human decision.`,
+          tasks: [],
+          })),
+          ...(input.plannerFindingIds ?? findings.map((finding) => finding.id))
+            .filter((id) => !(input.plannerHaltFindingIds ?? []).includes(id))
+            .map((id) => ({
           id,
           disposition: 'build',
           category: null,
@@ -1533,6 +1544,21 @@ describe('prd_audit kickback', () => {
       );
     }
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
+  it('surfaces a halt-dispositioned finding by its own rationale, not as a missing finding', async () => {
+    // A `halt` disposition means the planner addressed the finding and judged it
+    // a human decision rather than plan growth. It is admitted at
+    // conductor.ts:3988 but `continue`s before the counter the exact-match check
+    // reads, so the check reported it `Missing` — punishing the planner for the
+    // correct answer and hiding the finding's real rationale behind set
+    // arithmetic.
+    const fixture = await createAsBuiltRemediationCapFixture({ plannerHaltFindingIds: ['AB-1'] });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt' });
+    expect(fixture.outcome.detail).not.toContain('Missing: AB-1');
+    expect(fixture.outcome.detail).toContain('AB-1');
+    expect(fixture.outcome.detail).toContain('needs a human decision');
   });
 
   it('halts before appending when planner gaps omit or add parsed as-built findings', async () => {
