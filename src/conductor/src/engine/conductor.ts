@@ -4746,7 +4746,14 @@ export class Conductor {
     name: StepName,
     state: ConductState,
     retryHint: string | undefined,
+    /**
+     * This dispatch's engine-minted verdict identity, for a SHIP-tail verdict
+     * gate only. Threaded through so the provider lifecycle and the sidecar
+     * stamp carry one value on the self-host path too (D1).
+     */
+    verdictRunId?: string,
   ): Promise<StepRunResult> {
+    const identityOption = verdictRunId ? { runId: verdictRunId } : {};
     const selfHostConfig = resolveSelfHostConfig(this.config);
     const stepSelection =
       this.config.steps?.[name]?.llm_provider ?? this.config.llm_provider;
@@ -4810,7 +4817,7 @@ export class Conductor {
     // test/extension surface.
     if (!this.providerExecution) {
       if (preferredBuildProvider === 'codex') {
-        return this.stepRunner.run(name, state, { retryReason: retryHint });
+        return this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });
       }
       const installed = await this.guardrails.resolveInstalledHarnessRoot();
       const harnessRoot = installed.status === 'ok' ? installed.root : this.projectRoot;
@@ -4834,7 +4841,7 @@ export class Conductor {
       process.env.CLAUDE_CONFIG_DIR = sandbox.configDir;
       if (daemonToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = daemonToken;
       try {
-        return await this.stepRunner.run(name, state, { retryReason: retryHint });
+        return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });
       } finally {
         if (hadConfig) process.env.CLAUDE_CONFIG_DIR = priorConfig;
         else delete process.env.CLAUDE_CONFIG_DIR;
@@ -4959,7 +4966,7 @@ export class Conductor {
       };
     }
     try {
-      return await this.stepRunner.run(name, state, { retryReason: retryHint });
+      return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });
     } finally {
       if (this.providerExecution) {
         this.providerExecution.prepareCandidateSelfHost = priorPreparation;
@@ -8124,7 +8131,16 @@ export class Conductor {
               step.name !== 'worktree' &&
               step.name !== 'test_suite' &&
               step.name !== 'rebase' &&
-              !(this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name)))));
+              // A SHIP-tail verdict gate is armed on EVERY dispatch path. The
+              // group branch already mints one identity per member with no
+              // self-host exclusion, and D3's post-dispatch handshake requires
+              // that identity wherever gate code validity is enabled. Leaving
+              // the self-host serial dispatch unarmed made a resumed lone group
+              // member score the verdict it had just written `unstamped` and
+              // retry the identical condition until its budget was spent.
+              (isVerdictRunIdentityStep(step.name) ||
+                !(this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))));
+
             if (dispatchIdentityArmed) {
               // Task 2, session-fresh-verdict-artifacts: stamp immediately
               // before the generic dispatch call so completionCtx can
@@ -8170,7 +8186,19 @@ export class Conductor {
                               effortOverride: esc.effort,
                             })
                         : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
-                          ? await this.runSelfBuildDispatch(step.name, state, retryHint)
+                          ? await this.runSelfBuildDispatch(
+                              step.name,
+                              state,
+                              retryHint,
+                              // D1 scope, self-host path: the verdict gate's
+                              // lifecycle `attempt.id` and its sidecar stamp
+                              // are the one value minted above.
+                              dispatchIdentityArmed &&
+                              this.currentRunId &&
+                              isVerdictRunIdentityStep(step.name)
+                                ? this.currentRunId
+                                : undefined,
+                            )
                           : await this.stepRunner.run(step.name, state, {
                             retryReason: retryHint,
                             attempt,

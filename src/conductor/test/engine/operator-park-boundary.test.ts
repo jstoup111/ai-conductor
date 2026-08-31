@@ -126,8 +126,8 @@ describe('operator park boundary contract', () => {
     });
     const reviewedHelperDispatchAllowlist: Array<string | RegExp> = [
       "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
-      'return this.stepRunner.run(name, state, { retryReason: retryHint });',
-      'return await this.stepRunner.run(name, state, { retryReason: retryHint });',
+      'return this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
+      'return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
       'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);',
       "return this.stepRunner.run('finish', state, options);",
       // The two bounded FINISH prose passes. Both are reached only from inside
