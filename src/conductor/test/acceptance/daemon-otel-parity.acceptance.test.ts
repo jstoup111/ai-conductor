@@ -106,6 +106,17 @@ function withoutRunIdentity(attributes: Record<string, unknown>): Record<string,
   return eventAttributes;
 }
 
+function comparableMetricValue(name: string, value: unknown): unknown {
+  // Step duration is the only metric whose value is intentionally derived from
+  // wall-clock time. The two supported wiring paths do not share a clock, so
+  // compare the emitted observation count while retaining exact values for
+  // every deterministic metric (especially the cost snapshot gauges).
+  if (name === 'conductor.step.duration' && typeof value === 'object' && value !== null && 'count' in value) {
+    return { count: value.count };
+  }
+  return value;
+}
+
 function signals(spanExporter: InMemorySpanExporter, metricExporter: InMemoryMetricExporter): OtelSignals {
   return {
     spans: spanExporter.getFinishedSpans().map((span: ReadableSpan) => ({ name: span.name, status: span.status, attributes: span.attributes, events: span.events.map((event) => ({ name: event.name, attributes: event.attributes })) })),
@@ -113,7 +124,7 @@ function signals(spanExporter: InMemorySpanExporter, metricExporter: InMemoryMet
       scopeMetrics.metrics.map((metric) => ({
         name: metric.descriptor.name,
         dataPoints: metric.dataPoints.map((point) => ({
-          value: point.value,
+          value: comparableMetricValue(metric.descriptor.name, point.value),
           attributes: withoutRunIdentity(point.attributes),
         })),
       })),
