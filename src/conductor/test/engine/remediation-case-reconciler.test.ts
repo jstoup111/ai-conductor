@@ -79,6 +79,7 @@ describe('remediation case reconciler', () => {
 
     expect(result).toEqual({
       ok: true,
+      caseIdsByRef: new Map([['new-action', 'case-1']]),
       state: {
         version: 'v1',
         feature: FEATURE,
@@ -193,5 +194,57 @@ describe('remediation case reconciler', () => {
     expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
       { ok: false, reason: 'illegal-disposition-transition' }, before,
     ]);
+  });
+  it('converges a re-applied judgement on the first stamped identity instead of a second one', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const first = await reconcileRemediationCases(store, {
+      graph: graph(ACTION_CASE), recordedAt: RECORDED_AT, generateId: generatedIds('case-1', 'effect-1'),
+    });
+    // A crash between the store write and the coordinator's next step replays
+    // the identical judgement under the same lease.
+    const second = await reconcileRemediationCases(store, {
+      graph: graph(ACTION_CASE), recordedAt: '2026-08-30T12:05:00.000Z', generateId: generatedIds('case-2', 'effect-2'),
+    });
+
+    expect(first.ok && first.state.cases).toHaveLength(1);
+    expect(second.ok && second.state.cases).toEqual([{
+      id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high',
+      rationale: ACTION_CASE.rationale, confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: RECORDED_AT }],
+      effect: { id: 'effect-1', kind: 'action', status: 'reserved' },
+    }]);
+    expect(second.ok && second.caseIdsByRef.get('new-action')).toBe('case-1');
+  });
+
+  it('reports the durable identity for every proposed reference, stamped or bound', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.replace({ version: 'v1', feature: FEATURE, cases: [durableAction()] });
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'bound', existingCaseId: 'case-1' } as never),
+      recordedAt: RECORDED_AT, generateId: generatedIds('unused'),
+    });
+
+    expect(result.ok && [...result.caseIdsByRef]).toEqual([['bound', 'case-1']]);
+  });
+
+  it('stamps a materially distinct later case rather than converging it', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await reconcileRemediationCases(store, {
+      graph: graph(ACTION_CASE), recordedAt: RECORDED_AT, generateId: generatedIds('case-1', 'effect-1'),
+    });
+
+    const distinct = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'later-action' } as never, [
+        { sourceId: 'testQuality:finding-2', outcome: 'acted', caseRef: 'later-action' },
+      ] as never),
+      recordedAt: '2026-08-30T12:05:00.000Z', generateId: generatedIds('case-2', 'effect-2'),
+    });
+
+    expect(distinct.ok && distinct.state.cases.map((record) => record.id)).toEqual(['case-1', 'case-2']);
+    expect(distinct.ok && distinct.caseIdsByRef.get('later-action')).toBe('case-2');
   });
 });
