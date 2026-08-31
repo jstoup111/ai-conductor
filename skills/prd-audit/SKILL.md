@@ -54,7 +54,7 @@ For every story criterion, record one row.
 
 - **PASS** — the shipped behavior satisfies the criterion. Cite the code and/or behavioral proof.
 - **FIXABLE** — the criterion is unmet and an existing active-plan task owns the repair.
-  **FIXABLE names an owning plan task.** It also names the criterion it repairs; do not invent a
+  **FIXABLE cites its owning plan task.** It also names the criterion it repairs; do not invent a
   task, and do not use this grade when the required work is outside the approved plan.
 - **PLAN_GAP** — the criterion is unmet and no existing task owns its repair. Describe why the plan
   is insufficient. For a PRD requirement with no traced story criterion, make that missing coverage
@@ -112,9 +112,10 @@ contract. Per-FR evidence may appear below the table, but never replaces the cri
 **Rationale:** <why this grade follows from the criterion, its intent context, and task ownership>
 ```
 
-The Verdict Table needs one row for every readable story criterion. Use `—` for an absent Plan task,
-but only FIXABLE rows may name a task and that task must exist in the active plan. `PRD:` records the
-intent FR(s) when known and `none` when there is no PRD. `Intent relation` is machine-readable:
+The Verdict Table needs one row for every readable story criterion. Any row may cite a task present
+in the active plan; cite its bare task id with no annotation. Every FIXABLE row must cite its owning
+plan task. Use `—` when there is no task. `PRD:` records the intent FR(s) when known and `none` when
+there is no PRD. `Intent relation` is machine-readable:
 every OVER_SCOPE row must use exactly one of `within`, `outside-harmless`, or `outside-visible`; use
 `—` for other grades. Do not encode this relation in Evidence prose. If report evidence is malformed
 or incomplete, surface it as BLOCKED rather than fabricating a grade.

@@ -1740,7 +1740,8 @@ describe('prd_audit kickback', () => {
     });
 
     const report = await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8');
-    expect(parsePrdAuditReport(report)).toMatchObject({
+    // The fixture's own plan is the citation authority for the `1` cell.
+    expect(parsePrdAuditReport(report, await readFile(fixture.planPath, 'utf8'))).toMatchObject({
       ok: true,
       value: {
         findings: [
@@ -1818,6 +1819,59 @@ describe('prd_audit kickback', () => {
         summary: 'An edge case is not in the approved plan.',
         gate: 'prd_audit',
       }],
+    });
+  });
+
+  // Both routes gate on `rejectedRows`, so an unauthorized parse silences
+  // them: every sibling row citing a Plan task rejects and the route degrades
+  // to `none`. The active plan travels with the report text into each route.
+  describe('plan-task citation authority on the routes', () => {
+    const activePlan = '### Task 1: Existing work\n';
+    const withCitingSibling = (citation: string, grade = 'PLAN_GAP') => [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      `| S2.1 | PASS | ${citation} | Covered behavior |`,
+      `| S2.3 | ${grade} | | The approved plan has no task for this behavior. |`,
+    ].join('\n');
+
+    it('routes a PLAN_GAP beside a sibling row citing a declared task', () => {
+      expect(routePrdAuditPlanGaps(
+        withCitingSibling('1'),
+        '# Stories\n',
+        {} as never,
+        activePlan,
+      )).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
+    });
+
+    it('declines to route when a sibling citation names an absent task', () => {
+      expect(routePrdAuditPlanGaps(
+        withCitingSibling('rem-ab1-9'),
+        '# Stories\n',
+        {} as never,
+        activePlan,
+      )).toEqual({ kind: 'none' });
+    });
+
+    it('routes OVER_SCOPE beside a sibling row citing a declared task', () => {
+      const report = [
+        '**PRD:** present',
+        '',
+        '## Verdict Table',
+        '| Criterion | Grade | Plan task | Evidence | Intent relation |',
+        '| --- | --- | --- | --- | --- |',
+        '| S3.1 | PASS | 1 | Covered behavior | within |',
+        '| S3.3 | OVER_SCOPE | | Unplanned behavior | outside-visible |',
+      ].join('\n');
+
+      expect(routePrdAuditOverScope(report, [], activePlan)).toMatchObject({ kind: 'halt' });
+      expect(routePrdAuditOverScope(
+        report.replace('| S3.1 | PASS | 1 |', '| S3.1 | PASS | rem-ab1-9 |'),
+        [],
+        activePlan,
+      )).toEqual({ kind: 'none' });
     });
   });
 

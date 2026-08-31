@@ -40,7 +40,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
-import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { parsePlanTaskPaths, resolvePlanTaskReference } from './plan-task-parse.js';
 import {
   deriveEffectiveBuildReviewVerdict,
   parseBuildReviewAggregate,
@@ -738,6 +738,40 @@ export async function resolveFeaturePlanPath(
 }
 
 /**
+ * The active plan's text — the authority every cited plan-task reference is
+ * resolved against (adr-2026-08-30-shared-plan-task-reference-resolver D1).
+ *
+ * Every prd_audit parse that scores, preserves, or routes on a Verdict Table
+ * `Plan task` cell MUST supply this. `parsePrdAuditReport` has no other way to
+ * learn which ids exist and it refuses to guess: with no plan text a citing
+ * row is rejected, never resolved against the citation under judgement.
+ * Returns undefined when no plan resolves or it cannot be read; the parser
+ * then rejects fail-closed rather than self-validating.
+ */
+export async function readActivePlanText(
+  projectRoot: string,
+  planPath?: string,
+  featureDesc?: string,
+): Promise<string | undefined> {
+  const resolved = planPath ?? (await resolveFeaturePlanPath(projectRoot, featureDesc));
+  if (!resolved) return undefined;
+  return readFile(isAbsolute(resolved) ? resolved : join(projectRoot, resolved), 'utf-8')
+    .catch(() => undefined);
+}
+
+/** {@link readActivePlanText} for a caller that already resolved the feature. */
+async function activePlanTextFor(
+  projectRoot: string,
+  context: ArtifactResolutionContext,
+): Promise<string | undefined> {
+  return readActivePlanText(
+    projectRoot,
+    context.activePlanPath ?? context.planPath,
+    context.featureDesc,
+  );
+}
+
+/**
  * Resolve the active feature's stories doc, mirroring resolveFeaturePlanPath's
  * ladder (#407 → #441): a singleton corpus is unambiguous; otherwise match the
  * featureDesc stem, then the resolved plan's stem. Returns undefined when the
@@ -895,13 +929,17 @@ async function sweptArtifactStillValid(
       // about to be swept can diverge from what it was stamped from — never
       // spare a report that does not itself currently read clean.
       const report = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
-      const parsed = parsePrdAuditReport(report);
+      const resolution = artifactResolution ?? (await buildArtifactResolutionContext(dir, { git }));
+      // Resolve the citation authority BEFORE the parse: a spared report is a
+      // preserved PASS, so its Plan task cells must be checked against the
+      // plan that is active now, never against themselves.
+      const activePlan = await activePlanTextFor(dir, resolution);
+      const parsed = parsePrdAuditReport(report, activePlan);
       if (
         parsed.ok
           ? parsed.value.rejectedRows.length > 0 || parsed.value.findings.some((finding) => finding.grade !== 'PASS')
-          : findUnalignedFrRows(report).length > 0
+          : findUnalignedFrRows(report, activePlan).length > 0
       ) return false;
-      const resolution = artifactResolution ?? (await buildArtifactResolutionContext(dir, { git }));
       if ((await prdAuditCoverageGap(dir, resolution, report)) !== null) return false;
       return (await prdAuditStoryCoverageGap(dir, resolution, undefined, report)) === null;
     }
@@ -3137,9 +3175,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                   featureDesc: ctx.featureDesc,
                   git: ctx.git,
                 }));
+              const preActivePlan = await activePlanTextFor(dir, artifactResolution);
               for (const f of preCheckFiles) {
                 const report = await readFile(f, 'utf-8');
-                const parsed = parsePrdAuditReport(report);
+                const parsed = parsePrdAuditReport(report, preActivePlan);
                 const preRelations = overScopeRelations(report);
                 const preDecisions = (await readOverScopeDecisions(dir)).decisions;
                 if (
@@ -3152,7 +3191,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                             ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, finding.evidence, preRelations, preDecisions))
                           ),
                       )
-                    : findUnalignedFrRows(report).length > 0) ||
+                    : findUnalignedFrRows(report, preActivePlan).length > 0) ||
                   (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null ||
                   (await prdAuditStoryCoverageGap(dir, artifactResolution, ctx.featureDesc, report)) !== null
                 ) {
@@ -3203,11 +3242,15 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       };
     }
     let blockingReason: string | undefined;
+    // The gate's own scoring parse carries the same citation authority the
+    // remediation path uses, so a Verdict Table cannot score done here and be
+    // rejected there (adr-2026-08-30 D1).
+    const activePlan = await readActivePlanText(dir, ctx.planPath, ctx.featureDesc);
     for (const f of fresh) {
-      const parsed = parsePrdAuditReport(await readFile(f, 'utf-8'));
+      const parsed = parsePrdAuditReport(await readFile(f, 'utf-8'), activePlan);
       if (!parsed.ok) {
         const hasFeatureIdentity = Boolean(ctx.planPath || ctx.featureDesc);
-        const legacyBlocking = findUnalignedFrRows(await readFile(f, 'utf-8'));
+        const legacyBlocking = findUnalignedFrRows(await readFile(f, 'utf-8'), activePlan);
         if (hasFeatureIdentity || legacyBlocking.length > 0) {
           blockingReason = hasFeatureIdentity
             ? `PRD audit report mechanical fault: ${parsed.error}`
@@ -4190,7 +4233,7 @@ export type PrdAuditGrade = 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE';
 export interface PrdAuditFinding {
   criterion: string;
   grade: PrdAuditGrade;
-  planTask?: number;
+  planTask?: string;
   /** Intent FR associations from the table's PRD: column. */
   prdIds: readonly string[];
   evidence: string;
@@ -4456,30 +4499,44 @@ export function parsePrdAuditReport(
     }
 
     const rawPlanTask = planTaskIndex === -1 ? '' : cells[planTaskIndex] ?? '';
-    const planTask = rawPlanTask.trim() === '' || rawPlanTask.trim() === '—'
+    const citedPlanTask = rawPlanTask.trim() === '' || rawPlanTask.trim() === '—'
       ? undefined
-      : Number(rawPlanTask);
-    if (planTask !== undefined && (!Number.isInteger(planTask) || planTask < 1)) {
-      rejectedPrdAuditRow(rejectedRows, line, criterion, `PRD audit finding ${criterion} has an invalid Plan task.`);
+      : rawPlanTask;
+    // adr-2026-08-30-shared-plan-task-reference-resolver D1: a citation is
+    // valid only if it names an id the CITING artifact's active plan declares.
+    // With no plan supplied there is no id set to check membership in, so the
+    // row is refused fail-closed. The predecessor derived the lookup set from
+    // the citation under judgement (`activePlanTaskIds ?? new Set([...])`), so
+    // any grammar-valid id resolved against itself and the gate scored a
+    // report that the remediation path — which does pass the plan — rejects.
+    if (citedPlanTask !== undefined && activePlanTaskIds === undefined) {
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
+        `PRD audit finding ${criterion} cites Plan task ${citedPlanTask.trim()}, but the active plan could not be resolved to verify it.`,
+      );
       continue;
     }
+    const planTaskReference = citedPlanTask === undefined || activePlanTaskIds === undefined
+      ? undefined
+      : resolvePlanTaskReference(citedPlanTask, activePlanTaskIds);
+    if (planTaskReference?.kind === 'malformed') {
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
+        `PRD audit finding ${criterion} has malformed Plan task ${planTaskReference.raw}.`,
+      );
+      continue;
+    }
+    if (planTaskReference?.kind === 'unresolvable') {
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
+        `PRD audit finding ${criterion} names Plan task ${planTaskReference.id}, which is absent from the active plan.`,
+      );
+      continue;
+    }
+    const planTask = planTaskReference?.id;
     if (rawGrade === 'FIXABLE' && planTask === undefined) {
       rejectedPrdAuditRow(rejectedRows, line, criterion,
         `PRD audit finding ${criterion} is FIXABLE but has no Plan task.`,
       );
       continue;
     }
-    if (
-      rawGrade === 'FIXABLE' &&
-      activePlanTaskIds !== undefined &&
-      !activePlanTaskIds.has(String(planTask))
-    ) {
-      rejectedPrdAuditRow(rejectedRows, line, criterion,
-        `PRD audit finding ${criterion} names Plan task ${planTask}, which is absent from the active plan.`,
-      );
-      continue;
-    }
-
     parsedFindings.push({
       finding: {
         criterion,
@@ -4606,7 +4663,7 @@ export async function prdAuditCoverageGap(
   const hasFeatureIdentity = Boolean(context.activePlanPath || context.featureDesc || context.featureIdentities.length > 0);
   if (!hasFeatureIdentity) return null;
 
-  const parsed = parsePrdAuditReport(reportContent);
+  const parsed = parsePrdAuditReport(reportContent, await activePlanTextFor(projectRoot, context));
   if (!parsed.ok) return parsed.error;
   const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
   if (prdPaths.length === 0) {
@@ -4653,7 +4710,9 @@ async function prdAuditStoryCoverageGap(
   if (criterionIds.length === 0) {
     return `PRD audit cannot parse story criteria in ${relative(projectRoot, storiesPath)}.`;
   }
-  const parsed = parsePrdAuditReport(reportContent);
+  // Rows the parser rejects never reach `findings`, so an unauthorized parse
+  // here would drop every citing row and report its criterion as missing.
+  const parsed = parsePrdAuditReport(reportContent, await activePlanTextFor(projectRoot, context));
   if (!parsed.ok) return parsed.error;
   const expectedCriteria = new Set(criterionIds);
   const reportedCriteria = new Set(
@@ -4738,8 +4797,8 @@ function extractStoryCriterionIds(storiesText: string): string[] {
  * ALIGNED and not human-ACCEPTED. Returns the FR identifier of every still-
  * blocking row. Verdict is read per-cell (see {@link parseFrVerdictRow}).
  */
-function findUnalignedFrRows(content: string): string[] {
-  const parsed = parsePrdAuditReport(content);
+function findUnalignedFrRows(content: string, activePlan?: string): string[] {
+  const parsed = parsePrdAuditReport(content, activePlan);
   if (parsed.ok) {
     return parsed.value.findings
       .filter((finding) => finding.grade !== 'PASS')
@@ -4761,8 +4820,9 @@ function findUnalignedFrRows(content: string): string[] {
 function findUnalignedFrRowsWithClass(
   content: string,
   settledOverScopeCriteria: ReadonlySet<string> = new Set(),
+  activePlan?: string,
 ): UnalignedFrRow[] {
-  const parsed = parsePrdAuditReport(content);
+  const parsed = parsePrdAuditReport(content, activePlan);
   if (parsed.ok) {
     return parsed.value.findings
       .filter((finding) => finding.grade !== 'PASS')
@@ -4809,6 +4869,9 @@ export async function classifyPrdAuditGaps(
   const files = await findArtifactFiles(dir, 'prd_audit');
   const decisions = (await readOverScopeDecisions(dir)).decisions;
   const identity = await verdictProducedByRun(dir, 'prd_audit', expectedRunId, config);
+  // Routing decides self-heal vs HALT off these rows, so it reads them under
+  // the same citation authority the gate scored them with (adr-2026-08-30 D1).
+  const activePlan = await readActivePlanText(dir);
   const blocking: UnalignedFrRow[] = [];
   for (const f of files) {
     if (identity.state === 'stale-run-identity') continue;
@@ -4817,7 +4880,7 @@ export async function classifyPrdAuditGaps(
       !(await fileIsFreshSinceSession(f, sessionStartedAt))
     ) continue;
     const content = await readFile(f, 'utf-8');
-    const parsed = parsePrdAuditReport(content);
+    const parsed = parsePrdAuditReport(content, activePlan);
     if (parsed.ok && parsed.value.rejectedRows.length > 0) {
       return {
         kind: 'needs-decide',
@@ -4838,7 +4901,7 @@ export async function classifyPrdAuditGaps(
           classifyOverScopeCriterion(criterion, findingSummaries.get(criterion) ?? '', relations, decisions),
         )),
     );
-    blocking.push(...findUnalignedFrRowsWithClass(content, settled));
+    blocking.push(...findUnalignedFrRowsWithClass(content, settled, activePlan));
   }
   if (blocking.length === 0) return { kind: 'clean', summary: 'no blocking FRs' };
 

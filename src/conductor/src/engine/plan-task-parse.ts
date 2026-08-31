@@ -13,6 +13,38 @@ import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-art
 // grammar instead of re-deriving a narrower ad hoc regex.)
 export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
+export type PlanTaskReferenceResolution =
+  | { kind: 'resolved'; id: string }
+  | { kind: 'unresolvable'; id: string }
+  | { kind: 'malformed'; raw: string };
+
+/**
+ * The cited plan-task id with any trailing annotation removed.
+ *
+ * Every caller that builds a set for `resolvePlanTaskReference` to look up in
+ * MUST normalize through this, because the resolver normalizes before it looks
+ * up. A caller that built its set from the raw cell — as the prd_audit gate
+ * scorer's no-active-plan fallback did — holds `rem-x (landed)` while the
+ * resolver asks for `rem-x`, so an annotated citation can never resolve
+ * against its own row.
+ */
+export function normalizePlanTaskId(raw: string): string {
+  return raw.trim().replace(/\s*\([^()]*\)$/, '');
+}
+
+/** Resolves a cited plan-task id against the active plan's declared task ids. */
+export function resolvePlanTaskReference(
+  raw: string,
+  planTaskIds: ReadonlySet<string>,
+): PlanTaskReferenceResolution {
+  const id = normalizePlanTaskId(raw);
+  if (!new RegExp(`^${TASK_ID_PATTERN}$`).test(id)) return { kind: 'malformed', raw };
+
+  return planTaskIds.has(id)
+    ? { kind: 'resolved', id }
+    : { kind: 'unresolvable', id };
+}
+
 // Shared task-header grammar for parsers that identify task blocks without
 // requiring a title. Keep every consumer on this expression so a supported
 // heading form cannot silently drift between Files and Verify-only metadata.

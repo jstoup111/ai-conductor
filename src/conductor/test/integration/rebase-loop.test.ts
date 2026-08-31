@@ -203,6 +203,12 @@ describe('integration/rebase-loop', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs/specs'), { recursive: true });
     await mkdir(join(dir, '.docs/stories'), { recursive: true });
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    // The prd_audit fixture below cites Plan task 1; the plan declares it.
+    await writeFile(
+      join(dir, '.docs/plans/add-foo.md'),
+      '### Task 1: add foo\n\n**Files:** foo.ts\n',
+    );
     await writeFile(
       join(dir, '.docs/specs/add-foo.md'),
       '## Functional Requirements\n\nFR-1\n',
