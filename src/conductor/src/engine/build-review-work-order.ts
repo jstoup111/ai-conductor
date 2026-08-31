@@ -205,34 +205,28 @@ export async function publishBuildReviewWorkOrder(
 }
 
 /**
- * Reads only a work order bound to the feature and stable effect that the
- * caller reserved. Any malformed, stale, or foreign artifact remains outside
- * BUILD prompt construction.
+ * Reads only a work order bound to this feature AND to a stable action effect
+ * the caller's durable state recorded. Any malformed, stale, or foreign
+ * artifact remains outside BUILD prompt construction.
+ *
+ * The binding is a set, not one id, because the order's `effectId` is the
+ * primary route's effect — whichever open action case was still *reserved*
+ * when the order published — and a later process cannot re-derive which one
+ * that was. What it can re-derive from the case store is the complete set of
+ * stable effects recorded for the feature's open action cases; an `effectId`
+ * outside that set was never this feature's route. An empty set therefore
+ * binds nothing and fails closed.
  */
 export async function readBuildReviewWorkOrder(
   projectRoot: string,
   feature: RemediationCaseFeatureIdentity,
-  effectId: string,
+  stableEffectIds: string | readonly string[],
   filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
 ): Promise<ReadBuildReviewWorkOrderResult> {
-  let serialized: string;
-  try {
-    serialized = await filesystem.readFile(buildReviewWorkOrderPath(projectRoot));
-  } catch (error) {
-    return { ok: false, reason: isMissing(error) ? 'missing-work-order' : 'unreadable-work-order' };
-  }
-
-  let raw: unknown;
-  try {
-    raw = JSON.parse(serialized);
-  } catch {
-    return { ok: false, reason: 'malformed-json' };
-  }
-  const parsed = parseWorkOrder(raw);
+  const parsed = await readFeatureWorkOrder(projectRoot, feature, filesystem);
   if (!parsed.ok) return parsed;
-  if (!sameFeature(parsed.workOrder.feature, feature)) return { ok: false, reason: 'foreign-feature' };
-  if (parsed.workOrder.effectId !== effectId) return { ok: false, reason: 'foreign-effect' };
-  return parsed;
+  const bound = typeof stableEffectIds === 'string' ? [stableEffectIds] : stableEffectIds;
+  return bound.includes(parsed.workOrder.effectId) ? parsed : { ok: false, reason: 'foreign-effect' };
 }
 
 /** Adds validated ordered work to an existing BUILD retry context. */
@@ -280,8 +274,6 @@ async function readFeatureWorkOrder(
   if (!parsed.ok) return parsed;
   return sameFeature(parsed.workOrder.feature, feature) ? parsed : { ok: false, reason: 'foreign-feature' };
 }
-
-export { readFeatureWorkOrder as readBuildReviewFeatureWorkOrder };
 
 /**
  * The durable BUILD-attempt evidence reconciliation consumes. Absence remains
