@@ -364,3 +364,23 @@ export class RemediationCaseStore {
     }
   }
 }
+
+/**
+ * The feature identity recorded in the durable case store, without needing to
+ * know it first.
+ *
+ * BUILD-side restart recovery has no in-memory feature and no git available to
+ * re-derive one, but the case store and the work order are written as a pair:
+ * the store's own identity is the durable one to bind the order against.
+ */
+export async function readRemediationCaseStoreFeature(
+  projectRoot: string,
+  filesystem: RemediationCaseStoreFilesystem = defaultFilesystem,
+): Promise<RemediationCaseFeatureIdentity | undefined> {
+  try {
+    const raw: unknown = JSON.parse(await filesystem.readFile(remediationCaseStorePath(projectRoot)));
+    return isRecord(raw) ? parseFeature(raw.feature) : undefined;
+  } catch {
+    return undefined;
+  }
+}
