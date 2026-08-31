@@ -84,6 +84,23 @@ Relevant existing facts (evidence):
 5. **Failure isolation.** Unlike `EventPersister` (which re-throws `EventPersistError`), all
    exporter/transport failures are caught and degrade to a single bounded warning; a dead collector
    or unwritable file never fails or wedges a run (FR-8). Export calls carry a bounded timeout.
+> **Amended 2026-08-30 by #2095 (cost instruments are spine projections; the meter provider is shut
+> down on stop):** two corrections to how Decisions 4 and 5 were realized. (a) `stop()` had called
+> `forceFlush()` only, so each finished run's `PeriodicExportingMetricReader` kept its 60 s timer and
+> re-exported frozen cumulatives for the daemon's lifetime; with all runs of a feature sharing one
+> identity (2026-08-28 amendment) those dead readers interleaved on one series and made every
+> aggregation of `conductor.step.cost` wrong (#2095, #2086). `stop()` now also calls
+> `meterProvider.shutdown()`; the tracer side keeps flush-only so spans stay readable after stop.
+> (b) A per-process cumulative counter cannot be made to aggregate to a feature total on a shared
+> identity, on any backend. Cost is therefore exported as cumulative gauges projected from the
+> per-feature `events.jsonl` rollup (adr-2026-07-22-per-feature-cost-rollup-in-shipped-record) at
+> every step close — `conductor.feature.cost` (whole feature, `cost_complete`) and
+> `conductor.feature.step.cost` (`step`, `model`, `source`), plus token counts as
+> `conductor.feature.step.tokens` (`step`, `model`, `kind`) from the same snapshot — and the
+> `conductor.step.cost` and `conductor.step.tokens` counters are removed. The rollup read happens in Conductor's step-close code, not in the bus handler, so
+> Decision 4 holds. Decision 5's bounded warning is now rendered (`renderer_error` reaches
+> `daemon.log`) so an export failure is visible instead of silently persisted.
+
 6. **Dual transport, config-selected** under `otel:` in `.ai-conductor/config.yml`
    (`exporter: otlp|file`, `endpoint`, `file`). Absent `otel` ⇒ disabled (default off, FR-1/FR-7).
 
