@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-31T13:12:32.982Z
 Slug: exported-step-cost-under-records-spend-20x-so-ever
 Class: needs-human
 Halting step: prd_audit
