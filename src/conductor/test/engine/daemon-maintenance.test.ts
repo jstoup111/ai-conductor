@@ -424,4 +424,197 @@ describe('engine/daemon-maintenance', () => {
       drainLogs: ['[daemon] drain started: restart-pending'],
     });
   });
+
+  it('suppresses every root-mutating restart action until the busy drain reaches zero claims', async () => {
+    const rootMutationsWhileDraining: string[] = [];
+    const rootMutationsAfterDrain: string[] = [];
+    let phase: 'before-drain' | 'draining' | 'after-drained' = 'before-drain';
+    const logs: string[] = [];
+    let releaseWorkers: (() => void) | undefined;
+    let observeDrain: (() => void) | undefined;
+    let observeBusyPoll: (() => void) | undefined;
+    let staleChecks = 0;
+    const drainObserved = new Promise<void>((resolve) => {
+      observeDrain = resolve;
+    });
+    const busyPollObserved = new Promise<void>((resolve) => {
+      observeBusyPoll = resolve;
+    });
+    const workersReleased = new Promise<void>((resolve) => {
+      releaseWorkers = resolve;
+    });
+    const recordRootMutation = (operation: string) => {
+      if (phase === 'draining') rootMutationsWhileDraining.push(operation);
+      if (phase === 'after-drained') rootMutationsAfterDrain.push(operation);
+    };
+
+    const run = runDaemon(
+      {
+        discoverBacklog: async () => [{ slug: 'first' }, { slug: 'second' }],
+        runFeature: async (item) => {
+          await workersReleased;
+          return { slug: item.slug, status: 'done' as const };
+        },
+        staleEngineChecker: {
+          check: () => (staleChecks++ === 0 ? 'current' : 'stale'),
+          capturedIdentity: () => 'engine-before',
+          targetIdentity: () => 'engine-after',
+        },
+        refreshEngineSource: async () => {
+          recordRootMutation('refresh');
+        },
+        rebuildEngine: async () => {
+          recordRootMutation('rebuild');
+        },
+        requestRestart: async () => {
+          recordRootMutation('relink');
+          recordRootMutation('restart');
+          return { fired: true };
+        },
+        log: (line) => {
+          logs.push(line);
+          if (line === '[daemon] drain started: stale-engine') {
+            phase = 'draining';
+            observeDrain?.();
+          }
+        },
+        sleep: async () => {
+          observeBusyPoll?.();
+          await workersReleased;
+        },
+      },
+      {
+        concurrency: 2,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        idlePollMs: 0,
+        maxIdlePolls: 0,
+      },
+    );
+
+    const firstBoundary = await Promise.race([
+      drainObserved.then(() => 'drain-started' as const),
+      busyPollObserved.then(() => 'busy-poll' as const),
+    ]);
+    try {
+      expect(firstBoundary).toBe('drain-started');
+      expect(rootMutationsWhileDraining).toEqual([]);
+    } finally {
+      phase = 'after-drained';
+      releaseWorkers?.();
+      await run;
+    }
+
+    expect({ rootMutationsAfterDrain, logs }).toEqual({
+      rootMutationsAfterDrain: ['refresh', 'rebuild', 'relink', 'restart'],
+      logs: expect.arrayContaining(['[daemon] drain started: stale-engine']),
+    });
+  });
+
+  it('refuses a feature that becomes eligible during drain, then lets the restarted daemon claim it', async () => {
+    const firstRunClaimAttempts: string[] = [];
+    const firstRunStarted: string[] = [];
+    let laterEligible = false;
+    let releaseWorkers: (() => void) | undefined;
+    let observeDrain: (() => void) | undefined;
+    let restartFired: (() => void) | undefined;
+    const drainObserved = new Promise<void>((resolve) => {
+      observeDrain = resolve;
+    });
+    const workersReleased = new Promise<void>((resolve) => {
+      releaseWorkers = resolve;
+    });
+    const restartFiredPromise = new Promise<void>((resolve) => {
+      restartFired = resolve;
+    });
+
+    const firstRun = runDaemon(
+      {
+        discoverBacklog: async () => [
+          { slug: 'first' },
+          { slug: 'second' },
+          ...(laterEligible ? [{ slug: 'newly-eligible' }] : []),
+        ],
+        runFeature: async (item) => {
+          firstRunStarted.push(item.slug);
+          await workersReleased;
+          return { slug: item.slug, status: 'done' as const };
+        },
+        claims: trackedClaims(firstRunClaimAttempts),
+        hasRestartPending: async () => true,
+        triggerSelfRestart: async () => {
+          restartFired?.();
+        },
+        log: (line) => {
+          if (line === '[daemon] drain started: restart-pending') observeDrain?.();
+        },
+      },
+      { concurrency: 2, once: false, idlePollMs: 0, maxIdlePolls: 0 },
+    );
+
+    await drainObserved;
+    laterEligible = true;
+    releaseWorkers?.();
+    await Promise.all([firstRun, restartFiredPromise]);
+
+    const restartedRunClaimAttempts: string[] = [];
+    const restartedRunStarted: string[] = [];
+    await runDaemon(
+      {
+        discoverBacklog: async () => [{ slug: 'newly-eligible' }],
+        runFeature: async (item) => {
+          restartedRunStarted.push(item.slug);
+          return { slug: item.slug, status: 'done' as const };
+        },
+        claims: trackedClaims(restartedRunClaimAttempts),
+      },
+      { concurrency: 1, once: true },
+    );
+
+    expect({ firstRunClaimAttempts, firstRunStarted, restartedRunClaimAttempts, restartedRunStarted }).toEqual({
+      firstRunClaimAttempts: ['first', 'second'],
+      firstRunStarted: ['first', 'second'],
+      restartedRunClaimAttempts: ['newly-eligible'],
+      restartedRunStarted: ['newly-eligible'],
+    });
+  });
+
+  it('retries one failed restart firing, logs the retry once, then keeps the successful firing one-shot', async () => {
+    const logs: string[] = [];
+    let triggerCalls = 0;
+
+    const result = await runDaemon(
+      {
+        discoverBacklog: async () => [],
+        runFeature: async () => {
+          throw new Error('empty backlog must not dispatch');
+        },
+        hasRestartPending: async () => true,
+        triggerSelfRestart: async () => {
+          triggerCalls++;
+          if (triggerCalls === 1) throw new Error('tmux respawn unavailable');
+        },
+        log: (line) => logs.push(line),
+      },
+      { concurrency: 1, once: false, idlePollMs: 0, maxIdlePolls: 3 },
+    );
+
+    expect({
+      triggerCalls,
+      stopReason: result.stoppedReason,
+      retryLogs: logs.filter((line) => line.includes('self-restart trigger failed')),
+      firingLogs: logs.filter((line) => line.includes('self-restart marker found at idle boundary; firing trigger')),
+      completionLogs: logs.filter((line) => line.includes('self-restart trigger completed')),
+    }).toEqual({
+      triggerCalls: 2,
+      stopReason: 'idle_timeout',
+      retryLogs: ['[daemon] self-restart trigger failed: tmux respawn unavailable; will retry at next idle boundary'],
+      firingLogs: [
+        '[daemon] self-restart marker found at idle boundary; firing trigger',
+        '[daemon] self-restart marker found at idle boundary; firing trigger',
+      ],
+      completionLogs: ['[daemon] self-restart trigger completed (no respawn yet)'],
+    });
+  });
 });
