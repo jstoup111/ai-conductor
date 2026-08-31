@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-31T20:00:10.634Z
+Status: halted
 Slug: the-cumulative-kickback-cap-never-resets-so-a-reco
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-the-cumulative-kickback-cap-never-resets-so-a-reco
-Head SHA: ddf4528460602f37360a12243d470cf47eafb569
-Halted at: 2026-08-31T18:36:11.187Z
+Head SHA: ffdadae7739838211e8e46d54d6f8b3c31050c29
+Halted at: 2026-08-31T20:28:16.718Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
@@ -20,8 +18,6 @@ Validation group "prd_audit" halted: as-built review verdict is BLOCKED — ship
 
 Blocking findings:
 AB-1 (REMEDIABLE; Task 4): Existing rollback, rebase-credit, and growth-reconciliation paths still write the kickback ledger outside the new lease.
-AB-2 (REMEDIABLE; Task 4): Rebase lap credit treats effectiveLimit as a counter and resets it to zero instead of preserving adjusted state.
-AB-3 (REMEDIABLE; adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class decision 4): The shipped raise command accepts --amount instead of the carried-forward approved --by interface.
 AB-4 (REMEDIABLE; Task 11): Mutation and resume do not bind ledger authorization to the originating gate of the live needs-human halt.
 AB-5 (REMEDIABLE; Task 15): Reconciliation creates a missing authorization occurrence and applies a decision that was not durable before interruption.
 AB-6 (REMEDIABLE; Task 15): Duplicate adjustment occurrences are not detected as ambiguous; only the first matching id is compared.
