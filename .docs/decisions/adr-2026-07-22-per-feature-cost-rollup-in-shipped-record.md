@@ -32,6 +32,12 @@ The `step_completed` emit carries `model` alongside `tokenUsage`, keeping the ex
 `conductor.step.tokens` counter fed so the deferred OTel-first work (Approach C) is a consumer swap,
 not a re-wire.
 
+> **Amended 2026-08-30 by #2095:** the "consumer swap" above is delivered. The OTel exporter no
+> longer accumulates cost in a process-local counter; it records cumulative gauges from this same
+> `events.jsonl` rollup at every step close (per step × model × source, plus the whole-feature
+> total), so the exported cost, the finish line, and the `## Cost` block are three projections of one
+> ledger and cannot disagree. The `## Cost` block itself is unchanged.
+
 The KPI/trend surface (`conduct kpi`) reads committed `.docs/shipped/*.md` Cost blocks — no new
 database, no daemon-shared store; trend survives machine changes because the data is in git.
 
