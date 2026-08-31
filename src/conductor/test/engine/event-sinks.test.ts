@@ -123,6 +123,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   // is already persisted, so an unpersisted preservation reads as silence.
   'rebase_gate_preserved',
   'operator_rewind',
+  'setup_repair',
   'project_setup',
   'plan_growth',
   'config_deprecated_key',
@@ -162,6 +163,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_review_cache_discarded',
   'operator_rewind',
+  'setup_repair',
   'project_setup',
   'plan_growth',
   'contained_live_checkout_drift',
