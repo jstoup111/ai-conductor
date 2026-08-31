@@ -8,6 +8,9 @@
 schema" consequence below is corrected to match it.
 **Amended:** 2026-08-26 by operator (James Stoup) — decision 8 added, subordinating this
 route to `adr-2026-07-10-validation-group-join` decision 3.
+**Amended:** 2026-08-31 by #2119 — decision 9 added: a finding whose remedy existing plan
+tasks already own takes a non-appending `existing-task` disposition that never draws on the
+plan-growth allowance; decisions 3, 4, and 7 are qualified accordingly.
 
 ## Context
 
@@ -136,6 +139,35 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    as-built-only path is decision 4's gate-local durable budget the sole authority — which is
    why the process-local `remediationRounds` pre-cap was removed from that branch and from
    that branch alone.
+
+9. **Findings owned by existing plan tasks append nothing and charge no growth (added
+   2026-08-31 by #2119).** The remediation planner may disposition a `REMEDIABLE` (or
+   prd_audit `FIXABLE`) finding as **`existing-task`**, binding it to one or more task ids
+   already present in the active plan, each resolved fail-closed through the shared
+   reference resolver (adr-2026-08-30-shared-plan-task-reference-resolver D1/D2/D3); an
+   unresolvable id invalidates the disposition. `existing-task` is excluded from the
+   plan-append contract exactly as `publication` is
+   (adr-2026-08-06-publication-progress-is-its-own-disposition shape discipline: the union,
+   the fail-closed validator, `remediationDispositionStep`, and
+   `remediationDispositionAppendsToPlan` widen in the same change), routes to `build`, and
+   consumes ONLY this gate's lap allowance under decision 4's lap cap — `growth.added` is
+   not incremented and `prdAuditAppendCap` is never consulted for it, so decision 4's
+   "appended tasks draw on the shared plan-growth allowance" now governs appending
+   dispositions only. Decision 3's "admitted through the existing `appendRemediationTasks`
+   appender" is likewise qualified: `existing-task` bypasses the appender by construction
+   and introduces no second appender (decision 5 unchanged). Decision 7's pending entry for
+   such a finding is authorized by the successful resolution of its task binding rather
+   than by an append, and is persisted, validated, and cleared identically. Decision 8's
+   condition applies unchanged. **Every `existing-task` kickback MUST re-stage its bound task
+   ids to `pending` in `.pipeline/task-status.json` (the same re-seed seam the appender uses)
+   before the rewind, fail-closed — a route that cannot re-stage halts rather than dispatching
+   a BUILD with no pending work.** Without this the next dispatch sees the bound tasks still
+   `done` and the kickback delivers nothing (the prior restage bug class). The no-op escalation pair (decision 3) stays armed for this
+   disposition — its lap has no plan-text progress witness, so the tree-hash baseline is
+   its only termination evidence. A cap terminal still halts `kickback-cap`, its prose
+   naming the budget actually exhausted as diagnostics only
+   (adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class D2); the typed
+   ledger remains the authority.
 
 ## Consequences
 
