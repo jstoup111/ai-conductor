@@ -13,6 +13,24 @@ import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-art
 // grammar instead of re-deriving a narrower ad hoc regex.)
 export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
+export type PlanTaskReferenceResolution =
+  | { kind: 'resolved'; id: string }
+  | { kind: 'unresolvable'; id: string }
+  | { kind: 'malformed'; raw: string };
+
+/** Resolves a cited plan-task id against the active plan's declared task ids. */
+export function resolvePlanTaskReference(
+  raw: string,
+  planTaskIds: ReadonlySet<string>,
+): PlanTaskReferenceResolution {
+  const id = raw.trim().replace(/\s*\([^()]*\)$/, '');
+  if (!new RegExp(`^${TASK_ID_PATTERN}$`).test(id)) return { kind: 'malformed', raw };
+
+  return planTaskIds.has(id)
+    ? { kind: 'resolved', id }
+    : { kind: 'unresolvable', id };
+}
+
 // Shared task-header grammar for parsers that identify task blocks without
 // requiring a title. Keep every consumer on this expression so a supported
 // heading form cannot silently drift between Files and Verify-only metadata.
