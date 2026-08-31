@@ -179,6 +179,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_no_progress',
   'build_stall',
   'pipeline_closeout',
+  'renderer_error',
   'provider_attempt',
   'scratch_cleanup_reclaimed',
   'scratch_cleanup_retained',
@@ -286,6 +287,18 @@ describe('event sink subscriptions', () => {
       otel: true,
       rendered: false,
       persisted: false,
+    });
+  });
+
+  it('renders and persists renderer errors through the shared event spine', () => {
+    expect({
+      sinks: EVENT_SINKS.renderer_error,
+      rendered: renderedEventTypes().includes('renderer_error'),
+      persisted: persistedEventTypes().includes('renderer_error'),
+    }).toEqual({
+      sinks: { render: true, persist: true, audit: false, otel: false },
+      rendered: true,
+      persisted: true,
     });
   });
 

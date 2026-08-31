@@ -2314,6 +2314,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // to answer by summing a hundred log lines by hand.
       log(`${dot}   ${chalk.dim(formatFeatureUsageTotal(event))}`);
       break;
+    case 'renderer_error':
+      log(`${dot} ${chalk.yellow(`⚠ renderer ${event.rendererName} failed: ${event.error}`)}`);
+      break;
     case 'scratch_cleanup_reclaimed':
       log(`${dot} ${chalk.green('✓')} scratch reclaimed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
       break;
