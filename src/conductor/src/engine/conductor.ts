@@ -375,7 +375,12 @@ import {
   makeRetainedPrPresentable,
   clearHaltStateForResume,
 } from './halt-pr-rehabilitation.js';
-import { computeCostRollup, toFeatureUsageTotals, type CostRollup } from './cost-rollup.js';
+import {
+  computeCostRollup,
+  toFeatureCostSnapshot,
+  toFeatureUsageTotals,
+  type CostRollup,
+} from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
@@ -2001,13 +2006,30 @@ export class Conductor {
     this.executionEventTail = delivery.catch(() => {});
     if (!terminalKey) return delivery;
 
-    const terminalDelivery = delivery.then(() => {
+    const terminalDelivery = delivery.then(async () => {
       this.openExecutions.delete(terminalKey);
+      if (event.type === 'step_completed' || event.type === 'step_failed') {
+        await this.emitFeatureCostSnapshot();
+      }
     }).finally(() => {
       this.closingExecutions.delete(terminalKey);
     });
     this.closingExecutions.set(terminalKey, terminalDelivery);
     return terminalDelivery;
+  }
+
+  /**
+   * Project the durable event ledger after a step closes. This is best-effort:
+   * a missing or corrupt ledger must never alter that step's verdict.
+   */
+  private async emitFeatureCostSnapshot(): Promise<void> {
+    try {
+      const rollup = await computeCostRollup(this.projectRoot);
+      if ((rollup.readErrors ?? 0) > 0) return;
+      await this.events.emit(toFeatureCostSnapshot(rollup));
+    } catch {
+      // Per-step provider lines remain the record when the ledger cannot be read.
+    }
   }
 
   /** Close every execution this conductor observed, without exposing step selection to callers. */

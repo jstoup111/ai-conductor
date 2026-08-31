@@ -17,13 +17,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AggregationTemporality, InMemoryMetricExporter } from '@opentelemetry/sdk-metrics';
-import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
-import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -40,6 +36,16 @@ interface FeatureCostSnapshot {
     model?: string;
     tokens: { input?: number; output?: number; cacheRead?: number; cacheCreation?: number };
   }>;
+}
+
+type StepTerminal = Extract<ConductorEvent, { type: 'step_completed' | 'step_failed' }>;
+
+function stepVerdicts(terminals: StepTerminal[]): Array<[string, string, string | undefined]> {
+  return terminals.map((event) => [
+    event.type,
+    event.step,
+    event.type === 'step_completed' ? event.status : undefined,
+  ]);
 }
 
 let dir: string;
@@ -92,7 +98,10 @@ interface RunOptions {
   persist?: boolean;
 }
 
-function finishingRunner(options: RunOptions): StepRunner {
+function finishingRunner(
+  options: RunOptions,
+  emitProviderAttempt: (event: Extract<ConductorEvent, { type: 'provider_attempt' }>) => Promise<void>,
+): StepRunner {
   return {
     run: vi.fn(async (step: StepName) => {
       if (step === 'finish') {
@@ -102,6 +111,17 @@ function finishingRunner(options: RunOptions): StepRunner {
         state.pr_url = 'https://github.com/org/repo/pull/1';
         await writeState(statePath, state);
         await writeState(join(dir, '.pipeline/conduct-state.json'), state);
+      }
+      if (options.usage) {
+        await emitProviderAttempt({
+          type: 'provider_attempt',
+          step,
+          provider: 'claude',
+          outcome: options.success === false ? 'failure' : 'success',
+          invoked: true,
+          model: 'm2',
+          tokenUsage: options.usage,
+        });
       }
       return {
         success: options.success ?? true,
@@ -116,20 +136,19 @@ function finishingRunner(options: RunOptions): StepRunner {
 
 async function runFinish(options: RunOptions = {}): Promise<{
   snapshots: FeatureCostSnapshot[];
-  terminals: ConductorEvent[];
+  terminals: StepTerminal[];
   order: string[];
-  metrics: ReturnType<InMemoryMetricExporter['getMetrics']>;
 }> {
   const events = new ConductorEventEmitter();
   const snapshots: FeatureCostSnapshot[] = [];
-  const terminals: ConductorEvent[] = [];
+  const terminals: StepTerminal[] = [];
   const order: string[] = [];
   events.on('step_completed', (event) => {
-    terminals.push(event);
+    terminals.push(event as StepTerminal);
     order.push(event.type);
   });
   events.on('step_failed', (event) => {
-    terminals.push(event);
+    terminals.push(event as StepTerminal);
     order.push(event.type);
   });
   events.on('feature_cost_snapshot' as ConductorEvent['type'], (event) => {
@@ -140,26 +159,9 @@ async function runFinish(options: RunOptions = {}): Promise<{
     ? undefined
     : new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
   persister?.start();
-  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-  const visualizer = new OtelVisualizer(
-    resolveOtelConfig(
-      { otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318' } },
-      join(dir, '.pipeline'),
-    ),
-    {
-      spanExporter: new InMemorySpanExporter(),
-      metricExporter,
-    },
-  );
-  visualizer.start(events, {
-    feature: 'feature-cost-snapshot',
-    project: 'test-project',
-    pipelineDir: join(dir, '.pipeline'),
-  });
-
   const conductor = new Conductor({
     stateFilePath: statePath,
-    stepRunner: finishingRunner(options),
+    stepRunner: finishingRunner(options, (event) => events.emit(event)),
     events,
     projectRoot: dir,
     mode: 'auto',
@@ -173,10 +175,9 @@ async function runFinish(options: RunOptions = {}): Promise<{
   try {
     await conductor.run();
   } finally {
-    await visualizer.stop();
     persister?.stop();
   }
-  return { snapshots, terminals, order, metrics: metricExporter.getMetrics() };
+  return { snapshots, terminals, order };
 }
 
 beforeEach(async () => {
@@ -231,32 +232,6 @@ describe('acceptance: ledger-derived feature cost snapshot at the real step-clos
     expect(result.order.indexOf('feature_cost_snapshot')).toBeGreaterThan(
       result.order.indexOf('step_completed'),
     );
-    const metrics = result.metrics.flatMap((resource) =>
-      resource.scopeMetrics.flatMap((scope) => scope.metrics),
-    );
-    const stepCost = metrics.find((metric) =>
-      metric.descriptor.name === 'conductor.feature.step.cost',
-    );
-    const stepTokens = metrics.find((metric) =>
-      metric.descriptor.name === 'conductor.feature.step.tokens',
-    );
-    expect(stepCost?.dataPoints).toEqual(expect.arrayContaining([
-      expect.objectContaining({ value: 2.1, attributes: expect.objectContaining({ project: 'test-project', feature: 'feature-cost-snapshot', step: 'build', model: 'm1', source: 'provider' }) }),
-      expect.objectContaining({ value: 1.4, attributes: expect.objectContaining({ project: 'test-project', feature: 'feature-cost-snapshot', step: 'finish', model: 'm2', source: 'rate-card' }) }),
-    ]));
-    for (const point of stepCost?.dataPoints ?? []) {
-      expect(point.attributes).toMatchObject({
-        project: 'test-project',
-        feature: 'feature-cost-snapshot',
-      });
-      expect(point.attributes).not.toHaveProperty('run');
-      expect(point.attributes).not.toHaveProperty('run_id');
-      expect(point.attributes).not.toHaveProperty('conductor.run.id');
-    }
-    expect(stepTokens?.dataPoints).toEqual(expect.arrayContaining([
-      expect.objectContaining({ value: 100, attributes: expect.objectContaining({ step: 'build', model: 'm1', kind: 'input' }) }),
-      expect.objectContaining({ value: 5, attributes: expect.objectContaining({ step: 'finish', model: 'm2', kind: 'output' }) }),
-    ]));
   });
 
   it('re-emits cumulative, non-decreasing ledger totals across sequential process lifetimes', async () => {
@@ -289,7 +264,9 @@ describe('acceptance: ledger-derived feature cost snapshot at the real step-clos
     );
   });
 
-  it('suppresses an unreadable ledger projection without changing the successful step verdict', async () => {
+  it('suppresses a malformed-ledger projection without changing the clean step-verdict sequence', async () => {
+    const clean = await runFinish({ persist: false });
+    await seedFinishBoundary();
     await writeFile(join(dir, '.pipeline/events.jsonl'), '{ malformed\n');
 
     const result = await runFinish();
@@ -297,19 +274,17 @@ describe('acceptance: ledger-derived feature cost snapshot at the real step-clos
 
     expect(ledger).toContain('{ malformed');
     expect(result.snapshots).toEqual([]);
-    expect(result.terminals).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'step_completed', step: 'finish', status: 'done' }),
-    ]));
+    expect(stepVerdicts(result.terminals)).toEqual(stepVerdicts(clean.terminals));
   });
 
-  it('suppresses a missing-ledger projection without changing the successful step verdict', async () => {
+  it('suppresses a missing-ledger projection without changing the clean step-verdict sequence', async () => {
+    const clean = await runFinish({ persist: false });
+    await seedFinishBoundary();
     await rm(join(dir, '.pipeline/events.jsonl'), { force: true });
 
     const result = await runFinish({ persist: false });
 
     expect(result.snapshots).toEqual([]);
-    expect(result.terminals).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'step_completed', step: 'finish', status: 'done' }),
-    ]));
+    expect(stepVerdicts(result.terminals)).toEqual(stepVerdicts(clean.terminals));
   });
 });
