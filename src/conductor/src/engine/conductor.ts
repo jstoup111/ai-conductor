@@ -33,6 +33,7 @@ import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
 import {
   appendBuildReviewWorkOrderContext,
+  classifyBuildReviewDurableRead,
   markBuildReviewWorkOrderAttempted,
   readBuildReviewFeatureWorkOrder,
 } from './build-review-work-order.js';
@@ -4571,25 +4572,34 @@ export class Conductor {
    * from the stable effect id. The attempt is stamped BEFORE provider work, so
    * a repeat of an already-attempted case cannot take a second free route.
    */
-  private async durableBuildReviewRetryContext(retryHint: string | undefined): Promise<string | undefined> {
-    const feature = await readRemediationCaseStoreFeature(this.projectRoot);
-    if (!feature) return undefined;
+  private async durableBuildReviewRetryContext(retryHint: string | undefined): Promise<
+    | { readonly kind: 'ready'; readonly context: string }
+    | { readonly kind: 'absent' }
+    | { readonly kind: 'invalid'; readonly reason: string }
+  > {
+    const featureRead = await readRemediationCaseStoreFeature(this.projectRoot);
+    if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
+    if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
+    if (!featureRead.feature) return { kind: 'absent' };
+    const feature = featureRead.feature;
     const order = await readBuildReviewFeatureWorkOrder(this.projectRoot, feature);
-    if (!order.ok) return undefined;
+    if (classifyBuildReviewDurableRead(order) === 'absent') return { kind: 'absent' };
+    if (!order.ok) return { kind: 'invalid', reason: `work order ${order.reason}` };
     // A settled order stays on disk as evidence, so openness is what makes it
     // BUILD input. Without this the artifact would keep re-entering every
     // later BUILD prompt long after its cases were resolved.
     const state = await new RemediationCaseStore(this.projectRoot, feature).read();
-    if (!state.ok) return undefined;
+    if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
     const openActionCases = new Set(state.state.cases
       .filter((record) => record.resolution === 'open' && record.effect.kind === 'action')
       .map((record) => record.id));
-    if (!order.workOrder.cases.some((row) => openActionCases.has(row.caseId))) return undefined;
-    await markBuildReviewWorkOrderAttempted(this.projectRoot, feature);
-    return appendBuildReviewWorkOrderContext(
+    if (!order.workOrder.cases.some((row) => openActionCases.has(row.caseId))) return { kind: 'absent' };
+    const attempt = await markBuildReviewWorkOrderAttempted(this.projectRoot, feature);
+    if (!attempt.ok) return { kind: 'invalid', reason: `work order attempt ${attempt.reason}` };
+    return { kind: 'ready', context: appendBuildReviewWorkOrderContext(
       retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
       order.workOrder,
-    );
+    ) };
   }
 
   /** Best-effort compact remediation context from existing build-review evidence. */
@@ -7786,7 +7796,15 @@ export class Conductor {
         if (step.name === 'build') {
           // Durable, not process-local: this is the clause an in-memory hint
           // alone can never satisfy (Task 18 Done-when 5).
-          retryHint = (await this.durableBuildReviewRetryContext(retryHint)) ?? retryHint;
+          const durableRetry = await this.durableBuildReviewRetryContext(retryHint);
+          if (durableRetry.kind === 'invalid') {
+            const reason = `BUILD durable remediation recovery halted: ${durableRetry.reason}`;
+            await this.writeHaltMarker(reason + '\n', 'needs-human');
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            await this.emitLoopHalt(reason);
+            return;
+          }
+          if (durableRetry.kind === 'ready') retryHint = durableRetry.context;
         }
         let successOutput: string | undefined;
         let stepResult: StepRunResult | undefined;

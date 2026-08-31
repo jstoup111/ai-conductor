@@ -195,7 +195,10 @@ describe('remediation case reconciler', () => {
       { ok: false, reason: 'illegal-disposition-transition' }, before,
     ]);
   });
-  it('converges a re-applied judgement on the first stamped identity instead of a second one', async () => {
+  it.each([
+    ['an unbound equivalent proposal', ACTION_CASE],
+    ['an explicitly bound proposal', { ...ACTION_CASE, existingCaseId: 'case-1' }],
+  ] as const)('keeps %s on the first stamped identity instead of a second one', async (_origin, replayedCase) => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
     const first = await reconcileRemediationCases(store, {
@@ -204,7 +207,7 @@ describe('remediation case reconciler', () => {
     // A crash between the store write and the coordinator's next step replays
     // the identical judgement under the same lease.
     const second = await reconcileRemediationCases(store, {
-      graph: graph(ACTION_CASE), recordedAt: '2026-08-30T12:05:00.000Z', generateId: generatedIds('case-2', 'effect-2'),
+      graph: graph(replayedCase), recordedAt: '2026-08-30T12:05:00.000Z', generateId: generatedIds('case-2', 'effect-2'),
     });
 
     expect(first.ok && first.state.cases).toHaveLength(1);

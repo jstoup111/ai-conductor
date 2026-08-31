@@ -188,6 +188,18 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events).toEqual(['remediation_adjudication_started', 'remediation_adjudication_failed']);
   });
 
+  it('fails closed before reconciliation when durable attempt evidence is invalid', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline/build-review-work-order.json'), '{not json', 'utf8');
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(result).toEqual({ ok: false, detail: 'build-review work order malformed-json' });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
   it('re-reads late exact operator authority before it can reserve an autonomous effect', async () => {
     const root = await projectRoot();
     const resolutions = [new Set<string>(), new Set<string>(), new Set([findingId])];
@@ -319,7 +331,10 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(result).toMatchObject({ ok: true, route: 'pass' });
     expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(4);
   });
-  it('halts an attempted action case bound again instead of granting a second free route', async () => {
+  it.each([
+    ['explicit provider binding', true],
+    ['unbound proposal converged by reconciliation', false],
+  ] as const)('halts an attempted action case through %s instead of granting a second free route', async (_origin, explicitlyBound) => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
     await store.replace({
@@ -341,7 +356,10 @@ describe('coordinateBuildReviewAdjudication', () => {
     const events: RemediationCaseLifecycleEvent[] = [];
     const repeated: RemediationCaseJudgement = {
       ...actionJudgement(),
-      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-durable' }],
+      cases: [{
+        ...actionJudgement().cases[0]!,
+        ...(explicitlyBound ? { existingCaseId: 'case-durable' } : {}),
+      }],
     };
 
     const result = await coordinateBuildReviewAdjudication({
@@ -352,6 +370,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'already-attempted',
     }));
+    expect(events.map((event) => event.type)).not.toContain('remediation_effect_applied');
   });
 
   it('resolves an attempted open case that the current lap no longer reports', async () => {
