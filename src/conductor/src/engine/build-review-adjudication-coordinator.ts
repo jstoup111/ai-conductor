@@ -113,16 +113,10 @@ export async function coordinateBuildReviewAdjudication(input: {
   });
   if (!reconciled.ok) return fail(reconciled.reason === 'store-failure' ? `case store ${reconciled.storeReason}` : `case reconciliation ${reconciled.reason}`);
 
-  // Reconciliation preserves proposed-case order for engine-stamped additions;
-  // explicit existing bindings retain their own durable id. This derives the
-  // local mapping without making a provider-visible identity API.
-  const newlyStamped = reconciled.state.cases.slice(prior.state.cases.length);
-  let newIndex = 0;
-  const caseIdsByRef = new Map<string, string>();
-  for (const proposed of admitted) {
-    const id = proposed.case.existingCaseId ?? newlyStamped[newIndex++]?.id;
-    if (id) caseIdsByRef.set(proposed.case.caseRef, id);
-  }
+  // Reconciliation owns durable identity, so it reports the caseRef -> case-id
+  // map itself. Deriving it here from array positions could not see a replayed
+  // judgement converging on an already-stamped case.
+  const caseIdsByRef = reconciled.caseIdsByRef;
   const reconciledCasesById = new Map(reconciled.state.cases.map((record) => [record.id, record]));
   const priorCasesById = new Map(prior.state.cases.map((record) => [record.id, record]));
   const emittedCaseIds = new Set<string>();
