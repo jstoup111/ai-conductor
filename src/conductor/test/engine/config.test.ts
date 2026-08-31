@@ -753,6 +753,30 @@ steps:
       expect(result.error.message).toMatch(/after/);
     });
 
+    it('rejects when on gating and structural custom steps while allowing advisory custom steps', () => {
+      const customStep = (enforcement: 'gating' | 'structural' | 'advisory') => ({
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            enforcement,
+            when: 'tier == S',
+          },
+        },
+      });
+
+      const outcomes = (['gating', 'structural', 'advisory'] as const).map((enforcement) => {
+        const result = validateConfig(customStep(enforcement));
+        return result.ok ? 'accepted' : result.error.message;
+      });
+
+      expect(outcomes).toEqual([
+        'Cannot condition gating step: "lint" with when:. Only advisory steps may be conditional.',
+        'Cannot condition structural step: "lint" with when:. Only advisory steps may be conditional.',
+        'accepted',
+      ]);
+    });
+
     it('accepts custom step with valid after target and existing SKILL.md', async () => {
       await mkdir(join(tmpDir, 'skills', 'custom-lint'), { recursive: true });
       await writeFile(

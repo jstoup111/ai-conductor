@@ -450,7 +450,7 @@ export function validateConfig(
       ...Object.entries(OUT_OF_BAND_STEPS),
     ]);
     const stepSkipAuthorityError = (
-      def: (typeof ALL_STEPS)[number] | undefined,
+      def: Pick<(typeof ALL_STEPS)[number], 'enforcement' | 'configDisableAllowed'> | undefined,
       name: string,
       key: 'disable' | 'when',
     ): string | undefined => {
@@ -564,6 +564,13 @@ export function validateConfig(
         }
         if (!isCustom) {
           const skipAuthorityError = stepSkipAuthorityError(def, name, 'when');
+          if (skipAuthorityError) return errVal(skipAuthorityError);
+        } else if (cfg.enforcement === 'gating' || cfg.enforcement === 'structural') {
+          const skipAuthorityError = stepSkipAuthorityError(
+            { enforcement: cfg.enforcement },
+            name,
+            'when',
+          );
           if (skipAuthorityError) return errVal(skipAuthorityError);
         }
         const syntaxErr = validateWhenSyntax(cfg.when);
