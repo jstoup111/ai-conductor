@@ -126,7 +126,7 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toEqual({
       rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [],
-      skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [],
+      skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
     });
   });
 
