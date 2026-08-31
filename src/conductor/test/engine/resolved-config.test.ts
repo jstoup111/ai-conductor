@@ -14,6 +14,7 @@ import {
   resolveProviderPreparationTimeoutMinutes,
   resolveDispatchStartTimeoutSeconds,
   resolveTeardownTimeoutSeconds,
+  resolveCoverageBindingConfig,
 } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
@@ -1121,5 +1122,18 @@ describe('engine/resolved-config', () => {
       };
       expect(resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config).escalate).toBe(true);
     });
+  });
+});
+
+describe('resolveCoverageBindingConfig', () => {
+  it('defaults judgeEnabled to true (adr-2026-08-31 D7 exit condition)', () => {
+    expect(resolveCoverageBindingConfig(undefined).judgeEnabled).toBe(true);
+    expect(resolveCoverageBindingConfig({} as HarnessConfig).judgeEnabled).toBe(true);
+  });
+
+  it('honors an explicit false', () => {
+    expect(
+      resolveCoverageBindingConfig({ coverage_binding: { judge: { enabled: false } } } as HarnessConfig).judgeEnabled,
+    ).toBe(false);
   });
 });

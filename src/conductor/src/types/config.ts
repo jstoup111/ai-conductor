@@ -321,6 +321,19 @@ export interface GateCodeValidityConfig {
 }
 
 /**
+ * `coverage_binding:` — the pre-BUILD coverage-binding judge
+ * (adr-2026-08-31-coverage-binding-judge-step D7). `judge.enabled` gates the
+ * fresh-context judge that confirms each criterion's cited plan task `Done when`
+ * asserts it; disabled, the step completes as a no-op `done`.
+ */
+export interface CoverageBindingConfig {
+  judge?: {
+    /** Dispatch the binding judge before `build`. Omitted → true. */
+    enabled?: boolean;
+  };
+}
+
+/**
  * Retry-routing config kill-switch (retry_routing): master on/off switch for
  * classifying a retry as "rerun" vs "route" (rather than always re-dispatching
  * the same step). Absent block resolves to the documented default (owned by
@@ -495,6 +508,7 @@ export interface HarnessConfig {
    * resolves to `{ enabled: true }`. See `GateCodeValidityConfig`.
    */
   gate_code_validity?: GateCodeValidityConfig;
+  coverage_binding?: CoverageBindingConfig;
   /**
    * Retry-routing kill-switch. Absent block resolves to defaults owned by
    * runtime resolution (not this type). See `RetryRoutingConfig`.

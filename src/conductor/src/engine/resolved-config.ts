@@ -804,3 +804,19 @@ export function resolveBuildReviewConfig(
     rubrics,
   };
 }
+
+/** Resolved `coverage_binding:` block (adr-2026-08-31-coverage-binding-judge-step D7). */
+export interface ResolvedCoverageBindingConfig {
+  /** Whether the pre-BUILD binding judge dispatches. Default: true. */
+  readonly judgeEnabled: boolean;
+}
+
+/**
+ * Resolve `coverage_binding.judge.enabled` with its default. The default is
+ * `true` — the ADR's D7 exit condition, flipped from the initial `false` once
+ * the judge shipped behind the key.
+ */
+export function resolveCoverageBindingConfig(config?: HarnessConfig): ResolvedCoverageBindingConfig {
+  const enabled = config?.coverage_binding?.judge?.enabled;
+  return { judgeEnabled: typeof enabled === 'boolean' ? enabled : true };
+}

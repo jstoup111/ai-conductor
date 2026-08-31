@@ -2735,6 +2735,36 @@ steps:
     });
   });
 
+  describe('coverage_binding config block (adr-2026-08-31 D7)', () => {
+    it('resolves an absent block to judge.enabled true', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.coverage_binding?.judge?.enabled).toBe(true);
+    });
+
+    it('keeps judge.enabled false when set explicitly', () => {
+      const result = validateConfig({ coverage_binding: { judge: { enabled: false } } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.coverage_binding?.judge?.enabled).toBe(false);
+    });
+
+    it('rejects a non-boolean judge.enabled naming the key and type', () => {
+      const result = validateConfig({ coverage_binding: { judge: { enabled: 'yes' } } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toBe('coverage_binding.judge.enabled must be a boolean');
+    });
+
+    it('rejects an unknown nested key', () => {
+      const result = validateConfig({ coverage_binding: { judge: { enabled: true, mode: 'x' } } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/Unknown key in coverage_binding\.judge: "mode"/);
+    });
+  });
+
   describe('ci_watch config field (Task 4)', () => {
     it('resolves absent key to enabled, no warning', () => {
       const result = validateConfig({ harness_version: '>=1.0.0' });
