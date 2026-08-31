@@ -1,6 +1,6 @@
-// Covers: task:1, task:2, task:4
+// Covers: task:1, task:2, task:4, task:10
 /**
- * Covers: task:1, task:2, task:3, task:4
+ * Covers: task:1, task:2, task:3, task:4, task:10
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
  *
  * Tests T15–T16 using OtelVisualizer + InMemoryMetricExporter:
@@ -725,6 +725,40 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
           expect(Object.keys(point.attributes)).not.toEqual(expect.arrayContaining(['run', 'run_id', 'conductor.run.id']));
         }
       }
+    } finally { await provider.shutdown(); }
+  });
+
+  it('does not record a non-finite snapshot total or any of its buckets', async () => {
+    const { exporter, provider, recorder } = await makeRecorder();
+    try {
+      recorder.onFeatureCostSnapshot({
+        ...snapshot,
+        costUsd: Number.NaN,
+        byDimension: [{ step: 'build', costUsd: 1.5 }],
+      });
+      await provider.forceFlush();
+
+      expect(findMetric(exporter, 'conductor.feature.cost')).toBeUndefined();
+      expect(findMetric(exporter, 'conductor.feature.step.cost')).toBeUndefined();
+    } finally { await provider.shutdown(); }
+  });
+
+  it('skips a non-finite dimension bucket while preserving a finite incomplete total', async () => {
+    const { exporter, provider, recorder } = await makeRecorder();
+    try {
+      recorder.onFeatureCostSnapshot({
+        ...snapshot,
+        costUsd: 0,
+        costComplete: false,
+        byDimension: [{ step: 'build', costUsd: Number.NaN }],
+        tokensByDimension: [],
+      });
+      await provider.forceFlush();
+
+      expect(findMetric(exporter, 'conductor.feature.cost')?.dataPoints).toEqual([
+        expect.objectContaining({ value: 0, attributes: { cost_complete: false, project: 'test-project', feature: 'test-feature' } }),
+      ]);
+      expect(findMetric(exporter, 'conductor.feature.step.cost')).toBeUndefined();
     } finally { await provider.shutdown(); }
   });
 });

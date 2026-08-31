@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:10
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -94,6 +94,27 @@ describe('engine/cost-rollup', () => {
       costUnmetered: { count: 0 },
       providers: { claude: { costUsd: 0, costUnmetered: { count: 0 } } },
     });
+  });
+
+  it('marks a mixed metered and unmetered ledger incomplete without dropping its metered bucket', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build', provider: 'claude', model: 'm1',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 100, output: 10, costUsd: 1, costSource: 'provider' },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build_review', provider: 'codex',
+        outcome: 'success', invoked: true,
+      }),
+    ]);
+
+    const snapshot = toFeatureCostSnapshot(await computeCostRollup(dir));
+
+    expect(snapshot).toMatchObject({ costUsd: 1, costComplete: false });
+    expect(snapshot.byDimension).toEqual([
+      { step: 'build', model: 'm1', source: 'provider', costUsd: 1 },
+    ]);
   });
 
   it.each([

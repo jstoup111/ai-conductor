@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:6, task:8
+// Covers: task:2, task:5, task:6, task:8, task:10
 /**
  * T9: OtelVisualizer — provider/processor setup (off hot path).
  * T17: hot-path guard — emit() resolves promptly even when the transport blocks.
@@ -500,6 +500,21 @@ describe('Task 5: feature cost snapshot routing', () => {
         project: 'task-5-project', feature: 'task-5-feature', cost_complete: true,
       } }),
     );
+  });
+
+  it('exports an incomplete zero total without a step-cost point for an empty snapshot', async () => {
+    const visualizer = makeTask5Visualizer();
+    await task5Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 0, costComplete: false, byDimension: [], tokensByDimension: [],
+    });
+    await visualizer.stop();
+
+    expect(metric(task5MetricExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 0, attributes: {
+        project: 'task-5-project', feature: 'task-5-feature', cost_complete: false,
+      } }),
+    );
+    expect(metric(task5MetricExporter, 'conductor.feature.step.cost')).toBeUndefined();
   });
 });
 

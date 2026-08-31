@@ -114,6 +114,7 @@ export class MetricsRecorder {
 
     this.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete }));
     for (const bucket of event.byDimension) {
+      if (!Number.isFinite(bucket.costUsd)) continue;
       const attributes: Record<string, string> = { step: bucket.step };
       if (bucket.model !== undefined) attributes.model = bucket.model;
       if (bucket.source !== undefined) attributes.source = bucket.source;
