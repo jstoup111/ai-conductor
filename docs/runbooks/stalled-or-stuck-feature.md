@@ -1051,8 +1051,11 @@ rm -f .worktrees/<slug>/.pipeline/HALT.class
 ```
 
 **What it changes:** the daemon registers a filesystem watcher on each halted feature's marker
-and wakes when it is cleared, so removal is the resume signal. (With `--no-watch` the daemon
-relies on polling instead; it still picks the feature up, just on the next poll.)
+and wakes when it is cleared, so removal is the resume signal. Filesystem events are the fast
+path; the watcher also polls (every second by default), so a clear that lands before the watcher
+is ready — or an event the OS drops — is still picked up within one poll interval. (With
+`--no-watch` the daemon relies on its own polling loop instead; it still picks the feature up,
+just on the next poll.)
 
 **How to confirm:** the next dashboard snapshot lists the slug under ELIGIBLE or IN-PROGRESS
 rather than HALTED, and the log shows `↻ resume <slug>`.

@@ -91,10 +91,14 @@ describe('committed halt record operator pickup', () => {
     expect(haltedRecord).toContain(HALT_REASON.trim());
 
     let cleared = false;
-    dispose = watchHaltCleared(worktreeBase, SLUG, () => {
-      cleared = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    dispose = watchHaltCleared(
+      worktreeBase,
+      SLUG,
+      () => {
+        cleared = true;
+      },
+      { pollIntervalMs: 25 },
+    );
     await unlink(join(worktree, '.pipeline', 'HALT'));
     await vi.waitFor(() => expect(cleared).toBe(true), { timeout: 2_000 });
 
