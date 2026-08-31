@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:3, task:4, task:5
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -275,7 +275,7 @@ describe('parsePrdAuditReport', () => {
     });
   });
 
-  it('rejects a FIXABLE finding whose task is absent from the active plan', () => {
+  it('rejects a FIXABLE finding whose remediation task is absent from the active plan', () => {
     const report = [
       '**PRD:** present',
       '',
@@ -283,7 +283,7 @@ describe('parsePrdAuditReport', () => {
       '',
       '| Criterion | Grade | Plan task | Evidence |',
       '| --- | --- | --- | --- |',
-      '| S2.1 | FIXABLE | 99 | Missing guard |',
+      '| S2.1 | FIXABLE | rem-prd-audit-zz-1 | Missing guard |',
     ].join('\n');
 
     expect(parsePrdAuditReport(report, activePlan)).toEqual({
@@ -293,8 +293,8 @@ describe('parsePrdAuditReport', () => {
         findings: [],
         rejectedRows: [{
           key: 'S2.1',
-          rowText: '| S2.1 | FIXABLE | 99 | Missing guard |',
-          reason: 'PRD audit finding S2.1 names Plan task 99, which is absent from the active plan.',
+          rowText: '| S2.1 | FIXABLE | rem-prd-audit-zz-1 | Missing guard |',
+          reason: 'PRD audit finding S2.1 names Plan task rem-prd-audit-zz-1, which is absent from the active plan.',
         }],
       },
     });
