@@ -47,6 +47,7 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
   step_failed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 }],
   provider_attempt: [{ type: 'provider_attempt', step: 'build', provider: 'claude', outcome: 'success', invoked: true, tokenUsage: { input: 10, output: 2, costUsd: 0.25 } }],
   feature_usage_total: [{ type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0, costUnmeteredDispatches: 0, costUsd: 0.25, inputTokens: 10, outputTokens: 2 }],
+  feature_cost_snapshot: [{ type: 'feature_cost_snapshot', costUsd: 0.25, costComplete: true, byDimension: [{ step: 'build', model: 'test-model', source: 'provider', costUsd: 0.25 }], tokensByDimension: [{ step: 'build', model: 'test-model', tokens: { input: 10, output: 2 } }] }],
   step_retry: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry' }],
   gate_verdict: [{ type: 'gate_verdict', step: 'build', satisfied: true }],
   kickback: [{ type: 'kickback', from: 'build', to: 'plan', count: 1 }],

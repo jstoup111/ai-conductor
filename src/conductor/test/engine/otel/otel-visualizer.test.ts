@@ -381,6 +381,123 @@ describe('Task 5: visualizer identity wiring', () => {
   });
 });
 
+describe('Task 5: feature cost snapshot routing', () => {
+  let task5TempDir: string;
+  let task5PipelineDir: string;
+  let task5SpanExporter: InMemorySpanExporter;
+  let task5MetricExporter: InMemoryMetricExporter;
+  let task5Emitter: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    task5TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-feature-cost-'));
+    task5PipelineDir = join(task5TempDir, '.pipeline');
+    task5SpanExporter = new InMemorySpanExporter();
+    task5MetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    task5Emitter = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(task5TempDir, { recursive: true, force: true });
+  });
+
+  function makeTask5Visualizer(
+    metricExporter = task5MetricExporter,
+    emitter = task5Emitter,
+  ): OtelVisualizer {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      task5PipelineDir,
+    );
+    const visualizer = new OtelVisualizer(resolved, {
+      runId: 'task-5-run',
+      feature: 'task-5-feature',
+      project: 'task-5-project',
+      spanExporter: task5SpanExporter,
+      metricExporter,
+    });
+    visualizer.start(emitter);
+    return visualizer;
+  }
+
+  function metric(exporter: InMemoryMetricExporter, name: string) {
+    return exporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+      .find((candidate) => candidate.descriptor.name === name);
+  }
+
+  it('records ledger-driven cost and token buckets even without a matching step span', async () => {
+    const visualizer = makeTask5Visualizer();
+    await task5Emitter.emit({
+      type: 'feature_cost_snapshot',
+      costUsd: 3.5,
+      costComplete: true,
+      byDimension: [{ step: 'build_review', model: 'm2', source: 'rate-card', costUsd: 2 }],
+      tokensByDimension: [{ step: 'build_review', model: 'm2', tokens: { input: 150, output: 15 } }],
+    });
+    await visualizer.stop();
+
+    expect(metric(task5MetricExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 3.5, attributes: {
+        project: 'task-5-project', feature: 'task-5-feature', cost_complete: true,
+      } }),
+    );
+    expect(metric(task5MetricExporter, 'conductor.feature.step.cost')?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 2, attributes: {
+        project: 'task-5-project', feature: 'task-5-feature', step: 'build_review', model: 'm2', source: 'rate-card',
+      } }),
+    );
+    expect(metric(task5MetricExporter, 'conductor.feature.step.tokens')?.dataPoints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: 150, attributes: expect.objectContaining({ step: 'build_review', model: 'm2', kind: 'input' }) }),
+        expect.objectContaining({ value: 15, attributes: expect.objectContaining({ step: 'build_review', model: 'm2', kind: 'output' }) }),
+      ]),
+    );
+  });
+
+  it('keeps equal step-close and finish-time totals on the feature cost gauge', async () => {
+    const visualizer = makeTask5Visualizer();
+    await task5Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 3.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    await task5Emitter.emit({
+      type: 'feature_usage_total', dispatches: 2, meteredDispatches: 1, unmeteredDispatches: 1,
+      costUnmeteredDispatches: 0, costUsd: 3.5, inputTokens: 0, outputTokens: 0,
+    });
+    await visualizer.stop();
+
+    const values = metric(task5MetricExporter, 'conductor.feature.cost')!.dataPoints
+      .filter((point) => point.attributes['project'] === 'task-5-project')
+      .map((point) => ({ value: point.value, costComplete: point.attributes['cost_complete'] }));
+    expect(values).toEqual(expect.arrayContaining([
+      { value: 3.5, costComplete: true },
+      { value: 3.5, costComplete: false },
+    ]));
+  });
+
+  it('exports the cumulative snapshot for a later visualizer with the same feature identity', async () => {
+    const first = makeTask5Visualizer();
+    await task5Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 1.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    await first.stop();
+
+    const secondExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const secondEmitter = new ConductorEventEmitter();
+    const second = makeTask5Visualizer(secondExporter, secondEmitter);
+    await secondEmitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 3.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    await second.stop();
+
+    expect(metric(secondExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 3.5, attributes: {
+        project: 'task-5-project', feature: 'task-5-feature', cost_complete: true,
+      } }),
+    );
+  });
+});
+
 // ── T17: hot-path guard — emit() resolves promptly (R1 non-blocking) ──────────
 
 describe('T17: hot-path guard — emit() does not await the transport', () => {

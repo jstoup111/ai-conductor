@@ -390,6 +390,9 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'feature_usage_total':
         this.metricsRecorder.onFeatureUsageTotal(event);
         break;
+      case 'feature_cost_snapshot':
+        this.metricsRecorder.onFeatureCostSnapshot(event);
+        break;
       case 'step_retry':
         this.spanManager.onStepRetry(event);
         break;
