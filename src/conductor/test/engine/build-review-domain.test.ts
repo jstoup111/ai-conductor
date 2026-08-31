@@ -18,6 +18,8 @@ import {
   parseBuildReviewSkip,
   renderBuildReviewJudgedResultShape,
   type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection } from '../../src/engine/build-review-domain.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { matchesBuildReviewDisposition, type BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
 
 const HASH = `sha256:${'a'.repeat(64)}`;
@@ -198,6 +200,35 @@ describe('build-review domain', () => {
       expect(parseBuildReviewJudgedResult(candidate), JSON.stringify(counterfactualSensitivity)).toBeUndefined();
       expect(describeBuildReviewJudgedResultRejection(candidate, 'testQuality', expected), JSON.stringify(counterfactualSensitivity)).toContain('counterfactualSensitivity');
     }
+  });
+
+  it('keeps counterfactualSensitivity out of finding identities and existing dispositions', () => {
+    const identityFor = (value: Record<string, unknown>) => {
+      const result = parseBuildReviewJudgedResult(value)!;
+      const parsedFinding = result.findings[0]!;
+      return canonicalizeBuildReviewFindingIdentity({
+        rubric: result.rubric, contractVersion: result.contractVersion,
+        concernKind: parsedFinding.concernKind, anchor: parsedFinding.anchor,
+      })!;
+    };
+    const preChangeIdentity = identityFor(judged([finding()]));
+    const sensitivityVariants = ['supports', 'indeterminate', 'not-applicable'].map((counterfactualSensitivity) =>
+      identityFor(judged([finding()], { counterfactualSensitivity })),
+    );
+    const changedFindingIdentity = identityFor(judged([finding({ anchor: { rubric: 'testQuality', locus: { ...locus, contentHash: `sha256:${'b'.repeat(64)}` } } })]));
+    const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'counterfactual-sensitivity' };
+    const storedDisposition: BuildReviewDispositionRecord = {
+      version: 'v1', feature, finding: preChangeIdentity, sourceLapId: 'lap-1',
+      summary: 'Accepted before counterfactual sensitivity was introduced.', rationale: 'Known risk.',
+      operator: 'operator', acceptedAt: '2026-08-31T00:00:00.000Z',
+    };
+
+    expect(sensitivityVariants).toEqual([preChangeIdentity, preChangeIdentity, preChangeIdentity]);
+    expect(changedFindingIdentity.id).not.toBe(preChangeIdentity.id);
+    for (const identity of sensitivityVariants) {
+      expect(matchesBuildReviewDisposition(feature, identity, [storedDisposition])).toBe(true);
+    }
+    expect(matchesBuildReviewDisposition(feature, changedFindingIdentity, [storedDisposition])).toBe(false);
   });
 
   it('requires a non-empty summary and non-empty evidence locations on every finding', () => {
