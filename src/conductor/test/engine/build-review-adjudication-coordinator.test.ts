@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
@@ -36,7 +37,17 @@ const aggregate = joinBuildReviewRubricOutcomes({
     },
   },
 });
-const sourceId = projectBuildReviewAggregateSources(aggregate)![0]!.findingId;
+// The judge receives namespaced ids from the context and returns them
+// verbatim, so the fixture must use the same identity the coordinator
+// validates against. Deriving the bare findingId here is what let the
+// context/coordinator drift go unnoticed.
+const rawSource = projectBuildReviewAggregateSources(aggregate)![0]!;
+// Two distinct identities, deliberately named apart. `sourceId` is the
+// namespaced id the judge is handed and returns; `findingId` is the bare id
+// operator dispositions are keyed by. Conflating them is what let the
+// context/coordinator drift go unnoticed.
+const sourceId = buildReviewAdjudicationSourceId(rawSource);
+const findingId = rawSource.findingId;
 const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
 
 function actionJudgement(): RemediationCaseJudgement {
@@ -81,7 +92,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   it('dispatches one complete current-source/history judgement and returns its closed action route', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async (context: unknown) => {
-      expect(context).toMatchObject({ currentSources: [expect.objectContaining({ findingId: sourceId })], priorCases: [] });
+      expect(context).toMatchObject({ currentSources: [expect.objectContaining({ findingId })], priorCases: [] });
       return actionJudgement();
     });
     const events: string[] = [];
@@ -104,7 +115,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const judge = vi.fn(async () => actionJudgement());
 
     const result = await coordinateBuildReviewAdjudication({
-      ...input(root, judge), operatorResolvedFindingIds: new Set([sourceId]),
+      ...input(root, judge), operatorResolvedFindingIds: new Set([findingId]),
     });
 
     expect(result).toMatchObject({ ok: true, route: 'pass', trace: expect.stringContaining('operator-resolved') });
@@ -126,7 +137,7 @@ describe('coordinateBuildReviewAdjudication', () => {
 
   it('re-reads late exact operator authority before it can reserve an autonomous effect', async () => {
     const root = await projectRoot();
-    const resolutions = [new Set<string>(), new Set<string>(), new Set([sourceId])];
+    const resolutions = [new Set<string>(), new Set<string>(), new Set([findingId])];
     const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift()!);
 
     const result = await coordinateBuildReviewAdjudication({
