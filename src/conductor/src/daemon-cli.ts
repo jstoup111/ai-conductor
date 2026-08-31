@@ -2216,6 +2216,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'build_review_cache_discarded':
+      log(`${dot} ${chalk.yellow(`build_review cache discarded: ${event.rubric} (${event.reason}; cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp})`)}`);
+      break;
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;

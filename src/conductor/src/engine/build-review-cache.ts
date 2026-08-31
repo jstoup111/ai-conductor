@@ -13,6 +13,18 @@ import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 const CACHE_VERSION = 1;
 const CACHE_DIRECTORY = ".pipeline/build-review/cache";
 
+/**
+ * The judging engine's identity (adr-2026-08-21 D1): a sixth, sibling cache
+ * identity component alongside (never inside) `policyFingerprint`.
+ * `engineStamp` is the 12-hex content stamp only (or the `dev` sentinel);
+ * `skillDigest` is `sha256:` over the raw bytes of the rubric's installed
+ * SKILL.md.
+ */
+export interface BuildReviewEngineIdentity {
+  engineStamp: string;
+  skillDigest: string;
+}
+
 /** One bounded, feature-scoped reusable semantic judgement per rubric. */
 export interface BuildReviewCacheEntry {
   version: typeof CACHE_VERSION;
@@ -21,6 +33,7 @@ export interface BuildReviewCacheEntry {
   projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
+  engineIdentity: BuildReviewEngineIdentity;
   result: BuildReviewJudgedResult;
 }
 
@@ -39,14 +52,21 @@ export interface BuildReviewCacheLookup {
   projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
+  engineIdentity: BuildReviewEngineIdentity;
   lapId: BuildReviewLapId;
   snapshotDigest: string;
 }
 
 /** Safely parsed persisted state, including legacy entries that must miss closed. */
-export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEntry, "contractVersion" | "projectionVersion"> {
+export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEntry, "contractVersion" | "projectionVersion" | "engineIdentity"> {
   contractVersion: BuildReviewRubricContractVersion;
   projectionVersion: "v1" | "v2";
+  /**
+   * Staged legacy parse (adr-2026-08-21 D4): pre-engine-identity entries carry
+   * no field and classify as `engine-version-mismatch`, never `invalid-entry`.
+   * Newly written entries always carry it.
+   */
+  engineIdentity?: BuildReviewEngineIdentity;
 }
 
 /** Explicit cache provenance accompanies a newly materialized current-lap result. */
@@ -68,11 +88,18 @@ export type BuildReviewCacheMissReason =
   | "contract-version-mismatch"
   | "projection-version-mismatch"
   | "projection-digest-mismatch"
-  | "policy-fingerprint-mismatch";
+  | "policy-fingerprint-mismatch"
+  | "engine-version-mismatch"
+  | "skill-digest-mismatch";
 
 export type BuildReviewCacheLookupResolution =
   | { kind: "hit"; hit: BuildReviewCacheHit }
-  | { kind: "miss"; reason: BuildReviewCacheMissReason };
+  | {
+      kind: "miss";
+      reason: BuildReviewCacheMissReason;
+      /** The stamp a discarded engine-identity entry was judged under, when it carried one. */
+      cachedEngineStamp?: string;
+    };
 
 export function cacheEntryPath(projectRoot: string, rubric: BuildReviewRubricId): string {
   return join(projectRoot, CACHE_DIRECTORY, `${rubric}.json`);
@@ -90,17 +117,30 @@ function isRubric(value: unknown): value is BuildReviewRubricId {
   return value === "testQuality";
 }
 
+function parseBuildReviewEngineIdentity(value: unknown): BuildReviewEngineIdentity | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  return Object.keys(candidate).length === 2 &&
+    isNonEmptyString(candidate.engineStamp) && isNonEmptyString(candidate.skillDigest)
+    ? { engineStamp: candidate.engineStamp, skillDigest: candidate.skillDigest }
+    : undefined;
+}
+
 /** Strictly parses the cache boundary; unknown fields and non-judgements miss closed. */
 function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEntryCandidate | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
   const keys = [
     "version", "rubric", "contractVersion", "projectionVersion", "projectionDigest",
-    "policyFingerprint", "result",
+    "policyFingerprint", "result", ...(candidate.engineIdentity === undefined ? [] : ["engineIdentity"]),
   ];
   if (Object.keys(candidate).length !== keys.length || Object.keys(candidate).some((key) => !keys.includes(key))) {
     return undefined;
   }
+  const engineIdentity = candidate.engineIdentity === undefined
+    ? undefined
+    : parseBuildReviewEngineIdentity(candidate.engineIdentity);
+  if (candidate.engineIdentity !== undefined && !engineIdentity) return undefined;
   const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
   if (candidate.version !== CACHE_VERSION || !isRubric(candidate.rubric) || !contractVersion ||
     (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2") ||
@@ -118,6 +158,7 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
     projectionVersion: candidate.projectionVersion,
     projectionDigest: candidate.projectionDigest,
     policyFingerprint: candidate.policyFingerprint,
+    ...(engineIdentity === undefined ? {} : { engineIdentity }),
     result,
   };
 }
@@ -125,8 +166,8 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
 /** Strictly parses entries current code may persist or reuse. */
 export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
   const entry = parseBuildReviewCacheEntryCandidate(value);
-  return entry?.contractVersion === "v3" && entry.projectionVersion === "v2"
-    ? { ...entry, contractVersion: "v3", projectionVersion: "v2" }
+  return entry?.contractVersion === "v3" && entry.projectionVersion === "v2" && entry.engineIdentity !== undefined
+    ? { ...entry, contractVersion: "v3", projectionVersion: "v2", engineIdentity: entry.engineIdentity }
     : undefined;
 }
 
@@ -168,6 +209,16 @@ export function classifyBuildReviewCacheLookup(
   }
   if (entry.policyFingerprint !== lookup.policyFingerprint) {
     return { kind: "miss", reason: "policy-fingerprint-mismatch" };
+  }
+  if (entry.engineIdentity?.engineStamp !== lookup.engineIdentity.engineStamp) {
+    return {
+      kind: "miss",
+      reason: "engine-version-mismatch",
+      ...(entry.engineIdentity === undefined ? {} : { cachedEngineStamp: entry.engineIdentity.engineStamp }),
+    };
+  }
+  if (entry.engineIdentity.skillDigest !== lookup.engineIdentity.skillDigest) {
+    return { kind: "miss", reason: "skill-digest-mismatch", cachedEngineStamp: entry.engineIdentity.engineStamp };
   }
   return {
     kind: "hit",

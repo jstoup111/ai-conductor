@@ -1,7 +1,8 @@
 import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -11,7 +12,7 @@ import type {
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
-import type { HarnessConfig, EffortLevel } from '../types/config.js';
+import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
 import { prdAuditScopeProjection } from './conductor.js';
 import type {
   ComplexityAssessment,
@@ -40,6 +41,9 @@ import {
   resolveFeaturePlanPath,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
+import { engineContentStamp } from './engine-version-id.js';
+import { resolveHarnessRoot } from './install-freshness.js';
+import { BUILD_REVIEW_RUBRIC_IDS, getBuildReviewRubricDescriptor } from './build-review-registry.js';
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import {
@@ -57,6 +61,8 @@ import {
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import {
   coordinateBuildReviewRubrics,
+  type BuildReviewCoordinationEngineIdentity,
+  type BuildReviewRubricSkillDigest,
   describeBuildReviewDispatchedResultRejection,
   stampBuildReviewDispatchedCandidate,
   validateBuildReviewDispatchedResult,
@@ -1892,6 +1898,38 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   /**
+   * The judging engine's cache identity (adr-2026-08-21 D2/D3/D6), resolved
+   * once per build_review dispatch and injected into the coordinator: the
+   * 12-hex engine content stamp (or the `dev` sentinel for an unpublished
+   * run) plus a `sha256:` digest over the raw bytes of each registered
+   * rubric's installed SKILL.md under the harness root. An unreadable skill
+   * resolves as unavailable — the coordinator fails that rubric closed.
+   */
+  private async resolveBuildReviewEngineIdentity(): Promise<BuildReviewCoordinationEngineIdentity> {
+    const engineStamp = engineContentStamp(dirname(fileURLToPath(import.meta.url)));
+    const harnessRoot = await resolveHarnessRoot();
+    const skillDigests: Partial<Record<BuildReviewRubricId, BuildReviewRubricSkillDigest>> = {};
+    for (const registeredRubric of BUILD_REVIEW_RUBRIC_IDS) {
+      const rubric = registeredRubric as BuildReviewRubricId;
+      const skillName = getBuildReviewRubricDescriptor(registeredRubric).skillName;
+      const path = join(harnessRoot ?? '', 'skills', skillName, 'SKILL.md');
+      if (harnessRoot === null) {
+        skillDigests[rubric] = { kind: 'unavailable', path: `skills/${skillName}/SKILL.md` };
+        continue;
+      }
+      try {
+        skillDigests[rubric] = {
+          kind: 'resolved',
+          digest: `sha256:${createHash('sha256').update(await readFile(path)).digest('hex')}`,
+        };
+      } catch {
+        skillDigests[rubric] = { kind: 'unavailable', path };
+      }
+    }
+    return { engineStamp, skillDigests };
+  }
+
+  /**
    * Dispatch the build_review grader: a fresh, isolated one-shot session
    * (never resumes the main conductor session), fed strictly the diff since
    * the default branch plus the plan body (assembleBuildReviewInputs — no
@@ -1917,10 +1955,13 @@ export class DefaultStepRunner implements StepRunner {
     const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
     await rm(join(effectivePipelineDir, 'build-review.json'), { force: true });
 
+    const engineIdentity = await this.resolveBuildReviewEngineIdentity();
+
     const coordination = await coordinateBuildReviewRubrics({
       config,
       inputs,
       lapId,
+      engineIdentity,
       preflight: async () => this.runTautologyPreflight(inputs),
       readCache: async (branch) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
         readFile: async (path) => readFile(path, 'utf-8'),

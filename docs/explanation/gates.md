@@ -489,6 +489,12 @@ re-lands instead. Its re-run settles from cache, applies the dispositions, and r
 infrastructure-failed rubrics. Without this guard a kickback has ordered removal of exactly the surface
 the operator had just accepted.
 
+The cache identity also includes the judging engine (adr-2026-08-21): the engine's 12-hex content
+stamp and a `sha256:` digest of the rubric's installed `SKILL.md`. A cached judgement made under a
+different engine build or edited rubric skill text is discarded (miss reasons
+`engine-version-mismatch` / `skill-digest-mismatch`) and re-judged; each discard is a
+`build_review_cache_discarded` event in `events.jsonl`, the daemon log, and the audit trail.
+
 Each rubric has a closed engine-owned finding vocabulary, repeated in its provider-facing skill contract:
 `testQuality` uses `test-insensitive`. The parser normalizes harmless casing and underscore variation
 before validation. A value outside the rubric's vocabulary is rejected and receives the bounded

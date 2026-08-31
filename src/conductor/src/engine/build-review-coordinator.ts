@@ -19,6 +19,7 @@ import {
   classifyBuildReviewCacheLookup,
   type BuildReviewCacheEntry,
   type BuildReviewCacheEntryCandidate,
+  type BuildReviewEngineIdentity,
 } from "./build-review-cache.js";
 import {
   parseBuildReviewBranchArtifact,
@@ -85,6 +86,25 @@ export type BuildReviewCoordinatedBranch =
       readonly detail?: string;
     };
 
+/**
+ * One rubric's resolved skill digest (adr-2026-08-21 D3): `sha256:` over the
+ * raw bytes of the installed SKILL.md, or the unreadable path. An unavailable
+ * digest is an infrastructure failure for that rubric — never a hit, never a
+ * write (amended: reason `cache-read-failed`, detail naming the path).
+ */
+export type BuildReviewRubricSkillDigest =
+  | { readonly kind: "resolved"; readonly digest: string }
+  | { readonly kind: "unavailable"; readonly path: string };
+
+/**
+ * The judging engine identity, resolved once per build_review dispatch and
+ * injected (adr-2026-08-21 D6) so the cache module stays pure.
+ */
+export interface BuildReviewCoordinationEngineIdentity {
+  readonly engineStamp: string;
+  readonly skillDigests: Readonly<Partial<Record<BuildReviewRubricId, BuildReviewRubricSkillDigest>>>;
+}
+
 export type BuildReviewCoordination =
   | { readonly kind: "gate-disabled" }
   | { readonly kind: "passed"; readonly verdict: "PASS"; readonly reason: BuildReviewPassReason }
@@ -103,6 +123,8 @@ export interface BuildReviewCoordinationInput {
   /** Test seam for an engine-held projection corruption at branch settlement. */
   readonly projections?: BuildReviewRubricProjections;
   readonly preflight: () => Promise<TautologyPreflightResult>;
+  /** Resolved once per dispatch by the caller; never read from the environment here (D6). */
+  readonly engineIdentity: BuildReviewCoordinationEngineIdentity;
   readonly readCache: (
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
@@ -124,6 +146,7 @@ export interface BuildReviewCoordinationInput {
     | "build_review_rubric_result"
     | "build_review_rubric_skipped"
     | "build_review_cache_hit"
+    | "build_review_cache_discarded"
     | "build_review_rubric_infrastructure_failure"
     | "build_review_outer_verdict" }>) => Promise<void>;
 }
@@ -339,6 +362,19 @@ export async function coordinateBuildReviewRubrics(
       });
       continue;
     }
+    const skillDigest = input.engineIdentity.skillDigests[branch.rubric];
+    if (skillDigest === undefined || skillDigest.kind === "unavailable") {
+      // adr-2026-08-21 D3 (amended): an unreadable rubric SKILL.md is an
+      // infrastructure failure — never a hit and never a write.
+      const detail = `rubric skill digest unavailable: ${skillDigest?.path ?? `skills/${branch.skillName}/SKILL.md`}`;
+      resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed", detail));
+      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed", excerpt: detail });
+      continue;
+    }
+    const engineIdentity: BuildReviewEngineIdentity = {
+      engineStamp: input.engineIdentity.engineStamp,
+      skillDigest: skillDigest.digest,
+    };
     const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
     let candidate: BuildReviewCacheEntryCandidate | undefined;
     try {
@@ -354,9 +390,22 @@ export async function coordinateBuildReviewRubrics(
       projectionVersion: projection.projectionVersion,
       projectionDigest: projection.digest,
       policyFingerprint,
+      engineIdentity,
       lapId: input.lapId,
       snapshotDigest: projection.snapshotDigest,
     });
+    if (cache.kind === "miss" && (cache.reason === "engine-version-mismatch" || cache.reason === "skill-digest-mismatch")) {
+      // adr-2026-08-21 D5: only the two engine-identity reasons emit a
+      // discard on the spine; ordinary projection/policy misses stay silent.
+      await input.emit?.({
+        type: "build_review_cache_discarded",
+        rubric: branch.rubric,
+        lapId: input.lapId,
+        reason: cache.reason,
+        ...(cache.cachedEngineStamp === undefined ? {} : { cachedEngineStamp: cache.cachedEngineStamp }),
+        currentEngineStamp: input.engineIdentity.engineStamp,
+      });
+    }
     if (cache.kind === "hit") {
       let result: BuildReviewJudgedResult | undefined;
       try {
@@ -416,6 +465,12 @@ export async function coordinateBuildReviewRubrics(
           return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };
         }
         if (!written) return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };
+        const skillDigest = input.engineIdentity.skillDigests[rubric];
+        if (skillDigest === undefined || skillDigest.kind === "unavailable") {
+          // Unreachable for dispatched branches (unavailable digests fail
+          // before dispatch), kept fail-closed: never write without identity.
+          return { rubric, branch: infrastructure(rubric, "cache-write-failed") };
+        }
         try {
           await input.writeCache({
             version: 1,
@@ -424,6 +479,7 @@ export async function coordinateBuildReviewRubrics(
             projectionVersion: projection.projectionVersion,
             projectionDigest: projection.digest,
             policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
+            engineIdentity: { engineStamp: input.engineIdentity.engineStamp, skillDigest: skillDigest.digest },
             result: written,
           });
         } catch {

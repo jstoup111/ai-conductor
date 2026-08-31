@@ -76,6 +76,7 @@ function coordinationInput(
     config: config(testQualityEnabled),
     inputs: inputs(),
     lapId: parseBuildReviewLapId("lap-current")!,
+    engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { testQuality: { kind: "resolved", digest: "sha256:skill-a" } } },
     preflight: vi.fn(),
     readCache: vi.fn(async () => undefined),
     dispatchModel: vi.fn(async () => undefined),
