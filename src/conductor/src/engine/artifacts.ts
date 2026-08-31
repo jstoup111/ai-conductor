@@ -40,7 +40,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
-import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { parsePlanTaskPaths, resolvePlanTaskReference } from './plan-task-parse.js';
 import {
   deriveEffectiveBuildReviewVerdict,
   parseBuildReviewAggregate,
@@ -4190,7 +4190,7 @@ export type PrdAuditGrade = 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE';
 export interface PrdAuditFinding {
   criterion: string;
   grade: PrdAuditGrade;
-  planTask?: number;
+  planTask?: string;
   /** Intent FR associations from the table's PRD: column. */
   prdIds: readonly string[];
   evidence: string;
@@ -4456,30 +4456,29 @@ export function parsePrdAuditReport(
     }
 
     const rawPlanTask = planTaskIndex === -1 ? '' : cells[planTaskIndex] ?? '';
-    const planTask = rawPlanTask.trim() === '' || rawPlanTask.trim() === '—'
+    const planTaskReference = rawPlanTask.trim() === '' || rawPlanTask.trim() === '—'
       ? undefined
-      : Number(rawPlanTask);
-    if (planTask !== undefined && (!Number.isInteger(planTask) || planTask < 1)) {
+      : resolvePlanTaskReference(
+        rawPlanTask,
+        activePlanTaskIds ?? new Set([rawPlanTask.trim()]),
+      );
+    if (planTaskReference?.kind === 'malformed') {
       rejectedPrdAuditRow(rejectedRows, line, criterion, `PRD audit finding ${criterion} has an invalid Plan task.`);
       continue;
     }
+    if (planTaskReference?.kind === 'unresolvable') {
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
+        `PRD audit finding ${criterion} names Plan task ${planTaskReference.id}, which is absent from the active plan.`,
+      );
+      continue;
+    }
+    const planTask = planTaskReference?.id;
     if (rawGrade === 'FIXABLE' && planTask === undefined) {
       rejectedPrdAuditRow(rejectedRows, line, criterion,
         `PRD audit finding ${criterion} is FIXABLE but has no Plan task.`,
       );
       continue;
     }
-    if (
-      rawGrade === 'FIXABLE' &&
-      activePlanTaskIds !== undefined &&
-      !activePlanTaskIds.has(String(planTask))
-    ) {
-      rejectedPrdAuditRow(rejectedRows, line, criterion,
-        `PRD audit finding ${criterion} names Plan task ${planTask}, which is absent from the active plan.`,
-      );
-      continue;
-    }
-
     parsedFindings.push({
       finding: {
         criterion,

@@ -1,3 +1,4 @@
+// Covers: task:3
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -57,7 +58,7 @@ describe('parsePrdAuditReport', () => {
         prd: 'present',
         rejectedRows: [],
         findings: [
-          { criterion: 'S2.1', grade: 'FIXABLE', planTask: 4, prdIds: [], evidence: 'Missing guard' },
+          { criterion: 'S2.1', grade: 'FIXABLE', planTask: '4', prdIds: [], evidence: 'Missing guard' },
           { criterion: 'S2.2', grade: 'PLAN_GAP', prdIds: [], evidence: 'No plan task owns this' },
         ],
       },
@@ -87,7 +88,7 @@ describe('parsePrdAuditReport', () => {
         rejectedRows: [],
         findings: [
           { criterion: 'S6.1', grade: 'PASS', prdIds: ['FR-7'], evidence: 'Implemented' },
-          { criterion: 'S6.2', grade: 'FIXABLE', planTask: 4, prdIds: ['FR-7'], evidence: 'Missing guard' },
+          { criterion: 'S6.2', grade: 'FIXABLE', planTask: '4', prdIds: ['FR-7'], evidence: 'Missing guard' },
           {
             criterion: 'S6.3',
             grade: 'PLAN_GAP',
@@ -143,6 +144,48 @@ describe('parsePrdAuditReport', () => {
   });
 
   const activePlan = '### Task 4: Existing task\n\n**Files:** src/example.ts';
+
+  it('resolves annotated and remediation Plan task citations against the active plan', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S1.1 | PASS | rem-prd-audit-rem-s1-6-1 (landed) | Implemented |',
+      '| S1.2 | FIXABLE | rem-as-built-rem-ab1-3 | Missing guard |',
+    ].join('\n');
+    const remediationPlan = [
+      '### Task rem-prd-audit-rem-s1-6-1: Existing task',
+      '',
+      '### Task rem-as-built-rem-ab1-3: Existing task',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, remediationPlan)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        rejectedRows: [],
+        findings: [
+          {
+            criterion: 'S1.1',
+            grade: 'PASS',
+            planTask: 'rem-prd-audit-rem-s1-6-1',
+            prdIds: [],
+            evidence: 'Implemented',
+          },
+          {
+            criterion: 'S1.2',
+            grade: 'FIXABLE',
+            planTask: 'rem-as-built-rem-ab1-3',
+            prdIds: [],
+            evidence: 'Missing guard',
+          },
+        ],
+      },
+    });
+  });
 
   it('rejects a FIXABLE finding with no owning plan task, naming the finding', () => {
     const report = [
@@ -237,7 +280,7 @@ describe('parsePrdAuditReport', () => {
         prd: 'present',
         rejectedRows: [],
         findings: [
-          { criterion: 'S2.1', grade: 'FIXABLE', planTask: 4, prdIds: [], evidence: 'Missing guard' },
+          { criterion: 'S2.1', grade: 'FIXABLE', planTask: '4', prdIds: [], evidence: 'Missing guard' },
           { criterion: 'S2.2', grade: 'PLAN_GAP', prdIds: [], evidence: 'No plan task owns this' },
         ],
       },

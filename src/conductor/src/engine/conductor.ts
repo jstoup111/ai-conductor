@@ -3833,7 +3833,7 @@ export class Conductor {
     ).then(() => true).catch(() => false);
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
-    const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
+    const prdAuditFindings = new Map<string, { criterion: string; parentTask: string }>();
     const asBuiltFindings = new Map<string, AsBuiltGoverningClauseResolution>();
     const asBuiltRecordedFindings = new Map<string, RecordedAsBuiltRemediationFinding>();
     const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];

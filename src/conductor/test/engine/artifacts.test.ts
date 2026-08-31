@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, task:1, task:6, task:10
+// Covers: S1.1, S1.2, S1.3, task:1, task:3, task:6, task:10
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
@@ -167,7 +167,7 @@ describe('engine/artifacts', () => {
           findings: [
             { criterion: 'S1.1', grade: 'PASS' },
             { criterion: 'S1.2', grade: 'PLAN_GAP' },
-            { criterion: 'S1.3', grade: 'FIXABLE', planTask: 3 },
+            { criterion: 'S1.3', grade: 'FIXABLE', planTask: '3' },
           ],
           rejectedRows: [
             { key: 'OS.1', reason: expect.stringContaining('accepted key forms') },
@@ -218,7 +218,7 @@ describe('engine/artifacts', () => {
           ],
           rejectedRows: [
             { key: 'S1.2', reason: expect.stringContaining('invalid Grade') },
-            { key: 'S1.3', reason: expect.stringContaining('invalid Plan task') },
+            { key: 'S1.3', reason: expect.stringContaining('absent from the active plan') },
             { key: 'S1.4', reason: expect.stringContaining('no Plan task') },
             { key: 'S1.5', reason: expect.stringContaining('absent from the active plan') },
             { key: 'NC.1', reason: expect.stringContaining('Verdict Table') },
@@ -481,7 +481,7 @@ describe('engine/artifacts', () => {
             {
               criterion: 'S2.1',
               grade: 'FIXABLE',
-              planTask: 3,
+              planTask: '3',
               prdIds: [],
               evidence: 'Missing guard',
             },
