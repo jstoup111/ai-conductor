@@ -4,6 +4,12 @@ spec_hash: e6dd1a21842c42c0d8366e9f7804df86da5e45112c89cb7343d26d901f4220ac
 pr: https://github.com/jstoup111/ai-conductor/pull/2104
 shipped: 2026-08-31
 engine_version: 20260831T173643Z-391706023b73
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/daemon-cli.ts:631 — exported `runDaemonMode` return type widened from `Promise<void>` to `Promise<DaemonResult or undefined>`, returning `result` at daemon-cli.ts:2174; no plan task authorises a production change to this seam"
+    accepted: false
 ---
 
 ## Cost
