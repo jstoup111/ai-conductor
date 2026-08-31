@@ -331,12 +331,16 @@ describe("build-review coordinator: frozen fan-out", () => {
     });
   });
 
-  it("records a preflight infrastructure failure without dispatching the grader", async () => {
+  it.each([
+    ['launch', 'scoped-run-launch-failed', 'scoped command could not launch'],
+    ['timeout', 'scoped-run-timeout', 'scoped run exceeded 60s'],
+    ['signal', 'scoped-run-signaled', 'scoped run received SIGTERM'],
+  ] as const)("records a preflight %s infrastructure failure without dispatching the grader", async (_kind, reason, detail) => {
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
     const input = coordinationInput(true, {
       preflight: vi.fn(async () => ({
-        classification: "infrastructure-failure" as const, reason: "scoped-run-timeout" as const,
-        failureExcerpt: "scoped run exceeded 60s",
+        classification: "infrastructure-failure" as const, reason,
+        failureExcerpt: detail,
         changedPaths: [], changedTestSelectors: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
       })),
       emit,
@@ -350,11 +354,11 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(input.writeArtifact).not.toHaveBeenCalled();
     expect(result).toEqual({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "scoped-run-timeout", detail: "scoped run exceeded 60s" }],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason, detail }],
     });
     expect(emit.mock.calls.map(([event]) => event)).toEqual([{
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current",
-      reason: "scoped-run-timeout", excerpt: "scoped run exceeded 60s",
+      reason, excerpt: detail,
     }]);
   });
 

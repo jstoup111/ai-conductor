@@ -32,8 +32,23 @@ describe('build-review test-quality preflight', () => {
   ] as const)('projects %s as typed evidence without synthesizing an engine finding', (result, excerpt) => {
     const projection = preflightProjection(result);
 
-    expect(projection.preflight).toEqual({ classification: result.classification, excerpt });
+    expect(projection.preflight).toMatchObject({ classification: result.classification, excerpt });
     expect(projection).not.toHaveProperty('findings');
+  });
+
+  it('forwards a completed nonzero exit as descriptive evidence without a sensitivity verdict', () => {
+    const projection = preflightProjection({
+      classification: 'nonzero-exit', cacheable: true, cacheProvenance: 'miss',
+      changedPaths: ['src/a.ts', 'test/a.test.ts'], changedTestSelectors: ['test/a.test.ts'],
+      revertedProductionManifest: [], sourceIdentities: { mergeBase: 'base', headSha: 'head' },
+      scopedRun: { exitCode: 7, runKind: 'nonzero-exit', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'assertion failed' },
+    });
+
+    expect(projection.preflight).toEqual({
+      classification: 'nonzero-exit', exitCode: 7, runKind: 'nonzero-exit',
+      ranSelectors: ['test/a.test.ts'], excerpt: 'assertion failed',
+    });
+    expect(projection.preflight).not.toHaveProperty('counterfactualSensitivity');
   });
 
   it('classifies a scoped command execution error as a mechanical fault with bounded projection evidence', async () => {

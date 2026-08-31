@@ -56,10 +56,9 @@ function source(overrides: Partial<Source> = {}): Source {
         { path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' },
       ],
       preflight: {
-        classification: 'red', cacheable: true, cacheProvenance: 'miss',
-        sourceIdentities: { mergeBase: 'base', headSha: 'head' },
+        classification: 'nonzero-exit', exitCode: 7, runKind: 'nonzero-exit',
+        ranSelectors: ['test/a.test.ts'], excerpt: 'AssertionError',
         output: { stdout: 'counterfactual stdout', stderr: 'counterfactual stderr' },
-        scopedRun: { exitCode: 1, runKind: 'nonzero-exit', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
       } as unknown as Source['testQuality']['preflight'],
     },
     ...overrides,
@@ -100,12 +99,16 @@ describe('build-review rubric projections', () => {
       mergeBase: 'base', headSha: 'head',
       changedFiles: [{ path: 'src/a.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 2, newStart: 1, newCount: 3, contentHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) }] }],
       changedTestTitles: [{ selector: 'test/a.test.ts', titleText: 'a > persists', staticExtractionFallback: false }],
-      preflight: { classification: 'red' },
+      preflight: expect.objectContaining({
+        classification: 'nonzero-exit', exitCode: 7, runKind: 'nonzero-exit',
+        ranSelectors: ['test/a.test.ts'], excerpt: 'AssertionError',
+      }),
     });
     expect(projection.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(JSON.stringify(projection)).not.toContain('embedded-diff-body-line');
     expect(projection).not.toHaveProperty('planBody');
     expect(projection).not.toHaveProperty('diff');
+    expect(projection.preflight).not.toHaveProperty('counterfactualSensitivity');
     expect(Object.isFrozen(projection)).toBe(true);
   });
 
