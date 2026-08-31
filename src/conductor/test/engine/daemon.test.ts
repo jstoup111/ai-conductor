@@ -2858,7 +2858,7 @@ describe('engine/daemon — runDaemon', () => {
             signalFeatureADispatched();
             return featureAPromise;
           }
-          return { slug: it.slug, status: 'done' };
+          return { slug: it.slug, status: 'done' as const };
         }),
         isBuildAuthMissing: async () => credentialMissing,
         sleep: async () => {
