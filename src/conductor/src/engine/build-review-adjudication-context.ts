@@ -27,14 +27,43 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly effect: RemediationCaseEffect;
 }
 
-/** The complete input to one post-join remediate judgement. */
+/** The active approved-plan contract that decides whether work is admitted. */
+export interface BuildReviewAdjudicationPlanContract {
+  /** `null` states that no plan is bound — never an omitted field. */
+  readonly path: string | null;
+  readonly pointers: readonly string[];
+}
+
+/** Engine-supplied task-status evidence for the active plan. */
+export interface BuildReviewAdjudicationTaskStatus {
+  readonly path: string | null;
+  readonly tasks: readonly { readonly id: string; readonly status: string }[];
+}
+
+const ABSENT_PLAN_CONTRACT: BuildReviewAdjudicationPlanContract = Object.freeze({ path: null, pointers: Object.freeze([]) });
+const ABSENT_TASK_STATUS: BuildReviewAdjudicationTaskStatus = Object.freeze({ path: null, tasks: Object.freeze([]) });
+
+/**
+ * The complete input to one post-join remediate judgement.
+ *
+ * The key set is the skill contract, not an implementation detail:
+ * `skills/remediate/SKILL.md` selects its case branch on `mode` + `domain` and
+ * then names `currentFindings`, `priorCases`, `planContract`, `taskStatus`, and
+ * `effectPointers`. A context missing any of them routes a real dispatch into
+ * the legacy gap-plan branch, whose output the case parser then rejects.
+ */
 export interface BuildReviewAdjudicationContext {
   readonly version: 'v1';
+  readonly mode: 'case-v1';
   readonly domain: 'build_review';
   readonly lapId: string;
   readonly snapshotDigest: string;
-  readonly currentSources: readonly BuildReviewAdjudicationCurrentSource[];
+  readonly currentFindings: readonly BuildReviewAdjudicationCurrentSource[];
   readonly priorCases: readonly BuildReviewAdjudicationPriorCase[];
+  readonly planContract: BuildReviewAdjudicationPlanContract;
+  readonly taskStatus: BuildReviewAdjudicationTaskStatus;
+  /** Prior effect state plus durable BUILD-attempt evidence, one line per case. */
+  readonly effectPointers: readonly string[];
 }
 
 export interface AssembleBuildReviewAdjudicationContextInput {
@@ -42,6 +71,10 @@ export interface AssembleBuildReviewAdjudicationContextInput {
   readonly priorCases: readonly RemediationCaseRecord[];
   /** Exact accepted-risk identities only; no summary or rubric-wide matching. */
   readonly operatorResolvedFindingIds?: ReadonlySet<string>;
+  readonly planContract?: BuildReviewAdjudicationPlanContract;
+  readonly taskStatus?: BuildReviewAdjudicationTaskStatus;
+  /** Durable work-order attempt evidence; renders into `effectPointers`. */
+  readonly attemptedCaseIds?: readonly string[];
 }
 
 export type BuildReviewAdjudicationContextStop =
@@ -145,6 +178,17 @@ function validatePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudi
   return validateEffect(caseRecord);
 }
 
+/** One compact durable pointer per prior case; no prose, no tree re-audit. */
+function effectPointerFor(caseRecord: RemediationCaseRecord, attempted: ReadonlySet<string>): string | undefined {
+  const effect = caseRecord.effect;
+  if (effect.kind === 'none') return undefined;
+  const reference = effect.status === 'applied'
+    ? effect.kind === 'action' ? ` (work order ${effect.workOrderId})` : ` (issue ${effect.issueUrl})`
+    : effect.status === 'failed' ? ` (${effect.diagnostic})` : '';
+  const attempt = attempted.has(caseRecord.id) ? '; BUILD attempted' : '';
+  return `case ${caseRecord.id}: ${effect.kind} effect ${effect.id} ${effect.status}${reference}${attempt}`;
+}
+
 function freezePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationPriorCase {
   const sources = [...caseRecord.sources].sort((left, right) =>
     `${left.recordedAt}\u0000${left.sourceId}`.localeCompare(`${right.recordedAt}\u0000${right.sourceId}`),
@@ -192,15 +236,15 @@ export function assembleBuildReviewAdjudicationContext(
   if (!rawSources) return { ok: false, stop: { code: 'invalid-aggregate' } };
   const unresolvedSources = rawSources.filter((source) => !input.operatorResolvedFindingIds?.has(source.findingId));
   if (unresolvedSources.length > LIMITS.maxCurrentSources) {
-    return { ok: false, stop: { code: 'field-overflow', subject: 'current-source', field: 'currentSources', limit: LIMITS.maxCurrentSources, actual: unresolvedSources.length } };
+    return { ok: false, stop: { code: 'field-overflow', subject: 'current-source', field: 'currentFindings', limit: LIMITS.maxCurrentSources, actual: unresolvedSources.length } };
   }
-  const currentSources: BuildReviewAdjudicationCurrentSource[] = [];
+  const currentFindings: BuildReviewAdjudicationCurrentSource[] = [];
   for (const source of unresolvedSources) {
     const stop = validateCurrent(source);
     if (stop) return { ok: false, stop };
-    currentSources.push(Object.freeze({ ...source, sourceId: buildReviewAdjudicationSourceId(source) }));
+    currentFindings.push(Object.freeze({ ...source, sourceId: buildReviewAdjudicationSourceId(source) }));
   }
-  currentSources.sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+  currentFindings.sort((left, right) => left.sourceId.localeCompare(right.sourceId));
 
   if (input.priorCases.length > LIMITS.maxPriorCases) {
     return { ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'priorCases', limit: LIMITS.maxPriorCases, actual: input.priorCases.length } };
@@ -216,9 +260,18 @@ export function assembleBuildReviewAdjudicationContext(
   }
   priorCases.sort((left, right) => left.id.localeCompare(right.id));
 
+  const attempted = new Set(input.attemptedCaseIds ?? []);
   const context: BuildReviewAdjudicationContext = Object.freeze({
-    version: 'v1', domain: 'build_review', lapId: input.aggregate.lapId, snapshotDigest: input.aggregate.snapshotDigest,
-    currentSources: Object.freeze(currentSources), priorCases: Object.freeze(priorCases),
+    version: 'v1', mode: 'case-v1', domain: 'build_review',
+    lapId: input.aggregate.lapId, snapshotDigest: input.aggregate.snapshotDigest,
+    currentFindings: Object.freeze(currentFindings), priorCases: Object.freeze(priorCases),
+    planContract: Object.freeze(input.planContract ?? ABSENT_PLAN_CONTRACT),
+    taskStatus: Object.freeze(input.taskStatus ?? ABSENT_TASK_STATUS),
+    effectPointers: Object.freeze(priorCases.flatMap((priorCase) => {
+      const source = input.priorCases.find((record) => record.id === priorCase.id)!;
+      const pointer = effectPointerFor(source, attempted);
+      return pointer === undefined ? [] : [pointer];
+    })),
   });
   const actual = bytes(JSON.stringify(context));
   if (actual > LIMITS.maxSerializedBytes) {

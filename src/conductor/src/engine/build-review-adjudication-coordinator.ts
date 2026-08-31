@@ -1,6 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
-import { assembleBuildReviewAdjudicationContext, buildReviewAdjudicationSourceId } from './build-review-adjudication-context.js';
+import { readFile } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
+
+import {
+  assembleBuildReviewAdjudicationContext,
+  buildReviewAdjudicationSourceId,
+  type BuildReviewAdjudicationPlanContract,
+  type BuildReviewAdjudicationTaskStatus,
+} from './build-review-adjudication-context.js';
+import { planContractPointers, readActivePlanPath } from './remediation-context-pointers.js';
 import { reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect } from './remediation-case-effects.js';
@@ -25,6 +34,53 @@ export type BuildReviewAdjudicationCoordinatorResult =
   | { readonly ok: true; readonly route: 'pass' | 'build' | 'mechanical-retry' | 'halt'; readonly detail: string; readonly trace: string; readonly remainingMechanical: boolean }
   | { readonly ok: false; readonly detail: string };
 
+
+/**
+ * The case-v1 contract's plan evidence, sourced from the feature worktree.
+ *
+ * `skills/remediate/SKILL.md` tells the judge to decide admissibility from the
+ * supplied `planContract` and to re-audit nothing, so the engine must supply it.
+ * An unreadable or unbound plan states `path: null` rather than omitting the
+ * field — an absent key would silently drop the case branch.
+ */
+async function sourcePlanContract(
+  projectRoot: string,
+  aggregate: BuildReviewAggregate,
+): Promise<BuildReviewAdjudicationPlanContract> {
+  const path = await readActivePlanPath(projectRoot);
+  if (!path) return { path: null, pointers: [] };
+  try {
+    const plan = await readFile(isAbsolute(path) ? path : join(projectRoot, path), 'utf-8');
+    const findings = Object.values(aggregate.results).flatMap((result) =>
+      result.kind === 'judged' ? result.findings : [],
+    );
+    return { path, pointers: planContractPointers(findings, plan, path) };
+  } catch {
+    return { path, pointers: [] };
+  }
+}
+
+/** Engine-supplied task-status evidence; an unreadable file states `path: null`. */
+async function sourceTaskStatus(projectRoot: string): Promise<BuildReviewAdjudicationTaskStatus> {
+  const path = '.pipeline/task-status.json';
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(projectRoot, path), 'utf-8'));
+    const tasks = (parsed as { tasks?: unknown }).tasks;
+    if (!Array.isArray(tasks)) return { path: null, tasks: [] };
+    return {
+      path,
+      tasks: tasks.flatMap((task: unknown) => {
+        const row = task as { id?: unknown; status?: unknown };
+        return typeof row?.id === 'string' && typeof row?.status === 'string'
+          ? [{ id: row.id, status: row.status }]
+          : [];
+      }),
+    };
+  } catch {
+    return { path: null, tasks: [] };
+  }
+}
+
 /**
  * Provider-facing work is deliberately a dependency. The coordinator owns all
  * identity, completeness, effects, and transition legality after that one
@@ -43,6 +99,9 @@ export async function coordinateBuildReviewAdjudication(input: {
   readonly tracker?: EffectMarkerTrackerClient;
   readonly repo?: string;
   readonly fileIssue?: (input: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => Promise<{ issueUrl: string }>;
+  /** Injected in tests; production sources both from the feature worktree. */
+  readonly readPlanContract?: () => Promise<BuildReviewAdjudicationPlanContract>;
+  readonly readTaskStatus?: () => Promise<BuildReviewAdjudicationTaskStatus>;
   readonly generateId?: () => string;
   readonly emit?: (event: RemediationCaseLifecycleEvent) => void | Promise<void>;
 }): Promise<BuildReviewAdjudicationCoordinatorResult> {
@@ -69,8 +128,17 @@ export async function coordinateBuildReviewAdjudication(input: {
   const store = new RemediationCaseStore(input.projectRoot, input.feature);
   const prior = await store.read();
   if (!prior.ok) return fail(`case store ${prior.reason}`);
+  // Durable BUILD-attempt evidence, read from the published work order rather
+  // than process memory. Without it an attempted case is indistinguishable from
+  // an interrupted one, so a repeat could take a second free route and an
+  // absent repaired case could never resolve.
+  const attemptedCaseIds = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
+  const attempted = new Set(attemptedCaseIds);
+  const planContract = await (input.readPlanContract ?? (() => sourcePlanContract(input.projectRoot, input.aggregate)))();
+  const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
+  const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
   const context = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved,
+    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
   if (!context.ok) return fail(`adjudication context ${context.stop.code}`);
   // A disposition arriving while the case store was read wins before the one
@@ -87,7 +155,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   const liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved,
+    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
   if (!freshContext.ok) return fail(`adjudication context ${freshContext.stop.code}`);
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
@@ -109,12 +177,6 @@ export async function coordinateBuildReviewAdjudication(input: {
   const admitted = graph.graph.cases.filter((proposed) =>
     proposed.sources.some((source) => liveSourceIds.has(source.sourceId)),
   );
-  // Durable BUILD-attempt evidence, read from the published work order rather
-  // than process memory. Without it an attempted case is indistinguishable from
-  // an interrupted one, so a repeat could take a second free route and an
-  // absent repaired case could never resolve.
-  const attemptedCaseIds = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
-  const attempted = new Set(attemptedCaseIds);
   const reconciled = await reconcileRemediationCases(store, {
     graph: { ...graph.graph, cases: admitted }, recordedAt: new Date().toISOString(), generateId: input.generateId ?? randomUUID,
     attemptedCaseIds,

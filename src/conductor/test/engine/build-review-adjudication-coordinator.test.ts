@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -145,7 +145,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   it('dispatches one complete current-source/history judgement and returns its closed action route', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async (context: unknown) => {
-      expect(context).toMatchObject({ currentSources: [expect.objectContaining({ findingId })], priorCases: [] });
+      expect(context).toMatchObject({ currentFindings: [expect.objectContaining({ findingId })], priorCases: [] });
       return actionJudgement();
     });
     const events: string[] = [];
@@ -379,5 +379,31 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(settled.ok && settled.state.cases.map((record) => [record.id, record.resolution])).toEqual([
       ['case-gone', 'resolved'], ['case-durable', 'open'],
     ]);
+  });
+  it('hands the judge the case-v1 contract, sourcing plan and task evidence from the worktree', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    await writeFile(join(root, '.docs/plans/example.md'), [
+      '### Task 4: Cover the changed test',
+      '**Files:**',
+      '- `test/example.test.ts` — the insensitive assertion',
+      '',
+    ].join('\n'), 'utf8');
+    await writeFile(join(root, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '4', status: 'completed' }] }), 'utf8');
+
+    let seen: unknown;
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async (context) => { seen = context; return actionJudgement(); }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(seen).toMatchObject({
+      mode: 'case-v1', domain: 'build_review',
+      planContract: { path: '.docs/plans/example.md', pointers: [expect.stringContaining('Task 4')] },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '4', status: 'completed' }] },
+      effectPointers: [],
+    });
   });
 });
