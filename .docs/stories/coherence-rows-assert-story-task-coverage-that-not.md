@@ -29,12 +29,12 @@ surfacing two steps later as an `acceptance_specs` needs-human halt.
 - Given a spec whose stories declare four criteria and whose coherence artifact carries three criterion rows and no waiver names the resulting gap, when the operator runs engineer land, then the land is rejected and the message names the omitted criterion verbatim
 - Given a spec whose coherence artifact carries a criterion row whose criterion text matches no criterion in the stories file and no waiver names the resulting gap, when the operator runs engineer land, then the land is rejected and the message names that row as invented
 - Given a spec whose coherence artifact carries two criterion rows for the same criterion and no waiver names the resulting gap, when the operator runs engineer land, then the land is rejected and the message names the duplicated criterion
-- Given a Small-tier spec, when the operator runs engineer land, then the criterion layer does not engage and the land is unaffected
+- Given a Small-tier spec, when the operator runs engineer land, then the criterion layer engages over the plan's own `## Coverage Check` criterion-level rows and no other layer runs
 - Given a change set carrying no file under `.docs/coherence/`, when the operator runs engineer land, then the criterion layer does not engage and the legacy escape is preserved
 - Given a spec whose stories file has no parseable story blocks, when the land gate enumerates criteria, then the land is rejected naming the unparseable stories file rather than reporting zero criteria as full coverage
 
 ### Done When
-- [ ] `resolveRequiredLayers` returns a layer set containing `criterion` for tier M and tier L, and omits it for tier S
+- [ ] `resolveRequiredLayers` returns a layer set containing `criterion` for tier M and tier L, and exactly `{criterion}` over the plan carrier for tier S
 - [ ] A land-gate test proves a spec with one unrowed story criterion is rejected with that criterion's exact text in the message
 - [ ] A land-gate test proves a criterion row citing text absent from the stories file is rejected as invented
 - [ ] The land gate obtains its criterion set by calling `extractAuthoritativeStoryCriteria`, asserted by a test that fails if a second extractor is introduced
@@ -48,7 +48,7 @@ contradicts cannot pass as `covered`.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a criterion row citing task 10 and quoting a span that appears verbatim in task 10's committed text, when the operator runs engineer land, then the row is accepted
+- Given a criterion row citing task 10 and quoting a span that appears verbatim in one of task 10's `Done when` checks, when the operator runs engineer land, then the row is accepted
 - Given a criterion row whose quote differs from the cited task's text only in surrounding whitespace and line wrapping, when the land gate compares them, then the quote is accepted
 - Given a criterion row citing two tasks and quoting a span from the second of them, when the land gate checks grounding, then the row is accepted because the quote is found in one cited task
 
