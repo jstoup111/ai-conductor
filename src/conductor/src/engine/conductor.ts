@@ -154,6 +154,7 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
   parsePrdAuditReport,
+  readActivePlanText,
   isNoOwnerKey,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
@@ -823,8 +824,12 @@ export function routePrdAuditPlanGaps(
   reportText: string,
   storiesText: string,
   config: HarnessConfig,
+  activePlanText?: string,
 ): PrdAuditPlanGapRoute {
-  const parsed = parsePrdAuditReport(reportText);
+  // `activePlanText` is this parse's citation authority. Its absence is not
+  // permission to self-validate: the parser rejects a row citing a Plan task
+  // it cannot check, and the rejected-row guard below then declines to route.
+  const parsed = parsePrdAuditReport(reportText, activePlanText);
   // A rejected row is a row the parser could not read, not a finding — it never
   // appears in `parsed.value.findings`, so the `hasOtherBlockingGrade` scan
   // below cannot see it. Without this guard a rejected row riding with a
@@ -890,8 +895,9 @@ type CurrentPrdAuditRoute =
 export function routePrdAuditOverScope(
   reportText: string,
   decisions: readonly OverScopeDecision[],
+  activePlanText?: string,
 ): PrdAuditOverScopeRoute {
-  const parsed = parsePrdAuditReport(reportText);
+  const parsed = parsePrdAuditReport(reportText, activePlanText);
   if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
   const relations = overScopeRelations(reportText);
   const overScopeFindings = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
@@ -3603,6 +3609,11 @@ export class Conductor {
     return recordGateRepair(this.projectRoot, gate, { ...failure, observedAt: Date.now() });
   }
 
+  /** The active plan's text: the authority a prd_audit citation resolves against. */
+  private async activePlanText(featureDesc?: string): Promise<string | undefined> {
+    return readActivePlanText(this.projectRoot, undefined, featureDesc);
+  }
+
   /** Read the current verdict and its authoritative story sections as one route decision. */
   private async routeCurrentPrdAuditPlanGaps(state: ConductState): Promise<PrdAuditPlanGapRoute> {
     const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
@@ -3616,7 +3627,12 @@ export class Conductor {
     }
     const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
     const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
-    const route = routePrdAuditPlanGaps(reportText, storiesText, this.config);
+    const route = routePrdAuditPlanGaps(
+      reportText,
+      storiesText,
+      this.config,
+      await this.activePlanText(state.feature_desc),
+    );
     if (route.kind === 'record') {
       const projected = await persistRecordedFindings(reportPath, reportText, route.findings);
       if (!projected.ok) this.prdAuditProjectionRefusal = projected.message;
@@ -3625,7 +3641,7 @@ export class Conductor {
   }
 
   /** Read OVER_SCOPE verdict rows after incorporating an operator-cleared halt acceptance. */
-  private async routeCurrentPrdAuditOverScope(): Promise<PrdAuditOverScopeRoute> {
+  private async routeCurrentPrdAuditOverScope(featureDesc?: string): Promise<PrdAuditOverScopeRoute> {
     const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
     if (!reportPath) return { kind: 'none' };
     let reportText: string;
@@ -3635,7 +3651,8 @@ export class Conductor {
       return { kind: 'none' };
     }
     const relations = overScopeRelations(reportText);
-    const parsedReport = parsePrdAuditReport(reportText);
+    const activePlanText = await this.activePlanText(featureDesc);
+    const parsedReport = parsePrdAuditReport(reportText, activePlanText);
     const blockingFindings = new Map(
       parsedReport.ok
         ? parsedReport.value.findings
@@ -3664,7 +3681,7 @@ export class Conductor {
       if (parsed.decisions.length || defects.length) await this.events.emit({ type: 'over_scope_decision', criteria: [...blockingFindings.keys()], decisions: result.recorded.map((decision) => ({ criterion: decision.criterion, decision: decision.decision })), defects });
     }
     const decisions = await readOverScopeDecisions(this.projectRoot);
-    const route = routePrdAuditOverScope(reportText, decisions.decisions);
+    const route = routePrdAuditOverScope(reportText, decisions.decisions, activePlanText);
     // D8: recorded decisions project into the verdict artifact whichever way
     // the route went. A halted route carries the same findings — including the
     // refusal that caused the halt — and previously persisted none of them.
@@ -3705,7 +3722,9 @@ export class Conductor {
     this.prdAuditProjectionRefusal = undefined;
     const planGapRoute = await this.routeCurrentPrdAuditPlanGaps(state);
     const overScopeRoute =
-      planGapRoute.kind === 'halt' ? undefined : await this.routeCurrentPrdAuditOverScope();
+      planGapRoute.kind === 'halt'
+        ? undefined
+        : await this.routeCurrentPrdAuditOverScope(state.feature_desc);
 
     // D8 first: a decision that could not be projected blocks with its own
     // named reason, whatever the content route would otherwise have done.

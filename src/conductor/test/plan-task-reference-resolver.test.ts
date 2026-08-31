@@ -41,12 +41,11 @@ describe('resolvePlanTaskReference', () => {
 });
 
 describe('normalizePlanTaskId', () => {
-  // The prd_audit gate scorer calls the parser with no active plan and falls
-  // back to a set built from the RAW cell. The resolver strips a trailing
-  // annotation before lookup, so a fallback holding the annotated string could
-  // never match its own citation — every annotated `rem-` row was rejected on
-  // the one path that produces the halt this feature exists to end. Both sides
-  // share this normalization now.
+  // The resolver strips a tolerated trailing annotation before it looks the id
+  // up, so every caller that builds a lookup set must normalize the same way.
+  // The set itself always comes from the ACTIVE PLAN — never from the citation
+  // under judgement, which would let any grammar-valid id resolve against
+  // itself (adr-2026-08-30-shared-plan-task-reference-resolver D1).
   it('strips a trailing annotation', () => {
     expect(normalizePlanTaskId('rem-prd-audit-rem-s1-6-1 (landed)')).toBe('rem-prd-audit-rem-s1-6-1');
   });
@@ -55,9 +54,11 @@ describe('normalizePlanTaskId', () => {
     expect(normalizePlanTaskId('  4  ')).toBe('4');
   });
 
-  it('agrees with the resolver, so a set built from it always matches', () => {
-    const raw = 'rem-as-built-rem-ab1-2 (landed)';
-    expect(resolvePlanTaskReference(raw, new Set([normalizePlanTaskId(raw)])))
+  it('normalizes the citation to the bare id the active plan declares', () => {
+    const activePlanTaskIds = new Set(['1', 'rem-as-built-rem-ab1-2']);
+    expect(resolvePlanTaskReference('rem-as-built-rem-ab1-2 (landed)', activePlanTaskIds))
       .toEqual({ kind: 'resolved', id: 'rem-as-built-rem-ab1-2' });
+    expect(resolvePlanTaskReference('rem-as-built-rem-ab1-9 (landed)', activePlanTaskIds))
+      .toEqual({ kind: 'unresolvable', id: 'rem-as-built-rem-ab1-9' });
   });
 });

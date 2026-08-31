@@ -52,7 +52,7 @@ describe('parsePrdAuditReport', () => {
       '| S2.2 | PLAN_GAP | | No plan task owns this |',
     ].join('\n');
 
-    expect(parsePrdAuditReport(report)).toEqual({
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
       ok: true,
       value: {
         prd: 'present',
@@ -586,10 +586,17 @@ describe('prd_audit completion predicate coverage', () => {
     root = await mkdtemp(join(tmpdir(), 'prd-audit-predicate-coverage-'));
     await mkdir(join(root, '.docs/specs'), { recursive: true });
     await mkdir(join(root, '.docs/stories'), { recursive: true });
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await writeFile(
       join(root, '.docs/specs/current-feature.md'),
       '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2\nFR-3\nFR-4\nFR-5',
+    );
+    // The predicate resolves this plan as the authority for every `Plan task`
+    // cell `criterionReport` emits; without it a cited task is unverifiable.
+    await writeFile(
+      join(root, '.docs/plans/current-feature.md'),
+      '### Task 1: Existing work\n\n**Files:** src/example.ts\n',
     );
     await writeFile(
       join(root, '.docs/stories/current-feature.md'),

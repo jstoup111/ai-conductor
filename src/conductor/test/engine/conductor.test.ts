@@ -3344,7 +3344,7 @@ describe('engine/conductor', () => {
               '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
               '| Criterion | Grade | Plan task | PRD: | Evidence |',
               '|---|---|---|---|---|',
-              '| S1.1 | PLAN_GAP | 12 | FR-1 | evidence.ts:1 |',
+              '| S1.1 | PLAN_GAP | — | FR-1 | evidence.ts:1 |',
             ].join('\n'),
           );
           return { success: true };

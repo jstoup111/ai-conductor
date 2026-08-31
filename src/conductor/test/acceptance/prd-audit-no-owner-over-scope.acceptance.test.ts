@@ -21,6 +21,10 @@ import {
 
 const SUMMARY = 'unplanned npm test change';
 
+// The Verdict Table's `Plan task` cell is resolved against the ids this text
+// declares; the route is handed it so a legitimate citation is not rejected.
+const ACTIVE_PLAN = '### Task 1: Planned behavior\n\n**Files:** src/example.ts\n';
+
 function noOwnerReport(): string {
   return [
     '**PRD:** none',
@@ -49,7 +53,7 @@ describe('PRD-audit no-owner OVER_SCOPE decision lifecycle', () => {
     root = await mkdtemp(join(tmpdir(), 'prd-audit-no-owner-'));
     const report = noOwnerReport();
 
-    const firstLap = routePrdAuditOverScope(report, []);
+    const firstLap = routePrdAuditOverScope(report, [], ACTIVE_PLAN);
     expect(firstLap).toMatchObject({
       kind: 'halt',
       haltClass: 'over-scope',
@@ -79,7 +83,7 @@ describe('PRD-audit no-owner OVER_SCOPE decision lifecycle', () => {
     expect(persisted.decisions).toEqual([
       expect.objectContaining({ criterion: 'NC.1', summary: SUMMARY, decision: 'accept' }),
     ]);
-    expect(routePrdAuditOverScope(report, persisted.decisions)).toMatchObject({
+    expect(routePrdAuditOverScope(report, persisted.decisions, ACTIVE_PLAN)).toMatchObject({
       kind: 'record',
       findings: [{ criterion: 'NC.1', summary: SUMMARY, accepted: true }],
     });

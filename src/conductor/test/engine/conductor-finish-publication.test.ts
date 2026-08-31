@@ -54,7 +54,13 @@ const PASS_EVIDENCE: FullSuitePassEvidence = {
 async function writeGreenShipValidatorEvidence(dir: string): Promise<void> {
   await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
   await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+  await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
   await mkdir(join(dir, '.pipeline'), { recursive: true });
+  // The audit below cites Plan task 1; the plan is its citation authority.
+  await writeFile(
+    join(dir, '.docs', 'plans', 'finish-publication.md'),
+    '### Task 1: Finish publication\n\n**Files:** src/example.ts\n',
+  );
   await writeFile(
     join(dir, '.docs', 'specs', 'finish-publication.md'),
     '# PRD\n\n## Functional Requirements\n\n- FR-1: The feature can finish.\n',

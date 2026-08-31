@@ -146,6 +146,15 @@ describe('engine/artifacts', () => {
   }
 
   describe('parsePrdAuditReport', () => {
+    // The plan is the parser's citation authority: a Verdict Table row naming
+    // a `Plan task` is resolved against the ids THIS text declares, never
+    // against the citation itself (adr-2026-08-30 D1).
+    const activePlan = [
+      '### Task 3: Existing work',
+      '',
+      '### Task 4: Existing work',
+    ].join('\n');
+
     it('salvages valid criterion rows while diagnosing invented criterion keys', () => {
       const parsed = parsePrdAuditReport(`
 **PRD:** present
@@ -159,7 +168,7 @@ describe('engine/artifacts', () => {
 | S1.2 | PLAN_GAP | — | FR-2 | Second valid row |
 | OS.2 | OVER_SCOPE | — | FR-3 | Another invented key |
 | S1.3 | FIXABLE | 3 | FR-3 | Third valid row |
-`);
+`, activePlan);
 
       expect(parsed).toMatchObject({
         ok: true,
@@ -294,7 +303,7 @@ describe('engine/artifacts', () => {
       expect(noOwnerSection).toBeDefined();
       expect(reportExample).toBeDefined();
 
-      const parsed = parsePrdAuditReport(reportExample ?? '');
+      const parsed = parsePrdAuditReport(reportExample ?? '', activePlan);
       expect(parsed.ok).toBe(true);
       if (parsed.ok) {
         expect(parsed.value.findings).toContainEqual(
@@ -472,7 +481,7 @@ describe('engine/artifacts', () => {
 | Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | S2.1 | FIXABLE | 3 | none | — | Missing guard |
-`)).toEqual({
+`, activePlan)).toEqual({
         ok: true,
         value: {
           prd: 'none',
@@ -3927,6 +3936,79 @@ describe('engine/artifacts', () => {
     });
   });
 
+
+  // adr-2026-08-30-shared-plan-task-reference-resolver decision 1 requires a
+  // cited reference to be resolved against the id set of the artifact that
+  // DEFINES it. The gate scorer used to call the parser with no active plan,
+  // and the parser then built its lookup set out of the citation under
+  // judgement — so every grammar-valid id resolved against itself and the gate
+  // scored a report the remediation path (which does supply the plan) rejects.
+  describe('checkStepCompletion: prd_audit plan-task citation authority', () => {
+    const table =
+      '| Criterion | Grade | Plan task | Evidence |\n' +
+      '| --- | --- | --- | --- |\n';
+
+    async function writePlan(...taskIds: string[]): Promise<void> {
+      await createFile(
+        '.docs/plans/citation-authority.md',
+        taskIds
+          .map((id) => `### Task ${id}: Existing work\n\n**Files:** src/example.ts\n`)
+          .join('\n'),
+      );
+    }
+
+    async function writeReport(rows: string): Promise<void> {
+      await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n**PRD:** none\n\n' + table + rows);
+    }
+
+    it('refuses a citation naming a task the active plan does not declare', async () => {
+      await writePlan('1');
+      await writeReport('| S1.1 | PASS | rem-ab1-9 | Implemented |\n');
+
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('S1.1');
+      expect(result.reason).toContain('rem-ab1-9');
+    });
+
+    it('scores clean when every citation names a task the active plan declares', async () => {
+      await writePlan('1', 'rem-ab1-2');
+      // Story criteria make the story-coverage check authoritative too: it
+      // reads the parsed findings, so its own parse needs the plan or every
+      // citing row is rejected and its criterion reported missing.
+      await createFile(
+        '.docs/stories/citation-authority.md',
+        [
+          '# Stories',
+          '',
+          '## Story 1: behavior',
+          '',
+          '#### Happy Path',
+          '- Given input, when exercised, then the first behavior appears.',
+          '- Given input, when exercised, then the second behavior appears.',
+        ].join('\n'),
+      );
+      await writeReport(
+        '| S1.1 | PASS | 1 | Implemented |\n' +
+        '| S1.2 | PASS | rem-ab1-2 (landed) | Implemented |\n',
+      );
+
+      expect(await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 }))
+        .toMatchObject({ done: true });
+    });
+
+    it('refuses fail-closed when the feature plan cannot be resolved at all', async () => {
+      await writeReport('| S1.1 | PASS | 1 | Implemented |\n');
+
+      const result = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+
+      expect(result.done).toBe(false);
+      expect(result.reason).toContain('S1.1');
+      expect(result.reason).toMatch(/active plan could not be resolved/);
+    });
+  });
+
   describe('checkStepCompletion: architecture_review_as_built codeStamp sidecar (gate-code-validity, #817)', () => {
     const SIDECAR = '.pipeline/architecture-review-as-built-code-stamp.json';
 
@@ -4124,6 +4206,48 @@ describe('engine/artifacts', () => {
       // sessionStartedAt=undefined below treats any mtime as fresh.
       await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n' + header + body);
     }
+
+    // The classifier parses the report twice — once for rejected rows, once
+    // inside findUnalignedFrRowsWithClass — and BOTH parses need the active
+    // plan. An unauthorized second parse drops every citing row from
+    // `findings`, so a blocking report routes as clean.
+    it('routes a blocking row that cites a task the active plan declares', async () => {
+      await createFile(
+        '.docs/plans/citation-authority.md',
+        '### Task 1: Existing work\n\n**Files:** src/example.ts\n',
+      );
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | PRD: | Evidence |\n' +
+          '| --- | --- | --- | --- | --- |\n' +
+          '| S1.1 | FIXABLE | 1 | FR-1 | Missing guard |\n',
+      );
+
+      const c = await classifyPrdAuditGaps(dir, undefined);
+
+      expect(c.kind).toBe('impl-only');
+      expect(c.summary).toContain('FR-1 (impl-gap)');
+    });
+
+    it('refuses to route a blocking row whose citation names an absent plan task', async () => {
+      await createFile(
+        '.docs/plans/citation-authority.md',
+        '### Task 1: Existing work\n\n**Files:** src/example.ts\n',
+      );
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | PRD: | Evidence |\n' +
+          '| --- | --- | --- | --- | --- |\n' +
+          '| S1.1 | FIXABLE | rem-ab1-9 | FR-1 | Missing guard |\n',
+      );
+
+      const c = await classifyPrdAuditGaps(dir, undefined);
+
+      expect(c.kind).toBe('needs-decide');
+      expect(c.summary).toContain('rem-ab1-9');
+    });
 
     it('an accepted OVER_SCOPE widening flips cleanliness on the next lap', async () => {
       // ADR D8 / Plan Task 12: the operator's recorded acceptance must reach
@@ -5231,6 +5355,69 @@ Task 1 → Task 2
         expect(result.done).toBe(true);
       });
 
+      // The preserve short-circuit re-parses the report, so it needs the plan
+      // too: unauthorized, this legitimate citation is rejected, the report is
+      // no longer "still clean", and a stale-mtime PASS stops preserving.
+      it('preserves a stale-mtime report whose citation names a declared plan task', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        const baseline = await commitFile(
+          gdir,
+          '.docs/plans/citation.md',
+          '### Task 1: Existing work\n\n**Files:** featureA.ts\n',
+          'docs: add plan',
+        );
+        const p = join(gdir, PATH);
+        await writeFile(
+          p,
+          '**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | Evidence |\n' +
+          '| --- | --- | --- | --- |\n' +
+          '| S1.1 | PASS | 1 | Implemented |\n',
+        );
+        await utimes(p, OLD_MTIME, OLD_MTIME);
+        await writeSidecar(gdir, baseline);
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+
+        expect(result.done).toBe(true);
+      });
+
+      // The preserve pre-check re-reads the report against present content, so
+      // its parse needs the active plan too: without it a citation naming an
+      // absent task resolves against itself and a stale PASS is preserved
+      // (adr-2026-08-30-shared-plan-task-reference-resolver decision 1).
+      it('never preserves a report whose citation names a task absent from the active plan', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        const baseline = await commitFile(
+          gdir,
+          '.docs/plans/citation.md',
+          '### Task 1: Existing work\n\n**Files:** featureA.ts\n',
+          'docs: add plan',
+        );
+        const p = join(gdir, PATH);
+        await writeFile(
+          p,
+          '**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | Evidence |\n' +
+          '| --- | --- | --- | --- |\n' +
+          '| S1.1 | PASS | rem-ab1-9 | Implemented |\n',
+        );
+        await utimes(p, OLD_MTIME, OLD_MTIME);
+        await writeSidecar(gdir, baseline, 'current-run');
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toContain('rem-ab1-9');
+      });
+
       // Covers: task:9, task:10
       it('never preserves or completes a report stamped for a prior run', async () => {
         gdir = await makeGitDir();
@@ -5811,6 +5998,34 @@ Task 1 → Task 2
 
         expect(removed).toEqual([]);
         await expect(readFile(join(gdir, PATH), 'utf-8')).resolves.toBe(ALIGNED);
+      });
+
+      // The spare predicate re-reads the report it is about to preserve, and
+      // its parse carries the plan for the same reason the gate's does: a
+      // `Plan task` cell must be checked against the plan, not against itself.
+      it('spares a stale report whose citation names a declared plan task', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        const baseline = await commitFile(
+          gdir,
+          '.docs/plans/citation.md',
+          '### Task 1: Existing work\n\n**Files:** featureA.ts\n',
+          'docs: add plan',
+        );
+        const citing =
+          '**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | Evidence |\n' +
+          '| --- | --- | --- | --- |\n' +
+          '| S1.1 | PASS | 1 | Implemented |\n';
+        const p = join(gdir, PATH);
+        await writeFile(p, citing);
+        await utimes(p, OLD_MTIME, OLD_MTIME);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', Date.now());
+
+        expect(removed).toEqual([]);
+        await expect(readFile(join(gdir, PATH), 'utf-8')).resolves.toBe(citing);
       });
 
       // Covers: task:5
