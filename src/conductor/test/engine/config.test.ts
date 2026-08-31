@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:2.1, task:3
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -773,6 +773,36 @@ steps:
       expect(outcomes).toEqual([
         'Cannot condition gating step: "lint" with when:. Only advisory steps may be conditional.',
         'Cannot condition structural step: "lint" with when:. Only advisory steps may be conditional.',
+        'accepted',
+      ]);
+    });
+
+    it('rejects disable on gating and structural custom steps while allowing advisory custom steps', () => {
+      const customStep = (enforcement?: 'gating' | 'structural' | 'advisory') => ({
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            ...(enforcement === undefined ? {} : { enforcement }),
+            disable: true,
+          },
+        },
+      });
+
+      const outcomes = ([
+        'gating',
+        'structural',
+        'advisory',
+        undefined,
+      ] as const).map((enforcement) => {
+        const result = validateConfig(customStep(enforcement));
+        return result.ok ? 'accepted' : result.error.message;
+      });
+
+      expect(outcomes).toEqual([
+        'Cannot disable gating step: "lint". Only advisory steps may be disabled.',
+        'Cannot disable structural step: "lint". Only advisory steps may be disabled.',
+        'accepted',
         'accepted',
       ]);
     });

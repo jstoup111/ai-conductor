@@ -672,6 +672,14 @@ export function validateConfig(
             `Custom step "${name}".enforcement must be structural|advisory|gating`,
           );
         }
+        if (cfg.disable === true) {
+          const skipAuthorityError = stepSkipAuthorityError(
+            { enforcement: cfg.enforcement as EnforcementLevel },
+            name,
+            'disable',
+          );
+          if (skipAuthorityError) return errVal(skipAuthorityError);
+        }
         if (projectRoot && typeof cfg.skill === 'string') {
           const skillPath = isAbsolute(cfg.skill)
             ? cfg.skill
