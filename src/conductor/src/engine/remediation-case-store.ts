@@ -91,6 +91,11 @@ export type RemediationCaseStoreReadResult =
   | { readonly ok: true; readonly state: RemediationCaseStoreState }
   | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
 
+/** Durable feature discovery for restart recovery, with absence kept distinct from corruption. */
+export type RemediationCaseStoreFeatureReadResult =
+  | { readonly ok: true; readonly feature: RemediationCaseFeatureIdentity | undefined }
+  | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
+
 export type RemediationCaseStoreReplaceResult =
   | { readonly ok: true; readonly state: RemediationCaseStoreState }
   | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
@@ -376,11 +381,23 @@ export class RemediationCaseStore {
 export async function readRemediationCaseStoreFeature(
   projectRoot: string,
   filesystem: RemediationCaseStoreFilesystem = defaultFilesystem,
-): Promise<RemediationCaseFeatureIdentity | undefined> {
+): Promise<RemediationCaseStoreFeatureReadResult> {
+  let serialized: string;
   try {
-    const raw: unknown = JSON.parse(await filesystem.readFile(remediationCaseStorePath(projectRoot)));
-    return isRecord(raw) ? parseFeature(raw.feature) : undefined;
-  } catch {
-    return undefined;
+    serialized = await filesystem.readFile(remediationCaseStorePath(projectRoot));
+  } catch (error) {
+    return isMissing(error)
+      ? { ok: true, feature: undefined }
+      : { ok: false, reason: 'unreadable' };
   }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(serialized);
+  } catch {
+    return { ok: false, reason: 'malformed-json' };
+  }
+  const parsed = parseState(raw);
+  return parsed.ok
+    ? { ok: true, feature: parsed.state.feature }
+    : parsed;
 }

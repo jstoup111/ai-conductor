@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 
 import type {
   RemediationCaseFeatureIdentity,
+  RemediationCaseStoreFeatureReadResult,
+  RemediationCaseStoreReadResult,
 } from './remediation-case-store.js';
 import type { RemediationCasePriority } from './remediation-case-artifact.js';
 
@@ -67,6 +69,25 @@ export type PublishBuildReviewWorkOrderResult =
   | { readonly ok: false; readonly reason: BuildReviewWorkOrderFailureReason };
 
 export type ReadBuildReviewWorkOrderResult = PublishBuildReviewWorkOrderResult;
+
+/** Attempt evidence must preserve invalid durable state for the coordinator. */
+export type ReadBuildReviewWorkOrderAttemptedCaseIdsResult =
+  | { readonly ok: true; readonly attemptedCaseIds: readonly string[] }
+  | { readonly ok: false; readonly reason: BuildReviewWorkOrderFailureReason };
+
+/** Shared absence/invalid split for durable BUILD recovery consumers. */
+export type BuildReviewDurableReadResult =
+  | ReadBuildReviewWorkOrderResult
+  | ReadBuildReviewWorkOrderAttemptedCaseIdsResult
+  | RemediationCaseStoreReadResult
+  | RemediationCaseStoreFeatureReadResult;
+
+export function classifyBuildReviewDurableRead(
+  result: BuildReviewDurableReadResult,
+): 'present' | 'absent' | 'invalid' {
+  if (!result.ok) return result.reason === 'missing-work-order' ? 'absent' : 'invalid';
+  return 'feature' in result && result.feature === undefined ? 'absent' : 'present';
+}
 
 const defaultFilesystem: BuildReviewWorkOrderFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
@@ -263,17 +284,19 @@ async function readFeatureWorkOrder(
 export { readFeatureWorkOrder as readBuildReviewFeatureWorkOrder };
 
 /**
- * The durable BUILD-attempt evidence reconciliation consumes. A missing,
- * malformed, or foreign order yields no evidence rather than a guess, so an
- * unattempted case is never mistaken for an attempted one.
+ * The durable BUILD-attempt evidence reconciliation consumes. Absence remains
+ * empty evidence; malformed or foreign orders remain typed failures so a
+ * coordinator cannot mistake corruption for an unattempted case.
  */
 export async function readBuildReviewWorkOrderAttemptedCaseIds(
   projectRoot: string,
   feature: RemediationCaseFeatureIdentity,
   filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
-): Promise<readonly string[]> {
+): Promise<ReadBuildReviewWorkOrderAttemptedCaseIdsResult> {
   const order = await readFeatureWorkOrder(projectRoot, feature, filesystem);
-  return order.ok ? order.workOrder.attemptedCaseIds ?? [] : [];
+  return order.ok
+    ? { ok: true, attemptedCaseIds: order.workOrder.attemptedCaseIds ?? [] }
+    : order;
 }
 
 /**

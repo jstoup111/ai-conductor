@@ -15,7 +15,7 @@ import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from '.
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
-import { readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
+import { classifyBuildReviewDurableRead, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
 import { RemediationCaseStore } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
@@ -132,7 +132,11 @@ export async function coordinateBuildReviewAdjudication(input: {
   // than process memory. Without it an attempted case is indistinguishable from
   // an interrupted one, so a repeat could take a second free route and an
   // absent repaired case could never resolve.
-  const attemptedCaseIds = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
+  const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
+  if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) === 'invalid') {
+    return fail(`build-review work order ${attemptEvidence.reason}`);
+  }
+  const attemptedCaseIds = attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [];
   const attempted = new Set(attemptedCaseIds);
   const planContract = await (input.readPlanContract ?? (() => sourcePlanContract(input.projectRoot, input.aggregate)))();
   const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
@@ -210,10 +214,13 @@ export async function coordinateBuildReviewAdjudication(input: {
   }
 
   for (const proposed of admitted) {
-    if (!proposed.case.existingCaseId) continue;
     const caseId = caseIdsByRef.get(proposed.case.caseRef);
     const record = caseId ? reconciledCasesById.get(caseId) : undefined;
-    if (!caseId || !record) return fail('existing case identity was not reconciled');
+    if (!caseId || !record) {
+      if (proposed.case.existingCaseId) return fail('existing case identity was not reconciled');
+      continue;
+    }
+    if (!priorCasesById.has(caseId)) continue;
     const reuse = classifyRemediationCaseReuse(record, attempted);
     if (reuse === 'halt-regression' || reuse === 'halt-repeat') {
       await input.emit?.({

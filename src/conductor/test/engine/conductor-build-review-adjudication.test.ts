@@ -241,6 +241,21 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(restartedOrder.attemptedCaseIds).toEqual(order.attemptedCaseIds);
   });
 
+  it('halts before BUILD when a durable work order is malformed rather than falling back to a stale hint', async () => {
+    const first = await fixture();
+    const cases = await first.readJson('.pipeline/remediation-cases.json');
+    const restart = await fixture({
+      startFrom: 'build',
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/build-review-work-order.json'), '{not json', 'utf8');
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(cases), 'utf8');
+      },
+    });
+
+    expect(restart.dispatched).not.toContain('build');
+    expect(await restart.haltMarker()).toContain('BUILD durable remediation recovery halted: work order malformed-json');
+  });
+
   it('files a deferred case through the production tracker and intake dependencies', async () => {
     const run = await fixture({ judgement: deferralJudgement() });
 
