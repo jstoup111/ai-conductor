@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5
+// Covers: task:3, task:4, task:5, task:6
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -295,6 +295,56 @@ describe('parsePrdAuditReport', () => {
           key: 'S2.1',
           rowText: '| S2.1 | FIXABLE | rem-prd-audit-zz-1 | Missing guard |',
           reason: 'PRD audit finding S2.1 names Plan task rem-prd-audit-zz-1, which is absent from the active plan.',
+        }],
+      },
+    });
+  });
+
+  it('names the criterion and unresolved Plan task reference in its diagnostic', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.3 | FIXABLE | rem-x-1 | Missing guard |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [],
+        rejectedRows: [{
+          key: 'S2.3',
+          rowText: '| S2.3 | FIXABLE | rem-x-1 | Missing guard |',
+          reason: 'PRD audit finding S2.3 names Plan task rem-x-1, which is absent from the active plan.',
+        }],
+      },
+    });
+  });
+
+  it('names the criterion and malformed Plan task reference in its diagnostic', () => {
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.3 | FIXABLE | task#7 | Missing guard |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report, activePlan)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [],
+        rejectedRows: [{
+          key: 'S2.3',
+          rowText: '| S2.3 | FIXABLE | task#7 | Missing guard |',
+          reason: 'PRD audit finding S2.3 has malformed Plan task task#7.',
         }],
       },
     });

@@ -4463,7 +4463,9 @@ export function parsePrdAuditReport(
         activePlanTaskIds ?? new Set([rawPlanTask.trim()]),
       );
     if (planTaskReference?.kind === 'malformed') {
-      rejectedPrdAuditRow(rejectedRows, line, criterion, `PRD audit finding ${criterion} has an invalid Plan task.`);
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
+        `PRD audit finding ${criterion} has malformed Plan task ${planTaskReference.raw}.`,
+      );
       continue;
     }
     if (planTaskReference?.kind === 'unresolvable') {
