@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:3, task:6
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -515,6 +515,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'build_review_base',
       'parallel_started',
       'parallel_completed',
+      'when_skip',
       'rebase_mergeable_skip',
       'rebase_conflict_halt',
       'operator_park_boundary',
