@@ -6,8 +6,8 @@ Class: protected-artifact
 Halting step: test_suite
 Phase: BUILD
 Branch: feat/daemon-build-review-rubrics-need-a-post-join-adjudicator-
-Head SHA: 2ceed20ed95fb37216ef7733e63af7a892b2c5a4
-Halted at: 2026-08-31T15:13:20.656Z
+Head SHA: a3c9477640f95cf098be2ab5821f4bf415e6bfa0
+Halted at: 2026-08-31T15:14:37.833Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
