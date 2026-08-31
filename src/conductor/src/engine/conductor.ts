@@ -179,6 +179,7 @@ import {
   type RemediationGap,
   type CompletionContext,
   type CompletionResult,
+  discardStaleLapBuildReviewFail,
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
   stampGateRunIdentity,
@@ -5704,6 +5705,13 @@ export class Conductor {
     // so daemon re-dispatch cannot reset either loop guard.
     const kickbackEscalationEnabled = this.config.kickback_escalation?.enabled ?? true;
     const cumulativeKickbackBoundEnabled = this.config.cumulative_kickback_bound?.enabled ?? true;
+    // Bound for the stale-lap FAIL discard below (#1740 follow-up): the
+    // discard re-lands on build_review so the grader writes a current-lap
+    // verdict. A SECOND stale-lap FAIL in the same run means the grader is
+    // itself stamping a prior lap — re-landing again would loop forever, so
+    // that halts instead. In-memory is enough: a daemon re-dispatch re-runs
+    // the grader anyway, which is exactly the recovery the discard wants.
+    let staleLapDiscards = 0;
 
     const pendingBuildKickbackGate = async (): Promise<string | null> => {
       const ledger = await readKickbackLedger(this.projectRoot);
@@ -9922,6 +9930,45 @@ export class Conductor {
               }
               const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
               if (parsed?.ok && parsed.verdict === 'FAIL') {
+                // #1740 follow-up: this raw read bypasses the completion
+                // predicate's lap-freshness guard, so without this check a
+                // FAIL aggregate from a PRIOR lap re-raises its (already
+                // fixed) findings as kickbacks forever — the stored lapId
+                // never changes while HEAD moves every lap. Treat a stale-lap
+                // aggregate as no verdict at all: discard it and re-land on
+                // build_review so the grader writes a brand-new verdict.
+                const staleLap = await discardStaleLapBuildReviewFail(
+                  this.projectRoot,
+                  verdictRaw,
+                );
+                if (staleLap) {
+                  staleLapDiscards += 1;
+                  if (staleLapDiscards > 1) {
+                    const reason =
+                      `build_review stale-lap FAIL persists after discard: the grader rewrote an ` +
+                      `aggregate for prior lap ${staleLap.storedLapId} while HEAD is at ` +
+                      `${staleLap.currentLapId} — re-landing again would loop; halting for inspection`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    const prUrl = await this.surfaceRemediationPr(reason);
+                    await this.emitLoopHalt(reason, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    process.off('SIGTERM', sigterm);
+                    return;
+                  }
+                  this.log?.(
+                    `build_review FAIL aggregate belongs to prior lap ${staleLap.storedLapId} ` +
+                      `(current ${staleLap.currentLapId}) — discarded; a prior lap's FAIL is never kicked back`,
+                  );
+                  await emitTracked({
+                    type: 'build_review_stale_aggregate',
+                    ...staleLap,
+                  });
+                  await this.saveConductorStepStatus(state, step.name, 'failed');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  i = i - 1; // for-loop i++ re-lands on build_review
+                  continue;
+                }
                 const failureDetails = buildReviewFailureDetails(parsed);
                 let kickbackLedgerBeforeConsumption: KickbackLedger | undefined;
                 // The raw aggregate can outlive a concurrent operator acceptance.

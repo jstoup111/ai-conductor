@@ -373,6 +373,15 @@ same-surface PASS survive re-dispatch. The stale condition is recorded on the ev
 `build_review_stale_aggregate` (telemetry only; never consulted for routing) and consumes no
 kickback budget.
 
+The same rule guards the daemon's post-retry kickback route. When `build_review` exhausts its
+retries, the daemon re-reads the raw verdict to build the kickback evidence; a stale-lap FAIL
+aggregate found there is discarded outright (the artifact is deleted, exactly like the stale-mirage
+disposition) and the run re-lands on `build_review` instead of kicking its prior-lap findings back
+to `build`. Without this, a stored `lapId` that never matches a moving HEAD replayed already-fixed
+findings as kickbacks indefinitely. The discard also emits `build_review_stale_aggregate`. A
+second stale-lap FAIL in the same run means the grader itself is stamping a prior lap, so the run
+halts `needs-human` instead of re-landing again.
+
 A below-cap mechanical (infrastructure) fault publishes no aggregate at all, so it cannot be stale
 by this check; the last such fault is instead recorded on the kickback ledger's `build_review` gate
 entry (`lastMechanicalFault`) and surfaces in `ai-conductor build-review findings` and in the

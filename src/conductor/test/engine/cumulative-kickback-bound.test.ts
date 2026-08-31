@@ -244,7 +244,12 @@ describe('cumulative build-review kickback bound', () => {
         run: async (step: string) => {
           if (step === 'build_review') {
             mixedBuildReviewRuns += 1;
-            return runRubricLap('mixed-lap');
+            // Stamp the REAL HEAD: a FAIL aggregate from a prior lap is
+            // discarded at the kickback read instead of driving a kickback,
+            // so a fabricated lap id would never reach the charge under test.
+            return runRubricLap(
+              execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim(),
+            );
           }
           if (step === 'build') throw new Error('stop after mixed lap kickback');
           return { success: true };
