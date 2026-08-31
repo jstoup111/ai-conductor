@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   classifyBuildReviewRubricBranches,
   coordinateBuildReviewRubrics,
+  stampBuildReviewDispatchedCandidate,
   type BuildReviewCoordinationInput,
+  validateBuildReviewDispatchedResult,
 } from "../../src/engine/build-review-coordinator.js";
 import {
   mapBuildReviewCoordinatorFailureReason,
@@ -379,6 +381,46 @@ describe("build-review coordinator: frozen fan-out", () => {
 });
 
 describe("build-review coordinator: dispatch-failure detail carry-through", () => {
+  it("rejects malformed counterfactualSensitivity as absent rerun evidence without a semantic route or cap tick", async () => {
+    const frozenInputs = titledInputs();
+    const lapId = parseBuildReviewLapId("lap-current")!;
+    const projection = {
+      rubric: "testQuality", contractVersion: "v3", projectionVersion: "v2", lapId,
+      snapshotDigest: frozenInputs.sourceSnapshot.digest, digest: "sha256:test-quality",
+      changedTestSelectors: [IN_SCOPE_TEST],
+      changedTestTitles: frozenInputs.sourceSnapshot.changedTestTitles,
+      changedFiles: [],
+    } as never;
+    const malformed = { findings: [], counterfactualSensitivity: "unknown" };
+    const stamped = stampBuildReviewDispatchedCandidate(malformed, "testQuality", projection);
+    const rubricFailures = { testQuality: 3 };
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1, ...artifact }));
+    const writeCache = vi.fn(async () => undefined);
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+
+    // The dispatch repair predicate rejects the envelope before it can settle a
+    // judged FAIL. With no persisted result, the existing gate-completion path
+    // sees absent evidence and reruns; no semantic kickback can charge this tally.
+    expect(validateBuildReviewDispatchedResult(stamped, "testQuality", projection)).toBeUndefined();
+
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: frozenInputs,
+      dispatchModel: vi.fn(async () => malformed),
+      writeArtifact,
+      writeCache,
+      emit,
+    }));
+
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result",
+      detail: expect.stringContaining("counterfactualSensitivity"),
+    });
+    expect(writeArtifact).not.toHaveBeenCalled();
+    expect(writeCache).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "build_review_rubric_result", verdict: "FAIL" }));
+    expect(rubricFailures).toEqual({ testQuality: 3 });
+  });
+
   it("settles a dispatch-failure report as invalid-provider-result carrying its bounded detail", async () => {
     const detail = "judged-result contract not satisfied after one repair turn: ... Raw output excerpt: I judged the rubric...";
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
