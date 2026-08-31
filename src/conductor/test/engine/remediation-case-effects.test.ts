@@ -45,14 +45,17 @@ describe('remediation case effects', () => {
     await writeFile(planPath, 'original plan\n');
     const publishWorkOrder = vi.fn().mockResolvedValue({ ok: true, workOrder: {} });
     const chargeEffect = vi.fn().mockResolvedValue({
-      status: 'charged', exhausted: true, cumulativeExhausted: false, entry: {},
+      status: 'charged', exhausted: true, cumulativeExhausted: false, entry: { count: 3, cumulative: 3 },
     });
 
     await expect(applyBuildReviewActionEffects({
       projectRoot: root, feature, store, tasksByCaseId: new Map([['case-1', [{ title: 'Repair the regression' }]]]),
       chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-1' }, workOrderId: () => 'order-1',
       publishWorkOrder, chargeEffect,
-    })).resolves.toMatchObject({ ok: false, reason: 'build-review kickback budget exhausted' });
+    })).resolves.toMatchObject({
+      ok: false,
+      reason: 'build-review kickback budget exhausted (per-gate): blocked cases case-1 (effect effect-1); count 3, cumulative 3',
+    });
 
     const read = await store.read();
     expect(read.ok && read.state.cases[0]?.effect).toEqual(expect.objectContaining({ status: 'failed' }));
@@ -169,5 +172,52 @@ describe('remediation case effects', () => {
     if (savedEffect?.kind !== 'deferral') throw new Error('expected a deferred effect');
     expect(savedEffect.status).toMatch(/^(reserved|failed)$/);
     expect(savedEffect).not.toHaveProperty('issueUrl');
+  });
+  it('charges a later distinct action under its own reserved effect, not the already-applied one', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [
+      {
+        // Applied on an earlier lap and still open: BUILD has not resolved it.
+        id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'repair', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'source-1', outcome: 'acted', recordedAt: '2026-08-30T00:00:00.000Z' }],
+        effect: { id: 'effect-1', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      },
+      {
+        id: 'case-2', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'later repair', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'source-2', outcome: 'acted', recordedAt: '2026-08-31T00:00:00.000Z' }],
+        effect: { id: 'effect-2', kind: 'action', status: 'reserved' },
+      },
+    ] });
+    const chargeEffect = vi.fn().mockResolvedValue({ status: 'charged', exhausted: false, cumulativeExhausted: false, entry: { count: 2, cumulative: 2 } });
+
+    const result = await applyBuildReviewActionEffects({
+      projectRoot: root, feature, store,
+      tasksByCaseId: new Map([['case-1', [{ title: 'Repair the first' }]], ['case-2', [{ title: 'Repair the second' }]]]),
+      chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-2' }, workOrderId: () => 'order-2', chargeEffect,
+    });
+
+    expect(result).toMatchObject({ ok: true, status: 'applied', effectId: 'effect-2' });
+    expect(chargeEffect).toHaveBeenCalledWith(root, 'effect-2', expect.anything());
+  });
+
+  it('names the blocked cases and the counter state when the kickback budget is exhausted', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [{
+      id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'repair', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'source-1', outcome: 'acted', recordedAt: '2026-08-30T00:00:00.000Z' }],
+      effect: { id: 'effect-1', kind: 'action', status: 'reserved' },
+    }] });
+    const chargeEffect = vi.fn().mockResolvedValue({
+      status: 'charged', exhausted: false, cumulativeExhausted: true, entry: { count: 3, cumulative: 6 },
+    });
+
+    const result = await applyBuildReviewActionEffects({
+      projectRoot: root, feature, store, tasksByCaseId: new Map([['case-1', [{ title: 'Repair the regression' }]]]),
+      chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-1' }, workOrderId: () => 'order-1',
+      publishWorkOrder: vi.fn().mockResolvedValue({ ok: true, workOrder: {} }), chargeEffect,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'build-review kickback budget exhausted (cumulative): blocked cases case-1 (effect effect-1); count 3, cumulative 6',
+    });
   });
 });
