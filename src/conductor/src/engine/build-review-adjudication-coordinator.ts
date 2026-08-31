@@ -5,7 +5,8 @@ import { reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
-import { reconcileRemediationCases } from './remediation-case-reconciler.js';
+import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
+import { readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
 import { RemediationCaseStore } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
@@ -108,8 +109,15 @@ export async function coordinateBuildReviewAdjudication(input: {
   const admitted = graph.graph.cases.filter((proposed) =>
     proposed.sources.some((source) => liveSourceIds.has(source.sourceId)),
   );
+  // Durable BUILD-attempt evidence, read from the published work order rather
+  // than process memory. Without it an attempted case is indistinguishable from
+  // an interrupted one, so a repeat could take a second free route and an
+  // absent repaired case could never resolve.
+  const attemptedCaseIds = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
+  const attempted = new Set(attemptedCaseIds);
   const reconciled = await reconcileRemediationCases(store, {
     graph: { ...graph.graph, cases: admitted }, recordedAt: new Date().toISOString(), generateId: input.generateId ?? randomUUID,
+    attemptedCaseIds,
   });
   if (!reconciled.ok) return fail(reconciled.reason === 'store-failure' ? `case store ${reconciled.storeReason}` : `case reconciliation ${reconciled.reason}`);
 
@@ -144,12 +152,16 @@ export async function coordinateBuildReviewAdjudication(input: {
     const caseId = caseIdsByRef.get(proposed.case.caseRef);
     const record = caseId ? reconciledCasesById.get(caseId) : undefined;
     if (!caseId || !record) return fail('existing case identity was not reconciled');
-    if (record.disposition === 'act' && record.resolution === 'resolved') {
+    const reuse = classifyRemediationCaseReuse(record, attempted);
+    if (reuse === 'halt-regression' || reuse === 'halt-repeat') {
       await input.emit?.({
         type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
-        caseId, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }), reason: 'regressed',
+        caseId, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }),
+        reason: reuse === 'halt-repeat' ? 'already-attempted' : 'regressed',
       });
-      return fail(`semantic remediation case regression ${caseId}`);
+      return fail(reuse === 'halt-repeat'
+        ? `semantic remediation case repeat ${caseId}`
+        : `semantic remediation case regression ${caseId}`);
     }
   }
 
