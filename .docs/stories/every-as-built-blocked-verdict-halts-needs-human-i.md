@@ -54,7 +54,7 @@ tasks and route back to BUILD so that the feature converges without an operator.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a blocked-remediable outcome within allowance, when the conductor handles the gate, then each finding is admitted as a remediation gap and appended to the plan through the existing remediation-append primitive with a task id prefixed for the as-built gate source, each task carrying its governing clause and a Done when block
+- Given a blocked-remediable outcome within allowance, when the conductor handles the gate, then each finding is admitted as a remediation gap, and each finding whose disposition appends is appended to the plan through the existing remediation-append primitive with a task id prefixed for the as-built gate source, each task carrying its governing clause and a Done when block (an existing-task-dispositioned finding is admitted without an append and charges no plan growth, per adr-2026-08-25 decision 9)
 - Given tasks were appended, when routing completes, then execution navigates back to BUILD, the as-built gate is restaged stale, and after the rebuild the gate re-runs against a fresh report
 - Given the re-run report is APPROVED, when the gate re-evaluates, then the SHIP tail proceeds and no halt is written
 
