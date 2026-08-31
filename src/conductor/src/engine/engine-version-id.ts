@@ -46,3 +46,15 @@ export function versionIdFromEngineDir(engineDir: string): EngineVersionId | und
   const match = segments.find((segment) => isEngineVersionId(segment));
   return match as EngineVersionId | undefined;
 }
+
+/**
+ * The engine content stamp for cache identity (adr-2026-08-21 D2): the 12-hex
+ * content half of the embedded version id — never the timestamp half, so
+ * byte-identical republishes keep warm caches. An unpublished dev run (plain
+ * `dist/` or `src/engine`) embeds no version id and stamps as the constant
+ * sentinel `dev`: dev-to-dev hits; dev and published never match.
+ */
+export function engineContentStamp(engineDir: string): string {
+  const versionId = versionIdFromEngineDir(engineDir);
+  return versionId === undefined ? 'dev' : versionId.slice(versionId.indexOf('-') + 1);
+}

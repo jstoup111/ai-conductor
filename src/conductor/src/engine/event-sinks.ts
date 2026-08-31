@@ -19,6 +19,9 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_review_rubric_result: { render: false, persist: true, audit: false, otel: false },
   build_review_rubric_skipped: { render: false, persist: true, audit: false, otel: false },
   build_review_cache_hit: { render: false, persist: true, audit: false, otel: false },
+  // adr-2026-08-21 D5: discards are attributable in the daemon log, the
+  // ledger, and the audit trail by rubric and cause.
+  build_review_cache_discarded: { render: true, persist: true, audit: true, otel: false },
   build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false, otel: false },
   build_review_mechanical_allowance_exhausted: { render: false, persist: true, audit: false, otel: false },
   // These are written by the external build-review CLI to the pipeline-owned

@@ -221,6 +221,13 @@ export class AuditTrailWriter {
           event: 'halt_cleared',
           cause: event.cause,
         };
+      case 'build_review_cache_discarded':
+        return {
+          origin: 'build_review',
+          event: 'build_review_cache_discarded',
+          reason: `${event.rubric}: ${event.reason}`,
+          cause: `cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp}`,
+        };
       case 'verdict_freshness':
         return {
           origin: event.step,

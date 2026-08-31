@@ -96,6 +96,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_result',
   'build_review_rubric_skipped',
   'build_review_cache_hit',
+  'build_review_cache_discarded',
   'build_review_rubric_infrastructure_failure',
   'build_review_mechanical_allowance_exhausted',
   'build_review_disposition_version_invalidated',
@@ -158,6 +159,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
+  'build_review_cache_discarded',
   'operator_rewind',
   'project_setup',
   'plan_growth',
@@ -628,6 +630,7 @@ describe('event sink subscriptions', () => {
       'halt_record_push_failed',
       'shipment_evidence_refused',
       'build_review_disposition_version_invalidated',
+      'build_review_cache_discarded',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
     ]));
