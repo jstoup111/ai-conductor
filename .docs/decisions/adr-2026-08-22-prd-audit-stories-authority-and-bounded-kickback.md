@@ -72,11 +72,20 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    operator-configurable. Each appended task carries `Criterion:` and its parent task. Exceeding a
    cap, or a second lap, converts to a needs-human HALT listing every finding. The lap rides the
    durable per-gate kickback ledger (`gates.prd_audit`), never the build_review cumulative counter.
+
+   > **Amended 2026-08-31 by #2119:** A `FIXABLE` finding whose remedy is owned by task ids
+   > already in the active plan may instead take the non-appending `existing-task` disposition
+   > (adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 9). It routes to
+   > BUILD without the append seam, adds no tasks, and is bounded by the gate's lap cap alone;
+   > the 5-task and 25% caps continue to govern appending dispositions only.
 6. **Growth ledger.** The kickback ledger gains a per-feature `growth` record:
    `{authored, added, byGate, remaining}`; pre-existing `rem-*` tasks found in a plan at first read
    count toward `authored`. Surfaced by `conduct-ts` status output and emitted on the spine.
    (Extending the ledger was chosen over a new spine record because the ledger already owns
    per-feature kickback state and the removal guard reads appended ids from it.)
+
+   > **Amended 2026-08-31 by #2119:** An `existing-task` disposition leaves `added` and
+   > `remaining` untouched by design — a plan that did not grow records no growth.
 7. **PLAN_GAP.** Happy-path criterion unmet with no owning task → HALT (class `plan-gap`); negative/
    edge criterion → recorded in the verdict and the shipped record, ships, unless configuration
    requires a halt. Never a kickback; the daemon DECIDE-halt rule is unchanged.
