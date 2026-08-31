@@ -9,6 +9,7 @@ import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } fro
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
@@ -317,5 +318,66 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toMatchObject({ ok: true, route: 'pass' });
     expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(4);
+  });
+  it('halts an attempted action case bound again instead of granting a second free route', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await store.replace({
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The test needs a focused assertion.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    // BUILD already ran against this order: the durable attempt evidence is on
+    // the artifact, not in this process's memory.
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-durable',
+      cases: [{ caseId: 'case-durable', priority: 'high', tasks: [{ title: 'Add the missing assertion' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const repeated: RemediationCaseJudgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-durable' }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => repeated), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case repeat case-durable' });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'already-attempted',
+    }));
+  });
+
+  it('resolves an attempted open case that the current lap no longer reports', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await store.replace({
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-gone', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'An earlier finding that BUILD repaired.', resolution: 'open',
+        sources: [{ sourceId: 'testQuality:sha256-gone', outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-gone', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-gone',
+      cases: [{ caseId: 'case-gone', priority: 'high', tasks: [{ title: 'Repair the earlier finding' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, async () => actionJudgement()) });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases.map((record) => [record.id, record.resolution])).toEqual([
+      ['case-gone', 'resolved'], ['case-durable', 'open'],
+    ]);
   });
 });
