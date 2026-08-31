@@ -5220,6 +5220,7 @@ Task 1 → Task 2
             unresolvedFindingIds: [],
             skippedRubrics: [],
             infrastructureFailureRubrics: [],
+            uncoveredInfrastructureFailureRubrics: [],
           },
         }),
         git: async (args) => {

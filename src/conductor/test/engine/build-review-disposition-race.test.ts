@@ -39,6 +39,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
         unresolvedFindingIds: overrides.unresolved,
         skippedRubrics: [],
         infrastructureFailureRubrics: [],
+        uncoveredInfrastructureFailureRubrics: [],
       },
     };
   }
