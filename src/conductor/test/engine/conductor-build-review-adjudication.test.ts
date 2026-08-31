@@ -287,8 +287,26 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(uncovered.dispatched).not.toContain('build');
     expect(uncovered.kickbacks).toEqual([]);
     expect(uncovered.remediateDispatches()).toBe(0);
-    const ledger = await uncovered.readJson('.pipeline/kickback-ledger.json').catch(() => ({ gates: {} })) as { gates: Record<string, { count?: number }> };
+    // An uncovered fault is not PASS: it exhausts the bounded mechanical
+    // allowance, preserves the source diagnostic, and then writes the
+    // conductor HALT marker. These are the durable outputs of the production
+    // mechanical lane, rather than merely the absence of a semantic route.
+    const ledger = await uncovered.readJson('.pipeline/kickback-ledger.json') as {
+      gates: { build_review?: {
+        count?: number;
+        mechanicalFaults?: number;
+        lastMechanicalFault?: { rubric: string; reason: string; detail: string; lapId: string };
+      } };
+    };
     expect(ledger.gates.build_review?.count ?? 0).toBe(0);
+    expect(ledger.gates.build_review?.mechanicalFaults).toBe(3);
+    expect(ledger.gates.build_review?.lastMechanicalFault).toEqual({
+      rubric: 'testQuality',
+      reason: 'provider-error',
+      detail: 'provider unavailable',
+      lapId: LAP_ID,
+    });
+    expect(await uncovered.haltMarker()).toContain('build_review adjudication halted');
   });
   it('does not leak a settled work order into a later unrelated BUILD dispatch', async () => {
     const first = await fixture();
