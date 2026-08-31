@@ -690,6 +690,11 @@ export async function terminateFeature({
     if (triage.outputTail) note += `\nOutput tail:\n${triage.outputTail}\n`;
     if (triage.quarantineRef) {
       note += `\nQuarantine ref: ${triage.quarantineRef}\n`;
+    } else if (
+      triage.contractOutcome === 'provider-failure' &&
+      triage.treeUnchangedSinceDispatch?.before === triage.treeUnchangedSinceDispatch?.after
+    ) {
+      note += `\nNo repair state was preserved because none was produced; the tree is unchanged since dispatch (${triage.treeUnchangedSinceDispatch.after}).\n`;
     } else {
       note += `\nNo quarantine ref exists (clean-HEAD case)\n`;
     }

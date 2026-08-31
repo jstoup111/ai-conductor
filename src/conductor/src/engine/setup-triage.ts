@@ -90,6 +90,8 @@ export type TriageOutcome =
       quarantineRef?: string;
       preservedPaths?: string[];
       contractOutcome?: string;
+      /** Present only when a provider failure left the exact dispatch tree intact. */
+      treeUnchangedSinceDispatch?: { before: string; after: string };
     };
 
 /**
@@ -653,7 +655,12 @@ export async function fixSession(
     if (!settled) { settled = true; await events?.emit({ type: 'setup_repair', disposition, preservedPaths: [] }); }
     return { kind: 'fixed-pass', outputTail: '', preservedPaths: [], contractOutcome: disposition };
   };
-  const reject = async (reason: SetupRepairRejectionReason, outputTail: string, preserve: boolean): Promise<TriageOutcome> => {
+  const reject = async (
+    reason: SetupRepairRejectionReason,
+    outputTail: string,
+    preserve: boolean,
+    treeUnchangedSinceDispatch?: { before: string; after: string },
+  ): Promise<TriageOutcome> => {
     let ref: string | undefined;
     let paths: string[] = [];
     let finalReason = reason;
@@ -665,10 +672,32 @@ export async function fixSession(
       else { finalReason = 'preservation-failed'; finalTail = result.outputTail; }
     }
     if (!settled) { settled = true; await events?.emit({ type: 'setup_repair', disposition: 'rejected', reason: finalReason, ...(ref ? { quarantineRef: ref } : {}), preservedPaths: paths }); }
-    return { kind: 'park', outputTail: finalTail, contractOutcome: finalReason, ...(ref ? { quarantineRef: ref } : {}), preservedPaths: paths };
+    return {
+      kind: 'park',
+      outputTail: finalTail,
+      contractOutcome: finalReason,
+      ...(ref ? { quarantineRef: ref } : {}),
+      ...(treeUnchangedSinceDispatch ? { treeUnchangedSinceDispatch } : {}),
+      preservedPaths: paths,
+    };
   };
 
-  try { await dispatchFixSession(); } catch (err) { return reject('provider-failure', extractErrorOutput(err), false); }
+  try {
+    await dispatchFixSession();
+  } catch (err) {
+    const afterFailure = await repairSnapshot(git);
+    if (!afterFailure.ok) return reject('snapshot-failed', afterFailure.outputTail, true);
+    const treeUnchanged =
+      afterFailure.value.head === original.head &&
+      afterFailure.value.tree === original.tree &&
+      !afterFailure.value.dirty;
+    return reject(
+      'provider-failure',
+      extractErrorOutput(err),
+      !treeUnchanged,
+      treeUnchanged ? { before: original.tree, after: afterFailure.value.tree } : undefined,
+    );
+  }
   const candidate = await repairSnapshot(git);
   if (!candidate.ok) return reject('snapshot-failed', candidate.outputTail, true);
   const forward = await git(['merge-base', '--is-ancestor', original.head, candidate.value.head]);

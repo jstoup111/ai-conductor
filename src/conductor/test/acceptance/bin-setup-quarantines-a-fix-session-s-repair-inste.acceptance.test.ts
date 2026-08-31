@@ -150,4 +150,73 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
     ]);
     expect(rendered.filter((line) => line.includes('engine-committed'))).toHaveLength(1);
   });
+
+  it('proves no repair state was produced when the provider throws before touching the tree', async () => {
+    const originalHead = await git('rev-parse', 'HEAD');
+    const originalTree = await git('rev-parse', 'HEAD^{tree}');
+    let fixCalls = 0;
+    let conductorCalls = 0;
+    let triageOutcome: TriageOutcome | undefined;
+
+    const runSetupTriage: NonNullable<FeatureRunnerDeps['runSetupTriage']> = async (
+      _error,
+      worktree,
+      item,
+      _providerExecution,
+      _log,
+      events,
+    ) => {
+      triageOutcome = await fixSession(
+        makeGitRunner(worktree.path),
+        worktree.path,
+        item.slug,
+        async () => {
+          fixCalls += 1;
+          throw new Error('provider unavailable before repair');
+        },
+        async () => {
+          throw new Error('forced setup must not run after provider failure');
+        },
+        events,
+      );
+      return triageOutcome;
+    };
+
+    const deps: FeatureRunnerDeps = {
+      createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
+      prepareWorktree: async () => {
+        throw new SetupFailureError('setup failed', 'fixture compile failure');
+      },
+      runSetupTriage,
+      runConductor: async () => {
+        conductorCalls += 1;
+      },
+      readOutcome: async () => ({ done: false, halted: false }),
+      teardownWorktree: async () => {},
+      markProcessed: async () => {},
+      daemon: true,
+      project: 'acceptance-project',
+      projectRoot: root,
+    };
+
+    const result = await makeRunFeature(deps)({ slug: SLUG } as BacklogItem);
+
+    expect(result.status).toBe('error');
+    expect(fixCalls).toBe(1);
+    expect(conductorCalls).toBe(0);
+    expect(triageOutcome).toMatchObject({
+      kind: 'park',
+      contractOutcome: 'provider-failure',
+      treeUnchangedSinceDispatch: { before: originalTree, after: originalTree },
+    });
+    expect(await git('rev-parse', 'HEAD')).toBe(originalHead);
+    expect(await git('rev-parse', 'HEAD^{tree}')).toBe(originalTree);
+    expect(await git('status', '--porcelain')).toBe('');
+    expect(await git('branch', '--list', `wip/setup-quarantine-${SLUG}`)).toBe('');
+
+    const halt = await readFile(join(root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('provider unavailable before repair');
+    expect(halt).toContain('No repair state was preserved because none was produced');
+    expect(halt).not.toContain('No quarantine ref exists (clean-HEAD case)');
+  });
 });
