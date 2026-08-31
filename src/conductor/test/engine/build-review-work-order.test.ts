@@ -8,6 +8,8 @@ import {
   appendBuildReviewWorkOrderContext,
   publishBuildReviewWorkOrder,
   readBuildReviewWorkOrder,
+  readBuildReviewWorkOrderAttemptedCaseIds,
+  markBuildReviewWorkOrderAttempted,
   type BuildReviewWorkOrder,
   type BuildReviewWorkOrderFilesystem,
 } from '../../src/engine/build-review-work-order.js';
@@ -140,5 +142,30 @@ describe('build-review work order', () => {
     await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, EFFECT_ID)).resolves.toMatchObject({ ok: true });
     await expect(Promise.all([readFile(activePlan, 'utf8'), readFile(taskStatus, 'utf8'), readFile(growth, 'utf8')]))
       .resolves.toEqual(['approved plan\n', '{"tasks":[]}\n', '{"version":1,"gates":{}}\n']);
+  });
+  it('records durable BUILD attempt evidence for every case in the published order', async () => {
+    const projectRoot = await createProjectRoot();
+    await publishBuildReviewWorkOrder(projectRoot, WORK_ORDER);
+
+    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE)).resolves.toEqual([]);
+    await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE)).resolves.toMatchObject({ ok: true });
+    // A later process — not the one that stamped it — reads the same evidence.
+    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE)).resolves.toEqual(['case-critical', 'case-high']);
+    // Stamping twice is idempotent and preserves the stable effect identity.
+    await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE)).resolves.toMatchObject({ ok: true });
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, EFFECT_ID)).resolves.toMatchObject({
+      ok: true, workOrder: { effectId: EFFECT_ID, attemptedCaseIds: ['case-critical', 'case-high'] },
+    });
+  });
+
+  it('reports no attempt evidence for a missing or foreign order rather than guessing', async () => {
+    const projectRoot = await createProjectRoot();
+    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE)).resolves.toEqual([]);
+    await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE)).resolves.toEqual({ ok: false, reason: 'missing-work-order' });
+
+    await publishBuildReviewWorkOrder(projectRoot, WORK_ORDER);
+    const foreign = { ...FEATURE, feature: 'other-feature' } as const;
+    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, foreign)).resolves.toEqual([]);
+    await expect(markBuildReviewWorkOrderAttempted(projectRoot, foreign)).resolves.toEqual({ ok: false, reason: 'foreign-feature' });
   });
 });

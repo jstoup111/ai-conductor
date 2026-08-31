@@ -35,6 +35,12 @@ export interface BuildReviewWorkOrder {
   readonly feature: RemediationCaseFeatureIdentity;
   readonly effectId: string;
   readonly cases: readonly BuildReviewWorkOrderCase[];
+  /**
+   * Durable BUILD-attempt evidence: the cases this order has already been
+   * dispatched for. Absent until BUILD stamps it, so a fresh order and an
+   * attempted one are distinguishable across a restart.
+   */
+  readonly attemptedCaseIds?: readonly string[];
 }
 
 export interface BuildReviewWorkOrderFilesystem {
@@ -106,7 +112,9 @@ function parseCase(value: unknown): BuildReviewWorkOrderCase | undefined {
 }
 
 function parseWorkOrder(value: unknown): PublishBuildReviewWorkOrderResult {
-  if (!isRecord(value) || !exactKeys(value, ['version', 'domain', 'feature', 'effectId', 'cases'])) {
+  if (!isRecord(value) || !exactKeys(value, value.attemptedCaseIds === undefined
+    ? ['version', 'domain', 'feature', 'effectId', 'cases']
+    : ['version', 'domain', 'feature', 'effectId', 'cases', 'attemptedCaseIds'])) {
     return { ok: false, reason: 'malformed-order' };
   }
   if (value.version !== WORK_ORDER_VERSION) return { ok: false, reason: 'unknown-version' };
@@ -123,7 +131,21 @@ function parseWorkOrder(value: unknown): PublishBuildReviewWorkOrderResult {
     caseIds.add(caseRow.caseId);
     cases.push(caseRow);
   }
-  return { ok: true, workOrder: { version: WORK_ORDER_VERSION, domain: 'build_review', feature, effectId: value.effectId, cases } };
+  let attemptedCaseIds: string[] | undefined;
+  if (value.attemptedCaseIds !== undefined) {
+    if (!Array.isArray(value.attemptedCaseIds) || value.attemptedCaseIds.length > MAX_CASES) return { ok: false, reason: 'malformed-order' };
+    attemptedCaseIds = [];
+    for (const attempted of value.attemptedCaseIds) {
+      // Attempt evidence names cases the order itself carries; anything else is
+      // a foreign or corrupt trace and never becomes BUILD prompt text.
+      if (!boundedString(attempted, MAX_REFERENCE_LENGTH) || !caseIds.has(attempted)) return { ok: false, reason: 'malformed-order' };
+      attemptedCaseIds.push(attempted);
+    }
+  }
+  return { ok: true, workOrder: {
+    version: WORK_ORDER_VERSION, domain: 'build_review', feature, effectId: value.effectId, cases,
+    ...(attemptedCaseIds === undefined ? {} : { attemptedCaseIds }),
+  } };
 }
 
 function isMissing(error: unknown): boolean {
@@ -209,4 +231,63 @@ export function appendBuildReviewWorkOrderContext(
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * Reads the feature's current durable order without binding it to a reserved
+ * effect. Restart recovery has no in-memory effect id to bind with; the
+ * artifact's own `effectId` is the durable one.
+ */
+async function readFeatureWorkOrder(
+  projectRoot: string,
+  feature: RemediationCaseFeatureIdentity,
+  filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+): Promise<ReadBuildReviewWorkOrderResult> {
+  let serialized: string;
+  try {
+    serialized = await filesystem.readFile(buildReviewWorkOrderPath(projectRoot));
+  } catch (error) {
+    return { ok: false, reason: isMissing(error) ? 'missing-work-order' : 'unreadable-work-order' };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(serialized);
+  } catch {
+    return { ok: false, reason: 'malformed-json' };
+  }
+  const parsed = parseWorkOrder(raw);
+  if (!parsed.ok) return parsed;
+  return sameFeature(parsed.workOrder.feature, feature) ? parsed : { ok: false, reason: 'foreign-feature' };
+}
+
+export { readFeatureWorkOrder as readBuildReviewFeatureWorkOrder };
+
+/**
+ * The durable BUILD-attempt evidence reconciliation consumes. A missing,
+ * malformed, or foreign order yields no evidence rather than a guess, so an
+ * unattempted case is never mistaken for an attempted one.
+ */
+export async function readBuildReviewWorkOrderAttemptedCaseIds(
+  projectRoot: string,
+  feature: RemediationCaseFeatureIdentity,
+  filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+): Promise<readonly string[]> {
+  const order = await readFeatureWorkOrder(projectRoot, feature, filesystem);
+  return order.ok ? order.workOrder.attemptedCaseIds ?? [] : [];
+}
+
+/**
+ * Stamps every case in the current order as attempted, before BUILD provider
+ * work begins. Idempotent, and it never rewrites the stable effect identity a
+ * charge is keyed by.
+ */
+export async function markBuildReviewWorkOrderAttempted(
+  projectRoot: string,
+  feature: RemediationCaseFeatureIdentity,
+  filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+): Promise<PublishBuildReviewWorkOrderResult> {
+  const order = await readFeatureWorkOrder(projectRoot, feature, filesystem);
+  if (!order.ok) return order;
+  const attemptedCaseIds = order.workOrder.cases.map((caseRow) => caseRow.caseId);
+  return publishBuildReviewWorkOrder(projectRoot, { ...order.workOrder, attemptedCaseIds }, filesystem);
 }
