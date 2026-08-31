@@ -11,9 +11,9 @@
  *    BatchSpanProcessor / PeriodicExportingMetricReader. No await, no
  *    network call happens inline (emit() awaits handlers; blocking here
  *    stalls the bus).
- *  - stop() calls forceFlush() on both providers. This IS awaited — it
- *    happens after the run, not on the hot path. shutdown() is intentionally
- *    NOT called so that InMemorySpanExporter retains spans for test assertions.
+ *  - stop() force-flushes the tracer so finished spans remain readable after
+ *    stop(), then shuts down the meter provider after its final collection so
+ *    its periodic reader cannot export after the run ends.
  *
  * Dependency injection:
  *  - ctx.spanExporter / ctx.metricExporter: override the transport exporters
@@ -295,17 +295,15 @@ export class OtelVisualizer implements VisualizerPlugin {
   }
 
   /**
-   * Force-close open spans (FR-9), flush the batch processors, and optionally
-   * shut down providers. Idempotent — safe to call from signal handlers or
+   * Force-close open spans (FR-9), flush the tracer, and shut down the meter
+   * provider after its final collection. Idempotent — safe to call from signal handlers or
    * directly; subsequent calls return the same promise from the first invocation
    * (not a new wrapper — callers can use reference equality to detect re-entry).
    *
-   * NOTE: We intentionally call forceFlush() ONLY and NOT shutdown() here.
-   * BatchSpanProcessor.shutdown() calls exporter.shutdown() which clears
-   * InMemorySpanExporter._finishedSpans — making spans unreadable after stop().
-   * Callers (tests, acceptance spec) read spans AFTER stop(), so we must not
-   * clear the exporter. In production (OTLP / file), the process exits after
-   * stop() so the providers are GC'd naturally.
+   * The tracer stays flush-only: BatchSpanProcessor.shutdown() calls
+   * exporter.shutdown(), which clears InMemorySpanExporter._finishedSpans and
+   * makes spans unreadable after stop(). The meter provider is shut down so its
+   * PeriodicExportingMetricReader clears its interval after the final export.
    */
   stop(): Promise<void> {
     // Idempotent: if already stopping/stopped, return the existing promise.
@@ -330,7 +328,8 @@ export class OtelVisualizer implements VisualizerPlugin {
     // Force-close any spans still open (e.g. interrupted run, FR-9).
     this.spanManager.forceCloseAll();
 
-    // Flush providers (off the hot path — intentionally async).
+    // Flush the tracer and shut down the meter provider (off the hot path —
+    // intentionally async). The meter shutdown performs its own final flush.
     //
     // FR-8: export/flush errors are already intercepted at the exporter level
     // (WarnOnceSpanExporter / WarnOnceMetricExporter). We additionally wrap here
@@ -347,7 +346,7 @@ export class OtelVisualizer implements VisualizerPlugin {
       );
     }
     try {
-      await this.meterProvider.forceFlush();
+      await this.meterProvider.shutdown();
     } catch (err) {
       this.warnOnce?.(
         `[otel] meter flush error: ${err instanceof Error ? err.message : String(err)}`,

@@ -498,6 +498,107 @@ describe('Task 5: feature cost snapshot routing', () => {
   });
 });
 
+// ── Task 6: meter shutdown after final flush ───────────────────────────────
+
+describe('Task 6: stop() shuts down the meter provider after its final flush', () => {
+  let task6TempDir: string;
+  let task6PipelineDir: string;
+  let task6SpanExporter: InMemorySpanExporter;
+  let task6MetricExporter: InMemoryMetricExporter;
+  let task6Emitter: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    task6TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-meter-stop-'));
+    task6PipelineDir = join(task6TempDir, '.pipeline');
+    task6SpanExporter = new InMemorySpanExporter();
+    task6MetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    task6Emitter = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(task6TempDir, { recursive: true, force: true });
+  });
+
+  function makeTask6Visualizer(): OtelVisualizer {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      task6PipelineDir,
+    );
+    const visualizer = new OtelVisualizer(resolved, {
+      runId: 'task-6-run',
+      feature: 'task-6-feature',
+      project: 'task-6-project',
+      spanExporter: task6SpanExporter,
+      metricExporter: task6MetricExporter,
+    });
+    visualizer.start(task6Emitter);
+    return visualizer;
+  }
+
+  async function stopWithSdkTimers(visualizer: OtelVisualizer): Promise<void> {
+    const stopped = visualizer.stop();
+    // The OTel processors use timeout-backed asynchronous flushes. Advance the
+    // bounded flush window while retaining control of the periodic-reader clock.
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopped;
+  }
+
+  it('exports the latest metric value before stop() resolves', async () => {
+    const visualizer = makeTask6Visualizer();
+    const exportSpy = vi.spyOn(task6MetricExporter, 'export');
+    await task6Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 1.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    await task6Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 3.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+
+    await stopWithSdkTimers(visualizer);
+
+    expect(exportSpy).toHaveBeenCalledTimes(1);
+    const featureCost = task6MetricExporter.getMetrics()
+      .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+      .find((candidate) => candidate.descriptor.name === 'conductor.feature.cost');
+    expect(featureCost?.dataPoints).toContainEqual(expect.objectContaining({ value: 3.5 }));
+  });
+
+  it('does not export again across three metric intervals after stop()', async () => {
+    const visualizer = makeTask6Visualizer();
+    const exportSpy = vi.spyOn(task6MetricExporter, 'export');
+    await task6Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 3.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+
+    await stopWithSdkTimers(visualizer);
+    const exportsAtStop = exportSpy.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+
+    expect(exportSpy).toHaveBeenCalledTimes(exportsAtStop);
+  });
+
+  it('keeps force-closed spans readable after stop()', async () => {
+    const visualizer = makeTask6Visualizer();
+    await task6Emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+
+    await stopWithSdkTimers(visualizer);
+
+    expect(task6SpanExporter.getFinishedSpans().map((span) => span.name)).toEqual(
+      expect.arrayContaining(['build', 'conductor.run']),
+    );
+  });
+
+  it('does not export metrics when no metric was recorded', async () => {
+    const visualizer = makeTask6Visualizer();
+    const exportSpy = vi.spyOn(task6MetricExporter, 'export');
+
+    await stopWithSdkTimers(visualizer);
+
+    expect(exportSpy).not.toHaveBeenCalled();
+  });
+});
+
 // ── T17: hot-path guard — emit() resolves promptly (R1 non-blocking) ──────────
 
 describe('T17: hot-path guard — emit() does not await the transport', () => {
