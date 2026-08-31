@@ -10,13 +10,18 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
-import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  type PushMetricExporter,
+  type ResourceMetrics,
+} from '@opentelemetry/sdk-metrics';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { ConductorEvent } from '../../src/types/events.js';
 
 const fixture = vi.hoisted(() => ({
   worktreePath: '',
-  terminalOutcomes: [] as Array<{ slug: string; status: string; reason: string }>,
+  outcomes: [] as Array<{ slug: string; status: string; reason: string }>,
   exportCalls: 0,
 }));
 const buildExporters = vi.hoisted(() => vi.fn());
@@ -52,9 +57,12 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
       });
       await vi.advanceTimersByTimeAsync(60_000);
     }
+    // Periodic exports use fake time, while meter shutdown awaits the SDK's
+    // real completion path.
+    vi.useRealTimers();
     await (scope.stop as () => Promise<void>)();
     const outcome = { slug: item.slug, status: 'halted', reason: 'test dispatch complete' };
-    fixture.terminalOutcomes.push(outcome);
+    fixture.outcomes.push(outcome);
     return outcome;
   },
 }));
@@ -76,14 +84,18 @@ let dirs: string[] = [];
 
 afterEach(async () => {
   buildExporters.mockReset();
-  fixture.terminalOutcomes = [];
+  fixture.outcomes = [];
   fixture.exportCalls = 0;
   vi.useRealTimers();
   await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
   dirs = [];
 });
 
-async function runFailingExportDaemon(): Promise<{ repo: string; events: ConductorEvent[]; log: string }> {
+async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
+  events: ConductorEvent[];
+  log: string;
+  outcome: { slug: string; status: string; reason: string };
+}> {
   const repo = await mkdtemp(join(tmpdir(), 'daemon-export-failure-'));
   dirs.push(repo);
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
@@ -95,7 +107,7 @@ async function runFailingExportDaemon(): Promise<{ repo: string; events: Conduct
   );
   buildExporters.mockReturnValueOnce({
     spanExporter: new InMemorySpanExporter(),
-    metricExporter: failingMetricExporter(),
+    metricExporter,
   });
 
   await runDaemonMode({
@@ -111,15 +123,40 @@ async function runFailingExportDaemon(): Promise<{ repo: string; events: Conduct
   const rawEvents = await readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8');
   const events = rawEvents.trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent);
   const log = await readFile(join(repo, '.daemon/daemon.log'), 'utf8');
-  return { repo, events, log };
+  return { events, log, outcome: fixture.outcomes.at(-1)! };
+}
+
+function terminalVerdicts(events: ConductorEvent[]): Array<Record<string, unknown>> {
+  const verdicts: Array<Record<string, unknown>> = [];
+  for (const event of events) {
+    switch (event.type) {
+      case 'step_completed':
+        verdicts.push({ type: event.type, step: event.step, status: event.status });
+        break;
+      case 'step_failed':
+        verdicts.push({ type: event.type, step: event.step, error: event.error, retryCount: event.retryCount });
+        break;
+      case 'feature_complete':
+        verdicts.push({ type: event.type });
+        break;
+      case 'loop_halt':
+        verdicts.push({ type: event.type, reason: event.reason });
+        break;
+      default:
+        break;
+    }
+  }
+  return verdicts;
 }
 
 describe('acceptance: failed telemetry export is visible without changing daemon outcome', () => {
   it('logs and persists one matching otel failure across repeated export attempts', async () => {
     vi.useFakeTimers();
-    const { events, log } = await runFailingExportDaemon();
-    const rendererErrors = events.filter((event) => event.type === 'renderer_error');
-    const failureLines = log.split('\n').filter((line) => line.includes('renderer otel failed'));
+    const failed = await runExportDaemon(failingMetricExporter());
+    vi.useFakeTimers();
+    const succeeded = await runExportDaemon(new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE));
+    const rendererErrors = failed.events.filter((event) => event.type === 'renderer_error');
+    const failureLines = failed.log.split('\n').filter((line) => line.includes('renderer otel failed'));
 
     expect(rendererErrors).toHaveLength(1);
     expect(fixture.exportCalls).toBeGreaterThanOrEqual(3);
@@ -131,8 +168,7 @@ describe('acceptance: failed telemetry export is visible without changing daemon
     expect(failureLines).toHaveLength(1);
     expect(failureLines[0]).toContain('otel');
     expect(failureLines[0]).toContain('collector refused metrics');
-    expect(fixture.terminalOutcomes).toEqual([
-      { slug: 'feature-a', status: 'halted', reason: 'test dispatch complete' },
-    ]);
+    expect(terminalVerdicts(failed.events)).toEqual(terminalVerdicts(succeeded.events));
+    expect(failed.outcome).toEqual(succeeded.outcome);
   });
 });
