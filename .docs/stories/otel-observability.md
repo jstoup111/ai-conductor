@@ -133,11 +133,11 @@ can see retries, gate verdicts, and kickbacks inside the step's span without lea
 
 ---
 
-## Story: Metrics for duration, retries, and tokens
+## Story: Metrics for duration and retries
 
 **Requirement:** FR-5
 
-As a harness operator, I want duration/retry/token metrics emitted per step, so that I can build
+As a harness operator, I want duration/retry metrics emitted per step, so that I can build
 cross-run dashboards of slow and retry-heavy steps in Prometheus/Grafana.
 
 ### Acceptance Criteria
@@ -147,22 +147,15 @@ cross-run dashboards of slow and retry-heavy steps in Prometheus/Grafana.
   attribute `step`) records the duration.
 - Given a step had retries, when it completes, then `conductor.step.retries` (counter, attribute
   `step`) is incremented by the retry count.
-- Given a `step_completed` carries `tokenUsage`, when processed, then `conductor.step.tokens`
-  (counter, attributes `step` + `kind` ∈ {input, output, cacheRead, cacheCreation}) records each
-  present token kind.
 
 #### Negative Paths
-- Given a `step_completed` with no `tokenUsage` field (provider didn't report), when processed,
-  then no token metric points are recorded for that step (gracefully skipped — no zero-filled or
-  NaN points).
-- Given `tokenUsage` includes only `input`/`output` (cache fields absent), when processed, then
-  only the present kinds emit points (absent kinds are not recorded as 0).
+- Given a step completed with zero retries, when its span closes, then no `conductor.step.retries`
+  data point is recorded for that step (no zero-filled points).
 
 ### Done When
 - [ ] Fixture run exports a `conductor.step.duration` histogram with one observation per step.
 - [ ] A step with N retries yields a `conductor.step.retries` counter of N.
-- [ ] A `step_completed` lacking `tokenUsage` produces zero token metric points (asserted).
-- [ ] Present token kinds map to the correct `kind` attribute value.
+- [ ] A step with zero retries yields no `conductor.step.retries` point (asserted).
 
 ---
 
