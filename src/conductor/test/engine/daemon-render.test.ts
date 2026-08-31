@@ -511,6 +511,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'build_progress',
       'build_no_progress',
       'build_stall',
+      'renderer_error',
       'build_review_base',
       'parallel_started',
       'parallel_completed',

@@ -100,6 +100,13 @@ Relevant existing facts (evidence):
 > `conductor.step.cost` and `conductor.step.tokens` counters are removed. The rollup read happens in Conductor's step-close code, not in the bus handler, so
 > Decision 4 holds. Decision 5's bounded warning is now rendered (`renderer_error` reaches
 > `daemon.log`) so an export failure is visible instead of silently persisted.
+> (c) Decision 4's "O(1)" bounds the *class* of work a bus handler may do, not its instruction
+> count: no I/O, no awaiting, no iteration that scales with the run. Recording one snapshot's
+> already-computed dimensions is bounded, in-memory, synchronous SDK work over the feature's
+> distinct step x model x source and step x model x kind keys, and the projection those keys come
+> from is computed before the event is emitted — which is the work Decision 4 exists to keep off
+> the hot path. Read Decision 4 as **bounded, non-blocking, in-memory work with no I/O on the
+> bus.** A handler that read the ledger, awaited, or iterated per dispatch would still violate it.
 
 6. **Dual transport, config-selected** under `otel:` in `.ai-conductor/config.yml`
    (`exporter: otlp|file`, `endpoint`, `file`). Absent `otel` ⇒ disabled (default off, FR-1/FR-7).

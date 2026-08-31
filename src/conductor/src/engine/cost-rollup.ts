@@ -11,6 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FeatureUsageTotals } from '../execution/provider-diagnostics.js';
 import type { TokenUsage } from '../execution/llm-provider.js';
+import type { ConductorEvent } from '../types/events.js';
 import { classifyMetering } from './metering.js';
 import {
   DispatchMeteringTracker,
@@ -20,9 +21,21 @@ import {
 export interface CostRollup {
   tokens: { input: number; output: number; cacheRead: number; cacheCreation: number };
   costUsd: number;
+  byDimension?: Array<{
+    step: string;
+    model?: string;
+    source?: 'provider' | 'rate-card';
+    costUsd: number;
+  }>;
+  tokensByDimension?: Array<{
+    step: string;
+    model?: string;
+    tokens: { input?: number; output?: number; cacheRead?: number; cacheCreation?: number };
+  }>;
   dispatches: number;
   retries: number;
   halts: number;
+  readErrors?: number;
   unmetered: { count: number; durationMs: number };
   costUnmetered?: { count: number };
   providers?: Record<string, ProviderCostRollup>;
@@ -47,7 +60,70 @@ function zeroUsageRollup(): ProviderCostRollup {
 }
 
 function zeroRollup(): CostRollup {
-  return { ...zeroUsageRollup(), retries: 0, halts: 0 };
+  return {
+    ...zeroUsageRollup(),
+    byDimension: [],
+    tokensByDimension: [],
+    retries: 0,
+    halts: 0,
+    readErrors: 0,
+  };
+}
+
+function dimensionKey(...dimensions: Array<string | undefined>): string {
+  return JSON.stringify(dimensions);
+}
+
+function addDimensionRollup(
+  rollup: CostRollup,
+  buckets: Map<string, NonNullable<CostRollup['byDimension']>[number]>,
+  event: DispatchMeteringObservation,
+): void {
+  const tokenUsage = event.tokenUsage;
+  if (!tokenUsage || classifyMetering(tokenUsage) !== 'fully-metered') return;
+
+  const step = event.step ?? 'unknown';
+  const source = tokenUsage.costSource;
+  const key = dimensionKey(step, event.model, source);
+  const bucket = buckets.get(key) ?? {
+    step,
+    ...(event.model === undefined ? {} : { model: event.model }),
+    ...(source === undefined ? {} : { source }),
+    costUsd: 0,
+  };
+  bucket.costUsd += tokenUsage.costUsd!;
+  if (!buckets.has(key)) {
+    buckets.set(key, bucket);
+    rollup.byDimension!.push(bucket);
+  }
+}
+
+function addTokenDimensionRollup(
+  rollup: CostRollup,
+  buckets: Map<string, NonNullable<CostRollup['tokensByDimension']>[number]>,
+  event: DispatchMeteringObservation,
+): void {
+  const tokenUsage = event.tokenUsage;
+  if (!tokenUsage) return;
+
+  const finiteTokens = (['input', 'output', 'cacheRead', 'cacheCreation'] as const)
+    .filter((kind) => Number.isFinite(tokenUsage[kind]));
+  if (finiteTokens.length === 0) return;
+
+  const step = event.step ?? 'unknown';
+  const key = dimensionKey(step, event.model);
+  const bucket = buckets.get(key) ?? {
+    step,
+    ...(event.model === undefined ? {} : { model: event.model }),
+    tokens: {},
+  };
+  for (const kind of finiteTokens) {
+    bucket.tokens[kind] = (bucket.tokens[kind] ?? 0) + tokenUsage[kind]!;
+  }
+  if (!buckets.has(key)) {
+    buckets.set(key, bucket);
+    rollup.tokensByDimension!.push(bucket);
+  }
 }
 
 function addDispatch(
@@ -95,9 +171,24 @@ export function toFeatureUsageTotals(rollup: CostRollup): FeatureUsageTotals {
   };
 }
 
+/** Project cumulative ledger costs into the non-persisted OTel snapshot event. */
+export function toFeatureCostSnapshot(
+  rollup: CostRollup,
+): Extract<ConductorEvent, { type: 'feature_cost_snapshot' }> {
+  return {
+    type: 'feature_cost_snapshot',
+    costUsd: rollup.costUsd,
+    costComplete: rollup.unmetered.count === 0 && (rollup.costUnmetered?.count ?? 0) === 0,
+    byDimension: rollup.byDimension ?? [],
+    tokensByDimension: rollup.tokensByDimension ?? [],
+  };
+}
+
 export async function computeCostRollup(worktreeDir: string): Promise<CostRollup> {
   const rollup = zeroRollup();
   const providers: Record<string, ProviderCostRollup> = Object.create(null);
+  const dimensions = new Map<string, NonNullable<CostRollup['byDimension']>[number]>();
+  const tokenDimensions = new Map<string, NonNullable<CostRollup['tokensByDimension']>[number]>();
   const eventsPath = join(worktreeDir, '.pipeline', 'events.jsonl');
 
   let raw: string;
@@ -105,6 +196,7 @@ export async function computeCostRollup(worktreeDir: string): Promise<CostRollup
     raw = await readFile(eventsPath, 'utf-8');
   } catch {
     rollup.unmetered.count += 1;
+    rollup.readErrors = (rollup.readErrors ?? 0) + 1;
     return rollup;
   }
 
@@ -117,11 +209,13 @@ export async function computeCostRollup(worktreeDir: string): Promise<CostRollup
       event = JSON.parse(line);
     } catch {
       rollup.unmetered.count += 1;
+      rollup.readErrors = (rollup.readErrors ?? 0) + 1;
       continue;
     }
 
     if (typeof event !== 'object' || event === null || !('type' in event)) {
       rollup.unmetered.count += 1;
+      rollup.readErrors = (rollup.readErrors ?? 0) + 1;
       continue;
     }
 
@@ -135,6 +229,8 @@ export async function computeCostRollup(worktreeDir: string): Promise<CostRollup
       const dispatch = dispatchMetering.observe(e);
       if (dispatch) {
         addDispatch(rollup, dispatch);
+        addDimensionRollup(rollup, dimensions, dispatch);
+        addTokenDimensionRollup(rollup, tokenDimensions, dispatch);
         if (dispatch.provider) {
           const providerRollup = providers[dispatch.provider] ??= zeroUsageRollup();
           addDispatch(providerRollup, dispatch);

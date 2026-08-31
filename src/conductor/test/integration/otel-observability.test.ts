@@ -51,6 +51,13 @@ async function emitRepresentativeRun(emitter: ConductorEventEmitter): Promise<vo
     status: 'done',
     tokenUsage: { input: 100, output: 50 }, // partial kinds (no cache) — FR-5
   });
+  await emitter.emit({
+    type: 'feature_cost_snapshot',
+    costUsd: 0,
+    costComplete: false,
+    byDimension: [],
+    tokensByDimension: [{ step: 'explore', tokens: { input: 100, output: 50 } }],
+  });
 
   await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
   // no tokenUsage on this one — token rows must be skipped (FR-5 negative)
@@ -151,7 +158,7 @@ describe('OTel Observability — Phase 1 acceptance', () => {
 
   // ── FR-5: metrics ──────────────────────────────────────────────────────────
   describe('Story: duration/retry/token metrics (FR-5)', () => {
-    it('emits a step.duration histogram and a retries counter; tokens only when present', async () => {
+    it('emits a step.duration histogram and a retries counter; token gauges only when present', async () => {
       const vis = startVisualizer();
       await emitRepresentativeRun(emitter);
       await vis.stop();
@@ -163,14 +170,14 @@ describe('OTel Observability — Phase 1 acceptance', () => {
 
       expect(names).toContain('conductor.step.duration');
       expect(names).toContain('conductor.step.retries');
-      expect(names).toContain('conductor.step.tokens');
+      expect(names).toContain('conductor.feature.step.tokens');
 
       // token data points exist only for the step that carried tokenUsage (brainstorm),
       // never for 'plan' (no tokenUsage) — no zero-fill / NaN points.
       const tokenMetric = metricExporter
         .getMetrics()
         .flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics))
-        .find((m) => m.descriptor.name === 'conductor.step.tokens')!;
+        .find((m) => m.descriptor.name === 'conductor.feature.step.tokens')!;
       const steps = tokenMetric.dataPoints.map((d) => d.attributes['step']);
       expect(steps).toContain('explore');
       expect(steps).not.toContain('plan');

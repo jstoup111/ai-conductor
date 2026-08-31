@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:6, task:8
+// Covers: task:2, task:5, task:6, task:8, task:10
 /**
  * T9: OtelVisualizer — provider/processor setup (off hot path).
  * T17: hot-path guard — emit() resolves promptly even when the transport blocks.
@@ -18,7 +18,12 @@ import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { createOtelVisualizer } from '../../../src/engine/otel/create-otel-visualizer.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
-import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
+import {
+  InMemoryMetricExporter,
+  AggregationTemporality,
+  type PushMetricExporter,
+  type ResourceMetrics,
+} from '@opentelemetry/sdk-metrics';
 
 describe('OtelVisualizer — T9: provider/processor setup', () => {
   let tempDir: string;
@@ -378,6 +383,365 @@ describe('Task 5: visualizer identity wiring', () => {
       serviceName: 'ai-conductor',
       conductorProject: firstProject,
     });
+  });
+});
+
+describe('Task 5: feature cost snapshot routing', () => {
+  let task5TempDir: string;
+  let task5PipelineDir: string;
+  let task5SpanExporter: InMemorySpanExporter;
+  let task5MetricExporter: InMemoryMetricExporter;
+  let task5Emitter: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    task5TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-feature-cost-'));
+    task5PipelineDir = join(task5TempDir, '.pipeline');
+    task5SpanExporter = new InMemorySpanExporter();
+    task5MetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    task5Emitter = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(task5TempDir, { recursive: true, force: true });
+  });
+
+  function makeTask5Visualizer(
+    metricExporter = task5MetricExporter,
+    emitter = task5Emitter,
+  ): OtelVisualizer {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      task5PipelineDir,
+    );
+    const visualizer = new OtelVisualizer(resolved, {
+      runId: 'task-5-run',
+      feature: 'task-5-feature',
+      project: 'task-5-project',
+      spanExporter: task5SpanExporter,
+      metricExporter,
+    });
+    visualizer.start(emitter);
+    return visualizer;
+  }
+
+  function metric(exporter: InMemoryMetricExporter, name: string) {
+    return exporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+      .find((candidate) => candidate.descriptor.name === name);
+  }
+
+  it('records ledger-driven cost and token buckets even without a matching step span', async () => {
+    const visualizer = makeTask5Visualizer();
+    await task5Emitter.emit({
+      type: 'feature_cost_snapshot',
+      costUsd: 3.5,
+      costComplete: true,
+      byDimension: [{ step: 'build_review', model: 'm2', source: 'rate-card', costUsd: 2 }],
+      tokensByDimension: [{ step: 'build_review', model: 'm2', tokens: { input: 150, output: 15 } }],
+    });
+    await visualizer.stop();
+
+    expect(metric(task5MetricExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 3.5, attributes: {
+        project: 'task-5-project', feature: 'task-5-feature', cost_complete: true,
+      } }),
+    );
+    expect(metric(task5MetricExporter, 'conductor.feature.step.cost')?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 2, attributes: {
+        project: 'task-5-project', feature: 'task-5-feature', step: 'build_review', model: 'm2', source: 'rate-card',
+      } }),
+    );
+    expect(metric(task5MetricExporter, 'conductor.feature.step.tokens')?.dataPoints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: 150, attributes: expect.objectContaining({ step: 'build_review', model: 'm2', kind: 'input' }) }),
+        expect.objectContaining({ value: 15, attributes: expect.objectContaining({ step: 'build_review', model: 'm2', kind: 'output' }) }),
+      ]),
+    );
+  });
+
+  it('keeps equal step-close and finish-time totals on the feature cost gauge', async () => {
+    const visualizer = makeTask5Visualizer();
+    await task5Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 3.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    await task5Emitter.emit({
+      type: 'feature_usage_total', dispatches: 2, meteredDispatches: 1, unmeteredDispatches: 1,
+      costUnmeteredDispatches: 0, costUsd: 3.5, inputTokens: 0, outputTokens: 0,
+    });
+    await visualizer.stop();
+
+    const values = metric(task5MetricExporter, 'conductor.feature.cost')!.dataPoints
+      .filter((point) => point.attributes['project'] === 'task-5-project')
+      .map((point) => ({ value: point.value, costComplete: point.attributes['cost_complete'] }));
+    expect(values).toEqual(expect.arrayContaining([
+      { value: 3.5, costComplete: true },
+      { value: 3.5, costComplete: false },
+    ]));
+  });
+
+  it('exports the cumulative snapshot for a later visualizer with the same feature identity', async () => {
+    const first = makeTask5Visualizer();
+    await task5Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 1.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    await first.stop();
+
+    const secondExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const secondEmitter = new ConductorEventEmitter();
+    const second = makeTask5Visualizer(secondExporter, secondEmitter);
+    await secondEmitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 3.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    await second.stop();
+
+    expect(metric(secondExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 3.5, attributes: {
+        project: 'task-5-project', feature: 'task-5-feature', cost_complete: true,
+      } }),
+    );
+  });
+
+  it('exports an incomplete zero total without a step-cost point for an empty snapshot', async () => {
+    const visualizer = makeTask5Visualizer();
+    await task5Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 0, costComplete: false, byDimension: [], tokensByDimension: [],
+    });
+    await visualizer.stop();
+
+    expect(metric(task5MetricExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 0, attributes: {
+        project: 'task-5-project', feature: 'task-5-feature', cost_complete: false,
+      } }),
+    );
+    expect(metric(task5MetricExporter, 'conductor.feature.step.cost')).toBeUndefined();
+  });
+});
+
+// ── Task 6: meter shutdown after final flush ───────────────────────────────
+
+describe('Task 6: stop() shuts down the meter provider after its final flush', () => {
+  let task6TempDir: string;
+  let task6PipelineDir: string;
+  let task6SpanExporter: InMemorySpanExporter;
+  let task6MetricExporter: InMemoryMetricExporter;
+  let task6Emitter: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    task6TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-meter-stop-'));
+    task6PipelineDir = join(task6TempDir, '.pipeline');
+    task6SpanExporter = new InMemorySpanExporter();
+    task6MetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    task6Emitter = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(task6TempDir, { recursive: true, force: true });
+  });
+
+  function makeTask6Visualizer(): OtelVisualizer {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      task6PipelineDir,
+    );
+    const visualizer = new OtelVisualizer(resolved, {
+      runId: 'task-6-run',
+      feature: 'task-6-feature',
+      project: 'task-6-project',
+      spanExporter: task6SpanExporter,
+      metricExporter: task6MetricExporter,
+    });
+    visualizer.start(task6Emitter);
+    return visualizer;
+  }
+
+  async function stopWithSdkTimers(visualizer: OtelVisualizer): Promise<void> {
+    const stopped = visualizer.stop();
+    // The OTel processors use timeout-backed asynchronous flushes. Advance the
+    // bounded flush window while retaining control of the periodic-reader clock.
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopped;
+  }
+
+  it('exports the latest metric value before stop() resolves', async () => {
+    const visualizer = makeTask6Visualizer();
+    const exportSpy = vi.spyOn(task6MetricExporter, 'export');
+    await task6Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 1.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    await task6Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 3.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+
+    await stopWithSdkTimers(visualizer);
+
+    expect(exportSpy).toHaveBeenCalledTimes(1);
+    const featureCost = task6MetricExporter.getMetrics()
+      .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+      .find((candidate) => candidate.descriptor.name === 'conductor.feature.cost');
+    expect(featureCost?.dataPoints).toContainEqual(expect.objectContaining({ value: 3.5 }));
+  });
+
+  it('does not export again across three metric intervals after stop()', async () => {
+    const visualizer = makeTask6Visualizer();
+    const exportSpy = vi.spyOn(task6MetricExporter, 'export');
+    await task6Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 3.5, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+
+    await stopWithSdkTimers(visualizer);
+    const exportsAtStop = exportSpy.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+
+    expect(exportSpy).toHaveBeenCalledTimes(exportsAtStop);
+  });
+
+  it('keeps force-closed spans readable after stop()', async () => {
+    const visualizer = makeTask6Visualizer();
+    await task6Emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+
+    await stopWithSdkTimers(visualizer);
+
+    expect(task6SpanExporter.getFinishedSpans().map((span) => span.name)).toEqual(
+      expect.arrayContaining(['build', 'conductor.run']),
+    );
+  });
+
+  it('does not export metrics when no metric was recorded', async () => {
+    const visualizer = makeTask6Visualizer();
+    const exportSpy = vi.spyOn(task6MetricExporter, 'export');
+
+    await stopWithSdkTimers(visualizer);
+
+    expect(exportSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ── Task 7: bounded, idempotent stop and sequential runs ──────────────────
+
+describe('Task 7: stop stays bounded and sequential runs do not interleave', () => {
+  let task7TempDir: string;
+  let task7PipelineDir: string;
+  let task7Emitter: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    task7TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-stop-bounded-'));
+    task7PipelineDir = join(task7TempDir, '.pipeline');
+    task7Emitter = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(task7TempDir, { recursive: true, force: true });
+  });
+
+  function makeVisualizer(
+    metricExporter: PushMetricExporter,
+    exportTimeoutMillis = 100,
+    onWarning?: (message: string) => void,
+  ): OtelVisualizer {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      task7PipelineDir,
+    );
+    const visualizer = new OtelVisualizer(resolved, {
+      runId: 'task-7-run',
+      feature: 'task-7-feature',
+      project: 'task-7-project',
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter,
+      exportTimeoutMillis,
+      onWarning,
+    });
+    visualizer.start(task7Emitter);
+    return visualizer;
+  }
+
+  it('bounds stop when metric export and shutdown both hang', async () => {
+    const warn = vi.fn();
+    const shutdown = vi.fn(() => new Promise<void>(() => {}));
+    const hangingExporter: PushMetricExporter = {
+      export(_metrics: ResourceMetrics, _callback): void {
+        // Simulate a transport that never completes its export callback.
+      },
+      forceFlush: async (): Promise<void> => {},
+      shutdown,
+    };
+    const timeoutMillis = 100;
+    const visualizer = makeVisualizer(hangingExporter, timeoutMillis, warn);
+    await task7Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 1, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+
+    const stopped = visualizer.stop();
+    await vi.advanceTimersByTimeAsync(timeoutMillis + 25);
+
+    await expect(stopped).resolves.toBeUndefined();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the in-flight stop promise when a signal arrives during stop and shuts down once', async () => {
+    const shutdown = vi.fn(async (): Promise<void> => {});
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    exporter.shutdown = shutdown;
+    const processOn = vi.spyOn(process, 'on');
+    const visualizer = makeVisualizer(exporter);
+
+    const first = visualizer.stop();
+    const sigintHandler = processOn.mock.calls.find(([signal]) => signal === 'SIGINT')?.[1];
+    expect(sigintHandler).toBeTypeOf('function');
+    (sigintHandler as () => void)();
+    const second = visualizer.stop();
+
+    expect(second).toBe(first);
+    await vi.advanceTimersByTimeAsync(125);
+    await first;
+    expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a no-op when stop is called before start', async () => {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      task7PipelineDir,
+    );
+    const visualizer = new OtelVisualizer(resolved, {
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+    });
+
+    await expect(visualizer.stop()).resolves.toBeUndefined();
+  });
+
+  it('exports only from the next visualizer after the previous sequential run stops', async () => {
+    const firstExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const firstExport = vi.spyOn(firstExporter, 'export');
+    const first = makeVisualizer(firstExporter);
+    await task7Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 1, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    const firstStopped = first.stop();
+    await vi.advanceTimersByTimeAsync(125);
+    await firstStopped;
+    const firstExportsAtStop = firstExport.mock.calls.length;
+
+    const secondExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const secondExport = vi.spyOn(secondExporter, 'export');
+    const second = makeVisualizer(secondExporter);
+    await task7Emitter.emit({
+      type: 'feature_cost_snapshot', costUsd: 2, costComplete: true, byDimension: [], tokensByDimension: [],
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(firstExport).toHaveBeenCalledTimes(firstExportsAtStop);
+    expect(secondExport).toHaveBeenCalled();
+
+    const secondStopped = second.stop();
+    await vi.advanceTimersByTimeAsync(125);
+    await secondStopped;
   });
 });
 

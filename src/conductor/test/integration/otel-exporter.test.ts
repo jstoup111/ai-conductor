@@ -35,6 +35,13 @@ async function runFixture(emitter: ConductorEventEmitter): Promise<void> {
     status: 'done',
     tokenUsage: { input: 200, output: 80 },
   });
+  await emitter.emit({
+    type: 'feature_cost_snapshot',
+    costUsd: 0,
+    costComplete: false,
+    byDimension: [],
+    tokensByDimension: [{ step: 'plan', tokens: { input: 200, output: 80 } }],
+  });
   await emitter.emit({ type: 'feature_complete', featureDesc: 'e2e-test' });
 }
 
@@ -188,7 +195,7 @@ describe('T22-otlp: OTLP transport (in-memory exporters) — structure assertion
     }
   });
 
-  it('emits conductor.step.duration and conductor.step.tokens metric descriptors', async () => {
+  it('emits conductor.step.duration and conductor.feature.step.tokens metric descriptors', async () => {
     const resolved = resolveOtelConfig(
       { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
       pipelineDir,
@@ -209,8 +216,8 @@ describe('T22-otlp: OTLP transport (in-memory exporters) — structure assertion
       .flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics.map((m) => m.descriptor.name)));
 
     expect(metricNames).toContain('conductor.step.duration');
-    // 'plan' step carried tokenUsage → tokens metric present.
-    expect(metricNames).toContain('conductor.step.tokens');
+    // The ledger-derived snapshot for 'plan' carries the token dimensions.
+    expect(metricNames).toContain('conductor.feature.step.tokens');
   });
 
   it('resource attributes are present on every span (non-empty run.id, feature, project)', async () => {

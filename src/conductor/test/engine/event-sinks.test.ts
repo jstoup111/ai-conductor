@@ -179,6 +179,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_no_progress',
   'build_stall',
   'pipeline_closeout',
+  'renderer_error',
   'provider_attempt',
   'scratch_cleanup_reclaimed',
   'scratch_cleanup_retained',
@@ -261,6 +262,7 @@ describe('event sink subscriptions', () => {
       'step_failed',
       'provider_attempt',
       'feature_usage_total',
+      'feature_cost_snapshot',
       'step_retry',
       'gate_verdict',
       'kickback',
@@ -272,6 +274,32 @@ describe('event sink subscriptions', () => {
       'build_stall',
       'pipeline_closeout',
     ]));
+  });
+
+  it('declares feature cost snapshots as OpenTelemetry-only ledger projections', () => {
+    expect({
+      sinks: EVENT_SINKS.feature_cost_snapshot,
+      otel: otelEventTypes().includes('feature_cost_snapshot'),
+      rendered: renderedEventTypes().includes('feature_cost_snapshot'),
+      persisted: persistedEventTypes().includes('feature_cost_snapshot'),
+    }).toEqual({
+      sinks: { render: false, persist: false, audit: false, otel: true },
+      otel: true,
+      rendered: false,
+      persisted: false,
+    });
+  });
+
+  it('renders and persists renderer errors through the shared event spine', () => {
+    expect({
+      sinks: EVENT_SINKS.renderer_error,
+      rendered: renderedEventTypes().includes('renderer_error'),
+      persisted: persistedEventTypes().includes('renderer_error'),
+    }).toEqual({
+      sinks: { render: true, persist: true, audit: false, otel: false },
+      rendered: true,
+      persisted: true,
+    });
   });
 
   it('persists engine-owned build-review occurrences through the shared ledger exactly once', async () => {

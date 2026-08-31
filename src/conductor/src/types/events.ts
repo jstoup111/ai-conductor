@@ -368,6 +368,29 @@ export type ConductorEvent =
       costUnmeteredDispatches?: number;
     }
   | {
+      /**
+       * Non-persisted projection of the ledger emitted after each step close.
+       *
+       * Its dimensions are cumulative ledger totals, so OTel can record the
+       * current feature-wide cost without treating a step terminal as a new
+       * cost occurrence.
+       */
+      type: 'feature_cost_snapshot';
+      costUsd: number;
+      costComplete: boolean;
+      byDimension: Array<{
+        step: string;
+        model?: string;
+        source?: 'provider' | 'rate-card';
+        costUsd: number;
+      }>;
+      tokensByDimension: Array<{
+        step: string;
+        model?: string;
+        tokens: { input?: number; output?: number; cacheRead?: number; cacheCreation?: number };
+      }>;
+    }
+  | {
       /** A visible transition from an unavailable provider to the next candidate. */
       type: 'provider_fallback';
       step: StepName;

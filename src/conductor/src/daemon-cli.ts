@@ -81,7 +81,7 @@ import {
   type DaemonLogSink,
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
-import { runDaemon, type BacklogItem } from './engine/daemon.js';
+import { runDaemon, type BacklogItem, type DaemonResult } from './engine/daemon.js';
 import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import {
@@ -628,7 +628,7 @@ export function createForcedSetupPrepare(
  * the worktree down on success. Unattended; ceilings + supervision live in
  * runDaemon / makeRunFeature.
  */
-export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
+export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const configResult = await loadMergedConfig(projectRoot);
   if (!configResult.ok && configResult.error.type !== 'missing') {
@@ -2171,6 +2171,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   if (teardownWasRequested) {
     (opts.exitProcess ?? process.exit)(0);
   }
+  return result;
 }
 
 /**
@@ -2313,6 +2314,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // operator actually asks once a build ships, and one they otherwise have
       // to answer by summing a hundred log lines by hand.
       log(`${dot}   ${chalk.dim(formatFeatureUsageTotal(event))}`);
+      break;
+    case 'renderer_error':
+      log(`${dot} ${chalk.yellow(`⚠ renderer ${event.rendererName} failed: ${event.error}`)}`);
       break;
     case 'scratch_cleanup_reclaimed':
       log(`${dot} ${chalk.green('✓')} scratch reclaimed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);

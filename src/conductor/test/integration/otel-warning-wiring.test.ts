@@ -19,17 +19,36 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { Writable } from 'node:stream';
 import { ExportResultCode } from '@opentelemetry/core';
 import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import type { ExportResult } from '@opentelemetry/core';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { renderedEventTypes } from '../../src/engine/event-sinks.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 // Import the PRODUCTION construction helper. `registerBuiltins`' `visualizer:otel`
 // factory calls this same function (src/engine/plugin-loader.ts), so these proofs
 // bind the shipped construction site while still injecting fake exporters.
 import { createOtelVisualizer } from '../../src/engine/otel/create-otel-visualizer.js';
 import type { ConductorEvent } from '../../src/types/events.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { createLiveRegion } from '../../src/ui/live-region.js';
+import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
+import { TerminalSubscriber } from '../../src/ui/subscriber.js';
+
+class CaptureStream extends Writable {
+  private readonly chunks: string[] = [];
+
+  _write(chunk: Buffer | string, _encoding: string, callback: (error?: Error | null) => void): void {
+    this.chunks.push(chunk.toString());
+    callback();
+  }
+
+  output(): string {
+    return this.chunks.join('');
+  }
+}
 
 /** Span exporter that always calls back with FAILED — dead/refused transport. */
 function makeFailingSpanExporter(): SpanExporter {
@@ -68,7 +87,7 @@ describe('FR-8: onWarning wired at production construction site (createOtelVisua
   });
 
   it(
-    'dead exporter → exactly ONE renderer_error on the bus, nothing throws',
+    'dead exporter → exactly ONE renderer_error on the bus and terminal, nothing throws',
     async () => {
       const resolved = resolveOtelConfig(
         { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
@@ -77,6 +96,21 @@ describe('FR-8: onWarning wired at production construction site (createOtelVisua
 
       const rendererErrors: ConductorEvent[] = [];
       events.on('renderer_error', (ev) => { rendererErrors.push(ev); });
+
+      // The daemon derives its subscriptions from the render registry, while
+      // TerminalSubscriber keeps its existing explicit list. Pin this event in
+      // both paths so an OTel warning cannot be daemon-only again.
+      expect(renderedEventTypes()).toContain('renderer_error');
+
+      const terminalStream = new CaptureStream();
+      const terminalRenderer = new TerminalRenderer({
+        stateFilePath: join(tempDir, 'conduct-state.json'),
+        steps: ALL_STEPS,
+        readStateFn: async () => ({ ok: true as const, value: {} }),
+        liveRegion: createLiveRegion({ stream: terminalStream, forceTTY: false }),
+      });
+      const terminalSubscriber = new TerminalSubscriber(events, async () => {}, terminalRenderer);
+      terminalSubscriber.start();
 
       // PRODUCTION construction path — the built-in visualizer:otel factory
       // calls this exact function.
@@ -96,20 +130,31 @@ describe('FR-8: onWarning wired at production construction site (createOtelVisua
       // Visualizer must be constructed successfully on the happy path.
       expect(vis).not.toBeNull();
 
-      vis!.start(events);
-      await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
-      await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-      await events.emit({ type: 'feature_complete', featureDesc: 'fr8-test' });
-      await vis!.stop();
+      try {
+        vis!.start(events);
+        await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+        await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+        await events.emit({ type: 'feature_complete', featureDesc: 'fr8-test' });
+        await vis!.stop();
 
-      // Exactly ONE renderer_error regardless of how many export callbacks fired.
-      expect(rendererErrors).toHaveLength(1);
-      expect(rendererErrors[0]).toMatchObject({
-        type: 'renderer_error',
-        rendererName: 'otel',
-      });
-      expect(typeof (rendererErrors[0] as { error: string }).error).toBe('string');
-      expect((rendererErrors[0] as { error: string }).error.length).toBeGreaterThan(0);
+        // Exactly ONE renderer_error regardless of how many export callbacks fired.
+        expect(rendererErrors).toHaveLength(1);
+        expect(rendererErrors[0]).toMatchObject({
+          type: 'renderer_error',
+          rendererName: 'otel',
+        });
+        const error = (rendererErrors[0] as { error: string }).error;
+        expect(error.length).toBeGreaterThan(0);
+
+        const renderedWarningLines = terminalStream.output().split('\n').filter(
+          (line) => line.includes('Renderer error [otel]'),
+        );
+        expect(renderedWarningLines).toHaveLength(1);
+        expect(renderedWarningLines[0]).toContain(error);
+      } finally {
+        terminalSubscriber.stop();
+        terminalRenderer.stop();
+      }
     },
     15_000,
   );
