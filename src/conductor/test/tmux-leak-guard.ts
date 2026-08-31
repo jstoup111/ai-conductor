@@ -86,23 +86,61 @@ export type TmuxResult = {
  * without a real tmux binary. */
 export type TmuxRunner = (args: string[]) => TmuxResult;
 
-/** Default runner — the real `spawnSync('tmux', …)` wrapper. */
-export const realTmuxRunner: TmuxRunner = (args: string[]): TmuxResult => {
-  const result = spawnSync('tmux', args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf-8',
-  });
-  if (result.error) {
-    // tmux not installed (CI runners), or the spawn itself failed — distinct
-    // from a clean exec that returned a non-zero code.
-    return { code: 1, stdout: '', stderr: '', spawnError: true };
-  }
-  return {
-    code: result.status ?? 1,
-    stdout: (result.stdout as string | null) ?? '',
-    stderr: (result.stderr as string | null) ?? '',
+/**
+ * Hard ceiling on any single tmux client invocation (2026-08-30 wedge).
+ *
+ * A tmux client command blocks INDEFINITELY at 0 CPU when the server is
+ * unresponsive (e.g. stopped, wedged mid-OOM, or hung on another client):
+ * the client connects to the socket and waits forever for a reply — verified
+ * by SIGSTOPping a private server and watching `tmux ls` sit until an
+ * external `timeout` killed it. Because this guard runs `spawnSync('tmux',…)`
+ * in vitest's globalSetup BEFORE any test, an unbounded wait there hung every
+ * `npm test` invocation (single-file and full-suite alike) for 30+ minutes at
+ * 0 CPU, before any testTimeout could apply. A wedged tmux server must
+ * degrade this guard to its existing fail-closed report-only path, never
+ * block the run. 15s is orders of magnitude above a healthy round-trip.
+ */
+export const TMUX_COMMAND_TIMEOUT_MS = 15_000;
+
+/**
+ * Build a bounded runner. `command`/`timeoutMs` are injectable so tests can
+ * prove the timeout kills a genuinely blocking child without a real tmux.
+ * A timed-out invocation is classified as `spawnError` — the same fail-closed
+ * bucket as "tmux not installed": snapshots report `failed: true`, reaps
+ * degrade to report-only, and nothing is ever killed on its say-so.
+ */
+export function makeTmuxRunner(
+  options: { command?: string; timeoutMs?: number } = {}
+): TmuxRunner {
+  const { command = 'tmux', timeoutMs = TMUX_COMMAND_TIMEOUT_MS } = options;
+  return (args: string[]): TmuxResult => {
+    const result = spawnSync(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf-8',
+      timeout: timeoutMs,
+      killSignal: 'SIGKILL',
+    });
+    if (result.error) {
+      // tmux not installed (CI runners), the spawn itself failed, or the
+      // invocation hit the timeout above (ETIMEDOUT) — all distinct from a
+      // clean exec that merely returned a non-zero code.
+      return { code: 1, stdout: '', stderr: '', spawnError: true };
+    }
+    if (result.signal !== null) {
+      // Killed by the timeout's SIGKILL (or externally) before exiting on its
+      // own — an unresponsive server, not a clean answer. Fail closed.
+      return { code: 1, stdout: '', stderr: '', spawnError: true };
+    }
+    return {
+      code: result.status ?? 1,
+      stdout: (result.stdout as string | null) ?? '',
+      stderr: (result.stderr as string | null) ?? '',
+    };
   };
-};
+}
+
+/** Default runner — the real bounded `spawnSync('tmux', …)` wrapper. */
+export const realTmuxRunner: TmuxRunner = makeTmuxRunner();
 
 function tmux(args: string[], runner: TmuxRunner): TmuxResult {
   return runner(args);
