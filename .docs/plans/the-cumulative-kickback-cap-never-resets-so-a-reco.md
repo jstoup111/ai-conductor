@@ -149,6 +149,7 @@ unchanged.
 2. Existing PASS preservation, rebase credit, per-tree count, and mechanical-lane assertions pass.
 3. Production search finds no kickback-ledger read followed by a direct write outside the transaction
    implementation or whole-ledger fresh-session clear.
+4. Lap credit preserves `effectiveLimit` and adjustment history: a qualifying rebase credits lap-counting fields only, leaves a raised limit readable at its raised value, and never writes a `effectiveLimit: 0` that fails ledger validation.
 
 **Files:**
 - `src/conductor/src/engine/kickback-ledger.ts`
