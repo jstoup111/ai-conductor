@@ -218,7 +218,7 @@ describe('build-review domain', () => {
     const changedFindingIdentity = identityFor(judged([finding({ anchor: { rubric: 'testQuality', locus: { ...locus, contentHash: `sha256:${'b'.repeat(64)}` } } })]));
     const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'counterfactual-sensitivity' };
     const storedDisposition: BuildReviewDispositionRecord = {
-      version: 'v1', feature, finding: preChangeIdentity, sourceLapId: 'lap-1',
+      version: 'v1', feature, finding: preChangeIdentity, sourceLapId: parseBuildReviewLapId('lap-1')!,
       summary: 'Accepted before counterfactual sensitivity was introduced.', rationale: 'Known risk.',
       operator: 'operator', acceptedAt: '2026-08-31T00:00:00.000Z',
     };
