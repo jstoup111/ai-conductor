@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-31T11:05:51.268Z
 Slug: bin-setup-quarantines-a-fix-session-s-repair-inste
 Class: plan-gap
 Halting step: prd_audit
