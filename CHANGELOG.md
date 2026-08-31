@@ -11,6 +11,20 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-31
+
+### Added
+
+- Daemon OpenTelemetry traces now identify the feature branch and executing engine version. ([implementation PR #2080](https://github.com/jstoup111/ai-conductor/pull/2080)).
+
+### Changed
+
+- Plans now declare only genuine task dependencies and tight file sets, so BUILD can fan out independent tasks instead of serializing them. ([implementation PR #2073](https://github.com/jstoup111/ai-conductor/pull/2073)).
+
+### Fixed
+
+- A build_review aggregate from a prior lap no longer replays its findings as kickbacks. ([implementation PR #2094](https://github.com/jstoup111/ai-conductor/pull/2094)).
+
 ## [1.0.0] - 2026-08-31
 
 ### Added
