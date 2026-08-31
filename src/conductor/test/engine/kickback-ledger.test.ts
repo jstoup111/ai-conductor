@@ -627,6 +627,57 @@ describe('kickback-ledger', () => {
   });
 
   describe('creditKickbackGateLaps', () => {
+    // Task 4 Done-when 4 / adr-2026-08-31-kickback-ledger-read-fails-closed D5:
+    // lap credit may only credit lap-counting fields. An authorized allowance
+    // and its attribution are enforcement/audit state, not laps.
+    it('preserves an authorized effective limit and its adjustment history', () => {
+      const entry: KickbackGateEntry = {
+        count: 2,
+        cumulative: 4,
+        effectiveLimit: 8,
+        adjustments: [{
+          id: 'raise-1',
+          kind: 'raise',
+          beforeCount: 6,
+          afterCount: 6,
+          beforeLimit: 5,
+          afterLimit: 8,
+          operator: 'operator',
+          rationale: 'review contract changed outside the feature tree',
+          at: '2026-08-29T00:00:00.000Z',
+        }],
+        treeHash: '0123456789abcdef0123456789abcdef01234567',
+        lastReason: 'repeated semantic failure',
+        priorVerdict: false,
+        resolvedBefore: 7,
+      };
+
+      expect(creditKickbackGateLaps(entry)).toEqual({ ...entry, cumulative: 0 });
+    });
+
+    // adr-2026-08-31-kickback-ledger-read-fails-closed Context 2: a credited
+    // `effectiveLimit: 0` fails isKickbackGateEntry, so an ordinary rebase would
+    // make the ledger unreadable and silently uncap the feature.
+    it('writes a credited entry the ledger validator still accepts', async () => {
+      const entry: KickbackGateEntry = {
+        count: 2,
+        cumulative: 4,
+        effectiveLimit: 8,
+        treeHash: null,
+        lastReason: 'repeated semantic failure',
+        priorVerdict: false,
+        resolvedBefore: 7,
+      };
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: { build_review: creditKickbackGateLaps(entry) },
+      });
+
+      const reread = await readKickbackLedger(dir);
+
+      expect(reread.gates.build_review).toMatchObject({ cumulative: 0, effectiveLimit: 8 });
+    });
+
     it('credits an entry carrying only the cumulative lap count', () => {
       const entry: KickbackGateEntry = {
         count: 2,

@@ -161,7 +161,24 @@ export interface BumpKickbackGateResult {
   exhausted: boolean;
 }
 
-const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set(['count', 'resolvedBefore']);
+/**
+ * Fields a rebase lap credit must never zero. `count`/`resolvedBefore` carry the
+ * per-tree budget; the recovery fields carry operator-authorized enforcement and
+ * audit state, which adr-2026-08-29-operator-authorized-kickback-budget-recovery
+ * D2 declares explicitly non-lap-counting. Crediting `effectiveLimit` to 0 also
+ * writes a value `isKickbackGateEntry` rejects, which
+ * adr-2026-08-31-kickback-ledger-read-fails-closed D5 forbids: the entry would
+ * become unreadable and the feature silently uncapped.
+ */
+const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set([
+  'count',
+  'resolvedBefore',
+  'effectiveLimit',
+  'adjustments',
+  'exhaustedEvidence',
+  'pendingAdjustment',
+  'resumeAuthorization',
+]);
 
 function isLapCountingValue(value: unknown): value is number | Record<string, number> {
   return (
