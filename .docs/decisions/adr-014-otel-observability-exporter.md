@@ -95,8 +95,9 @@ Relevant existing facts (evidence):
 > identity, on any backend. Cost is therefore exported as cumulative gauges projected from the
 > per-feature `events.jsonl` rollup (adr-2026-07-22-per-feature-cost-rollup-in-shipped-record) at
 > every step close — `conductor.feature.cost` (whole feature, `cost_complete`) and
-> `conductor.feature.step.cost` (`step`, `model`, `source`) — and the `conductor.step.cost` counter
-> is removed. The rollup read happens in Conductor's step-close code, not in the bus handler, so
+> `conductor.feature.step.cost` (`step`, `model`, `source`), plus token counts as
+> `conductor.feature.step.tokens` (`step`, `model`, `kind`) from the same snapshot — and the
+> `conductor.step.cost` and `conductor.step.tokens` counters are removed. The rollup read happens in Conductor's step-close code, not in the bus handler, so
 > Decision 4 holds. Decision 5's bounded warning is now rendered (`renderer_error` reaches
 > `daemon.log`) so an export failure is visible instead of silently persisted.
 
