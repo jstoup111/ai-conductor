@@ -159,6 +159,24 @@ describe('build-review work order', () => {
     });
   });
 
+  it('binds a read to the stable effects durable state recorded, not to one guessed id', async () => {
+    const projectRoot = await createProjectRoot();
+    await publishBuildReviewWorkOrder(projectRoot, WORK_ORDER);
+
+    // Recovery has no in-memory effect id; it has the set of stable action
+    // effects the case store recorded. The published order's primary effect is
+    // whichever route was reserved first, so it need not be the first of them.
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, ['effect-earlier-route', EFFECT_ID]))
+      .resolves.toEqual({ ok: true, workOrder: WORK_ORDER });
+    // An order naming an effect that durable state never recorded is foreign,
+    // exactly as a single mismatched id is.
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, ['effect-earlier-route']))
+      .resolves.toEqual({ ok: false, reason: 'foreign-effect' });
+    // No recorded effect can bind anything: fail closed rather than open.
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, []))
+      .resolves.toEqual({ ok: false, reason: 'foreign-effect' });
+  });
+
   it('keeps absent attempt evidence distinct from invalid durable orders', async () => {
     const projectRoot = await createProjectRoot();
     const missing = await readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE);
