@@ -2601,6 +2601,28 @@ steps:
       expect(result.error.message).toMatch(/build_review/);
       expect(result.error.message).toMatch(/gating/i);
     });
+
+    it.each([
+      ['build_review', "tier == 'S'", 'gating'],
+      ['rebase', "x == 'y'", 'structural'],
+      ['build_review', "'a' == 'a'", 'gating'],
+    ])('rejects when: on non-disableable %s steps without evaluating the expression', (name, when, enforcement) => {
+      const result = validateConfig({ steps: { [name]: { when } } });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(new RegExp(`Cannot condition ${enforcement} step: "${name}" with when:`, 'i')),
+        },
+      });
+    });
+
+    it.each(['manual_test', 'prd_audit', 'explore'])('accepts when: on disableable built-in step %s', (name) => {
+      const result = validateConfig({ steps: { [name]: { when: "tier == 'S'" } } });
+
+      expect(result.ok).toBe(true);
+    });
   });
 
   describe('mergeable_autoresolve config block (Task 2)', () => {
