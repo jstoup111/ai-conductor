@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-31T20:00:10.634Z
 Slug: the-cumulative-kickback-cap-never-resets-so-a-reco
 Class: needs-human
 Halting step: prd_audit
