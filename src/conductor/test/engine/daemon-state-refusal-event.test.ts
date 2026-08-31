@@ -34,6 +34,14 @@ vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
     defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' })),
   };
 });
+vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/daemon-deps.js')>();
+  return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };
+});
+vi.mock('../../src/engine/work-order.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/work-order.js')>();
+  return { ...actual, buildWorkOrder: vi.fn((input) => input) };
+});
 
 vi.mock('../../src/engine/step-runners.js', () => ({
   DefaultStepRunner: class {},

@@ -21,7 +21,7 @@ describe('Task 5 — park guard covers the claim path', () => {
   it('derives the claim path as a guarded dispatch entry point', async () => {
     const source = await readFile(DAEMON_SRC, 'utf-8');
     const dispatch = source.match(
-      /const dispatch = \(item: BacklogItem\): boolean => \{[\s\S]*?\n  \};/,
+      /const dispatch = async \(item: BacklogItem\): Promise<boolean> => \{[\s\S]*?\n  \};/,
     )?.[0];
     const guardedDispatch = source.match(
       /const guardedDispatch = \(item: BacklogItem\): Promise<boolean> =>\n    guardedDispatchWith\(item, deps\.isParked, dispatch, log\);/,

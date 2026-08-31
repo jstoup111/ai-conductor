@@ -861,11 +861,20 @@ export async function runDaemon(
   // Task 21: track whether a stale-engine restart request has been made in this
   // run. Once requested, don't retry (the restart would exit the process).
   let staleEngineRestartRequested = false;
+  // A suppressed stale identity is a hold, not permission to run the pending
+  // feature.  Keep that distinction separate from the boolean that reports a
+  // successful restart request to the dispatch loop.
+  let staleDispatchSuppressed = false;
+  // A stale identity held by non-convergence suppression must not be selected
+  // again on every idle tick.  It is process-local like the claim registry;
+  // a restart re-derives ordinary eligibility from durable state.
+  const staleSuppressed = new Set<string>();
   // Completed outcomes are the existing terminal record. `pickEligible` only
   // consults it after the claims-backed active check and park handling, so the
   // predicate order and parked re-dispatch behavior remain unchanged.
   const started = {
     has: (slug: string): boolean =>
+      staleSuppressed.has(slug) ||
       processed.some((outcome) => outcome.slug === slug && outcome.status === 'done'),
   };
   // Slugs that halted this run and are parked for a human. A parked slug is the
@@ -1113,6 +1122,7 @@ export async function runDaemon(
    * an in-flight build. Reuses the shipped suppression + requestRestart path.
    */
   const rebuildAndMaybeRestartForStaleEngine = async (): Promise<boolean> => {
+    staleDispatchSuppressed = false;
     if (!staleGatesArmed || !deps.staleEngineChecker) {
       // Task 9 (TI-4 HP3): self-heal is disabled (non-self-host, or the flag
       // is off) — the checker/rebuild/restart chain never runs, but still
@@ -1170,7 +1180,10 @@ export async function runDaemon(
     staleAlreadyHandledByPreflight = true;
 
     const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
-    if (deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) return false;
+    if (deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) {
+      staleDispatchSuppressed = true;
+      return false;
+    }
     if (inFlight.size !== 0) return false; // re-verify after the async suppression check
 
     const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
@@ -1296,9 +1309,13 @@ export async function runDaemon(
         }
         // Task 1 (#651): re-check park immediately before this dispatch — closes
         // the selection→dispatch race opened by the rebuild/restart await above.
-        const dispatched = await guardedDispatch(next);
-        if (dispatched) {
-          continue; // try to fill another slot before awaiting
+        if (!staleDispatchSuppressed) {
+          const dispatched = await guardedDispatch(next);
+          if (dispatched) {
+            continue; // try to fill another slot before awaiting
+          }
+        } else {
+          staleSuppressed.add(next.slug);
         }
         // Parked between selection and here: fall through to the idle/await
         // section below instead of `continue`, so the tick doesn't tight-loop
@@ -1535,7 +1552,18 @@ export async function runDaemon(
     // busy pools still execute the scheduler-owned periodic sweep; a timer
     // tick never mutates an in-flight WorkOrder. This is outside the free-slot
     // branch: a full pool is exactly the case that must still sweep.
+    // Let immediately fulfilled runners update their settled bit before
+    // arming a busy-pool timer; a genuinely busy pool still reaches the
+    // periodic maintenance sweep below.
+    await Promise.resolve();
     if (workers.some((worker) => worker.settled)) {
+      await collectOne();
+      continue;
+    }
+    // A drain run and an immediate-idle-boundary run have no poll interval to
+    // observe.  Collect directly so their injected sleep cannot become an
+    // accidental scheduling side effect of the concurrent worker wrapper.
+    if (maxIdlePolls === 0) {
       await collectOne();
       continue;
     }
