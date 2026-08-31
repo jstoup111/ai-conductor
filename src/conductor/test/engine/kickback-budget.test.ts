@@ -12,7 +12,7 @@ import {
   consumeKickbackResumeAuthorization,
 } from '../../src/engine/kickback-budget.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
-import type { KickbackGateEntry } from '../../src/engine/kickback-ledger.js';
+import type { KickbackGateEntry, KickbackResumeAuthorization } from '../../src/engine/kickback-ledger.js';
 
 function entry(overrides: Partial<KickbackGateEntry> = {}): KickbackGateEntry {
   return {
@@ -142,7 +142,55 @@ describe('kickback budget recovery transaction', () => {
     }
   });
 
-  it('consumes only an authorization bound to the live needs-human cumulative-cap evidence', async () => {
+  it.each([
+    ['gate', { gate: 'test_suite' }],
+    ['halt class', { haltClass: 'mechanical' }],
+  ])('rejects an authorization with the wrong %s', async (_caseName, authorizationOverride) => {
+    const root = await mkdtemp(join(tmpdir(), 'kickback-budget-consume-invalid-'));
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify({ version: 1, gates: {
+        build_review: entry({
+          exhaustedEvidence: {
+            gate: 'build_review', count: 6, limit: 5, generation: 'cap-generation-1', latestReason: 'repeat',
+          },
+          resumeAuthorization: {
+            adjustmentId: 'adjustment-1', gate: 'build_review', haltClass: 'needs-human', generation: 'cap-generation-1',
+            ...authorizationOverride,
+          } as unknown as KickbackResumeAuthorization,
+        }),
+      } }));
+
+      await expect(consumeKickbackResumeAuthorization(root)).resolves.toEqual({ authorized: false });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an authorization from an earlier cap generation without consuming it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kickback-budget-consume-stale-'));
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify({ version: 1, gates: {
+        build_review: entry({
+          exhaustedEvidence: {
+            gate: 'build_review', count: 6, limit: 5, generation: 'cap-generation-2', latestReason: 'repeat',
+          },
+          resumeAuthorization: {
+            adjustmentId: 'adjustment-1', gate: 'build_review', haltClass: 'needs-human', generation: 'cap-generation-1',
+          },
+        }),
+      } }));
+
+      await expect(consumeKickbackResumeAuthorization(root)).resolves.toEqual({ authorized: false });
+      expect((await readKickbackLedger(root)).gates.build_review?.resumeAuthorization)
+        .toMatchObject({ generation: 'cap-generation-1' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('consumes one exact live authorization only once', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kickback-budget-consume-'));
     try {
       await mkdir(join(root, '.pipeline'), { recursive: true });
