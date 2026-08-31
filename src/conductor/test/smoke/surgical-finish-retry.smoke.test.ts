@@ -75,7 +75,7 @@ describe('smoke: surgical finish-record retry drives one-command completion (Sto
       // The surgical prompt names the finish-record command when the miss is
       // classification-only (recording). Pass the missing field and pipelineDir.
       const hint = buildRetryHint('finish', completion.reason, completion.missing, pipelineDirAbs);
-      expect(hint).toContain('conduct-ts finish-record');
+      expect(hint).toContain('ai-conductor finish-record');
       expect(hint).toContain(`--pipeline-dir ${pipelineDirAbs}`);
 
       // Proving the one-command completion: run the exact command the
