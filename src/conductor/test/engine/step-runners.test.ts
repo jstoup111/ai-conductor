@@ -3968,6 +3968,7 @@ TIER: M`,
     function scriptedGit() {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
         if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
@@ -3999,6 +4000,7 @@ TIER: M`,
     function scopedGit() {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
         if (args[0] === 'diff') return { exitCode: 0, stdout: `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}\n`, stderr: '' };
         if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
@@ -4025,6 +4027,7 @@ TIER: M`,
     function scopedTestGit() {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
         if (args[0] === 'diff') {
           return { exitCode: 0, stdout: [

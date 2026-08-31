@@ -568,6 +568,23 @@ export async function assembleBuildReviewInputs(
     );
   }
 
+  // The snapshot's headSha anchors what the grader actually looks at — the
+  // live HEAD the diff above was computed against — and is what the lap
+  // identity derives from. It must NOT come from the test-suite evidence's
+  // provenanceHeadSha: when the drift budget preserves an attested PASS
+  // across laps, that provenance stays pinned at an older commit while build
+  // commits advance HEAD, making every aggregate stale by construction
+  // (discarded by the completion check's lap comparison). The proof's own
+  // provenance remains available, separately, as testSuiteProof.
+  const headResult = await git(['rev-parse', 'HEAD']);
+  const liveHeadSha = headResult.stdout.trim();
+  if (headResult.exitCode !== 0 || !liveHeadSha) {
+    throw new MergeBaseError(
+      `git rev-parse HEAD failed: ${headResult.stderr || 'no HEAD found'}`,
+      baseRef,
+    );
+  }
+
   const planBody = await readFile(planPath, 'utf-8');
 
   const featureRoot = dirname(dirname(dirname(planPath)));
@@ -592,10 +609,10 @@ export async function assembleBuildReviewInputs(
   }
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
-  const changedTestTitles = await snapshotChangedTestTitles(git, inspection.evidence.provenanceHeadSha, diffResult.stdout);
+  const changedTestTitles = await snapshotChangedTestTitles(git, liveHeadSha, diffResult.stdout);
   const testQuality = await snapshotTestQualityScope(
     git,
-    inspection.evidence.provenanceHeadSha,
+    liveHeadSha,
     diffResult.stdout,
     projectRootForPlan(planPath),
     planPath,
@@ -604,7 +621,7 @@ export async function assembleBuildReviewInputs(
   const snapshotWithoutDigest = {
     baseRef,
     mergeBase: mergeBaseSha,
-    headSha: inspection.evidence.provenanceHeadSha,
+    headSha: liveHeadSha,
     diff: diffResult.stdout,
     planBody,
     repairContext: Object.freeze([...repairContext]),

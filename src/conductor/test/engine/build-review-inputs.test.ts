@@ -83,7 +83,56 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 0, stdout: 'refs/remotes/origin/main\n' } },
       { match: ['rev-parse', 'refs/remotes/origin/main'], result: { exitCode: 0, stdout: 'abc1234\n' } },
       { match: ['ls-remote', 'origin', 'main'], result: { exitCode: 0, stdout: 'abc1234\trefs/heads/main\n' } },
+      // The snapshot's headSha anchors what the grader looks at: live HEAD.
+      // Kept equal to the injected proof's provenanceHeadSha ('head123') so
+      // scenarios not about evidence reuse read unchanged.
+      { match: ['rev-parse', 'HEAD'], result: { exitCode: 0, stdout: 'head123\n' } },
     ];
+
+    it('stamps the snapshot headSha from live HEAD, not from reused test-suite evidence provenance', async () => {
+      // Reused (drift-budget PRESERVED) evidence keeps provenanceHeadSha
+      // pinned at the attested commit while build commits advance HEAD. The
+      // lap identity derives from sourceSnapshot.headSha, and the completion
+      // check compares it against live HEAD — so a snapshot stamped from
+      // evidence provenance is stale by construction (halted features
+      // the-cumulative-kickback-cap-never-resets-so-a-reco and
+      // exported-step-cost-under-records-spend-20x-so-ever).
+      const { git } = fakeGit([
+        { match: ['remote'], result: { exitCode: 0, stdout: 'origin\n' } },
+        { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 0, stdout: 'refs/remotes/origin/main\n' } },
+        { match: ['rev-parse', 'refs/remotes/origin/main'], result: { exitCode: 0, stdout: 'abc1234\n' } },
+        { match: ['ls-remote', 'origin', 'main'], result: { exitCode: 0, stdout: 'abc1234\trefs/heads/main\n' } },
+        { match: ['rev-parse', 'HEAD'], result: { exitCode: 0, stdout: 'live456\n' } },
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/widget.test.ts b/test/widget.test.ts',
+          '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
+        ].join('\n') } },
+        // Changed-test titles must be read from the graded tree (live HEAD),
+        // not from the evidence's attested commit.
+        { match: ['show', 'live456:test/widget.test.ts'], result: { stdout: "describe('widget', () => it('persists state', () => {}));" } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.headSha).toBe('live456');
+      // The proof's own provenance stays what the evidence attests.
+      expect(inputs.testSuiteProof.provenanceHeadSha).toBe('head123');
+      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([
+        { selector: 'test/widget.test.ts', titleText: 'widget > persists state', staticExtractionFallback: false },
+      ]);
+    });
+
+    it('fails input assembly when live HEAD cannot be resolved', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript.filter((entry) => !(entry.match[0] === 'rev-parse' && entry.match[1] === 'HEAD')),
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
+        { match: ['rev-parse', 'HEAD'], result: { exitCode: 128, stderr: 'fatal: bad revision' } },
+      ]);
+
+      await expect(assembleBuildReviewInputs(git, planPath)).rejects.toThrow(MergeBaseError);
+    });
 
     it('freezes one source snapshot and admits only an injected CURRENT test-suite proof', async () => {
       const { git } = fakeGit([
@@ -288,6 +337,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         const { git } = fakeGit([
           { match: ['remote'], result: { exitCode: 0, stdout: '' } },
           { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: `${baseRef}\n` } },
+          { match: ['rev-parse', 'HEAD'], result: { stdout: `${headSha}\n` } },
           { match: ['merge-base', baseRef, 'HEAD'], result: { stdout: `${mergeBase}\n` } },
           { match: ['diff', `${mergeBase}..HEAD`], result: { stdout: diff } },
         ]);
@@ -534,6 +584,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         { match: ['ls-remote', 'origin', 'main'], result: { exitCode: 0, stdout: 'fresh222\trefs/heads/main\n' } },
         // resolveBaseCore's fetch path (stale → refetch):
         { match: ['fetch', 'origin', 'main'], result: { exitCode: 0 } },
+        { match: ['rev-parse', 'HEAD'], result: { exitCode: 0, stdout: 'head123\n' } },
         { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'newbase\n' } },
         { match: ['diff', 'newbase..HEAD'], result: { exitCode: 0, stdout: 'diff --git a/y b/y\n' } },
       ]);
@@ -551,6 +602,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const { git } = fakeGit([
         { match: ['remote'], result: { exitCode: 0, stdout: '' } },
         { match: ['symbolic-ref', '--short', 'HEAD'], result: { exitCode: 0, stdout: 'feature/foo\n' } },
+        { match: ['rev-parse', 'HEAD'], result: { exitCode: 0, stdout: 'head123\n' } },
         { match: ['merge-base', 'feature/foo', 'HEAD'], result: { exitCode: 0, stdout: 'localbase\n' } },
         { match: ['diff', 'localbase..HEAD'], result: { exitCode: 0, stdout: '' } },
       ]);

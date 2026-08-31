@@ -76,6 +76,9 @@ function buildReviewGit(): GitRunner {
   return async (args) => {
     const command = args.join(' ');
     if (command === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
+    if (command === 'rev-parse HEAD') {
+      return { exitCode: 0, stdout: 'fixture-head\n', stderr: '' };
+    }
     if (command === 'merge-base main HEAD') {
       return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
     }
