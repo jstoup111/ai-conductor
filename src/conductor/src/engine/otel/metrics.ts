@@ -4,15 +4,14 @@
  * Instruments (FR-5):
  *  - conductor.step.duration  — Histogram (ms, per step)
  *  - conductor.step.retries   — Counter (per step, only when retryCount > 0)
- *  - conductor.step.tokens    — Counter (per step × kind, only when tokenUsage present)
- *  - conductor.step.cost      — Counter (per authoritative dispatch with finite cost)
  *  - conductor.step.dispatches — Counter (per authoritative dispatch)
- *  - conductor.feature.cost   — Gauge (authoritative shipped-record feature total)
+ *  - conductor.feature.cost   — Gauge (authoritative cumulative feature total)
+ *  - conductor.feature.step.cost — Gauge (cumulative feature cost per dimension)
+ *  - conductor.feature.step.tokens — Gauge (cumulative feature tokens per dimension)
  *  - conductor.run.outcomes   — Counter (once per opened run, by terminal outcome)
  *
  * All record/add calls are synchronous (enqueue to PeriodicExportingMetricReader).
- * TokenUsage absent → no data points (no NaN / zero-fill). Partial kinds
- * (input/output only) → only present kinds recorded.
+ * Snapshot token buckets with absent kinds → no data points (no NaN / zero-fill).
  */
 import type { Attributes, Meter, Counter, Gauge, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
@@ -29,10 +28,10 @@ export const DURATION_BUCKET_BOUNDARIES_MS = [
 export class MetricsRecorder {
   private readonly durationHistogram: Histogram;
   private readonly retriesCounter: Counter;
-  private readonly tokensCounter: Counter;
-  private readonly costCounter: Counter;
   private readonly dispatchesCounter: Counter;
   private readonly featureCostGauge: Gauge;
+  private readonly featureStepCostGauge: Gauge;
+  private readonly featureStepTokensGauge: Gauge;
   private readonly closeoutDurationHistogram: Histogram;
   private readonly runOutcomesCounter: Counter;
 
@@ -51,19 +50,19 @@ export class MetricsRecorder {
     this.retriesCounter = meter.createCounter('conductor.step.retries', {
       description: 'Number of retries per conductor step',
     });
-    this.tokensCounter = meter.createCounter('conductor.step.tokens', {
-      description: 'Token usage per conductor step',
-    });
-    this.costCounter = meter.createCounter('conductor.step.cost', {
-      description: 'Cost per conductor step',
-      unit: 'usd',
-    });
     this.dispatchesCounter = meter.createCounter('conductor.step.dispatches', {
       description: 'Number of conductor step dispatches classified by metering status',
     });
     this.featureCostGauge = meter.createGauge('conductor.feature.cost', {
       description: 'Authoritative shipped-record cost for a conductor feature',
       unit: 'usd',
+    });
+    this.featureStepCostGauge = meter.createGauge('conductor.feature.step.cost', {
+      description: 'Authoritative cumulative feature cost by step, model, and source',
+      unit: 'usd',
+    });
+    this.featureStepTokensGauge = meter.createGauge('conductor.feature.step.tokens', {
+      description: 'Authoritative cumulative feature tokens by step and model',
     });
     this.closeoutDurationHistogram = meter.createHistogram('conductor.pipeline.closeout.duration', {
       description: 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
@@ -105,11 +104,30 @@ export class MetricsRecorder {
   }
 
   /** Record one dispatch selected by the shared shipped-record metering projection. */
-  onDispatch(step: string, tokenUsage?: TokenUsage, model?: string): void {
+  onDispatch(step: string, tokenUsage?: TokenUsage, _model?: string): void {
     this.dispatchesCounter.add(1, this.withIdentity({ step, metering: classifyMetering(tokenUsage) }));
-    if (tokenUsage === undefined || tokenUsage === null) return;
-    this.recordTokens(step, tokenUsage, model);
-    this.recordCost(step, tokenUsage, model);
+  }
+
+  /** Record cumulative ledger dimensions emitted after each step terminal. */
+  onFeatureCostSnapshot(event: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>): void {
+    if (!Number.isFinite(event.costUsd)) return;
+
+    this.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete }));
+    for (const bucket of event.byDimension) {
+      const attributes: Record<string, string> = { step: bucket.step };
+      if (bucket.model !== undefined) attributes.model = bucket.model;
+      if (bucket.source !== undefined) attributes.source = bucket.source;
+      this.featureStepCostGauge.record(bucket.costUsd, this.withIdentity(attributes));
+    }
+    for (const bucket of event.tokensByDimension) {
+      for (const kind of MetricsRecorder.TOKEN_KINDS) {
+        const value = bucket.tokens[kind];
+        if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+        const attributes: Record<string, string> = { step: bucket.step, kind };
+        if (bucket.model !== undefined) attributes.model = bucket.model;
+        this.featureStepTokensGauge.record(value, this.withIdentity(attributes));
+      }
+    }
   }
 
   /** Record the exact whole-feature cost computed from the shipped-record ledger. */
@@ -146,35 +164,7 @@ export class MetricsRecorder {
     'cacheCreation',
   ] as const;
 
-  private recordTokens(step: string, usage: TokenUsage, model?: string): void {
-    for (const kind of MetricsRecorder.TOKEN_KINDS) {
-      const value = usage[kind];
-      if (typeof value === 'number' && !Number.isNaN(value)) {
-        this.tokensCounter.add(
-          value,
-          this.withIdentity(model ? { step, kind, model } : { step, kind }),
-        );
-      }
-    }
-  }
-
   private withIdentity(attrs: Attributes): Attributes {
     return { ...attrs, ...this.identityAttrs };
-  }
-
-  private recordCost(step: string, usage: TokenUsage, model?: string): void {
-    const { costUsd } = usage;
-    if (typeof costUsd !== 'number' || !Number.isFinite(costUsd)) {
-      return;
-    }
-
-    const attributes: Record<string, string> = { step };
-    if (model !== undefined) {
-      attributes.model = model;
-    }
-    if (usage.costSource !== undefined) {
-      attributes.source = usage.costSource;
-    }
-    this.costCounter.add(costUsd, this.withIdentity(attributes));
   }
 }

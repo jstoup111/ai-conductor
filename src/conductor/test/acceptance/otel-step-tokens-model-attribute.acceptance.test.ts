@@ -1,29 +1,8 @@
 /**
- * Acceptance specs for .docs/stories/per-feature-token-accounting.md Story 6
- * (#537), governed by .docs/plans/per-feature-token-accounting.md Task 9.
+ * Acceptance specs for cumulative feature token dimensions.
  *
- * WHY ACCEPTANCE-LEVEL (not unit): `MetricsRecorder.onStepClose` (metrics.ts)
- * and `OtelVisualizer`'s `step_completed` handling (otel-visualizer.ts) both
- * already exist and are already unit-tested in isolation
- * (test/engine/otel/metrics.test.ts T15/T16) — those specs prove the
- * counter records token KINDS but never touch the `model` attribute, because
- * the event object flowing through today never carries `model` (Story 2 is
- * the same underlying gap: `conductor.ts:5127`'s emit call site doesn't
- * populate it). A unit test that calls `MetricsRecorder.onStepClose(...,
- * tokenUsage)` directly with a hand-built `model` argument would pass even
- * if the real event-driven wiring (`ConductorEventEmitter` ->
- * `OtelVisualizer.handleEvent` -> stashed model -> `onStepClose`) never
- * threads it through — the exact wiring-not-the-primitive gap this skill's
- * §3b targets. This file drives the REAL entry point: a `ConductorEvent`
- * emitted through a real `ConductorEventEmitter` into a real
- * `OtelVisualizer`, reading the exported counter's data-point attributes via
- * `InMemoryMetricExporter` (matching the existing T15/T16 convention) —
- * never calling `MetricsRecorder`/`SpanManager` methods directly.
- *
- * PRE-FIX RED: as of this file's authoring, `step_completed` has no `model`
- * field on the event type, `OtelVisualizer` never stashes/forwards one, and
- * `MetricsRecorder.recordTokens` never adds a `model` attribute — the token
- * counter's data points carry only `{step, kind}`.
+ * This drives the real event path from a feature_cost_snapshot through the
+ * visualizer and verifies the exported gauge's model labels.
  *
  * Story 6's negative path (OTel disabled/unconfigured must never block
  * ship-time rollup or `conduct kpi`) is proven structurally, not duplicated
@@ -50,7 +29,7 @@ function findTokensMetric(exporter: InMemoryMetricExporter) {
   return exporter
     .getMetrics()
     .flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics))
-    .find((m) => m.descriptor.name === 'conductor.step.tokens');
+    .find((m) => m.descriptor.name === 'conductor.feature.step.tokens');
 }
 
 let tempDir: string;
@@ -85,19 +64,15 @@ function makeVisualizer(): OtelVisualizer {
   });
 }
 
-describe('acceptance: conductor.step.tokens carries the model attribute, fed end-to-end from step_completed (Story 6, #537)', () => {
-  it('happy: a step_completed event with tokenUsage + model produces token counter data points tagged with that model', async () => {
+describe('acceptance: conductor.feature.step.tokens carries the model attribute from a feature_cost_snapshot', () => {
+  it('happy: a snapshot produces token gauge data points tagged with its model', async () => {
     const vis = makeVisualizer();
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
     await emitter.emit({
-      type: 'step_completed',
-      step: 'build',
-      status: 'done',
-      tokenUsage: { input: 800, output: 150, cacheRead: 0, cacheCreation: 0 },
-      model: 'claude-sonnet-5',
-    } as never);
+      type: 'feature_cost_snapshot', costUsd: 0.5, costComplete: true, byDimension: [],
+      tokensByDimension: [{ step: 'build', model: 'claude-sonnet-5', tokens: { input: 800, output: 150 } }],
+    });
     await vis.stop();
 
     const tokensMetric = findTokensMetric(metricExporter);
@@ -109,26 +84,17 @@ describe('acceptance: conductor.step.tokens carries the model attribute, fed end
     }
   });
 
-  it('two steps dispatched at different models produce token data points tagged with their OWN model, not the other step\'s', async () => {
+  it('two snapshot dimensions at different models retain their own model labels', async () => {
     const vis = makeVisualizer();
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
     await emitter.emit({
-      type: 'step_completed',
-      step: 'build',
-      status: 'done',
-      tokenUsage: { input: 100, output: 20, cacheRead: 0, cacheCreation: 0 },
-      model: 'claude-sonnet-5',
-    } as never);
-    await emitter.emit({ type: 'step_started', step: 'plan', index: 1 });
-    await emitter.emit({
-      type: 'step_completed',
-      step: 'plan',
-      status: 'done',
-      tokenUsage: { input: 300, output: 60, cacheRead: 0, cacheCreation: 0 },
-      model: 'claude-opus-4-8',
-    } as never);
+      type: 'feature_cost_snapshot', costUsd: 0.5, costComplete: true, byDimension: [],
+      tokensByDimension: [
+        { step: 'build', model: 'claude-sonnet-5', tokens: { input: 100, output: 20 } },
+        { step: 'plan', model: 'claude-opus-4-8', tokens: { input: 300, output: 60 } },
+      ],
+    });
     await vis.stop();
 
     const tokensMetric = findTokensMetric(metricExporter);
