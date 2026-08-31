@@ -9,6 +9,7 @@ import { PluginRegistry } from '../src/engine/plugin-registry.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { HarnessConfig } from '../src/types/config.js';
 import type { VisualizerFactoryContext } from '../src/types/plugin.js';
+import type { OtelVisualizerStartContext } from '../src/engine/otel/wire.js';
 
 const buildExporters = vi.hoisted(() => vi.fn());
 
@@ -24,7 +25,7 @@ describe('interactive OTel wiring', () => {
       metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
     });
     await writeFile(join(pipelineDir, 'conduct-session-id'), 'persisted-interactive-run');
-    const context: VisualizerFactoryContext = {
+    const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
       config: { otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318' } } as HarnessConfig,
       pipelineDir,
       emitter,
@@ -32,6 +33,8 @@ describe('interactive OTel wiring', () => {
         feature: 'interactive-feature',
         project: '/interactive-project',
         pipelineDir,
+        branch: undefined,
+        engineVersion: undefined,
       },
     };
 

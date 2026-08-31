@@ -433,8 +433,10 @@ export class OtelVisualizer implements VisualizerPlugin {
       feature: context.feature,
       project: context.project,
       projectName: this.projectNameOverride ?? (context.project ? basename(context.project) : undefined),
-      branch: context.branch,
-      engineVersion: context.engineVersion,
+      ...(Object.prototype.hasOwnProperty.call(context, 'branch') ? { branch: context.branch } : {}),
+      ...(Object.prototype.hasOwnProperty.call(context, 'engineVersion')
+        ? { engineVersion: context.engineVersion }
+        : {}),
     };
     // Two scopes, one context: the meter provider must not carry run-varying
     // attributes, because the backend turns the metric Resource into

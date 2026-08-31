@@ -14,9 +14,9 @@ export interface ResourceContext {
   project?: string;
   /** Resolved project identity for service.instance.id. Defaults to 'unknown'. */
   projectName?: string;
-  /** Git branch for the active run. Defaults to 'unknown'. */
+  /** Git branch: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
   branch?: string;
-  /** Harness engine version for the active run. Defaults to 'unknown'. */
+  /** Engine version: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
   engineVersion?: string;
   /**
    * Override the run id. When supplied, the session-id file and generated id
@@ -50,7 +50,7 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   const feature = ctx.feature ?? 'unknown';
   const project = ctx.project ?? 'unknown';
   const projectName = ctx.projectName ?? 'unknown';
-  const branch = ctx.branch ?? 'unknown';
+  const branch = normalizeIdentity(ctx, 'branch');
 
   const featureStable = {
     'service.name': SERVICE_NAME,
@@ -68,8 +68,15 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   return resourceFromAttributes({
     ...featureStable,
     'conductor.run.id': ctx.runId ?? resolveRunId(ctx.pipelineDir),
-    'conductor.engine.version': ctx.engineVersion ?? 'unknown',
+    'conductor.engine.version': normalizeIdentity(ctx, 'engineVersion'),
   });
+}
+
+function normalizeIdentity(ctx: ResourceContext, key: 'branch' | 'engineVersion'): string {
+  if (!Object.prototype.hasOwnProperty.call(ctx, key)) return 'not-supplied';
+
+  const value = ctx[key];
+  return typeof value === 'string' && value.length > 0 ? value : 'unresolved';
 }
 
 function resolveRunId(pipelineDir: string): string {
