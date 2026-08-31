@@ -856,6 +856,135 @@ describe.skip('engine/setup-triage — legacy fixSession (pre-#1346)', () => {
   });
 });
 
+type RejectionCase =
+  | 'provider-failure'
+  | 'history-rewritten'
+  | 'mixed-commit-and-residue'
+  | 'setup-still-failing'
+  | 'setup-drift'
+  | 'snapshot-failed'
+  | 'repair-commit-failed'
+  | 'repair-postcondition-failed'
+  | 'preservation-failed'
+  | 'restoration-failed';
+
+/**
+ * A stateful fake of the small Git protocol owned by fixSession. It deliberately
+ * models only that protocol: the table below changes one terminal condition at
+ * a time while preservation follows the real helper's ref-before-reset order.
+ */
+function rejectionGit(kind: RejectionCase): GitRunner {
+  let headReads = 0;
+  let snapshot = 0;
+  let statusReads = 0;
+  let preserve = false;
+  let postCommit = false;
+  const terminal = kind === 'preservation-failed' || kind === 'restoration-failed'
+    ? 'history-rewritten'
+    : kind;
+  const originalHead = 'a'.repeat(40);
+  const attemptedHead = 'b'.repeat(40);
+  const result = (stdout = '', exitCode = 0, stderr = ''): GitResult => ({ stdout, exitCode, stderr });
+
+  return async (args) => {
+    const [command, ...rest] = args;
+    if (command === 'rev-parse' && rest[0] === 'HEAD') {
+      headReads += 1;
+      if (kind === 'snapshot-failed' && headReads === 2) return result('', 1, 'cannot read candidate');
+      if (kind === 'mixed-commit-and-residue' && headReads === 2) return result(`${attemptedHead}\n`);
+      if (kind === 'repair-postcondition-failed' && headReads === 4) return result(`${originalHead}\n`);
+      return result(`${postCommit || preserve ? attemptedHead : originalHead}\n`);
+    }
+    if (command === 'rev-parse' && rest[0] === 'HEAD^{tree}') {
+      snapshot += 1;
+      if (kind === 'setup-drift' && snapshot === 3) return result('drifted-tree\n');
+      return result(snapshot === 1 ? 'original-tree\n' : (kind === 'mixed-commit-and-residue' || kind === 'repair-commit-failed' || kind === 'repair-postcondition-failed') ? 'repair-tree\n' : 'original-tree\n');
+    }
+    if (command === 'status') {
+      statusReads += 1;
+      const dirty = statusReads > 1 && (
+        terminal === 'mixed-commit-and-residue' ||
+        terminal === 'repair-commit-failed' ||
+        terminal === 'repair-postcondition-failed' ||
+        kind === 'preservation-failed'
+      );
+      return result(dirty ? '?? repair.txt\n' : '');
+    }
+    if (command === 'write-tree') return result('repair-tree\n');
+    if (command === 'merge-base') return result('', terminal === 'history-rewritten' ? 1 : 0);
+    if (command === 'diff') {
+      preserve = true;
+      return result('repair.txt\n');
+    }
+    if (command === 'add') {
+      if (kind === 'preservation-failed') return result('', 1, 'cannot preserve');
+      return result();
+    }
+    if (command === 'commit') {
+      if (preserve) return result();
+      if (kind === 'repair-commit-failed') return result('', 1, 'cannot commit repair');
+      postCommit = true;
+      return result();
+    }
+    if (command === 'branch') return result();
+    if (command === 'reset' && rest[0] === '--hard') {
+      preserve = true;
+      return kind === 'restoration-failed' ? result('', 1, 'cannot restore') : result();
+    }
+    if (command === 'reset') return result();
+    if (command === 'rev-parse' && rest[0] === '--verify') return result(`${attemptedHead}\n`);
+    return result();
+  };
+}
+
+describe('engine/setup-triage — fixSession closed rejection dispositions (Task 13)', () => {
+  const cases: Array<{
+    reason: RejectionCase;
+    dispatchThrows?: boolean;
+    prepareThrows?: boolean;
+    hasRef: boolean;
+  }> = [
+    { reason: 'provider-failure', dispatchThrows: true, hasRef: false },
+    { reason: 'history-rewritten', hasRef: true },
+    { reason: 'mixed-commit-and-residue', hasRef: true },
+    { reason: 'setup-still-failing', prepareThrows: true, hasRef: false },
+    { reason: 'setup-drift', hasRef: true },
+    { reason: 'snapshot-failed', hasRef: true },
+    { reason: 'repair-commit-failed', hasRef: true },
+    { reason: 'repair-postcondition-failed', hasRef: true },
+    { reason: 'preservation-failed', hasRef: false },
+    { reason: 'restoration-failed', hasRef: true },
+  ];
+
+  it.each(cases)('$reason emits one matching rejected disposition and accurate ref evidence', async ({ reason, dispatchThrows, prepareThrows, hasRef }) => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const events = { emit: async (event: Record<string, unknown>) => { emitted.push(event); } };
+    const outcome = await fixSession(
+      rejectionGit(reason),
+      '/worktree',
+      'task-13',
+      async () => {
+        if (dispatchThrows) throw new Error('provider failed');
+      },
+      async () => {
+        if (prepareThrows) throw new Error('setup still fails');
+      },
+      events as never,
+    );
+
+    expect(outcome).toMatchObject({ kind: 'park', contractOutcome: reason });
+    expect(emitted).toEqual([
+      expect.objectContaining({ type: 'setup_repair', disposition: 'rejected', reason }),
+    ]);
+    expect((emitted[0] as { quarantineRef?: string }).quarantineRef).toBe(
+      hasRef ? 'wip/setup-quarantine-task-13' : undefined,
+    );
+    expect(outcome.quarantineRef).toBe(
+      hasRef ? 'wip/setup-quarantine-task-13' : undefined,
+    );
+  });
+});
+
 describe('engine/setup-triage — quarantine sentinel surfacing (Task 14)', () => {
   it('quarantined-pass outcome includes quarantine ref and preserved paths', async () => {
     const { git } = fakeGit([
