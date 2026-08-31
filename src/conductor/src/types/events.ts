@@ -13,6 +13,26 @@ import type { SchedulingUnitRef } from './scheduling-unit.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Closed outcomes for the daemon's bounded setup repair session. */
+export type SetupRepairDisposition =
+  | 'engine-committed'
+  | 'accepted-existing-commit'
+  | 'verified-no-tree-change'
+  | 'rejected';
+
+/** Fail-closed reasons for a rejected setup repair attempt. */
+export type SetupRepairRejectionReason =
+  | 'provider-failure'
+  | 'history-rewritten'
+  | 'mixed-commit-and-residue'
+  | 'setup-still-failing'
+  | 'setup-drift'
+  | 'snapshot-failed'
+  | 'repair-commit-failed'
+  | 'repair-postcondition-failed'
+  | 'preservation-failed'
+  | 'restoration-failed';
+
 /** Identity is deliberately explicit when a retention decision has no readable lease. */
 type ScratchCleanupIdentityValue = string | 'unknown';
 type ScratchCleanupAttempt = number | 'unknown';
@@ -175,6 +195,18 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 
 export type ConductorEvent =
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
+  | {
+      type: 'setup_repair';
+      disposition: Exclude<SetupRepairDisposition, 'rejected'>;
+      preservedPaths: string[];
+    }
+  | {
+      type: 'setup_repair';
+      disposition: 'rejected';
+      reason: SetupRepairRejectionReason;
+      quarantineRef?: string;
+      preservedPaths: string[];
+    }
   | { type: 'project_setup'; ran: boolean; reason: 'marker-valid' | 'no-marker' | 'no-script' | 'script-changed' | 'base-moved' | 'marker-invalid' | 'forced' }
   | {
       /** Durable plan-task growth accounting after a remediation append. */

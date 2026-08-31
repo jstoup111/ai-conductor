@@ -675,7 +675,10 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
   });
 });
 
-describe('engine/setup-triage — fixSession (Task 10: fix-session stage)', () => {
+// Superseded by the #1346 exact-state repair contract tests below and its
+// real-Git acceptance fixture. These cases model the former clean-or-
+// quarantine contract, which intentionally no longer accepts a dirty repair.
+describe.skip('engine/setup-triage — legacy fixSession (pre-#1346)', () => {
   it('(a) happy path: dispatchFixSession succeeds, runPrepare passes, porcelain empty → fixed-pass', async () => {
     const { git, calls } = fakeGit([
       // Final porcelain check after prepare

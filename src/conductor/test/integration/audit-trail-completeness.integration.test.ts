@@ -55,6 +55,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   'friction-mapped' | 'not-audited-by-design'
 > = {
   project_setup: 'not-audited-by-design',
+  setup_repair: 'not-audited-by-design',
   config_deprecated_key: 'not-audited-by-design',
   contained_live_checkout_drift: 'not-audited-by-design',
   self_host_containment_verdict: 'not-audited-by-design',
@@ -176,6 +177,11 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
   project_setup: { type: 'project_setup', ran: false, reason: 'marker-valid' },
+  setup_repair: {
+    type: 'setup_repair',
+    disposition: 'engine-committed',
+    preservedPaths: [],
+  },
   config_deprecated_key: {
     type: 'config_deprecated_key',
     key: 'build_review.rubrics.scope',

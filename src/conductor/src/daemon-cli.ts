@@ -1327,7 +1327,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     };
 
     // Run fix-session: dispatch LLM, verify contract (prepare + clean tree)
-    const fixOutcome = await fixSession(git, worktree.path, item.slug, dispatchFixSession, runPrepare);
+    const fixOutcome = await fixSession(git, worktree.path, item.slug, dispatchFixSession, runPrepare, featureEvents);
 
     // A stage-1 quarantine ref must never be lost from the final outcome —
     // fixSession() doesn't know about it, so carry it forward if the fix
@@ -2198,6 +2198,13 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'setup_repair': {
+      const rejection = event.disposition === 'rejected'
+        ? ` (${event.reason}${event.quarantineRef ? `; ${event.quarantineRef}` : ''})`
+        : '';
+      log(`${dot} setup repair ${event.disposition}${rejection}`);
+      break;
+    }
     case 'project_setup':
       log(`${dot} project setup ${event.ran ? 'ran' : 'skipped'} (${event.reason})`);
       break;
