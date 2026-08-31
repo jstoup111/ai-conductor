@@ -408,6 +408,23 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     expect(stale[0]).toContain('fresh: false');
   });
 
+  it('renders conditional skips with their expression and undefined-key reason', () => {
+    expect(lines({
+      type: 'when_skip',
+      step: 'manual_test',
+      expression: "tier == 'S'",
+    })).toEqual(["· ⊘ manual_test skipped: tier == 'S'"]);
+
+    expect(lines({
+      type: 'when_skip',
+      step: 'build_review',
+      expression: 'feature.enabled',
+      undefinedKey: 'feature.enabled',
+    })).toEqual([
+      '· ⊘ build_review skipped: feature.enabled (key "feature.enabled" undefined → false)',
+    ]);
+  });
+
   it('renders exactly the previously-rendering event types plus navigation_back', () => {
     // One minimal, valid sample per ConductorEvent variant (see types/events.ts).
     // Some variants (e.g. gate_verdict) only render conditionally; the sample
