@@ -46,6 +46,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   scratch_cleanup_retained: { render: true, persist: true, audit: false, otel: false },
   scratch_cleanup_failed: { render: true, persist: true, audit: false, otel: false },
   feature_usage_total: { render: true, persist: true, audit: false, otel: true },
+  feature_cost_snapshot: { render: false, persist: false, audit: false, otel: true },
   provider_fallback: { render: true, persist: true, audit: false, otel: false },
   session_policy: { render: true, persist: true, audit: false, otel: false },
   step_retry: { render: true, persist: true, audit: true, otel: true },

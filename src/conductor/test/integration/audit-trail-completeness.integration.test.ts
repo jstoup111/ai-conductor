@@ -88,6 +88,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // Whole-feature cost telemetry: durable in events.jsonl, but it describes no
   // friction — it is a summation of dispatches already mapped elsewhere.
   feature_usage_total: 'not-audited-by-design',
+  feature_cost_snapshot: 'not-audited-by-design',
   provider_fallback: 'not-audited-by-design',
   session_policy: 'not-audited-by-design',
   step_retry: 'friction-mapped',
@@ -278,6 +279,13 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     costUsd: 1.5,
     inputTokens: 100,
     outputTokens: 20,
+  },
+  feature_cost_snapshot: {
+    type: 'feature_cost_snapshot',
+    costUsd: 1.5,
+    costComplete: true,
+    byDimension: [{ step: 'build', costUsd: 1.5 }],
+    tokensByDimension: [{ step: 'build', tokens: { input: 100, output: 20 } }],
   },
   provider_fallback: {
     type: 'provider_fallback',

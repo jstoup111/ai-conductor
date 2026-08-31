@@ -261,6 +261,7 @@ describe('event sink subscriptions', () => {
       'step_failed',
       'provider_attempt',
       'feature_usage_total',
+      'feature_cost_snapshot',
       'step_retry',
       'gate_verdict',
       'kickback',
@@ -272,6 +273,20 @@ describe('event sink subscriptions', () => {
       'build_stall',
       'pipeline_closeout',
     ]));
+  });
+
+  it('declares feature cost snapshots as OpenTelemetry-only ledger projections', () => {
+    expect({
+      sinks: EVENT_SINKS.feature_cost_snapshot,
+      otel: otelEventTypes().includes('feature_cost_snapshot'),
+      rendered: renderedEventTypes().includes('feature_cost_snapshot'),
+      persisted: persistedEventTypes().includes('feature_cost_snapshot'),
+    }).toEqual({
+      sinks: { render: false, persist: false, audit: false, otel: true },
+      otel: true,
+      rendered: false,
+      persisted: false,
+    });
   });
 
   it('persists engine-owned build-review occurrences through the shared ledger exactly once', async () => {

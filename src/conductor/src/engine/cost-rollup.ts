@@ -11,6 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FeatureUsageTotals } from '../execution/provider-diagnostics.js';
 import type { TokenUsage } from '../execution/llm-provider.js';
+import type { ConductorEvent } from '../types/events.js';
 import { classifyMetering } from './metering.js';
 import {
   DispatchMeteringTracker,
@@ -167,6 +168,19 @@ export function toFeatureUsageTotals(rollup: CostRollup): FeatureUsageTotals {
     outputTokens: rollup.tokens.output,
     cachedInputTokens: rollup.tokens.cacheRead + rollup.tokens.cacheCreation,
     costUnmeteredDispatches: rollup.costUnmetered?.count ?? 0,
+  };
+}
+
+/** Project cumulative ledger costs into the non-persisted OTel snapshot event. */
+export function toFeatureCostSnapshot(
+  rollup: CostRollup,
+): Extract<ConductorEvent, { type: 'feature_cost_snapshot' }> {
+  return {
+    type: 'feature_cost_snapshot',
+    costUsd: rollup.costUsd,
+    costComplete: rollup.unmetered.count === 0 && (rollup.costUnmetered?.count ?? 0) === 0,
+    byDimension: rollup.byDimension ?? [],
+    tokensByDimension: rollup.tokensByDimension ?? [],
   };
 }
 

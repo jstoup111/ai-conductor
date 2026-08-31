@@ -5,6 +5,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   computeCostRollup,
+  toFeatureCostSnapshot,
   toFeatureUsageTotals,
 } from '../../src/engine/cost-rollup.js';
 import { classifyMetering } from '../../src/engine/metering.js';
@@ -92,6 +93,38 @@ describe('engine/cost-rollup', () => {
       unmetered: { count: 0, durationMs: 0 },
       costUnmetered: { count: 0 },
       providers: { claude: { costUsd: 0, costUnmetered: { count: 0 } } },
+    });
+  });
+
+  it.each([
+    [{ count: 0, durationMs: 0 }, undefined, true],
+    [{ count: 0, durationMs: 0 }, { count: 0 }, true],
+    [{ count: 1, durationMs: 0 }, { count: 0 }, false],
+    [{ count: 0, durationMs: 0 }, { count: 1 }, false],
+  ] as const)('projects cost completeness from unmetered and cost-unmetered dispatches', (
+    unmetered,
+    costUnmetered,
+    costComplete,
+  ) => {
+    const byDimension = [{ step: 'build', model: 'm1', costUsd: 1.25 }];
+    const tokensByDimension = [{ step: 'build', model: 'm1', tokens: { input: 100, output: 10 } }];
+
+    expect(toFeatureCostSnapshot({
+      tokens: { input: 100, output: 10, cacheRead: 0, cacheCreation: 0 },
+      costUsd: 1.25,
+      byDimension,
+      tokensByDimension,
+      dispatches: 1,
+      retries: 0,
+      halts: 0,
+      unmetered,
+      ...(costUnmetered === undefined ? {} : { costUnmetered }),
+    })).toEqual({
+      type: 'feature_cost_snapshot',
+      costUsd: 1.25,
+      costComplete,
+      byDimension,
+      tokensByDimension,
     });
   });
 
