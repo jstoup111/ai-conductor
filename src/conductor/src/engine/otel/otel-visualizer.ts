@@ -39,7 +39,7 @@ import {
 } from '@opentelemetry/sdk-metrics';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import { basename } from 'node:path';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter, EventHandler } from '../../ui/events.js';
 import type { ConductorEvent } from '../../types/events.js';
 import { otelEventTypes } from '../event-sinks.js';
 import type { VisualizerPlugin, VisualizerStartContext } from '../../types/plugin.js';
@@ -190,8 +190,10 @@ export class OtelVisualizer implements VisualizerPlugin {
    * manifests.
    */
   private readonly warnOnce?: (msg: string) => void;
-  /** Registered handlers, kept for potential off() cleanup (currently no off needed). */
+  /** Emitter that owns this visualizer's event subscriptions. */
   private emitter: ConductorEventEmitter | null = null;
+  /** Event subscriptions owned by this run; removed before a sequential run starts. */
+  private readonly eventHandlers: Array<[ConductorEvent['type'], EventHandler]> = [];
 
   // ── T21: idempotent stop + SIGINT/SIGTERM flush handlers ──────────────────
 
@@ -277,10 +279,12 @@ export class OtelVisualizer implements VisualizerPlugin {
     this.initializeProviders(context ?? this.legacyStartContext);
     this.emitter = emitter;
     for (const type of otelEventTypes()) {
-      emitter.on(type, (event) => {
+      const handler: EventHandler = (event) => {
         // Synchronous, O(1): span/metric APIs enqueue to batch processors.
         this.handleEvent(event);
-      });
+      };
+      this.eventHandlers.push([type, handler]);
+      emitter.on(type, handler);
     }
 
     // T21: register SIGINT/SIGTERM handlers so an abrupt process termination
@@ -317,6 +321,7 @@ export class OtelVisualizer implements VisualizerPlugin {
       process.off('SIGTERM', this.sigHandler);
       this.sigHandler = null;
     }
+    this.detachEventHandlers();
 
     this.stopPromise = this._doStop();
     return this.stopPromise;
@@ -346,12 +351,45 @@ export class OtelVisualizer implements VisualizerPlugin {
       );
     }
     try {
-      await this.meterProvider.shutdown();
+      const shutdownCompleted = await this.awaitMeterShutdown();
+      if (!shutdownCompleted) {
+        this.warnOnce?.(
+          `[otel] meter shutdown timed out after ${this.exportTimeoutMillis}ms`,
+        );
+      }
     } catch (err) {
       this.warnOnce?.(
         `[otel] meter flush error: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * The SDK bounds exports, but exporter.shutdown() is an arbitrary promise.
+   * Keep a dead shutdown from retaining the visualizer (and its next run)
+   * indefinitely.
+   */
+  private async awaitMeterShutdown(): Promise<boolean> {
+    const shutdown = this.meterProvider!.shutdown().then(() => true);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        shutdown,
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(() => resolve(false), this.exportTimeoutMillis);
+        }),
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+  }
+
+  private detachEventHandlers(): void {
+    if (this.emitter !== null) {
+      for (const [type, handler] of this.eventHandlers) this.emitter.off(type, handler);
+    }
+    this.eventHandlers.length = 0;
+    this.emitter = null;
   }
 
   // ── Internal event dispatch (synchronous, O(1)) ────────────────────────────
@@ -452,6 +490,7 @@ export class OtelVisualizer implements VisualizerPlugin {
     const reader = new PeriodicExportingMetricReader({
       exporter: this.metricExporter,
       exportIntervalMillis: METRIC_EXPORT_INTERVAL_MS,
+      exportTimeoutMillis: this.exportTimeoutMillis,
     });
     this.meterProvider = new MeterProvider({ resource: metricResource, readers: [reader] });
     const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
