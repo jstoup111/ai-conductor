@@ -170,6 +170,29 @@ It records a decision only when that rubric currently has an exhausted mechanica
 fault. Judged, skipped, duplicate, unknown-rubric, allowance-remaining, and stale-review requests
 are refused without changing the decision state.
 
+## `ai-conductor kickback-budget`
+
+```bash
+ai-conductor kickback-budget inspect --feature <slug> [--format json]
+ai-conductor kickback-budget reset --feature <slug> --rationale <text>
+ai-conductor kickback-budget raise --feature <slug> --by <count> --rationale <text>
+```
+
+Inspects, or operator-authorizes recovery of, one feature's cumulative `build_review` budget.
+`inspect` is read-only, runs without a TTY, and renders the canonical budget view — count,
+effective limit, remaining allowance, exhausted flag, latest semantic reason, recorded adjustment
+history, and the separately counted mechanical faults. `--format json` renders the same fields as
+JSON. A legacy entry with no recorded history reports adjustment history as unavailable rather than
+as empty.
+
+`reset` and `raise` change durable state and therefore require an interactive terminal, a machine-scoped
+operator identity, a non-empty rationale of at most 1000 characters, and the feature's exact live
+cumulative-cap `needs-human` halt with matching typed evidence. `reset` returns the consumed count to
+zero and preserves the effective limit; `raise --by <count>` adds one positive safe integer to the
+effective limit and preserves the consumed count. Neither command clears the halt itself: it records an
+attributed adjustment and a one-use resume authorization that the daemon consumes at its next halted-feature
+sweep. Refusals leave budget, history, halt, and sibling features byte-identical and exit 1.
+
 ## `ai-conductor scope-check`
 
 ```bash

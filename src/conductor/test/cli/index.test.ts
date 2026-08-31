@@ -23,7 +23,7 @@ describe('CLI', () => {
     expect(help).toContain('ai-conductor kickback-budget raise');
     expect(help).toContain('--feature <slug>');
     expect(help).toContain('--format <format>');
-    expect(help).toContain('--amount <amount>');
+    expect(help).toContain('--by <count>');
     expect(help).toContain('--rationale <text>');
   });
 

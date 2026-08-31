@@ -30,10 +30,18 @@ describe('detectKickbackBudgetCommand', () => {
       kind: 'reset', feature: 'recovery', rationale: 'The prior review episode is obsolete.',
     });
     expect(detectKickbackBudgetCommand(argv(
-      'raise', '--feature', 'recovery', '--amount', '3', '--rationale', 'Need three more reviewed attempts.',
+      'raise', '--feature', 'recovery', '--by', '3', '--rationale', 'Need three more reviewed attempts.',
     ))).toEqual({
       kind: 'raise', feature: 'recovery', amount: 3, rationale: 'Need three more reviewed attempts.',
     });
+  });
+
+  // adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class D4 carries
+  // forward the approved `raise ... --by` grammar; `--amount` is not that interface.
+  it('rejects the unapproved --amount spelling of the raise allowance', () => {
+    expect(detectKickbackBudgetCommand(argv(
+      'raise', '--feature', 'recovery', '--amount', '3', '--rationale', 'Need three more reviewed attempts.',
+    ))).toBeNull();
   });
 
   it.each([
@@ -42,11 +50,11 @@ describe('detectKickbackBudgetCommand', () => {
     ['missing reset feature', argv('reset', '--rationale', 'reason')],
     ['blank rationale', argv('reset', '--feature', 'recovery', '--rationale', '   ')],
     ['over-limit rationale', argv('reset', '--feature', 'recovery', '--rationale', 'x'.repeat(1001))],
-    ['zero amount', argv('raise', '--feature', 'recovery', '--amount', '0', '--rationale', 'reason')],
-    ['negative amount', argv('raise', '--feature', 'recovery', '--amount', '-1', '--rationale', 'reason')],
-    ['fractional amount', argv('raise', '--feature', 'recovery', '--amount', '1.5', '--rationale', 'reason')],
-    ['non-numeric amount', argv('raise', '--feature', 'recovery', '--amount', 'three', '--rationale', 'reason')],
-    ['unsafe amount', argv('raise', '--feature', 'recovery', '--amount', '9007199254740992', '--rationale', 'reason')],
+    ['zero amount', argv('raise', '--feature', 'recovery', '--by', '0', '--rationale', 'reason')],
+    ['negative amount', argv('raise', '--feature', 'recovery', '--by', '-1', '--rationale', 'reason')],
+    ['fractional amount', argv('raise', '--feature', 'recovery', '--by', '1.5', '--rationale', 'reason')],
+    ['non-numeric amount', argv('raise', '--feature', 'recovery', '--by', 'three', '--rationale', 'reason')],
+    ['unsafe amount', argv('raise', '--feature', 'recovery', '--by', '9007199254740992', '--rationale', 'reason')],
   ])('rejects %s before any command can be dispatched', (_case_, command) => {
     expect(detectKickbackBudgetCommand(command)).toBeNull();
   });

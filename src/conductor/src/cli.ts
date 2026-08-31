@@ -226,8 +226,10 @@ export function detectKickbackBudgetCommand(argv: string[]): KickbackBudgetDispa
   }
 
   if (command === 'raise') {
-    const rawAmount = feature('--amount');
-    const expected = ['--feature', selectedFeature, '--amount', rawAmount, '--rationale', rationale];
+    // adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class D4
+    // carries forward the approved `raise --by «positive-integer»` grammar.
+    const rawAmount = feature('--by');
+    const expected = ['--feature', selectedFeature, '--by', rawAmount, '--rationale', rationale];
     const amount = rawAmount === undefined ? Number.NaN : Number(rawAmount);
     if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) ||
       !selectedFeature || !FEATURE_SLUG_PATTERN.test(selectedFeature) || !isKickbackBudgetRationale(rationale) ||
@@ -747,7 +749,7 @@ export function createProgram(): Command {
     .command('raise')
     .description('Raise one exhausted cumulative budget from an interactive terminal')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
-    .requiredOption('--amount <amount>', 'Positive safe integer allowance increase')
+    .requiredOption('--by <count>', 'Positive safe integer allowance increase')
     .requiredOption('--rationale <text>', 'Non-blank operator rationale (maximum 1000 characters)');
 
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
