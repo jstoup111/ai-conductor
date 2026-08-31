@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-08-30T21:18:57.710Z
+Status: halted
 Slug: build-review-rubrics-need-a-post-join-adjudicator-
-Class: plan-gap
+Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-build-review-rubrics-need-a-post-join-adjudicator-
-Head SHA: 37cd69ff4ddbc425193f0e3a8564b548a6c10174
-Halted at: 2026-08-30T19:36:55.478Z
+Head SHA: edf328e6cc99baf059af3f8ab412e3f0a61f1d69
+Halted at: 2026-08-31T03:16:25.877Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-prd-audit halted: needs human DECIDE — PLAN_GAP on S11.1.
+Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings. Missing: AB-1, AB-2, AB-3, AB-4, AB-5, AB-6.
 ```
