@@ -35,7 +35,7 @@ import {
   appendBuildReviewWorkOrderContext,
   classifyBuildReviewDurableRead,
   markBuildReviewWorkOrderAttempted,
-  readBuildReviewFeatureWorkOrder,
+  readBuildReviewWorkOrder,
 } from './build-review-work-order.js';
 import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
 import { createGithubTrackerClient } from './tracker-client.js';
@@ -4777,10 +4777,11 @@ export class Conductor {
    * The adjudicated route used to survive only in the process-local
    * `pendingRetryHints` map, so an ordinary restart lost the accepted work
    * order entirely. The order and the case store are written as a pair: the
-   * store's recorded feature identity binds the order without needing git or
-   * in-memory state, so a fresh process reconstructs the same prioritized work
-   * from the stable effect id. The attempt is stamped BEFORE provider work, so
-   * a repeat of an already-attempted case cannot take a second free route.
+   * store's recorded feature identity AND its recorded stable action effects
+   * bind the order without needing git or in-memory state, so a fresh process
+   * reconstructs the same prioritized work from the stable effect id — and
+   * only that work. The attempt is stamped BEFORE provider work, so a repeat
+   * of an already-attempted case cannot take a second free route.
    */
   private async durableBuildReviewRetryContext(retryHint: string | undefined): Promise<
     | { readonly kind: 'ready'; readonly context: string }
@@ -4792,17 +4793,27 @@ export class Conductor {
     if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
     if (!featureRead.feature) return { kind: 'absent' };
     const feature = featureRead.feature;
-    const order = await readBuildReviewFeatureWorkOrder(this.projectRoot, feature);
-    if (classifyBuildReviewDurableRead(order) === 'absent') return { kind: 'absent' };
-    if (!order.ok) return { kind: 'invalid', reason: `work order ${order.reason}` };
-    // A settled order stays on disk as evidence, so openness is what makes it
-    // BUILD input. Without this the artifact would keep re-entering every
-    // later BUILD prompt long after its cases were resolved.
+    // The case store is read FIRST because it owns both bindings this recovery
+    // needs. A settled order stays on disk as evidence, so openness is what
+    // makes it BUILD input — without it the artifact would keep re-entering
+    // every later BUILD prompt long after its cases were resolved — and the
+    // stable action effects it recorded are what bind the order's own effect
+    // identity. No open action case means no live route, which is the same
+    // benign absence as no order at all.
     const state = await new RemediationCaseStore(this.projectRoot, feature).read();
     if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
-    const openActionCases = new Set(state.state.cases
-      .filter((record) => record.resolution === 'open' && record.effect.kind === 'action')
-      .map((record) => record.id));
+    const openActionCases = new Map(state.state.cases.flatMap((record) =>
+      record.resolution === 'open' && record.effect.kind === 'action'
+        ? [[record.id, record.effect.id] as const]
+        : [],
+    ));
+    if (openActionCases.size === 0) return { kind: 'absent' };
+    // Effect-bound, not feature-bound: an order carrying a stable effect this
+    // feature's case store never recorded is foreign and must never reach BUILD
+    // prompt construction, even when it names an open case of this feature.
+    const order = await readBuildReviewWorkOrder(this.projectRoot, feature, [...openActionCases.values()]);
+    if (classifyBuildReviewDurableRead(order) === 'absent') return { kind: 'absent' };
+    if (!order.ok) return { kind: 'invalid', reason: `work order ${order.reason}` };
     if (!order.workOrder.cases.some((row) => openActionCases.has(row.caseId))) return { kind: 'absent' };
     const attempt = await markBuildReviewWorkOrderAttempted(this.projectRoot, feature);
     if (!attempt.ok) return { kind: 'invalid', reason: `work order attempt ${attempt.reason}` };

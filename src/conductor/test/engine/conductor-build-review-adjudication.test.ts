@@ -256,6 +256,31 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(await restart.haltMarker()).toContain('BUILD durable remediation recovery halted: work order malformed-json');
   });
 
+  it('halts before BUILD when a durable order names an effect the case store never recorded', async () => {
+    const first = await fixture();
+    const order = await first.readJson('.pipeline/build-review-work-order.json') as { effectId: string };
+    const cases = await first.readJson('.pipeline/remediation-cases.json');
+
+    // The order still names an OPEN action case of THIS feature, so openness
+    // and feature identity both pass; only its stable effect is foreign. Under
+    // a feature-only read that order reached BUILD prompt construction.
+    const restart = await fixture({
+      startFrom: 'build',
+      seedPipeline: async (root) => {
+        await writeFile(
+          join(root, '.pipeline/build-review-work-order.json'),
+          JSON.stringify({ ...order, effectId: 'effect-from-another-route' }),
+          'utf8',
+        );
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(cases), 'utf8');
+      },
+    });
+
+    expect(restart.dispatched).not.toContain('build');
+    expect(restart.retryReasons.get('build')).toBeUndefined();
+    expect(await restart.haltMarker()).toContain('BUILD durable remediation recovery halted: work order foreign-effect');
+  });
+
   it('files a deferred case through the production tracker and intake dependencies', async () => {
     const run = await fixture({ judgement: deferralJudgement() });
 
