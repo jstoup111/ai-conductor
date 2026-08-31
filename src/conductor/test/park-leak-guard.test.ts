@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -221,7 +221,10 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
         '--reporter=dot',
         '--silent',
       ],
-      { cwd: process.cwd(), env: childEnv },
+      // Bounded below the enclosing testTimeout so a wedged nested run is
+      // killed by execa (no orphaned vitest child) rather than merely failing
+      // this test while the child lives on (2026-08-30 wedge).
+      { cwd: process.cwd(), env: childEnv, timeout: 18_000 },
     );
 
     const enclosingMarkers = await readdir(join(enclosingRepository, '.daemon', 'parked'))
@@ -231,6 +234,12 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
       });
 
     expect(enclosingMarkers).toEqual([]);
+  });
+
+  it('runs the nested Vitest fixture with one worker', async () => {
+    const config = await readFile('test/fixtures/park-leak-child.vitest.config.ts', 'utf8');
+
+    expect(config).toMatch(/maxWorkers:\s*1/);
   });
 
   async function loadParkLifecycleSetup(
