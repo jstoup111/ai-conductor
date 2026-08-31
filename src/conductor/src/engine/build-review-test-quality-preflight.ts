@@ -105,7 +105,7 @@ export interface TautologyScopedRunEvidence {
 }
 
 export interface TautologyCompletedPreflight {
-      readonly classification: 'red' | 'stayed-green' | 'approved-exception';
+      readonly classification: 'nonzero-exit' | 'stayed-green' | 'approved-exception';
       readonly exception?: 'empty-test-set' | 'removal-maintenance';
       readonly cacheable: true;
       readonly cacheProvenance: 'hit' | 'miss';
@@ -436,7 +436,7 @@ export async function materializeTautologyPreflight(
     if (!result) {
       try {
         const execution = await deps.runScoped(checkout, counterfactualSelectors, signal);
-        // Exit code zero stays green and any nonzero exit is counterfactual RED.
+        // Exit code zero stays green and any nonzero exit is recorded neutrally.
         // Per #1593, a reverted-tree collection failure is evidence that the
         // changed production matters, not output-derived infrastructure. Only
         // launch, timeout, and signal outcomes remain infrastructure failures.
@@ -452,7 +452,7 @@ export async function materializeTautologyPreflight(
         else if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
         else {
           result = {
-            classification: execution.exitCode === 0 ? 'stayed-green' : 'red',
+            classification: execution.exitCode === 0 ? 'stayed-green' : 'nonzero-exit',
             cacheable: true,
             cacheProvenance: 'miss',
             changedPaths: paths,
