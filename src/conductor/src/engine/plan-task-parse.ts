@@ -18,12 +18,26 @@ export type PlanTaskReferenceResolution =
   | { kind: 'unresolvable'; id: string }
   | { kind: 'malformed'; raw: string };
 
+/**
+ * The cited plan-task id with any trailing annotation removed.
+ *
+ * Every caller that builds a set for `resolvePlanTaskReference` to look up in
+ * MUST normalize through this, because the resolver normalizes before it looks
+ * up. A caller that built its set from the raw cell — as the prd_audit gate
+ * scorer's no-active-plan fallback did — holds `rem-x (landed)` while the
+ * resolver asks for `rem-x`, so an annotated citation can never resolve
+ * against its own row.
+ */
+export function normalizePlanTaskId(raw: string): string {
+  return raw.trim().replace(/\s*\([^()]*\)$/, '');
+}
+
 /** Resolves a cited plan-task id against the active plan's declared task ids. */
 export function resolvePlanTaskReference(
   raw: string,
   planTaskIds: ReadonlySet<string>,
 ): PlanTaskReferenceResolution {
-  const id = raw.trim().replace(/\s*\([^()]*\)$/, '');
+  const id = normalizePlanTaskId(raw);
   if (!new RegExp(`^${TASK_ID_PATTERN}$`).test(id)) return { kind: 'malformed', raw };
 
   return planTaskIds.has(id)

@@ -40,7 +40,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
-import { parsePlanTaskPaths, resolvePlanTaskReference } from './plan-task-parse.js';
+import { normalizePlanTaskId, parsePlanTaskPaths, resolvePlanTaskReference } from './plan-task-parse.js';
 import {
   deriveEffectiveBuildReviewVerdict,
   parseBuildReviewAggregate,
@@ -4460,7 +4460,7 @@ export function parsePrdAuditReport(
       ? undefined
       : resolvePlanTaskReference(
         rawPlanTask,
-        activePlanTaskIds ?? new Set([rawPlanTask.trim()]),
+        activePlanTaskIds ?? new Set([normalizePlanTaskId(rawPlanTask)]),
       );
     if (planTaskReference?.kind === 'malformed') {
       rejectedPrdAuditRow(rejectedRows, line, criterion,
