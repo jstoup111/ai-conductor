@@ -712,24 +712,31 @@ unavailable provider that was never invoked does not. A successful attempt suppr
 `step_completed` compatibility record, while an unmatched completion remains a legacy fallback. This
 keeps OTel dispatch counts, token totals, and costs aligned with `## Cost` in the shipped record.
 
-`conductor.step.cost` is a USD counter emitted only when that authoritative dispatch carries a finite
-`costUsd`. Its attributes are `step`, `model` when known, and `source` when known (`provider` or
-`rate-card`); an absent, `NaN`, or infinite cost produces no cost point. Every dispatch still emits
-`conductor.step.dispatches` with `step` and a `metering` attribute of `fully-metered`,
-`cost-unmetered`, or `unmetered`, so the absence of a cost series is not ambiguous.
+Every authoritative dispatch still emits `conductor.step.dispatches` with `step` and a `metering`
+attribute of `fully-metered`, `cost-unmetered`, or `unmetered`. A terminal step also emits a
+non-persisted `feature_cost_snapshot` from the feature's durable event ledger. The snapshot records
+the cumulative `conductor.feature.cost` USD gauge, plus `conductor.feature.step.cost` by `step`,
+`model` when known, and `source` when known (`provider` or `rate-card`), and
+`conductor.feature.step.tokens` by `step`, `model` when known, and token `kind` (`input`, `output`,
+`cacheRead`, or `cacheCreation`). A missing, malformed, or incomplete ledger emits no snapshot, so
+dashboards do not treat a partial total as authoritative.
 
-At feature closeout, `feature_usage_total` also exports `conductor.feature.cost`, a USD gauge carrying
-the exact current shipped-record rollup total. Its `cost_complete` attribute is false when any dispatch
-lacks token evidence or finite cost evidence. Dashboards should use this gauge for cumulative feature
-cost instead of reconstructing a lifetime total from the process-local `conductor.step.cost` counter,
-which can reset when the daemon or collector restarts. Prometheus commonly normalizes this instrument
-to `conductor_feature_cost_usd`; for example:
+`feature_usage_total` at feature closeout also records `conductor.feature.cost`; it agrees with the
+last successful snapshot for the same ledger. Its `cost_complete` attribute is false when any dispatch
+lacks token evidence or finite cost evidence. These are cumulative gauges, not counters: use a
+last-value query (or `max_over_time` where a range query is required), never `increase()` or `rate()`.
+Prometheus commonly normalizes the instruments to `conductor_feature_cost_usd`,
+`conductor_feature_step_cost_usd`, and `conductor_feature_step_tokens`. For example:
 
 ```promql
 max by (feature) (
   last_over_time(conductor_feature_cost_usd{project=~"$project"}[$__range])
 )
 ```
+
+To measure spend over an interval, subtract each cost series' last value at the interval start from
+its last value at the interval end, then sum the differences. Do not sum repeated snapshot samples:
+each sample already represents the whole feature total at that moment.
 
 | Key | Type | Required | Allowed | Default |
 | --- | --- | --- | --- | --- |
