@@ -22,7 +22,7 @@ finish line and shipped record will report, however many daemon lifetimes the fe
 - Given the current export identity contract, when any cost point is exported, then it carries `project` and `feature` attributes and no run identifier on any label
 
 #### Negative Paths
-- Given a worktree with no `.pipeline/events.jsonl`, when a step closes, then no `conductor.feature.cost` data point is exported (no zero is recorded) and the step's own verdict and the run's progress are unchanged
+- Given a worktree whose `.pipeline/events.jsonl` cannot be read at step close, when a step closes, then no `conductor.feature.cost` data point is exported (no zero is recorded) and the step's own verdict and the run's progress are unchanged
 - Given an event ledger with one malformed line, when a step closes, then no `conductor.feature.cost` data point is exported for that close and the step completes normally with no thrown error surfaced to the run
 - Given a feature whose ledger holds one fully-metered dispatch and one dispatch that reported no usage at all, when a step closes, then the exported value equals the metered dispatch's cost and carries `cost_complete=false`
 - Given a feature whose worktree was recreated from its branch so the ledger holds only dispatches after recreation, when a step closes, then the exported value equals that shorter ledger's total (the same figure the finish line and shipped record will report), not a higher earlier value
@@ -31,7 +31,7 @@ finish line and shipped record will report, however many daemon lifetimes the fe
 ### Done When
 - [ ] A test proves the exported `conductor.feature.cost` value after each step close equals the ledger rollup total and is non-decreasing across closes
 - [ ] A test proves a second visualizer/run started over the same worktree ledger exports the cumulative total including the first run's dispatches
-- [ ] A test proves a missing or malformed ledger yields no cost data point and no run failure
+- [ ] A test proves an unreadable or malformed ledger yields no cost data point and no run failure
 - [ ] A test proves the finish-time total and the step-close total are the same gauge value for the same ledger
 
 ## Story 2: Per-step, per-model, per-source cost is exact and provider-agnostic
