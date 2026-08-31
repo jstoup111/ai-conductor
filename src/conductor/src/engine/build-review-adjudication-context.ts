@@ -166,6 +166,25 @@ function freezePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudica
  * current unresolved source and every prior case, or a typed stop—never a
  * silently truncated provider prompt.
  */
+/**
+ * The adjudication source identity, in one place.
+ *
+ * The judge is handed these ids and returns them verbatim, and the coordinator
+ * validates its judgement against the set it builds itself. When the two sides
+ * derived that identity independently they drifted — the context stamped
+ * `<rubric>:<findingId>` while the coordinator passed the bare `findingId`, so
+ * every contract-following judgement failed closed as `unknown-source` and no
+ * lap could ever settle. Both sides call this now.
+ *
+ * The rubric prefix is load-bearing for post-join adjudication: two rubrics may
+ * legitimately raise the same `findingId`, and a bare id cannot tell them apart.
+ */
+export function buildReviewAdjudicationSourceId(
+  source: Pick<BuildReviewRawSourceProjection, 'rubric' | 'findingId'>,
+): string {
+  return `${source.rubric}:${source.findingId}`;
+}
+
 export function assembleBuildReviewAdjudicationContext(
   input: AssembleBuildReviewAdjudicationContextInput,
 ): AssembleBuildReviewAdjudicationContextResult {
@@ -179,7 +198,7 @@ export function assembleBuildReviewAdjudicationContext(
   for (const source of unresolvedSources) {
     const stop = validateCurrent(source);
     if (stop) return { ok: false, stop };
-    currentSources.push(Object.freeze({ ...source, sourceId: `${source.rubric}:${source.findingId}` }));
+    currentSources.push(Object.freeze({ ...source, sourceId: buildReviewAdjudicationSourceId(source) }));
   }
   currentSources.sort((left, right) => left.sourceId.localeCompare(right.sourceId));
 

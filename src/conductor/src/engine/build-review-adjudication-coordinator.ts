@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { assembleBuildReviewAdjudicationContext } from './build-review-adjudication-context.js';
+import { assembleBuildReviewAdjudicationContext, buildReviewAdjudicationSourceId } from './build-review-adjudication-context.js';
 import { reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect } from './remediation-case-effects.js';
@@ -92,7 +92,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   const postJudgeOperatorRoute = routeIfAllOperatorResolved(resolved);
   if (postJudgeOperatorRoute) return postJudgeOperatorRoute;
   if (sources.some((source) => resolved.has(source.findingId))) return fail('operator disposition changed during adjudication');
-  const graph = validateRemediationCaseGraph(currentSources.map((source) => source.findingId), judgement);
+  const graph = validateRemediationCaseGraph(currentSources.map(buildReviewAdjudicationSourceId), judgement);
   if (!graph.ok) return fail(`invalid remediation judgement ${graph.reason}`);
   const reconciled = await reconcileRemediationCases(store, {
     graph: graph.graph, recordedAt: new Date().toISOString(), generateId: input.generateId ?? randomUUID,
@@ -207,7 +207,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   }
   const settled = await store.read();
   if (!settled.ok) return fail(`case store ${settled.reason}`);
-  const transition = reduceBuildReviewAdjudication({ currentSourceIds: currentSources.map((source) => source.findingId), cases: settled.state.cases, mechanical: input.mechanical });
+  const transition = reduceBuildReviewAdjudication({ currentSourceIds: currentSources.map(buildReviewAdjudicationSourceId), cases: settled.state.cases, mechanical: input.mechanical });
   await input.emit?.({
     type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
     caseIds: settled.state.cases.map((record) => record.id),
