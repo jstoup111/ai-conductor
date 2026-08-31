@@ -50,6 +50,58 @@ const sourceId = buildReviewAdjudicationSourceId(rawSource);
 const findingId = rawSource.findingId;
 const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
 
+// A mixed lap: one finding the operator has already accepted (or accepts
+// mid-lap) alongside a live sibling. Late authority must suppress only its own
+// source, never fail the whole lap closed.
+const mixedAggregate = joinBuildReviewRubricOutcomes({
+  lapId: 'lap-2' as never,
+  snapshotDigest: 'snapshot-2',
+  results: {
+    testQuality: {
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-2' as never, snapshotDigest: 'snapshot-2', contractVersion: 'v3', verdict: 'FAIL',
+      findings: [
+        {
+          concernKind: 'test-insensitive', summary: 'The first changed test is insensitive.', evidenceLocations: ['test/first.test.ts:1'],
+          anchor: { rubric: 'testQuality', locus: { path: 'test/first.test.ts', contentHash: 'sha256:first', display: 'first test' } },
+        },
+        {
+          concernKind: 'test-insensitive', summary: 'The second changed test is insensitive.', evidenceLocations: ['test/second.test.ts:1'],
+          anchor: { rubric: 'testQuality', locus: { path: 'test/second.test.ts', contentHash: 'sha256:second', display: 'second test' } },
+        },
+      ],
+    },
+  },
+});
+const mixedSources = projectBuildReviewAggregateSources(mixedAggregate)!;
+const acceptedSource = mixedSources[0]!;
+const liveSource = mixedSources[1]!;
+
+/** One case per source, so suppression of one leaves the other intact. */
+function mixedJudgement(): RemediationCaseJudgement {
+  return {
+    mode: 'case-v1', domain: 'build_review',
+    sourceOutcomes: [
+      { sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'acted', caseRef: 'case-accepted' },
+      { sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted', caseRef: 'case-live' },
+    ],
+    cases: [
+      {
+        caseRef: 'case-accepted', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The first test needs a focused assertion.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the first test' }] },
+      },
+      {
+        caseRef: 'case-live', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The second test needs a focused assertion.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the second test' }] },
+      },
+    ],
+  };
+}
+
+function sequentialIds(prefix: string): () => string {
+  let next = 0;
+  return () => `${prefix}-${(next += 1)}`;
+}
+
 function actionJudgement(): RemediationCaseJudgement {
   return {
     mode: 'case-v1', domain: 'build_review',
@@ -203,5 +255,67 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'regressed',
     }));
+  });
+  it('adjudicates the unresolved remainder when the lap opens with a pre-existing acceptance', async () => {
+    const root = await projectRoot();
+    const judge = vi.fn(async () => {
+      // Only the live sibling reaches the judge; the accepted one is excluded
+      // before dispatch and must not fail the lap closed afterwards. A
+      // judgement naming only the live source therefore validates cleanly.
+      return {
+        mode: 'case-v1' as const, domain: 'build_review' as const,
+        sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted' as const, caseRef: 'case-live' }],
+        cases: [{
+          caseRef: 'case-live', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+          rationale: 'The second test needs a focused assertion.',
+          effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the second test' }] },
+        }],
+      };
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: mixedAggregate,
+      operatorResolvedFindingIds: new Set([acceptedSource.findingId]),
+      generateId: sequentialIds('live'),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(judge).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses only the source accepted during the lap and routes the live remainder', async () => {
+    const root = await projectRoot();
+    const resolutions = [
+      new Set<string>(), new Set<string>(),
+      new Set([acceptedSource.findingId]), new Set([acceptedSource.findingId]),
+    ];
+    const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift() ?? new Set([acceptedSource.findingId]));
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds, generateId: sequentialIds('mixed'),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    // The accepted source's case never reserved or applied an effect.
+    const store = new RemediationCaseStore(root, feature);
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases.map((record) => record.sources.map((source) => source.sourceId))).toEqual([
+      [buildReviewAdjudicationSourceId(liveSource)],
+    ]);
+  });
+
+  it('re-reads operator authority adjacent to the final exit and drops the obsolete route', async () => {
+    const root = await projectRoot();
+    // Unresolved through reservation and effects; accepted only at the exit.
+    const resolutions = [new Set<string>(), new Set<string>(), new Set<string>(), new Set([findingId])];
+    const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift() ?? new Set([findingId]));
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), resolveOperatorResolvedFindingIds,
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(4);
   });
 });
