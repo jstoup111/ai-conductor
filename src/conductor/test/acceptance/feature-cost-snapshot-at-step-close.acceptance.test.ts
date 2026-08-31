@@ -309,7 +309,9 @@ describe('acceptance: ledger-derived feature cost snapshot at the real step-clos
   });
 
   it('suppresses a missing-ledger projection without changing the clean step-verdict sequence', async () => {
-    const clean = await runFinish({ persist: false });
+    const clean = await runFinish({
+      usage: { input: 10, output: 1, costUsd: 0.25, costSource: 'provider' },
+    });
     await seedFinishBoundary();
     await rm(join(dir, '.pipeline/events.jsonl'), { force: true });
 

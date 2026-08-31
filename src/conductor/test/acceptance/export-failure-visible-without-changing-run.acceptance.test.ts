@@ -21,7 +21,6 @@ import type { ConductorEvent } from '../../src/types/events.js';
 
 const fixture = vi.hoisted(() => ({
   worktreePath: '',
-  outcomes: [] as Array<{ slug: string; status: string; reason: string }>,
   exportCalls: 0,
 }));
 const buildExporters = vi.hoisted(() => vi.fn());
@@ -46,6 +45,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
       item,
     );
     const events = scope.events as { emit: (event: ConductorEvent) => Promise<void> };
+    await events.emit({ type: 'step_started', step: 'build', index: 0 });
     for (let attempt = 0; attempt < 3; attempt += 1) {
       await events.emit({
         type: 'provider_attempt',
@@ -57,13 +57,12 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
       });
       await vi.advanceTimersByTimeAsync(60_000);
     }
+    await events.emit({ type: 'step_completed', step: 'build', status: 'done' });
     // Periodic exports use fake time, while meter shutdown awaits the SDK's
     // real completion path.
     vi.useRealTimers();
     await (scope.stop as () => Promise<void>)();
-    const outcome = { slug: item.slug, status: 'halted', reason: 'test dispatch complete' };
-    fixture.outcomes.push(outcome);
-    return outcome;
+    return { slug: item.slug, status: 'halted', reason: 'test dispatch complete' };
   },
 }));
 
@@ -84,7 +83,6 @@ let dirs: string[] = [];
 
 afterEach(async () => {
   buildExporters.mockReset();
-  fixture.outcomes = [];
   fixture.exportCalls = 0;
   vi.useRealTimers();
   await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
@@ -94,7 +92,7 @@ afterEach(async () => {
 async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
   events: ConductorEvent[];
   log: string;
-  outcome: { slug: string; status: string; reason: string };
+  outcome: { slug: string; status: string; reason?: string };
 }> {
   const repo = await mkdtemp(join(tmpdir(), 'daemon-export-failure-'));
   dirs.push(repo);
@@ -110,7 +108,7 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
     metricExporter,
   });
 
-  await runDaemonMode({
+  const daemonResult = await runDaemonMode({
     projectRoot: repo,
     concurrency: 1,
     maxItems: 1,
@@ -123,7 +121,9 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
   const rawEvents = await readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8');
   const events = rawEvents.trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent);
   const log = await readFile(join(repo, '.daemon/daemon.log'), 'utf8');
-  return { events, log, outcome: fixture.outcomes.at(-1)! };
+  const outcome = daemonResult?.processed.at(-1);
+  if (!outcome) throw new Error('daemon completed without a feature outcome');
+  return { events, log, outcome };
 }
 
 function terminalVerdicts(events: ConductorEvent[]): Array<Record<string, unknown>> {
