@@ -27,6 +27,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review no longer stamps its aggregate with a stale lap identity when the test-suite evidence is reused. ([implementation PR #2110](https://github.com/jstoup111/ai-conductor/pull/2110)).
 - A remediation finding the planner dispositions as a human decision is no longer reported as a missing finding. ([implementation PR #2112](https://github.com/jstoup111/ai-conductor/pull/2112)).
 - Build-review cache entries now miss when the reviewer skill text or the engine build changes. ([implementation PR #2115](https://github.com/jstoup111/ai-conductor/pull/2115)).
+- A SHIP-tail verdict gate resumed as its group's last member no longer discards the verdict it just produced and retry until its budget is spent. ([implementation PR #2117](https://github.com/jstoup111/ai-conductor/pull/2117)).
 
 ## [1.0.0] - 2026-08-31
 
