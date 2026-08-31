@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-30
 **Inventory:** all 344 story files, all 239 prior conflict reports, and the repo-wide ADR corpus (`conflict_check.adr_corpus: repo_wide`): 300 ADR files; a title and body sweep for telemetry, metric, cost, usage, event-ledger, visualizer, and renderer subjects narrowed semantic comparison to 22 ADRs (listed below); the remaining 278 were narrowed out as subject-disjoint (gates, planning, review rubrics, worktree/branch mechanics, provider auth, memory, install/migration). Supersession parsing: 9 ADRs carry a superseded status; none of the examined set is fully superseded, so none was excluded on that ground.
-**Result:** **PASS — zero blocking conflicts remain.** One blocking contradiction was found and resolved by operator decision (deletion of the superseded historical story). No degrading conflict is accepted.
+**Result:** **PASS — zero blocking conflicts remain.** Three blocking contradictions were found (one on the first pass, two on the 2026-08-30 tokens scope extension) and resolved by operator decision (deletion of the superseded historical assertions). No degrading conflict is accepted.
 
 ## Conflict: A shipped story requires the per-process cost counter this spec removes
 
@@ -24,6 +24,27 @@
 
 **Resolution:** Option 1, selected by the operator ("just remove it"). The historical Story 1 is deleted from `exported-telemetry-carries-no-cost-signal-so-spend.md` with no amendment record (story artifacts are replaced in place). Because the engineer land gate rejects a foreign-stem stories file in the spec diff, the deletion ships as a companion pull request based on `main` alongside the spec PR (precedent: PR #1928 beside spec PR #1927), not on the spec branch.
 
+## Conflict: Two shipped stories require the per-process token counter this spec removes (scope extension)
+
+**Stories involved:** "Metrics for duration, retries, and tokens" (historical, id-less heading, ADR-014 phase 1) and "OTel path stays fed for the deferred KPI work" (historical Story 6, #906 lineage) vs "Per-step, per-model token counts are exact and cumulative" (Story 5)
+**Files:** `.docs/stories/otel-observability.md` and `.docs/stories/per-feature-token-accounting.md` vs `.docs/stories/exported-step-cost-under-records-spend-20x-so-ever.md`
+**Type:** contradiction
+**Severity:** blocking
+**Confidence:** 99% — both historical criteria require a `conductor.step.tokens` data point per usage-bearing step; the new story requires that no per-process token counter be exported.
+
+**Historical opposing sentence (verbatim, otel-observability):** "Given a `step_completed` carries `tokenUsage`, when processed, then `conductor.step.tokens` (counter, attributes `step` + `kind` ∈ {input, output, cacheRead, cacheCreation}) records each present token kind."
+**Historical opposing sentence (verbatim, per-feature-token-accounting Story 6):** "**Then** `conductor.step.tokens` is recorded with the token counts (and model attribute available), with no new wiring required by the future OTel-first work."
+**New opposing sentence (verbatim):** "Given any dispatch close, when the visualizer's metric instruments are enumerated, then the only token-carrying instrument is the feature token gauge; no per-process token counter is exported"
+
+**Description:** the token counter has the identical splice defect as the cost counter (per-process cumulative on the shared feature identity). Story 6's own purpose — "so Approach C is a later consumer swap" — is what this spec delivers, so its assertion is fulfilled and retired rather than contradicted in spirit; the phase-1 tokens bullet is superseded by the cumulative gauge.
+
+**Resolution Options:**
+1. Delete the tokens bullet (and its token-only negative paths) from the phase-1 story and delete Story 6 of per-feature-token-accounting; keep every other assertion in both files.
+2. Keep the tokens counter alongside the gauge — leaves a wrong-by-construction token metric.
+3. Rewrite both historical assertions to name the gauge — same outcome as 1 with more churn in shipped artifacts.
+
+**Resolution:** Option 1, selected by the operator ("fix tokens now if it's a repeat"). Both deletions ship in the same companion pull request as the cost-story deletion (foreign-stem story edits cannot ride the spec branch).
+
 ## Explicitly Compatible Overlaps
 
 Each pair below was tested in both directions ("if A is fully satisfied, does B still hold?"); both answers were yes.
@@ -31,7 +52,8 @@ Each pair below was tested in both directions ("if A is fully satisfied, does B 
 - `daemon-dispatched-builds-emit-no-otel-telemetry-th` Story 3 (stop force-flushes traces and metrics before teardown; repeated stop returns the same promise) vs new Story 3 — the new stop flushes first and then shuts the meter provider down; the idempotent-promise clause is preserved verbatim as a negative path.
 - `daemon-dispatched-builds-emit-no-otel-telemetry-th` Story 4 (export failures surface as bounded `renderer_error` warnings on the bus; build outcome unaffected) vs new Story 4 — the new story adds rendering of that same bounded event; boundedness and outcome-neutrality are restated as negative paths.
 - `every-project-reports-the-same-otel-identity-so-me` Stories 1–2 (data-point `project`/`feature` attributes; feature-stable metric Resource; run id only on the trace side) vs new Stories 1–2 — every new point carries `project`/`feature` and no run identifier; the Resource is untouched.
-- `exported-telemetry-carries-no-cost-signal-so-spend` Story 2 (`conductor.step.dispatches` with `metering` from `classifyMetering`) vs new Story 2 — the dispatches counter is out of scope and unchanged.
+- `exported-telemetry-carries-no-cost-signal-so-spend` Story 2 (`conductor.step.dispatches` with `metering` from `classifyMetering`) vs new Stories 2 and 5 — the dispatches counter is out of scope and unchanged.
+- `otel-observability` "Metrics for duration, retries, and tokens" duration and retry criteria vs new Story 5 — the duration histogram and retry counter are untouched; only the tokens bullet is removed.
 - `build-post-task-tail-telemetry` Stories 2–3 (closeout events are non-persisted bus events reaching existing consumers) vs the new `feature_cost_snapshot` — same sink shape (`persist: false, otel: true`); no shared field or file.
 - `fix-otel-step-duration-histogram-bucket-saturation` — duration histogram untouched.
 

@@ -109,3 +109,24 @@ could not be delivered is known to be missing rather than assumed present.
 - [ ] A test proves a metric export failure produces exactly one daemon-log line naming `otel` and the message
 - [ ] A test proves the run outcome and step verdicts are unchanged when export fails
 - [ ] The event-sink registry declares the renderer error as rendered, and the registry's exhaustiveness test passes
+
+## Story 5: Per-step, per-model token counts are exact and cumulative
+
+As an operator charting token burn, I want cumulative token counts per step, model, and kind that
+equal the feature's ledger so that token dashboards survive restarts and agree with the shipped
+record exactly like cost does.
+
+### Acceptance Criteria
+
+#### Happy Path
+- Given a feature whose ledger holds `build` dispatches on model `m1` with input tokens 100 and 50 and output tokens 10 and 5, when the latest step closes, then `conductor.feature.step.tokens` carries one point per kind for {step=build, model=m1}: input 150 and output 15, each also carrying `project` and `feature`
+- Given a dispatch whose usage carried tokens but no cost, when the step closes, then its tokens are included in the token buckets even though it contributes no cost bucket
+- Given a feature with dispatches across two engine process lifetimes, when the second run's first step closes, then every token bucket includes the first run's dispatches for that bucket
+- Given any dispatch close, when the visualizer's metric instruments are enumerated, then the only token-carrying instrument is the feature token gauge; no per-process token counter is exported
+- Given a bucket that received no new dispatches since the previous step close, when the next step closes, then its token points are exported again unchanged (cumulative, not per-interval)
+
+#### Negative Paths
+- Given a dispatch that reported no usage at all, when the step closes, then no token point is created for it and the whole-feature point carries `cost_complete=false`
+- Given a dispatch whose usage carries only `input` and `output` (cache fields absent), when the step closes, then only the `input` and `output` kinds are exported for its bucket and no zero-filled cache points appear
+- Given a dispatch whose model is unknown, when the step closes, then its tokens are counted in a bucket keyed by step with the `model` attribute omitted
+- Given an event ledger with one malformed line, when a step closes, then no token point is exported for that close, the same as for cost

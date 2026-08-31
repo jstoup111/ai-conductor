@@ -29,6 +29,17 @@ trace linkage (#2011), delta temporality, per-provider cost measurement, the tok
 4. `renderer_error` is `render: false` (`event-sinks.ts`), so an OTLP export failure in the daemon path
    is persisted to `events.jsonl` but never reaches `daemon.log`. **Verified.**
 
+> **Amended 2026-08-30 by #2095 (operator scope extension):** `conductor.step.tokens` shares the
+> splice defect exactly (same per-process cumulative counter on the same shared identity), so the
+> operator extended the scope: the snapshot also carries `tokensByDimension` (step × model → per-kind
+> sums, populated for every usage-bearing dispatch including cost-unmetered ones), the recorder
+> exports `conductor.feature.step.tokens {step, model, kind}` as a cumulative gauge, and the
+> `conductor.step.tokens` counter is removed. Two more shipped stories pinned that counter
+> (`otel-observability` "Metrics for duration, retries, and tokens"; `per-feature-token-accounting`
+> Story 6) and are deleted via the companion PR. `conductor.step.dispatches` stays out of scope: it
+> counts occurrences, not accumulations, and its shared-identity splice is a separate, smaller
+> defect. Story 5 and Task 11 carry the criteria and tests.
+
 ## Feasibility
 
 - **Stack compatibility** — no new dependencies. `@opentelemetry/api` `Gauge` (`meter.createGauge`)
@@ -108,7 +119,8 @@ dispatches, which contribute no cost bucket (they still count toward `cost_compl
 | `CostRollup.byDimension` (per step × model × source cumulative cost) | computed inside the existing `computeCostRollup(worktree)` in `cost-rollup.ts`; consumed by the new snapshot emission and by nothing else (shipped-record rendering unchanged) |
 | `feature_cost_snapshot` ConductorEvent | emitted by Conductor's step-close path in `conductor.ts` after each `step_completed` / `step_failed` (same code region as the finish-time `feature_usage_total` emission); routed by `EVENT_SINKS` to the OTel visualizer only |
 | `MetricsRecorder.onFeatureCostSnapshot` + gauge `conductor.feature.step.cost` | `OtelVisualizer.handleEvent` `case 'feature_cost_snapshot'`, alongside the existing `feature_usage_total` case; `conductor.feature.cost` recorded from the same handler |
-| Removal of `conductor.step.cost` | `MetricsRecorder.recordCost` deleted; `onDispatch` keeps tokens + dispatches |
+| Removal of `conductor.step.cost` and `conductor.step.tokens` | `MetricsRecorder.recordCost` and `recordTokens` deleted; `onDispatch` keeps dispatches only |
+| `conductor.feature.step.tokens` gauge | recorded by `MetricsRecorder.onFeatureCostSnapshot` from `tokensByDimension` on every snapshot |
 | `meterProvider.shutdown()` in `OtelVisualizer.stop()` | already invoked from `daemon-cli.ts` `beginFeatureRun.stop` (in `daemon-runner.ts`'s `finally`, every termination path) and from `index.ts` interactive shutdown; SIGINT/SIGTERM handlers unchanged |
 | `renderer_error` rendered | `EVENT_SINKS.renderer_error.render = true`; `daemon-cli.ts` `renderDaemonEvent` gains a case; `TerminalRenderer` already handles it |
 | Documentation | `docs/reference/configuration.md` (otel metrics section: replace the `conductor.step.cost` paragraph, document the new gauge, the cost-over-time recipe, `cost_complete`), `docs/reference/artifacts.md` (Cost block ↔ gauge parity paragraph) |

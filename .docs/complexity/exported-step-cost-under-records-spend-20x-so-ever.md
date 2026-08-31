@@ -6,11 +6,11 @@ Tier: M
 
 | Signal | Assessment |
 |---|---|
-| New models / entities | One new per-dimension cost gauge instrument; a step × model × source split added to `CostRollup` |
+| New models / entities | Two new per-dimension gauge instruments (cost, tokens); step × model × source cost buckets and step × model token buckets added to `CostRollup` |
 | External integrations | OTLP export path (existing); dashboards in the out-of-repo LGTM stack must be re-pointed |
 | Auth / permission surface | None |
 | State machines | Visualizer stop lifecycle changes (forceFlush → flush + meter shutdown); no new states |
-| Story count | ~6 (exact totals across lifetimes, per-dimension exactness, spend-over-time, reader shutdown, export-failure surfacing, unavailable-not-small) |
+| Story count | 5 (whole-feature cost, per-dimension cost, per-dimension tokens, reader shutdown, export-failure surfacing (exact totals across lifetimes, per-dimension exactness, spend-over-time, reader shutdown, export-failure surfacing, unavailable-not-small) |
 | Files touched | `engine/otel/metrics.ts`, `engine/otel/otel-visualizer.ts`, `engine/cost-rollup.ts`, `engine/conductor.ts` (settle hook), `engine/event-sinks.ts` / daemon render, tests, `docs/` telemetry pages, dashboard JSON |
 | New runtime code | Rollup-per-settle emission on the event spine; gauge recording; shutdown seam |
 

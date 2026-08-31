@@ -15,7 +15,7 @@ graph TD
     subgraph Engine["Conductor run (one per dispatch of a feature; N per feature lifetime)"]
         PA["provider_attempt / step_completed<br/>existing — exact per-dispatch cost<br/>(claude, codex, pi: all through TokenUsage)"]
         SETTLE["Step terminal in Conductor (emitExecutionEvent)<br/>NEW hook: after each step_completed / step_failed delivery<br/>suppressed when the ledger had read errors"]
-        ROLLUP["computeCostRollup(worktree)<br/>cost-rollup.ts — reads the spine<br/>NEW: byDimension buckets<br/>step × model × source → cumulative costUsd,<br/>plus existing whole-feature totals + unmetered counts"]
+        ROLLUP["computeCostRollup(worktree)<br/>cost-rollup.ts — reads the spine<br/>NEW: byDimension buckets<br/>step × model × source → cumulative costUsd<br/>NEW: tokensByDimension step × model → per-kind token sums,<br/>plus existing whole-feature totals + unmetered counts"]
         SNAP["NEW spine event: feature_cost_snapshot<br/>EVENT_SINKS: render false · persist false · otel true<br/>(same shape as pipeline_closeout)"]
         FUT["feature_usage_total<br/>existing — finish only, rendered as the log finish line"]
     end
@@ -23,13 +23,13 @@ graph TD
     SPINE[(".pipeline/events.jsonl<br/>EventPersister — durable across<br/>restart / OOM / respawn / re-kick")]
 
     subgraph Otel["OtelVisualizer (per run; MeterProvider + PeriodicExportingMetricReader, 60s)"]
-        REC["MetricsRecorder<br/>NEW gauge conductor.feature.step.cost {step, model, source}<br/>existing gauge conductor.feature.cost {cost_complete}<br/>both recorded from every snapshot, not only at finish<br/>REMOVED: conductor.step.cost counter"]
+        REC["MetricsRecorder<br/>NEW gauge conductor.feature.step.cost {step, model, source}<br/>NEW gauge conductor.feature.step.tokens {step, model, kind}<br/>existing gauge conductor.feature.cost {cost_complete}<br/>all recorded from every snapshot, not only at finish<br/>REMOVED: conductor.step.cost and conductor.step.tokens counters"]
         STOP["stop()<br/>existing: forceClose spans, forceFlush both providers<br/>NEW: meterProvider.shutdown() — the 60s timer dies with the run"]
         WARN["onWarning → renderer_error<br/>NEW: rendered into daemon.log / terminal<br/>(export failures are visible, bounded by warnOnce)"]
     end
 
     subgraph Backend["Any OTLP backend (collector → Prometheus/Mimir/other)"]
-        SERIES["conductor_feature_step_cost_usd / conductor_feature_cost_usd<br/>one monotonic series per feature × dimension<br/>identity = project/feature labels (ADR-014), never the process"]
+        SERIES["conductor_feature_step_cost_usd / conductor_feature_step_tokens / conductor_feature_cost_usd<br/>one monotonic series per feature × dimension<br/>identity = project/feature labels (ADR-014), never the process"]
         DASH["Dashboards (out of repo)<br/>last value / max_over_time — no increase(), no rate(),<br/>no reset semantics required"]
     end
 
@@ -89,14 +89,14 @@ sequenceDiagram
 - Cumulative gauges need no backend reset handling: any OTLP backend stores the last value as-is.
   This is what makes the fix backend-agnostic (operator requirement) — delta temporality was
   rejected because its correctness would live in collector/Prometheus configuration.
-- `conductor.step.cost` (the resettable per-process counter behind
-  `conductor_step_cost_usd_total`) is removed; `conductor.step.tokens` and
-  `conductor.step.dispatches` keep their current semantics and are out of scope (the tokens
-  counter shares the splice defect — follow-up intake).
+- `conductor.step.cost` and `conductor.step.tokens` (the resettable per-process counters behind
+  `conductor_step_cost_usd_total` / `conductor_step_tokens_total`) are removed — both share the
+  splice defect; `conductor.step.dispatches` keeps its current semantics and is out of scope.
 
 ## Change Log
 
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-08-30 | Initial generation | DECIDE for #2095 / #2086 |
+| 2026-08-30 | Operator extension: token counts ride the same snapshot (`tokensByDimension` → `conductor.feature.step.tokens`); `conductor.step.tokens` counter removed | #2095 scope extension |
 | 2026-08-30 | Plan update: emission hook pinned to the step-terminal path of `emitExecutionEvent`; snapshot suppressed on ledger read errors (`readErrors`) | /plan for #2095 |
