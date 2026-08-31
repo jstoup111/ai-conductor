@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-08-31T11:02:43.246Z
 Slug: remediation-task-ids-are-non-numeric-by-design-but
 Class: plan-gap
 Halting step: prd_audit
