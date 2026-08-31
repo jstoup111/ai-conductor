@@ -86,6 +86,8 @@ land validator engages only when the spec's `.docs/complexity/` tier ≠ S. The
 same diff that registers the step. The exemption is checked before the fail-closed
 missing-artifact rule so it can never be misread as a gap.
 
+> **Amended 2026-08-31 by #2088:** the tier-S exemption is narrowed, not lifted. At S, `runCoherenceGate` engages exactly the `criterion` layer over the plan's own `## Coverage Check` criterion-level rows (criterion | task id(s) | `Done when` quote | diff-locality disposition) and nothing else — no coherence artifact, no other layer. The `/coherence-check` step stays S-skipped and discovery keeps accepting merged S plans without the table. Separately, the LLM judgement this ADR keeps off `land` (Option B) now runs as the config-gated, default-off BUILD-phase step `coverage_binding` before `build`; `land` itself gains no model dependency. See `adr-2026-08-31-coverage-binding-judge-step` D3, D4, D7.
+
 **Outcome persistence (conflict-check amendment, resolves
 `intake-marker-plan-stem-keying` contradiction):** the claimed intake body's
 Desired-outcome bullets are staged in the worktree's gitignored `.pipeline/` at

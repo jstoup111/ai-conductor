@@ -71,6 +71,8 @@ the quote occurs in it verbatim. A row whose quote is absent from the cited task
 both the criterion and the task it was attributed to — the two facts #1799 asks the rejection to
 carry.
 
+> **Amended 2026-08-31 by #2088:** "drawn from that task's own text" is narrowed to "drawn from that task's `Done when` block". The engine still only proves the quoted text is real; the bound it establishes is now "the author pointed at a completion check", because a quote from Steps prose grounded two claims on 2026-08-30 whose cited tasks' `Done when` never asserted the criterion (#2088). The division of labour gains one row: a default-off pre-BUILD judge (`coverage_binding`) re-judges whether the cited `Done when` asserts the criterion — never whether the implementation satisfies it, which stays `prd_audit`'s. See `adr-2026-08-31-coverage-binding-judge-step` D2, D4–D6.
+
 The division of labour is explicit and is the point of this ADR:
 
 - **The author judges** which task carries a criterion. That is a judgement and stays at authoring.
