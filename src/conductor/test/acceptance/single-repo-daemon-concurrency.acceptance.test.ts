@@ -44,38 +44,51 @@ describe('single-repo daemon concurrency', () => {
     const alphaFinished = deferred<FeatureOutcome>();
     const events: string[] = [];
     let mergedFeatureVisible = false;
+    let busyPolls = 0;
+    const race = vi.spyOn(Promise, 'race');
 
-    const daemon = runDaemon(
-      {
-        discoverBacklog: async ({ refresh }) => {
-          if (refresh && events.includes('start:alpha')) mergedFeatureVisible = true;
-          return mergedFeatureVisible
-            ? [feature('alpha'), feature('beta')]
-            : [feature('alpha')];
+    try {
+      const daemon = runDaemon(
+        {
+          discoverBacklog: async ({ refresh }) => {
+            if (refresh && events.includes('start:alpha')) mergedFeatureVisible = true;
+            return mergedFeatureVisible
+              ? [feature('alpha'), feature('beta')]
+              : [feature('alpha')];
+          },
+          runFeature: async (item) => {
+            events.push(`start:${item.slug}`);
+            if (item.slug === 'alpha') {
+              alphaStarted.resolve();
+              const outcome = await alphaFinished.promise;
+              events.push('finish:alpha');
+              return outcome;
+            }
+            events.push(`finish:${item.slug}`);
+            return done(item.slug);
+          },
+          // An immediately resolving injected clock must not add a new losing
+          // completion race on every busy tick. End after a small fixed number
+          // of ticks; the `Promise.race` count below is the regression proof.
+          sleep: async () => {
+            busyPolls++;
+            if (busyPolls === 25) alphaFinished.resolve(done('alpha'));
+          },
         },
-        runFeature: async (item) => {
-          events.push(`start:${item.slug}`);
-          if (item.slug === 'alpha') {
-            alphaStarted.resolve();
-            const outcome = await alphaFinished.promise;
-            events.push('finish:alpha');
-            return outcome;
-          }
-          events.push(`finish:${item.slug}`);
-          return done(item.slug);
-        },
-        sleep: async () => {},
-      },
-      { concurrency: 2, once: true, idlePollMs: 0 },
-    );
+        { concurrency: 2, once: true, idlePollMs: 0 },
+      );
 
-    await alphaStarted.promise;
-    await yieldDispatcher();
-    alphaFinished.resolve(done('alpha'));
-    const result = await daemon;
+      await alphaStarted.promise;
+      const result = await daemon;
 
-    expect(result.processed.map((outcome) => outcome.slug).sort()).toEqual(['alpha', 'beta']);
-    expect(events.indexOf('start:beta')).toBeLessThan(events.indexOf('finish:alpha'));
+      expect(result.processed.map((outcome) => outcome.slug).sort()).toEqual(['alpha', 'beta']);
+      expect(events.indexOf('start:beta')).toBeLessThan(events.indexOf('finish:alpha'));
+      expect(busyPolls).toBeGreaterThanOrEqual(25);
+      // One completion race per worker-set transition, not per timer tick.
+      expect(race).toHaveBeenCalledTimes(3);
+    } finally {
+      race.mockRestore();
+    }
   });
 
   it('enters drain on stale-engine detection, refuses a newly eligible feature, and restarts once after both workers finish', async () => {

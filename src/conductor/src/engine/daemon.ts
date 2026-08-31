@@ -853,28 +853,49 @@ export async function runDaemon(
     now,
     () => claims.list(),
   );
-  const workers: Array<{ slug: string; tagged: Tagged; settled: boolean }> = [];
+  const workers: Array<{ slug: string; tagged: Tagged }> = [];
+  // Keep one completion observer for the current worker set. A busy poll must
+  // not race every timer tick directly against live workers: every losing race
+  // leaves another reaction attached until that worker settles.
+  let nextWorkerCompletion: Tagged | undefined;
+  let completionGeneration = 0;
+  let completedWorker: Awaited<Tagged> | undefined;
+  let wakeBusyPoll: (() => void) | undefined;
+
+  const observeWorkerSet = (): void => {
+    completedWorker = undefined;
+    const generation = ++completionGeneration;
+    if (workers.length === 0) {
+      nextWorkerCompletion = undefined;
+      return;
+    }
+
+    const completion = Promise.race(workers.map(({ tagged }) => tagged));
+    nextWorkerCompletion = completion;
+    void completion.then((worker) => {
+      if (generation !== completionGeneration) return;
+      completedWorker = worker;
+      wakeBusyPoll?.();
+    });
+  };
   // Task T28: track whether the restart trigger has been successfully called
   // in this run. Once successful, don't retry (the respawn would exit the process).
   let restartTriggeredSuccessfully = false;
+  // A restart marker observed at a drained boundary during an active episode
+  // remains actionable on the first boundary after that episode clears.  This
+  // avoids re-reading the same durable intent between deferral and action;
+  // failed trigger/relink attempts intentionally do not set this latch, so
+  // their existing retry-and-recheck behavior is preserved.
+  let restartPendingDeferredByEpisode = false;
   let restartPendingConsumed = false;
   // Task 21: track whether a stale-engine restart request has been made in this
   // run. Once requested, don't retry (the restart would exit the process).
   let staleEngineRestartRequested = false;
-  // A suppressed stale identity is a hold, not permission to run the pending
-  // feature.  Keep that distinction separate from the boolean that reports a
-  // successful restart request to the dispatch loop.
-  let staleDispatchSuppressed = false;
-  // A stale identity held by non-convergence suppression must not be selected
-  // again on every idle tick.  It is process-local like the claim registry;
-  // a restart re-derives ordinary eligibility from durable state.
-  const staleSuppressed = new Set<string>();
   // Completed outcomes are the existing terminal record. `pickEligible` only
   // consults it after the claims-backed active check and park handling, so the
   // predicate order and parked re-dispatch behavior remain unchanged.
   const started = {
     has: (slug: string): boolean =>
-      staleSuppressed.has(slug) ||
       processed.some((outcome) => outcome.slug === slug && outcome.status === 'done'),
   };
   // Slugs that halted this run and are parked for a human. A parked slug is the
@@ -935,14 +956,8 @@ export async function runDaemon(
           reason: err instanceof Error ? err.message : String(err),
         },
       }));
-    const worker = { slug: item.slug, tagged, settled: false };
-    // Preserve an already-settled outcome across a timer sweep. Without this
-    // bit a zero-delay test clock can repeatedly win the Promise.race below,
-    // starving collection even though an executor has completed.
-    void tagged.then(() => {
-      worker.settled = true;
-    });
-    workers.push(worker);
+    workers.push({ slug: item.slug, tagged });
+    observeWorkerSet();
     return true;
   };
 
@@ -957,10 +972,13 @@ export async function runDaemon(
     guardedDispatchWith(item, deps.isParked, dispatch, log);
 
   const collectOne = async (): Promise<void> => {
-    const { slug, outcome } = await Promise.race(workers.map(({ tagged }) => tagged));
+    const completion = nextWorkerCompletion;
+    if (!completion) throw new Error('daemon attempted to collect without a worker completion');
+    const { slug, outcome } = await completion;
     claims.release(slug);
     const workerIndex = workers.findIndex((worker) => worker.slug === slug);
     if (workerIndex >= 0) workers.splice(workerIndex, 1);
+    observeWorkerSet();
     processed.push(outcome);
     if (outcome.costTokens) totalCost += outcome.costTokens;
     // A halted OR errored feature is parked for a human, not finished. Both now
@@ -1122,7 +1140,6 @@ export async function runDaemon(
    * an in-flight build. Reuses the shipped suppression + requestRestart path.
    */
   const rebuildAndMaybeRestartForStaleEngine = async (): Promise<boolean> => {
-    staleDispatchSuppressed = false;
     if (!staleGatesArmed || !deps.staleEngineChecker) {
       // Task 9 (TI-4 HP3): self-heal is disabled (non-self-host, or the flag
       // is off) — the checker/rebuild/restart chain never runs, but still
@@ -1180,10 +1197,7 @@ export async function runDaemon(
     staleAlreadyHandledByPreflight = true;
 
     const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
-    if (deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) {
-      staleDispatchSuppressed = true;
-      return false;
-    }
+    if (deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) return false;
     if (inFlight.size !== 0) return false; // re-verify after the async suppression check
 
     const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
@@ -1309,13 +1323,9 @@ export async function runDaemon(
         }
         // Task 1 (#651): re-check park immediately before this dispatch — closes
         // the selection→dispatch race opened by the rebuild/restart await above.
-        if (!staleDispatchSuppressed) {
-          const dispatched = await guardedDispatch(next);
-          if (dispatched) {
-            continue; // try to fill another slot before awaiting
-          }
-        } else {
-          staleSuppressed.add(next.slug);
+        const dispatched = await guardedDispatch(next);
+        if (dispatched) {
+          continue; // try to fill another slot before awaiting
         }
         // Parked between selection and here: fall through to the idle/await
         // section below instead of `continue`, so the tick doesn't tight-loop
@@ -1336,7 +1346,8 @@ export async function runDaemon(
           async (episodeActive): Promise<DaemonStopReason | null> => {
             if (!restartTriggeredSuccessfully && deps.hasRestartPending) {
               try {
-                const hasRestart = await deps.hasRestartPending();
+                const hasRestart =
+                  restartPendingDeferredByEpisode || (await deps.hasRestartPending());
                 if (hasRestart) {
                 // Task 21 (#392): never fire restart triggers while a rate-limit
                 // episode is active — a respawn mid-episode discards the shared
@@ -1411,6 +1422,7 @@ export async function runDaemon(
                 }
               } else {
                 // Episode is active: defer the restart trigger but keep the marker
+                restartPendingDeferredByEpisode = true;
                 log('[daemon] restart marker present but episode active; deferring trigger');
               }
                 }
@@ -1552,11 +1564,11 @@ export async function runDaemon(
     // busy pools still execute the scheduler-owned periodic sweep; a timer
     // tick never mutates an in-flight WorkOrder. This is outside the free-slot
     // branch: a full pool is exactly the case that must still sweep.
-    // Let immediately fulfilled runners update their settled bit before
-    // arming a busy-pool timer; a genuinely busy pool still reaches the
-    // periodic maintenance sweep below.
+    // Let an immediately fulfilled completion observer run before arming a
+    // busy-pool timer; a genuinely busy pool still reaches the periodic
+    // maintenance sweep below.
     await Promise.resolve();
-    if (workers.some((worker) => worker.settled)) {
+    if (completedWorker) {
       await collectOne();
       continue;
     }
@@ -1567,9 +1579,18 @@ export async function runDaemon(
       await collectOne();
       continue;
     }
-    const workerCompleted = Promise.race(workers.map(({ tagged }) => tagged)).then(() => true);
-    const pollElapsed = sleep(idlePollMs).then(() => false);
-    if (!(await Promise.race([workerCompleted, pollElapsed]))) {
+    // A worker completion wakes this one poll waiter; timer ticks only resolve
+    // their own waiter. Reusing the worker-set observer keeps completion
+    // observation bounded even when an injected clock resolves immediately.
+    let resolveBusyPoll!: () => void;
+    const busyPoll = new Promise<void>((resolve, reject) => {
+      resolveBusyPoll = resolve;
+      void sleep(idlePollMs).then(resolve, reject);
+    });
+    wakeBusyPoll = resolveBusyPoll;
+    await busyPoll;
+    if (wakeBusyPoll === resolveBusyPoll) wakeBusyPoll = undefined;
+    if (!completedWorker) {
       await maintenance.afterBusyPoll(sweepBestEffort);
       continue;
     }
