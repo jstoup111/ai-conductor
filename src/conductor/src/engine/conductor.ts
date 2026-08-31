@@ -36,7 +36,7 @@ import {
   markBuildReviewWorkOrderAttempted,
   readBuildReviewFeatureWorkOrder,
 } from './build-review-work-order.js';
-import { readRemediationCaseStoreFeature } from './remediation-case-store.js';
+import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
@@ -4576,6 +4576,15 @@ export class Conductor {
     if (!feature) return undefined;
     const order = await readBuildReviewFeatureWorkOrder(this.projectRoot, feature);
     if (!order.ok) return undefined;
+    // A settled order stays on disk as evidence, so openness is what makes it
+    // BUILD input. Without this the artifact would keep re-entering every
+    // later BUILD prompt long after its cases were resolved.
+    const state = await new RemediationCaseStore(this.projectRoot, feature).read();
+    if (!state.ok) return undefined;
+    const openActionCases = new Set(state.state.cases
+      .filter((record) => record.resolution === 'open' && record.effect.kind === 'action')
+      .map((record) => record.id));
+    if (!order.workOrder.cases.some((row) => openActionCases.has(row.caseId))) return undefined;
     await markBuildReviewWorkOrderAttempted(this.projectRoot, feature);
     return appendBuildReviewWorkOrderContext(
       retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
