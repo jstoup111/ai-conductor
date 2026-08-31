@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -13,6 +13,7 @@ import {
   sweepStaleReviewArtifacts,
   type ArtifactResolutionContext,
 } from '../src/engine/artifacts.js';
+import { appendRemediationTasks } from '../src/engine/remediation-append.js';
 
 const prdAuditSkillPath = fileURLToPath(
   new URL('../../../skills/prd-audit/SKILL.md', import.meta.url),
@@ -185,6 +186,66 @@ describe('parsePrdAuditReport', () => {
         ],
       },
     });
+  });
+
+  it('#2064 keeps an unchanged report parseable after appending remediation tasks', () => {
+    const basePlan = [
+      '### Task 1: Existing work',
+      '',
+      '### Task 2: Existing work',
+    ].join('\n');
+    const appended = appendRemediationTasks(basePlan, [{
+      id: 'S1.1',
+      disposition: 'build',
+      category: null,
+      rationale: 'Repair the first missing behavior.',
+      tasks: [{ id: 'rem-s1-6-1', title: 'Repair the cited behavior' }],
+    }], 'prd-audit');
+    const report = [
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S1.1 | PASS | rem-prd-audit-rem-s1-6-1 (landed) | Implemented |',
+      '| S1.2 | FIXABLE | 2 | Missing guard |',
+    ].join('\n');
+    const extended = appendRemediationTasks(appended.planText, [{
+      id: 'AB1',
+      disposition: 'build',
+      category: null,
+      rationale: 'Repair the as-built gap.',
+      tasks: [{ id: 'rem-ab1-2', title: 'Repair the as-built behavior' }],
+    }], 'as-built');
+    const expected = {
+      ok: true,
+      value: {
+        prd: 'present' as const,
+        rejectedRows: [],
+        findings: [
+          {
+            criterion: 'S1.1',
+            grade: 'PASS',
+            planTask: 'rem-prd-audit-rem-s1-6-1',
+            prdIds: [],
+            evidence: 'Implemented',
+          },
+          {
+            criterion: 'S1.2',
+            grade: 'FIXABLE',
+            planTask: '2',
+            prdIds: [],
+            evidence: 'Missing guard',
+          },
+        ],
+      },
+    };
+
+    expect([
+      parsePrdAuditReport(report, appended.planText),
+      parsePrdAuditReport(report, extended.planText),
+    ]).toEqual([expected, expected]);
   });
 
   it('rejects a FIXABLE finding with no owning plan task, naming the finding', () => {
