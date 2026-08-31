@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -92,6 +93,73 @@ describe('engine/cost-rollup', () => {
       costUnmetered: { count: 0 },
       providers: { claude: { costUsd: 0, costUnmetered: { count: 0 } } },
     });
+  });
+
+  it('rolls fully-metered costs into cumulative step, model, and source buckets', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build', provider: 'claude', model: 'm1',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 100, output: 10, costUsd: 1, costSource: 'provider' },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build', provider: 'claude', model: 'm1',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 50, output: 5, costUsd: 0.5, costSource: 'provider' },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build_review', provider: 'codex', model: 'm2',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 200, output: 20, costUsd: 2, costSource: 'rate-card' },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build', provider: 'claude',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 10, output: 1, costUsd: 0.25, costSource: 'provider' },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.byDimension).toEqual([
+      { step: 'build', model: 'm1', source: 'provider', costUsd: 1.5 },
+      { step: 'build_review', model: 'm2', source: 'rate-card', costUsd: 2 },
+      { step: 'build', source: 'provider', costUsd: 0.25 },
+    ]);
+    expect((rollup.byDimension ?? []).reduce((sum, bucket) => sum + bucket.costUsd, 0))
+      .toBe(rollup.costUsd);
+  });
+
+  it('excludes cost-unmetered dispatches from cost buckets but includes their finite token kinds', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build', provider: 'claude', model: 'm1',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 100, output: 10, cacheRead: 8, cacheCreation: 2, costUsd: 1 },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build', provider: 'codex', model: 'm1',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 40, output: 4, cacheRead: 3 },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build_review', provider: 'codex', model: 'm2',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 7, output: 2, costUsd: Number.NaN },
+      }),
+      JSON.stringify({ type: 'provider_attempt', step: 'review', provider: 'claude', outcome: 'success', invoked: true }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.byDimension).toEqual([
+      { step: 'build', model: 'm1', costUsd: 1 },
+    ]);
+    expect(rollup.costUnmetered).toEqual({ count: 2 });
+    expect(rollup.tokensByDimension).toEqual([
+      { step: 'build', model: 'm1', tokens: { input: 140, output: 14, cacheRead: 11, cacheCreation: 2 } },
+      { step: 'build_review', model: 'm2', tokens: { input: 7, output: 2 } },
+    ]);
   });
 
   it('preserves all three metering states without inventing a cost', async () => {
@@ -274,9 +342,18 @@ describe('engine/cost-rollup', () => {
         cacheCreation: 3,
       },
       costUsd: expect.closeTo(0.08, 5),
+      byDimension: [
+        { step: 'plan', costUsd: expect.closeTo(0.07, 5) },
+        { step: 'legacy', costUsd: expect.closeTo(0.01, 5) },
+      ],
+      tokensByDimension: [
+        { step: 'plan', tokens: { input: 140, output: 30, cacheRead: 14, cacheCreation: 3 } },
+        { step: 'legacy', tokens: { input: 7, output: 3, cacheRead: 0, cacheCreation: 0 } },
+      ],
       dispatches: 3,
       retries: 0,
       halts: 0,
+      readErrors: 0,
       unmetered: { count: 0, durationMs: 0 },
       costUnmetered: { count: 0 },
       providers: {
@@ -398,9 +475,12 @@ describe('engine/cost-rollup', () => {
     expect(rollup).toEqual({
       tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
       costUsd: 0,
+      byDimension: [],
+      tokensByDimension: [],
       dispatches: 0,
       retries: 0,
       halts: 0,
+      readErrors: 1,
       unmetered: { count: 1, durationMs: 0 },
       costUnmetered: { count: 0 },
     });
@@ -414,9 +494,12 @@ describe('engine/cost-rollup', () => {
     expect(rollup).toEqual({
       tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
       costUsd: 0,
+      byDimension: [],
+      tokensByDimension: [],
       dispatches: 0,
       retries: 0,
       halts: 0,
+      readErrors: 0,
       unmetered: { count: 0, durationMs: 0 },
       costUnmetered: { count: 0 },
     });
@@ -428,6 +511,7 @@ describe('engine/cost-rollup', () => {
     const rollup = await computeCostRollup(dir);
 
     expect(rollup.unmetered.count).toBeGreaterThan(0);
+    expect(rollup.readErrors).toBe(1);
   });
 
   it('skips unparseable lines, folding them into unmetered.count, and still sums good lines', async () => {
@@ -454,6 +538,7 @@ describe('engine/cost-rollup', () => {
     expect(rollup.costUsd).toBeCloseTo(0.03, 5);
     expect(rollup.dispatches).toBe(2);
     expect(rollup.unmetered.count).toBe(1);
+    expect(rollup.readErrors).toBe(1);
   });
 
   it('handles an all-unmetered fixture', async () => {
