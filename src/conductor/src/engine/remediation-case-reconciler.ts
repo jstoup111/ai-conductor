@@ -31,7 +31,7 @@ export type RemediationCaseReconciliationRejection =
   | 'id-collision';
 
 export type ReconcileRemediationCasesResult =
-  | { readonly ok: true; readonly state: RemediationCaseStoreState }
+  | { readonly ok: true; readonly state: RemediationCaseStoreState; readonly caseIdsByRef: ReadonlyMap<string, string> }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
   | { readonly ok: false; readonly reason: 'store-failure'; readonly storeReason: RemediationCaseStoreFailureReason };
 
@@ -48,7 +48,7 @@ export function classifyRemediationCaseReuse(
 }
 
 type Reconciliation =
-  | { readonly ok: true; readonly state: RemediationCaseStoreState; readonly changed: boolean }
+  | { readonly ok: true; readonly state: RemediationCaseStoreState; readonly changed: boolean; readonly caseIdsByRef: ReadonlyMap<string, string> }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection };
 
 function isDurableId(value: string): boolean {
@@ -60,6 +60,32 @@ function effectFor(caseRow: RemediationCaseRow, id: string | undefined): Remedia
   return caseRow.disposition === 'act'
     ? { id: id!, kind: 'action', status: 'reserved' }
     : { id: id!, kind: 'deferral', status: 'reserved' };
+}
+
+/**
+ * The durable identity of an un-bound proposal, when one already exists.
+ *
+ * Reconciliation is serialized by the store lease, but serialization alone does
+ * not make it idempotent: replaying one judgement used to stamp a second case
+ * and effect id for work the first application had already reserved. An open
+ * case whose disposition and complete source-link set are exactly the
+ * proposal's IS that proposal, so the replay converges on it. Identity here is
+ * the engine's own canonical source ids and outcomes — never rationale prose,
+ * summaries, or tree movement.
+ */
+function convergedCaseFor(
+  state: RemediationCaseStoreState,
+  proposed: RemediationCaseGraph['cases'][number],
+  claimed: ReadonlySet<string>,
+): RemediationCaseRecord | undefined {
+  return state.cases.find((record) => {
+    if (claimed.has(record.id) || record.resolution !== 'open') return false;
+    if (record.disposition !== proposed.case.disposition) return false;
+    if (record.sources.length !== proposed.sources.length) return false;
+    return proposed.sources.every((source) =>
+      record.sources.some((link) => link.sourceId === source.sourceId && link.outcome === source.outcome),
+    );
+  });
 }
 
 function takeId(generateId: () => string, usedIds: Set<string>): string | RemediationCaseReconciliationRejection {
@@ -91,16 +117,27 @@ function reconcileState(
   const referencedExisting = new Set<string>();
   const replacements = new Map<string, RemediationCaseRecord>();
   const additions: RemediationCaseRecord[] = [];
+  const caseIdsByRef = new Map<string, string>();
+  const claimed = new Set<string>();
 
   for (const proposed of input.graph.cases) {
     const { case: caseRow, sources } = proposed;
     if (!caseRow.existingCaseId) {
+      const converged = convergedCaseFor(state, proposed, claimed);
+      if (converged) {
+        claimed.add(converged.id);
+        caseIdsByRef.set(caseRow.caseRef, converged.id);
+        referencedExisting.add(converged.id);
+        continue;
+      }
       const caseId = takeId(input.generateId, usedIds);
       if (typeof caseId !== 'string' || caseId === 'id-generation-failed' || caseId === 'id-collision') {
         return { ok: false, reason: caseId };
       }
       const effectId = caseRow.disposition === 'reject' ? undefined : takeId(input.generateId, usedIds);
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
+      claimed.add(caseId);
+      caseIdsByRef.set(caseRow.caseRef, caseId);
       additions.push({
         id: caseId,
         domain: 'build_review',
@@ -127,6 +164,8 @@ function reconcileState(
     if (referencedExisting.has(existingCaseId)) return { ok: false, reason: 'duplicate-case-binding' };
     if (existing.disposition !== caseRow.disposition) return { ok: false, reason: 'illegal-disposition-transition' };
     referencedExisting.add(existingCaseId);
+    claimed.add(existingCaseId);
+    caseIdsByRef.set(caseRow.caseRef, existingCaseId);
 
     const appendedSources = [...existing.sources];
     for (const source of sources) {
@@ -157,7 +196,7 @@ function reconcileState(
     }
     return replacement;
   });
-  return { ok: true, state: { ...state, cases: [...cases, ...additions] }, changed };
+  return { ok: true, state: { ...state, cases: [...cases, ...additions] }, changed, caseIdsByRef };
 }
 
 /**
@@ -176,6 +215,6 @@ export async function reconcileRemediationCases(
   });
   if (!mutation.ok) return { ok: false, reason: 'store-failure', storeReason: mutation.reason };
   return mutation.value.ok
-    ? { ok: true, state: mutation.value.state }
+    ? { ok: true, state: mutation.value.state, caseIdsByRef: mutation.value.caseIdsByRef }
     : mutation.value;
 }
