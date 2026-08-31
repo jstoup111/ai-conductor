@@ -3992,6 +3992,19 @@ export class Conductor {
         gap.disposition === 'halt'
       ) {
         admittedGaps.push(gap);
+        // A `halt` disposition IS the planner addressing this finding — it
+        // judged the repair a human decision rather than plan growth. Count it
+        // so the exact-match check below does not report it `Missing` and
+        // preempt the halt at the `halts.length > 0` branch, which names the
+        // finding's own category and rationale. Deliberately scoped to `halt`:
+        // the sealed-artifact and publication dispositions sharing this early
+        // return keep their existing `Missing` reporting untouched.
+        if (gap.disposition === 'halt' && asBuiltFindings.has(gap.id)) {
+          admittedAsBuiltFindingCounts.set(
+            gap.id,
+            (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1,
+          );
+        }
         continue;
       }
       if (
