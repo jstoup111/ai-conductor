@@ -28,12 +28,12 @@ jobs:
       group: rate-card-refresh
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: src/conductor/.tool-versions
           cache: npm

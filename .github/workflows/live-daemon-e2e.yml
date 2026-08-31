@@ -40,8 +40,8 @@ jobs:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version-file: src/conductor/.tool-versions
           cache: npm
@@ -88,8 +88,8 @@ jobs:
           else
             echo "### Live daemon E2E: ${{ matrix.provider }} non-gating skip (${{ matrix.credential_env }} is unavailable)" >> "$GITHUB_STEP_SUMMARY"
           fi
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version-file: src/conductor/.tool-versions
           cache: npm
