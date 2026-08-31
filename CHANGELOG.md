@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-08-30
+## [1.0.0] - 2026-08-31
 
 ### Added
 
@@ -93,6 +93,76 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - OTEL cost and dispatch metrics now match shipped-record rollups, including failed provider attempts. ([implementation PR #2063](https://github.com/jstoup111/ai-conductor/pull/2063)).
 - A stable-channel checkout left detached by an older updater is recovered onto the stable branch instead of silently stopping updates. ([implementation PR #2082](https://github.com/jstoup111/ai-conductor/pull/2082)).
 - A plan that references its stories with a markdown link no longer fails the finish step with a shipped-record hash mismatch. ([implementation PR #2089](https://github.com/jstoup111/ai-conductor/pull/2089)).
+
+## Migration
+
+```bash migration
+# build_review's scope, completeness, rootCause (and tautology) rubrics are
+# retired; only an opt-in test-quality rubric remains in the container.
+# Their skill directories (skills/build-review-scope,
+# skills/build-review-completeness, skills/build-review-root-cause,
+# skills/build-review-tautology) are removed from the harness and a new
+# skills/build-review-test-quality is added.
+#
+# A normal harness update (bin/conduct's built-in update flow, which runs
+# bin/migrate) already re-runs `bin/install --update` and prunes the stale
+# skill symlinks automatically — no manual symlink cleanup is required.
+#
+# Existing `build_review.rubrics.<scope|completeness|rootCause|tautology|
+# wiring|causalIntegrity>` keys in .ai-conductor/config.yml or project
+# config are accepted as no-ops with a one-time notice; they never fail
+# config loading or halt a run. Review your config afterward, since those
+# rubrics will simply stop running — if you relied on them, the questions
+# they used to ask are now owned by prd_audit (scope-as-intent, with bounded
+# remediation) and the new as-built architecture review (design
+# conformance), both of which now run on every feature regardless of
+# complexity tier or work track. See the new `prd_audit` and
+# `architecture_review_as_built` sections in docs/reference/configuration.md
+# for their keys and defaults.
+echo "No required action beyond a normal 'bin/conduct' update — review build_review.rubrics config afterward."
+```
+
+```bash migration
+asdf install nodejs 26.7.0
+ASDF_NODEJS_VERSION=26.7.0 "${HARNESS_DIR}/bin/install" --update
+```
+
+```bash migration
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
+```
+
+```bash migration
+printf "%s\n" "The retro command and skill are retired. Remove retro invocations and steps.retro entries from your automation and configuration before upgrading."
+```
+
+```bash migration
+config=.ai-conductor/config.yml
+[ -f "$config" ] || exit 0
+tmp=$(mktemp)
+awk '
+  /^steps:[[:space:]]*$/ { in_steps = 1 }
+  in_steps && /^  wiring_check:[[:space:]]*$/ { dropping = 1; next }
+  dropping && /^  [^[:space:]]/ { dropping = 0 }
+  !dropping { print }
+' "$config" > "$tmp"
+mv "$tmp" "$config"
+```
+
+```bash migration
+for config in ~/.ai-conductor/config.yml .ai-conductor/config.yml; do
+  [ -f "$config" ] || continue
+  yq -i 'del(.defaults.by_tier, .complexity.default_tier, .harness_self_host.skill_relink_preflight, .auth_park_timeout_minutes)' "$config"
+done
+```
+
+```bash migration
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
+```
+
+```bash migration
+"$HARNESS_DIR/bin/install"
+test "$(readlink -f "$HOME/.local/bin/conduct")" = "$HARNESS_DIR/bin/ai-conductor"
+```
 
 ## Migration
 
