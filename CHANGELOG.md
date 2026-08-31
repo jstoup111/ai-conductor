@@ -16,6 +16,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Added
 
 - Daemon OpenTelemetry traces now identify the feature branch and executing engine version. ([implementation PR #2080](https://github.com/jstoup111/ai-conductor/pull/2080)).
+- OpenTelemetry now exports cumulative per-feature cost and token gauges after each terminal step. ([implementation PR #2104](https://github.com/jstoup111/ai-conductor/pull/2104)).
 
 ### Changed
 
