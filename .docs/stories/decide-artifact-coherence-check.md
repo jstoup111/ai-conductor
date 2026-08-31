@@ -369,7 +369,7 @@ where it isn't needed and nothing on the happy path.
   new prompt, confirmation, or warning is emitted by the coherence rung (silent pass).
 - Given an S-tier spec (per its `.docs/complexity/` tier), when the DECIDE flow runs,
   then the coherence-check step is skipped, and when land validates, then no coherence
-  artifact is required and no coherence validation runs.
+  artifact is required and only the plan-carried criterion layer runs.
 
 #### Negative Paths
 - Given an S-tier spec with no coherence artifact, when land validates, then land
@@ -380,7 +380,7 @@ where it isn't needed and nothing on the happy path.
 
 ### Done When
 - [ ] Coherence step registered as skippable for tier S; `getSkippableSteps('S')` pinned test updated in the same diff
-- [ ] Land validator engages only when tier ≠ S (tier read from `.docs/complexity/`, same source as the existing tier/artifact check)
+- [ ] Land validator engages the full layer set only when tier ≠ S, and exactly the criterion layer over the plan carrier at S (tier read from `.docs/complexity/`, same source as the existing tier/artifact check)
 - [ ] Coherent-path M/L land output is unchanged except for the validator's silent pass
 
 ## Story 14 — Missing or unreadable evidence blocks exactly like incoherence
