@@ -422,6 +422,33 @@ and publish one typed repair disposition through the existing event spine.
 
 **Dependencies:** Task 2, Task 11, Task 13
 
+### Task 15: Prove no repair state exists when the provider throws before touching the tree
+**Story:** Story 4 — provider-failure rejection states that no repair state was preserved
+**Type:** negative-path
+
+**Steps:**
+1. Add a failing real-local-Git acceptance case whose injected fix callback throws before writing anything, asserting the rejection carries `provider-failure`, no invented ref, a proof that the tree is unchanged since dispatch, and a HALT body stating no repair state was preserved because none was produced.
+2. Verify RED: `setup-triage.ts:671` rejects immediately with no post-throw state proof, and the HALT can say only `No quarantine ref exists (clean-HEAD case)`.
+3. Capture the tree OID at dispatch and re-read it after the throw, and carry that proof into the rejection so the no-state claim is evidence rather than an inference from a missing ref.
+4. Render the HALT from that proof in `daemon-runner.ts`, so a clean-HEAD-because-nothing-ran case reads differently from a clean-HEAD-because-the-repair-was-reverted case.
+5. Verify GREEN and assert the fix callback ran exactly once and no commit, quarantine branch, or ref was created.
+6. Commit with message: `fix(setup-triage): prove no repair state on provider failure (#1346)`.
+
+**Done when:**
+
+1. A fix callback that throws before touching the tree produces a rejection whose reason is `provider-failure` and whose ref field is absent rather than invented.
+2. The rejection carries a post-throw proof that the tree OID is unchanged since dispatch, so the no-state claim rests on evidence and not on the absence of a ref.
+3. The HALT body states explicitly that no repair state was preserved because none was produced, and is distinguishable from the existing `No quarantine ref exists (clean-HEAD case)` wording.
+4. No commit, quarantine branch, or ref is created on this path, and the fix callback is dispatched exactly once.
+
+**Files:**
+- `src/conductor/src/engine/setup-triage.ts`
+- `src/conductor/src/engine/daemon-runner.ts`
+- `src/conductor/test/engine/setup-triage.test.ts`
+- `src/conductor/test/acceptance/bin-setup-quarantines-a-fix-session-s-repair-inste.acceptance.test.ts`
+
+**Dependencies:** Task 13
+
 ## Task Dependency Graph
 
 ```text
@@ -434,6 +461,8 @@ Task 3 ──> Task 4 ──┬─> Task 7 ────────┘          
    ├─> Task 5 ──────┼─> Task 9 ─────────────────────┤
    │      │         └─> Task 10 ─> Task 11 ─────────┘
    └──────┴─> Task 6 ────────────────┘
+
+Task 13 ──> Task 15
 ```
 
 ## Integration Points
