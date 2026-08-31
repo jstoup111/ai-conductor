@@ -64,7 +64,7 @@ describe('build-review adjudication context', () => {
       ok: true,
       context: {
         version: 'v1', domain: 'build_review', lapId, snapshotDigest,
-        currentSources: expect.arrayContaining([
+        currentFindings: expect.arrayContaining([
           expect.objectContaining({ rubric: 'testQuality', summary: finding('alpha').summary }),
           expect.objectContaining({ rubric: 'testQuality', summary: finding('beta').summary }),
         ]),
@@ -76,22 +76,22 @@ describe('build-review adjudication context', () => {
       },
     });
     if (!result.ok) return;
-    expect(result.context.currentSources.map((source) => source.sourceId)).toEqual([...result.context.currentSources.map((source) => source.sourceId)].sort());
+    expect(result.context.currentFindings.map((source) => source.sourceId)).toEqual([...result.context.currentFindings.map((source) => source.sourceId)].sort());
     expect(result.context.priorCases.map((caseRecord) => caseRecord.id)).toEqual(['case-first', 'case-middle', 'case-oldest']);
   });
 
   it('omits only exact operator-resolved sources and emits no synthetic prior case for empty history', () => {
     const current = aggregate(finding('accepted'), finding('unresolved'));
     const all = assembleBuildReviewAdjudicationContext({ aggregate: current, priorCases: [] });
-    expect(all).toMatchObject({ ok: true, context: { priorCases: [], currentSources: [expect.anything(), expect.anything()] } });
+    expect(all).toMatchObject({ ok: true, context: { priorCases: [], currentFindings: [expect.anything(), expect.anything()] } });
     if (!all.ok) return;
 
     const resolved = assembleBuildReviewAdjudicationContext({
       aggregate: current,
       priorCases: [],
-      operatorResolvedFindingIds: new Set([all.context.currentSources[0]!.findingId]),
+      operatorResolvedFindingIds: new Set([all.context.currentFindings[0]!.findingId]),
     });
-    expect(resolved).toMatchObject({ ok: true, context: { priorCases: [], currentSources: [expect.objectContaining({ summary: finding('unresolved').summary })] } });
+    expect(resolved).toMatchObject({ ok: true, context: { priorCases: [], currentFindings: [expect.objectContaining({ summary: finding('unresolved').summary })] } });
   });
 
   it('bounds only operator-unresolved sources, not the complete raw aggregate', () => {
@@ -105,7 +105,7 @@ describe('build-review adjudication context', () => {
       aggregate: current,
       priorCases: [],
       operatorResolvedFindingIds: new Set(rawSources.map((source) => source.findingId)),
-    })).toMatchObject({ ok: true, context: { currentSources: [], priorCases: [] } });
+    })).toMatchObject({ ok: true, context: { currentFindings: [], priorCases: [] } });
   });
 
   it('stops before dispatch when operator-unresolved sources exceed the current-source bound', () => {
@@ -119,7 +119,7 @@ describe('build-review adjudication context', () => {
       stop: {
         code: 'field-overflow',
         subject: 'current-source',
-        field: 'currentSources',
+        field: 'currentFindings',
         limit: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources,
         actual: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources + 1,
       },
@@ -139,7 +139,7 @@ describe('build-review adjudication context', () => {
 
     expect(assembleBuildReviewAdjudicationContext({ aggregate: mixed, priorCases: [] })).toMatchObject({
       ok: true,
-      context: { currentSources: [], priorCases: [] },
+      context: { currentFindings: [], priorCases: [] },
     });
   });
 
@@ -176,5 +176,46 @@ describe('build-review adjudication context', () => {
         limit: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes,
       }),
     });
+  });
+  it('declares the case-v1 discriminator and every input field the skill is told to read', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('alpha')),
+      priorCases: [priorCase('case-first')],
+      attemptedCaseIds: ['case-first'],
+      planContract: { path: '.docs/plans/example.md', pointers: ['plan contract: .docs/plans/example.md — Task 3 (anchor: test/alpha.test.ts)'] },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '3', status: 'completed' }] },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // skills/remediate/SKILL.md selects case mode on `mode` + `domain`, then
+    // names exactly these input fields. A context missing any of them routes a
+    // real dispatch into the legacy gap-plan branch.
+    expect(Object.keys(result.context).sort()).toEqual([
+      'currentFindings', 'domain', 'effectPointers', 'lapId', 'mode', 'planContract',
+      'priorCases', 'snapshotDigest', 'taskStatus', 'version',
+    ]);
+    expect(result.context).toMatchObject({
+      mode: 'case-v1',
+      domain: 'build_review',
+      planContract: { path: '.docs/plans/example.md', pointers: [expect.stringContaining('Task 3')] },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '3', status: 'completed' }] },
+    });
+    // Effect pointers carry the prior effect state AND the durable BUILD
+    // attempt evidence, so the judge can tell an interrupted case from a
+    // repeatedly attempted one without re-auditing the tree.
+    expect(result.context.effectPointers).toEqual([
+      'case case-first: action effect effect-case-first applied (work order work-order-case-first); BUILD attempted',
+    ]);
+  });
+
+  it('states absent plan and task evidence explicitly rather than omitting the field', () => {
+    const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [] });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      planContract: { path: null, pointers: [] },
+      taskStatus: { path: null, tasks: [] },
+      effectPointers: [],
+    } });
   });
 });

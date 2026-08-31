@@ -33,7 +33,7 @@ import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
-import { planContractPointers, priorAttemptPointers } from './remediation-context-pointers.js';
+import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
 import type { CoverageBindingPayloadError } from './step-runners.js';
 import type {
   AuthenticationReadiness,
@@ -4739,16 +4739,7 @@ export class Conductor {
 
   /** Read the active plan path from engine state, or null if not recorded. */
   private async getActivePlanPath(): Promise<string | null> {
-    try {
-      const engineStatePath = join(this.projectRoot, '.pipeline', 'engine-state.json');
-      const content = await readFile(engineStatePath, 'utf-8');
-      const engineState = JSON.parse(content) as Record<string, unknown>;
-      const activePlanPath = engineState.activePlanPath;
-      return typeof activePlanPath === 'string' ? activePlanPath : null;
-    } catch {
-      // Engine state doesn't exist or is invalid
-      return null;
-    }
+    return readActivePlanPath(this.projectRoot);
   }
 
   /** Best-effort compact remediation context from existing build-review evidence. */
