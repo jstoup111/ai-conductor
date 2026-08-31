@@ -557,6 +557,62 @@ describe("build-review coordinator: findings-only provider payloads", () => {
   });
 });
 
+describe("build-review coordinator: counterfactual sensitivity is verdict-neutral", () => {
+  it("settles indeterminate with no findings exactly as an ordinary empty result", async () => {
+    const ordinary = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => ({ findings: [] })),
+    }));
+    const indeterminate = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => ({ findings: [], counterfactualSensitivity: "indeterminate" })),
+    }));
+
+    expect(testQualityBranch(ordinary)).toMatchObject({
+      kind: "dispatched", result: { verdict: "PASS", findings: [] },
+    });
+    expect(testQualityBranch(indeterminate)).toMatchObject({
+      kind: "dispatched", result: { verdict: "PASS", findings: [], counterfactualSensitivity: "indeterminate" },
+    });
+  });
+
+  it("retains an evidenced test-insensitive finding despite indeterminate counterfactual sensitivity", async () => {
+    const finding = testQualityFinding();
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => ({ findings: [finding], counterfactualSensitivity: "indeterminate" })),
+    }));
+
+    expect(testQualityBranch(result)).toEqual({
+      kind: "dispatched", rubric: "testQuality",
+      result: {
+        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+        findings: [finding], counterfactualSensitivity: "indeterminate", verdict: "FAIL",
+      },
+    });
+  });
+
+  it("settles repeated indeterminate findings as ordinary FAIL laps for the existing convergence bound", async () => {
+    const finding = testQualityFinding();
+    const laps = await Promise.all(["lap-one", "lap-two"].map(async (lap) => {
+      const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+        inputs: titledInputs(),
+        lapId: parseBuildReviewLapId(lap)!,
+        dispatchModel: vi.fn(async () => ({ findings: [finding], counterfactualSensitivity: "indeterminate" })),
+      }));
+      return testQualityBranch(result);
+    }));
+
+    expect(laps).toEqual(["lap-one", "lap-two"].map((lapId) => ({
+      kind: "dispatched", rubric: "testQuality",
+      result: {
+        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId, snapshotDigest: "sha256:snapshot",
+        findings: [finding], counterfactualSensitivity: "indeterminate", verdict: "FAIL",
+      },
+    })));
+  });
+});
+
 describe("build-review coordinator: engine-held rubric isolation", () => {
   it("rejects a dispatch-time projection rubric mismatch without writing a branch artifact", async () => {
     const lapId = parseBuildReviewLapId("lap-current")!;
