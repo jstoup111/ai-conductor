@@ -66,6 +66,7 @@ import { isForwardedFromFeature, startFeatureEventPersistence } from './engine/e
 import { renderedEventTypes } from './engine/event-sinks.js';
 import { wireOtelVisualizer } from './engine/otel/wire.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
+import { LiveBoundaryCoordinator } from './engine/self-host/live-boundary-coordinator.js';
 import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
 import { readLastResolvedCount } from './engine/task-evidence.js';
@@ -952,6 +953,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // feature this daemon builds; threaded to each Conductor as `selfHost`. For any
   // non-harness repo this is false and the build path is byte-for-byte unchanged.
   const isSelfHost = await classifySelfHost(defaultSelfHostDetector(), config, projectRoot);
+  // One daemon process owns both dispatcher root mutations and every
+  // in-process self-host executor's fingerprint window.
+  const liveBoundaryCoordinator = isSelfHost ? new LiveBoundaryCoordinator() : undefined;
   if (isSelfHost) {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');
   }
@@ -1227,6 +1231,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // is building the harness itself. `baseBranch` feeds the release-artifact
       // migration classifier (`<base>...HEAD`).
       selfHost: isSelfHost,
+      liveBoundaryCoordinator,
       baseBranch,
       verifyArtifacts: true,
       // Resume from the first unsatisfied step rather than hardcoding the entry
@@ -1682,7 +1687,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // relink rebuilds the harness skill symlinks before self-host dispatches
   // triggerSelfRestart is injected from opts (respawn pane in session-hosted mode)
   const requestRestart = createRestartRequester(projectRoot, log, lock, process, {
-    relink: () => relinkSkillsForSelfBuild({ log }),
+    relink: () => liveBoundaryCoordinator
+      ? liveBoundaryCoordinator.runMutation(
+        () => relinkSkillsForSelfBuild({ log }),
+        (reason) => log(`[daemon] root relink deferred: ${reason}`),
+      )
+      : relinkSkillsForSelfBuild({ log }),
     triggerSelfRestart: opts.triggerSelfRestart,
   });
 
@@ -1781,7 +1791,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // (#309) hides. projectRoot is the harness root under self-host, so
       // src/conductor is its build package.
       rebuildEngine: isSelfHost
-        ? () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor'))
+        ? () => liveBoundaryCoordinator!.runMutation(
+          () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor')),
+          (reason) => log(`[daemon] engine rebuild deferred: ${reason}`),
+        )
         : undefined,
       // Fast-forward the harness checkout to origin before each dispatch
       // (self-host only, NP4) so rebuildEngine above builds from
@@ -1801,7 +1814,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             return async (refreshOpts?: { force?: boolean }) => {
               if (!refreshOpts?.force && !throttle.shouldRun()) return;
               throttle.markRan();
-              const outcome = await fastForwardRoot(projectRoot, log);
+              const outcome = await liveBoundaryCoordinator!.runMutation(
+                () => fastForwardRoot(projectRoot, log),
+                (reason) => log(`[daemon] root refresh deferred: ${reason}`),
+              );
               if (
                 outcome.status === 'skipped' &&
                 (outcome.cause === 'dirty' ||
@@ -2233,7 +2249,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // Task T28: trigger self-restart when marker is pending (injected from supervisor/bare-run).
       triggerSelfRestart: opts.triggerSelfRestart,
       // Queued supervisor restarts rebuild/relink only for the harness self-host.
-      ...(isSelfHost ? { relink: () => relinkSkillsForSelfBuild({ log }) } : {}),
+      ...(isSelfHost ? {
+        relink: () => liveBoundaryCoordinator!.runMutation(
+          () => relinkSkillsForSelfBuild({ log }),
+          (reason) => log(`[daemon] root relink deferred: ${reason}`),
+        ),
+      } : {}),
       // Task T30: consume restart marker in bare-run mode (when triggerSelfRestart absent).
       consumeRestartPending: async () => {
         return await consumeOnBoot(projectRoot);
