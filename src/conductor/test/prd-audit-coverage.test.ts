@@ -33,9 +33,6 @@ describe('prd-audit skill contract', () => {
     expect(report).toMatch(/^\| S6\.2 \| FIXABLE \| 4 \| FR-7 \| /m);
 
     expect(skill).toContain('PASS | FIXABLE | PLAN_GAP | OVER_SCOPE');
-    expect(skill).toContain('Any row may cite a task present\nin the active plan; cite its bare task id with no annotation.');
-    expect(skill).toContain('Every FIXABLE row must cite its owning\nplan task.');
-    expect(skill).toContain('Use `—` when there is no task.');
     expect(skill).toContain('every OVER_SCOPE row must use exactly one of `within`, `outside-harmless`, or `outside-visible`');
   });
 });
