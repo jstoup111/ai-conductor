@@ -83,6 +83,13 @@ interface FixtureOptions {
   readonly judgement?: unknown;
   /** Rubric ids the operator has covered with an exact reduced-coverage decision. */
   readonly infrastructure?: 'none' | 'covered' | 'uncovered';
+  /**
+   * Report uncovered infrastructure alongside a judged content finding.
+   * Today's registry holds one rubric, so a genuinely mixed aggregate cannot be
+   * built in production; the effective projection is the seam the conductor
+   * actually reads for its mechanical state, so drive it there.
+   */
+  readonly reportUncoveredInfrastructure?: boolean;
   /** Writes durable `.pipeline` artifacts a previous process would have left. */
   readonly seedPipeline?: (projectRoot: string) => Promise<void>;
   readonly startFrom?: StepName;
@@ -127,8 +134,9 @@ async function fixture(options: FixtureOptions = {}) {
     },
   };
 
-  const infrastructureRubrics = mixed ? (['testQuality'] as const) : ([] as const);
-  const uncovered = options.infrastructure === 'uncovered' ? (['testQuality'] as const) : ([] as const);
+  const infrastructureRubrics = mixed || options.reportUncoveredInfrastructure ? (['testQuality'] as const) : ([] as const);
+  const uncovered = options.infrastructure === 'uncovered' || options.reportUncoveredInfrastructure
+    ? (['testQuality'] as const) : ([] as const);
   const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => ({
     ok: true as const,
     feature,
@@ -266,5 +274,42 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(uncovered.remediateDispatches()).toBe(0);
     const ledger = await uncovered.readJson('.pipeline/kickback-ledger.json').catch(() => ({ gates: {} })) as { gates: Record<string, { count?: number }> };
     expect(ledger.gates.build_review?.count ?? 0).toBe(0);
+  });
+  it('does not leak a settled work order into a later unrelated BUILD dispatch', async () => {
+    const first = await fixture();
+    const order = await first.readJson('.pipeline/build-review-work-order.json');
+    const settled = await first.readJson('.pipeline/remediation-cases.json') as {
+      version: string; feature: unknown; cases: Array<Record<string, unknown>>;
+    };
+
+    // BUILD repaired the case and the next lap resolved it. The order artifact
+    // is still on disk and still parses — it must not keep re-entering BUILD
+    // prompts, and it must not be re-stamped as attempted again.
+    const resolved = { ...settled, cases: settled.cases.map((record) => ({ ...record, resolution: 'resolved' })) };
+    const later = await fixture({
+      startFrom: 'build',
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/build-review-work-order.json'), JSON.stringify(order), 'utf8');
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(resolved), 'utf8');
+      },
+    });
+
+    expect(later.dispatched).toContain('build');
+    expect(later.retryReasons.get('build')).toBeUndefined();
+  });
+  it('takes the mechanical lane for a non-action lap with uncovered infrastructure, spending no semantic kickback', async () => {
+    const run = await fixture({ judgement: deferralJudgement(), reportUncoveredInfrastructure: true });
+
+    // adr-2026-08-29 D3.2: the content was adjudicated and finalized, so the
+    // legacy raw kickback would have re-sent settled content to BUILD and
+    // charged a semantic route for it.
+    expect(run.remediateDispatches()).toBeGreaterThanOrEqual(1);
+    expect(run.dispatched).not.toContain('build');
+    expect(run.kickbacks).toEqual([]);
+    const ledger = await run.readJson('.pipeline/kickback-ledger.json') as { gates: { build_review?: { count?: number; mechanicalFaults?: number } } };
+    expect(ledger.gates.build_review?.count ?? 0).toBe(0);
+    // The mechanical allowance bounds the re-land loop and then halts.
+    expect(ledger.gates.build_review?.mechanicalFaults).toBe(3);
+    expect(await run.haltMarker()).toContain('build_review adjudication halted');
   });
 });
