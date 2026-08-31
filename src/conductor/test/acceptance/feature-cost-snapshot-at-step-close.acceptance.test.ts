@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.5, S1.6, S1.7, S1.9, S2.1, S2.2, S2.3, S2.4, S2.7, S2.9, S2.10, S5.1, S5.2, S5.3, S5.6, S5.9, task:3
+// Covers: S1.1, S1.2, S1.5, S1.6, S1.7, S1.9, S2.1, S2.2, S2.3, S2.4, S2.7, S2.9, S2.10, S5.1, S5.2, S5.3, S5.6, S5.9, task:3, task:11
 /**
  * Acceptance seam: a real Conductor step terminal must project the durable
  * feature ledger onto the shared event bus. Unit tests own rollup arithmetic;
@@ -23,8 +23,12 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
+import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
+import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
+import { AggregationTemporality, InMemoryMetricExporter } from '@opentelemetry/sdk-metrics';
 
 interface FeatureCostSnapshot {
   type: 'feature_cost_snapshot';
@@ -96,6 +100,7 @@ interface RunOptions {
   };
   success?: boolean;
   persist?: boolean;
+  captureMetrics?: boolean;
 }
 
 function finishingRunner(
@@ -138,6 +143,7 @@ async function runFinish(options: RunOptions = {}): Promise<{
   snapshots: FeatureCostSnapshot[];
   terminals: StepTerminal[];
   order: string[];
+  metricExporter?: InMemoryMetricExporter;
 }> {
   const events = new ConductorEventEmitter();
   const snapshots: FeatureCostSnapshot[] = [];
@@ -158,7 +164,23 @@ async function runFinish(options: RunOptions = {}): Promise<{
   const persister = options.persist === false
     ? undefined
     : new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+  const metricExporter = options.captureMetrics
+    ? new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE)
+    : undefined;
+  const otel = metricExporter === undefined
+    ? undefined
+    : new OtelVisualizer(resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      join(dir, '.pipeline'),
+    ), {
+      runId: 'feature-cost-snapshot-acceptance',
+      feature: 'feature-cost-snapshot',
+      project: 'test-project',
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter,
+    });
   persister?.start();
+  otel?.start(events);
   const conductor = new Conductor({
     stateFilePath: statePath,
     stepRunner: finishingRunner(options, (event) => events.emit(event)),
@@ -175,9 +197,17 @@ async function runFinish(options: RunOptions = {}): Promise<{
   try {
     await conductor.run();
   } finally {
+    await otel?.stop();
     persister?.stop();
   }
-  return { snapshots, terminals, order };
+  return { snapshots, terminals, order, metricExporter };
+}
+
+function findMetric(exporter: InMemoryMetricExporter, name: string) {
+  return exporter
+    .getMetrics()
+    .flatMap((resourceMetrics) => resourceMetrics.scopeMetrics.flatMap((scopeMetrics) => scopeMetrics.metrics))
+    .find((metric) => metric.descriptor.name === name);
 }
 
 beforeEach(async () => {
@@ -269,11 +299,12 @@ describe('acceptance: ledger-derived feature cost snapshot at the real step-clos
     await seedFinishBoundary();
     await writeFile(join(dir, '.pipeline/events.jsonl'), '{ malformed\n');
 
-    const result = await runFinish();
+    const result = await runFinish({ captureMetrics: true });
     const ledger = await readFile(join(dir, '.pipeline/events.jsonl'), 'utf8');
 
     expect(ledger).toContain('{ malformed');
     expect(result.snapshots).toEqual([]);
+    expect(findMetric(result.metricExporter!, 'conductor.feature.step.tokens')).toBeUndefined();
     expect(stepVerdicts(result.terminals)).toEqual(stepVerdicts(clean.terminals));
   });
 

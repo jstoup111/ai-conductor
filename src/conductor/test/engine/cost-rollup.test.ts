@@ -1,4 +1,4 @@
-// Covers: task:1, task:10
+// Covers: task:1, task:10, task:11
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -214,6 +214,33 @@ describe('engine/cost-rollup', () => {
       { step: 'build', model: 'm1', tokens: { input: 140, output: 14, cacheRead: 11, cacheCreation: 2 } },
       { step: 'build_review', model: 'm2', tokens: { input: 7, output: 2 } },
     ]);
+  });
+
+  it('keeps partial cost-unmetered and unknown-model token buckets exact', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt', step: 'no_usage', provider: 'claude', outcome: 'success', invoked: true,
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build', provider: 'codex', model: 'm1',
+        outcome: 'success', invoked: true, tokenUsage: { input: 40, output: 4 },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'unknown_model', provider: 'codex',
+        outcome: 'success', invoked: true, tokenUsage: { input: 10 },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.tokensByDimension).toEqual([
+      { step: 'build', model: 'm1', tokens: { input: 40, output: 4 } },
+      { step: 'unknown_model', tokens: { input: 10 } },
+    ]);
+    expect(rollup.tokensByDimension).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: 'no_usage' }),
+    ]));
+    expect(toFeatureCostSnapshot(rollup)).toMatchObject({ costComplete: false });
   });
 
   it('preserves all three metering states without inventing a cost', async () => {

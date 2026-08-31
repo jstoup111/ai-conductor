@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4, task:10
+// Covers: task:1, task:2, task:4, task:10, task:11
 /**
  * Covers: task:1, task:2, task:3, task:4, task:10
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
@@ -759,6 +759,37 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
         expect.objectContaining({ value: 0, attributes: { cost_complete: false, project: 'test-project', feature: 'test-feature' } }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.step.cost')).toBeUndefined();
+    } finally { await provider.shutdown(); }
+  });
+
+  it('records only a finite present input kind for an unknown-model token bucket', async () => {
+    const { exporter, provider, recorder } = await makeRecorder();
+    try {
+      recorder.onFeatureCostSnapshot({
+        ...snapshot,
+        byDimension: [],
+        tokensByDimension: [{
+          step: 'unknown_model',
+          tokens: {
+            input: 10,
+            output: Number.NaN,
+            cacheRead: Number.POSITIVE_INFINITY,
+          },
+        }],
+      });
+      await provider.forceFlush();
+
+      expect(findMetric(exporter, 'conductor.feature.step.tokens')?.dataPoints).toEqual([
+        expect.objectContaining({
+          value: 10,
+          attributes: {
+            step: 'unknown_model',
+            kind: 'input',
+            project: 'test-project',
+            feature: 'test-feature',
+          },
+        }),
+      ]);
     } finally { await provider.shutdown(); }
   });
 });
