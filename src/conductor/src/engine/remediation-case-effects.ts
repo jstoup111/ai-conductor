@@ -69,7 +69,16 @@ export async function applyBuildReviewActionEffects(input: {
       if (!tasks || tasks.length === 0) return { value: { ok: false as const, reason: `action case ${record.id} has no work-order tasks` } };
       cases.push({ caseId: record.id, priority: record.priority, tasks });
     }
-    const primaryEffectId = actionCases[0]!.effect.kind === 'action' ? actionCases[0]!.effect.id : '';
+    // The charge identity is the FIRST-TIME route's own reserved effect, taken
+    // in the same deterministic order the work order publishes. Charging
+    // `actionCases[0]` charged whichever action came first overall — so a later
+    // materially distinct case re-charged an already-charged id, the ledger
+    // reported `already-charged`, and the new route was never counted against
+    // the convergence bound.
+    const orderedPendingIds = new Set(pending.map((record) => record.effect.id));
+    const primaryEffectId = orderBuildReviewActionCases(cases)
+      .map((row) => actionCases.find((record) => record.id === row.caseId)!.effect.id)
+      .find((effectId) => orderedPendingIds.has(effectId))!;
     const workOrderId = input.workOrderId?.() ?? randomUUID();
     const failPending = (diagnostic: string): RemediationCaseStoreState => replaceCases(state, (record) =>
       record.effect.kind === 'action' && record.effect.status === 'reserved'
@@ -92,7 +101,12 @@ export async function applyBuildReviewActionEffects(input: {
       return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
     }
     if (charged.status === 'charged' && (charged.exhausted || charged.cumulativeExhausted)) {
-      const diagnostic = 'build-review kickback budget exhausted';
+      // A bare "budget exhausted" halt told the operator nothing about which
+      // work is blocked or how close the counters are. Name both.
+      const blocked = pending.map((record) => `${record.id} (effect ${record.effect.id})`).join(', ');
+      const scope = charged.cumulativeExhausted ? 'cumulative' : 'per-gate';
+      const diagnostic = `build-review kickback budget exhausted (${scope}): blocked cases ${blocked}; ` +
+        `count ${charged.entry.count}, cumulative ${charged.entry.cumulative}`;
       return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
     }
     const next = replaceCases(state, (record) => record.effect.kind === 'action' && record.resolution === 'open'
