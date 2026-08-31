@@ -31,6 +31,14 @@ import {
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
+import {
+  appendBuildReviewWorkOrderContext,
+  markBuildReviewWorkOrderAttempted,
+  readBuildReviewFeatureWorkOrder,
+} from './build-review-work-order.js';
+import { readRemediationCaseStoreFeature } from './remediation-case-store.js';
+import { createGithubTrackerClient } from './tracker-client.js';
+import { fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
@@ -247,6 +255,7 @@ import {
 } from './finish-publication.js';
 import {
   bumpKickbackGateInLedger,
+  bumpMechanicalFaultsInLedger,
   clearKickbackLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
@@ -4742,6 +4751,48 @@ export class Conductor {
     return readActivePlanPath(this.projectRoot);
   }
 
+  /**
+   * The `owner/repo` slug the deferred-intake effects publish against.
+   *
+   * `undefined` leaves the coordinator without its tracker dependencies, so a
+   * deferral stays unfinalized and the reducer blocks — never a silent skip.
+   */
+  private trackerRepoSlug: string | null | undefined;
+  private async resolveTrackerRepoSlug(): Promise<string | undefined> {
+    if (this.trackerRepoSlug !== undefined) return this.trackerRepoSlug ?? undefined;
+    try {
+      const { stdout } = await this.gh(['repo', 'view', '--json', 'nameWithOwner'], { cwd: this.projectRoot });
+      const parsed = JSON.parse(stdout || '{}') as { nameWithOwner?: unknown };
+      this.trackerRepoSlug = typeof parsed.nameWithOwner === 'string' && parsed.nameWithOwner ? parsed.nameWithOwner : null;
+    } catch {
+      this.trackerRepoSlug = null;
+    }
+    return this.trackerRepoSlug ?? undefined;
+  }
+
+  /**
+   * BUILD's durable remediation input.
+   *
+   * The adjudicated route used to survive only in the process-local
+   * `pendingRetryHints` map, so an ordinary restart lost the accepted work
+   * order entirely. The order and the case store are written as a pair: the
+   * store's recorded feature identity binds the order without needing git or
+   * in-memory state, so a fresh process reconstructs the same prioritized work
+   * from the stable effect id. The attempt is stamped BEFORE provider work, so
+   * a repeat of an already-attempted case cannot take a second free route.
+   */
+  private async durableBuildReviewRetryContext(retryHint: string | undefined): Promise<string | undefined> {
+    const feature = await readRemediationCaseStoreFeature(this.projectRoot);
+    if (!feature) return undefined;
+    const order = await readBuildReviewFeatureWorkOrder(this.projectRoot, feature);
+    if (!order.ok) return undefined;
+    await markBuildReviewWorkOrderAttempted(this.projectRoot, feature);
+    return appendBuildReviewWorkOrderContext(
+      retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
+      order.workOrder,
+    );
+  }
+
   /** Best-effort compact remediation context from existing build-review evidence. */
   private async buildReviewPointerLines(verdictRaw: unknown): Promise<readonly string[]> {
     const aggregate = parseBuildReviewAggregate(verdictRaw);
@@ -7990,6 +8041,11 @@ export class Conductor {
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
         pendingRetryHints.delete(step.name);
+        if (step.name === 'build') {
+          // Durable, not process-local: this is the clause an in-memory hint
+          // alone can never satisfy (Task 18 Done-when 5).
+          retryHint = (await this.durableBuildReviewRetryContext(retryHint)) ?? retryHint;
+        }
         let successOutput: string | undefined;
         let stepResult: StepRunResult | undefined;
         let failedStepResult: StepRunResult | undefined;
@@ -10373,7 +10429,17 @@ export class Conductor {
                     return;
                   }
                   if (effective.ok && !legacyAdjudicationInput) {
-                  const mechanical = effective.effective.infrastructureFailureRubrics.length === 0 ? 'healthy' : 'retry';
+                  // adr-2026-08-29 D3: only UNCOVERED infrastructure pins the
+                  // mechanical lane. Mapping the undifferentiated list to
+                  // `retry` treated a branch the operator had already covered
+                  // with an exact reduced-coverage decision as a live fault, so
+                  // a content-complete PASS was unreachable.
+                  const uncoveredInfrastructure = effective.effective.uncoveredInfrastructureFailureRubrics;
+                  const mechanicalFaults =
+                    (await readKickbackLedger(this.projectRoot)).gates.build_review?.mechanicalFaults ?? 0;
+                  const mechanical = uncoveredInfrastructure.length === 0
+                    ? 'healthy'
+                    : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW ? 'halt' : 'retry';
                   const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
                     const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                       this.projectRoot,
@@ -10383,6 +10449,7 @@ export class Conductor {
                     if (!latest.ok) throw new Error(latest.reason);
                     return new Set(latest.effective.acceptedFindingIds);
                   };
+                  const trackerRepo = await this.resolveTrackerRepoSlug();
                   const adjudication = await coordinateBuildReviewAdjudication({
                     projectRoot: this.projectRoot,
                     feature: effective.feature,
@@ -10404,6 +10471,22 @@ export class Conductor {
                       if (!judgement.ok) throw new Error(judgement.reason);
                       return judgement.judgement;
                     },
+                    // Task 18 Done-when 4: the deferral path is only reachable
+                    // when the production call carries all three dependencies.
+                    // Omitting them left marker lookup, issue filing, and
+                    // deferral completion dead in production while an injected
+                    // coordinator fixture kept passing.
+                    ...(trackerRepo === undefined ? {} : {
+                      repo: trackerRepo,
+                      tracker: createGithubTrackerClient(this.gh),
+                      fileIssue: async (issue: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => {
+                        const filed = await fileIntakeIssue(
+                          { title: issue.title, body: issue.body, priority: issue.priority, repo: trackerRepo },
+                          { tracker: createGithubTrackerClient(this.gh), gh: this.gh, cwd: this.projectRoot },
+                        );
+                        return { issueUrl: filed.issueUrl };
+                      },
+                    }),
                     emit: async (event) => { await this.events.emit(event); },
                   });
                   if (!adjudication.ok || adjudication.route === 'halt') {
@@ -10435,8 +10518,28 @@ export class Conductor {
                     i = navigationIndex - 1;
                     continue;
                   }
-                  // A pure mechanical retry deliberately retains the existing
-                  // raw mechanical lane below; it never invokes the judge again.
+                  // adr-2026-08-29 D3.2: no actionable content route remains
+                  // and infrastructure is uncovered. That is the MECHANICAL
+                  // lane — re-land build_review under its own bounded
+                  // allowance. Falling through to the legacy raw route spent a
+                  // semantic kickback and re-sent content the judgement had
+                  // already finalized back to BUILD as raw reasons.
+                  const uncoveredRubric = uncoveredInfrastructure[0];
+                  const uncoveredResult = uncoveredRubric ? aggregate.results[uncoveredRubric] : undefined;
+                  await bumpMechanicalFaultsInLedger(this.projectRoot, 'build_review',
+                    uncoveredRubric && uncoveredResult?.kind === 'infrastructure-failure'
+                      ? {
+                          rubric: uncoveredRubric,
+                          reason: uncoveredResult.reason,
+                          detail: uncoveredResult.detail ?? 'uncovered infrastructure failure on a settled lap',
+                          lapId: aggregate.lapId,
+                        }
+                      : undefined,
+                  );
+                  await this.saveConductorStepStatus(state, step.name, 'failed');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  i = i - 1; // for-loop i++ re-lands on build_review
+                  continue;
                   }
                 }
                 const failureDetails = buildReviewFailureDetails(parsed);
