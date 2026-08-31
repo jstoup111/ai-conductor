@@ -930,6 +930,9 @@ describe.skip('superseded dispatch-cost parity with the shipped-record rollup', 
     });
   });
 
+});
+
+describe('feature usage total cost export', () => {
   it('exports the authoritative feature cost carried by feature_usage_total', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
