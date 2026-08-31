@@ -294,6 +294,7 @@ import {
   snapshotReleaseMetadataBlock,
 } from './release-metadata.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
+import { LiveBoundaryCoordinator } from './self-host/live-boundary-coordinator.js';
 import {
   deriveBindSet,
   probeContainment,
@@ -1556,6 +1557,8 @@ export interface ConductorOptions {
    * real primitives (`defaultSelfHostGuardrails`).
    */
   selfHostGuardrails?: SelfHostGuardrails;
+  /** Shared daemon owner for root mutations and per-dispatch boundary windows. */
+  liveBoundaryCoordinator?: LiveBoundaryCoordinator;
   /**
    * Maximum auto-retries before a failing step (including artifact miss)
    * escalates to the recovery menu.
@@ -2186,6 +2189,7 @@ export class Conductor {
   private selfHost: boolean;
   private baseBranch?: string;
   private guardrails: SelfHostGuardrails;
+  private readonly liveBoundaryCoordinator?: LiveBoundaryCoordinator;
   /** Reusable safety verdicts are valid only within one exact attempt identity. */
   private readonly safetyAttemptCache = new SafetyAttemptCache();
   /**
@@ -3176,6 +3180,7 @@ export class Conductor {
     this.selfHost = opts.selfHost ?? false;
     this.baseBranch = opts.baseBranch;
     this.guardrails = opts.selfHostGuardrails ?? defaultSelfHostGuardrails;
+    this.liveBoundaryCoordinator = opts.liveBoundaryCoordinator;
     this.acceptanceRedExec =
       opts.acceptanceRedExec ??
       (async () => {
@@ -4980,6 +4985,13 @@ export class Conductor {
             },
           )
           : { contained: false as const, reason: 'containment disabled by configuration' };
+        // The daemon owns root mutations. Register the complete fingerprint →
+        // verify lifetime before provisioning the provider so a concurrent
+        // mutation either finishes first or waits for this exact snapshot to
+        // verify. Outside daemon concurrency this seam is intentionally inert.
+        const boundaryWindow = this.liveBoundaryCoordinator
+          ? await this.liveBoundaryCoordinator.openWindow(containment)
+          : undefined;
         const prepareInvocation = (invocation: SelfHostInvocation): SelfHostInvocation => {
           if (!containment.contained) return invocation;
           return { ...invocation, ...wrapForContainment(invocation, bindSet) };
@@ -4992,28 +5004,32 @@ export class Conductor {
         // recorded reason is consumed at the next dispatch boundary, which is
         // where the HALT marker is written and the run stops.
         const verify = async () => {
-          const result = await verifyLiveBoundary(boundary, containment)
-            .catch(() => ({
-              ok: false,
-              reason: 'Live boundary could not be verified.',
-              containedDrift: undefined,
-            }));
-          await this.events.emit(
-            containment.contained
-              ? { type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence }
-              : { type: 'self_host_containment_verdict', contained: false, reason: containment.reason },
-          );
-          if (result.containedDrift) {
-            await this.events.emit({
-              type: 'contained_live_checkout_drift',
-              evidence: result.containedDrift.evidence,
-              attribution: 'concurrent-operator',
-              summary: result.containedDrift.summary,
-            });
-          }
-          if (!result.ok) {
-            this.pendingLiveBoundaryHalt =
-              result.reason ?? 'Live boundary could not be verified.';
+          try {
+            const result = await verifyLiveBoundary(boundary, containment)
+              .catch(() => ({
+                ok: false,
+                reason: 'Live boundary could not be verified.',
+                containedDrift: undefined,
+              }));
+            await this.events.emit(
+              containment.contained
+                ? { type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence }
+                : { type: 'self_host_containment_verdict', contained: false, reason: containment.reason },
+            );
+            if (result.containedDrift) {
+              await this.events.emit({
+                type: 'contained_live_checkout_drift',
+                evidence: result.containedDrift.evidence,
+                attribution: 'concurrent-operator',
+                summary: result.containedDrift.summary,
+              });
+            }
+            if (!result.ok) {
+              this.pendingLiveBoundaryHalt =
+                result.reason ?? 'Live boundary could not be verified.';
+            }
+          } finally {
+            boundaryWindow?.close();
           }
         };
         const featureSlug = this.featureSlug ?? state.feature_desc;
