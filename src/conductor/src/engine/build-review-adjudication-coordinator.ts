@@ -79,6 +79,12 @@ export async function coordinateBuildReviewAdjudication(input: {
   const preDispatchOperatorRoute = routeIfAllOperatorResolved(resolved);
   if (preDispatchOperatorRoute) return preDispatchOperatorRoute;
   currentSources = sources.filter((source) => !resolved.has(source.findingId));
+  // Frozen at dispatch: the exact source set the judge was asked about. Every
+  // later authority read is a delta against this, never against the raw join.
+  const dispatchSources = currentSources;
+  const dispatchSourceIds = dispatchSources.map(buildReviewAdjudicationSourceId);
+  const liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
+    new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved,
   });
@@ -91,11 +97,19 @@ export async function coordinateBuildReviewAdjudication(input: {
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
   const postJudgeOperatorRoute = routeIfAllOperatorResolved(resolved);
   if (postJudgeOperatorRoute) return postJudgeOperatorRoute;
-  if (sources.some((source) => resolved.has(source.findingId))) return fail('operator disposition changed during adjudication');
-  const graph = validateRemediationCaseGraph(currentSources.map(buildReviewAdjudicationSourceId), judgement);
+  // The judgement is validated against exactly the sources the judge was handed.
+  // An acceptance that landed while it was thinking suppresses only its own
+  // source: its case is dropped before reservation, and every sibling case is
+  // still reconciled, effected, and routed. Failing the whole lap closed here
+  // is what made any pre-existing acceptance un-adjudicable.
+  const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement);
   if (!graph.ok) return fail(`invalid remediation judgement ${graph.reason}`);
+  const liveSourceIds = liveSourceIdsFor(resolved);
+  const admitted = graph.graph.cases.filter((proposed) =>
+    proposed.sources.some((source) => liveSourceIds.has(source.sourceId)),
+  );
   const reconciled = await reconcileRemediationCases(store, {
-    graph: graph.graph, recordedAt: new Date().toISOString(), generateId: input.generateId ?? randomUUID,
+    graph: { ...graph.graph, cases: admitted }, recordedAt: new Date().toISOString(), generateId: input.generateId ?? randomUUID,
   });
   if (!reconciled.ok) return fail(reconciled.reason === 'store-failure' ? `case store ${reconciled.storeReason}` : `case reconciliation ${reconciled.reason}`);
 
@@ -105,7 +119,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   const newlyStamped = reconciled.state.cases.slice(prior.state.cases.length);
   let newIndex = 0;
   const caseIdsByRef = new Map<string, string>();
-  for (const proposed of graph.graph.cases) {
+  for (const proposed of admitted) {
     const id = proposed.case.existingCaseId ?? newlyStamped[newIndex++]?.id;
     if (id) caseIdsByRef.set(proposed.case.caseRef, id);
   }
@@ -131,7 +145,7 @@ export async function coordinateBuildReviewAdjudication(input: {
     }
   }
 
-  for (const proposed of graph.graph.cases) {
+  for (const proposed of admitted) {
     if (!proposed.case.existingCaseId) continue;
     const caseId = caseIdsByRef.get(proposed.case.caseRef);
     const record = caseId ? reconciledCasesById.get(caseId) : undefined;
@@ -146,7 +160,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   }
 
   const tasksByCaseId = new Map<string, readonly { readonly title: string }[]>();
-  for (const proposed of graph.graph.cases) {
+  for (const proposed of admitted) {
     if (proposed.case.disposition !== 'act') continue;
     const caseId = caseIdsByRef.get(proposed.case.caseRef);
     if (!caseId || proposed.case.effect.kind !== 'action') return fail('action case identity was not reconciled');
@@ -180,7 +194,7 @@ export async function coordinateBuildReviewAdjudication(input: {
     }
   }
   if (input.tracker && input.repo && input.fileIssue) {
-    for (const proposed of graph.graph.cases) {
+    for (const proposed of admitted) {
       if (proposed.case.disposition !== 'defer' || proposed.case.effect.kind !== 'deferral') continue;
       const caseId = caseIdsByRef.get(proposed.case.caseRef);
       if (!caseId) return fail('deferral case identity was not reconciled');
@@ -207,7 +221,13 @@ export async function coordinateBuildReviewAdjudication(input: {
   }
   const settled = await store.read();
   if (!settled.ok) return fail(`case store ${settled.reason}`);
-  const transition = reduceBuildReviewAdjudication({ currentSourceIds: currentSources.map(buildReviewAdjudicationSourceId), cases: settled.state.cases, mechanical: input.mechanical });
+  // Adjacent to the BUILD/HALT/PASS exit itself: an acceptance that arrived
+  // while effects were settling must not leave an obsolete route standing.
+  try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+  const exitOperatorRoute = routeIfAllOperatorResolved(resolved);
+  if (exitOperatorRoute) return exitOperatorRoute;
+  const exitSourceIds = [...liveSourceIdsFor(resolved)];
+  const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: settled.state.cases, mechanical: input.mechanical });
   await input.emit?.({
     type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
     caseIds: settled.state.cases.map((record) => record.id),
