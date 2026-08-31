@@ -96,29 +96,52 @@ function eventSequence(type: ConductorEvent['type']): ConductorEvent[] {
   return events;
 }
 
-function signals(exporter: InMemorySpanExporter): unknown[] {
-  return exporter.getFinishedSpans().map((span: ReadableSpan) => ({ name: span.name, status: span.status, attributes: span.attributes, events: span.events.map((event) => ({ name: event.name, attributes: event.attributes })) }));
+interface OtelSignals {
+  spans: unknown[];
+  metrics: unknown[];
 }
-async function throughInteractive(events: ConductorEvent[]): Promise<unknown[]> {
+
+function withoutRunIdentity(attributes: Record<string, unknown>): Record<string, unknown> {
+  const { project: _project, feature: _feature, ...eventAttributes } = attributes;
+  return eventAttributes;
+}
+
+function signals(spanExporter: InMemorySpanExporter, metricExporter: InMemoryMetricExporter): OtelSignals {
+  return {
+    spans: spanExporter.getFinishedSpans().map((span: ReadableSpan) => ({ name: span.name, status: span.status, attributes: span.attributes, events: span.events.map((event) => ({ name: event.name, attributes: event.attributes })) })),
+    metrics: metricExporter.getMetrics().flatMap((resourceMetrics) => resourceMetrics.scopeMetrics.flatMap((scopeMetrics) =>
+      scopeMetrics.metrics.map((metric) => ({
+        name: metric.descriptor.name,
+        dataPoints: metric.dataPoints.map((point) => ({
+          value: point.value,
+          attributes: withoutRunIdentity(point.attributes),
+        })),
+      })),
+    )),
+  };
+}
+async function throughInteractive(events: ConductorEvent[]): Promise<OtelSignals> {
   const pipelineDir = await mkdtemp(join(tmpdir(), 'interactive-otel-parity-')); dirs.push(pipelineDir);
   const exporter = new InMemorySpanExporter();
-  buildExporters.mockReturnValueOnce({ spanExporter: exporter, metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE) });
+  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  buildExporters.mockReturnValueOnce({ spanExporter: exporter, metricExporter });
   const emitter = new ConductorEventEmitter();
   const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = { config, pipelineDir, emitter, startContext: { feature: 'interactive', project: 'test', pipelineDir, branch: undefined, engineVersion: undefined } };
   const visualizers = buildInteractiveVisualizers(new PluginRegistry(), config, context);
   for (const event of events) await emitter.emit(event);
   await Promise.all(visualizers.map((visualizer) => visualizer.stop()));
-  return signals(exporter);
+  return signals(exporter, metricExporter);
 }
-async function throughDaemonDispatch(events: ConductorEvent[], filteredType?: ConductorEvent['type']): Promise<unknown[]> {
+async function throughDaemonDispatch(events: ConductorEvent[], filteredType?: ConductorEvent['type']): Promise<OtelSignals> {
   const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-parity-')); dirs.push(repo);
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a'); fixture.events = events; fixture.filteredType = filteredType;
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
   const exporter = new InMemorySpanExporter();
-  buildExporters.mockReturnValueOnce({ spanExporter: exporter, metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE) });
+  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  buildExporters.mockReturnValueOnce({ spanExporter: exporter, metricExporter });
   await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] } });
-  return signals(exporter);
+  return signals(exporter, metricExporter);
 }
 
 function rejectingMetricExporter(): PushMetricExporter {
@@ -171,21 +194,21 @@ function terminalVerdicts(events: ConductorEvent[]): Array<Record<string, unknow
   }
   return verdicts;
 }
-function missingParityTypes(results: Map<ConductorEvent['type'], { interactive: unknown[]; daemon: unknown[] }>): ConductorEvent['type'][] {
+function missingParityTypes(results: Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>): ConductorEvent['type'][] {
   return [...results].flatMap(([type, result]) => JSON.stringify(result.interactive) === JSON.stringify(result.daemon) ? [] : [type]);
 }
 
 describe('daemon OTel parity acceptance', () => {
   it('exports every OTel event through daemon dispatch exactly as the interactive helper does', async () => {
-    const results = new Map<ConductorEvent['type'], { interactive: unknown[]; daemon: unknown[] }>();
+    const results = new Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>();
     for (const type of otelEventTypes()) results.set(type, { interactive: await throughInteractive(eventSequence(type)), daemon: await throughDaemonDispatch(eventSequence(type)) });
     const missing = missingParityTypes(results);
     expect(missing, `daemon OTel exporter missed: ${missing.join(', ')}`).toEqual([]);
   });
-  it('proves the parity assertion names a deliberately filtered daemon event', async () => {
-    const type = 'pipeline_closeout' as const;
-    const results = new Map<ConductorEvent['type'], { interactive: unknown[]; daemon: unknown[] }>([[type, { interactive: await throughInteractive(eventSequence(type)), daemon: await throughDaemonDispatch(eventSequence(type), type) }]]);
-    expect(missingParityTypes(results)).toEqual(['pipeline_closeout']);
+  it('proves the parity assertion detects a filtered metric-only snapshot', async () => {
+    const type = 'feature_cost_snapshot' as const;
+    const results = new Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>([[type, { interactive: await throughInteractive(eventSequence(type)), daemon: await throughDaemonDispatch(eventSequence(type), type) }]]);
+    expect(missingParityTypes(results)).toEqual(['feature_cost_snapshot']);
   });
 
   it('logs one persisted otel export failure without changing the daemon run outcome', async () => {
