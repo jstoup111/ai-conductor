@@ -215,6 +215,9 @@ export function stampBuildReviewDispatchedCandidate(
     // let validation enforce rubric-appropriateness (unexpected payloads
     // carrying one are rejected with a named problem, never laundered here).
     ...(source?.relocationAudit === undefined ? {} : { relocationAudit: source.relocationAudit }),
+    ...(source?.counterfactualSensitivity === undefined
+      ? {}
+      : { counterfactualSensitivity: source.counterfactualSensitivity }),
   };
 }
 
