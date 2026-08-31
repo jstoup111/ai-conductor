@@ -396,9 +396,14 @@ async function appendHaltClearedRecord(worktreePath: string, cause: 'operator' |
  * Watch a halted feature's worktree for HALT marker removal, calling `onCleared`
  * when the `.pipeline/HALT` file is deleted or renamed away.
  *
- * Uses chokidar to watch for filesystem events. On detecting an unlink event
- * (both delete and rename), re-verifies the file is truly gone before calling
- * the callback. Returns a dispose function that closes the watcher (idempotent).
+ * Uses chokidar to watch for filesystem events as the fast path, plus a
+ * polling fallback (default HALT_CLEARED_POLL_INTERVAL_MS) that bounds
+ * worst-case detection: fs event delivery is best-effort, so a clear that
+ * lands before the watcher is ready — or an event the OS drops — is still
+ * detected within one poll interval. On either path the marker is re-verified
+ * gone before the callback fires, and the callback fires at most once.
+ * Returns a dispose function that closes the watcher and stops the poll
+ * (idempotent).
  *
  * Errors and missing directories are handled gracefully:
  * - If the worktree directory doesn't exist, returns a no-op dispose function
@@ -413,53 +418,106 @@ async function appendHaltClearedRecord(worktreePath: string, cause: 'operator' |
  * @param onCleared Callback fired exactly once when HALT marker is confirmed gone
  * @returns Dispose function that closes the watcher
  */
+export interface WatchHaltClearedOptions {
+  /**
+   * Interval for the polling fallback that guarantees a cleared HALT is
+   * detected even when no filesystem event is delivered. Defaults to
+   * HALT_CLEARED_POLL_INTERVAL_MS.
+   */
+  pollIntervalMs?: number;
+}
+
+/**
+ * Default polling-fallback interval for `watchHaltCleared`. Filesystem events
+ * remain the fast path; this bounds worst-case detection latency when an
+ * event is dropped or the clear lands before the watcher is ready.
+ */
+export const HALT_CLEARED_POLL_INTERVAL_MS = 1000;
+
 export function watchHaltCleared(
   worktreeBase: string,
   slug: string,
   onCleared: () => void,
+  options?: WatchHaltClearedOptions,
 ): () => void {
   const worktreePath = join(worktreeBase, slug);
   const haltPath = join(worktreePath, HALT_MARKER);
   const clearedPath = join(worktreePath, '.pipeline', 'HALT.cleared');
   let watcher: FSWatcher | null = null;
   let disposed = false;
+  let fired = false;
 
-  // Start the watcher
+  // Contract: a missing worktree directory yields a no-op dispose and the
+  // callback is never invoked. Checked up front so the polling fallback
+  // below cannot fire for a worktree that never existed.
+  if (!existsSync(worktreePath)) {
+    return () => {
+      /* no-op */
+    };
+  }
+
+  // Fire-once path shared by the fs-event fast path and the polling
+  // fallback. Re-verifies the marker is truly gone, attributes the clear
+  // (Task 15), appends the audit record, then calls onCleared exactly once.
+  const fireIfCleared = async (): Promise<void> => {
+    if (disposed || fired) return;
+    const stillExists = await exists(haltPath);
+    // Re-check after the await: a concurrent caller may have fired, or
+    // dispose may have run while we were checking the filesystem.
+    if (disposed || fired || stillExists) return;
+    fired = true;
+    // Task 15: attribute the clear to its cause before waking the
+    // daemon. A `HALT.cleared` sibling means the rekick flow renamed
+    // HALT away (cause='rekick'); its absence means an operator deleted
+    // HALT directly (cause='operator'). The append is synchronous and
+    // happens BEFORE onCleared() fires, so the record always precedes
+    // any re-dispatch/dispose race (AC5).
+    const cause: 'operator' | 'rekick' = existsSync(clearedPath) ? 'rekick' : 'operator';
+    await appendHaltClearedRecord(worktreePath, cause);
+    onCleared();
+  };
+
+  // Fast path: filesystem events.
   try {
     watcher = chokidar.watch(haltPath, { ignoreInitial: true });
 
+    // Handler returns the fireIfCleared promise so direct invocations (and
+    // tests driving the handler) can await the full clear flow.
     watcher.on('unlink', async () => {
-      if (disposed) return;
-
-      // Re-verify the file is actually gone
-      const stillExists = await exists(haltPath);
-      if (!stillExists) {
-        // Task 15: attribute the clear to its cause before waking the
-        // daemon. A `HALT.cleared` sibling means the rekick flow renamed
-        // HALT away (cause='rekick'); its absence means an operator deleted
-        // HALT directly (cause='operator'). The append is synchronous and
-        // happens BEFORE onCleared() fires, so the record always precedes
-        // any re-dispatch/dispose race (AC5).
-        const cause: 'operator' | 'rekick' = existsSync(clearedPath) ? 'rekick' : 'operator';
-        await appendHaltClearedRecord(worktreePath, cause);
-        onCleared();
-      }
+      await fireIfCleared();
     });
 
-    // Swallow watcher errors (best-effort monitoring)
-    watcher.on('error', () => {
-      /* ignore */
+    // Watcher errors do not risk a missed pickup (the poll below is the
+    // guaranteed path), but surface them loudly: a silent swallow hides
+    // real operational limits like inotify instance exhaustion.
+    watcher.on('error', (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `[daemon] WATCH-ERROR: HALT watcher error (slug=${slug}); ` +
+          `falling back to polling: ${message}\n`,
+      );
     });
   } catch {
-    // If the directory doesn't exist or the watcher fails to start,
-    // just return a no-op dispose
+    // If the watcher fails to start, the polling fallback still covers
+    // detection.
     watcher = null;
   }
+
+  // Guaranteed path: fs event delivery is best-effort (a clear that lands
+  // before the watcher is ready, or an event the OS drops, is otherwise
+  // missed forever and the feature is never picked back up). Poll bounds
+  // worst-case detection latency deterministically.
+  const pollIntervalMs = options?.pollIntervalMs ?? HALT_CLEARED_POLL_INTERVAL_MS;
+  const pollTimer = setInterval(() => {
+    void fireIfCleared();
+  }, pollIntervalMs);
+  pollTimer.unref?.();
 
   // Return idempotent dispose function
   return () => {
     if (disposed) return;
     disposed = true;
+    clearInterval(pollTimer);
     if (watcher) {
       watcher.close().catch(() => {
         /* best-effort cleanup */
@@ -479,8 +537,9 @@ export function watchHaltCleared(
  */
 export function makeWatchHaltClearedSeam(
   worktreeBase: string,
+  options?: WatchHaltClearedOptions,
 ): (slug: string, onCleared: () => void) => () => void {
   return (slug: string, onCleared: () => void) => {
-    return watchHaltCleared(worktreeBase, slug, onCleared);
+    return watchHaltCleared(worktreeBase, slug, onCleared, options);
   };
 }

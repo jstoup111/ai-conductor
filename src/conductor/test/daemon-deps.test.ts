@@ -45,12 +45,14 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // Track if onCleared was called
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
-      onClearedCalled = true;
-    });
-
-    // Give the watcher time to set up
-    await new Promise((r) => setTimeout(r, 100));
+    const dispose = watchHaltCleared(
+      tempDir,
+      slug,
+      () => {
+        onClearedCalled = true;
+      },
+      { pollIntervalMs: 25 },
+    );
 
     // Delete the HALT file
     await unlink(join(pipelineDir, 'HALT'));
@@ -79,12 +81,14 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // Track if onCleared was called
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
-      onClearedCalled = true;
-    });
-
-    // Give the watcher time to set up
-    await new Promise((r) => setTimeout(r, 100));
+    const dispose = watchHaltCleared(
+      tempDir,
+      slug,
+      () => {
+        onClearedCalled = true;
+      },
+      { pollIntervalMs: 25 },
+    );
 
     // Rename HALT to HALT.cleared (what the rekick flow does)
     await rename(haltPath, join(pipelineDir, 'HALT.cleared'));
@@ -113,12 +117,14 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // Track if onCleared was called
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
-      onClearedCalled = true;
-    });
-
-    // Give the watcher time to set up
-    await new Promise((r) => setTimeout(r, 100));
+    const dispose = watchHaltCleared(
+      tempDir,
+      slug,
+      () => {
+        onClearedCalled = true;
+      },
+      { pollIntervalMs: 25 },
+    );
 
     // Dispose the watcher
     dispose();
@@ -134,6 +140,41 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // onCleared should NOT have been called
     expect(onClearedCalled).toBe(false);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Scenario (f): HALT already gone when the watcher starts → polling fallback
+  // fires onCleared. fs events are best-effort: a clear that lands before the
+  // watcher is ready (or an event the OS drops) must still be detected, so the
+  // watcher carries a bounded poll and never depends on event delivery alone.
+  // ───────────────────────────────────────────────────────────────────────────
+  it('HALT cleared before the watcher starts → polling fallback fires onCleared', async () => {
+    const mod = await load();
+    const watchHaltCleared = requireFn(mod, 'watchHaltCleared');
+
+    const slug = 'test-feature-pre-cleared';
+    const worktreeDir = join(tempDir, slug);
+    const pipelineDir = join(worktreeDir, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+
+    // HALT was created and cleared before anyone watched — no fs event will
+    // ever be delivered for it. Only the poll can observe this.
+    const haltPath = join(pipelineDir, 'HALT');
+    await writeFile(haltPath, 'halted\n', 'utf-8');
+    await unlink(haltPath);
+
+    let onClearedCalled = false;
+    const dispose = watchHaltCleared(
+      tempDir,
+      slug,
+      () => {
+        onClearedCalled = true;
+      },
+      { pollIntervalMs: 25 },
+    );
+
+    await vi.waitFor(() => expect(onClearedCalled).toBe(true), { timeout: 2000 });
+    dispose();
   });
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -183,12 +224,14 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // Track if onCleared was called
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
-      onClearedCalled = true;
-    });
-
-    // Give the watcher time to set up
-    await new Promise((r) => setTimeout(r, 100));
+    const dispose = watchHaltCleared(
+      tempDir,
+      slug,
+      () => {
+        onClearedCalled = true;
+      },
+      { pollIntervalMs: 25 },
+    );
 
     // Create a sibling file in .pipeline to trigger a watcher event
     // but the HALT file still exists
@@ -252,11 +295,14 @@ describe('watchHaltCleared — halt_cleared audit record with cause attribution 
     await writeFile(join(pipelineDir, 'HALT'), 'halted\n', 'utf-8');
 
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
-      onClearedCalled = true;
-    });
-
-    await new Promise((r) => setTimeout(r, 100));
+    const dispose = watchHaltCleared(
+      tempDir,
+      slug,
+      () => {
+        onClearedCalled = true;
+      },
+      { pollIntervalMs: 25 },
+    );
     await unlink(join(pipelineDir, 'HALT'));
 
     await vi.waitFor(() => expect(onClearedCalled).toBe(true), { timeout: 2000 });
@@ -282,11 +328,14 @@ describe('watchHaltCleared — halt_cleared audit record with cause attribution 
     await writeFile(haltPath, 'halted\n', 'utf-8');
 
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
-      onClearedCalled = true;
-    });
-
-    await new Promise((r) => setTimeout(r, 100));
+    const dispose = watchHaltCleared(
+      tempDir,
+      slug,
+      () => {
+        onClearedCalled = true;
+      },
+      { pollIntervalMs: 25 },
+    );
     await rename(haltPath, join(pipelineDir, 'HALT.cleared'));
 
     await vi.waitFor(() => expect(onClearedCalled).toBe(true), { timeout: 2000 });
@@ -313,11 +362,14 @@ describe('watchHaltCleared — halt_cleared audit record with cause attribution 
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
     let onClearedCalled = false;
-    const dispose = watchHaltCleared(tempDir, slug, () => {
-      onClearedCalled = true;
-    });
-
-    await new Promise((r) => setTimeout(r, 100));
+    const dispose = watchHaltCleared(
+      tempDir,
+      slug,
+      () => {
+        onClearedCalled = true;
+      },
+      { pollIntervalMs: 25 },
+    );
 
     // Simulate the worktree vanishing out from under the watcher: remove the
     // whole worktree directory (including HALT) and replace it with a plain
