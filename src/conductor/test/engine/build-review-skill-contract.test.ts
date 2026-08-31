@@ -13,7 +13,7 @@ describe('build-review Test Quality skill contract', () => {
 
     expect(skill).toMatch(/`stayed-green`.*not automatically/i);
     expect(skill).toMatch(/concrete stub-passable assertion/i);
-    expect(skill).toMatch(/`infrastructure-failure`.*not a finding/i);
+    expect(skill).toMatch(/infrastructure failure.*not a finding/i);
   });
 
   it('is a gating build-phase judgement-only contract that the engine dispatches, never the operator', async () => {
@@ -27,10 +27,15 @@ describe('build-review Test Quality skill contract', () => {
     expect(skill).toMatch(/judgement-only contract/i);
   });
 
-  it('returns a findings-only payload with the closed vocabulary and a nested content-region anchor', async () => {
+  it('returns a findings-plus-optional-counterfactualSensitivity payload with closed vocabularies and a nested content-region anchor', async () => {
     const skill = await readFile(testQualitySkillPath, 'utf8');
 
-    expect(skill).toMatch(/only top-level field is `findings`/i);
+    expect(skill).toMatch(/required `findings` array and an optional\s+`counterfactualSensitivity` field/i);
+    expect(skill).toMatch(/"counterfactualSensitivity": "supports \| indeterminate \| not-applicable"/);
+    expect(skill).toMatch(/`supports` means either an executed in-scope example fails on the reverted tree, or the reverted\s+production causes the intended tests to fail during collection or load/i);
+    expect(skill).toMatch(/`indeterminate`[\s\S]*#1915 database-auth or boot failures/i);
+    expect(skill).toMatch(/`indeterminate`[\s\S]*neither sensitivity support nor a finding/i);
+    expect(skill).toMatch(/`not-applicable` means the counterfactual evidence does not apply/i);
     expect(skill).toMatch(/\*\*Closed vocabulary:\*\* `test-insensitive`\./);
     expect(skill).toMatch(/sole allowed member `test-insensitive`/);
     expect(skill).toMatch(/`concernKind` field \(never `kind`\)/);
