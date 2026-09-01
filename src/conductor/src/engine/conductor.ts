@@ -706,7 +706,9 @@ async function readRemediationGateAppendBudget(
     readKickbackLedger(projectRoot),
     readGrowth(projectRoot, growthCap),
   ]);
-  const priorLaps = ledger.gates[gate]?.count ?? 0;
+  const priorLaps = (
+    ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
+  )?.laps ?? 0;
   return { gate, priorLaps, lapCap, taskCount, growthTaskCount, growthCap, growth };
 }
 
@@ -729,7 +731,7 @@ async function recordRemediationGateAppend(
 ): Promise<void> {
   const ledger = await readKickbackLedger(projectRoot);
   const existing = ledger.gates[budget.gate];
-  const next: KickbackGateEntry = {
+  const next: KickbackGateEntry & { laps: number } = {
     ...(existing ?? {
       count: 0,
       cumulative: 0,
@@ -738,7 +740,7 @@ async function recordRemediationGateAppend(
       priorVerdict: true,
       resolvedBefore: 0,
     }),
-    count: budget.priorLaps + (budget.taskCount > 0 ? 1 : 0),
+    laps: budget.priorLaps + (budget.taskCount > 0 ? 1 : 0),
   };
   await writeKickbackLedger(projectRoot, {
     ...ledger,
