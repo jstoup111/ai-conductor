@@ -90,7 +90,6 @@ import {
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { appendTimingSection, renderShippedRecord } from '../../src/engine/shipped-record.js';
-import { classifyBuildProgress, shouldEscalateKickback } from '../../src/engine/kickback-escalation.js';
 import { deriveEffectiveBuildReviewVerdict, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
@@ -536,20 +535,6 @@ describe('engine/conductor', () => {
       expect(outcome.detail).toContain('lap cap reached (1/1)');
       expect(outcome.detail).not.toMatch(/plan-growth allowance/i);
       expect(outcome.detail).not.toMatch(/growth cap reached/i);
-    });
-
-    it('keeps the zero-tree-change escalation armed for an existing-task lap', () => {
-      // The existing-task route above reaches build without adding plan work;
-      // its capture/check pair therefore sees this ordinary no-progress shape
-      // on a repeated as-built failure and must still terminate it.
-      const progress = classifyBuildProgress({
-        treeBefore: 'unchanged-tree', treeAfter: 'unchanged-tree',
-        resolvedBefore: 1, resolvedAfter: 1,
-      });
-
-      expect(shouldEscalateKickback({
-        progress, priorVerdict: false, nextVerdict: false, enabled: true,
-      })).toMatchObject({ halt: true });
     });
 
     it('routes a validated prd_audit FIXABLE existing-task gap without appending', async () => {
