@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-01T14:04:34.601Z
 Slug: when-bypasses-gating-enforcement-while-disable-is-
 Class: needs-human
 Halting step: prd_audit
