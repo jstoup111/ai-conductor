@@ -190,6 +190,7 @@ import {
   isVerdictRunIdentityStep,
 } from './artifacts.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
+import { canonicalTaskId } from './autoheal.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
@@ -4533,6 +4534,16 @@ export class Conductor {
       }
       if (remediationReopensSatisfiedDecideArtifact && disposition.kind === 'enter') {
         this.remediationDecideReentryTargets.add(target);
+      }
+      // Existing-task remediation reopens work already named in the plan.
+      // Do this only after admission and budget checks have passed, but before
+      // the caller rewinds to the repair target.
+      if (resolvedExistingTaskIdsByGapId.size > 0 && planPath) {
+        await restageExistingRemediationTaskStatuses(
+          this.projectRoot,
+          planPath,
+          new Set([...resolvedExistingTaskIdsByGapId.values()].flat()),
+        );
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
       // when the appended/upserted rem-* task(s) are already evidence-
@@ -12654,6 +12665,35 @@ export function earliestRemediationTarget(
 export type ExistingTaskBindingResolution =
   | { kind: 'resolved'; ids: string[] }
   | { kind: 'unresolvable'; id: string };
+
+/**
+ * Reopen the already-authored work selected by an existing-task remediation
+ * disposition. The following seedTaskStatus call is deliberately retained as
+ * the authoritative re-seed write path; this only changes the statuses that
+ * must not survive that re-seed as terminal rows.
+ */
+async function restageExistingRemediationTaskStatuses(
+  projectRoot: string,
+  planPath: string,
+  boundIds: ReadonlySet<string>,
+): Promise<void> {
+  const statusPath = join(projectRoot, '.pipeline', 'task-status.json');
+  const statusFile = JSON.parse(await readFile(statusPath, 'utf8')) as {
+    tasks?: Array<Record<string, unknown>>;
+  };
+  if (!Array.isArray(statusFile.tasks)) {
+    throw new Error('task-status.json has no task rows to re-stage');
+  }
+
+  const boundCanonicalIds = new Set([...boundIds].map(canonicalTaskId));
+  for (const task of statusFile.tasks) {
+    if (typeof task.id === 'string' && boundCanonicalIds.has(canonicalTaskId(task.id))) {
+      task.status = 'pending';
+    }
+  }
+  await writeFile(statusPath, JSON.stringify(statusFile, null, 2) + '\n');
+  await seedTaskStatus(projectRoot, planPath);
+}
 
 /**
  * Resolve an existing-task remediation binding against the active plan. Keep

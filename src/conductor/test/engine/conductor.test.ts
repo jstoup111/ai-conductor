@@ -273,7 +273,10 @@ describe('engine/conductor', () => {
       await writeFile(planPath, authoredPlan);
       await writeFile(
         join(dir, '.pipeline', 'task-status.json'),
-        JSON.stringify({ tasks: Array.from({ length: 8 }, (_, index) => ({ id: String(index + 1), status: 'pending' })) }),
+        JSON.stringify({ tasks: Array.from({ length: 8 }, (_, index) => ({
+          id: String(index + 1),
+          status: index < 3 ? 'completed' : 'pending',
+        })) }),
       );
       await writeKickbackLedger(dir, {
         version: 1,
@@ -328,6 +331,20 @@ describe('engine/conductor', () => {
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
+      // Re-stage every bound task before the caller rewinds to build. The
+      // remaining rows stay untouched, so this also proves the route observes
+      // the bound ids rather than broadly resetting task tracking.
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
+        .toEqual([
+          { id: '1', name: 'Existing work 1', status: 'pending' },
+          { id: '2', name: 'Existing work 2', status: 'pending' },
+          { id: '3', name: 'Existing work 3', status: 'pending' },
+          { id: '4', name: 'Existing work 4', status: 'pending' },
+          { id: '5', name: 'Existing work 5', status: 'pending' },
+          { id: '6', name: 'Existing work 6', status: 'pending' },
+          { id: '7', name: 'Existing work 7', status: 'pending' },
+          { id: '8', name: 'Existing work 8', status: 'pending' },
+        ]);
       const ledger = await readKickbackLedger(dir);
       expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
       expect(ledger.growth).toEqual({ authored: 8, added: 0, byGate: {} });
@@ -377,6 +394,8 @@ describe('engine/conductor', () => {
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
+        .toEqual([{ id: '1', name: 'Existing work', status: 'pending' }]);
       expect((await readKickbackLedger(dir)).gates.prd_audit?.laps).toBe(1);
     });
 
