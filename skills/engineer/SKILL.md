@@ -110,7 +110,7 @@ spawned `claude`. Present the proposed target and your rationale, then **confirm
 **Author in an isolated per-idea worktree — never the target's primary checkout.** First create it:
 
 `conduct-ts engineer worktree --project <name> --idea "<idea>" [--source-ref <ref>]` → prints JSON
-`{ slug, branch, worktreePath, reconcile }`. For **intake-claimed ideas**, pass the `sourceRef`
+`{ kind, engineerRunId, slug, branch, worktreePath, reconcile }`. For **intake-claimed ideas**, pass the `sourceRef`
 carried from step 1 as `--source-ref <ref>` — the claim record it resolves lets a later `land`
 auto-resolve the intake body without having to re-thread it by hand. `--source-ref` can be omitted
 for chat/CLI ideas, which have no claim record. This creates a dedicated worktree at
@@ -118,11 +118,67 @@ for chat/CLI ideas, which have no claim record. This creates a dedicated worktre
 repo's derived default branch), disjoint from the daemon's own worktrees. **`worktreePath` is your
 working directory for all authoring, `land`, and `handoff`** for this idea.
 
+#### Authoritative run context
+
+Parse the successful JSON before doing any authoring. Retain the exact returned `engineerRunId`,
+`slug`, `branch`, and `worktreePath` as the authoritative run context. Do not infer or regenerate
+these values from the idea, title, branch, or directory name.
+
+- Use `engineerRunId` for every later lifecycle command in this run.
+- Use `slug` verbatim as the feature and plan stem for every artifact family named below.
+- Use `branch` for push and handoff. It may carry a collision suffix that cannot be reconstructed.
+- Use `worktreePath` as the working directory for every authoring, lifecycle, land, and handoff
+  command.
+
+The engine has already recorded `run_started`, `routing_selected`, and `worktree_created` while
+creating the worktree. Do not record those mechanical transitions again. On a resumed session only,
+recover the same values from `<worktreePath>/.pipeline/engineer-run.json`; the durable marker is a
+resume path, not permission to infer a replacement identity.
+
 - **Strict abort (never fall back):** if the worktree cannot be created (e.g. a detached/unborn
   HEAD with no derivable default branch), the command exits non-zero and makes **zero** changes to
   the target's primary tree. Do **not** author in the primary checkout — surface the error and stop.
 - **reconcile** reports how a leftover from a prior failed run was resolved (`created` / `reused` /
   `attached`); a **dirty** leftover is refused (recreate it). Report the decision to the operator.
+
+#### Lifecycle reporting for no-hook hosts
+
+A host with structured Engineer hooks keeps using those hooks for the transitions they actually
+emit. A managed Codex or other host without equivalent hooks must use `engineer run-record` around
+every applicable Engineer step. Never double-record a transition already emitted by a structured
+hook.
+
+Use these exact command shapes with the retained run id:
+
+```text
+conduct-ts engineer run-record --run-id <engineerRunId> --transition step_started --step <step> [--provider <provider>] [--model <model>]
+conduct-ts engineer run-record --run-id <engineerRunId> --transition step_completed --step <step> --completion accepted_result
+conduct-ts engineer run-record --run-id <engineerRunId> --transition step_completed --step <step> --completion artifact_validation --artifact-paths <comma-separated-paths>
+conduct-ts engineer run-record --run-id <engineerRunId> --transition step_skipped --step <step> --reason "<bounded reason>"
+conduct-ts engineer run-record --run-id <engineerRunId> --transition step_failed --step <step> --error "<established error>"
+conduct-ts engineer run-record --run-id <engineerRunId> --transition step_retried --step <step> --reason "<bounded reason>"
+```
+
+For each step the workflow performs, record `step_started`, run the owning workflow and its human
+acceptance loop, then record `step_completed`. Use `accepted_result` only when that owning workflow's
+result was accepted. Use `artifact_validation` only after deterministic validation proves the
+required artifact, and include its repo-relative path or paths. A tool return is never completion
+evidence.
+
+If track, tier, or workflow applicability omits a canonical step, record `step_skipped` directly
+with the concrete bounded reason. If an attempted step has an established failure, record
+`step_failed`. Before another attempt in this same run, record `step_retried`, then record the new
+`step_started`. Do not mark a rejected result complete.
+
+Use the existing canonical lifecycle names: `bootstrap`, `memory`, and `assess` only when this
+Engineer session actually performs them; `explore`, `complexity`, `prd`, `architecture_diagram`,
+`architecture_review`, `stories`, `conflict_check`, `plan`, and `coherence_check` for the workflow
+below. Do not fabricate completion or skip events for a pre-DECIDE stage the session did not run.
+For the tier and track skips below, record the explicit skip as soon as applicability is known.
+
+Every lifecycle command is a gate. If one exits non-zero or does not return the expected lifecycle
+JSON, stop authoring, preserve the worktree, and report the exact lifecycle error. Never continue
+producing work whose progress the lifecycle store did not accept.
 
 With **`worktreePath` as the working directory**, run the genuine skills **in canonical conduct
 order**, honoring each skill's own clarity loops and human gates. The engineer owns the WHOLE
@@ -131,27 +187,33 @@ DECIDE phase — the daemon only builds — so produce the complete, build-ready
 
 1. `/explore` → Pass the **problem statement + desired outcomes** as primary framing; if an embedded
    hypothesis exists from step 1, pass it explicitly marked as "a candidate, not the chosen approach".
-   Run discovery and confirm the **track** (product/technical) → `.docs/track/<stem>.md`. Ephemeral
+   Run discovery and confirm the **track** (product/technical) → `.docs/track/<slug>.md`. Ephemeral
    notes only (no `.docs/` design doc).
 2. **Complexity assessment** → classify the feature **S / M / L** (same signals conduct uses:
    models, integrations, auth, state machines, story count). Write the tier to
-   `.docs/complexity/<plan-stem>.md` with a `Tier: <S|M|L>` line (plus rationale). The stem
-   **MUST** match the `.docs/plans/<stem>.md` filename so the daemon resolves it.
-3. `/prd`       → an approved product-only PRD in the target's `.docs/specs/` — **product track
+   `.docs/complexity/<slug>.md` with a `Tier: <S|M|L>` line (plus rationale).
+3. `/prd`       → an approved product-only PRD at `.docs/specs/<slug>.md` - **product track
    only; skip on technical** (acceptance criteria live in stories there).
 4. `/architecture-diagram`  → `.docs/architecture/` — **skip for Small**
 5. `/architecture-review`   → `.docs/decisions/` (review report + ADRs) — **skip for Small;
    lightweight for Medium; full for Large.** Every ADR must be **APPROVED** (no `Status: DRAFT`)
-   before landing. Runs **before** stories.
-6. `/stories`   → stories in the target's `.docs/stories/` (must end **Status: Accepted**)
-7. `/conflict-check`        → `.docs/conflicts/` — **skip for Small**
-8. `/plan`      → an implementation plan in the target's `.docs/plans/`
+   before landing. Runs **before** stories. Preserve the established architecture and ADR naming
+   contracts; these repository-scoped artifacts are not renamed to the feature stem.
+6. `/stories`   → `.docs/stories/<slug>.md` (must end **Status: Accepted**)
+7. `/conflict-check`        → `.docs/conflicts/<slug>.md` - **skip for Small**
+8. `/plan`      → `.docs/plans/<slug>.md`
 9. `/coherence-check` → the committed traceability mapping (outcomes → FRs → stories → tasks) in
-   the target's `.docs/coherence/` — **skip for Small; Medium and Large only.**
+   `.docs/coherence/<slug>.md` - **skip for Small; Medium and Large only.**
 
 These produce **Status:Accepted** artifacts via your real harness (agents + hooks). Do NOT
 hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the operator rejects a
 step, loop within that skill until accepted or abandon the idea — never carry a DRAFT forward.
+
+The returned `slug` is the exact filename stem. Do not shorten it or substitute a title chosen by a
+skill. Before `land`, audit every applicable feature artifact against the retained value:
+`.docs/specs/<slug>.md`, `.docs/stories/<slug>.md`, `.docs/plans/<slug>.md`,
+`.docs/complexity/<slug>.md`, `.docs/conflicts/<slug>.md`, and `.docs/coherence/<slug>.md`. Do not
+rename unrelated or pre-existing artifacts.
 
 ### 4. Land the already-authored spec — from within the worktree
 `conduct-ts engineer land --project <name> --idea "<idea>" --worktree <worktreePath>` (the
@@ -172,6 +234,15 @@ does NOT author; the real DECIDE skills in step 3 already wrote the artifacts in
 
 On failure it leaves the worktree in place for inspection (**keep-on-failure**). It prints JSON
 `{ slug, branch, repoPath }` — pass `branch` and the same `--worktree` to step 5.
+
+If `land` refuses, show the exact deterministic reason and repair only the named artifact or gate
+failure in the same `engineerRunId`, `slug`, `branch`, and `worktreePath`. When the refusal maps to
+an authoring step, record its `step_failed`, `step_retried`, and next `step_started` transitions as
+described above. Rerun `land` with the same retained path and identity after the focused repair.
+Do not create a successor run or reserve a fresh slug for an in-place land refusal. Terminal
+cancellation or failure and a later retry continue to use the existing successor-run contract.
+`land` itself records deterministic refusal or reconciliation events; do not duplicate those
+mechanical events with `run-record`.
 
 ### 5. Open the spec PR + nudge the daemon — remove the worktree on success
 `conduct-ts engineer handoff --project <name> --branch <branch> --worktree <worktreePath>` (the
@@ -224,6 +295,17 @@ behavior is deferred to #759.
 - [ ] All ADRs are APPROVED (no `Status: DRAFT`) before landing
 - [ ] Authoring + `land` + `handoff` ran inside the per-idea worktree (`--worktree`); the target's
       primary tree was never checked out or dirtied
+- [ ] Exact `engineerRunId`, `slug`, `branch`, and `worktreePath` retained from worktree JSON; no
+      identity was inferred from the idea, title, branch, or directory
+- [ ] No-hook host recorded every performed start and evidence-backed completion, every applicable
+      skip, and every established failure/retry in the retained run; no mechanical worktree or land
+      event was double-recorded
+- [ ] Completion used only an accepted owning-workflow result or deterministic artifact validation;
+      no tool return was treated as proof
+- [ ] Every applicable feature artifact filename uses the exact returned `slug`, and the filename
+      audit passed before `land`
+- [ ] A lifecycle recording error stopped authoring with the worktree preserved and the exact error
+      visible
 - [ ] Worktree creation strict-aborted (no primary-tree mutation) if it could not be made
 - [ ] All artifacts + the `spec/<slug>` branch landed inside the resolved target repo only
 - [ ] Spec is discovery-build-ready: stories end `Status: Accepted` (no DRAFT) and the plan
@@ -234,6 +316,6 @@ behavior is deferred to #759.
       local-commit result that opens no PR)
 - [ ] Spec PR opened to the target repo; nothing built, nothing merged
 - [ ] On success the per-idea worktree was removed and `spec/<slug>` stayed reachable; on failure it
-      was kept for inspection
+      was kept for inspection; a recoverable land refusal was repaired in the same run and worktree
 - [ ] `ensureRunning` nudged the target daemon fire-and-forget (no lifecycle ownership)
 - [ ] Sibling repos left byte-for-byte unchanged

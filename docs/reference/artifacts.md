@@ -47,7 +47,7 @@ Twenty entries. Alphabetized; the five with no code reference are marked.
 | `coherence/` | `<plan-stem>.md` | `coherence-check` skill (M and L tiers only) | `coherence_check` completion glob; the land-time coherence validator |
 | `coherence-waivers/` | `<plan-stem>.md` | operator, hand-authored | the land-time coherence waiver check. The directory appears when the first waiver is committed — see below |
 | `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, engineer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line. Missing ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
-| `conflicts/` | `YYYY-MM-DD-<slug>.md` | `conflict-check` skill | `conflict_check` completion glob |
+| `conflicts/` | `YYYY-MM-DD-<slug>.md`; the Engineer loop uses the exact worktree-returned `<slug>.md` under the [reserved-stem contract](#the-engineer-reserved-stem-contract) | `conflict-check` skill | `conflict_check` completion glob |
 | `decisions/` | `adr-<topic>.md`, `adr-YYYY-MM-DD-<topic>.md`, `NNN-<topic>.md`, `architecture-review-*.md`, `technical-assessment-*.md` | `architecture-review`, `assess`, `bootstrap`, `prd`, `simplify`, `debugging`, `finish` | `architecture_review` and `assess` completion globs; the land gate and daemon discovery both scan every `adr-*.md` and reject one whose first declared status is not `APPROVED` or `SUPERSEDED` |
 | `halted/` | `<slug>.md` | the halt-marker writer | An operator-readable halt record on the feature branch. It records status, slug, halt class, halting step, phase, branch, HEAD SHA, UTC halt time, the full HALT body, and whether the record may be ahead of the remote. It is written and committed for an operator-actionable (`needs-human`, `plan-gap`, or `protected-artifact`) halt off the default branch, then pushed best-effort; `mechanical` halts produce no record. Clearing the halt changes the record's status to resolved while retaining its original details. |
 | `intake/` | `<plan-stem>.md` | `intake` skill | `parseIntakeSourceRef` reads `Source-Ref: owner/repo#N`; `Owner: <id>` drives the daemon owner gate |
@@ -59,8 +59,8 @@ Twenty entries. Alphabetized; the five with no code reference are marked.
 | `retired/` | `<plan-stem>.md`, plus `README.md` registering each retirement as delivered or abandoned | operator, hand-authored | **no code reference** — a plan moved here leaves the backlog scan's non-recursive `.docs/plans` listing, retiring work that another feature already delivered or the operator abandoned. See [`.docs/retired/README.md`](../../.docs/retired/README.md) |
 | `retros/` | `YYYY-MM-DD-<feature-name>.md` | `retro` skill | `retro` completion glob, resolved by slug or by mtime at or after session start |
 | `shipped/` | `<plan-stem>.md` | `conduct-ts shipped-record` | daemon backlog dedup; the only input to `conduct-ts kpi` |
-| `specs/` | `YYYY-MM-DD-<slug>.md` | `prd` skill (product track only) | `prd` completion glob; protected-artifact seal |
-| `stories/` | `YYYY-MM-DD-<slug>.md`, plus `epics/` and `features/<name>/` subdirs | `stories` skill | `stories` completion glob; plan-coverage check; coherence rows; protected-artifact seal |
+| `specs/` | `YYYY-MM-DD-<slug>.md`; the Engineer loop uses the exact worktree-returned `<slug>.md` under the [reserved-stem contract](#the-engineer-reserved-stem-contract) | `prd` skill (product track only) | `prd` completion glob; protected-artifact seal |
+| `stories/` | `YYYY-MM-DD-<slug>.md`, plus `epics/` and `features/<name>/` subdirs; the Engineer loop uses the exact worktree-returned `<slug>.md` for its feature file under the [reserved-stem contract](#the-engineer-reserved-stem-contract) | `stories` skill | `stories` completion glob; plan-coverage check; coherence rows; protected-artifact seal |
 | `track/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `explore` skill | `parseTrack` reads a `Track: product\|technical` line. Missing ⇒ defaults to `product`. Decides whether `prd` and `prd_audit` run. The file also carries a `Scope boundary:` line recording the operator-confirmed fix breadth; `plan` and `stories` read it as binding free-form text — no code parses it |
 
 Every entry above is committed.
@@ -78,6 +78,19 @@ Artifacts are keyed by the **plan stem**: the plan file's basename with only a t
 Interior dots survive, so `.docs/plans/phase-9.3b-intake.md` has the stem `phase-9.3b-intake`. That stem
 is the shared key across the daemon backlog, the interactive conduct path, and the land gate — and the
 filename of the matching `complexity/`, `track/`, `intake/`, `coherence/`, and `shipped/` entries.
+
+#### The Engineer reserved-stem contract
+
+The Engineer loop uses its worktree-returned slug verbatim for feature-scoped PRD, stories, conflict,
+plan, complexity, and coherence filenames. For `prd`, `stories`, and `conflict_check`, the declared
+completion patterns match any Markdown filename in the applicable directory and the feature identity
+contract normalizes an optional leading date before comparing stems. `landSpec` applies that same
+identity contract to every idea-authored candidate before committing it. Protected-artifact discovery
+is directory-based, so bare-slug specs and stories are sealed exactly like their date-prefixed forms;
+conflict artifacts are not a protected family.
+
+This is an exact identity supplied by worktree reservation, not the relaxed lookup below. No consumer
+must infer a missing date or search for a nearby filename.
 
 #### The undated-stem fallback
 

@@ -8,6 +8,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENGINEER_SKILL_FILE="$HARNESS_DIR/skills/engineer/SKILL.md"
 
 PASS=0
 FAIL=0
@@ -237,7 +238,93 @@ require_pattern 'engineer scopes /quit to Claude Code sessions' \
   "$HARNESS_DIR/skills/engineer/SKILL.md"
 require_pattern 'engineer gives non-Claude hosts a normal session-end path' \
   'other supported host.*(end|close).*session|end.*session.*other supported host' \
-  "$HARNESS_DIR/skills/engineer/SKILL.md"
+  "$ENGINEER_SKILL_FILE"
+
+# The canonical Engineer skill is executable lifecycle policy for hosts without
+# structured hooks. Audit exact commands and artifact identities so a nearby
+# prose mention cannot stand in for the behavior the host must perform.
+engineer_host_contract_audit() {
+  local file=$1
+  local normalized
+  local required
+
+  normalized="$(tr '\n' ' ' < "$file")"
+
+  for required in \
+    '{ kind, engineerRunId, slug, branch, worktreePath, reconcile }' \
+    'Retain the exact returned `engineerRunId`, `slug`, `branch`, and `worktreePath` as the authoritative run context.' \
+    'Do not infer or regenerate these values from the idea, title, branch, or directory name.' \
+    'already recorded `run_started`, `routing_selected`, and `worktree_created`' \
+    'conduct-ts engineer run-record --run-id <engineerRunId> --transition step_started --step <step> [--provider <provider>] [--model <model>]' \
+    'conduct-ts engineer run-record --run-id <engineerRunId> --transition step_completed --step <step> --completion accepted_result' \
+    'conduct-ts engineer run-record --run-id <engineerRunId> --transition step_completed --step <step> --completion artifact_validation --artifact-paths <comma-separated-paths>' \
+    'conduct-ts engineer run-record --run-id <engineerRunId> --transition step_skipped --step <step> --reason "<bounded reason>"' \
+    'conduct-ts engineer run-record --run-id <engineerRunId> --transition step_failed --step <step> --error "<established error>"' \
+    'conduct-ts engineer run-record --run-id <engineerRunId> --transition step_retried --step <step> --reason "<bounded reason>"' \
+    'A tool return is never completion evidence.' \
+    '`bootstrap`, `memory`, and `assess` only when this Engineer session actually performs them' \
+    '.docs/specs/<slug>.md' \
+    '.docs/stories/<slug>.md' \
+    '.docs/plans/<slug>.md' \
+    '.docs/complexity/<slug>.md' \
+    '.docs/conflicts/<slug>.md' \
+    '.docs/coherence/<slug>.md' \
+    'stop authoring, preserve the worktree, and report the exact lifecycle error' \
+    'same `engineerRunId`, `slug`, `branch`, and `worktreePath`' \
+    'Do not create a successor run or reserve a fresh slug for an in-place land refusal'; do
+    grep -qF -- "$required" <<< "$normalized" || return 1
+  done
+
+  return 0
+}
+
+expect_engineer_host_contract() {
+  local description=$1
+  local expected=$2
+  local file=$3
+  local status
+
+  set +e
+  engineer_host_contract_audit "$file"
+  status=$?
+  set -e
+
+  if [ "$status" -eq "$expected" ]; then
+    pass "$description"
+  else
+    fail "$description"
+  fi
+}
+
+expect_engineer_host_contract \
+  'engineer gives no-hook hosts executable lifecycle, evidence, identity, and refusal recovery policy' \
+  0 "$ENGINEER_SKILL_FILE"
+
+engineer_contract_fixture="$(mktemp)"
+
+assert_engineer_contract_mutation_fails() {
+  local description=$1
+  local removed_line=$2
+
+  grep -vF -- "$removed_line" "$ENGINEER_SKILL_FILE" > "$engineer_contract_fixture"
+  expect_engineer_host_contract "$description" 1 "$engineer_contract_fixture"
+}
+
+assert_engineer_contract_mutation_fails \
+  'engineer contract rejects omission of worktree-returned run identity' \
+  '{ kind, engineerRunId, slug, branch, worktreePath, reconcile }'
+assert_engineer_contract_mutation_fails \
+  'engineer contract rejects omission of explicit retry recording' \
+  'conduct-ts engineer run-record --run-id <engineerRunId> --transition step_retried --step <step> --reason "<bounded reason>"'
+assert_engineer_contract_mutation_fails \
+  'engineer contract rejects tool-return completion evidence' \
+  'A tool return is never completion'
+assert_engineer_contract_mutation_fails \
+  'engineer contract rejects omission of returned-slug PRD naming' \
+  '.docs/specs/<slug>.md'
+assert_engineer_contract_mutation_fails \
+  'engineer contract rejects omission of same-run land-refusal recovery' \
+  'Do not create a successor run or reserve a fresh slug for an in-place land refusal'
 
 # The positive checks above pin expected language. This small deterministic audit
 # rejects the high-risk ways a shared instruction can accidentally become
@@ -296,7 +383,7 @@ expect_audit() {
 }
 
 contract_fixture="$(mktemp)"
-trap 'rm -f "$contract_fixture"' EXIT
+trap 'rm -f "$contract_fixture" "$engineer_contract_fixture"' EXIT
 
 printf '%s\n' \
   'Claude Code invokes `conduct` as `/conduct`; Codex invokes it as `$conduct`.' \

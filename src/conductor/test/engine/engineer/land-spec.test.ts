@@ -17,6 +17,8 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import { stepHasArtifacts } from '../../../src/engine/artifacts.js';
+import { createProtectedArtifactSeal } from '../../../src/engine/protected-artifact-seal.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
@@ -915,6 +917,31 @@ describe('Task 2: feature-scoped artifact stems at land (#1743)', () => {
     const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
 
     expect(result.branch).toBeTruthy();
+  });
+
+  it('preserves bare worktree-reserved stems through land, completion globs, and protected sealing', async () => {
+    const dir = await seedNamedTierMWorktree(idea, slug, '');
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+    await expect(Promise.all([
+      stepHasArtifacts(dir, 'prd'),
+      stepHasArtifacts(dir, 'stories'),
+      stepHasArtifacts(dir, 'conflict_check'),
+    ])).resolves.toEqual([true, true, true]);
+
+    const baselineCommit = await git(['rev-parse', 'HEAD'], dir);
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: dir,
+      baselineCommit,
+    });
+    const sealedPaths = seal.protectedArtifacts.map(({ path }) => path);
+    expect(sealedPaths).toEqual(expect.arrayContaining([
+      `.docs/specs/${slug}.md`,
+      `.docs/stories/${slug}.md`,
+    ]));
+    expect(sealedPaths).not.toContain(`.docs/conflicts/${slug}.md`);
   });
 });
 

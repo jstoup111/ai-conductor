@@ -21,6 +21,12 @@ that identity first with `conduct-ts engineer run-create`; a direct legacy flow 
 exact association in `.pipeline/engineer-run.json`. The marker carries repository, plan slug, and branch
 identity, so consumers never infer identity from a worktree directory name.
 
+Worktree creation records the mechanical run-started, route-selected, and worktree-created events. A
+host without structured Engineer hooks records each authoring step through `engineer run-record` using
+the returned run id. Completion requires the owning workflow's accepted result or deterministic
+artifact validation. A tool return alone is not evidence. Land independently validates the final
+artifact set and reconciles any mechanically proven completion or skip without weakening its gates.
+
 The events are durable under
 `$AI_CONDUCTOR_ENGINEER_DIR/lifecycle/runs/<engineerRunId>/events.jsonl`, outside the authoring
 worktree. `engineer run-inspect` reduces that journal to a compact snapshot and repairs a missing compact
@@ -155,8 +161,12 @@ conduct-ts engineer worktree \
   --source-ref <owner/repo#N>
 ```
 
-You should see `{"kind":"worktree","slug":"…","branch":"spec/<slug>","worktreePath":"…","reconcile":"…"}`.
+You should see
+`{"kind":"worktree","engineerRunId":"…","slug":"…","branch":"spec/<slug>","worktreePath":"…","reconcile":"…"}`.
 
+- Parse and retain the exact `engineerRunId`, `slug`, `branch`, and `worktreePath`. They are
+  authoritative for the rest of this run. Do not reconstruct them from the idea, title, branch, or
+  directory name. Use `.pipeline/engineer-run.json` only to resume the same worktree and run.
 - `worktreePath` is `<target>/.worktrees/engineer-<slug>`, checked out on a fresh `spec/<slug>`
   branch. It is your working directory for every remaining step of this idea.
 - `reconcile` reports how a leftover from a prior failed run was handled: `created`, `reused`, or
@@ -178,22 +188,39 @@ missing or unreadable record degrades to no staging rather than failing.
 
 With `worktreePath` as the working directory, run the real DECIDE skills in canonical order. The
 engineer owns the whole DECIDE phase; the daemon only builds. Every artifact is written inside the
-worktree, never the primary checkout.
+worktree, never the primary checkout. Use the returned `slug` verbatim for the feature artifacts:
 
-1. `/explore` — discovery and the confirmed track.
-2. Complexity assessment — write the tier to `.docs/complexity/<plan-stem>.md`. The stem must match
-   the plan filename or the daemon cannot resolve it.
-3. `/prd` — product track only.
-4. `/architecture-diagram` — skipped at tier S.
-5. `/architecture-review` — skipped at tier S. Every ADR must be APPROVED before landing.
-6. `/stories` — must end `Status: Accepted`.
-7. `/conflict-check` — skipped at tier S.
-8. `/plan`.
-9. `/coherence-check` — tiers M and L only.
+1. `/explore` - discovery and the confirmed track at `.docs/track/<slug>.md`.
+2. Complexity assessment - write the tier to `.docs/complexity/<slug>.md`.
+3. `/prd` - product track only, at `.docs/specs/<slug>.md`.
+4. `/architecture-diagram` - skipped at tier S.
+5. `/architecture-review` - skipped at tier S. Every ADR must be APPROVED before landing. Keep its
+   established architecture and ADR naming contracts.
+6. `/stories` - `.docs/stories/<slug>.md`, ending with `Status: Accepted`.
+7. `/conflict-check` - `.docs/conflicts/<slug>.md`, skipped at tier S.
+8. `/plan` - `.docs/plans/<slug>.md`.
+9. `/coherence-check` - `.docs/coherence/<slug>.md`, tiers M and L only.
 
 Do not hand-write stub or DRAFT artifacts. See [steps reference](../reference/steps.md) for the
 per-step tier-skip and enforcement table, and [SDLC phases](../explanation/sdlc-phases.md) for why
 the order is fixed.
+
+For a managed Codex or another host without structured Engineer hooks, wrap every performed step with
+the existing lifecycle command:
+
+```bash
+conduct-ts engineer run-record --run-id <engineerRunId> --transition step_started --step <step>
+# Run the owning workflow and its acceptance loop.
+conduct-ts engineer run-record --run-id <engineerRunId> --transition step_completed --step <step> --completion accepted_result
+```
+
+Use `--completion artifact_validation --artifact-paths <comma-separated-paths>` only after a
+deterministic artifact check. Record `step_skipped --reason`, `step_failed --error`, and
+`step_retried --reason` when those transitions occur. A retry is followed by another `step_started`.
+The canonical names are `explore`, `complexity`, `prd`, `architecture_diagram`,
+`architecture_review`, `stories`, `conflict_check`, `plan`, and `coherence_check`; record
+`bootstrap`, `memory`, or `assess` only if the session actually performs that stage. A failed
+lifecycle command stops authoring and leaves the worktree in place.
 
 ## Step 5 — Land the spec
 
@@ -209,6 +236,10 @@ conduct-ts engineer land \
 branch. It authors nothing. You should see `{"slug":"…","branch":"spec/<slug>","repoPath":"…"}` —
 pass `branch` and the same `--worktree` to step 6.
 
+Before running it, audit the applicable feature filenames against the exact retained slug:
+`.docs/specs/<slug>.md`, `.docs/stories/<slug>.md`, `.docs/plans/<slug>.md`,
+`.docs/complexity/<slug>.md`, `.docs/conflicts/<slug>.md`, and `.docs/coherence/<slug>.md`.
+
 Before committing, `land` refuses on any of:
 
 - a missing required artifact for the recorded tier,
@@ -220,6 +251,12 @@ Before committing, `land` refuses on any of:
 
 `--worktree` is required. `land` never falls back to the primary checkout. On failure the worktree
 is kept for inspection and its path is printed.
+
+For a recoverable refusal, report the exact reason, repair only the named artifact or gate failure,
+and rerun land with the same `engineerRunId`, `slug`, `branch`, and `worktreePath`. Record authoring
+step failure and retry transitions when the repair maps to a step. Do not create a successor run or
+new slug for an in-place refusal. Land owns the deterministic refusal and reconciliation events, so
+the host does not duplicate them with `run-record`.
 
 With `--source-ref`, `land` also comments "Routed to `<repo>`" on the originating issue and advances
 the ledger to `routed`. That write-back is advisory: a `gh` failure never fails a successful land.

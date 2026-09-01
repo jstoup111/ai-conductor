@@ -431,10 +431,9 @@ done
 
 SCOPE_CONTRACT_TEXT="$(printf '%s\n' "${SCOPE_CONTRACT_FILES[@]}" | while read -r relative_path; do cat "${HARNESS_DIR}/${relative_path}"; done)"
 GENERIC_SCOPE_TEXT="$(printf '%s\n' "${SCOPE_CONTRACT_FILES[@]}" | while read -r relative_path; do
-  case "$relative_path" in
-    skills/conduct/SKILL.md) ;;
-    skills/*) cat "${HARNESS_DIR}/${relative_path}" ;;
-  esac
+  if [[ "$relative_path" == skills/* && "$relative_path" != skills/conduct/SKILL.md ]]; then
+    cat "${HARNESS_DIR}/${relative_path}"
+  fi
 done)"
 TDD_RED_SECTION="$(awk '
   /^### Phase 1: RED/ { in_red = 1; next }

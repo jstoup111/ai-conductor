@@ -127,6 +127,12 @@ the `engineer_*` family through `ConductorEventEmitter`. Claude host hooks may e
 structured tool or workflow started or failed. Codex and hosts without an equivalent hook use
 `engineer run-record` for the same transitions.
 
+The no-hook host retains the `engineerRunId` returned by `engineer worktree`, records every performed
+step start and evidence-backed completion, records applicability skips, and records a failed step
+plus retry before another attempt. Worktree creation and land already emit their mechanical events;
+the host does not duplicate them. A rejected lifecycle command stops authoring and preserves the
+worktree for recovery.
+
 A `PostToolUse` callback cannot prove that a DECIDE step completed. Tool return proves only that the
 tool invocation returned. `engineer_step_completed` accepts only an owning workflow's accepted result,
 deterministic artifact validation, or land-time reconciliation. The land command validates the final

@@ -568,6 +568,19 @@ another schema version fails explicitly. Existing BUILD and SHIP event names and
 Generic `run-record` accepts `accepted_result` and `artifact_validation` completion evidence.
 `land_reconciliation` is reserved for the engine-owned `land` reconciliation path.
 
+`engineer worktree` records the mechanical run-started, routing-selected, and worktree-created
+transitions. A host must not emit them again. A managed Codex or other host without structured
+Engineer hooks retains the returned `engineerRunId` and uses `run-record` for each authoring
+`step_started`, evidence-backed `step_completed`, applicable `step_skipped`, established
+`step_failed`, and same-run `step_retried` transition. A retry precedes the next start. A lifecycle
+command error stops authoring; it is not safe to continue with unrecorded progress.
+
+The `slug`, `branch`, and `worktreePath` returned beside that run id remain authoritative through
+authoring, land, and handoff. The host uses the returned slug for feature-scoped filenames and uses
+the marker only to resume the same identity. Land still validates the final artifacts and records
+its own refusal or reconciliation, so host guidance neither replaces the deterministic gate nor
+duplicates its events.
+
 `--source-ref` on `worktree`, `--body` on `worktree`, and the `--idea` and free-text launch forms are
 all accepted by the code but absent from the root `--help` output.
 

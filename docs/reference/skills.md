@@ -419,12 +419,16 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `model: opus`.
 - **Engine step** — none. It is a separate control plane with its own CLI subcommands.
 - **Inputs** — a claimed GitHub intake issue, or a launch argument or chat idea; the project registry.
-- **Outputs** — in a per-idea worktree on a `spec/<slug>` branch: the track marker, the complexity
-  marker whose stem must match the plan stem, and the full `.docs/` DECIDE artifact set; an intake
-  marker committed at land; the spec PR.
+- **Outputs** - in a per-idea worktree on a `spec/<slug>` branch: the track marker and feature-scoped
+  PRD, stories, complexity, conflict, plan, and coherence artifacts named with the exact slug
+  returned by `engineer worktree`; the remaining DECIDE artifacts under their established naming
+  contracts; an intake marker committed at land; the spec PR.
 - **Gate role** — neither as an engine step, but the land gate is hard: no idea reaches a build without
   a merged spec PR, only the operator merges, no spec lands with a DRAFT ADR, and the tier must be
-  recorded. See [engineer-loop](../guides/engineer-loop.md).
+  recorded. Worktree creation owns the mechanical start, route, and worktree events. A no-hook host
+  owns live authoring transitions through `engineer run-record`, using only accepted-result or
+  deterministic-artifact evidence for completion; land owns final reconciliation and refusal.
+  See [engineer-loop](../guides/engineer-loop.md).
 
 ## BUILD-phase skills
 
