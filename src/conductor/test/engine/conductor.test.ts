@@ -260,6 +260,121 @@ describe('engine/conductor', () => {
 
       expect(result).toEqual({ kind: 'resolved', ids: ['2'] });
     });
+
+    it('routes validated existing-task findings to build without appending or spending growth (#2119)', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
+      const authoredPlan = Array.from(
+        { length: 8 },
+        (_, index) => `### Task ${index + 1}: Existing work ${index + 1}`,
+      ).join('\n');
+      await writeFile(planPath, authoredPlan);
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: Array.from({ length: 8 }, (_, index) => ({ id: String(index + 1), status: 'pending' })) }),
+      );
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {},
+        growth: { authored: 8, added: 0, byGate: {} },
+      });
+      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | REMEDIABLE | Task 1 | Repair task one |',
+        '| ARCH-2 | REMEDIABLE | Task 2 | Repair task two |',
+        '| ARCH-3 | REMEDIABLE | Task 3 | Repair task three |',
+      ].join('\n'));
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'remediate') {
+              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+                dispositions: [1, 2, 3].map((id) => ({
+                  id: `ARCH-${id}`,
+                  disposition: 'existing-task',
+                  category: null,
+                  rationale: `Task ${id} already owns this repair.`,
+                  tasks: [{ id: String(id), title: `Existing work ${id}` }],
+                })),
+              }));
+            }
+            return { success: true };
+          },
+        },
+        events,
+        projectRoot: dir,
+        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        ALL_STEPS,
+        'test #2119',
+        {
+          source: 'architecture-review-as-built',
+          evidence: [{
+            gate: 'architecture_review_as_built',
+            evidenceFile: '.pipeline/architecture-review-as-built.md',
+          }],
+        },
+      );
+
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
+      expect((await readKickbackLedger(dir)).growth).toEqual({ authored: 8, added: 0, byGate: {} });
+    });
+
+    it('routes a validated prd_audit FIXABLE existing-task gap without appending', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
+      const authoredPlan = '### Task 1: Existing work\n';
+      await writeFile(planPath, authoredPlan);
+      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n');
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }));
+      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
+        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+        '| Criterion | Grade | Plan task | PRD: | Evidence |',
+        '|---|---|---|---|---|',
+        '| S1.1 | FIXABLE | 1 | FR-1 | x |',
+      ].join('\n'));
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'remediate') {
+              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+                dispositions: [{
+                  id: 'FR-1', disposition: 'existing-task', category: null,
+                  rationale: 'Task 1 already owns this repair.',
+                  tasks: [{ id: '1', title: 'Existing work' }],
+                }],
+              }));
+            }
+            return { success: true };
+          },
+        },
+        events,
+        projectRoot: dir,
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        ALL_STEPS,
+        'test prd existing-task',
+        { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+      );
+
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
+    });
   });
 
   it('credits lap counts once immediately before reopening an invalidated build_review after rebase', async () => {

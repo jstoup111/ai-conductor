@@ -4067,17 +4067,21 @@ export class Conductor {
       if (
         sealedArtifactGapIds.has(gap.id) ||
         gap.disposition === REMEDIATION_PUBLICATION_DISPOSITION ||
-        gap.disposition === 'halt'
+        gap.disposition === 'halt' ||
+        gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
       ) {
         admittedGaps.push(gap);
-        // A `halt` disposition IS the planner addressing this finding — it
-        // judged the repair a human decision rather than plan growth. Count it
-        // so the exact-match check below does not report it `Missing` and
-        // preempt the halt at the `halts.length > 0` branch, which names the
-        // finding's own category and rationale. Deliberately scoped to `halt`:
-        // the sealed-artifact and publication dispositions sharing this early
-        // return keep their existing `Missing` reporting untouched.
-        if (gap.disposition === 'halt' && asBuiltFindings.has(gap.id)) {
+        // A `halt` or `existing-task` disposition IS the planner addressing
+        // this finding: the former judges it a human decision, while the
+        // latter binds it to already-authored work rather than plan growth.
+        // Count both so the exact-match check below does not report the
+        // finding `Missing`. Sealed-artifact and publication dispositions
+        // sharing this early return keep their existing `Missing` reporting
+        // untouched.
+        if (
+          (gap.disposition === 'halt' || gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) &&
+          asBuiltFindings.has(gap.id)
+        ) {
           admittedAsBuiltFindingCounts.set(
             gap.id,
             (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1,
