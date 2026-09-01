@@ -159,6 +159,7 @@ import {
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   readRemediationPlan,
+  REMEDIATION_EXISTING_TASK_DISPOSITION,
   REMEDIATION_PUBLICATION_DISPOSITION,
   remediationDispositionAppendsToPlan,
   remediationDispositionStep,
@@ -186,7 +187,7 @@ import {
   stampGateRunIdentity,
   isVerdictRunIdentityStep,
 } from './artifacts.js';
-import { parsePlanTaskBodies } from './plan-task-parse.js';
+import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
@@ -4024,9 +4025,45 @@ export class Conductor {
     // attributed to prd_audit for the single shared plan-growth record.
     const asBuiltTasks: Array<{ id: string; title: string }> = [];
     const asBuiltGrowthTasks: Array<{ id: string; title: string }> = [];
+    // Task 2 records canonical plan ids here. Task 3 consumes the record when
+    // it admits existing-task gaps without sending them through plan growth.
+    const resolvedExistingTaskIdsByGapId = new Map<string, string[]>();
+    let activePlanTaskIds: ReadonlySet<string> | undefined;
     const admittedAsBuiltFindingCounts = new Map<string, number>();
     const unexpectedAsBuiltGapIds = new Set<string>();
     for (const gap of gaps) {
+      if (gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) {
+        if (activePlanTaskIds === undefined) {
+          if (!planPath) {
+            return {
+              kind: 'halt',
+              haltClass: 'needs-human',
+              detail: `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': active plan is unavailable.`,
+            };
+          }
+          try {
+            activePlanText = activePlanText || await readFile(planPath, 'utf8');
+            activePlanTaskIds = new Set(parsePlanTaskBodies(activePlanText).keys());
+          } catch (error) {
+            return {
+              kind: 'halt',
+              haltClass: 'needs-human',
+              detail:
+                `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': ` +
+                `active plan could not be read (${error instanceof Error ? error.message : String(error)}).`,
+            };
+          }
+        }
+        const bindings = resolveExistingTaskBindingsForAdmission(gap.tasks, activePlanTaskIds);
+        if (bindings.kind === 'unresolvable') {
+          return {
+            kind: 'halt',
+            haltClass: 'needs-human',
+            detail: `existing-task remediation cannot resolve bound id '${bindings.id}' in the active plan.`,
+          };
+        }
+        resolvedExistingTaskIdsByGapId.set(gap.id, bindings.ids);
+      }
       if (
         sealedArtifactGapIds.has(gap.id) ||
         gap.disposition === REMEDIATION_PUBLICATION_DISPOSITION ||
@@ -12601,6 +12638,30 @@ export function earliestRemediationTarget(
     }
   }
   return { target: best, unresolved: [...unresolved] };
+}
+
+export type ExistingTaskBindingResolution =
+  | { kind: 'resolved'; ids: string[] }
+  | { kind: 'unresolvable'; id: string };
+
+/**
+ * Resolve an existing-task remediation binding against the active plan. Keep
+ * this at the admission seam so every caller shares plan-task-parse's grammar
+ * and trailing-annotation normalization rather than recreating either locally.
+ */
+export function resolveExistingTaskBindingsForAdmission(
+  tasks: ReadonlyArray<Pick<RemediationGap['tasks'][number], 'id'>>,
+  activePlanTaskIds: ReadonlySet<string>,
+): ExistingTaskBindingResolution {
+  const ids: string[] = [];
+  for (const task of tasks) {
+    const resolved = resolvePlanTaskReference(task.id, activePlanTaskIds);
+    if (resolved.kind !== 'resolved') {
+      return { kind: 'unresolvable', id: resolved.kind === 'unresolvable' ? resolved.id : task.id };
+    }
+    ids.push(resolved.id);
+  }
+  return { kind: 'resolved', ids };
 }
 
 /**

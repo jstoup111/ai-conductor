@@ -59,6 +59,7 @@ import {
   findResumeIndex,
   resolveGroupMembership,
   earliestRemediationTarget,
+  resolveExistingTaskBindingsForAdmission,
 } from '../../src/engine/conductor.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
@@ -193,6 +194,72 @@ describe('engine/conductor', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  describe('existing-task remediation admission', () => {
+    it('resolves bound ids from the active plan through the shared resolver', () => {
+      const result = resolveExistingTaskBindingsForAdmission(
+        [{ id: '2', title: 'Existing task binding' }],
+        new Set(['1', '2']),
+      );
+
+      expect(result).toEqual({ kind: 'resolved', ids: ['2'] });
+    });
+
+    it('rejects a bound id absent from the active plan and names it', () => {
+      const result = resolveExistingTaskBindingsForAdmission(
+        [{ id: 'missing-task', title: 'Existing task binding' }],
+        new Set(['1', '2']),
+      );
+
+      expect(result).toEqual({ kind: 'unresolvable', id: 'missing-task' });
+    });
+
+    it('halts needs-human at routing admission when a bound id is absent from the active plan', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'remediate') {
+              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+                dispositions: [{
+                  id: 'missing-binding',
+                  disposition: 'existing-task',
+                  category: null,
+                  rationale: 'The existing task owns this repair.',
+                  tasks: [{ id: 'missing-task', title: 'Existing task binding' }],
+                }],
+              }));
+            }
+            return { success: true };
+          },
+        },
+        events,
+        projectRoot: dir,
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        ALL_STEPS,
+        'test admission',
+        { source: 'finish' },
+      );
+
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+      expect(outcome.detail).toContain('missing-task');
+    });
+
+    it('strips a trailing parenthesized binding annotation through the shared resolver', () => {
+      const result = resolveExistingTaskBindingsForAdmission(
+        [{ id: '2 (already scoped)', title: 'Existing task binding' }],
+        new Set(['1', '2']),
+      );
+
+      expect(result).toEqual({ kind: 'resolved', ids: ['2'] });
+    });
   });
 
   it('credits lap counts once immediately before reopening an invalidated build_review after rebase', async () => {
