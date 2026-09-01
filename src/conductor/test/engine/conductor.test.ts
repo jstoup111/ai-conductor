@@ -252,6 +252,94 @@ describe('engine/conductor', () => {
       expect(outcome.detail).toContain('missing-task');
     });
 
+    it.each([
+      ['missing', undefined, false],
+      ['unreadable', undefined, true],
+    ])('halts needs-human without routing when task-status is %s during re-stage', async (_case, taskStatus, makeUnreadable) => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
+      if (taskStatus !== undefined) {
+        await writeFile(join(dir, '.pipeline', 'task-status.json'), taskStatus);
+      }
+      if (makeUnreadable) {
+        await mkdir(join(dir, '.pipeline', 'task-status.json'));
+      }
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'remediate') {
+              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+                dispositions: [{
+                  id: 'existing-binding',
+                  disposition: 'existing-task',
+                  category: null,
+                  rationale: 'The existing task owns this repair.',
+                  tasks: [{ id: '1', title: 'Existing task binding' }],
+                }],
+              }));
+            }
+            return { success: true };
+          },
+        },
+        events,
+        projectRoot: dir,
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000, build: 'done' },
+        ALL_STEPS,
+        'test re-stage failure',
+        { source: 'finish' },
+      );
+
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+      expect(outcome.detail).toMatch(/re-stage.*task-status/i);
+    });
+
+    it('halts needs-human without routing when a bound id is absent from task-status during re-stage', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '2', status: 'completed' }],
+      }));
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'remediate') {
+              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+                dispositions: [{
+                  id: 'missing-status-binding',
+                  disposition: 'existing-task',
+                  category: null,
+                  rationale: 'The existing task owns this repair.',
+                  tasks: [{ id: '1', title: 'Existing task binding' }],
+                }],
+              }));
+            }
+            return { success: true };
+          },
+        },
+        events,
+        projectRoot: dir,
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000, build: 'done' },
+        ALL_STEPS,
+        'test missing re-stage id',
+        { source: 'finish' },
+      );
+
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+      expect(outcome.detail).toMatch(/re-stage.*'1'/i);
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')))
+        .toEqual({ tasks: [{ id: '2', status: 'completed' }] });
+    });
+
     it('strips a trailing parenthesized binding annotation through the shared resolver', () => {
       const result = resolveExistingTaskBindingsForAdmission(
         [{ id: '2 (already scoped)', title: 'Existing task binding' }],

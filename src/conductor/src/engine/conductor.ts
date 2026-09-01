@@ -4551,11 +4551,18 @@ export class Conductor {
       // Do this only after admission and budget checks have passed, but before
       // the caller rewinds to the repair target.
       if (resolvedExistingTaskIdsByGapId.size > 0 && planPath) {
-        await restageExistingRemediationTaskStatuses(
+        const restage = await restageExistingRemediationTaskStatuses(
           this.projectRoot,
           planPath,
           new Set([...resolvedExistingTaskIdsByGapId.values()].flat()),
         );
+        if (restage.kind === 'failed') {
+          return {
+            kind: 'halt',
+            haltClass: 'needs-human',
+            detail: `existing-task remediation could not re-stage task-status.json: ${restage.detail}`,
+          };
+        }
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
       // when the appended/upserted rem-* task(s) are already evidence-
@@ -12678,6 +12685,10 @@ export type ExistingTaskBindingResolution =
   | { kind: 'resolved'; ids: string[] }
   | { kind: 'unresolvable'; id: string };
 
+type ExistingTaskRestageResult =
+  | { kind: 'restaged' }
+  | { kind: 'failed'; detail: string };
+
 /**
  * Reopen the already-authored work selected by an existing-task remediation
  * disposition. The following seedTaskStatus call is deliberately retained as
@@ -12688,23 +12699,44 @@ async function restageExistingRemediationTaskStatuses(
   projectRoot: string,
   planPath: string,
   boundIds: ReadonlySet<string>,
-): Promise<void> {
+): Promise<ExistingTaskRestageResult> {
   const statusPath = join(projectRoot, '.pipeline', 'task-status.json');
-  const statusFile = JSON.parse(await readFile(statusPath, 'utf8')) as {
-    tasks?: Array<Record<string, unknown>>;
-  };
-  if (!Array.isArray(statusFile.tasks)) {
-    throw new Error('task-status.json has no task rows to re-stage');
-  }
-
-  const boundCanonicalIds = new Set([...boundIds].map(canonicalTaskId));
-  for (const task of statusFile.tasks) {
-    if (typeof task.id === 'string' && boundCanonicalIds.has(canonicalTaskId(task.id))) {
-      task.status = 'pending';
+  try {
+    const statusFile = JSON.parse(await readFile(statusPath, 'utf8')) as {
+      tasks?: Array<Record<string, unknown>>;
+    };
+    if (!Array.isArray(statusFile.tasks)) {
+      return { kind: 'failed', detail: 'task-status.json has no task rows to re-stage' };
     }
+
+    const boundCanonicalIds = new Set([...boundIds].map(canonicalTaskId));
+    const stagedCanonicalIds = new Set(statusFile.tasks.flatMap((task) =>
+      typeof task.id === 'string' ? [canonicalTaskId(task.id)] : [],
+    ));
+    const missingIds = [...boundCanonicalIds].filter((id) => !stagedCanonicalIds.has(id));
+    if (missingIds.length > 0) {
+      return {
+        kind: 'failed',
+        detail:
+          `bound id${missingIds.length === 1 ? '' : 's'} ` +
+          `${missingIds.map((id) => `'${id}'`).join(', ')} is absent from task-status.json`,
+      };
+    }
+
+    for (const task of statusFile.tasks) {
+      if (typeof task.id === 'string' && boundCanonicalIds.has(canonicalTaskId(task.id))) {
+        task.status = 'pending';
+      }
+    }
+    await writeFile(statusPath, JSON.stringify(statusFile, null, 2) + '\n');
+    await seedTaskStatus(projectRoot, planPath);
+    return { kind: 'restaged' };
+  } catch (error) {
+    return {
+      kind: 'failed',
+      detail: `task-status.json could not be read or re-staged (${error instanceof Error ? error.message : String(error)})`,
+    };
   }
-  await writeFile(statusPath, JSON.stringify(statusFile, null, 2) + '\n');
-  await seedTaskStatus(projectRoot, planPath);
 }
 
 /**
