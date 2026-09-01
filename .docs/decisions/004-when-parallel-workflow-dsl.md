@@ -20,6 +20,8 @@ The full design space includes loops (`until:`), DAGs (arbitrary `depends_on`), 
 
 Custom steps may declare a `when:` expression. Grammar (5 forms only):
 
+> **Superseded in part — see Amendment (#1777, 2026-09-01).** Eligibility is no longer custom-step-only; `when:` is admitted wherever `disable:` is, by enforcement level. The grammar and semantics below are unchanged.
+
 | Form | Example | Semantics |
 |---|---|---|
 | `tier == V` | `tier == L` | Current `complexity_tier` equals literal |
@@ -90,3 +92,14 @@ The `__` separator avoids collision with existing step keys: harness `ALL_STEPS`
 ## Amendment
 
 **Amended by:** adr-2026-07-10-concurrent-group-core (2026-07-10) — the `parallel:` DSL schema is unchanged, but execution moves from `runParallelGroup` (deleted; dispatched the group name instead of each branch's skill, unbounded fan-out, no rate-limit/retry wiring) to the capped, engine-integrated concurrent group core shared with the built-in SHIP validation group (adr-2026-07-10-validation-group-join).
+
+**Amended by:** DECIDE for `when-bypasses-gating-enforcement-while-disable-is-` (#1777, 2026-09-01, operator-authorized) — `when:` eligibility becomes **enforcement-based**, replacing the custom-step-only rule above.
+
+The original rule split eligibility on step origin: "Custom steps may declare a `when:` expression", enforced at config load by rejecting "`when:` on harness lifecycle step names". That split let `when:` silently skip a **gating custom step** — the exact bypass #1777 names — while forbidding it on advisory built-ins where a conditional skip is legitimate and `disable:` is already permitted. Origin was never the property that mattered; skip authority is.
+
+`when:` is now admitted wherever `disable:` is admitted, by one shared step-definition predicate in `src/conductor/src/engine/config.ts`:
+
+- **Rejected** on any structural step, on any gating built-in whose definition lacks `configDisableAllowed: true`, and on any gating or structural **custom** step (custom steps have no `configDisableAllowed` opt-in). Rejection is enforcement-based and never evaluates the expression, so a tautologically-true `when:` fails too.
+- **Accepted** on advisory steps of either origin and on gating built-ins that opt in — including the harness lifecycle steps `manual_test`, `prd_audit`, and `explore`, which the superseded rule rejected by name.
+
+The grammar, the two-phase validation structure, the AST caching, and the skip semantics are unchanged. Only the eligibility predicate in phase 1 changes; `when_skip` additionally becomes a rendered event so a conditional skip is observable. See `.docs/stories/when-bypasses-gating-enforcement-while-disable-is-.md` Stories 1, 2, and 4 (Accepted).
