@@ -90,6 +90,7 @@ import {
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { appendTimingSection, renderShippedRecord } from '../../src/engine/shipped-record.js';
+import { classifyBuildProgress, shouldEscalateKickback } from '../../src/engine/kickback-escalation.js';
 import { deriveEffectiveBuildReviewVerdict, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
@@ -436,6 +437,114 @@ describe('engine/conductor', () => {
       const ledger = await readKickbackLedger(dir);
       expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
       expect(ledger.growth).toEqual({ authored: 8, added: 0, byGate: {} });
+      // A non-appending binding is still a successful as-built remediation
+      // authorization. It must leave the same durable finding record that
+      // the next successful as-built projection consumes.
+      expect(ledger.pendingAsBuiltRemediationFindings).toEqual([{
+        gate: 'architecture_review_as_built',
+        finding: 'ARCH-1',
+        class: 'REMEDIABLE',
+        governingClause: 'Task 1',
+        summary: 'Repair task one',
+        outcome: 'remediated',
+      }, {
+        gate: 'architecture_review_as_built',
+        finding: 'ARCH-2',
+        class: 'REMEDIABLE',
+        governingClause: 'Task 2',
+        summary: 'Repair task two',
+        outcome: 'remediated',
+      }, {
+        gate: 'architecture_review_as_built',
+        finding: 'ARCH-3',
+        class: 'REMEDIABLE',
+        governingClause: 'Task 3',
+        summary: 'Repair task three',
+        outcome: 'remediated',
+      }]);
+
+      expect(await (conductor as unknown as {
+        projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+      }).projectPendingAsBuiltRemediationFindings()).toBeUndefined();
+      expect((await readKickbackLedger(dir)).pendingAsBuiltRemediationFindings).toBeUndefined();
+    });
+
+    it('halts an existing-task lap at the as-built lap cap without naming plan growth', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '1', status: 'completed' }],
+      }));
+      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+        'Verdict: BLOCKED', '', '## Blocking Findings', '',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | REMEDIABLE | Task 1 | Repair task one |',
+      ].join('\n'));
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          architecture_review_as_built: {
+            count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
+            resolvedBefore: 0, laps: 1,
+          },
+        },
+        growth: { authored: 1, added: 0, byGate: {} },
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'remediate') {
+              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+                dispositions: [{
+                  id: 'ARCH-1', disposition: 'existing-task', category: null,
+                  rationale: 'Task 1 already owns this repair.',
+                  tasks: [{ id: '1', title: 'Existing work' }],
+                }],
+              }));
+            }
+            return { success: true };
+          },
+        },
+        events,
+        projectRoot: dir,
+        config: {
+          architecture_review_as_built: { remediation: { enabled: true }, max_remediation_laps: 1 },
+        } as never,
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        ALL_STEPS,
+        'test existing-task lap cap',
+        {
+          source: 'architecture-review-as-built',
+          evidence: [{
+            gate: 'architecture_review_as_built',
+            evidenceFile: '.pipeline/architecture-review-as-built.md',
+          }],
+        },
+      );
+
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+      expect(outcome.detail).toContain('lap cap reached (1/1)');
+      expect(outcome.detail).not.toMatch(/plan-growth allowance/i);
+    });
+
+    it('keeps the zero-tree-change escalation armed for an existing-task lap', () => {
+      // The existing-task route above reaches build without adding plan work;
+      // its capture/check pair therefore sees this ordinary no-progress shape
+      // on a repeated as-built failure and must still terminate it.
+      const progress = classifyBuildProgress({
+        treeBefore: 'unchanged-tree', treeAfter: 'unchanged-tree',
+        resolvedBefore: 1, resolvedAfter: 1,
+      });
+
+      expect(shouldEscalateKickback({
+        progress, priorVerdict: false, nextVerdict: false, enabled: true,
+      })).toMatchObject({ halt: true });
     });
 
     it('routes a validated prd_audit FIXABLE existing-task gap without appending', async () => {
