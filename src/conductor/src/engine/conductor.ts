@@ -4278,7 +4278,7 @@ export class Conductor {
             ? `lap cap reached (${prdAuditBudget.priorLaps}/${prdAuditBudget.lapCap})`
             :
               `growth cap reached (${prdAuditBudget.growth.added}/${prdAuditBudget.growthCap} appended; ` +
-              `${prdAuditBudget.taskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
+              `${prdAuditBudget.growthTaskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
@@ -4302,7 +4302,7 @@ export class Conductor {
             ? `lap cap reached (${asBuiltBudget.priorLaps}/${asBuiltBudget.lapCap})`
             :
               `shared plan-growth allowance exhausted (${asBuiltBudget.growth.added}/${asBuiltBudget.growthCap} appended; ` +
-              `${asBuiltBudget.taskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
+              `${asBuiltBudget.growthTaskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,

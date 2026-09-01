@@ -242,7 +242,7 @@ describe('engine/conductor', () => {
       });
 
       const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
         ALL_STEPS,
         'test admission',
         { source: 'finish' },
@@ -403,7 +403,7 @@ describe('engine/conductor', () => {
       });
 
       const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
         ALL_STEPS,
         'test #2119',
         {
@@ -510,7 +510,7 @@ describe('engine/conductor', () => {
       });
 
       const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
         ALL_STEPS,
         'test existing-task lap cap',
         {
@@ -564,7 +564,7 @@ describe('engine/conductor', () => {
       });
 
       const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
         ALL_STEPS,
         'test prd existing-task',
         { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
@@ -622,7 +622,7 @@ describe('engine/conductor', () => {
       });
 
       const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
         ALL_STEPS,
         'test mixed existing-task laps',
         {
@@ -668,7 +668,7 @@ describe('engine/conductor', () => {
           return { success: true };
         } },
       });
-      const input = { feature_desc: 'existing-task-bindings', session_started_at: Date.now() };
+      const input = { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 };
       const source = { source: 'prd_audit' as const, evidence: [{ gate: 'prd_audit' as const, evidenceFile: '.pipeline/prd-audit.md' }] };
 
       await expect((conductor as any).planRemediation(input, ALL_STEPS, 'append once', source))
@@ -680,6 +680,65 @@ describe('engine/conductor', () => {
       expect(exhausted).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
       expect(exhausted.detail).toContain('growth cap reached (1/1 appended; 1 requested, 0 remaining)');
       expect(exhausted.detail).toContain('Findings: S1.1.');
+    });
+
+    it('reports only appended PRD-audit tasks as requested when mixed remediation exhausts growth', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'existing-task-bindings.md'),
+        Array.from({ length: 4 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n'),
+      );
+      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), [
+        '## Story 1: Repair', '', '### Happy Path',
+        '- Given the first repair, when it is completed, then it passes.',
+        '- Given the second repair, when it is completed, then it passes.',
+        '- Given the third repair, when it is completed, then it passes.',
+      ].join('\n'));
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '2', status: 'completed' }, { id: '3', status: 'completed' }],
+      }));
+      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
+        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+        '| Criterion | Grade | Plan task | PRD: | Evidence |',
+        '|---|---|---|---|---|',
+        '| S1.1 | FIXABLE | 1 | FR-1 | x |',
+        '| S1.2 | FIXABLE | 2 | FR-2 | x |',
+        '| S1.3 | FIXABLE | 3 | FR-3 | x |',
+      ].join('\n'));
+      // Four authored tasks permit one appended remediation task. It has
+      // already been spent, so this mixed round reaches the growth halt.
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {},
+        growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        projectRoot: dir,
+        events,
+        stepRunner: { run: async (step) => {
+          if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+            dispositions: [
+              { id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] },
+              { id: 'S1.2', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
+              { id: 'S1.3', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '3', title: 'Authored 3' }] },
+            ],
+          }));
+          return { success: true };
+        } },
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
+        ALL_STEPS,
+        'mixed growth exhaustion',
+        { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+      );
+
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+      expect(outcome.detail).toContain('growth cap reached (1/1 appended; 1 requested, 0 remaining)');
     });
 
     it('charges a mixed appending and existing-task round to growth and laps independently', async () => {
@@ -710,7 +769,7 @@ describe('engine/conductor', () => {
         } },
       });
       const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() }, ALL_STEPS, 'mixed attribution',
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 }, ALL_STEPS, 'mixed attribution',
         { source: 'prd_audit', evidence: [
           { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
           { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
