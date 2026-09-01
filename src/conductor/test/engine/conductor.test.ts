@@ -200,7 +200,7 @@ describe('engine/conductor', () => {
   describe('existing-task remediation admission', () => {
     it('resolves bound ids from the active plan through the shared resolver', () => {
       const result = resolveExistingTaskBindingsForAdmission(
-        [{ id: '2', title: 'Existing task binding' }],
+        [{ id: '2' }],
         new Set(['1', '2']),
       );
 
@@ -209,7 +209,7 @@ describe('engine/conductor', () => {
 
     it('rejects a bound id absent from the active plan and names it', () => {
       const result = resolveExistingTaskBindingsForAdmission(
-        [{ id: 'missing-task', title: 'Existing task binding' }],
+        [{ id: 'missing-task' }],
         new Set(['1', '2']),
       );
 
@@ -343,7 +343,7 @@ describe('engine/conductor', () => {
 
     it('strips a trailing parenthesized binding annotation through the shared resolver', () => {
       const result = resolveExistingTaskBindingsForAdmission(
-        [{ id: '2 (already scoped)', title: 'Existing task binding' }],
+        [{ id: '2 (already scoped)' }],
         new Set(['1', '2']),
       );
 
@@ -434,7 +434,7 @@ describe('engine/conductor', () => {
           { id: '8', name: 'Existing work 8', status: 'pending' },
         ]);
       const ledger = await readKickbackLedger(dir);
-      expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
+      expect(ledger.gates.architecture_review_as_built?.count).toBe(1);
       expect(ledger.growth).toEqual({ authored: 8, added: 0, byGate: {} });
       // A non-appending binding is still a successful as-built remediation
       // authorization. It must leave the same durable finding record that
@@ -488,8 +488,8 @@ describe('engine/conductor', () => {
         version: 1,
         gates: {
           architecture_review_as_built: {
-            count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
-            resolvedBefore: 0, laps: 1,
+            count: 1, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
+            resolvedBefore: 0,
           },
         },
         // Two growth slots remain, but this existing-task binding draws none.
@@ -597,7 +597,7 @@ describe('engine/conductor', () => {
       expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
       expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
         .toEqual([{ id: '1', name: 'Existing work', status: 'pending' }]);
-      expect((await readKickbackLedger(dir)).gates.prd_audit?.laps).toBe(1);
+      expect((await readKickbackLedger(dir)).gates.prd_audit?.count).toBe(1);
     });
 
     it('charges one lap to each owning gate in a mixed existing-task round without spending growth', async () => {
@@ -659,8 +659,8 @@ describe('engine/conductor', () => {
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       const ledger = await readKickbackLedger(dir);
-      expect(ledger.gates.prd_audit?.laps).toBe(1);
-      expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
+      expect(ledger.gates.prd_audit?.count).toBe(1);
+      expect(ledger.gates.architecture_review_as_built?.count).toBe(1);
       expect(ledger.growth).toEqual({ authored: 2, added: 0, byGate: {} });
     });
 
@@ -743,8 +743,8 @@ describe('engine/conductor', () => {
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       const ledger = await readKickbackLedger(dir);
       expect(ledger.growth).toEqual({ authored: 8, added: 1, byGate: { prd_audit: 1 } });
-      expect(ledger.gates.prd_audit?.laps).toBe(1);
-      expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
+      expect(ledger.gates.prd_audit?.count).toBe(1);
+      expect(ledger.gates.architecture_review_as_built?.count).toBe(1);
     });
 
   });
