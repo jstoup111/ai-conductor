@@ -4030,6 +4030,11 @@ export class Conductor {
     // Task 2 records canonical plan ids here. Task 3 consumes the record when
     // it admits existing-task gaps without sending them through plan growth.
     const resolvedExistingTaskIdsByGapId = new Map<string, string[]>();
+    // An existing-task binding is the non-appending authorization event for
+    // an as-built finding. Keep its validated record until the rebuilt gate
+    // projects the remediated outcome, just as the append path does after its
+    // successful append authorization.
+    const boundExistingAsBuiltFindings = new Map<string, RecordedAsBuiltRemediationFinding>();
     let activePlanTaskIds: ReadonlySet<string> | undefined;
     const admittedAsBuiltFindingCounts = new Map<string, number>();
     const unexpectedAsBuiltGapIds = new Set<string>();
@@ -4071,7 +4076,11 @@ export class Conductor {
         const prdAuditAdmits = prdAuditValidated && prdAuditFindings.has(gap.id.toUpperCase());
         const asBuiltAdmits = asBuiltValidated && asBuiltFindings.has(gap.id);
         if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
-        if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
+        if (asBuiltAdmits) {
+          asBuiltTasks.push(...gap.tasks);
+          const finding = asBuiltRecordedFindings.get(gap.id);
+          if (finding) boundExistingAsBuiltFindings.set(finding.finding, finding);
+        }
       }
       if (
         sealedArtifactGapIds.has(gap.id) ||
@@ -4419,6 +4428,13 @@ export class Conductor {
         asBuiltBudget,
         this.events,
       );
+      if (boundExistingAsBuiltFindings.size > 0) {
+        await this.reloadPendingAsBuiltRemediationFindings();
+        for (const finding of boundExistingAsBuiltFindings.values()) {
+          this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
+        }
+        await this.persistPendingAsBuiltRemediationFindings();
+      }
     }
 
     const fixes = gaps.filter((g) => g.disposition !== 'halt');
