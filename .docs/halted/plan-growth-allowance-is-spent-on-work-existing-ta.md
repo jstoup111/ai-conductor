@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-01T14:02:44.926Z
 Slug: plan-growth-allowance-is-spent-on-work-existing-ta
 Class: needs-human
 Halting step: prd_audit
