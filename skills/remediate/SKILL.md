@@ -97,6 +97,7 @@ gap must be turned into concrete work:
 | Disposition | When | Daemon effect |
 |---|---|---|
 | `build` | impl / test bug with clear evidence (the fix is obvious from the gap); **implementation/test/documentation drift that preserves the approved architecture**; OR **stall-question is answerable from committed artifacts** | inject the emitted tasks → kick to **build**; for stall-questions, answer lives in `rationale`, `tasks: []` |
+| `existing-task` | the remedy is admitted by an existing active-plan task's **Done when**; bind that disposition to the real active-plan task ID(s) | re-stage the bound task(s) → kick to **build**; no task is appended and no plan-growth allowance is spent |
 | `acceptance_specs` | the gap exists because acceptance coverage is missing or too weak to pin the behavior | kick to **acceptance_specs** (regenerate failing specs), then build |
 | `architecture_review` | changing or clarifying **approved architecture** is required before the gap can be closed | kick to **architecture_review** |
 | `plan` | functionality that **is in scope** but the plan simply omitted or missed (a planning omission, not an architecture or design decision) | In a daemon run, a `plan` disposition is a terminal needs-human HALT and never re-plans. |
@@ -218,7 +219,10 @@ The conductor reads this file to route, so the shape is exact:
 
 Field rules:
 - `id` — the blocking FR id (`FR-N`). For a `prd_audit` report row where `PRD: none`, use that row's report criterion exactly as `S<story>.<ordinal>` (e.g. `S5.1`); real `FR-N` rows remain `FR-N`. For an as-built finding, use the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`); for a finish test failure, `test:<failing file stem>` (e.g. `test:loop-intake`); for a `build_review` trigger gap, `build_review:<stem>` (e.g. `build_review:completeness`); for a stall-question, `stall:<slug>` where `<slug>` is a 1-3 word summary of the question topic (e.g. `stall:validation-layer`, `stall:acceptance-test-fidelity`).
-- `disposition` — one of `build` | `acceptance_specs` | `architecture_review` | `plan` | `publication` | `halt`.
+- `disposition` — one of `build` | `existing-task` | `acceptance_specs` | `architecture_review` | `plan` | `publication` | `halt`.
+  Use `existing-task` only when an existing active-plan task's **Done when** admits the remedy.
+  Its `tasks` must be non-empty bindings whose `id` values are real active-plan task IDs; it never
+  creates new remediation tasks.
   Use `publication` when the shipped code is already correct and the ONLY defect is in what the
   pull request *says* — a placeholder or wrong-template body, a stale title, a missing `Closes`
   reference, prose that describes a superseded approach. It routes to `finish`, which owns PR
@@ -227,8 +231,10 @@ Field rules:
   `publication` when any code, test, spec, or configuration must change — that is `build`.
 - `category` — **only** when `disposition == "halt"`: `architectural-clarity` | `product-scope` | `unanswerable` (stall-question only). Otherwise `null`.
 - `rationale` — one sentence citing the gap's `file:line` evidence and justifying the disposition. For a **stall-question with `disposition == "build"`**, the rationale contains the **answer to the question**, grounded in the committed artifacts that support it. A `plan` rationale must name the examined plan task IDs and why none admits the fix.
-- `tasks` — for a `publication` disposition, tasks are OPTIONAL and purely informational: the
-  `rationale` is the remedy, and nothing is ever appended to the plan (see §5). Otherwise:
+- `tasks` — for an `existing-task` disposition, tasks are required non-empty bindings to real
+  active-plan task IDs. For a `publication` disposition, tasks are OPTIONAL and purely
+  informational: the `rationale` is the remedy, and nothing is ever appended to the plan (see §5).
+  Otherwise:
   **required, non-empty** when `disposition == "build"` (and recommended for `acceptance_specs`/`plan`), EXCEPT for **stall-question answers**, which have `tasks: []` (no further work — the answer in `rationale` is the remedy). Each task is concrete and **file-scoped** (`file:line` + exactly what to change), drawn from the audit evidence. **`[]` for all `halt` dispositions.** A `build` disposition with empty `tasks` is invalid EXCEPT when the input is a `build_stall` stall-question.
 
 Emit one disposition per **blocking** gap. Non-blocking (`ALIGNED` / `ACCEPTED`) FRs are not included.
@@ -237,10 +243,11 @@ Emit one disposition per **blocking** gap. Non-blocking (`ALIGNED` / `ACCEPTED`)
 
 For `build`, `acceptance_specs`, `plan`, and `architecture_review` dispositions, the conductor engine appends each task to the `.docs/plans/{slug}.md` file as a task header for later execution. The append happens at the engine level after remediation completes.
 
-**`publication` and `halt` dispositions are excluded from the append.** `.docs/plans/{slug}.md` is a
-protected artifact; amending it from a step that is not authoring the plan raises
-"Protected artifact self-amendments detected". A PR-prose fix is not plan work, so the engine
-appends nothing for it and re-dispatches `finish` instead.
+**`existing-task`, `publication`, and `halt` dispositions are excluded from the append.**
+`.docs/plans/{slug}.md` is a protected artifact; amending it from a step that is not authoring the
+plan raises "Protected artifact self-amendments detected". An existing-task remedy reuses approved
+plan work, so it neither appends a task nor spends plan-growth allowance; a PR-prose fix is not plan
+work, so the engine appends nothing for it and re-dispatches `finish` instead.
 
 **Task ID Format:**
 - Task IDs must be non-empty and match the grammar: `[A-Za-z0-9._-]+` (alphanumeric, dots, underscores, hyphens)
