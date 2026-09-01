@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-01T16:51:38.687Z
 Slug: enable-single-repo-daemon-concurrency-un-clamp-the
 Class: needs-human
 Halting step: unknown
