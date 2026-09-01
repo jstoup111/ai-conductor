@@ -731,7 +731,7 @@ function remediationGateAppendBudgetExhausted(
   budget: RemediationGateAppendBudget,
 ): 'laps' | 'growth' | undefined {
   if (budget.priorLaps >= budget.lapCap) return 'laps';
-  return budget.taskCount > budget.growth.remaining ? 'growth' : undefined;
+  return budget.growthTaskCount > budget.growth.remaining ? 'growth' : undefined;
 }
 
 /** Persist one successful remediation append while keeping each gate's ledger and growth isolated. */
@@ -4020,6 +4020,7 @@ export class Conductor {
     // gate's bounded append allowance.
     const prdAuditCapEnforced = prdAuditRemediation && prdAuditValidated;
     const prdAuditTasks: Array<{ id: string; title: string }> = [];
+    const prdAuditGrowthTasks: Array<{ id: string; title: string }> = [];
     const asBuiltCapEnforced = asBuiltRemediation && asBuiltValidated;
     // A shared PRD/as-built task consumes the as-built lap, but remains
     // attributed to prd_audit for the single shared plan-growth record.
@@ -4063,6 +4064,13 @@ export class Conductor {
           };
         }
         resolvedExistingTaskIdsByGapId.set(gap.id, bindings.ids);
+        // Existing-task gaps reopen the task that already owns the repair.
+        // They consume the validating gate's lap, but never draw from the
+        // shared plan-growth allowance reserved for appended work.
+        const prdAuditAdmits = prdAuditValidated && prdAuditFindings.has(gap.id.toUpperCase());
+        const asBuiltAdmits = asBuiltValidated && asBuiltFindings.has(gap.id);
+        if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
+        if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
       }
       if (
         sealedArtifactGapIds.has(gap.id) ||
@@ -4133,7 +4141,10 @@ export class Conductor {
         admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
         if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
-        if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
+        if (prdAuditAdmits) {
+          prdAuditTasks.push(...gap.tasks);
+          prdAuditGrowthTasks.push(...gap.tasks);
+        }
         else if (asBuiltAdmits) asBuiltGrowthTasks.push(...gap.tasks);
       }
     }
@@ -4218,20 +4229,22 @@ export class Conductor {
     // legitimate self-heal on an unrelated append plumbing gap.
     let appendAttempted = allTasks.length === 0;
 
-    if (allTasks.length > 0) {
+    let prdAuditBudget: RemediationGateAppendBudget | undefined;
+    let asBuiltBudget: RemediationGateAppendBudget | undefined;
+    if (allTasks.length > 0 || prdAuditTasks.length > 0 || asBuiltTasks.length > 0) {
       const authoredTaskCount = activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
-      const prdAuditBudget = prdAuditCapEnforced
+      prdAuditBudget = prdAuditCapEnforced
         ? await readRemediationGateAppendBudget(
           this.projectRoot,
           this.config,
           'prd_audit',
           prdAuditLapCap,
           prdAuditTasks.length,
-          prdAuditTasks.length,
+          prdAuditGrowthTasks.length,
           authoredTaskCount,
         )
         : undefined;
-      const asBuiltBudget = asBuiltCapEnforced
+      asBuiltBudget = asBuiltCapEnforced
         ? await readRemediationGateAppendBudget(
           this.projectRoot,
           this.config,
@@ -4328,16 +4341,6 @@ export class Conductor {
             }
           }
           if (appendedAsBuiltFinding) await this.persistPendingAsBuiltRemediationFindings();
-          if (prdAuditBudget) await recordRemediationGateAppend(
-            this.projectRoot,
-            prdAuditBudget,
-            this.events,
-          );
-          if (asBuiltBudget) await recordRemediationGateAppend(
-            this.projectRoot,
-            asBuiltBudget,
-            this.events,
-          );
           // Record the appended ids so the build completion predicate can
           // reject a later removal of their headings from the plan.
           try {
@@ -4399,6 +4402,22 @@ export class Conductor {
           `WARNING: remediation task append skipped — no plan path resolved; ${allTasks.length} remediation task(s) never reached the plan or task list`,
         );
       }
+    }
+
+    // Both appends and existing-task rounds spend a gate lap only after the
+    // route has successfully admitted its work. The latter has no append
+    // attempt, but still needs this durable ledger update.
+    if (appendAttempted) {
+      if (prdAuditBudget) await recordRemediationGateAppend(
+        this.projectRoot,
+        prdAuditBudget,
+        this.events,
+      );
+      if (asBuiltBudget) await recordRemediationGateAppend(
+        this.projectRoot,
+        asBuiltBudget,
+        this.events,
+      );
     }
 
     const fixes = gaps.filter((g) => g.disposition !== 'halt');
