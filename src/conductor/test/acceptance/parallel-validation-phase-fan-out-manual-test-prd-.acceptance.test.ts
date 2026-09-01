@@ -243,10 +243,12 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     }
   });
 
-  it('the group wall-clock beats the serial sum for three stub validators of durations 3t/2t/t under cap 2', async () => {
+  it('starts the queued third validator before the longest validator finishes under cap 2', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'parvalid-wallclock-'));
     const statePath = join(dir, 'conduct-state.json');
     const t = 50;
+    const timeline: Array<{ step: StepName; phase: 'start' | 'end'; order: number }> = [];
+    let order = 0;
     try {
       await seedToValidators(dir, statePath, {
         rebase: 'done',
@@ -255,6 +257,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
+          timeline.push({ step, phase: 'start', order: ++order });
           if (step === 'manual_test') {
             await delay(3 * t);
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
@@ -264,6 +267,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
           } else if (step === 'architecture_review_as_built') {
             await delay(t);
           }
+          timeline.push({ step, phase: 'end', order: ++order });
           return { success: true } as StepRunResult;
         }),
       };
@@ -271,9 +275,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       const events = new ConductorEventEmitter();
       const conductor = makeConductor(dir, statePath, runner, events);
 
-      const startedAt = Date.now();
       await conductor.run();
-      const totalMs = Date.now() - startedAt;
 
       // Covers: task:3 — runGroupBranch awaits its result callback, so these
       // engine-authored sidecars must already exist before this test can
@@ -289,11 +291,20 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
         expect.stringMatching(/\S/),
       ]);
 
-      // Serial sum is 6t (300ms); a real cap-2 fan-out finishes in ~3t
-      // (150ms, the longest single branch). Assert comfortably below the
-      // serial sum (5t) so this is not a hair-trigger timing flake, while
-      // still failing today's genuinely-serial ~6t execution.
-      expect(totalMs).toBeLessThan(5 * t);
+      // With cap 2, manual_test (3t) and prd_audit (2t) start together;
+      // architecture_review_as_built is then admitted after prd_audit ends,
+      // while manual_test is still running. A serial loop cannot produce this
+      // ordering. Sequence evidence keeps the concurrency assertion stable
+      // under loaded CI, where wall-clock thresholds are not reliable.
+      const architectureStart = timeline.find(
+        (event) => event.step === 'architecture_review_as_built' && event.phase === 'start',
+      );
+      const manualTestEnd = timeline.find(
+        (event) => event.step === 'manual_test' && event.phase === 'end',
+      );
+      expect(architectureStart).toBeDefined();
+      expect(manualTestEnd).toBeDefined();
+      expect(architectureStart!.order).toBeLessThan(manualTestEnd!.order);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

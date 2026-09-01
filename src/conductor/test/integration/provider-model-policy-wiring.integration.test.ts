@@ -753,6 +753,21 @@ it('binds every production step-resolution call to the policy owned by its execu
   };
   await collectSources(productionRoot);
 
+  // Keep the discovery pass exhaustive so a new resolver reference anywhere
+  // in production is still examined.  The semantic program only needs files
+  // that can contain one of the three resolver names, however; making every
+  // production file a root forces TypeScript to type-check unrelated modules
+  // and exceeds Vitest's normal test budget under suite load.
+  const resolverReferencePattern =
+    /resolveStepConfig|resolveProviderNativeStepConfig|resolveProviderNeutralStepConfig/;
+  const resolverCandidateUrls = (
+    await Promise.all(sourceUrls.map(async (sourceUrl) =>
+      resolverReferencePattern.test(await readFile(sourceUrl, 'utf8'))
+        ? sourceUrl
+        : undefined,
+    ))
+  ).filter((sourceUrl): sourceUrl is URL => sourceUrl !== undefined);
+
   const configPath = fileURLToPath(new URL('../../tsconfig.json', import.meta.url));
   const config = ts.readConfigFile(configPath, ts.sys.readFile);
   const parsedConfig = ts.parseJsonConfigFileContent(
@@ -761,8 +776,11 @@ it('binds every production step-resolution call to the policy owned by its execu
     fileURLToPath(new URL('../../', import.meta.url)),
   );
   const program = ts.createProgram({
-    rootNames: sourceUrls.map((url) => fileURLToPath(url)),
-    options: parsedConfig.options,
+    rootNames: resolverCandidateUrls.map((url) => fileURLToPath(url)),
+    // This audit resolves only repository symbols. Loading TypeScript's
+    // standard-library declarations adds no authority evidence and consumes
+    // most of the fixed test budget when the suite is already busy.
+    options: { ...parsedConfig.options, noLib: true },
   });
   const checker = program.getTypeChecker();
   const resolverSource = program.getSourceFile(
