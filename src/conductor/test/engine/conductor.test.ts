@@ -658,6 +658,90 @@ describe('engine/conductor', () => {
       expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
       expect(ledger.growth).toEqual({ authored: 2, added: 0, byGate: {} });
     });
+
+    it('keeps an appending PRD-audit remediation on the growth path and halts only when that growth is truly exhausted', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
+      const authoredPlan = Array.from({ length: 4 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n');
+      await writeFile(planPath, authoredPlan);
+      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
+      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
+        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+        '| Criterion | Grade | Plan task | PRD: | Evidence |',
+        '|---|---|---|---|---|', '| S1.1 | FIXABLE | 1 | FR-1 | x |',
+      ].join('\n'));
+      await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 4, added: 0, byGate: {} } });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        projectRoot: dir,
+        events,
+        config: { prd_audit: { max_remediation_laps: 2 } } as never,
+        stepRunner: { run: async (step) => {
+          if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [{
+            id: 'FR-1', disposition: 'build', category: null, rationale: 'Append the repair.',
+            tasks: [{ id: 'rem-fr-1', title: 'Appended repair' }],
+          }] }));
+          return { success: true };
+        } },
+      });
+      const input = { feature_desc: 'existing-task-bindings', session_started_at: Date.now() };
+      const source = { source: 'prd_audit' as const, evidence: [{ gate: 'prd_audit' as const, evidenceFile: '.pipeline/prd-audit.md' }] };
+
+      await expect((conductor as any).planRemediation(input, ALL_STEPS, 'append once', source))
+        .resolves.toMatchObject({ kind: 'route', target: 'build' });
+      expect(await readFile(planPath, 'utf8')).toContain('### Task rem-prd-audit-rem-fr-1: Appended repair');
+      expect((await readKickbackLedger(dir)).growth).toEqual({ authored: 4, added: 1, byGate: { prd_audit: 1 } });
+
+      const exhausted = await (conductor as any).planRemediation(input, ALL_STEPS, 'append beyond growth', source);
+      expect(exhausted).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+      expect(exhausted.detail).toMatch(/growth cap reached|plan-growth allowance exhausted/i);
+      expect(exhausted.detail).toContain('1/1 appended');
+    });
+
+    it('charges a mixed appending and existing-task round to growth and laps independently', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
+      await writeFile(planPath, Array.from({ length: 8 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n'));
+      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '2', status: 'completed' }] }));
+      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), '# PRD Audit\n\n**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | FIXABLE | 1 | FR-1 | x |\n');
+      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+        'Verdict: BLOCKED', '', '## Blocking Findings', '',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | REMEDIABLE | Task 2 | Existing repair |',
+      ].join('\n'));
+      await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 8, added: 0, byGate: {} } });
+      const conductor = new Conductor({
+        stateFilePath: statePath, projectRoot: dir, events,
+        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+        stepRunner: { run: async (step) => {
+          if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [
+            { id: 'FR-1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-fr-1', title: 'Appended repair' }] },
+            { id: 'ARCH-1', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
+          ] }));
+          return { success: true };
+        } },
+      });
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() }, ALL_STEPS, 'mixed attribution',
+        { source: 'prd_audit', evidence: [
+          { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
+          { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
+        ] },
+      );
+
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger.growth).toEqual({ authored: 8, added: 1, byGate: { prd_audit: 1 } });
+      expect(ledger.gates.prd_audit?.laps).toBe(1);
+      expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
+    });
+
   });
 
   it('credits lap counts once immediately before reopening an invalidated build_review after rebase', async () => {
