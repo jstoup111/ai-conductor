@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-01T16:51:38.687Z
+Status: halted
 Slug: enable-single-repo-daemon-concurrency-un-clamp-the
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-enable-single-repo-daemon-concurrency-un-clamp-the
-Head SHA: f31fc379fb444c8d7caad2b1830ad3e8bf9bf41f
-Halted at: 2026-09-01T06:19:37.114Z
+Head SHA: d30dfbd2d9e0604167945efcda42621e585f701b
+Halted at: 2026-09-01T17:31:42.673Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
@@ -61,45 +59,45 @@ warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 error: unknown option '--step'
 error: unknown option '--output'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-PNldAx/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-y88Thq/origin.git
  * [new branch]      main -> main
 Switched to a new branch 'feat/fix'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-PNldAx/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-y88Thq/origin.git
  * [new branch]      feat/fix -> feat/fix
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-7MIEjT/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-2UZi9i/origin.git
  * [new branch]      main -> main
 Switched to a new branch 'feat/fix'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-7MIEjT/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-2UZi9i/origin.git
  * [new branch]      feat/fix -> feat/fix
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-GGHasj/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-Fva7Qe/origin.git
  * [new branch]      main -> main
 Switched to a new branch 'feat/fix'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-GGHasj/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-Fva7Qe/origin.git
  * [new branch]      feat/fix -> feat/fix
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-NXUK1w/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-xmTC9I/origin.git
  * [new branch]      main -> main
 Switched to a new branch 'feat/fix'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-NXUK1w/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-xmTC9I/origin.git
  * [new branch]      feat/fix -> feat/fix
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-dkWtB7/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-4a0XJf/origin.git
  * [new branch]      main -> main
 Switched to a new branch 'feat/fix'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-dkWtB7/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-4a0XJf/origin.git
  * [new branch]      feat/fix -> feat/fix
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-bIjNX3/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-ge76Fp/origin.git
  * [new branch]      main -> main
 Switched to a new branch 'feat/fix'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-bIjNX3/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-ge76Fp/origin.git
  * [new branch]      feat/fix -> feat/fix
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-LcTpvp/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-iUwjwX/origin.git
  * [new branch]      main -> main
 Switched to a new branch 'feat/fix'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-LcTpvp/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-iUwjwX/origin.git
  * [new branch]      feat/fix -> feat/fix
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-dAd48L/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-a5mwxt/origin.git
  * [new branch]      main -> main
 Switched to a new branch 'feat/fix'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-test-dAd48L/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-test-a5mwxt/origin.git
  * [new branch]      feat/fix -> feat/fix
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
@@ -133,17 +131,17 @@ warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-classify-C9z0o5/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-classify-386KC6/origin.git
  * [new branch]      main -> main
 Switched to a new branch 'feat/fix'
-To /tmp/ai-conductor-vitest-run-9cjUAY/ci-fix-classify-C9z0o5/origin.git
+To /tmp/ai-conductor-vitest-run-lgkPZz/ci-fix-classify-386KC6/origin.git
  * [new branch]      feat/fix -> feat/fix
 Switched to branch 'main'
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
-[audit-trail] WRITE-FAILED: failed to append audit record (origin=operator, event=reseal_refused): error: EISDIR: illegal operation on a directory, open '/tmp/ai-conductor-vitest-run-9cjUAY/reseal-cli-audit-write-failure-Z4xiVe/.worktrees/repair/.pipeline/audit-trail/events.jsonl'
+[audit-trail] WRITE-FAILED: failed to append audit record (origin=operator, event=reseal_refused): error: EISDIR: illegal operation on a directory, open '/tmp/ai-conductor-vitest-run-lgkPZz/reseal-cli-audit-write-failure-nIr0aG/.worktrees/repair/.pipeline/audit-trail/events.jsonl'
 warning: core.fsyncObjectFiles is deprecated; use core.fsync instead
 warning: core.fsyncObjectFile
 ...[output truncated]...
