@@ -707,21 +707,24 @@ describe('engine/conductor', () => {
         '| S1.2 | FIXABLE | 2 | FR-2 | x |',
         '| S1.3 | FIXABLE | 3 | FR-3 | x |',
       ].join('\n'));
-      // Four authored tasks permit one appended remediation task. It has
-      // already been spent, so this mixed round reaches the growth halt.
+      // Four authored tasks permit one appended remediation task. Start with
+      // the allowance available so the bound existing tasks can be observed
+      // re-staged before the second, exhausted mixed round checks its wording.
       await writeKickbackLedger(dir, {
         version: 1,
         gates: {},
-        growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
+        growth: { authored: 4, added: 0, byGate: {} },
       });
+      let mixedRound = false;
       const conductor = new Conductor({
         stateFilePath: statePath,
         projectRoot: dir,
         events,
+        config: { prd_audit: { max_remediation_laps: 2 } } as never,
         stepRunner: { run: async (step) => {
           if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
             dispositions: [
-              { id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] },
+              ...(mixedRound ? [{ id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] }] : []),
               { id: 'S1.2', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
               { id: 'S1.3', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '3', title: 'Authored 3' }] },
             ],
@@ -730,12 +733,27 @@ describe('engine/conductor', () => {
         } },
       });
 
-      const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
-        ALL_STEPS,
-        'mixed growth exhaustion',
-        { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
-      );
+      const input = { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 };
+      const source = { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] };
+
+      await expect((conductor as any).planRemediation(input, ALL_STEPS, 'restage existing work', source))
+        .resolves.toMatchObject({ kind: 'route', target: 'build' });
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
+        .toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: '2', status: 'pending' }),
+          expect.objectContaining({ id: '3', status: 'pending' }),
+        ]));
+
+      // The first route proves existing-task admission. Model the earlier
+      // appending lap that spent the sole growth slot before checking that a
+      // later mixed request renders only its appended task count.
+      const restagedLedger = await readKickbackLedger(dir);
+      await writeKickbackLedger(dir, {
+        ...restagedLedger,
+        growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
+      });
+      mixedRound = true;
+      const outcome = await (conductor as any).planRemediation(input, ALL_STEPS, 'mixed growth exhaustion', source);
 
       expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
       expect(outcome.detail).toContain('growth cap reached (1/1 appended; 1 requested, 0 remaining)');
