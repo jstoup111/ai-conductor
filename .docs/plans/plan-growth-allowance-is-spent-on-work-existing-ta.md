@@ -247,3 +247,11 @@ Adds a non-appending `existing-task` remediation disposition that binds a findin
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a Done when block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s54-1: conductor.ts:4257 and conductor.ts:4281 — render `${prdAuditBudget.growthTaskCount} requested` and `${asBuiltBudget.growthTaskCount} requested` in place of `taskCount` in both growth-exhaustion halt strings (matched pair; change both), leaving the shared-growth exit at conductor.ts:4302 (`allTasks.length`) unchanged; add a fixture for a mixed prd_audit round (1 build gap + 2 existing-task gaps, growth.remaining 0) asserting the halt reads '1 requested', and keep test/engine/conductor.test.ts:679-681's all-appending assertion green
+**Gate:** prd-audit
+**Rationale:** Implementation drift inside approved plan task 9 ('Growth-halt wording only when growth was drawn', which owns the halt-branch guards and wording for Story 5): src/conductor/src/engine/conductor.ts:4257 and :4281 render `${budget.taskCount} requested`, and taskCount includes existing-task bindings (conductor.ts:4082-4090), so a mixed round overstates the growth draw; only growthTaskCount excludes them (conductor.ts:4233,4246,735). Swept for siblings: the shared-growth exit at conductor.ts:4302 renders allTasks.length, which is the appending set only and is already correct — deliberately excluded. The two rendered figures are a matched pair (prd_audit and as-built branches of the same wording contract) and are fixed in one task. No assertion is removed: task 9's Done-when 'existing growth-halt wording and finding rendering are unchanged for appending rounds' is preserved because growthTaskCount equals taskCount on an all-appending round, and test/engine/conductor.test.ts:679-681 keeps asserting 'growth cap reached (1/1 appended; 1 requested, 0 remaining)'.
+**Criterion:** S5.4
+**Parent task:** 9
+**Done when:**
+- S5.4 is satisfied by this task.
