@@ -207,7 +207,7 @@ resolves to `product`, so nothing is track-skipped when the track is unknown.
 | `skipWhenSkipped` | Skip when a named upstream step ended `skipped`, for any reason | The mechanism (`shouldSkipForUpstreamSkip`) still exists but no current step definition declares it — `architecture_review_as_built` dropped its use when it stopped mirroring `architecture_review`'s tier-S skip |
 | Bootstrap mode | `bootstrap_mode: new` skips the step with a `mode_skip` event | `assess` only |
 | `configDisableAllowed` | Opt-in to `steps.<name>.disable: true`. Config validation rejects disabling any other gating or structural built-in | `manual_test` only |
-| `when:` | Per-step conditional expression in config | Any configured step |
+| `when:` | Per-step conditional expression in config. It has the same authority boundary as config disable: advisory steps and the opted-in built-in are allowed; other gating and structural steps are rejected | Advisory steps and `manual_test` |
 
 ## Step artifacts and gate behavior
 
