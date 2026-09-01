@@ -328,7 +328,9 @@ describe('engine/conductor', () => {
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
-      expect((await readKickbackLedger(dir)).growth).toEqual({ authored: 8, added: 0, byGate: {} });
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
+      expect(ledger.growth).toEqual({ authored: 8, added: 0, byGate: {} });
     });
 
     it('routes a validated prd_audit FIXABLE existing-task gap without appending', async () => {
@@ -375,6 +377,71 @@ describe('engine/conductor', () => {
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
+      expect((await readKickbackLedger(dir)).gates.prd_audit?.laps).toBe(1);
+    });
+
+    it('charges one lap to each owning gate in a mixed existing-task round without spending growth', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
+      await writeFile(planPath, '### Task 1: PRD work\n\n### Task 2: As-built work\n');
+      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n');
+      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
+        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+        '| Criterion | Grade | Plan task | PRD: | Evidence |',
+        '|---|---|---|---|---|',
+        '| S1.1 | FIXABLE | 1 | FR-1 | x |',
+      ].join('\n'));
+      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+        'Verdict: BLOCKED', '', '## Blocking Findings', '',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | REMEDIABLE | Task 2 | Repair task two |',
+      ].join('\n'));
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {},
+        growth: { authored: 2, added: 0, byGate: {} },
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'remediate') {
+              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+                dispositions: [
+                  { id: 'FR-1', disposition: 'existing-task', category: null, rationale: 'Task 1 owns this repair.', tasks: [{ id: '1', title: 'PRD work' }] },
+                  { id: 'ARCH-1', disposition: 'existing-task', category: null, rationale: 'Task 2 owns this repair.', tasks: [{ id: '2', title: 'As-built work' }] },
+                ],
+              }));
+            }
+            return { success: true };
+          },
+        },
+        events,
+        projectRoot: dir,
+        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() },
+        ALL_STEPS,
+        'test mixed existing-task laps',
+        {
+          source: 'prd_audit',
+          evidence: [
+            { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
+            { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
+          ],
+        },
+      );
+
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger.gates.prd_audit?.laps).toBe(1);
+      expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
+      expect(ledger.growth).toEqual({ authored: 2, added: 0, byGate: {} });
     });
   });
 
