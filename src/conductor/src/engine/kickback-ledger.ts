@@ -21,6 +21,8 @@ export interface KickbackLastMechanicalFault {
 export interface KickbackGateEntry {
   count: number;
   cumulative: number;
+  /** Remediation rounds authorized for this gate, independent of plan growth. */
+  laps?: number;
   mechanicalFaults?: number;
   lastMechanicalFault?: KickbackLastMechanicalFault;
   treeHash: string | null;
@@ -155,6 +157,7 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
   return (
     typeof entry.count === 'number' &&
     (entry.cumulative === undefined || typeof entry.cumulative === 'number') &&
+    (entry.laps === undefined || isNonNegativeInteger(entry.laps)) &&
     (entry.mechanicalFaults === undefined || (
       typeof entry.mechanicalFaults === 'number' &&
       Number.isInteger(entry.mechanicalFaults) &&

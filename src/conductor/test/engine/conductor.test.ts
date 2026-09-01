@@ -378,7 +378,6 @@ describe('engine/conductor', () => {
         '| --- | --- | --- | --- |',
         '| ARCH-1 | REMEDIABLE | Task 1 | Repair task one |',
         '| ARCH-2 | REMEDIABLE | Task 2 | Repair task two |',
-        '| ARCH-3 | REMEDIABLE | Task 3 | Repair task three |',
       ].join('\n'));
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -386,7 +385,7 @@ describe('engine/conductor', () => {
           run: async (step) => {
             if (step === 'remediate') {
               await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-                dispositions: [1, 2, 3].map((id) => ({
+                dispositions: [1, 2].map((id) => ({
                   id: `ARCH-${id}`,
                   disposition: 'existing-task',
                   category: null,
@@ -418,14 +417,14 @@ describe('engine/conductor', () => {
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
-      // Re-stage every bound task before the caller rewinds to build. The
-      // remaining rows stay untouched, so this also proves the route observes
-      // the bound ids rather than broadly resetting task tracking.
+      // Re-stage every bound task before the caller rewinds to build. Task 3
+      // is deliberately completed but unbound: it must stay completed, proving
+      // this route does not broadly reset task tracking.
       expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
         .toEqual([
           { id: '1', name: 'Existing work 1', status: 'pending' },
           { id: '2', name: 'Existing work 2', status: 'pending' },
-          { id: '3', name: 'Existing work 3', status: 'pending' },
+          { id: '3', status: 'completed' },
           { id: '4', name: 'Existing work 4', status: 'pending' },
           { id: '5', name: 'Existing work 5', status: 'pending' },
           { id: '6', name: 'Existing work 6', status: 'pending' },
@@ -451,13 +450,6 @@ describe('engine/conductor', () => {
         class: 'REMEDIABLE',
         governingClause: 'Task 2',
         summary: 'Repair task two',
-        outcome: 'remediated',
-      }, {
-        gate: 'architecture_review_as_built',
-        finding: 'ARCH-3',
-        class: 'REMEDIABLE',
-        governingClause: 'Task 3',
-        summary: 'Repair task three',
         outcome: 'remediated',
       }]);
 
