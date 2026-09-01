@@ -471,7 +471,10 @@ describe('engine/conductor', () => {
     it('halts an existing-task lap at the as-built lap cap without naming plan growth', async () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
+      await writeFile(
+        join(dir, '.docs', 'plans', 'existing-task-bindings.md'),
+        Array.from({ length: 8 }, (_, i) => `### Task ${i + 1}: Existing work ${i + 1}`).join('\n'),
+      );
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '1', status: 'completed' }],
       }));
@@ -489,7 +492,8 @@ describe('engine/conductor', () => {
             resolvedBefore: 0, laps: 1,
           },
         },
-        growth: { authored: 1, added: 0, byGate: {} },
+        // Two growth slots remain, but this existing-task binding draws none.
+        growth: { authored: 8, added: 0, byGate: {} },
       });
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -530,6 +534,7 @@ describe('engine/conductor', () => {
       expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
       expect(outcome.detail).toContain('lap cap reached (1/1)');
       expect(outcome.detail).not.toMatch(/plan-growth allowance/i);
+      expect(outcome.detail).not.toMatch(/growth cap reached/i);
     });
 
     it('keeps the zero-tree-change escalation armed for an existing-task lap', () => {
@@ -696,8 +701,8 @@ describe('engine/conductor', () => {
 
       const exhausted = await (conductor as any).planRemediation(input, ALL_STEPS, 'append beyond growth', source);
       expect(exhausted).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-      expect(exhausted.detail).toMatch(/growth cap reached|plan-growth allowance exhausted/i);
-      expect(exhausted.detail).toContain('1/1 appended');
+      expect(exhausted.detail).toContain('growth cap reached (1/1 appended; 1 requested, 0 remaining)');
+      expect(exhausted.detail).toContain('Findings: S1.1.');
     });
 
     it('charges a mixed appending and existing-task round to growth and laps independently', async () => {

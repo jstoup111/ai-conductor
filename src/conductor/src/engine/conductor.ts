@@ -732,6 +732,10 @@ function remediationGateAppendBudgetExhausted(
   budget: RemediationGateAppendBudget,
 ): 'laps' | 'growth' | undefined {
   if (budget.priorLaps >= budget.lapCap) return 'laps';
+  // A gate can spend a remediation lap by restaging work already in the
+  // sealed plan. That route has no plan-growth authority, so its terminal
+  // outcome must never be rendered as a growth-cap exhaustion.
+  if (budget.growthTaskCount === 0) return undefined;
   return budget.growthTaskCount > budget.growth.remaining ? 'growth' : undefined;
 }
 
