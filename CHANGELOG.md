@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.0.1] - 2026-09-01
+## [1.0.1] - 2026-09-02
 
 ### Added
 
@@ -31,6 +31,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A SHIP-tail verdict gate resumed as its group's last member no longer discards the verdict it just produced and retry until its budget is spent. ([implementation PR #2117](https://github.com/jstoup111/ai-conductor/pull/2117)).
 - The daemon's cleared-HALT watcher now carries a bounded polling fallback, so a halt cleared before the watcher is ready (or a dropped filesystem event) is still picked up within one poll interval, and watcher errors are logged instead of swallowed. ([implementation PR #2118](https://github.com/jstoup111/ai-conductor/pull/2118)).
 - PRD audit citations now accept every task identifier declared by the active plan. ([implementation PR #2105](https://github.com/jstoup111/ai-conductor/pull/2105)).
+- Configuration now prevents conditional or disabled gating and structural steps from bypassing required workflow enforcement. ([implementation PR #2107](https://github.com/jstoup111/ai-conductor/pull/2107)).
 
 ## [1.0.0] - 2026-08-31
 
