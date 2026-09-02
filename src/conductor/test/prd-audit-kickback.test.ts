@@ -1561,6 +1561,28 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome.detail).toContain('needs a human decision');
   });
 
+  it('carries planner halt rationales through the exact-match mismatch halt', async () => {
+    // The credit above is keyed by finding id, so a planner that keys its halt
+    // by anything else — its governing clause is the observed case — misses it
+    // and lands on the mismatch halt instead. That halt reported only set
+    // arithmetic, so the decision the planner actually escalated never reached
+    // the operator, and `.pipeline/remediation.json` holding the only copy is
+    // swept on re-dispatch. Report the mismatch AND the rationale.
+    const fixture = await createAsBuiltRemediationCapFixture({
+      plannerFindingIds: ['AB-2'],
+      plannerHaltFindingIds: ['Task 1'],
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+    // Fail-closed is unchanged: an unmatched finding is still reported missing.
+    expect(fixture.outcome.detail).toContain('Missing: AB-1');
+    // ...and the escalated decision now travels with it.
+    expect(fixture.outcome.detail).toContain('Task 1');
+    expect(fixture.outcome.detail).toContain('needs a human decision');
+    expect(fixture.outcome.detail).toContain('architectural-clarity');
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
   it('halts before appending when planner gaps omit or add parsed as-built findings', async () => {
     const fixture = await createAsBuiltRemediationCapFixture({
       plannerFindingIds: ['AB-1', 'AB-EXTRA'],
