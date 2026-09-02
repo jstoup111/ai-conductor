@@ -4251,6 +4251,17 @@ describe('engine/artifacts', () => {
         expect(parsed.ids).toEqual(new Set());
       }
     });
+
+    it('accepts decisions introduced by an additive amendment blockquote', () => {
+      const parsed = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\n4. **Original decision.**\n\n> **Amended 2026-09-02 by #2054:**\n>\n> 8. **Amendment decision.**\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set(['4', '8']));
+      }
+    });
   });
 
   // Covers: task:8
