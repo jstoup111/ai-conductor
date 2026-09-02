@@ -722,8 +722,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 3 (#561, daemon-releases-the-lock-only-after-draining-in-fl): SIGTERM
 // must drain (via runDaemon's shouldStop) before the lock is released, with a
-// bounded force-release if the drain never completes. Static source-assert
-// checks mirroring the Task 22 SIGTERM block above.
+// bounded force-release if the drain never completes.
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () => {
@@ -749,19 +748,58 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?shouldStop:\s*\(\)\s*=>\s*teardown\.shouldStop\(\),/);
   });
 
-  it('scaled onForceRelease synchronously releases the lock and logs a greppable force-release line', () => {
-    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
-
-    const teardownMatch = src.match(
-      /createScaledDaemonTeardown\(\{([\s\S]*?)\n  \}\);/,
+  it('force-releases a wedged two-executor daemon after its scaled bound and drops the lock before exit', async () => {
+    const started: string[] = [];
+    const exits: Array<{ code: number; lockPresent: boolean }> = [];
+    let releaseWorkers: (() => void) | undefined;
+    const workersReleased = new Promise<void>((resolve) => {
+      releaseWorkers = resolve;
+    });
+    let workersStarted!: () => void;
+    const startedWorkers = new Promise<void>((resolve) => {
+      workersStarted = resolve;
+    });
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(
+      join(root, '.ai-conductor', 'config.yml'),
+      'daemon_concurrency: 2\nharness_self_host:\n  build_auth:\n    mode: api-key\n',
     );
-    expect(teardownMatch).not.toBeNull();
-    const teardownArgs = teardownMatch![1];
 
-    expect(teardownArgs).toContain('onForceRelease');
-    expect(teardownArgs).toContain('liveExecutorCount');
-    expect(teardownArgs).toContain('releaseBackstop()');
-    expect(teardownArgs).toMatch(/force-release/);
+    const daemon = runDaemonMode({
+      projectRoot: root,
+      concurrency: 2,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      runHaltClassMigration: async () => join(root, '.worktrees'),
+      workSource: {
+        discover: async () => [{ slug: 'first' }, { slug: 'second' }],
+      },
+      watch: false,
+      runFeature: async (item) => {
+        started.push(item.slug);
+        if (started.length === 2) workersStarted();
+        await workersReleased;
+        return { slug: item.slug, status: 'done' };
+      },
+      exitProcess: (code) => {
+        exits.push({ code, lockPresent: existsSync(getPidfilePath(root)) });
+      },
+    });
+
+    try {
+      await startedWorkers;
+      vi.useFakeTimers();
+      process.emit('SIGTERM');
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(exits).toEqual([{ code: 1, lockPresent: false }]);
+      await expect(readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
+        .resolves.toContain('teardown force-release');
+    } finally {
+      releaseWorkers?.();
+      await daemon;
+      vi.useRealTimers();
+    }
   });
 
   it('normal-completion path cancels the teardown controller before/around releasing the lock', () => {
