@@ -1,4 +1,4 @@
-// Covers: task:18
+// Covers: task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -7,7 +7,7 @@
 // necessary but not sufficient, so every assertion below observes the
 // PRODUCTION call path — the real `Conductor` branch, the real coordinator, the
 // real effects, with fakes only at the provider and `gh` boundaries.
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CompletionContext } from '../../src/engine/artifacts.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
+import type { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
@@ -93,6 +94,10 @@ interface FixtureOptions {
   /** Writes durable `.pipeline` artifacts a previous process would have left. */
   readonly seedPipeline?: (projectRoot: string) => Promise<void>;
   readonly startFrom?: StepName;
+  readonly adjudicationEnabled?: boolean;
+  /** Forces an actual BUILD entry without relying on durable retry recovery. */
+  readonly buildPending?: boolean;
+  readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -108,12 +113,14 @@ async function fixture(options: FixtureOptions = {}) {
   const state: Record<string, unknown> = { complexity_tier: 'M', run_started_at: 1 };
   for (const step of ALL_STEPS) if (step.name !== 'build_review') state[step.name] = 'done';
   if (options.startFrom === 'build') state.build_review = 'done';
+  if (options.buildPending) state.build = 'pending';
   await writeState(statePath, state as ConductState);
 
   const mixed = options.infrastructure && options.infrastructure !== 'none';
   const raw = aggregate(mixed ? 'mixed' : 'judged');
 
   const dispatched: StepName[] = [];
+  const artifactMtimes = new Map<string, number>();
   const retryReasons = new Map<StepName, string>();
   let remediateDispatches = 0;
   const runner: StepRunner = {
@@ -177,10 +184,18 @@ async function fixture(options: FixtureOptions = {}) {
     verifyArtifacts: true,
     mode: 'auto',
     daemon: true,
-    config: { kickback_escalation: { enabled: false }, build_review: { adjudication: { enabled: true } } },
+    config: {
+      kickback_escalation: { enabled: false },
+      build_review: { adjudication: { enabled: options.adjudicationEnabled ?? true } },
+    },
     buildReviewEffectiveResolver: resolver,
+    buildReviewChargeEffect: options.chargeEffect,
     gh,
   } as never);
+
+  for (const relative of ['.pipeline/remediation-cases.json', '.pipeline/build-review-work-order.json']) {
+    await stat(join(projectRoot, relative)).then((metadata) => artifactMtimes.set(relative, metadata.mtimeMs)).catch(() => {});
+  }
 
   await conductor.run().catch((error: unknown) => {
     if (!(error instanceof Error) || !error.message.startsWith('stop after')) throw error;
@@ -188,7 +203,7 @@ async function fixture(options: FixtureOptions = {}) {
 
   return {
     projectRoot, feature, dispatched, retryReasons, kickbacks, lifecycle, ghCalls,
-    remediateDispatches: () => remediateDispatches,
+    remediateDispatches: () => remediateDispatches, artifactMtimes,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
     haltMarker: async (): Promise<string> => readFile(join(projectRoot, '.pipeline/HALT'), 'utf8').catch(() => ''),
@@ -213,6 +228,18 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.retryReasons.get('build')).toContain('test/example.test.ts:8 — assert the rejection path');
     // BUILD attempt evidence is stamped before provider work, durably.
     expect(order.attemptedCaseIds).toHaveLength(1);
+  });
+
+  it.each([
+    ['charge throws', async () => { throw new Error('ledger unavailable'); }],
+    ['per-gate cap is exhausted', async () => ({ status: 'charged' as const, exhausted: true, cumulativeExhausted: false, entry: { count: 3, cumulative: 3 } })],
+    ['cumulative cap is exhausted', async () => ({ status: 'charged' as const, exhausted: false, cumulativeExhausted: true, entry: { count: 3, cumulative: 6 } })],
+  ])('halts needs-human without dispatching BUILD when %s', async (_name, chargeEffect) => {
+    const charge = vi.fn(chargeEffect);
+    const run = await fixture({ chargeEffect: charge as never });
+
+    expect({ dispatched: run.dispatched, charges: charge.mock.calls.length }).toEqual({ dispatched: ['build_review', 'remediate'], charges: 1 });
+    expect(await run.haltMarker()).toContain('build_review adjudication halted:');
   });
 
   it('recovers the accepted work order and BUILD navigation point from disk alone after a restart', async () => {
@@ -241,6 +268,24 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(restartedOrder.attemptedCaseIds).toEqual(order.attemptedCaseIds);
   });
 
+  it('treats an all-resolved durable action order as absent on a fresh BUILD entry', async () => {
+    const first = await fixture();
+    const order = await first.readJson('.pipeline/build-review-work-order.json');
+    const cases = await first.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ resolution: string }> };
+    const restart = await fixture({
+      startFrom: 'build',
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/build-review-work-order.json'), JSON.stringify(order), 'utf8');
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify({
+          ...(cases as object), cases: cases.cases.map((record) => ({ ...record, resolution: 'resolved' })),
+        }), 'utf8');
+      },
+    });
+
+    expect(restart.dispatched).toEqual(['build']);
+    expect(restart.retryReasons.get('build')).toBeUndefined();
+  });
+
   it('halts before BUILD when a durable work order is malformed rather than falling back to a stale hint', async () => {
     const first = await fixture();
     const cases = await first.readJson('.pipeline/remediation-cases.json');
@@ -254,6 +299,28 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
 
     expect(restart.dispatched).not.toContain('build');
     expect(await restart.haltMarker()).toContain('BUILD durable remediation recovery halted: work order malformed-json');
+  });
+
+  it.each(['work order', 'case store'] as const)('does not read a durable adjudication %s when adjudication is disabled', async (artifact) => {
+    const first = await fixture();
+    const order = await first.readJson('.pipeline/build-review-work-order.json');
+    const cases = await first.readJson('.pipeline/remediation-cases.json');
+    const disabled = await fixture({
+      startFrom: 'build', buildPending: true, adjudicationEnabled: false,
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/build-review-work-order.json'), artifact === 'work order' ? '{not json' : JSON.stringify(order), 'utf8');
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), artifact === 'case store' ? '{not json' : JSON.stringify(cases), 'utf8');
+      },
+    });
+
+    // A malformed artifact is an observable read spy: the disabled route must
+    // remain on the pre-feature BUILD path rather than parsing or stamping it.
+    expect(disabled.dispatched).toEqual(['build']);
+    expect(disabled.retryReasons.get('build')).toBeUndefined();
+    expect(await disabled.haltMarker()).not.toContain('BUILD durable remediation recovery halted');
+    for (const [relative, before] of disabled.artifactMtimes) {
+      expect((await stat(join(disabled.projectRoot, relative))).mtimeMs).toBe(before);
+    }
   });
 
   it('halts before BUILD when a durable order names an effect the case store never recorded', async () => {

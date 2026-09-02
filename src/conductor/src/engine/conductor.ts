@@ -31,6 +31,7 @@ import {
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
+import { isBuildEligibleActionCase } from './remediation-case-effects.js';
 import {
   appendBuildReviewWorkOrderContext,
   classifyBuildReviewDurableRead,
@@ -259,6 +260,7 @@ import {
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
+  type chargeBuildReviewEffectInLedger,
   type PendingAsBuiltRemediationFinding,
   type PlanGrowth,
   type PlanGrowthEventSink,
@@ -1522,6 +1524,8 @@ export interface ConductorOptions {
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   /** Test seam for the disposition-aware build_review completion join. */
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
+  /** Test seam for an adjudicated action-effect charge failure. */
+  buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
@@ -2178,6 +2182,7 @@ export class Conductor {
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
+  private readonly buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
@@ -3171,6 +3176,7 @@ export class Conductor {
     this.fullSuiteVerifier =
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
     this.buildReviewEffectiveResolver = opts.buildReviewEffectiveResolver;
+    this.buildReviewChargeEffect = opts.buildReviewChargeEffect;
     this.featureDesc = opts.featureDesc;
     this.worktreeBranch = opts.worktreeBranch;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
@@ -4593,7 +4599,7 @@ export class Conductor {
     const state = await new RemediationCaseStore(this.projectRoot, feature).read();
     if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
     const openActionCases = new Map(state.state.cases.flatMap((record) =>
-      record.resolution === 'open' && record.effect.kind === 'action'
+      isBuildEligibleActionCase(record)
         ? [[record.id, record.effect.id] as const]
         : [],
     ));
@@ -4611,6 +4617,11 @@ export class Conductor {
       retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
       order.workOrder,
     ) };
+  }
+
+  /** Keep every adjudication gate on the same resolved configuration accessor. */
+  private buildReviewAdjudicationEnabled(): boolean {
+    return resolveBuildReviewConfig(this.config).adjudication.enabled;
   }
 
   /** Best-effort compact remediation context from existing build-review evidence. */
@@ -7804,7 +7815,7 @@ export class Conductor {
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
         pendingRetryHints.delete(step.name);
-        if (step.name === 'build') {
+        if (step.name === 'build' && this.buildReviewAdjudicationEnabled()) {
           // Durable, not process-local: this is the clause an in-memory hint
           // alone can never satisfy (Task 18 Done-when 5).
           const durableRetry = await this.durableBuildReviewRetryContext(retryHint);
@@ -10166,7 +10177,7 @@ export class Conductor {
                 // The compatibility selector lives at the conductor boundary:
                 // scalar/legacy verdicts retain the historical raw route, while
                 // a current raw aggregate defaults to the post-join path.
-                if (aggregate && resolveBuildReviewConfig(this.config).adjudication.enabled) {
+                if (aggregate && this.buildReviewAdjudicationEnabled()) {
                   const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                     this.projectRoot,
                     verdictRaw,
@@ -10221,6 +10232,7 @@ export class Conductor {
                       resolvedCount: await countResolvedTasks(this.projectRoot),
                       reason: buildReviewFailureDetails(parsed).join('\n') || 'build_review adjudicated action',
                     },
+                    ...(this.buildReviewChargeEffect === undefined ? {} : { chargeEffect: this.buildReviewChargeEffect }),
                     judge: async (context) => {
                       const dispatched = await this.stepRunner.run('remediate', state, {
                         retryReason: `Adjudicate this complete build-review context only; write case-v1 remediation output.\n${JSON.stringify(context)}`,

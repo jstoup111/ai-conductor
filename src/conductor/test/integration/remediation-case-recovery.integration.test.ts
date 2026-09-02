@@ -1,15 +1,17 @@
+// Covers: task:19, task:rem-as-built-rem-ab2-4
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { readBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
-import { applyBuildReviewActionEffects } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, isBuildEligibleActionCase } from '../../src/engine/remediation-case-effects.js';
 import { reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
+import { Conductor } from '../test-conductor.js';
 
 const directories: string[] = [];
 const feature = { version: 'v1' as const, repository: 'acme/conductor', feature: 'restart-recovery' };
@@ -63,5 +65,45 @@ describe('remediation case recovery', () => {
     expect(order).toMatchObject({ ok: true, workOrder: { cases: [{ caseId: 'case-1' }] } });
     const settled = await store.read();
     expect(settled).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ effect: expect.objectContaining({ status: 'applied' }) })] } });
+  });
+
+  it.each([
+    ['charge throws', async () => { throw new Error('ledger unavailable'); }],
+    ['per-gate cap is exhausted', async () => ({ status: 'charged' as const, exhausted: true, cumulativeExhausted: false, entry: { count: 3, cumulative: 3 } })],
+    ['cumulative cap is exhausted', async () => ({ status: 'charged' as const, exhausted: false, cumulativeExhausted: true, entry: { count: 3, cumulative: 6 } })],
+  ])('keeps failed action effects out of retry eligibility when %s', async (_name, chargeEffect) => {
+    const projectRoot = await root();
+    const store = new RemediationCaseStore(projectRoot, feature);
+    await reconcileRemediationCases(store, {
+      graph, recordedAt: '2026-08-30T00:00:00.000Z', generateId: (() => {
+        const ids = ['case-1', 'effect-1'];
+        return () => ids.shift()!;
+      })(),
+    });
+
+    const charge = vi.fn(chargeEffect);
+    await expect(applyBuildReviewActionEffects({
+      projectRoot, feature, store, tasksByCaseId: new Map([['case-1', [{ title: 'Repair the assertion' }]]]),
+      chargeInput: { treeHash: 'tree-1', resolvedCount: 1, reason: 'restart fixture' }, workOrderId: () => 'order-1',
+      chargeEffect: charge as never,
+    })).resolves.toMatchObject({ ok: false });
+
+    const settled = await store.read();
+    expect(settled).toMatchObject({
+      ok: true,
+      state: { cases: [expect.objectContaining({ effect: expect.objectContaining({ status: 'failed' }) })] },
+    });
+    if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
+    expect(isBuildEligibleActionCase(settled.state.cases[0]!)).toBe(false);
+    const freshConductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline/state.json'),
+      stepRunner: {} as never,
+      config: { build_review: { adjudication: { enabled: true } } },
+    } as never);
+    const retry = await (freshConductor as unknown as {
+      durableBuildReviewRetryContext(hint: string | undefined): Promise<{ kind: string }>;
+    }).durableBuildReviewRetryContext(undefined);
+    expect({ retry, charges: charge.mock.calls.length }).toEqual({ retry: { kind: 'absent' }, charges: 1 });
   });
 });

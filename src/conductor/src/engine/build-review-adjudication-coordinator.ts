@@ -10,16 +10,16 @@ import {
   type BuildReviewAdjudicationTaskStatus,
 } from './build-review-adjudication-context.js';
 import { planContractPointers, readActivePlanPath } from './remediation-context-pointers.js';
-import { reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
+import { orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect } from './remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, isBuildEligibleActionCase } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
-import { classifyBuildReviewDurableRead, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
+import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
 import { RemediationCaseStore } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
-import type { BumpKickbackGateInput } from './kickback-ledger.js';
+import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from './tracker-client.js';
 import type { RemediationCaseDeferralEffect } from './remediation-case-artifact.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -96,6 +96,8 @@ export async function coordinateBuildReviewAdjudication(input: {
   readonly mechanical: BuildReviewMechanicalState;
   readonly judge: (context: unknown) => Promise<RemediationCaseJudgement>;
   readonly chargeInput: BumpKickbackGateInput;
+  /** Injectable only at the charge boundary; production retains the ledger adapter. */
+  readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
   readonly tracker?: EffectMarkerTrackerClient;
   readonly repo?: string;
   readonly fileIssue?: (input: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => Promise<{ issueUrl: string }>;
@@ -247,6 +249,7 @@ export async function coordinateBuildReviewAdjudication(input: {
     );
     const action = await applyBuildReviewActionEffects({
       projectRoot: input.projectRoot, feature: input.feature, store, tasksByCaseId, chargeInput: input.chargeInput,
+      ...(input.chargeEffect === undefined ? {} : { chargeEffect: input.chargeEffect }),
     });
     if (!action.ok) {
       for (const record of pendingActionEffects) {
@@ -299,18 +302,52 @@ export async function coordinateBuildReviewAdjudication(input: {
   // Adjacent to the BUILD/HALT/PASS exit itself: an acceptance that arrived
   // while effects were settling must not leave an obsolete route standing.
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
-  const exitOperatorRoute = routeIfAllOperatorResolved(resolved);
-  if (exitOperatorRoute) return exitOperatorRoute;
   const exitSourceIds = [...liveSourceIdsFor(resolved)];
-  const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: settled.state.cases, mechanical: input.mechanical });
+  const acceptedSourceIds = new Set(sources
+    .filter((source) => resolved.has(source.findingId))
+    .map(buildReviewAdjudicationSourceId));
+  // Operator disposition remains its own authority. This leased mutation only
+  // retires autonomous rows it covers, then keeps the published order bound to
+  // a surviving applied action effect.
+  const neutralized = await store.mutate<
+    | { readonly ok: true; readonly cases: readonly import('./remediation-case-store.js').RemediationCaseRecord[] }
+    | { readonly ok: false; readonly reason: string }
+  >(async (state) => {
+    const cases = state.cases.map((record) =>
+      record.resolution === 'open' && record.sources.length > 0 &&
+      record.sources.every((source) => acceptedSourceIds.has(source.sourceId))
+        ? { ...record, resolution: 'resolved' as const }
+        : record,
+    );
+    const eligible = cases.filter(isBuildEligibleActionCase);
+    if (eligible.length === 0) return { value: { ok: true as const, cases }, nextState: { ...state, cases } };
+    const workOrderCases = [] as Array<{ caseId: string; priority: 'critical' | 'high' | 'medium' | 'low'; tasks: readonly { readonly title: string }[] }>;
+    for (const record of eligible) {
+      const tasks = tasksByCaseId.get(record.id);
+      if (!tasks || tasks.length === 0) {
+        return { value: { ok: false as const, reason: `action case ${record.id} has no work-order tasks` } };
+      }
+      workOrderCases.push({ caseId: record.id, priority: record.priority, tasks });
+    }
+    const orderedCases = orderBuildReviewActionCases(workOrderCases);
+    const primary = eligible.find((record) => record.id === orderedCases[0]!.caseId)!;
+    const published = await publishBuildReviewWorkOrder(input.projectRoot, {
+      version: 'v1', domain: 'build_review', feature: input.feature, effectId: primary.effect.id, cases: orderedCases,
+    });
+    if (!published.ok) return { value: { ok: false as const, reason: `work-order ${published.reason}` } };
+    return { value: { ok: true as const, cases }, nextState: { ...state, cases } };
+  });
+  if (!neutralized.ok) return fail(`case store ${neutralized.reason}`);
+  if (!neutralized.value.ok) return fail(neutralized.value.reason);
+  const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: neutralized.value.cases, mechanical: input.mechanical });
   await input.emit?.({
     type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
-    caseIds: settled.state.cases.map((record) => record.id),
-    effectIds: settled.state.cases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
+    caseIds: neutralized.value.cases.map((record) => record.id),
+    effectIds: neutralized.value.cases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
   });
   return {
     ok: true, route: transition.route, detail: transition.reason,
-    trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(settled.state.cases)}`,
+    trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(neutralized.value.cases)}`,
     remainingMechanical: transition.remainingMechanical,
   };
 }

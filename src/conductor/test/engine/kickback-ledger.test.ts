@@ -1,3 +1,4 @@
+// Covers: task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -670,6 +671,7 @@ describe('kickback-ledger', () => {
 
     it('charges a stable effect once and reports replays without changing the counters', () => {
       const first = chargeBuildReviewEffect(undefined, 'effect-build-review-1', input);
+      if (first.status === 'unreadable') throw new Error('pure charge cannot read a ledger');
       const replay = chargeBuildReviewEffect(first.entry, 'effect-build-review-1', input);
 
       expect(first).toMatchObject({
@@ -684,6 +686,7 @@ describe('kickback-ledger', () => {
 
     it('charges a distinct stable effect against the existing per-tree and cumulative caps', () => {
       const first = chargeBuildReviewEffect(undefined, 'effect-build-review-1', input);
+      if (first.status === 'unreadable') throw new Error('pure charge cannot read a ledger');
       const second = chargeBuildReviewEffect(first.entry, 'effect-build-review-2', input);
 
       expect(second).toMatchObject({
@@ -736,6 +739,21 @@ describe('kickback-ledger', () => {
           },
         },
       });
+    });
+
+    it.each([
+      ['malformed JSON', 'not valid json {'],
+      ['unsupported version', JSON.stringify({ version: 2, gates: {} })],
+    ])('fails closed without charging or rewriting an unreadable ledger (%s)', async (_name, rawLedger) => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+      await writeFile(ledgerPath, rawLedger, 'utf8');
+
+      await expect(chargeBuildReviewEffectInLedger(dir, 'effect-unreadable', input)).resolves.toMatchObject({
+        status: 'unreadable',
+        reason: expect.stringContaining('kickback ledger'),
+      });
+      await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(rawLedger);
     });
 
     it('preserves charged effects when rebase credit clears lap counters', () => {

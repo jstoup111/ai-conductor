@@ -1,4 +1,5 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+// Covers: task:16, task:rem-as-built-rem-ab1-4
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -211,7 +212,8 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toMatchObject({ ok: true, route: 'pass' });
     expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(3);
-    await expect(access(join(root, '.pipeline', 'build-review-work-order.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    // The historical order remains durable evidence, but its only case is
+    // resolved, so it is no longer BUILD-eligible.
   });
 
   it('emits a failed deferral effect through the same coordinator event port', async () => {
@@ -330,6 +332,45 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toMatchObject({ ok: true, route: 'pass' });
     expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(4);
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled).toMatchObject({
+      ok: true,
+      state: { cases: [expect.objectContaining({ resolution: 'resolved' })] },
+    });
+    // The historical order remains durable evidence, but its only case is
+    // resolved, so it is no longer BUILD-eligible.
+  });
+
+  it('resolves only sources accepted at the exit and republishes the surviving action order', async () => {
+    const root = await projectRoot();
+    // Both cases reach reservation; only the first source is accepted in the
+    // final authority read immediately before the coordinator exits.
+    const resolutions = [new Set<string>(), new Set<string>(), new Set<string>(), new Set([acceptedSource.findingId])];
+    const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift() ?? new Set([acceptedSource.findingId]));
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds, generateId: sequentialIds('exit-race'),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled.ok).toBe(true);
+    if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
+    expect(settled.state.cases.map((record) => ({
+      resolution: record.resolution,
+      sources: record.sources.map((source) => source.sourceId),
+    }))).toEqual([
+      { resolution: 'resolved', sources: [buildReviewAdjudicationSourceId(acceptedSource)] },
+      { resolution: 'open', sources: [buildReviewAdjudicationSourceId(liveSource)] },
+    ]);
+    const order = JSON.parse(await readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')) as {
+      effectId: string; cases: Array<{ caseId: string; priority: string; tasks: Array<{ title: string }> }>;
+    };
+    expect(order).toMatchObject({
+      effectId: (settled.state.cases[1]!.effect as { id: string }).id,
+      cases: [{ caseId: settled.state.cases[1]!.id, priority: 'high', tasks: [{ title: 'Repair the second test' }] }],
+    });
   });
   it.each([
     ['explicit provider binding', true],
