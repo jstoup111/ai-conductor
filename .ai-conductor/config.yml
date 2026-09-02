@@ -122,6 +122,21 @@ llm_provider: [codex, claude]
 conflict_check:
   adr_corpus: repo_wide
 
+# Remediation append allowance. The effective cap is
+# min(max_appended_tasks, floor(authored_count * max_appended_ratio)), so BOTH
+# terms bind: raising only the fixed cap leaves a small plan pinned by the ratio.
+#
+# Raised from the 5 / 0.25 defaults on 2026-09-02. Two features were halting a
+# task or three over an allowance that, on plans of 15 and 24 authored tasks,
+# resolved to 4 and 5 — small enough that an ordinary as-built round could not
+# fit inside it. The cap exists to stop a plan being rewritten by remediation
+# rather than re-planned; at 8 it still does that, and a feature needing 26
+# appended tasks against a 19-task plan (the case that prompted this review)
+# remains far outside it and still halts for an operator.
+prd_audit:
+  max_appended_tasks: 8
+  max_appended_ratio: 0.5
+
 steps:
   explore:
     llm_provider: claude
