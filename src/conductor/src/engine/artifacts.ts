@@ -4080,7 +4080,11 @@ const ADR_SECTION_HEADING_RE = /^\s{0,3}##\s+/;
  * list items, bolded D-headings, and ATX D-headings with optional emphasis.
  */
 export function parseAdrDecisions(content: string): AdrDecisionParseResult {
-  const lines = content.split(/\r?\n/);
+  const withoutFencedCodeBlocks = content.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
+    '',
+  );
+  const lines = withoutFencedCodeBlocks.split(/\r?\n/);
   const sectionStart = lines.findIndex((line) => ADR_DECISION_HEADING_RE.test(line));
   if (sectionStart === -1) {
     return {

@@ -4214,6 +4214,43 @@ describe('engine/artifacts', () => {
         expect(parsed.ids).toContain('4');
       }
     });
+
+    it('excludes decision-looking lines inside fenced code blocks', () => {
+      const parsed = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\n```markdown\n4. **Termination.**\n### D4 — Termination\n```\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set());
+      }
+    });
+
+    it('returns the missing-decision-heading diagnostic when the section is absent', () => {
+      expect(parseAdrDecisions('# ADR\n\n## Context\n\nNo decision section.\n')).toMatchObject({
+        kind: 'diagnostic',
+        reason: 'missing-decision-heading',
+      });
+    });
+
+    it('does not treat D10 as decision id 1', () => {
+      const parsed = parseAdrDecisions('# ADR\n\n## Decision\n\n### D10 — Tenth decision\n');
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toContain('10');
+        expect(parsed.ids).not.toContain('1');
+      }
+    });
+
+    it('distinguishes an empty Decision section from a missing heading', () => {
+      const parsed = parseAdrDecisions('# ADR\n\n## Decision\n\n   \n\t\n## Consequences\n');
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set());
+      }
+    });
   });
 
   // Covers: task:8
