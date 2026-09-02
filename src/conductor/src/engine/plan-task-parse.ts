@@ -14,8 +14,8 @@ import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-art
 export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
 export type PlanTaskReferenceResolution =
-  | { kind: 'resolved'; id: string }
-  | { kind: 'unresolvable'; id: string }
+  | { kind: 'resolved'; ids: string[] }
+  | { kind: 'unresolvable'; ids: string[] }
   | { kind: 'malformed'; raw: string };
 
 /**
@@ -37,12 +37,25 @@ export function resolvePlanTaskReference(
   raw: string,
   planTaskIds: ReadonlySet<string>,
 ): PlanTaskReferenceResolution {
-  const id = normalizePlanTaskId(raw);
-  if (!new RegExp(`^${TASK_ID_PATTERN}$`).test(id)) return { kind: 'malformed', raw };
+  // A citation may name more than one task: a criterion's evidence legitimately
+  // spans several, and the single-id form made that honest answer
+  // unrepresentable — the auditor either wrote the truth and had the row
+  // rejected as malformed, or narrowed the citation to fit the parser. Every
+  // segment must satisfy the same grammar, and one bad segment rejects the
+  // whole citation rather than silently resolving the good half.
+  const grammar = new RegExp(`^${TASK_ID_PATTERN}$`);
+  const ids: string[] = [];
+  for (const segment of raw.split(',')) {
+    const id = normalizePlanTaskId(segment);
+    if (!grammar.test(id)) return { kind: 'malformed', raw };
+    if (!ids.includes(id)) ids.push(id);
+  }
+  if (ids.length === 0) return { kind: 'malformed', raw };
 
-  return planTaskIds.has(id)
-    ? { kind: 'resolved', id }
-    : { kind: 'unresolvable', id };
+  const absent = ids.filter((id) => !planTaskIds.has(id));
+  return absent.length === 0
+    ? { kind: 'resolved', ids }
+    : { kind: 'unresolvable', ids: absent };
 }
 
 // Shared task-header grammar for parsers that identify task blocks without

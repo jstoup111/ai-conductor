@@ -4233,7 +4233,14 @@ export type PrdAuditGrade = 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE';
 export interface PrdAuditFinding {
   criterion: string;
   grade: PrdAuditGrade;
+  /**
+   * The single cited plan task, present only when the row cites exactly one.
+   * A FIXABLE row always has it — the parser rejects a multi-task FIXABLE
+   * citation, because its repair must bind to one parent task.
+   */
   planTask?: string;
+  /** Every plan task the row cites, in cited order. */
+  planTasks?: readonly string[];
   /** Intent FR associations from the table's PRD: column. */
   prdIds: readonly string[];
   evidence: string;
@@ -4526,22 +4533,37 @@ export function parsePrdAuditReport(
     }
     if (planTaskReference?.kind === 'unresolvable') {
       rejectedPrdAuditRow(rejectedRows, line, criterion,
-        `PRD audit finding ${criterion} names Plan task ${planTaskReference.id}, which is absent from the active plan.`,
+        `PRD audit finding ${criterion} names Plan task ${planTaskReference.ids.join(', ')}, which is absent from the active plan.`,
       );
       continue;
     }
-    const planTask = planTaskReference?.id;
-    if (rawGrade === 'FIXABLE' && planTask === undefined) {
+    const planTasks = planTaskReference?.ids;
+    if (rawGrade === 'FIXABLE' && planTasks === undefined) {
       rejectedPrdAuditRow(rejectedRows, line, criterion,
         `PRD audit finding ${criterion} is FIXABLE but has no Plan task.`,
       );
       continue;
     }
+    // A multi-task citation is legitimate for a criterion whose evidence spans
+    // several tasks, but a FIXABLE finding is different in kind: the
+    // remediation append binds its fix task to ONE parent
+    // (conductor.ts, `parentTask`), so the parser cannot choose among several
+    // on the auditor's behalf. Reject here, naming the choice, rather than
+    // silently taking the first.
+    if (rawGrade === 'FIXABLE' && planTasks !== undefined && planTasks.length > 1) {
+      rejectedPrdAuditRow(rejectedRows, line, criterion,
+        `PRD audit finding ${criterion} is FIXABLE and cites Plan task ${planTasks.join(', ')}; `
+        + 'a FIXABLE finding must cite exactly one parent task, because its repair is appended under that task.',
+      );
+      continue;
+    }
+    const planTask = planTasks?.length === 1 ? planTasks[0] : undefined;
     parsedFindings.push({
       finding: {
         criterion,
         grade: rawGrade as PrdAuditGrade,
         ...(planTask === undefined ? {} : { planTask }),
+        ...(planTasks === undefined ? {} : { planTasks: Object.freeze([...planTasks]) }),
         prdIds: Object.freeze([...(prdIndex === -1 ? '' : cells[prdIndex] ?? '').matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((match) => match[0].toUpperCase())),
         evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
       },

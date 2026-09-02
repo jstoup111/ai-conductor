@@ -491,12 +491,55 @@ describe('engine/artifacts', () => {
               criterion: 'S2.1',
               grade: 'FIXABLE',
               planTask: '3',
+              planTasks: ['3'],
               prdIds: [],
               evidence: 'Missing guard',
             },
           ],
         },
       });
+    });
+
+    it('accepts a PASS row whose evidence spans several plan tasks', () => {
+      // The rejected rows that halted bin-setup-quarantines were all PASS,
+      // citing `12, 13` and `1, 2, 14`. Nothing had failed the audit; four
+      // passing criteria were discarded on cell shape.
+      const result = parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| S4.1 | PASS | 3, 4 | none | — | one latch guards both emit sites |
+`, activePlan);
+
+      expect(result.ok).toBe(true);
+      expect(result.value?.rejectedRows).toEqual([]);
+      expect(result.value?.findings[0]).toMatchObject({
+        criterion: 'S4.1',
+        grade: 'PASS',
+        planTasks: ['3', '4'],
+      });
+      // No single parent is claimed when the row names several.
+      expect(result.value?.findings[0]).not.toHaveProperty('planTask');
+    });
+
+    it('rejects a FIXABLE row citing several plan tasks, naming the choice', () => {
+      // A repair is appended under ONE parent task, so the parser must not pick
+      // among the cited tasks on the auditor's behalf.
+      const result = parsePrdAuditReport(`
+**PRD:** none
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| S2.1 | FIXABLE | 3, 4 | none | — | Missing guard |
+`, activePlan);
+
+      expect(result.value?.findings).toEqual([]);
+      expect(result.value?.rejectedRows[0]?.reason).toContain('must cite exactly one parent task');
     });
 
     it('identifies no-owner keys without accepting story criteria', () => {
