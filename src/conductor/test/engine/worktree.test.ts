@@ -200,22 +200,30 @@ describe('engine/worktree', () => {
 
     it('runs lifecycle requests one at a time and continues after a failed request', async () => {
       const queue = new WorktreeLifecycleQueue();
-      let active = 0;
-      let peak = 0;
-      const operation = async (failure?: Error): Promise<void> => {
-        active += 1;
-        peak = Math.max(peak, active);
-        await Promise.resolve();
-        active -= 1;
-        if (failure) throw failure;
-      };
+      const events: string[] = [];
+      let releaseFirst!: () => void;
+      const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      let markFirstStarted!: () => void;
+      const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
 
-      const failed = queue.run(() => operation(new Error('expected lifecycle failure')));
-      const succeeding = queue.run(() => operation());
+      const first = queue.run(async () => {
+        events.push('first:start');
+        markFirstStarted();
+        await firstReleased;
+        events.push('first:fail');
+        throw new Error('expected lifecycle failure');
+      });
+      const second = queue.run(async () => {
+        events.push('second:start');
+      });
 
-      await expect(failed).rejects.toThrow('expected lifecycle failure');
-      await expect(succeeding).resolves.toBeUndefined();
-      expect(peak).toBe(1);
+      await firstStarted;
+      await Promise.resolve();
+      expect(events).toEqual(['first:start']);
+      releaseFirst();
+      await expect(first).rejects.toThrow('expected lifecycle failure');
+      await expect(second).resolves.toBeUndefined();
+      expect(events).toEqual(['first:start', 'first:fail', 'second:start']);
     });
 
     it('serializes concurrent add and remove requests against one shared git directory for 20 iterations', async () => {
@@ -231,10 +239,18 @@ describe('engine/worktree', () => {
         const pathB = join(lifecycleRoot, '.worktrees', slugB);
         await git(lifecycleRoot, 'worktree', 'add', '-b', `feat/daemon-${slugB}`, pathB, 'main');
 
-        await expect(Promise.all([
+        const [created] = await Promise.all([
           deps.createWorktree(slugA),
           deps.teardownWorktree({ path: pathB, branch: `feat/daemon-${slugB}` }, false),
-        ])).resolves.toHaveLength(2);
+        ]);
+
+        expect(created).toEqual({
+          path: join(lifecycleRoot, '.worktrees', slugA),
+          branch: `feat/daemon-${slugA}`,
+        });
+        const registrations = await git(lifecycleRoot, 'worktree', 'list', '--porcelain');
+        expect(registrations).toContain(`worktree ${created.path}`);
+        expect(registrations).not.toContain(`worktree ${pathB}`);
       }
     });
 
@@ -251,6 +267,7 @@ describe('engine/worktree', () => {
 
       const registered = await git(lifecycleRoot, 'worktree', 'list', '--porcelain');
       expect(registered).toContain(`worktree ${unrelated.path}`);
+      expect(registered).not.toContain(`worktree ${failedCleanupPath}`);
     });
   });
 
