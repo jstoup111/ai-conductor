@@ -790,7 +790,14 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
       await startedWorkers;
       vi.useFakeTimers();
       process.emit('SIGTERM');
-      await vi.advanceTimersByTimeAsync(60_000);
+      // The two running executors each receive the full 30-second allowance.
+      // Stopping just short of 60 seconds makes the scaled boundary observable:
+      // the former single-executor 30-second timeout would have force-released
+      // the lock already.
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(exits).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
 
       expect(exits).toEqual([{ code: 1, lockPresent: false }]);
       await expect(readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
