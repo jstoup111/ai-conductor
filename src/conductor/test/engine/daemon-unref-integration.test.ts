@@ -122,9 +122,10 @@ describe('runDaemon - process exit without blocking on idle sleep (Task 11)', ()
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Scenario 4: Once mode (drain and exit) never calls sleep
+  // Scenario 4: Once mode keeps busy-pool maintenance alive, but does not
+  // enter an idle poll after the backlog drains.
   // ───────────────────────────────────────────────────────────────────────────
-  it('once: true (drain) never calls idle sleep', async () => {
+  it('once: true (drain) uses busy polls but exits before idle polling', async () => {
     let sleepCallCount = 0;
     const deps: DaemonDeps = {
       discoverBacklog: async () => items(2),
@@ -143,6 +144,8 @@ describe('runDaemon - process exit without blocking on idle sleep (Task 11)', ()
 
     expect(result.stoppedReason).toBe('backlog_drained');
     expect(result.processed).toHaveLength(2);
-    expect(sleepCallCount).toBe(0); // sleep never called in once mode
+    // One busy-pool tick follows each in-flight feature. These are scheduler
+    // polls (needed for concurrent free-slot refresh/sweeps), not idle polls.
+    expect(sleepCallCount).toBe(2);
   });
 });

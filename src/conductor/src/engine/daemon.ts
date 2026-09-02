@@ -1124,6 +1124,11 @@ export async function runDaemon(
     }
 
     if (!staleGatesArmed || !deps.staleEngineChecker) return;
+    // The dispatch preflight has already refreshed, rebuilt, checked, and
+    // evaluated suppression for this exact source/build boundary. Do not ask
+    // the busy-pool observer to evaluate the same target again while the
+    // just-dispatched worker is still settling.
+    if (staleAlreadyHandledByPreflight) return;
     if (deps.staleEngineChecker.check() !== 'stale') return;
 
     const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
@@ -1573,9 +1578,11 @@ export async function runDaemon(
       await collectOne();
       continue;
     }
-    // A drain run and an immediate-idle-boundary run have no poll interval to
-    // observe.  Collect directly so their injected sleep cannot become an
-    // accidental scheduling side effect of the concurrent worker wrapper.
+    // An immediate-idle-boundary run has no poll interval to observe. Collect
+    // directly so its injected sleep cannot become an accidental scheduler
+    // side effect. Once mode still uses busy polling while workers are active:
+    // the scheduler must be able to refresh a free slot and sweep in-flight
+    // work before the one-shot drain completes.
     if (maxIdlePolls === 0) {
       await collectOne();
       continue;
