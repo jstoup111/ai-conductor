@@ -26,6 +26,10 @@ What is the issue? What forces are at play? What constraints exist?
 What was decided and WHY. Not just "we chose A" but "we chose A because [specific reasoning
 that helps future readers understand trade-offs]."
 
+Record each citable decision using an accepted form. Preferred form: a numbered list, because it
+creates a stable citation id: `1. **Decision summary.** Rationale.` Accepted alternatives are a
+bold D-heading (`**D1 — Decision summary.**`) or an ATX D-heading (`### D1 — Decision summary`).
+
 ## Consequences
 
 ### Positive

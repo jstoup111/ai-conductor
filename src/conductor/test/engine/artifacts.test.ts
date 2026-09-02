@@ -4201,6 +4201,32 @@ describe('engine/artifacts', () => {
   });
 
   describe('parseAdrDecisions', () => {
+    it('keeps the ADR template status vocabulary and guides authors to citable decisions', async () => {
+      const template = await readFile(join(REPOSITORY_ROOT, 'templates', 'adr.md.template'), 'utf8');
+      const statusLine = template.split(/\r?\n/).find((line) => line.startsWith('**Status:**'));
+      const statusVocabularyLines = template
+        .split(/\r?\n/)
+        .filter((line) => /\bstatus\b/i.test(line));
+
+      expect(statusLine).toBe('**Status:** APPROVED | SUPERSEDED by {{superseding-adr-slug}}');
+      expect(statusVocabularyLines).toEqual([
+        '**Status:** APPROVED | SUPERSEDED by {{superseding-adr-slug}}',
+      ]);
+      expect(template).toContain('Preferred form: a numbered list');
+
+      const parsed = parseAdrDecisions(
+        '# ADR: Template-conforming decision\n\n' +
+          '**Status:** APPROVED\n\n' +
+          '## Decision\n\n' +
+          '1. **Use a numbered decision list.** This creates a stable citation id.\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set(['1']));
+      }
+    });
+
     it.each([
       ['numbered decision item', '4. **Termination.**'],
       ['bolded D-heading', '**D4 — Termination.**'],
