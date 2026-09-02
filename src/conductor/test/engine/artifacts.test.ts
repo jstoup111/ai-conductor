@@ -91,6 +91,7 @@ import {
   PR_BODY_REGEN_ATTEMPT_MARKER,
   uncommittedPathsOrNull,
   isNoOwnerKey,
+  parseAdrDecisions,
   parsePrdAuditReport,
 } from '../../src/engine/artifacts.js';
 import type {
@@ -4196,6 +4197,22 @@ describe('engine/artifacts', () => {
         rejected: statuses.filter((status) => !status.approved && status.found !== null),
         unparseable: statuses.filter((status) => status.found === null),
       }).toEqual({ rejected: [], unparseable: [] });
+    });
+  });
+
+  describe('parseAdrDecisions', () => {
+    it.each([
+      ['numbered decision item', '4. **Termination.**'],
+      ['bolded D-heading', '**D4 — Termination.**'],
+      ['ATX D-heading', '### D4 — Termination'],
+      ['emphasized ATX D-heading', '### **D4** — X'],
+    ])('accepts the AB-R12 %s shape', (_description, decisionLine) => {
+      const parsed = parseAdrDecisions(`# ADR\n\n## Decision\n\n${decisionLine}\n`);
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toContain('4');
+      }
     });
   });
 
