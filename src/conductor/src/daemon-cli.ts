@@ -869,6 +869,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // can abort, close ledgers, and coordinate the drain.
   const allWaitSignals = new Set<AbortController>();
   const activeConductors = new Set<Conductor>();
+  // The in-process path contributes a conductor to this set, while the
+  // injectable composition-test executor deliberately does not. Count the
+  // runDaemon executor boundary instead so the scaled drain budget covers
+  // every live worker through the one dispatch seam.
+  let activeExecutorCount = 0;
   let shutdownRequested = false;
 
   // #561 (Story 1 + Story 3): SIGTERM must drain in-flight work before the
@@ -882,7 +887,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const FORCE_RELEASE_TIMEOUT_MS = 30_000;
   const teardown = createScaledDaemonTeardown({
     perExecutorTimeoutMs: FORCE_RELEASE_TIMEOUT_MS,
-    liveExecutorCount: () => activeConductors.size,
+    liveExecutorCount: () => activeExecutorCount,
     onForceRelease: () => {
       log(
         `[daemon] teardown force-release: drain did not complete within its scaled ${FORCE_RELEASE_TIMEOUT_MS / 1000}s-per-executor bound — releasing lock and exiting`,
@@ -1326,7 +1331,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     });
     } finally {
       activeConductors.delete(conductor);
-      teardown.executorSettled();
     }
 
   };
@@ -1476,7 +1480,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       })(item);
     },
   });
-  const runFeature = opts.runFeature ?? makeRunFeature(deps);
+  const executeFeature = opts.runFeature ?? makeRunFeature(deps);
+  const runFeature = async (item: BacklogItem): Promise<FeatureOutcome> => {
+    activeExecutorCount += 1;
+    try {
+      return await executeFeature(item);
+    } finally {
+      activeExecutorCount -= 1;
+      teardown.executorSettled();
+    }
+  };
 
   const continuous = opts.continuous ?? false;
   // Continuous with no ceiling at all runs unbounded — surface that loudly
