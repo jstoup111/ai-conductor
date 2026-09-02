@@ -32,6 +32,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon's cleared-HALT watcher now carries a bounded polling fallback, so a halt cleared before the watcher is ready (or a dropped filesystem event) is still picked up within one poll interval, and watcher errors are logged instead of swallowed. ([implementation PR #2118](https://github.com/jstoup111/ai-conductor/pull/2118)).
 - PRD audit citations now accept every task identifier declared by the active plan. ([implementation PR #2105](https://github.com/jstoup111/ai-conductor/pull/2105)).
 - Configuration now prevents conditional or disabled gating and structural steps from bypassing required workflow enforcement. ([implementation PR #2107](https://github.com/jstoup111/ai-conductor/pull/2107)).
+- A remediation halt caused by a planner gap-id mismatch now reports the halt rationale the planner recorded, instead of only the id mismatch. ([implementation PR #2129](https://github.com/jstoup111/ai-conductor/pull/2129)).
 
 ## [1.0.0] - 2026-08-31
 
