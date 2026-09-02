@@ -195,6 +195,7 @@ describe('engine/worktree', () => {
     });
 
     afterEach(async () => {
+      vi.restoreAllMocks();
       await rm(lifecycleRoot, { recursive: true, force: true });
     });
 
@@ -227,6 +228,22 @@ describe('engine/worktree', () => {
     });
 
     it('serializes concurrent add and remove requests against one shared git directory for 20 iterations', async () => {
+      const originalRun = WorktreeLifecycleQueue.prototype.run;
+      let activeLifecycleOperations = 0;
+      let peakLifecycleOperations = 0;
+      const lifecycleRun = vi.spyOn(WorktreeLifecycleQueue.prototype, 'run').mockImplementation(
+        function <T>(this: WorktreeLifecycleQueue, operation: () => Promise<T>): Promise<T> {
+          return originalRun.call(this, async () => {
+            activeLifecycleOperations += 1;
+            peakLifecycleOperations = Math.max(peakLifecycleOperations, activeLifecycleOperations);
+            try {
+              return await operation();
+            } finally {
+              activeLifecycleOperations -= 1;
+            }
+          }) as Promise<T>;
+        },
+      );
       const deps = makeFeatureRunnerDeps({
         projectRoot: lifecycleRoot,
         worktreeBase: join(lifecycleRoot, '.worktrees'),
@@ -252,6 +269,9 @@ describe('engine/worktree', () => {
         expect(registrations).toContain(`worktree ${created.path}`);
         expect(registrations).not.toContain(`worktree ${pathB}`);
       }
+
+      expect(lifecycleRun).toHaveBeenCalledTimes(40);
+      expect(peakLifecycleOperations).toBe(1);
     });
 
     it('keeps an unrelated stale registration when a failed cleanup targets only its requested slug', async () => {
