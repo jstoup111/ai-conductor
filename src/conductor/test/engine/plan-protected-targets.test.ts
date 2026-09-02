@@ -105,6 +105,38 @@ describe('engine/plan-protected-targets', () => {
     expect(scanPlanProtectedTargets(plan, 'build-tasks-can-amend-protected-docs-artifacts-ame')).toEqual([]);
   });
 
+  it('allows a placeholder path that names no real artifact', () => {
+    // `<slug>` is a pattern, not a file. A remediation task describing the plan
+    // appender has to name the shape of the path it must not rewrite, and the
+    // basename `<slug>` matches no feature stem — so `namesOwnFeature` was
+    // false and the task was redirected as another feature's sealed artifact.
+    // A path that cannot exist on disk is not a protected target.
+    const plan = `# Implementation Plan
+
+### Task 18: Guard the plan appender
+
+**Files:**
+- .docs/plans/<slug>.md
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'plan-growth-allowance-is-spent-on-work-existing-ta')).toEqual([]);
+  });
+
+  it('still reports a real foreign artifact alongside a placeholder', () => {
+    const plan = `# Implementation Plan
+
+### Task 19: Guard the plan appender
+
+**Files:**
+- .docs/plans/<slug>.md
+- .docs/decisions/some-other-feature.md
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'plan-growth-allowance-is-spent-on-work-existing-ta')).toEqual([
+      { taskId: '19', path: '.docs/decisions/some-other-feature.md' },
+    ]);
+  });
+
   it('allows a task naming only ordinary source paths', () => {
     const plan = `# Implementation Plan
 
