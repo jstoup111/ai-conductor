@@ -985,6 +985,101 @@ describe('engine/setup-triage — fixSession closed rejection dispositions (Task
   });
 });
 
+/** Models the clean Git states accepted by fixSession and records its protocol argv. */
+function acceptedRepairGit(): { git: GitRunner; calls: string[][]; applyForwardCommit: () => void } {
+  const calls: string[][] = [];
+  const originalHead = 'a'.repeat(40);
+  const originalTree = 'original-tree';
+  const repairedHead = 'b'.repeat(40);
+  const repairedTree = 'repaired-tree';
+  let forwardCommitApplied = false;
+  const result = (stdout = '', exitCode = 0, stderr = ''): GitResult => ({ stdout, exitCode, stderr });
+
+  const git: GitRunner = async (args) => {
+    calls.push(args);
+    const [command, ...rest] = args;
+    if (command === 'rev-parse' && rest[0] === 'HEAD') {
+      return result(`${forwardCommitApplied ? repairedHead : originalHead}\n`);
+    }
+    if (command === 'rev-parse' && rest[0] === 'HEAD^{tree}') {
+      return result(`${forwardCommitApplied ? repairedTree : originalTree}\n`);
+    }
+    if (command === 'status' && rest[0] === '--porcelain') return result();
+    if (command === 'merge-base' && rest[0] === '--is-ancestor') return result();
+    return result();
+  };
+
+  return { git, calls, applyForwardCommit: () => { forwardCommitApplied = true; } };
+}
+
+describe('engine/setup-triage — fixSession accepted repair dispositions (Task 5)', () => {
+  it('accepts a no-change repair without an engine commit and emits its closed disposition', async () => {
+    const { git, calls } = acceptedRepairGit();
+    const emitted: Array<Record<string, unknown>> = [];
+    const events = { emit: async (event: Record<string, unknown>) => { emitted.push(event); } };
+
+    const outcome = await fixSession(git, '/worktree', 'task-5', async () => {}, async () => {}, events as never);
+
+    expect(outcome).toMatchObject({ kind: 'fixed-pass', contractOutcome: 'verified-no-tree-change', preservedPaths: [] });
+    expect(outcome.quarantineRef).toBeUndefined();
+    expect(calls.some(([command]) => command === 'add' || command === 'commit')).toBe(false);
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: 'setup_repair',
+        disposition: 'verified-no-tree-change',
+        preservedPaths: [],
+      }),
+    ]);
+    expect((emitted[0] as { quarantineRef?: string }).quarantineRef).toBeUndefined();
+    expect(emitted[0]?.disposition).not.toBe('rejected');
+  });
+
+  it('accepts a clean forward commit without an additional engine commit and emits its closed disposition', async () => {
+    const { git, calls, applyForwardCommit } = acceptedRepairGit();
+    const emitted: Array<Record<string, unknown>> = [];
+    const events = { emit: async (event: Record<string, unknown>) => { emitted.push(event); } };
+
+    const outcome = await fixSession(git, '/worktree', 'task-5', async () => { applyForwardCommit(); }, async () => {}, events as never);
+
+    expect(outcome).toMatchObject({ kind: 'fixed-pass', contractOutcome: 'accepted-existing-commit', preservedPaths: [] });
+    expect(outcome.quarantineRef).toBeUndefined();
+    expect(calls.some(([command]) => command === 'add' || command === 'commit')).toBe(false);
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: 'setup_repair',
+        disposition: 'accepted-existing-commit',
+        preservedPaths: [],
+      }),
+    ]);
+    expect((emitted[0] as { quarantineRef?: string }).quarantineRef).toBeUndefined();
+    expect(emitted[0]?.disposition).not.toBe('rejected');
+  });
+
+  it('parks an initially dirty worktree before dispatch and emits no repair event', async () => {
+    const { git } = fakeGit([
+      { match: ['rev-parse', 'HEAD'], result: { stdout: `${'a'.repeat(40)}\n` } },
+      { match: ['status', '--porcelain'], result: { stdout: ' M src/dirty.ts\n' } },
+      { match: ['write-tree'], result: { stdout: 'dirty-tree\n' } },
+    ]);
+    const emitted: Array<Record<string, unknown>> = [];
+    const events = { emit: async (event: Record<string, unknown>) => { emitted.push(event); } };
+    let dispatches = 0;
+
+    const outcome = await fixSession(
+      git,
+      '/worktree',
+      'task-12',
+      async () => { dispatches += 1; },
+      async () => {},
+      events as never,
+    );
+
+    expect(outcome).toMatchObject({ kind: 'park', contractOutcome: 'precondition-failed' });
+    expect(dispatches).toBe(0);
+    expect(emitted).toEqual([]);
+  });
+});
+
 describe('engine/setup-triage — quarantine sentinel surfacing (Task 14)', () => {
   it('quarantined-pass outcome includes quarantine ref and preserved paths', async () => {
     const { git } = fakeGit([
