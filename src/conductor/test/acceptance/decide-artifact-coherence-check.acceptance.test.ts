@@ -169,7 +169,16 @@ const COHERENCE = [
   '',
 ].join('\n');
 
-const APPROVED_ADR = ['# ADR: coherence placement', '', '**Status:** APPROVED', '', 'Body.', ''].join('\n');
+const APPROVED_ADR = [
+  '# ADR: coherence placement',
+  '',
+  '**Status:** APPROVED',
+  '',
+  '## Decision',
+  '',
+  '1. **Keep coherence validation at land time.**',
+  '',
+].join('\n');
 
 let repoPath: string;
 
