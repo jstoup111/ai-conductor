@@ -109,7 +109,14 @@ export interface BumpKickbackGateResult {
 /** Result of applying a stable build-review effect to the kickback budget. */
 export type ChargeBuildReviewEffectResult =
   | ({ status: 'charged' } & BumpKickbackGateResult)
-  | { status: 'already-charged'; entry: KickbackGateEntry };
+  | { status: 'already-charged'; entry: KickbackGateEntry }
+  | { status: 'unreadable'; reason: string };
+
+/** Typed read boundary for callers that must never spend from corrupt state. */
+export type KickbackLedgerReadResult =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'ok'; readonly ledger: KickbackLedger }
+  | { readonly kind: 'unreadable'; readonly reason: string };
 
 const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set(['count', 'resolvedBefore']);
 
@@ -262,27 +269,40 @@ function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedge
  * Read the durable kickback state. Missing, malformed, and incompatible
  * ledgers deliberately fail open to an empty budget and never interrupt a run.
  */
-export async function readKickbackLedger(projectRoot: string): Promise<KickbackLedger> {
+export async function readKickbackLedgerResult(projectRoot: string): Promise<KickbackLedgerReadResult> {
   const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
 
   try {
     const parsed: unknown = JSON.parse(await readFile(ledgerPath, 'utf-8'));
-    if (isKickbackLedger(parsed)) return normalizeKickbackLedger(parsed);
+    if (isKickbackLedger(parsed)) return { kind: 'ok', ledger: normalizeKickbackLedger(parsed) };
 
     if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version !== 1) {
-      console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}; using empty ledger`);
-      return emptyLedger();
+      return { kind: 'unreadable', reason: 'kickback ledger has an unsupported version' };
     }
-
-    console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}; using empty ledger`);
+    return { kind: 'unreadable', reason: 'kickback ledger is corrupt' };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn(
-        `[kickback-ledger] unable to read ledger at ${ledgerPath}; using empty ledger: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
+    return { kind: 'unreadable', reason: `kickback ledger is unreadable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+/**
+ * Legacy callers intentionally retain the historic fail-open behavior. New
+ * enforcement boundaries consume readKickbackLedgerResult instead.
+ */
+export async function readKickbackLedger(projectRoot: string): Promise<KickbackLedger> {
+  const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
+  const result = await readKickbackLedgerResult(projectRoot);
+  if (result.kind === 'ok') return result.ledger;
+  if (result.kind === 'unreadable') {
+    if (result.reason === 'kickback ledger has an unsupported version') {
+      console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}; using empty ledger`);
+    } else if (result.reason === 'kickback ledger is corrupt') {
+      console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}; using empty ledger`);
+    } else {
+      console.warn(`[kickback-ledger] unable to read ledger at ${ledgerPath}; using empty ledger: ${result.reason.slice('kickback ledger is unreadable: '.length)}`);
     }
   }
-
   return emptyLedger();
 }
 
@@ -499,7 +519,9 @@ export async function chargeBuildReviewEffectInLedger(
   effectId: string,
   input: BumpKickbackGateInput,
 ): Promise<ChargeBuildReviewEffectResult> {
-  const ledger = await readKickbackLedger(projectRoot);
+  const read = await readKickbackLedgerResult(projectRoot);
+  if (read.kind === 'unreadable') return { status: 'unreadable', reason: read.reason };
+  const ledger = read.kind === 'ok' ? read.ledger : emptyLedger();
   const result = chargeBuildReviewEffect(ledger.gates.build_review, effectId, input);
 
   if (result.status === 'charged') {
