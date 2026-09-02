@@ -59,6 +59,28 @@ const DRAFT_ADR = [
   '',
 ].join('\n');
 
+const APPROVED_CITABLE_ADR = [
+  '# ADR: citable decision',
+  '',
+  '**Status:** Approved',
+  '',
+  '## Decision',
+  '',
+  '1. **Keep the decision citable.**',
+  '',
+].join('\n');
+
+const APPROVED_UNCITABLE_ADR = [
+  '# ADR: uncitable decision',
+  '',
+  '**Status:** Approved',
+  '',
+  '## Decision',
+  '',
+  'The decision has no numbered identifier.',
+  '',
+].join('\n');
+
 let repoPath: string;
 
 async function git(args: string[], cwd = repoPath): Promise<string> {
@@ -192,6 +214,46 @@ describe('landSpec ADR approval diagnostics (Task 6)', () => {
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
     ).rejects.toThrow(/adr-proposed\.md[\s\S]*adr-accepted\.md|adr-accepted\.md[\s\S]*adr-proposed\.md/i);
+  });
+});
+
+describe('landSpec ADR citability gate (Task 6)', () => {
+  const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+
+  it('lands an added APPROVED ADR with a numbered decision', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-citable.md'), APPROVED_CITABLE_ADR);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).resolves.toMatchObject({ slug: 'dep-bump' });
+  });
+
+  it('rejects an added APPROVED ADR with no citable decision and names the file', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-uncitable.md'), APPROVED_UNCITABLE_ADR);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/no citable decision.*adr-uncitable\.md/i);
+  });
+
+  it('rejects an edited ADR made uncitable and names the file', async () => {
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'decisions', 'adr-existing.md'), APPROVED_CITABLE_ADR);
+    await git(['add', '.docs/decisions/adr-existing.md']);
+    await git(['commit', '-m', 'add existing ADR']);
+
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-existing.md'), APPROVED_UNCITABLE_ADR);
+    await git(['add', '.docs/decisions/adr-existing.md'], dir);
+    await git(['commit', '-m', 'make existing ADR uncitable'], dir);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/no citable decision.*adr-existing\.md/i);
   });
 });
 
