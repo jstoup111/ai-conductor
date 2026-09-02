@@ -13,6 +13,7 @@
  * and unit-testable.
  */
 
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import chalk from 'chalk';
 import type { ComplexityTier, Track } from '../types/index.js';
 import { Waker } from './waker.js';
@@ -1589,6 +1590,17 @@ export async function runDaemon(
     });
     wakeBusyPoll = resolveBusyPoll;
     await busyPoll;
+    // A busy lap must be a real event-loop turn, never a microtask-only lap.
+    // `sleep` is injectable, and an immediately-resolved one leaves this whole
+    // branch — the poll, the sweep below, and the `continue` — resolvable in
+    // microtasks alone. The loop then never reaches the timers phase while a
+    // worker is in flight, so nothing timer-driven can make progress: not a
+    // caller's own escape timer, and not the test runner's timeout. The
+    // failure that produces is silent, because the watchdog meant to report it
+    // is starved by the same starvation it would report. Yielding here costs
+    // one check-phase tick per lap against a real `idlePollMs` wait, and keeps
+    // this loop's liveness independent of what `sleep` does.
+    await yieldToEventLoop();
     if (wakeBusyPoll === resolveBusyPoll) wakeBusyPoll = undefined;
     if (!completedWorker) {
       await maintenance.afterBusyPoll(sweepBestEffort);
