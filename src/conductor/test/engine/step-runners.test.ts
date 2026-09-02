@@ -3722,7 +3722,7 @@ TIER: M`,
         expect(await readFile(selectorMarker, 'utf8')).toBe('selector-loaded-checkout-dependencies');
         // The preflight reaches the grader as typed evidence only: its
         // classification plus a bounded excerpt, never a verdict.
-        expect(observedProjections[0]).toMatchObject({ preflight: { classification: 'red' } });
+        expect(observedProjections[0]).toMatchObject({ preflight: { classification: 'nonzero-exit' } });
         expect(typeof observedProjections[0].preflight.excerpt).toBe('string');
       } finally {
         if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
@@ -4544,14 +4544,14 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(prompt).toContain('never flattened');
   });
 
-  it('instructs graders with a findings-only structured-anchor payload', async () => {
+  it('instructs graders with findings and optional counterfactual sensitivity in the structured-anchor payload', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
     const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
 
     await dispatch(runner);
 
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('only top-level field is `findings`');
+    expect(prompt).toContain('top-level fields are `findings` and optional `counterfactualSensitivity`');
     expect(prompt).not.toContain('`contractVersion` is "v3"');
     expect(prompt).not.toContain('`contractVersion` is "v2"');
     expect(prompt).not.toContain('every anchor value is a plain string');

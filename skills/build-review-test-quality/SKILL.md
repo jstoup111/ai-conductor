@@ -38,18 +38,49 @@ For each in-scope changed test, judge whether its assertion actually distinguish
 stub-passable assertion: it could pass while the changed behavior is absent or replaced with a
 stub. Keep independent tests or behaviors as separate findings.
 
-The reverted-production preflight is evidence, never a finding by itself. A `red` result supports
-that the test distinguishes behavior. A `stayed-green` result is not automatically a concern: read
-the test and cite the concrete stub-passable assertion before finding it insensitive. An
-`infrastructure-failure` is not a finding; do not invent evidence, downgrade it to a pass, or turn
-it into content criticism. Tests outside the supplied in-scope set are not this rubric's concern.
+The reverted-production preflight is evidence, never a finding by itself. Report its optional
+`counterfactualSensitivity` judgement using this closed vocabulary:
+
+- `supports` means either an executed in-scope example fails on the reverted tree, or the reverted
+  production causes the intended tests to fail during collection or load.
+- `indeterminate` means an environment failure prevents the intended tests from bearing on behavior
+  before that can be determined — for example, the #1915 database-auth or boot failures.
+  It is neither sensitivity support nor a finding.
+- `not-applicable` means the counterfactual evidence does not apply to a sensitivity judgement.
+
+A `stayed-green` result is not automatically a concern: read the test and cite the concrete
+stub-passable assertion before finding it insensitive. An infrastructure failure is not a finding;
+do not invent evidence, downgrade it to a pass, or turn it into content criticism. Tests outside the
+supplied in-scope set are not this rubric's concern.
 
 ## Result contract (v3)
 
-Return exactly one JSON object whose only top-level field is `findings`, an array. The engine owns
-the `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot
-identity after validating this findings-only payload. Return every independent finding; an empty
-array means no Test Quality concern was found. Each finding contains:
+Return exactly one JSON object with a required `findings` array and an optional
+`counterfactualSensitivity` field. The engine owns the `judged` envelope and stamps its kind,
+rubric, contract version, lap identity, and snapshot identity after validating this
+findings-plus-optional-field payload. Return every independent finding; an empty array means no Test
+Quality concern was found. Each finding contains:
+
+```json
+{
+  "findings": [
+    {
+      "concernKind": "test-insensitive",
+      "summary": "string",
+      "evidenceLocations": ["path:line"],
+      "anchor": {
+        "rubric": "testQuality",
+        "locus": { "path": "string", "contentHash": "string", "display": "string" }
+      }
+    }
+  ],
+  "counterfactualSensitivity": "supports | indeterminate | not-applicable"
+}
+```
+
+Omit `counterfactualSensitivity` when no judgement is reported; when present, it must use exactly
+one of those three values. `indeterminate` never supports a finding, and a `test-insensitive`
+finding still requires its own concrete stub-passable assertion.
 
 **Closed vocabulary:** `test-insensitive`.
 
@@ -71,4 +102,8 @@ This skill does not read, write, apply, or decide a disposition.
 
 - [ ] Every finding uses only `test-insensitive` and a nested `testQuality` content-region anchor.
 - [ ] Every finding cites a concrete stub-passable assertion, not preflight classification alone.
+- [ ] `counterfactualSensitivity`, when returned, is exactly `supports`, `indeterminate`, or
+      `not-applicable`; `indeterminate` is neither sensitivity support nor a finding.
+- [ ] `supports` is used only for an executed-example failure on reverted production or a
+      reverted-production collection/load failure.
 - [ ] Findings omit tests outside the supplied in-scope projection and omit dispositions.

@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   classifyBuildReviewRubricBranches,
   coordinateBuildReviewRubrics,
+  stampBuildReviewDispatchedCandidate,
   type BuildReviewCoordinationInput,
+  validateBuildReviewDispatchedResult,
 } from "../../src/engine/build-review-coordinator.js";
 import {
   mapBuildReviewCoordinatorFailureReason,
@@ -331,12 +333,16 @@ describe("build-review coordinator: frozen fan-out", () => {
     });
   });
 
-  it("records a preflight infrastructure failure without dispatching the grader", async () => {
+  it.each([
+    ['launch', 'scoped-run-launch-failed', 'scoped command could not launch'],
+    ['timeout', 'scoped-run-timeout', 'scoped run exceeded 60s'],
+    ['signal', 'scoped-run-signaled', 'scoped run received SIGTERM'],
+  ] as const)("records a preflight %s infrastructure failure without dispatching the grader", async (_kind, reason, detail) => {
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
     const input = coordinationInput(true, {
       preflight: vi.fn(async () => ({
-        classification: "infrastructure-failure" as const, reason: "scoped-run-timeout" as const,
-        failureExcerpt: "scoped run exceeded 60s",
+        classification: "infrastructure-failure" as const, reason,
+        failureExcerpt: detail,
         changedPaths: [], changedTestSelectors: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
       })),
       emit,
@@ -350,11 +356,11 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(input.writeArtifact).not.toHaveBeenCalled();
     expect(result).toEqual({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "scoped-run-timeout", detail: "scoped run exceeded 60s" }],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason, detail }],
     });
     expect(emit.mock.calls.map(([event]) => event)).toEqual([{
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current",
-      reason: "scoped-run-timeout", excerpt: "scoped run exceeded 60s",
+      reason, excerpt: detail,
     }]);
   });
 
@@ -375,6 +381,46 @@ describe("build-review coordinator: frozen fan-out", () => {
 });
 
 describe("build-review coordinator: dispatch-failure detail carry-through", () => {
+  it("rejects malformed counterfactualSensitivity as absent rerun evidence without a semantic route or cap tick", async () => {
+    const frozenInputs = titledInputs();
+    const lapId = parseBuildReviewLapId("lap-current")!;
+    const projection = {
+      rubric: "testQuality", contractVersion: "v3", projectionVersion: "v2", lapId,
+      snapshotDigest: frozenInputs.sourceSnapshot.digest, digest: "sha256:test-quality",
+      changedTestSelectors: [IN_SCOPE_TEST],
+      changedTestTitles: frozenInputs.sourceSnapshot.changedTestTitles,
+      changedFiles: [],
+    } as never;
+    const malformed = { findings: [], counterfactualSensitivity: "unknown" };
+    const stamped = stampBuildReviewDispatchedCandidate(malformed, "testQuality", projection);
+    const rubricFailures = { testQuality: 3 };
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1, ...artifact }));
+    const writeCache = vi.fn(async () => undefined);
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+
+    // The dispatch repair predicate rejects the envelope before it can settle a
+    // judged FAIL. With no persisted result, the existing gate-completion path
+    // sees absent evidence and reruns; no semantic kickback can charge this tally.
+    expect(validateBuildReviewDispatchedResult(stamped, "testQuality", projection)).toBeUndefined();
+
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: frozenInputs,
+      dispatchModel: vi.fn(async () => malformed),
+      writeArtifact,
+      writeCache,
+      emit,
+    }));
+
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result",
+      detail: expect.stringContaining("counterfactualSensitivity"),
+    });
+    expect(writeArtifact).not.toHaveBeenCalled();
+    expect(writeCache).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "build_review_rubric_result", verdict: "FAIL" }));
+    expect(rubricFailures).toEqual({ testQuality: 3 });
+  });
+
   it("settles a dispatch-failure report as invalid-provider-result carrying its bounded detail", async () => {
     const detail = "judged-result contract not satisfied after one repair turn: ... Raw output excerpt: I judged the rubric...";
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
@@ -508,6 +554,62 @@ describe("build-review coordinator: findings-only provider payloads", () => {
         verdict, findings: [...findings],
       },
     });
+  });
+});
+
+describe("build-review coordinator: counterfactual sensitivity is verdict-neutral", () => {
+  it("settles indeterminate with no findings exactly as an ordinary empty result", async () => {
+    const ordinary = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => ({ findings: [] })),
+    }));
+    const indeterminate = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => ({ findings: [], counterfactualSensitivity: "indeterminate" })),
+    }));
+
+    expect(testQualityBranch(ordinary)).toMatchObject({
+      kind: "dispatched", result: { verdict: "PASS", findings: [] },
+    });
+    expect(testQualityBranch(indeterminate)).toMatchObject({
+      kind: "dispatched", result: { verdict: "PASS", findings: [], counterfactualSensitivity: "indeterminate" },
+    });
+  });
+
+  it("retains an evidenced test-insensitive finding despite indeterminate counterfactual sensitivity", async () => {
+    const finding = testQualityFinding();
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => ({ findings: [finding], counterfactualSensitivity: "indeterminate" })),
+    }));
+
+    expect(testQualityBranch(result)).toEqual({
+      kind: "dispatched", rubric: "testQuality",
+      result: {
+        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+        findings: [finding], counterfactualSensitivity: "indeterminate", verdict: "FAIL",
+      },
+    });
+  });
+
+  it("settles repeated indeterminate findings as ordinary FAIL laps for the existing convergence bound", async () => {
+    const finding = testQualityFinding();
+    const laps = await Promise.all(["lap-one", "lap-two"].map(async (lap) => {
+      const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+        inputs: titledInputs(),
+        lapId: parseBuildReviewLapId(lap)!,
+        dispatchModel: vi.fn(async () => ({ findings: [finding], counterfactualSensitivity: "indeterminate" })),
+      }));
+      return testQualityBranch(result);
+    }));
+
+    expect(laps).toEqual(["lap-one", "lap-two"].map((lapId) => ({
+      kind: "dispatched", rubric: "testQuality",
+      result: {
+        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId, snapshotDigest: "sha256:snapshot",
+        findings: [finding], counterfactualSensitivity: "indeterminate", verdict: "FAIL",
+      },
+    })));
   });
 });
 

@@ -9,6 +9,7 @@ import {
   writeBuildReviewBranchArtifact,
   type BuildReviewArtifactFilesystem,
 } from '../../src/engine/build-review-artifacts.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
 
@@ -86,6 +87,32 @@ describe('build-review current-lap branch artifacts', () => {
     expect(artifact).toMatchObject({ rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: judged() });
     expect(Object.keys(fs.files)).toEqual(['/feature/.pipeline/build-review/lap-current/testQuality.json']);
     expect(await readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
+  });
+
+  it('round-trips optional counterfactual sensitivity through the stamped envelope, artifact, and aggregate', async () => {
+    const projection = {
+      rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot',
+      contentDigest: 'sha256:content', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
+      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+      planBody: '# Plan', repairContext: [], acceptedWidenings: [], operatorReseals: [],
+    } as never;
+    const result = validateBuildReviewDispatchedResult(
+      stampBuildReviewDispatchedCandidate({ findings: [], counterfactualSensitivity: 'indeterminate' }, 'testQuality', projection),
+      'testQuality', projection,
+    )!;
+    const fs = filesystem();
+    await writeBuildReviewBranchArtifact('/feature', {
+      rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result, provenance: { kind: 'fresh' },
+    }, fs);
+    const reread = await readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs);
+
+    expect(result).toMatchObject({ counterfactualSensitivity: 'indeterminate' });
+    expect(reread?.result).toMatchObject({ counterfactualSensitivity: 'indeterminate' });
+    expect(joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: { testQuality: reread!.result } }))
+      .toMatchObject({ results: { testQuality: { counterfactualSensitivity: 'indeterminate' } } });
+
+    const absent = stampBuildReviewDispatchedCandidate({ findings: [] }, 'testQuality', projection) as Record<string, unknown>;
+    expect(Object.keys(absent)).toEqual(['kind', 'rubric', 'contractVersion', 'lapId', 'snapshotDigest', 'findings']);
   });
 
   async function exerciseLiveV3StampBoundary(fs: BuildReviewArtifactFilesystem): Promise<void> {

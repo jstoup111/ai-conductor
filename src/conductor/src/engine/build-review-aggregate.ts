@@ -81,7 +81,7 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
   const candidate = record(value);
   if (!candidate) return undefined;
   const keys = candidate.kind === 'judged'
-    ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', ...(candidate.relocationAudit === undefined ? [] : ['relocationAudit']), 'verdict']
+    ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', ...(candidate.relocationAudit === undefined ? [] : ['relocationAudit']), ...(candidate.counterfactualSensitivity === undefined ? [] : ['counterfactualSensitivity']), 'verdict']
     : candidate.kind === 'skipped'
       ? ['kind', 'rubric', 'reason']
       : candidate.kind === 'infrastructure-failure'

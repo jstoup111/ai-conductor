@@ -160,19 +160,27 @@ export interface BuildReviewCoordinationInput {
  * or merge-base file content, and never the same evidence twice.
  */
 export function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTestQualityProjectionInput {
+  const projectedPreflight = preflight.classification === "nonzero-exit" && preflight.scopedRun
+    ? {
+        ...projectTestQualityPreflight(preflight),
+        exitCode: preflight.scopedRun.exitCode,
+        runKind: preflight.scopedRun.runKind,
+        ranSelectors: preflight.scopedRun.ranSelectors,
+      }
+    : projectTestQualityPreflight(preflight);
   if (preflight.classification === "infrastructure-failure") {
     return {
       changedTestSelectors: preflight.changedTestSelectors,
       unresolvedMarkers: [],
       revertedProductionManifest: [],
-      preflight: projectTestQualityPreflight(preflight),
+      preflight: projectedPreflight,
     };
   }
   return {
     changedTestSelectors: preflight.changedTestSelectors,
     unresolvedMarkers: [],
     revertedProductionManifest: preflight.revertedProductionManifest,
-    preflight: projectTestQualityPreflight(preflight),
+    preflight: projectedPreflight,
   };
 }
 
@@ -207,6 +215,9 @@ export function stampBuildReviewDispatchedCandidate(
     // let validation enforce rubric-appropriateness (unexpected payloads
     // carrying one are rejected with a named problem, never laundered here).
     ...(source?.relocationAudit === undefined ? {} : { relocationAudit: source.relocationAudit }),
+    ...(source?.counterfactualSensitivity === undefined
+      ? {}
+      : { counterfactualSensitivity: source.counterfactualSensitivity }),
   };
 }
 

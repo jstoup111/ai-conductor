@@ -1654,6 +1654,41 @@ else
   assert "test/check_build_review_rubric_skill_vocabularies.sh exists" 1
 fi
 
+counterfactual_sensitivity_engine_source="${HARNESS_DIR}/src/conductor/src/engine/build-review-domain.ts"
+counterfactual_sensitivity_skill_source="${HARNESS_DIR}/skills/build-review-test-quality/SKILL.md"
+if [ ! -r "$counterfactual_sensitivity_engine_source" ] || [ ! -r "$counterfactual_sensitivity_skill_source" ]; then
+  echo "    counterfactualSensitivity vocabulary source missing or unreadable"
+  assert "counterfactualSensitivity vocabulary in SKILL.md equals the engine source" 1
+else
+  counterfactual_sensitivity_engine_vocabulary=$(sed -nE '/^export const COUNTERFACTUAL_SENSITIVITY_VOCABULARY =/ s/.*\[([^]]*)\].*/\1/p' "$counterfactual_sensitivity_engine_source" | grep -oE "'[^']+'" | tr -d "'" | sort -u)
+  counterfactual_sensitivity_skill_vocabulary=$(grep -oE '`(supports|indeterminate|not-applicable)`' "$counterfactual_sensitivity_skill_source" | tr -d '`' | sort -u)
+  counterfactual_sensitivity_engine_count=$(wc -l <<<"$counterfactual_sensitivity_engine_vocabulary" | tr -d ' ')
+  counterfactual_sensitivity_skill_count=$(wc -l <<<"$counterfactual_sensitivity_skill_vocabulary" | tr -d ' ')
+
+  counterfactual_sensitivity_vocabulary_drift=0
+  if [ "$counterfactual_sensitivity_engine_count" -ne 3 ] || [ "$counterfactual_sensitivity_skill_count" -ne 3 ]; then
+    echo "    could not extract exactly three counterfactualSensitivity members from both sources"
+    counterfactual_sensitivity_vocabulary_drift=1
+  fi
+
+  counterfactual_sensitivity_engine_only=$(comm -23 <(printf '%s\n' "$counterfactual_sensitivity_engine_vocabulary") <(printf '%s\n' "$counterfactual_sensitivity_skill_vocabulary"))
+  counterfactual_sensitivity_skill_only=$(comm -13 <(printf '%s\n' "$counterfactual_sensitivity_engine_vocabulary") <(printf '%s\n' "$counterfactual_sensitivity_skill_vocabulary"))
+  if [ -n "$counterfactual_sensitivity_engine_only" ]; then
+    while IFS= read -r member; do
+      [ -n "$member" ] && echo "    counterfactualSensitivity member missing from SKILL.md: ${member}"
+    done <<<"$counterfactual_sensitivity_engine_only"
+    counterfactual_sensitivity_vocabulary_drift=1
+  fi
+  if [ -n "$counterfactual_sensitivity_skill_only" ]; then
+    while IFS= read -r member; do
+      [ -n "$member" ] && echo "    stale counterfactualSensitivity member in SKILL.md: ${member}"
+    done <<<"$counterfactual_sensitivity_skill_only"
+    counterfactual_sensitivity_vocabulary_drift=1
+  fi
+
+  assert "counterfactualSensitivity vocabulary in SKILL.md equals the engine source" "$counterfactual_sensitivity_vocabulary_drift"
+fi
+
 # ── 26. Apache-2.0 licensing surface ────────────────────────────────────────
 # Keep the repository license, package metadata, attribution, and contributor
 # notice aligned. Pinning the complete LICENSE digest prevents a partial or
