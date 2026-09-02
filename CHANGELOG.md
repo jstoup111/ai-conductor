@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Changed
 
 - Plans now declare only genuine task dependencies and tight file sets, so BUILD can fan out independent tasks instead of serializing them. ([implementation PR #2073](https://github.com/jstoup111/ai-conductor/pull/2073)).
+- The prd_audit remediation append allowance is raised from 5 tasks / 25% of the plan to 8 tasks / 50%. ([implementation PR #2131](https://github.com/jstoup111/ai-conductor/pull/2131)).
 
 ### Fixed
 
