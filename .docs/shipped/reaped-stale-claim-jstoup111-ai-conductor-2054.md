@@ -4,6 +4,13 @@ spec_hash: 56264893b28d70deae078e5b3db1a712cb1c93271f44a5560703ba3d5344693f
 pr: https://github.com/jstoup111/ai-conductor/pull/2133
 shipped: 2026-09-02
 engine_version: 20260902T161129Z-9f7f57c27ee1
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-02-adr-decision-citability-contract decision 2"
+    outcome: remediated
+    summary: "[100% verified] The shared parser narrows the pre-change AB-R12 grammar, violating the required backwards-compatible superset."
 ---
 
 ## Cost
