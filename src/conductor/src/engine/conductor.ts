@@ -4104,12 +4104,36 @@ export class Conductor {
         .filter(([, count]) => count !== 1)
         .map(([id]) => id);
       if (missing.length > 0 || duplicate.length > 0 || unexpectedAsBuiltGapIds.size > 0) {
+        // A halt disposition is credited above by finding id, so a planner that
+        // keyed one by anything else — its governing clause, in every observed
+        // case — misses that credit and lands here instead. This exit then
+        // reported set arithmetic alone, and the architectural decision the
+        // planner escalated never reached the operator: the halt named an id
+        // bookkeeping failure while `.pipeline/remediation.json` held the only
+        // copy of the reason, and the re-dispatch that clears the halt sweeps
+        // that file. Report both.
+        //
+        // Deliberately NOT matched back to a finding. The correspondence
+        // between gap ids and finding ids is exactly what this branch has just
+        // proven unreliable, so inferring it would credit a finding as
+        // addressed on the strength of the evidence that failed. Fail-closed is
+        // unchanged; only the operator's copy of the reason is restored.
+        const plannerHalts = gaps.filter((gap) => gap.disposition === 'halt');
         const detail = [
           'As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings.',
           ...(missing.length > 0 ? [`Missing: ${missing.join(', ')}.`] : []),
           ...(duplicate.length > 0 ? [`Duplicate: ${duplicate.join(', ')}.`] : []),
           ...(unexpectedAsBuiltGapIds.size > 0
             ? [`Unexpected: ${[...unexpectedAsBuiltGapIds].join(', ')}.`]
+            : []),
+          ...(plannerHalts.length > 0
+            ? [
+                'Planner halt dispositions in this round: ' +
+                  plannerHalts
+                    .map((gap) => `${gap.id} (${gap.category}: ${gap.rationale})`)
+                    .join('; ') +
+                  '.',
+              ]
             : []),
         ].join(' ');
         return { kind: 'halt', haltClass: 'needs-human', detail };
