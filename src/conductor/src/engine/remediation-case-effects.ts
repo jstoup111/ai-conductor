@@ -35,6 +35,11 @@ function isActionCase(record: RemediationCaseRecord): record is ActionCase {
   return record.resolution === 'open' && record.effect.kind === 'action';
 }
 
+/** The one durable vocabulary for action cases that may enter a BUILD retry. */
+export function isBuildEligibleActionCase(record: RemediationCaseRecord): record is ActionCase {
+  return isActionCase(record) && record.effect.status === 'applied';
+}
+
 function replaceCases(
   state: RemediationCaseStoreState,
   replace: (record: RemediationCaseRecord) => RemediationCaseRecord,
@@ -62,7 +67,19 @@ export async function applyBuildReviewActionEffects(input: {
     const actionCases = state.cases.filter(isActionCase);
     if (actionCases.length === 0) return { value: { ok: false as const, reason: 'no open action effects' } };
     const pending = actionCases.filter((record) => record.effect.kind === 'action' && record.effect.status === 'reserved');
-    if (pending.length === 0) return { value: { ok: true as const, status: 'already-applied' as const, effectId: actionCases[0]!.effect.id } };
+    if (pending.length === 0) {
+      const failed = actionCases.filter((record) => record.effect.status === 'failed');
+      if (failed.length === actionCases.length) {
+        return {
+          value: {
+            ok: false as const,
+            reason: `all open action effects failed: ${failed.map((record) =>
+              `${record.effect.id} (${record.effect.status === 'failed' ? record.effect.diagnostic : 'unknown'})`).join(', ')}`,
+          },
+        };
+      }
+      return { value: { ok: true as const, status: 'already-applied' as const, effectId: actionCases[0]!.effect.id } };
+    }
     const cases: BuildReviewWorkOrderCase[] = [];
     for (const record of actionCases) {
       const tasks = input.tasksByCaseId.get(record.id);
@@ -100,6 +117,9 @@ export async function applyBuildReviewActionEffects(input: {
       const diagnostic = `build-review effect charge failed: ${error instanceof Error ? error.message : String(error)}`;
       return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
     }
+    if (charged.status === 'unreadable') {
+      return { value: { ok: false as const, reason: charged.reason }, nextState: failPending(charged.reason) };
+    }
     if (charged.status === 'charged' && (charged.exhausted || charged.cumulativeExhausted)) {
       // A bare "budget exhausted" halt told the operator nothing about which
       // work is blocked or how close the counters are. Name both.
@@ -109,7 +129,7 @@ export async function applyBuildReviewActionEffects(input: {
         `count ${charged.entry.count}, cumulative ${charged.entry.cumulative}`;
       return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
     }
-    const next = replaceCases(state, (record) => record.effect.kind === 'action' && record.resolution === 'open'
+    const next = replaceCases(state, (record) => record.effect.kind === 'action' && record.effect.status === 'reserved'
       ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'applied', workOrderId } }
       : record);
     return { value: { ok: true as const, status: 'applied' as const, effectId: primaryEffectId }, nextState: next };

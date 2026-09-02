@@ -1,3 +1,4 @@
+// Covers: task:19, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -60,6 +61,28 @@ describe('remediation case effects', () => {
     const read = await store.read();
     expect(read.ok && read.state.cases[0]?.effect).toEqual(expect.objectContaining({ status: 'failed' }));
     await expect(readFile(planPath, 'utf8')).resolves.toBe('original plan\n');
+  });
+
+  it.each([
+    ['malformed ledger', 'not valid json {'],
+    ['unsupported ledger version', JSON.stringify({ version: 2, gates: {} })],
+  ])('fails the pending action without charging when its ledger is unreadable (%s)', async (_name, rawLedger) => {
+    const store = await storeWith({ version: 'v1', feature, cases: [{
+      id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'repair', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'source-1', outcome: 'acted', recordedAt: '2026-08-30T00:00:00.000Z' }],
+      effect: { id: 'effect-1', kind: 'action', status: 'reserved' },
+    }] });
+    const ledgerPath = join(root, '.pipeline', 'kickback-ledger.json');
+    await writeFile(ledgerPath, rawLedger, 'utf8');
+
+    await expect(applyBuildReviewActionEffects({
+      projectRoot: root, feature, store, tasksByCaseId: new Map([['case-1', [{ title: 'Repair the regression' }]]]),
+      chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-1' }, workOrderId: () => 'order-1',
+    })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('kickback ledger') });
+
+    const read = await store.read();
+    expect(read.ok && read.state.cases[0]?.effect).toEqual(expect.objectContaining({ status: 'failed' }));
+    await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(rawLedger);
   });
 
   it('reuses an exact deferred issue marker instead of filing a duplicate', async () => {
@@ -197,6 +220,37 @@ describe('remediation case effects', () => {
 
     expect(result).toMatchObject({ ok: true, status: 'applied', effectId: 'effect-2' });
     expect(chargeEffect).toHaveBeenCalledWith(root, 'effect-2', expect.anything());
+  });
+
+  it('never reopens a failed sibling while finalizing a later reserved action', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [
+      {
+        id: 'case-failed', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'first repair', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'source-failed', outcome: 'acted', recordedAt: '2026-08-30T00:00:00.000Z' }],
+        effect: { id: 'effect-failed', kind: 'action', status: 'failed', diagnostic: 'budget exhausted' },
+      },
+      {
+        id: 'case-live', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'later repair', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'source-live', outcome: 'acted', recordedAt: '2026-08-31T00:00:00.000Z' }],
+        effect: { id: 'effect-live', kind: 'action', status: 'reserved' },
+      },
+    ] });
+    const chargeEffect = vi.fn().mockResolvedValue({ status: 'charged', exhausted: false, cumulativeExhausted: false, entry: { count: 2, cumulative: 2 } });
+
+    await expect(applyBuildReviewActionEffects({
+      projectRoot: root, feature, store,
+      tasksByCaseId: new Map([['case-failed', [{ title: 'Never replay this' }]], ['case-live', [{ title: 'Repair the second' }]]]),
+      chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-live' }, workOrderId: () => 'order-live', chargeEffect,
+    })).resolves.toMatchObject({ ok: true, status: 'applied', effectId: 'effect-live' });
+
+    const read = await store.read();
+    expect(read).toMatchObject({
+      ok: true,
+      state: { cases: [
+        expect.objectContaining({ effect: expect.objectContaining({ id: 'effect-failed', status: 'failed' }) }),
+        expect.objectContaining({ effect: expect.objectContaining({ id: 'effect-live', status: 'applied' }) }),
+      ] },
+    });
   });
 
   it('names the blocked cases and the counter state when the kickback budget is exhausted', async () => {

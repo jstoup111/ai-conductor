@@ -1,4 +1,5 @@
 import type { BuildReviewWorkOrderCase } from './build-review-work-order.js';
+import { isBuildEligibleActionCase } from './remediation-case-effects.js';
 import type { RemediationCaseRecord } from './remediation-case-store.js';
 
 /** The only routes a post-join review is allowed to publish. */
@@ -19,10 +20,6 @@ export type BuildReviewMechanicalState = 'healthy' | 'retry' | 'halt';
 
 function hasUnfinishedEffect(record: RemediationCaseRecord): boolean {
   return record.effect.kind !== 'none' && record.effect.status !== 'applied';
-}
-
-function hasAppliedAction(record: RemediationCaseRecord): boolean {
-  return record.resolution === 'open' && record.effect.kind === 'action' && record.effect.status === 'applied';
 }
 
 function currentSourceCoverageIsConsistent(
@@ -60,7 +57,7 @@ export function reduceBuildReviewAdjudication(input: {
     return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'remediation effect is not finalized' };
   }
   if (input.cases.some((record) =>
-    hasAppliedAction(record) && record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)),
+    isBuildEligibleActionCase(record) && record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)),
   )) {
     return {
       route: 'build',
