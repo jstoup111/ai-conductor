@@ -4099,7 +4099,7 @@ export function parseAdrDecisions(content: string): AdrDecisionParseResult {
     if (ADR_SECTION_HEADING_RE.test(line)) break;
     const decisionLine = line.replace(/^\s{0,3}>\s?/, '');
     const numberedItem = decisionLine.match(/^\s*(\d+)\.\s+\S/);
-    const dHeading = decisionLine.match(/^\s*(?:\*{2}|#{1,6}\s+\*{0,2})D(\d+)\b/);
+    const dHeading = decisionLine.match(/^\s*#{0,6}\s*\*{0,2}D(\d+)\b/);
     const id = numberedItem?.[1] ?? dHeading?.[1];
     if (id !== undefined) ids.add(id);
   }

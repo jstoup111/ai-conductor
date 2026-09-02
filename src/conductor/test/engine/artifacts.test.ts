@@ -4232,6 +4232,9 @@ describe('engine/artifacts', () => {
       ['bolded D-heading', '**D4 — Termination.**'],
       ['ATX D-heading', '### D4 — Termination'],
       ['emphasized ATX D-heading', '### **D4** — X'],
+      ['bare D-line', 'D4 bare'],
+      ['single-emphasis D-heading', '*D4 - Termination'],
+      ['ATX D-heading without space', '###D4 - Termination'],
     ])('accepts the AB-R12 %s shape', (_description, decisionLine) => {
       const parsed = parseAdrDecisions(`# ADR\n\n## Decision\n\n${decisionLine}\n`);
 
