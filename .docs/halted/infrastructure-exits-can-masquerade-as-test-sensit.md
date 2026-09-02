@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-02T11:53:54.257Z
 Slug: infrastructure-exits-can-masquerade-as-test-sensit
 Class: needs-human
 Halting step: unknown
