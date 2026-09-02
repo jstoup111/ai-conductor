@@ -33,6 +33,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - PRD audit citations now accept every task identifier declared by the active plan. ([implementation PR #2105](https://github.com/jstoup111/ai-conductor/pull/2105)).
 - Configuration now prevents conditional or disabled gating and structural steps from bypassing required workflow enforcement. ([implementation PR #2107](https://github.com/jstoup111/ai-conductor/pull/2107)).
 - A remediation halt caused by a planner gap-id mismatch now reports the halt rationale the planner recorded, instead of only the id mismatch. ([implementation PR #2129](https://github.com/jstoup111/ai-conductor/pull/2129)).
+- Build review distinguishes counterfactual test sensitivity from infrastructure failures. ([implementation PR #2109](https://github.com/jstoup111/ai-conductor/pull/2109)).
 
 ## [1.0.0] - 2026-08-31
 
