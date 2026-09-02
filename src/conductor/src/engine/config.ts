@@ -449,6 +449,24 @@ export function validateConfig(
       ...ALL_STEPS.map((s) => [s.name as string, s] as const),
       ...Object.entries(OUT_OF_BAND_STEPS),
     ]);
+    const stepSkipAuthorityError = (
+      def: Pick<(typeof ALL_STEPS)[number], 'enforcement' | 'configDisableAllowed'> | undefined,
+      name: string,
+      key: 'disable' | 'when',
+    ): string | undefined => {
+      if (
+        !def ||
+        (def.enforcement !== 'structural' &&
+          (def.enforcement !== 'gating' || def.configDisableAllowed === true))
+      ) {
+        return undefined;
+      }
+
+      if (key === 'disable') {
+        return `Cannot disable ${def.enforcement} step: "${name}". Only advisory steps may be disabled.`;
+      }
+      return `Cannot condition ${def.enforcement} step: "${name}" with when:. Only advisory steps may be conditional.`;
+    };
     // Collect all custom-step names up-front so a custom can legally point
     // `after` at a sibling custom (chain ordering). Validation still rejects
     // references that don't resolve to either built-in or declared custom.
@@ -470,6 +488,8 @@ export function validateConfig(
         };
       }
       const cfg = value as Record<string, unknown>;
+      const isCustom = !builtInNames.has(name as StepName);
+      const def = stepDefs.get(name as StepName);
 
       // `retro` was a built-in step before its removal. Reserve that retired
       // name so old routing config reaches the registry's normal unknown-step
@@ -542,6 +562,17 @@ export function validateConfig(
         if (typeof cfg.when !== 'string') {
           return errVal(`steps.${name}.when must be a string expression`);
         }
+        if (!isCustom) {
+          const skipAuthorityError = stepSkipAuthorityError(def, name, 'when');
+          if (skipAuthorityError) return errVal(skipAuthorityError);
+        } else if (cfg.enforcement === 'gating' || cfg.enforcement === 'structural') {
+          const skipAuthorityError = stepSkipAuthorityError(
+            { enforcement: cfg.enforcement },
+            name,
+            'when',
+          );
+          if (skipAuthorityError) return errVal(skipAuthorityError);
+        }
         const syntaxErr = validateWhenSyntax(cfg.when);
         if (syntaxErr) {
           return errVal(`steps.${name}.when: ${syntaxErr}`);
@@ -595,8 +626,6 @@ export function validateConfig(
         }
       }
 
-      const isCustom = !builtInNames.has(name as StepName);
-
       if (isCustom) {
         if (cfg.completion_artifact !== undefined) {
           const field = `steps.${name}.completion_artifact`;
@@ -643,6 +672,14 @@ export function validateConfig(
             `Custom step "${name}".enforcement must be structural|advisory|gating`,
           );
         }
+        if (cfg.disable === true) {
+          const skipAuthorityError = stepSkipAuthorityError(
+            { enforcement: cfg.enforcement as EnforcementLevel },
+            name,
+            'disable',
+          );
+          if (skipAuthorityError) return errVal(skipAuthorityError);
+        }
         if (projectRoot && typeof cfg.skill === 'string') {
           const skillPath = isAbsolute(cfg.skill)
             ? cfg.skill
@@ -677,15 +714,10 @@ export function validateConfig(
         // (per-step, deliberate — an explicit committed config disable is not
         // the silent-skip failure mode the gating promotion guards against).
         // Structural steps can never be disabled.
-        const def = stepDefs.get(name as StepName);
-        if (cfg.disable === true && def) {
-          if (
-            def.enforcement === 'structural' ||
-            (def.enforcement === 'gating' && def.configDisableAllowed !== true)
-          ) {
-            return errVal(
-              `Cannot disable ${def.enforcement} step: "${name}". Only advisory steps may be disabled.`,
-            );
+        if (cfg.disable === true) {
+          const skipAuthorityError = stepSkipAuthorityError(def, name, 'disable');
+          if (skipAuthorityError) {
+            return errVal(skipAuthorityError);
           }
         }
       }

@@ -1,4 +1,4 @@
-// Covers: task:1, task:6, task:17
+// Covers: task:1, task:3, task:6, task:17
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -204,6 +204,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   ...RESEAL_EVENT_TYPES,
   'parallel_started',
   'parallel_completed',
+  'when_skip',
   'rebase_mergeable_skip',
   'operator_park_boundary',
   'finish_publication_transition',
@@ -488,6 +489,15 @@ describe('event sink subscriptions', () => {
       sinks: { render: true, persist: false, audit: false, otel: true },
       rendered: true,
       persisted: false,
+    });
+  });
+
+  it('renders and persists conditional skips without widening their other sinks', () => {
+    expect(EVENT_SINKS.when_skip).toEqual({
+      render: true,
+      persist: true,
+      audit: false,
+      otel: false,
     });
   });
 

@@ -2254,6 +2254,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${dot}   ${event.step} [${event.branches.join(', ')}] ${chalk.green('✓')} ${chalk.green('done')}`,
       );
       break;
+    case 'when_skip': {
+      const undefinedNote = event.undefinedKey
+        ? ` (key "${event.undefinedKey}" undefined → false)`
+        : '';
+      log(`${dot} ${chalk.dim(`⊘ ${event.step} skipped: ${event.expression}${undefinedNote}`)}`);
+      break;
+    }
     case 'step_failed':
       log(
         `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} failed (try ${event.retryCount}): ${event.error}`)}`,

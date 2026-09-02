@@ -307,7 +307,7 @@ other key declares a custom step. `steps` must be an object, and each value must
 | `skill` | string | Must be a string path (`config.ts:384-386`); for custom steps the file must exist on disk (`config.ts:516-525`) | the built-in skill | `resolved-config.ts:381`, `src/conductor/src/engine/steps.ts:603` |
 | `hooks` | object | Object with optional string `before` / `after` paths (`config.ts:398-408`) | none | `resolved-config.ts:382-385` |
 | `by_tier` | object | See [by_tier](#by_tier) | none | `resolved-config.ts:236, 348` |
-| `when` | string | Grammar-checked at load time; see [when](#when) | none | `src/conductor/src/engine/when-expression.ts:97-136` |
+| `when` | string | Grammar-checked at load time and limited by step enforcement; see [when](#when) | none | `src/conductor/src/engine/when-expression.ts:97-136` |
 | `parallel` | array | See [parallel](#parallel) | none | `config.ts:422-466` |
 | `after` | string | **Custom steps only** — a built-in step with `after` is a hard error (`config.ts:529-531`) | required for custom steps | `steps.ts:561` |
 | `enforcement` | string | **Custom steps only** (`config.ts:532-534`); `structural`\|`advisory`\|`gating` | `advisory` | `steps.ts:599` |
@@ -337,8 +337,12 @@ Tier overrides sit above the flat `steps.<name>` values in the precedence chain.
 
 ### when
 
-A guard expression evaluated per run; when false the step is skipped and a `when_skip` event is emitted.
-Syntax is validated at config-load time by `validateWhenSyntax`
+A guard expression evaluated per run. It is accepted for advisory steps and for a built-in gating
+step that opts into `configDisableAllowed` (currently `manual_test`); it is rejected for every other
+gating step and for structural steps. A custom step is conditional only when its enforcement is
+advisory (including the default). When false, the step is skipped and the daemon renders and persists
+a `when_skip` event. If a state key is undefined, the rendered line identifies that key and records
+that it evaluated false. Syntax is validated at config-load time by `validateWhenSyntax`
 (`src/conductor/src/engine/when-expression.ts:97-136`), which never evaluates the expression.
 
 Supported forms, exhaustively:
@@ -386,11 +390,12 @@ count (`src/conductor/src/engine/conductor.ts:6357`).
 
 ### Disabling a step
 
-`disable: true` is checked against the step's enforcement level (`config.ts:539-554`):
+`disable: true` is checked against the step's enforcement level:
 
 | Step kind | Disableable |
 | --- | --- |
-| Custom step | Yes, always |
+| Custom `advisory` | Yes |
+| Custom `gating` or `structural` | No |
 | Built-in `advisory` | Yes |
 | Built-in `gating` | Only when the step definition sets `configDisableAllowed: true` |
 | Built-in `structural` | Never |
@@ -398,10 +403,8 @@ count (`src/conductor/src/engine/conductor.ts:6357`).
 `manual_test` is the only built-in step with `configDisableAllowed: true`
 (`src/conductor/src/engine/steps.ts:214`). Per-step enforcement values are listed in [steps](steps.md).
 
-> **Known limitation.** The rejection message reads `Cannot disable <enforcement> step: "<name>". Only
-> advisory steps may be disabled.` (`config.ts:550-552`), which understates the rule — `manual_test` is
-> a gating step and is disableable. Tracked in
-> [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
+The rejection message says that only advisory steps may be disabled. That wording describes the
+default rule; the explicitly opted-in `manual_test` exception remains valid.
 
 ### Custom step registry contract
 
@@ -422,8 +425,8 @@ Six fields are custom-step-only:
 | `kickback_target` | No | Boolean. Makes this step reopenable by a downstream kickback; defaults to `false` |
 
 `disable`, `when`, `parallel`, `model`, `effort`, `max_retries`, `escalate`, `hooks`, `by_tier`, and
-`llm_provider` use the same semantics as for built-in steps. Custom steps bypass the
-`configDisableAllowed` check.
+`llm_provider` use the same semantics as for built-in steps. A custom step's own enforcement controls
+whether it may be disabled or conditional: advisory is allowed; gating and structural are rejected.
 
 The derived `StepDefinition` (`steps.ts:595-609`) sets `label = name`, inherits `phase` from the `after`
 target, sets `prerequisites = [after]`, `skippableForTiers = []`, `isCheckpoint = false`, and takes
