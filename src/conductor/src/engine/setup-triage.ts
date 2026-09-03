@@ -518,7 +518,12 @@ export async function runTriage(
   setupError: any, // Import SetupFailureError at call site for type checking
   runPrepare: (worktreePath: string) => Promise<void>,
   logger?: Logger,
+  events?: ConductorEventEmitter,
 ): Promise<TriageOutcome> {
+  // Both silent stage-1 outcomes deliberately receive the feature-scoped event
+  // spine. They emit nothing; carrying it here makes an accidental future
+  // setup_repair emission observable by the production acceptance boundary.
+  void events;
   // Task 8 guard: require SetupFailureError as input
   if (!setupError) {
     throw new Error('runTriage requires a SetupFailureError to enter; no triage without failure');

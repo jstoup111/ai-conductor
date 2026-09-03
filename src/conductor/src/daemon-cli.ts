@@ -1277,7 +1277,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
     // Triage stage 1: run-triage (TS-2/TS-3)
     // Classify tree state and route: clean → pass, dirty → quarantine+retry
-    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log: featureLog });
+    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log: featureLog }, featureEvents);
 
     // A park with no quarantineRef is a genuine PRESERVATION failure (the
     // quarantine commit/branch itself could not be created) — stop immediately,

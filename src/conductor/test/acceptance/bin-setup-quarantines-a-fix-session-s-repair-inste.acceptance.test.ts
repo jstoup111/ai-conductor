@@ -83,14 +83,17 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
         renderDaemonEvent(event, (line) => rendered.push(line));
       });
       let conductorCalls = 0;
-      let fixSessionDispatches = 0;
       let prepareCalls = 0;
-      const runSetupTriage: NonNullable<FeatureRunnerDeps['runSetupTriage']> = async (error, worktree, item) => runTriage(
-        makeGitRunner(worktree.path),
-        worktree.path,
-        item.slug,
-        error,
-        async () => { prepareCalls += 1; },
+      const runSetupTriage = vi.fn<NonNullable<FeatureRunnerDeps['runSetupTriage']>>(
+        async (error, worktree, item, _providerExecution, _log, events) => runTriage(
+          makeGitRunner(worktree.path),
+          worktree.path,
+          item.slug,
+          error,
+          async () => { prepareCalls += 1; },
+          { log: () => {} },
+          events,
+        ),
       );
       const deps: FeatureRunnerDeps = {
         createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
@@ -125,10 +128,13 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
         .map((line) => JSON.parse(line) as { type: string })
         .filter((event) => event.type === 'setup_repair');
       expect(setupRepairs, scenario).toHaveLength(0);
-      expect(fixSessionDispatches, scenario).toBe(0);
       expect(rendered.filter((line) => line.includes('setup repair')), scenario).toHaveLength(0);
       expect(conductorCalls, scenario).toBe(1);
       expect(prepareCalls, scenario).toBe(scenario === 'ordinary setup' ? 1 : 2);
+      expect(runSetupTriage, scenario).toHaveBeenCalledTimes(scenario === 'ordinary setup' ? 0 : 1);
+      if (scenario === 'stage-1-only recovery') {
+        expect(runSetupTriage.mock.calls[0]?.[5]).toBe(persistence.events);
+      }
     }
   });
 
