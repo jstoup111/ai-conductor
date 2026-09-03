@@ -630,7 +630,8 @@ async function preserveRepairAttempt(git: GitRunner, slug: string, originalHead:
   const branch = await git(['branch', '-f', ref, attempted.stdout.trim()]);
   if (branch.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(branch, 'could not preserve rejected repair ref') };
   const verify = await git(['rev-parse', '--verify', ref]);
-  if (verify.exitCode !== 0 || verify.stdout.trim() !== attempted.stdout.trim()) return { ok: false, restored: false, outputTail: gitFailure(verify, 'could not verify rejected repair ref') };
+  if (verify.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(verify, 'could not verify rejected repair ref') };
+  if (verify.stdout.trim() !== attempted.stdout.trim()) return { ok: false, restored: false, outputTail: 'could not verify rejected repair ref: refreshed ref did not resolve to the attempted HEAD' };
   const reset = await git(['reset', '--hard', originalHead]);
   if (reset.exitCode !== 0) return { ok: false, restored: true, ref, paths, outputTail: gitFailure(reset, 'could not restore original HEAD') };
   return { ok: true, ref, paths };
@@ -714,8 +715,15 @@ export async function fixSession(
   const commit = add.exitCode === 0 ? await git(['commit', '-m', 'fix(setup): retain verified repair']) : add;
   if (commit.exitCode !== 0) return reject('repair-commit-failed', gitFailure(commit, 'could not commit verified repair'), true);
   const verified = await repairSnapshot(git);
-  if (!verified.ok || verified.value.head === original.head || verified.value.tree !== candidate.value.tree || verified.value.dirty) {
-    return reject('repair-postcondition-failed', verified.ok ? 'repair commit postcondition failed' : verified.outputTail, true);
+  if (!verified.ok) return reject('repair-postcondition-failed', verified.outputTail, true);
+  if (verified.value.head === original.head) {
+    return reject('repair-postcondition-failed', 'repair commit postcondition failed: HEAD did not advance past the original commit', true);
+  }
+  if (verified.value.tree !== candidate.value.tree) {
+    return reject('repair-postcondition-failed', 'repair commit postcondition failed: committed tree did not match the verified candidate tree', true);
+  }
+  if (verified.value.dirty) {
+    return reject('repair-postcondition-failed', 'repair commit postcondition failed: worktree left dirty after the repair commit', true);
   }
   const parent = await git(['rev-parse', 'HEAD^']);
   if (parent.exitCode !== 0 || parent.stdout.trim() !== original.head) return reject('repair-postcondition-failed', 'repair commit parent did not match original HEAD', true);

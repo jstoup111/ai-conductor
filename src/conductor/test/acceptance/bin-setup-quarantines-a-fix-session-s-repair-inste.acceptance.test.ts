@@ -28,6 +28,7 @@ import type { ProviderExecutionContext } from '../../src/engine/provider-executi
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
   fixSession,
+  runTriage,
   type GitRunner,
   type TriageOutcome,
 } from '../../src/engine/setup-triage.js';
@@ -70,6 +71,65 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it('emits no setup repair record for ordinary setup or stage-1-only recovery', async () => {
+    for (const scenario of ['ordinary setup', 'stage-1-only recovery'] as const) {
+      const globalEvents = new ConductorEventEmitter();
+      const persistence = startFeatureEventPersistence(root, globalEvents);
+      const rendered: string[] = [];
+      const setupRepairType = 'setup_repair' as ConductorEvent['type'];
+      persistence.events.on(setupRepairType, (event) => {
+        renderDaemonEvent(event, (line) => rendered.push(line));
+      });
+      let conductorCalls = 0;
+      let fixSessionDispatches = 0;
+      let prepareCalls = 0;
+      const runSetupTriage: NonNullable<FeatureRunnerDeps['runSetupTriage']> = async (error, worktree, item) => runTriage(
+        makeGitRunner(worktree.path),
+        worktree.path,
+        item.slug,
+        error,
+        async () => { prepareCalls += 1; },
+      );
+      const deps: FeatureRunnerDeps = {
+        createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
+        beginFeatureRun: async () => ({
+          events: persistence.events,
+          providerExecution: {} as ProviderExecutionContext,
+          stop: persistence.stop,
+        }),
+        prepareWorktree: async () => {
+          prepareCalls += 1;
+          if (scenario === 'stage-1-only recovery') {
+            await writeFile(join(root, 'tracked.txt'), 'stage-one residue\n', 'utf8');
+            throw new SetupFailureError('setup failed', 'fixture compile failure');
+          }
+        },
+        runSetupTriage,
+        runConductor: async () => { conductorCalls += 1; },
+        readOutcome: async () => ({ done: false, halted: false }),
+        teardownWorktree: async () => {},
+        markProcessed: async () => {},
+        daemon: true,
+        project: 'acceptance-project',
+        projectRoot: root,
+      };
+
+      await makeRunFeature(deps)({ slug: SLUG } as BacklogItem);
+
+      const eventText = await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8').catch(() => '');
+      const setupRepairs = eventText
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type: string })
+        .filter((event) => event.type === 'setup_repair');
+      expect(setupRepairs, scenario).toHaveLength(0);
+      expect(fixSessionDispatches, scenario).toBe(0);
+      expect(rendered.filter((line) => line.includes('setup repair')), scenario).toHaveLength(0);
+      expect(conductorCalls, scenario).toBe(1);
+      expect(prepareCalls, scenario).toBe(scenario === 'ordinary setup' ? 1 : 2);
+    }
   });
 
   it('commits one setup-stable repair, continues dispatch, and records one engine-committed disposition', async () => {
