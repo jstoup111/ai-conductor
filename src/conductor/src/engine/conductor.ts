@@ -37,8 +37,10 @@ import {
   classifyBuildReviewDurableRead,
   markBuildReviewWorkOrderAttempted,
   readBuildReviewWorkOrder,
+  readBuildReviewWorkOrderAttemptedCaseIds,
 } from './build-review-work-order.js';
 import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
+import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
@@ -4623,6 +4625,66 @@ export class Conductor {
   /** Keep every adjudication gate on the same resolved configuration accessor. */
   private buildReviewAdjudicationEnabled(): boolean {
     return resolveBuildReviewConfig(this.config).adjudication.enabled;
+  }
+
+  /**
+   * Settle durable remediation cases when a lap ends in a mechanically clean
+   * raw PASS.
+   *
+   * The adjudication coordinator runs only on a raw FAIL, so nothing closed
+   * cases a later clean lap no longer reports: an attempted action case stayed
+   * `open` with an `applied` effect forever, and every subsequent BUILD entry —
+   * for any gate — read its stale work order back through
+   * `durableBuildReviewRetryContext` and re-injected repaired work. A clean PASS
+   * IS the evidence that its content set is empty, so reconciling against an
+   * empty graph resolves exactly the prior attempted cases absent from it.
+   *
+   * The mechanical verdict is never changed here. This is state settlement
+   * before terminal PASS routing, and it is best-effort by design: an
+   * unreadable store logs and leaves the PASS alone rather than converting a
+   * passing lap into a halt.
+   */
+  private async settleRemediationCasesOnCleanBuildReview(): Promise<void> {
+    if (!this.daemon || !this.buildReviewAdjudicationEnabled()) return;
+    // The lap's own aggregate is both the PASS evidence and the lap identity
+    // every lifecycle occurrence is keyed by. A scalar/legacy verdict has
+    // neither and keeps its historical behavior.
+    let verdictRaw: unknown;
+    try {
+      verdictRaw = JSON.parse(await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'));
+    } catch {
+      return;
+    }
+    const aggregate = parseBuildReviewAggregate(verdictRaw);
+    if (!aggregate || aggregate.verdict !== 'PASS') return;
+    const featureRead = await readRemediationCaseStoreFeature(this.projectRoot);
+    if (!featureRead.ok || !featureRead.feature) return;
+    const feature = featureRead.feature;
+    const store = new RemediationCaseStore(this.projectRoot, feature);
+    const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
+    if (!attemptEvidence.ok) return;
+    const reconciled = await reconcileRemediationCases(store, {
+      graph: { sourceOutcomes: [], cases: [] },
+      recordedAt: new Date().toISOString(),
+      generateId: randomUUID,
+      attemptedCaseIds: attemptEvidence.attemptedCaseIds,
+    });
+    if (!reconciled.ok) {
+      this.log?.(
+        `WARNING: clean build_review lap could not settle remediation cases (${reconciled.reason}) — ` +
+          'a prior work order may still be BUILD-eligible',
+      );
+      return;
+    }
+    for (const caseId of reconciled.resolvedAbsentCaseIds) {
+      await this.events.emit({
+        type: 'remediation_case_reconciled',
+        domain: 'build_review',
+        lapId: aggregate.lapId,
+        caseId,
+        resolution: 'resolved',
+      });
+    }
   }
 
   /** Best-effort compact remediation context from existing build-review evidence. */
@@ -11341,6 +11403,11 @@ export class Conductor {
                   notBeforeMs: state.session_started_at,
                 })
               : null;
+
+          // A clean build_review lap settles its durable remediation cases
+          // before the PASS becomes terminal, so no repaired work order stays
+          // BUILD-eligible for a later lap to replay.
+          if (step.name === 'build_review') await this.settleRemediationCasesOnCleanBuildReview();
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are
           // written atomically in their engine handlers. `rebase` is also

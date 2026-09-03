@@ -66,7 +66,8 @@ describe('remediation case store', () => {
     const projectRoot = await createProjectRoot();
     const writer = new RemediationCaseStore(projectRoot, FEATURE);
 
-    await expect(writer.replace(CASE_STATE)).resolves.toEqual({ ok: true, state: CASE_STATE });
+    await expect(writer.mutate(async () => ({ value: 'seeded' as const, nextState: CASE_STATE })))
+      .resolves.toEqual({ ok: true, value: 'seeded' });
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
@@ -139,10 +140,10 @@ describe('remediation case store', () => {
       },
     };
 
-    await expect(new RemediationCaseStore(projectRoot, FEATURE, { filesystem }).replace(CASE_STATE)).resolves.toEqual({
-      ok: false,
-      reason: 'atomic-replace-failed',
-    });
+    await expect(
+      new RemediationCaseStore(projectRoot, FEATURE, { filesystem })
+        .mutate(async () => ({ value: null, nextState: CASE_STATE })),
+    ).resolves.toEqual({ ok: false, reason: 'atomic-replace-failed' });
     await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
@@ -156,10 +157,10 @@ describe('remediation case store', () => {
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     await writeFile(dispositionPath, '{"operator":"only"}\n', 'utf8');
 
-    await expect(new RemediationCaseStore(projectRoot, FEATURE).replace(CASE_STATE)).resolves.toEqual({
-      ok: true,
-      state: CASE_STATE,
-    });
+    await expect(
+      new RemediationCaseStore(projectRoot, FEATURE)
+        .mutate(async () => ({ value: null, nextState: CASE_STATE })),
+    ).resolves.toEqual({ ok: true, value: null });
     await expect(readFile(dispositionPath, 'utf8')).resolves.toBe('{"operator":"only"}\n');
   });
 });
