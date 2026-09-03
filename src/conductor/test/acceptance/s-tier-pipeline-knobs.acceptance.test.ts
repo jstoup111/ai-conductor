@@ -116,6 +116,7 @@ describe('S-tier pipeline knobs (#668)', () => {
       'build',
       'build_review',
       'test_suite',
+      'coverage_binding',
       'rebase',
       'finish',
     ] as const;

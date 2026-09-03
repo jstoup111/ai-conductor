@@ -4,6 +4,7 @@ import type { StepName } from '../types/steps.js';
 // type safety, but execute entirely in-process and never dispatch a model.
 export const MODEL_FREE_ENGINE_STEPS = [
   'test_suite',
+  'coverage_binding',
 ] as const satisfies readonly StepName[];
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -39,6 +40,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   architecture_review:
     'Pre-implementation design feasibility and alignment requires a high-capability model from the selected provider policy.',
   worktree: 'Git operations — mechanical branch/worktree management.',
+  coverage_binding: 'Engine-native coverage-claim gate; its later auxiliary judge has a separate model-table row.',
   acceptance_specs: 'Translating acceptance criteria into executable boundary-level specs requires strong reasoning to preserve behavioral intent and negative paths, using MEDIUM effort for S/M and HIGH effort for Large work.',
   build:
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',

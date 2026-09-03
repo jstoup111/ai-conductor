@@ -280,6 +280,9 @@ export const STEP_ARTIFACT_CONTRACTS = {
     },
   ],
   worktree: [],
+  // Task 7 registers the step name. Its run-scoped completion artifact belongs
+  // to Task 9; until then it must not be considered complete from an artifact.
+  coverage_binding: [],
   acceptance_specs: [
     'spec/acceptance/**/*',
     'spec/requests/**/*',

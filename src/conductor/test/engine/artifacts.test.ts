@@ -566,6 +566,7 @@ describe('engine/artifacts', () => {
           '.docs/decisions/adr-*.md',
         ],
         worktree: [],
+        coverage_binding: [],
         acceptance_specs: [
           'spec/acceptance/**/*',
           'spec/requests/**/*',
