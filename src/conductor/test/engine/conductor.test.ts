@@ -13383,7 +13383,6 @@ describe('engine/conductor', () => {
           'step.name, this.config',
           'step.name, this.config',
           'step.name, this.config',
-          'step.name, this.config',
         ],
       });
     });
