@@ -1,12 +1,17 @@
 // Covers: task:19, task:rem-as-built-rem-ab2-4
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { readBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
+import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
+import { reduceBuildReviewAdjudication } from '../../src/engine/build-review-adjudication.js';
+import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
+import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder, readBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import { applyBuildReviewActionEffects, isBuildEligibleActionCase } from '../../src/engine/remediation-case-effects.js';
+import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import { reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
@@ -36,6 +41,24 @@ const graph: RemediationCaseGraph = {
     },
   }],
 };
+
+function actionAggregate(lapId: string, findings: readonly { readonly name: string; readonly path: string }[]) {
+  return joinBuildReviewRubricOutcomes({
+    lapId: lapId as never,
+    snapshotDigest: `snapshot-${lapId}`,
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId: lapId as never, snapshotDigest: `snapshot-${lapId}`, contractVersion: 'v3', verdict: 'FAIL',
+        findings: findings.map((finding) => ({
+          concernKind: 'test-insensitive' as const,
+          summary: `${finding.name} is insensitive.`,
+          evidenceLocations: [`${finding.path}:1`],
+          anchor: { rubric: 'testQuality' as const, locus: { path: finding.path, contentHash: `sha256:${finding.name}`, display: finding.name } },
+        })),
+      },
+    },
+  });
+}
 
 describe('remediation case recovery', () => {
   it('two restarted executors converge on one stable work order and one charged effect', async () => {
@@ -105,5 +128,98 @@ describe('remediation case recovery', () => {
       durableBuildReviewRetryContext(hint: string | undefined): Promise<{ kind: string }>;
     }).durableBuildReviewRetryContext(undefined);
     expect({ retry, charges: charge.mock.calls.length }).toEqual({ retry: { kind: 'absent' }, charges: 1 });
+  });
+
+  it('keeps an action reservation orphaned by a semantic-repeat halt out of the next lap work order', async () => {
+    const projectRoot = await root();
+    const lapOne = actionAggregate('lap-one', [
+      { name: 'orphaned reservation', path: 'test/orphaned.test.ts' },
+      { name: 'already attempted case', path: 'test/repeated.test.ts' },
+    ]);
+    const [orphanedSource, repeatedSource] = projectBuildReviewAggregateSources(lapOne)!;
+    const repeatedSourceId = buildReviewAdjudicationSourceId(repeatedSource!);
+    const store = new RemediationCaseStore(projectRoot, feature);
+    await store.mutate(async () => ({
+      value: undefined,
+      nextState: {
+        version: 'v1', feature,
+        cases: [{
+          id: 'repeat-case', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'This case already reached BUILD.', resolution: 'open',
+          sources: [{ sourceId: repeatedSourceId, outcome: 'acted', recordedAt: '2026-09-03T00:00:00.000Z' }],
+          effect: { id: 'repeat-effect', kind: 'action', status: 'applied', workOrderId: 'repeat-order' },
+        }],
+      },
+    }));
+    await publishBuildReviewWorkOrder(projectRoot, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'repeat-effect',
+      cases: [{ caseId: 'repeat-case', priority: 'high', tasks: [{ title: 'Do not repeat this work' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(projectRoot, feature);
+
+    const lapOneJudgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: buildReviewAdjudicationSourceId(orphanedSource!), outcome: 'acted', caseRef: 'orphaned-case' },
+        { sourceId: repeatedSourceId, outcome: 'acted', caseRef: 'repeat-case' },
+      ],
+      cases: [
+        {
+          caseRef: 'orphaned-case', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'This action should remain reserved after the abort.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the orphaned assertion' }] },
+        },
+        {
+          caseRef: 'repeat-case', existingCaseId: 'repeat-case', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'This repeats the attempted action.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Do not repeat this work' }] },
+        },
+      ],
+    };
+    await expect(coordinateBuildReviewAdjudication({
+      projectRoot, feature, aggregate: lapOne, operatorResolvedFindingIds: new Set<string>(), mechanical: 'healthy',
+      judge: async () => lapOneJudgement, chargeInput: { treeHash: 'tree-one', resolvedCount: 1, reason: 'lap one' },
+      generateId: (() => { const ids = ['orphaned-case-id', 'orphaned-effect']; return () => ids.shift()!; })(),
+    })).resolves.toMatchObject({ ok: false, detail: 'semantic remediation case repeat repeat-case' });
+
+    const lapTwo = actionAggregate('lap-two', [{ name: 'materially distinct case', path: 'test/distinct.test.ts' }]);
+    const distinctSource = projectBuildReviewAggregateSources(lapTwo)![0]!;
+    const lapTwoJudgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(distinctSource), outcome: 'acted', caseRef: 'distinct-case' }],
+      cases: [{
+        caseRef: 'distinct-case', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'This is new work.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the distinct assertion' }] },
+      }],
+    };
+    await expect(coordinateBuildReviewAdjudication({
+      projectRoot, feature, aggregate: lapTwo, operatorResolvedFindingIds: new Set<string>(), mechanical: 'healthy',
+      judge: async () => lapTwoJudgement, chargeInput: { treeHash: 'tree-two', resolvedCount: 1, reason: 'lap two' },
+      generateId: (() => { const ids = ['distinct-case-id', 'distinct-effect']; return () => ids.shift()!; })(),
+    })).resolves.toMatchObject({ ok: true, route: 'halt', detail: 'remediation effect is not finalized' });
+
+    const freshStore = new RemediationCaseStore(projectRoot, feature);
+    const persisted = await freshStore.read();
+    expect(persisted).toMatchObject({
+      ok: true,
+      state: { cases: expect.arrayContaining([
+        expect.objectContaining({ id: 'orphaned-case-id', effect: expect.objectContaining({ status: 'reserved' }) }),
+        expect.objectContaining({ id: 'distinct-case-id', effect: expect.objectContaining({ status: 'applied' }) }),
+      ]) },
+    });
+    if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
+    const workOrder = JSON.parse(await readFile(join(projectRoot, '.pipeline/build-review-work-order.json'), 'utf8')) as { cases: Array<{ caseId: string }> };
+    expect(workOrder.cases).toEqual([{ caseId: 'distinct-case-id', priority: 'high', tasks: [{ title: 'Repair the distinct assertion' }] }]);
+
+    const freshConductor = new Conductor({
+      projectRoot, stateFilePath: join(projectRoot, '.pipeline/state.json'), stepRunner: {} as never,
+      config: { build_review: { adjudication: { enabled: true } } },
+    } as never);
+    const retry = await (freshConductor as unknown as {
+      durableBuildReviewRetryContext(hint: string | undefined): Promise<{ kind: string; context?: string }>;
+    }).durableBuildReviewRetryContext(undefined);
+    expect(retry).toMatchObject({ kind: 'ready' });
+    expect(retry.context).not.toContain('orphaned-case-id');
+    expect(reduceBuildReviewAdjudication({
+      currentSourceIds: [buildReviewAdjudicationSourceId(distinctSource)], cases: persisted.state.cases, mechanical: 'healthy',
+    })).toEqual({ route: 'halt', remainingMechanical: false, reason: 'remediation effect is not finalized' });
   });
 });
