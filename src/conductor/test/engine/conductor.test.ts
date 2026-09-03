@@ -80,6 +80,7 @@ import {
   PRD_AUDIT_CODE_STAMP,
   type RemediationGap,
 } from '../../src/engine/artifacts.js';
+import * as artifactModule from '../../src/engine/artifacts.js';
 import {
   creditKickbackGateLaps,
   readKickbackLedger,
@@ -13303,6 +13304,11 @@ describe('engine/conductor', () => {
             enforcement: 'gating',
             completion_artifact: '.pipeline/maintain-documentation-pass',
           },
+          'post-documentation': {
+            after: 'maintain-documentation',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'advisory',
+          },
         },
       };
       const conductor = new Conductor({
@@ -13322,13 +13328,17 @@ describe('engine/conductor', () => {
       const freshRoot = join(dir, 'fresh-marker-run');
       const freshStatePath = join(freshRoot, 'conduct-state.json');
       await mkdir(freshRoot, { recursive: true });
-      await writeState(freshStatePath, {
-        rebase: 'done',
+      const freshState: Record<string, unknown> = {
         complexity_tier: 'M',
         track: 'technical',
-      } as ConductState);
+      };
+      for (const step of ALL_STEPS) freshState[step.name] = 'done';
+      await writeState(freshStatePath, freshState as ConductState);
       const freshEvents = new ConductorEventEmitter();
       const freshness: Array<{ step: StepName; floorSource: string; fresh: boolean }> = [];
+      const freshStepsRun: StepName[] = [];
+      const artifactReviewPrompts = vi.fn().mockResolvedValue('approved' as const);
+      const resolveArtifacts = vi.spyOn(artifactModule, 'resolveArtifactFiles');
       freshEvents.on('verdict_freshness', (event) => {
         if (event.type === 'verdict_freshness') {
           freshness.push({
@@ -13340,6 +13350,7 @@ describe('engine/conductor', () => {
       });
       const freshRunner: StepRunner = {
         run: vi.fn(async (step) => {
+          freshStepsRun.push(step);
           if (step === customStep) {
             await mkdir(join(freshRoot, '.pipeline'), { recursive: true });
             await writeFile(join(freshRoot, '.pipeline/maintain-documentation-pass'), 'PASS\n');
@@ -13355,7 +13366,12 @@ describe('engine/conductor', () => {
         fromStep: customStep,
         config,
         verifyArtifacts: true,
+        mode: 'default',
+        onReviewArtifacts: artifactReviewPrompts,
       }).run();
+
+      const freshRunState = await readState(freshStatePath);
+      const freshHalt = await readFile(join(freshRoot, '.pipeline', 'HALT'), 'utf8').catch(() => undefined);
 
       expect({
         stepsRun,
@@ -13370,6 +13386,20 @@ describe('engine/conductor', () => {
         },
         freshness: [{ step: customStep, floorSource: 'attempt', fresh: true }],
       });
+      expect({
+        artifactReviewPrompts: artifactReviewPrompts.mock.calls.length,
+        artifactResolutionCalls: resolveArtifacts.mock.calls.length,
+        customStep: freshRunState.ok ? freshRunState.value[customStep] : undefined,
+        advancedToNextStep: freshStepsRun.includes('post-documentation' as StepName),
+        freshHalt,
+      }).toEqual({
+        artifactReviewPrompts: 0,
+        artifactResolutionCalls: 0,
+        customStep: 'done',
+        advancedToNextStep: true,
+        freshHalt: undefined,
+      });
+      resolveArtifacts.mockRestore();
     });
 
     it("build step requires .pipeline/task-status.json with all tasks completed", async () => {
