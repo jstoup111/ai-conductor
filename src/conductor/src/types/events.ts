@@ -217,6 +217,19 @@ export type ConductorEvent =
       remaining: number;
     }
   | {
+      /** One terminal judgement of a criterion-to-Done-when binding claim. */
+      type: 'coverage_binding_judged';
+      step: 'coverage_binding';
+      verdict: 'asserts' | 'does-not-assert' | 'not-applicable';
+      digest: string;
+      taskIds: string[];
+    }
+  | {
+      /** The default-off coverage-binding judge completed without dispatching. */
+      type: 'coverage_binding_disabled';
+      step: 'coverage_binding';
+    }
+  | {
       /** A retired configuration key was accepted as a compatibility no-op. */
       type: 'config_deprecated_key';
       key: string;

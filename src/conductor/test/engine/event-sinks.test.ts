@@ -126,6 +126,8 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'setup_repair',
   'project_setup',
   'plan_growth',
+  'coverage_binding_judged',
+  'coverage_binding_disabled',
   'config_deprecated_key',
   'contained_live_checkout_drift',
   'provider_stream_progress',
@@ -220,6 +222,20 @@ const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;
 // @ts-expect-error -- every ConductorEvent type must declare all three sink decisions.
 missingVerdictFreshness satisfies Record<ConductorEvent['type'], SinkDeclaration>;
 
+const { coverage_binding_judged: _coverageBindingJudgedOmitted, ...missingCoverageBindingJudged } = EVENT_SINKS;
+// @ts-expect-error -- coverage_binding_judged must declare every sink decision.
+missingCoverageBindingJudged satisfies Record<ConductorEvent['type'], SinkDeclaration>;
+
+const { coverage_binding_disabled: _coverageBindingDisabledOmitted, ...missingCoverageBindingDisabled } = EVENT_SINKS;
+// @ts-expect-error -- coverage_binding_disabled must declare every sink decision.
+missingCoverageBindingDisabled satisfies Record<ConductorEvent['type'], SinkDeclaration>;
+
+// @ts-expect-error -- coverage_binding is intentionally terminal-only telemetry.
+const coverageBindingStarted: Extract<ConductorEvent, { type: 'coverage_binding_started' }> = { type: 'coverage_binding_started' };
+// @ts-expect-error -- coverage_binding halts are represented by the ordinary step outcome.
+const coverageBindingHalted: Extract<ConductorEvent, { type: 'coverage_binding_halted' }> = { type: 'coverage_binding_halted' };
+void [coverageBindingStarted, coverageBindingHalted];
+
 const deliberatelyNotPersisted = {
   render: false,
   persist: false,
@@ -259,6 +275,24 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('persists coverage-binding terminal observations without rendering, audit, or OpenTelemetry', () => {
+    expect({
+      judged: EVENT_SINKS.coverage_binding_judged,
+      disabled: EVENT_SINKS.coverage_binding_disabled,
+      persisted: persistedEventTypes(),
+      rendered: renderedEventTypes(),
+      audited: auditedEventTypes(),
+      otel: otelEventTypes(),
+    }).toMatchObject({
+      judged: { render: false, persist: true, audit: false, otel: false },
+      disabled: { render: false, persist: true, audit: false, otel: false },
+      persisted: expect.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
+      rendered: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
+      audited: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
+      otel: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
+    });
+  });
+
   it('subscribes OpenTelemetry only to its defined event set', () => {
     expect(new Set(otelEventTypes())).toEqual(new Set([
       'step_started',
