@@ -146,6 +146,7 @@ describe('engine/steps', () => {
         prerequisites: ['plan'],
         skippableForTiers: [],
         isCheckpoint: false,
+        kickbackTarget: true,
       });
       expect(s.skippableForTracks).toBeUndefined();
       expect(s.skillName).toBeUndefined();

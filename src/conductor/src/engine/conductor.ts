@@ -11797,6 +11797,7 @@ export class Conductor {
         // manual_test → prd_audit →
         // architecture_review_as_built).
         for (const target of [
+          'coverage_binding',
           'build',
           'test_suite',
           'build_review',

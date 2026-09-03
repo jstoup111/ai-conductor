@@ -7967,6 +7967,7 @@ describe('engine/conductor', () => {
       stories: 'done',
       conflict_check: 'done',
       plan: 'done', coherence_check: 'done',
+      coverage_binding: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       coverage_binding: 'done',

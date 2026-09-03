@@ -139,6 +139,9 @@ export const ALL_STEPS: StepDefinition[] = [
     prerequisites: ['plan'],
     skippableForTiers: [],
     isCheckpoint: false,
+    // A changed rebase invalidates this feature/runtime-derived judgement, so
+    // it must participate in the shared verdict and kickback topology.
+    kickbackTarget: true,
   },
   {
     name: 'acceptance_specs',

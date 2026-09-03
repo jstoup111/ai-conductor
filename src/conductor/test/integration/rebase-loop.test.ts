@@ -238,7 +238,7 @@ describe('integration/rebase-loop', () => {
     prospectiveMergeFixture.forceIndeterminate = true;
   }
 
-  function conductorWith(runner: StepRunner, fromStep: 'build' | 'rebase' | undefined = 'build'): Conductor {
+  function conductorWith(runner: StepRunner, fromStep: 'build' | 'rebase' = 'build'): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
         ? { stdout: 'refs/remotes/origin/feature/x\n' }
@@ -253,10 +253,9 @@ describe('integration/rebase-loop', () => {
       // that real rebase against an isolated throwaway repo (`dir`), so they run
       // in daemon mode. Non-daemon runs no-op the step (see runRebaseStep).
       daemon: true,
-      verifyArtifacts: false,
+      verifyArtifacts: true,
       mode: 'auto',
       fromStep,
-      resume: fromStep === undefined,
       maxRetries: 1,
       git: fakeGit,
       shipmentEvidence: validShipmentEvidence,
@@ -272,9 +271,7 @@ describe('integration/rebase-loop', () => {
       const done = await access(join(dir, '.pipeline/DONE')).then(() => true).catch(() => false);
       const halted = await access(join(dir, '.pipeline/HALT')).then(() => true).catch(() => false);
       if (done || halted) return;
-      // Resume selection preserves the rebase's invalidation verdict and
-      // advances the newly pending coverage-binding gate only once.
-      await conductorWith(runner, undefined).run();
+      await conductorWith(runner, 'rebase').run();
     }
   }
 
