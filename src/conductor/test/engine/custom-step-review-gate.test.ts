@@ -1,8 +1,18 @@
-// Covers: task:3
+// Covers: tasks:3,4
 //
 // These run the conductor across the custom-step boundary: the runner writes
 // its configured completion marker, while artifact review remains uncalled
 // because this step declares no reviewable artifact contracts or extra globs.
+//
+// Task 4's plan-artifact prompt assertion is already covered by
+// conductor.test.ts's "persists approvals to state after a successful review"
+// case. `acceptance_specs` and `worktree` have fixed `auto` review policies,
+// so their cases below assert their observable auto-approval/no-prompt behavior
+// rather than an unreachable config override. The planned hand mutation that
+// removes `extraArtifactGlobs` is not falsifiable through `acceptance_specs`:
+// its built-in artifact contracts are non-empty, so the predicate's first term
+// already holds. Keep the extra-glob term as defensive support for future
+// extra-glob-only steps; it currently only returns values for acceptance_specs.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -124,4 +134,60 @@ describe('custom step post-success artifact review gate', () => {
       });
     });
   }
+
+  it('silently approves an acceptance-spec file matched only by its configured extra glob', async () => {
+    const specPath = join(dir, 'custom-specs', 'reviewed.test.ts');
+    await mkdir(join(dir, 'custom-specs'), { recursive: true });
+    await writeFile(specPath, 'export {};\n');
+
+    const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
+    const runner: StepRunner = {
+      run: vi.fn(async (): Promise<StepRunResult> => ({ success: true })),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      mode: 'default',
+      verifyArtifacts: false,
+      maxRetries: 1,
+      fromStep: 'acceptance_specs',
+      config: { acceptance_spec_globs: ['custom-specs/**/*.test.ts'] } as HarnessConfig,
+      onReviewArtifacts,
+    }).run();
+
+    const state = await readState(statePath);
+    expect(onReviewArtifacts).not.toHaveBeenCalled();
+    expect(state.ok).toBe(true);
+    if (state.ok) {
+      expect(state.value.artifact_approvals).toHaveProperty('custom-specs/reviewed.test.ts');
+    }
+  });
+
+  it('completes worktree without an artifact-review prompt', async () => {
+    const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
+    const runner: StepRunner = {
+      run: vi.fn(async (): Promise<StepRunResult> => ({ success: true })),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      mode: 'default',
+      verifyArtifacts: false,
+      maxRetries: 1,
+      fromStep: 'worktree',
+      config: {} as HarnessConfig,
+      onReviewArtifacts,
+    }).run();
+
+    const state = await readState(statePath);
+    expect(onReviewArtifacts).not.toHaveBeenCalled();
+    expect(state.ok).toBe(true);
+    if (state.ok) expect(state.value.worktree).toBe('done');
+  });
 });
