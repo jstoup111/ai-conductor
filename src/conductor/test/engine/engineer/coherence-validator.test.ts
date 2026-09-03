@@ -1757,11 +1757,17 @@ describe('criterion coverage (Tasks 4-18, 24)', () => {
 Ship the widget with
 arrival tracking.
 
+**Done when:**
+- Ship the widget with arrival tracking.
+
 ### Task 2: Reject broken widget
 **Story:** Story 1
 **Type:** negative-path
 
 Reject the broken widget before shipping.
+
+**Done when:**
+- Reject the broken widget before shipping.
 `;
   const criterion = 'Story 1 happy: Given a widget, when it ships, then it arrives';
   const negativeCriterion = 'Story 1 negative: Given a broken widget, when it ships, then it is rejected';
@@ -1780,6 +1786,75 @@ Reject the broken widget before shipping.
       `| criterion | ${criterion} | task-1 | covered | "Ship the widget with arrival tracking." | diff-local |`,
       `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
     ]);
+
+  const doneWhenStories = `# Stories
+
+## Story 1: Done-when evidence
+
+### Happy Path
+- Given a coverage claim, when its task completes, then the cited check proves the claim
+`;
+  const doneWhenCriterion =
+    'Story 1 happy: Given a coverage claim, when its task completes, then the cited check proves the claim';
+  const doneWhenPlan = `# Plan
+
+### Task 3: Grounded check
+**Done when:**
+- The widget is shipped with   arrival tracking.
+
+### Task 5: Alternate grounded check
+**Done when:**
+- The alternate task records the shipping confirmation.
+
+### Task 14: Steps-only evidence
+Document the steps-only evidence before completion.
+
+**Done when:**
+- Verify the recorded status.
+- Record the audit evidence.
+`;
+
+  it('accepts a whitespace-normalized quote from a cited task Done when check', () => {
+    const valid = rows([
+      `| criterion | ${doneWhenCriterion} | task-3 | covered | "The widget is shipped with arrival tracking." | diff-local |`,
+    ]);
+
+    expect(checkCriterionCoverage(valid, doneWhenStories, doneWhenPlan)).toEqual({ ok: true });
+  });
+
+  it('accepts a quote from any cited task Done when check', () => {
+    const valid = rows([
+      `| criterion | ${doneWhenCriterion} | task-3, task-5 | covered | "The alternate task records the shipping confirmation." | diff-local |`,
+    ]);
+
+    expect(checkCriterionCoverage(valid, doneWhenStories, doneWhenPlan)).toEqual({ ok: true });
+  });
+
+  it('rejects a quote found only in Steps prose with the cited Done when checks', () => {
+    const invalid = rows([
+      `| criterion | ${doneWhenCriterion} | task-14 | covered | "Document the steps-only evidence before completion." | diff-local |`,
+    ]);
+
+    const result = checkCriterionCoverage(invalid, doneWhenStories, doneWhenPlan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-not-done-when:1']);
+    expect(result.gaps[0].detail).toContain(doneWhenCriterion);
+    expect(result.gaps[0].detail).toContain('task-14');
+    expect(result.gaps[0].detail).toContain('Verify the recorded status.');
+    expect(result.gaps[0].detail).toContain('Record the audit evidence.');
+  });
+
+  it('keeps quote-ungrounded when the quote is absent from the cited task entirely', () => {
+    const invalid = rows([
+      `| criterion | ${doneWhenCriterion} | task-14 | covered | "Absent task evidence." | diff-local |`,
+    ]);
+
+    const result = checkCriterionCoverage(invalid, doneWhenStories, doneWhenPlan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-ungrounded:1']);
+  });
 
   it('accepts every extracted criterion when its quote is in a cited task, including normalized whitespace', () => {
     const valid = rows([
@@ -1841,21 +1916,19 @@ Cover the two acceptance variants: created and updated.
     expect(result.gaps[0].detail).toContain('task-1');
   });
 
-  // Plan Task 15 — the stale-quote case: the same rows pass against the plan
-  // text the quote was authored from, then fail after the task's wording is
-  // edited. Two runs over edited text prove the gate re-derives task bodies
-  // instead of caching a prior verdict.
-  it('re-checks a previously valid quote after the cited task body is edited (plan Task 15)', () => {
+  // A task-body edit alone no longer invalidates a quote grounded in `Done
+  // when`; changing its completion check instead produces the new D2 gap.
+  it('re-checks a previously valid quote after the cited task Done when check is edited', () => {
     const valid = completeRows();
     expect(checkCriterionCoverage(valid, stories, plan)).toEqual({ ok: true });
     const editedPlan = plan.replace(
-      'Ship the widget with\narrival tracking.',
+      'Ship the widget with arrival tracking.',
       'Dispatch the widget with delivery confirmation.',
     );
     const rerun = checkCriterionCoverage(valid, stories, editedPlan);
     expect(rerun.ok).toBe(false);
     if (rerun.ok) return;
-    expect(rerun.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-ungrounded:1']);
+    expect(rerun.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-not-done-when:1']);
     expect(rerun.gaps[0].detail).toContain(criterion);
   });
 
@@ -1946,6 +2019,9 @@ Cover the two acceptance variants: created and updated.
 **Type:** happy-path
 
 Count the landed plans on main.
+
+**Done when:**
+- Count the landed plans on main.
 `;
     const censusCriterion =
       `Story 1 happy: Given a plan whose Done-when reads "${CENSUS}", when the coherence gate reads its criterion row, then the land is rejected unless the row is dispositioned diff-local`;
@@ -2027,20 +2103,38 @@ Count the landed plans on main.
 ### Task 1: Duplicate evidence
 Duplicate evidence.
 
+**Done when:**
+- Duplicate evidence.
+
 ### Task 2: Verdict evidence
 Verdict evidence.
+
+**Done when:**
+- Verdict evidence.
 
 ### Task 3: Missing disposition evidence
 Missing disposition evidence.
 
+**Done when:**
+- Missing disposition evidence.
+
 ### Task 4: Negative disposition evidence
 Negative disposition evidence.
+
+**Done when:**
+- Negative disposition evidence.
 
 ### Task 5: Empty quote evidence
 Empty quote evidence.
 
+**Done when:**
+- Empty quote evidence.
+
 ### Task 6: Grounded quote evidence
 Grounded quote evidence.
+
+**Done when:**
+- Grounded quote evidence.
 `;
     const coverageRows = rows([
       '| criterion | Story 1 happy: Given a duplicate widget, when it ships, then it arrives | task-1 | covered | "Duplicate evidence." | diff-local |',
@@ -2310,12 +2404,18 @@ describe('runCoherenceGate ADR pool (Task 7)', () => {
 
 Build widget arrival.
 
+**Done when:**
+- Build widget arrival.
+
 ### Task 2: Return widget
 **Story:** Story 2 (FR-2)
 **Type:** happy-path
 **Files:** src/ship.ts
 
 Return requests are accepted.
+
+**Done when:**
+- Return requests are accepted.
 `,
         prdText: `# PRD
 

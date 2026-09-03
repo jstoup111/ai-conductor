@@ -28,7 +28,7 @@ import {
   extractAuthoritativeStoryCriteria,
   parseAdrDecisions,
 } from '../artifacts.js';
-import { parsePlanTaskBodies, parsePlanTaskPaths } from '../plan-task-parse.js';
+import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskPaths } from '../plan-task-parse.js';
 import {
   formatArchitectureDecisionId,
   validateArchitectureObligationCoverage,
@@ -367,7 +367,11 @@ export function checkStoryCoverage(
 
 // --- Criterion-coverage layer ---
 
-/** A criterion-level rejection, with a stable id suitable for the existing waiver mechanism. */
+/**
+ * A criterion-level rejection, with a stable id suitable for the existing
+ * waiver mechanism. `criterion:quote-not-done-when:<n>` means the quote was
+ * found in the cited task body but not in its `Done when` checks.
+ */
 export interface CriterionGapFinding {
   gapId: string;
   criterion: string;
@@ -388,9 +392,10 @@ function taskIdFromCitation(citedId: string): string {
 
 /**
  * Compare every authored criterion claim to the authoritative story extractor
- * and to the body of the plan task it cites. This is deliberately evidence
- * grounding, not a semantic re-judgement of whether the task implements the
- * criterion: the engine only proves that the asserted task text is real.
+ * and to the `Done when` checks of the plan task it cites. This is deliberately
+ * evidence grounding, not a semantic re-judgement of whether the task
+ * implements the criterion: the engine only proves that the asserted task
+ * completion-check text is real.
  */
 export function checkCriterionCoverage(
   rows: CoherenceRow[],
@@ -414,6 +419,7 @@ export function checkCriterionCoverage(
     (row): row is CriterionCoherenceRow => row.rowClass === 'criterion',
   );
   const taskBodies = parsePlanTaskBodies(planText ?? '');
+  const taskDoneWhen = parsePlanTaskDoneWhen(planText ?? '');
   const gaps: CriterionGapFinding[] = [];
   const rowsByCriterion = new Map<string, CriterionCoherenceRow[]>();
   for (const row of criterionRows) {
@@ -491,14 +497,29 @@ export function checkCriterionCoverage(
       });
       continue;
     }
-    const quoteFound = citedTaskIds.some((id) =>
+    const quoteFoundInBody = citedTaskIds.some((id) =>
       normalizeWhitespace(taskBodies.get(id) ?? '').includes(quote),
     );
-    if (!quoteFound) {
+    if (!quoteFoundInBody) {
       gaps.push({
         gapId: `criterion:quote-ungrounded:${index + 1}`,
         criterion: row.criterion,
         detail: `criterion "${row.criterion}" is attributed to task ${row.citedIds.join(', ')}, but its quote is absent from the cited task body`,
+      });
+      continue;
+    }
+
+    const quoteFoundInDoneWhen = citedTaskIds.some((id) =>
+      (taskDoneWhen.get(id) ?? []).some((check) => normalizeWhitespace(check).includes(quote)),
+    );
+    if (!quoteFoundInDoneWhen) {
+      const doneWhenChecks = citedTaskIds
+        .map((id) => `task-${id}: ${(taskDoneWhen.get(id) ?? []).join('; ') || '(none)'}`)
+        .join('; ');
+      gaps.push({
+        gapId: `criterion:quote-not-done-when:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion "${row.criterion}" is attributed to task ${row.citedIds.join(', ')}, but its quote is absent from the cited task Done when checks: ${doneWhenChecks}`,
       });
     }
   }
