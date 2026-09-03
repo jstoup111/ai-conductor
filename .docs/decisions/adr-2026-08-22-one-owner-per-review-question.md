@@ -47,6 +47,8 @@ The ownership map is:
 | Is the mechanism right? | DECIDE `/architecture-review`; post-code residue → as-built `PLAN_GAP` (adr-2026-08-22-as-built-review-runs-always-with-plan-gap) |
 | Does the code respect ADRs and is it reachable? | as-built review (unchanged) |
 
+> **Amended 2026-08-31 by #2088:** the map gains one question — *Does the cited plan task's `Done when` assert the story criterion it is claimed to cover?* — owned by the `coverage_binding` step (default off; `adr-2026-08-31-coverage-binding-judge-step` D4–D7), judged before BUILD from the criterion text and the `Done when` block alone. It may halt `needs-human`; it never appends a task and never routes to `plan`, so the appender clause and `prd_audit`'s completion authority are untouched.
+
 The `scope`, `completeness`, and `rootCause` rubrics are retired and deleted with their exemptions,
 projections, vocabularies, fixtures, and tests (FR-23). `prd_audit` replaces `completeness` as the
 completion authority wherever an ADR named it; those ADRs carry an amendment note and keep their
