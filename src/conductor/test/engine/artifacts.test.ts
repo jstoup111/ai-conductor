@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, task:1, task:3, task:6, task:10
+// Covers: S1.1, S1.2, S1.3, task:1, task:2, task:3, task:6, task:10
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
@@ -61,6 +61,7 @@ import {
   STEP_ARTIFACT_CONTRACTS,
   STEP_ARTIFACT_GLOBS,
   validateFeatureArtifactStems,
+  featureArtifactPatternsAreRecursive,
   buildArtifactResolutionContext,
   resolveArtifactFiles,
   findArtifactFiles,
@@ -737,6 +738,25 @@ describe('engine/artifacts', () => {
           featureIdentity,
         ),
       ).toEqual([]);
+    });
+
+    it('ignores unrelated plan-family paths for a custom step', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [{ step: 'release-disposition' as StepName, paths: ['.docs/plans/unrelated.md'] }],
+          'my-feature',
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe('featureArtifactPatternsAreRecursive', () => {
+    it('returns false for a custom step', () => {
+      expect(featureArtifactPatternsAreRecursive('release-disposition' as StepName)).toBe(false);
+    });
+
+    it('returns true for the built-in recursive stories family', () => {
+      expect(featureArtifactPatternsAreRecursive('stories')).toBe(true);
     });
   });
 

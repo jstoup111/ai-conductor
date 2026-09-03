@@ -366,7 +366,7 @@ function exampleArtifactPath(pattern: string, featureIdentity: string): string {
  * with no second list to update.
  */
 export function featureArtifactPatternsAreRecursive(step: StepName): boolean {
-  return STEP_ARTIFACT_CONTRACTS[step].some(
+  return stepArtifactContracts(step).some(
     (contract) => contract.scope === 'feature' && contract.pattern.includes('**/'),
   );
 }
@@ -385,7 +385,7 @@ export function validateFeatureArtifactStems(
 
   for (const { step, paths } of entries) {
     for (const path of paths) {
-      for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
+      for (const contract of stepArtifactContracts(step)) {
         if (contract.scope !== 'feature') continue;
         if (!artifactPathMatchesPattern(path, contract.pattern)) continue;
         if (artifactMatchesFeatureIdentity(path, featureIdentity, contract.identity)) continue;
