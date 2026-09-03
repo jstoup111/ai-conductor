@@ -110,6 +110,10 @@ describe('land uses the declaration-aware approval signal', () => {
         '',
         'The rejected example requires Status: DRAFT, but that prose is not a declaration.',
         '',
+        '## Decision',
+        '',
+        '1. **Use the declaration-aware approval signal.**',
+        '',
       ].join('\n'),
     });
 

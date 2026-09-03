@@ -4066,6 +4066,47 @@ export function adrApprovalStatus(content: string): { approved: boolean; found: 
   };
 }
 
+export type AdrDecisionParseResult =
+  | { kind: 'decisions'; ids: Set<string> }
+  | { kind: 'diagnostic'; reason: 'missing-decision-heading'; detail: string };
+
+const ADR_DECISION_HEADING_RE = /^\s{0,3}##\s+Decision\s*$/i;
+const ADR_SECTION_HEADING_RE = /^\s{0,3}##\s+/;
+
+/**
+ * Extract citable decision ids from an ADR's `## Decision` section.
+ *
+ * The accepted forms preserve the AB-R12 compatibility contract: numbered
+ * list items, bolded D-headings, and ATX D-headings with optional emphasis.
+ */
+export function parseAdrDecisions(content: string): AdrDecisionParseResult {
+  const withoutFencedCodeBlocks = content.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
+    '',
+  );
+  const lines = withoutFencedCodeBlocks.split(/\r?\n/);
+  const sectionStart = lines.findIndex((line) => ADR_DECISION_HEADING_RE.test(line));
+  if (sectionStart === -1) {
+    return {
+      kind: 'diagnostic',
+      reason: 'missing-decision-heading',
+      detail: 'ADR is missing a ## Decision heading.',
+    };
+  }
+
+  const ids = new Set<string>();
+  for (const line of lines.slice(sectionStart + 1)) {
+    if (ADR_SECTION_HEADING_RE.test(line)) break;
+    const decisionLine = line.replace(/^\s{0,3}>\s?/, '');
+    const numberedItem = decisionLine.match(/^\s*(\d+)\.\s+\S/);
+    const dHeading = decisionLine.match(/^\s*#{0,6}\s*\*{0,2}D(\d+)\b/);
+    const id = numberedItem?.[1] ?? dHeading?.[1];
+    if (id !== undefined) ids.add(id);
+  }
+
+  return { kind: 'decisions', ids };
+}
+
 /**
  * Parse a complexity-tier marker file (`.docs/complexity/<slug>.md`) into its
  * `ComplexityTier`. The marker carries a `Tier: <S|M|L>` line (case-insensitive);

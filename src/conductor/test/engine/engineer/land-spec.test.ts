@@ -10,7 +10,7 @@
 // with valid Accepted DECIDE artifacts.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, utimes } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -56,6 +56,28 @@ const DRAFT_ADR = [
   '**Status:** DRAFT',
   '',
   'Body.',
+  '',
+].join('\n');
+
+const APPROVED_CITABLE_ADR = [
+  '# ADR: citable decision',
+  '',
+  '**Status:** Approved',
+  '',
+  '## Decision',
+  '',
+  '1. **Keep the decision citable.**',
+  '',
+].join('\n');
+
+const APPROVED_UNCITABLE_ADR = [
+  '# ADR: uncitable decision',
+  '',
+  '**Status:** Approved',
+  '',
+  '## Decision',
+  '',
+  'The decision has no numbered identifier.',
   '',
 ].join('\n');
 
@@ -192,6 +214,110 @@ describe('landSpec ADR approval diagnostics (Task 6)', () => {
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
     ).rejects.toThrow(/adr-proposed\.md[\s\S]*adr-accepted\.md|adr-accepted\.md[\s\S]*adr-proposed\.md/i);
+  });
+});
+
+describe('landSpec ADR citability gate (Task 6)', () => {
+  const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+
+  it('lands an added APPROVED ADR with a numbered decision', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-citable.md'), APPROVED_CITABLE_ADR);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).resolves.toMatchObject({ slug: 'dep-bump' });
+  });
+
+  it('rejects an added APPROVED ADR with no citable decision and names the file', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-uncitable.md'), APPROVED_UNCITABLE_ADR);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/no citable decision.*adr-uncitable\.md/i);
+  });
+
+  it('rejects an edited ADR made uncitable and names the file', async () => {
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'decisions', 'adr-existing.md'), APPROVED_CITABLE_ADR);
+    await git(['add', '.docs/decisions/adr-existing.md']);
+    await git(['commit', '-m', 'add existing ADR']);
+
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-existing.md'), APPROVED_UNCITABLE_ADR);
+    await git(['add', '.docs/decisions/adr-existing.md'], dir);
+    await git(['commit', '-m', 'make existing ADR uncitable'], dir);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/no citable decision.*adr-existing\.md/i);
+  });
+});
+
+describe('landSpec ADR citability gate negatives (Task 7)', () => {
+  const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+
+  it('leaves a legacy approved but uncitable ADR untouched when this spec changes no ADR', async () => {
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'decisions', 'adr-legacy.md'), APPROVED_UNCITABLE_ADR);
+    await git(['add', '.docs/decisions/adr-legacy.md']);
+    await git(['commit', '-m', 'add legacy uncitable ADR']);
+
+    const dir = await seedValidWorktree();
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).resolves.toMatchObject({ slug: 'dep-bump' });
+  });
+
+  it('refuses an uncitable changed ADR without mutating artifacts or appending plan tasks', async () => {
+    const dir = await seedValidWorktree();
+    const planPath = join(dir, '.docs', 'plans', 'dep-bump.md');
+    const adrPath = join(dir, '.docs', 'decisions', 'adr-uncitable.md');
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(adrPath, APPROVED_UNCITABLE_ADR);
+
+    const [planBefore, adrBefore, statusBefore, headBefore] = await Promise.all([
+      readFile(planPath, 'utf-8'),
+      readFile(adrPath, 'utf-8'),
+      git(['status', '--porcelain', '--untracked-files=all'], dir),
+      git(['rev-parse', 'HEAD'], dir),
+    ]);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/no citable decision.*adr-uncitable\.md/i);
+
+    await expect(Promise.all([
+      readFile(planPath, 'utf-8'),
+      readFile(adrPath, 'utf-8'),
+      git(['status', '--porcelain', '--untracked-files=all'], dir),
+      git(['rev-parse', 'HEAD'], dir),
+    ])).resolves.toEqual([planBefore, adrBefore, statusBefore, headBefore]);
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(join(dir, '.docs', 'intake', 'dep-bump.md'))).toBe(false);
+  });
+
+  it('rejects an uncitable changed ADR even when a waiver-shaped file is present', async () => {
+    const dir = await seedValidWorktree();
+    await Promise.all([
+      mkdir(join(dir, '.docs', 'decisions'), { recursive: true }),
+      mkdir(join(dir, '.docs', 'coherence-waivers'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(dir, '.docs', 'decisions', 'adr-uncitable.md'), APPROVED_UNCITABLE_ADR),
+      writeFile(
+        join(dir, '.docs', 'coherence-waivers', 'dep-bump.md'),
+        'Waives: adr-citability\n\nRationale: this must not waive an evidentiary defect.\n',
+      ),
+    ]);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/no citable decision.*adr-uncitable\.md/i);
   });
 });
 

@@ -165,6 +165,7 @@ import {
   sweepStaleReviewArtifacts,
   classifyAsBuiltReviewOutcome,
   parseAsBuiltBlockedFindings,
+  parseAdrDecisions,
   parseTrack,
   parseIntakeSourceRef,
   planStem,
@@ -639,26 +640,8 @@ export async function resolveAsBuiltGoverningClause(
     /^status\s*:\s*approved\b/im.test(decisionText);
   if (!approved) return null;
 
-  const decisionHeading = decisionText.match(/^##\s+Decision\s*$/im);
-  if (!decisionHeading || decisionHeading.index === undefined) return null;
-  const decisionBody = decisionText.slice(decisionHeading.index + decisionHeading[0].length);
-  const nextHeading = decisionBody.search(/^##\s+/m);
-  const section = nextHeading === -1 ? decisionBody : decisionBody.slice(0, nextHeading);
-  // AB-R12: APPROVED ADRs in this repo write decisions three ways — a numbered
-  // list (`4. **Termination.**`), a bolded D-heading (`**D4 — Termination.**`),
-  // and an ATX heading (`### D4 — Termination`). `templates/adr.md.template`
-  // prescribes no shape for the `## Decision` section, so all three are
-  // legitimate and this consumer must accept every one of them: a form it
-  // rejects makes that decision uncitable as a governing clause, and its
-  // REMEDIABLE finding halts needs-human instead of entering the bounded
-  // remediation path. Both the `#` run and the `**` are optional and may
-  // combine (`### **D4** — ...`). `D${n}` stays word-bounded so D1 never
-  // matches D10.
-  const decisionPresent = new RegExp(
-    `^\\s*(?:${decisionNumber}\\.\\s+\\S|#{0,6}\\s*\\*{0,2}D${decisionNumber}\\b)`,
-    'm',
-  );
-  if (!decisionPresent.test(section)) return null;
+  const parsedDecisions = parseAdrDecisions(decisionText);
+  if (parsedDecisions.kind !== 'decisions' || !parsedDecisions.ids.has(decisionNumber)) return null;
 
   return { kind: 'adr', clause: normalizedClause };
 }

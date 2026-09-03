@@ -91,6 +91,7 @@ import {
   PR_BODY_REGEN_ATTEMPT_MARKER,
   uncommittedPathsOrNull,
   isNoOwnerKey,
+  parseAdrDecisions,
   parsePrdAuditReport,
 } from '../../src/engine/artifacts.js';
 import type {
@@ -4237,6 +4238,99 @@ describe('engine/artifacts', () => {
         rejected: statuses.filter((status) => !status.approved && status.found !== null),
         unparseable: statuses.filter((status) => status.found === null),
       }).toEqual({ rejected: [], unparseable: [] });
+    });
+  });
+
+  describe('parseAdrDecisions', () => {
+    it('keeps the ADR template status vocabulary and guides authors to citable decisions', async () => {
+      const template = await readFile(join(REPOSITORY_ROOT, 'templates', 'adr.md.template'), 'utf8');
+      const statusLine = template.split(/\r?\n/).find((line) => line.startsWith('**Status:**'));
+      const statusVocabularyLines = template
+        .split(/\r?\n/)
+        .filter((line) => /\bstatus\b/i.test(line));
+
+      expect(statusLine).toBe('**Status:** APPROVED | SUPERSEDED by {{superseding-adr-slug}}');
+      expect(statusVocabularyLines).toEqual([
+        '**Status:** APPROVED | SUPERSEDED by {{superseding-adr-slug}}',
+      ]);
+      expect(template).toContain('Preferred form: a numbered list');
+
+      const parsed = parseAdrDecisions(
+        '# ADR: Template-conforming decision\n\n' +
+          '**Status:** APPROVED\n\n' +
+          '## Decision\n\n' +
+          '1. **Use a numbered decision list.** This creates a stable citation id.\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set(['1']));
+      }
+    });
+
+    it.each([
+      ['numbered decision item', '4. **Termination.**'],
+      ['bolded D-heading', '**D4 — Termination.**'],
+      ['ATX D-heading', '### D4 — Termination'],
+      ['emphasized ATX D-heading', '### **D4** — X'],
+      ['bare D-line', 'D4 bare'],
+      ['single-emphasis D-heading', '*D4 - Termination'],
+      ['ATX D-heading without space', '###D4 - Termination'],
+    ])('accepts the AB-R12 %s shape', (_description, decisionLine) => {
+      const parsed = parseAdrDecisions(`# ADR\n\n## Decision\n\n${decisionLine}\n`);
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toContain('4');
+      }
+    });
+
+    it('excludes decision-looking lines inside fenced code blocks', () => {
+      const parsed = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\n```markdown\n4. **Termination.**\n### D4 — Termination\n```\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set());
+      }
+    });
+
+    it('returns the missing-decision-heading diagnostic when the section is absent', () => {
+      expect(parseAdrDecisions('# ADR\n\n## Context\n\nNo decision section.\n')).toMatchObject({
+        kind: 'diagnostic',
+        reason: 'missing-decision-heading',
+      });
+    });
+
+    it('does not treat D10 as decision id 1', () => {
+      const parsed = parseAdrDecisions('# ADR\n\n## Decision\n\n### D10 — Tenth decision\n');
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toContain('10');
+        expect(parsed.ids).not.toContain('1');
+      }
+    });
+
+    it('distinguishes an empty Decision section from a missing heading', () => {
+      const parsed = parseAdrDecisions('# ADR\n\n## Decision\n\n   \n\t\n## Consequences\n');
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set());
+      }
+    });
+
+    it('accepts decisions introduced by an additive amendment blockquote', () => {
+      const parsed = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\n4. **Original decision.**\n\n> **Amended 2026-09-02 by #2054:**\n>\n> 8. **Amendment decision.**\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set(['4', '8']));
+      }
     });
   });
 

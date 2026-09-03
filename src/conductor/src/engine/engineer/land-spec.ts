@@ -43,6 +43,7 @@ import {
   adrApprovalStatus,
   isStoriesApproved,
   featureArtifactPatternsAreRecursive,
+  parseAdrDecisions,
   parseComplexityTier,
   parseTrack,
   planStem,
@@ -381,13 +382,24 @@ export async function landSpec(
     throw new Error(`landSpec: feature-scoped artifact stems do not match the feature: ${violations}`);
   }
 
-  // 4e. ADR hard gate — no spec lands with an unapproved ADR (mirrors the
-  //     conduct architecture-review gate). Scan every `.docs/decisions/adr-*.md`.
+  // 4e. ADR hard gates — no spec lands with an unapproved ADR (mirrors the
+  //     conduct architecture-review gate). The citability rung applies only to
+  //     ADRs this spec added or changed; legacy ADRs remain backwards-compatible.
+  const changedAdrPaths = new Set(
+    [...ideaFiles, ...(await collectChangedDocsMarkdown(worktreePath)).map((path) => relative(worktreePath, path))]
+      .map((path) => path.replaceAll('\\', '/'))
+      .filter((path) => /^\.docs\/decisions\/adr-.*\.md$/i.test(path)),
+  );
   const unapprovedAdrs: Array<{ path: string; found: string | null }> = [];
+  const uncitableAdrs: string[] = [];
   for (const adrFile of await listAdrFiles(decisionsDir)) {
     const adrContent = await readFile(adrFile, 'utf-8');
     const approval = adrApprovalStatus(adrContent);
     if (!approval.approved) unapprovedAdrs.push({ path: adrFile, found: approval.found });
+    if (approval.approved && changedAdrPaths.has(relative(worktreePath, adrFile).replaceAll('\\', '/'))) {
+      const parsed = parseAdrDecisions(adrContent);
+      if (parsed.kind !== 'decisions' || parsed.ids.size === 0) uncitableAdrs.push(adrFile);
+    }
   }
   if (unapprovedAdrs.length > 0) {
     const offenders = unapprovedAdrs
@@ -395,7 +407,13 @@ export async function landSpec(
       .join('; ');
     throw new Error(
       `landSpec: ADRs are not approved: ${offenders}. All ADRs must be ` +
-        'APPROVED before landing. Approve the ADRs via /architecture-review, then land.',
+      'APPROVED before landing. Approve the ADRs via /architecture-review, then land.',
+    );
+  }
+  if (uncitableAdrs.length > 0) {
+    throw new Error(
+      `landSpec: approved ADRs have no citable decision: ${uncitableAdrs.join('; ')}. ` +
+        'Each added or changed APPROVED ADR must declare at least one citable decision before landing.',
     );
   }
 

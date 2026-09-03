@@ -153,7 +153,9 @@ worktree, never the primary checkout.
    the plan filename or the daemon cannot resolve it.
 3. `/prd` — product track only.
 4. `/architecture-diagram` — skipped at tier S.
-5. `/architecture-review` — skipped at tier S. Every ADR must be APPROVED before landing.
+5. `/architecture-review` — skipped at tier S. Every ADR must be APPROVED before landing. Each ADR
+   added or changed by the spec must also declare at least one citable decision: use a numbered item
+   in its `## Decision` section (preferred), a bold `D<number>` heading, or an ATX `D<number>` heading.
 6. `/stories` — must end `Status: Accepted`.
 7. `/conflict-check` — skipped at tier S.
 8. `/plan`.
@@ -182,6 +184,7 @@ Before committing, `land` refuses on any of:
 - a missing required artifact for the recorded tier,
 - any artifact carrying `Status: DRAFT`,
 - an ADR under `.docs/decisions/` whose first declared status is not `APPROVED` or `SUPERSEDED`, or that declares no status at all,
+- an added or changed approved ADR with no citable decision in its `## Decision` section,
 - an empty or stub artifact,
 - uncommitted changes in the worktree outside `.docs/`,
 - an unresolved identity (no `spec_owner` configured and no `gh` login).

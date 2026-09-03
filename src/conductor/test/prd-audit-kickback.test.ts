@@ -2216,6 +2216,24 @@ describe('prd_audit kickback', () => {
       .resolves.toBeNull();
   });
 
+  it('fails closed when an ADR omits the cited decision number', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-clause-absent-decision-'));
+    dirs.push(root);
+    const adrStem = 'adr-2026-09-02-absent-decision';
+    await mkdir(join(root, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
+      '# ADR: Absent decision',
+      '**Status:** APPROVED',
+      '',
+      '## Decision',
+      '',
+      '4. **Only decision.**',
+    ].join('\n'));
+
+    await expect(resolveAsBuiltGoverningClause(root, '', `${adrStem} decision 5`))
+      .resolves.toBeNull();
+  });
+
   /**
    * AB-R12 widened clause resolution to the bolded `**D<n>` form, but 15 of
    * this repo's APPROVED ADRs — including
