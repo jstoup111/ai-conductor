@@ -49,6 +49,33 @@ consumer-too-narrow parse defect in a week; #2054 is the ADR-decision-shape equi
   adr-2026-08-26-shared-coherence-parser-at-discovery): one grammar authority, multiple rungs,
   bespoke predicates deleted.
 
+## Amendment
+
+**Amended by:** hotfix for the prd-audit multi-task citation (2026-09-02, operator-authorized) —
+D1 and D2 are **widened, not reversed**: a citation may name more than one task.
+
+D1's contract said "reference + artifact id set -> resolved id", singular, and D2 carried
+`planTask` downstream as one string. A criterion's evidence legitimately spans several plan tasks,
+so the single-id form made the honest citation unrepresentable: the auditor either wrote the truth
+and had its row rejected as `malformed`, or narrowed the citation to fit the parser. Observed on
+`bin-setup-quarantines-a-fix-session-s-repair-inste`, where four **PASS** rows citing `12, 13`,
+`1, 2, 14`, `13, 15` and `1, 2, 14` were discarded and the feature halted `needs-human` with a
+message that read like audit findings. Nothing had failed the audit.
+
+The resolver now returns `ids: string[]`. Every segment must satisfy the same grammar; one bad
+segment rejects the whole citation rather than resolving the good half; an empty segment is
+malformed rather than dropped; a repeated id collapses. Absent ids are all reported, not just the
+first.
+
+D1's substance is untouched — one grammar authority, membership checked against the citing
+artifact's own plan, consumers still forbidden from re-deriving id validity. D3 (tolerated trailing
+annotation) applies per segment. D4 and D5 are unaffected.
+
+**A FIXABLE row still cites exactly one task.** Its repair is appended under a single parent
+(`parentTask`), so the parser may not choose among several on the auditor's behalf; a multi-task
+FIXABLE citation is rejected with a diagnostic naming the choice. The widening applies to rows whose
+citation is evidence, not ownership.
+
 ## Consequences
 
 - land-accepted plan ids are citable by construction; appending a remediation task can never

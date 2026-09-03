@@ -113,8 +113,11 @@ contract. Per-FR evidence may appear below the table, but never replaces the cri
 ```
 
 The Verdict Table needs one row for every readable story criterion. Any row may cite a task present
-in the active plan; cite its bare task id with no annotation. Every FIXABLE row must cite its owning
-plan task. Use `—` when there is no task. `PRD:` records the intent FR(s) when known and `none` when
+in the active plan; cite its bare task id with no annotation. When a criterion's evidence genuinely
+spans several tasks, cite them as a comma-separated list (`12, 13`) rather than narrowing to one —
+every id must still be declared by the active plan. Every FIXABLE row must cite its owning
+plan task, and exactly one: its repair is appended under that single parent, so a multi-task FIXABLE
+citation is rejected. Use `—` when there is no task. `PRD:` records the intent FR(s) when known and `none` when
 there is no PRD. `Intent relation` is machine-readable:
 every OVER_SCOPE row must use exactly one of `within`, `outside-harmless`, or `outside-visible`; use
 `—` for other grades. Do not encode this relation in Evidence prose. If report evidence is malformed
