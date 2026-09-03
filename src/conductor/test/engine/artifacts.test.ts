@@ -514,15 +514,15 @@ describe('engine/artifacts', () => {
 | S4.1 | PASS | 3, 4 | none | — | one latch guards both emit sites |
 `, activePlan);
 
-      expect(result.ok).toBe(true);
-      expect(result.value?.rejectedRows).toEqual([]);
-      expect(result.value?.findings[0]).toMatchObject({
+      if (!result.ok) throw new Error(result.error);
+      expect(result.value.rejectedRows).toEqual([]);
+      expect(result.value.findings[0]).toMatchObject({
         criterion: 'S4.1',
         grade: 'PASS',
         planTasks: ['3', '4'],
       });
       // No single parent is claimed when the row names several.
-      expect(result.value?.findings[0]).not.toHaveProperty('planTask');
+      expect(result.value.findings[0]).not.toHaveProperty('planTask');
     });
 
     it('rejects a FIXABLE row citing several plan tasks, naming the choice', () => {
@@ -538,8 +538,9 @@ describe('engine/artifacts', () => {
 | S2.1 | FIXABLE | 3, 4 | none | — | Missing guard |
 `, activePlan);
 
-      expect(result.value?.findings).toEqual([]);
-      expect(result.value?.rejectedRows[0]?.reason).toContain('must cite exactly one parent task');
+      if (!result.ok) throw new Error(result.error);
+      expect(result.value.findings).toEqual([]);
+      expect(result.value.rejectedRows[0]?.reason).toContain('must cite exactly one parent task');
     });
 
     it('identifies no-owner keys without accepting story criteria', () => {
