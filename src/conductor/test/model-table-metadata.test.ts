@@ -91,7 +91,7 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
 
     expect(missing).toEqual([]);
     expect(empty).toEqual([]);
-    expect(policySteps.size).toBe(24);
+    expect(policySteps.size).toBe(25);
   });
 
   it('describes deterministic BUILD gates as engine machinery rather than generative review', () => {
@@ -241,21 +241,20 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
   });
 });
 
-describe('AUXILIARY_MODEL_TABLE_ROWS build-review rubric registration', () => {
-  it('defines the test-quality rubric without inventing a lifecycle step', () => {
+describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
+  it('defines the test-quality rubric and coverage-binding judge without inventing lifecycle steps', () => {
     const names = AUXILIARY_MODEL_TABLE_ROWS.map((row) => row.name);
 
     expect(names).toEqual([
       'build-review-test-quality',
+      'coverage-binding',
     ]);
     expect(Object.keys(STEP_RATIONALE)).not.toEqual(expect.arrayContaining(names));
-    expect(AUXILIARY_MODEL_TABLE_ROWS.every((row) =>
-      row.executionPath === 'engine-managed auxiliary rubric' &&
-      row.claudeModel === 'inherits resolved rubric policy' &&
-      row.claudeEffort === 'inherits resolved rubric policy' &&
-      row.codexModel === 'inherits resolved rubric policy' &&
-      row.codexEffort === 'inherits resolved rubric policy',
-    )).toBe(true);
+
+    expect(AUXILIARY_MODEL_TABLE_ROWS.find((row) => row.name === 'coverage-binding')).toMatchObject({
+      name: 'coverage-binding',
+      executionPath: 'engine-managed auxiliary judge',
+    });
   });
 });
 

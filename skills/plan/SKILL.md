@@ -393,6 +393,17 @@ After generating the plan, cross-reference:
 - If any criterion is uncovered, add a task
 - Present the coverage mapping to the user
 
+Record the mapping in a `## Coverage Check` table. At every tier, use one four-cell
+criterion row per extracted criterion; Tier S is required to carry this table because
+it has no coherence artifact carrier. The Criterion cell is the exact extracted text
+(`Story <id> happy|negative: Given …, when …, then …`), not a paraphrase. The quote
+must be taken from one cited task's `Done when` block, and the disposition is
+`diff-local` unless a waiver is required.
+
+| Criterion | Task id(s) | Done when quote | Disposition |
+| --- | --- | --- | --- |
+| Story 2 happy: Given …, when …, then … | 4 | "the required completion check" | diff-local |
+
 **GATE: Every citable decision in each non-deleted land-accepted ADR (`APPROVED` or `SUPERSEDED`) in
 the current spec change set must have exactly one row in `## Architecture Obligation Coverage`.** Use
 this table:

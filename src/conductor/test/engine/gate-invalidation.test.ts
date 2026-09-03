@@ -31,12 +31,17 @@ describe('GATE_SURFACE', () => {
       [
         'architecture_review_as_built',
         'build_review',
+        'coverage_binding',
         'manual_test',
         'prd_audit',
         'test_suite',
       ].sort(),
     );
     expect(GATE_SURFACE).not.toHaveProperty('build');
+  });
+
+  it('invalidates coverage_binding for feature runtime or plan inputs', () => {
+    expect(GATE_SURFACE.coverage_binding).toBe('feature-runtime-or-prd-inputs');
   });
 });
 
@@ -72,6 +77,7 @@ describe('classifyGateInvalidation', () => {
     expect(result.preserved.sort()).toEqual(
       [
         'build_review',
+        'coverage_binding',
         'manual_test',
         'prd_audit',
         'architecture_review_as_built',
@@ -93,6 +99,7 @@ describe('classifyGateInvalidation', () => {
     expect(result.preserved.sort()).toEqual(
       [
         'build_review',
+        'coverage_binding',
         'manual_test',
         'prd_audit',
         'architecture_review_as_built',
@@ -120,6 +127,7 @@ describe('classifyGateInvalidation', () => {
     expect(result.invalidated.sort()).toEqual(
       [
         'build_review',
+        'coverage_binding',
         'manual_test',
         'prd_audit',
         'test_suite',
@@ -136,7 +144,7 @@ describe('classifyGateInvalidation', () => {
     const result = classifyGateInvalidation(D, F, true);
 
     expect(result.preserved.sort()).toEqual(
-      ['build_review', 'prd_audit', 'architecture_review_as_built'].sort(),
+      ['build_review', 'coverage_binding', 'prd_audit', 'architecture_review_as_built'].sort(),
     );
     expect(result.invalidated.sort()).toEqual(
       ['test_suite', 'manual_test'].sort(),

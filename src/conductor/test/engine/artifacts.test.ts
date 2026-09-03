@@ -566,7 +566,7 @@ describe('engine/artifacts', () => {
           '.docs/decisions/adr-*.md',
         ],
         worktree: [],
-        coverage_binding: [],
+        coverage_binding: ['.pipeline/coverage-binding.json'],
         acceptance_specs: [
           'spec/acceptance/**/*',
           'spec/requests/**/*',
@@ -613,6 +613,12 @@ describe('engine/artifacts', () => {
         ],
         derivedProjection: true,
       });
+    });
+
+    it('declares coverage_binding as run-scoped completion evidence', () => {
+      expect(STEP_ARTIFACT_CONTRACTS.coverage_binding).toEqual([
+        { pattern: '.pipeline/coverage-binding.json', scope: 'run' },
+      ]);
     });
 
     it('declares lifecycle scope and feature identity for every built-in artifact pattern', () => {
