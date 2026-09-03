@@ -51,6 +51,19 @@ function aggregate(kind: 'judged' | 'mixed'): unknown {
   });
 }
 
+/** A mechanically clean lap: the current content set is empty by construction. */
+function passAggregate(): unknown {
+  return joinBuildReviewRubricOutcomes({
+    lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+    },
+  });
+}
+
 function actionJudgement(): unknown {
   return {
     mode: 'case-v1', domain: 'build_review',
@@ -98,6 +111,8 @@ interface FixtureOptions {
   /** Forces an actual BUILD entry without relying on durable retry recovery. */
   readonly buildPending?: boolean;
   readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
+  /** A clean lap. The adjudication coordinator never runs for one. */
+  readonly rawVerdict?: 'PASS' | 'FAIL';
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -117,7 +132,8 @@ async function fixture(options: FixtureOptions = {}) {
   await writeState(statePath, state as ConductState);
 
   const mixed = options.infrastructure && options.infrastructure !== 'none';
-  const raw = aggregate(mixed ? 'mixed' : 'judged');
+  const clean = options.rawVerdict === 'PASS';
+  const raw = clean ? passAggregate() : aggregate(mixed ? 'mixed' : 'judged');
 
   const dispatched: StepName[] = [];
   const artifactMtimes = new Map<string, number>();
@@ -148,10 +164,10 @@ async function fixture(options: FixtureOptions = {}) {
     ok: true as const,
     feature,
     effective: {
-      rawVerdict: 'FAIL' as const,
-      verdict: 'FAIL' as const,
+      rawVerdict: clean ? ('PASS' as const) : ('FAIL' as const),
+      verdict: clean ? ('PASS' as const) : ('FAIL' as const),
       acceptedFindingIds: [] as string[],
-      unresolvedFindingIds: mixed ? [] : [FINDING_ID],
+      unresolvedFindingIds: mixed || clean ? [] : [FINDING_ID],
       skippedRubrics: [],
       infrastructureFailureRubrics: [...infrastructureRubrics],
       uncoveredInfrastructureFailureRubrics: [...uncovered],
@@ -171,7 +187,7 @@ async function fixture(options: FixtureOptions = {}) {
   const kickbacks: Array<{ from: string; to: string }> = [];
   const lifecycle: ConductorEvent[] = [];
   events.on('kickback', (event) => { if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to }); });
-  for (const type of ['remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_effect_applied'] as const) {
+  for (const type of ['remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_effect_applied', 'remediation_case_reconciled'] as const) {
     events.on(type, (event) => { lifecycle.push(event); });
   }
 
@@ -445,6 +461,34 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
 
     expect(later.dispatched).toContain('build');
     expect(later.retryReasons.get('build')).toBeUndefined();
+  });
+  it('settles a prior attempted action case when a later lap passes cleanly', async () => {
+    const first = await fixture();
+    const order = await first.readJson('.pipeline/build-review-work-order.json');
+    const attempted = await first.readJson('.pipeline/remediation-cases.json') as {
+      version: string; feature: unknown; cases: Array<Record<string, unknown>>;
+    };
+    expect(attempted.cases.map((record) => record.resolution)).toEqual(['open']);
+
+    // The adjudication coordinator runs only on a raw FAIL, so before this a
+    // clean lap left the repaired case open with its applied effect — and every
+    // later BUILD entry, for any gate, read its stale order back.
+    const later = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/build-review-work-order.json'), JSON.stringify(order), 'utf8');
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(attempted), 'utf8');
+      },
+    });
+
+    expect(later.remediateDispatches()).toBe(0);
+    const settled = await later.readJson('.pipeline/remediation-cases.json') as {
+      cases: Array<{ id: string; resolution: string }>;
+    };
+    expect(settled.cases.map((record) => record.resolution)).toEqual(['resolved']);
+    expect(later.lifecycle).toContainEqual(expect.objectContaining({
+      type: 'remediation_case_reconciled', caseId: settled.cases[0]!.id, resolution: 'resolved',
+    }));
   });
   it('takes the mechanical lane for a non-action lap with uncovered infrastructure, spending no semantic kickback', async () => {
     const run = await fixture({ judgement: deferralJudgement(), reportUncoveredInfrastructure: true });

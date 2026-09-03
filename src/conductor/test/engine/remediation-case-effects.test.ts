@@ -15,7 +15,9 @@ afterEach(async () => { if (root) await rm(root, { recursive: true, force: true 
 async function storeWith(state: RemediationCaseStoreState): Promise<RemediationCaseStore> {
   root = await mkdtemp(join(tmpdir(), 'remediation-case-effects-'));
   const store = new RemediationCaseStore(root, feature);
-  await store.replace(state);
+  // `mutate` is the store's only write seam; seeding goes through it too.
+  const seeded = await store.mutate(async () => ({ value: null, nextState: state }));
+  if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
   return store;
 }
 

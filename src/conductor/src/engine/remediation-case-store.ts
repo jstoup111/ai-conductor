@@ -96,12 +96,9 @@ export type RemediationCaseStoreFeatureReadResult =
   | { readonly ok: true; readonly feature: RemediationCaseFeatureIdentity | undefined }
   | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
 
+/** The atomic-write outcome of the one leased transition seam, `mutate`. */
 export type RemediationCaseStoreReplaceResult =
   | { readonly ok: true; readonly state: RemediationCaseStoreState }
-  | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
-
-export type RemediationCaseStoreLeaseResult<Value> =
-  | { readonly ok: true; readonly value: Value }
   | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
 
 /** A leased read/modify/write operation may decline to replace state. */
@@ -314,22 +311,17 @@ export class RemediationCaseStore {
     }
   }
 
-  async replace(stateInput: unknown): Promise<RemediationCaseStoreReplaceResult> {
-    const parsed = parseState(stateInput);
-    if (!parsed.ok) return parsed;
-    if (!sameFeature(parsed.state.feature, this.feature)) return { ok: false, reason: 'foreign-feature' };
-    const acquired = await this.acquire();
-    if (!acquired.ok) return acquired;
-    try {
-      return await this.atomicReplace(parsed.state);
-    } finally {
-      await acquired.release();
-    }
-  }
-
   /**
-   * Runs an admitted state transition under the same lease used for reads and
-   * replacements. Omitting `nextState` leaves the exact stored bytes intact.
+   * Runs an admitted state transition under the same lease used for reads.
+   * Omitting `nextState` leaves the exact stored bytes intact.
+   *
+   * This is the store's ONLY write seam. An unconditional `replace` and a bare
+   * `withLease` escape hatch both existed here and neither had a production
+   * caller: every durable transition already goes through this method, which
+   * keeps the read, the admissibility decision, and the atomic write inside one
+   * lease. A second public way to write the same file is a second transactional
+   * authority, so they were removed rather than left as reachable-by-accident
+   * surface.
    */
   async mutate<Value>(
     operation: (state: RemediationCaseStoreState) => Promise<RemediationCaseStoreMutation<Value>>,
@@ -349,19 +341,6 @@ export class RemediationCaseStore {
       return replaced.ok
         ? { ok: true, value: mutation.value }
         : replaced;
-    } catch {
-      return { ok: false, reason: 'lease-operation-failed' };
-    } finally {
-      await acquired.release();
-    }
-  }
-
-  /** Runs a caller-owned read/modify/write sequence under this store's lease. */
-  async withLease<Value>(operation: () => Promise<Value>): Promise<RemediationCaseStoreLeaseResult<Value>> {
-    const acquired = await this.acquire();
-    if (!acquired.ok) return acquired;
-    try {
-      return { ok: true, value: await operation() };
     } catch {
       return { ok: false, reason: 'lease-operation-failed' };
     } finally {

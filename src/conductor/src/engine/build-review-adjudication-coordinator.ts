@@ -160,6 +160,98 @@ export async function coordinateBuildReviewAdjudication(input: {
   const dispatchSourceIds = dispatchSources.map(buildReviewAdjudicationSourceId);
   const liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
+  /**
+   * The single terminal exit: settle durable state, then choose a route from
+   * what actually survived.
+   *
+   * Every path that can leave this coordinator AFTER reconciliation has
+   * persisted cases and reserved effects must come through here. An
+   * all-operator-resolved shortcut that returned directly bypassed the only
+   * neutralization path, so a lap could take its healthy route while leaving
+   * accepted cases open and their reserved effects live — durable state that a
+   * later BUILD entry would then replay.
+   *
+   * `republishWorkOrder` is false for that acceptance-terminal path: it applied
+   * no action this lap, so it has no tasks to publish and must leave an
+   * unrelated surviving case's existing order exactly as it found it.
+   */
+  const finalize = async (options: {
+    readonly tasksByCaseId: ReadonlyMap<string, readonly { readonly title: string }[]>;
+    readonly republishWorkOrder: boolean;
+    /**
+     * Supplied only by the acceptance-terminal path, which just read authority
+     * and applies no effect before arriving here — so a second read could not
+     * observe anything new, and charging one would be pure duplicate work.
+     */
+    readonly resolvedAtEntry?: ReadonlySet<string>;
+  }): Promise<BuildReviewAdjudicationCoordinatorResult> => {
+    const settled = await store.read();
+    if (!settled.ok) return fail(`case store ${settled.reason}`);
+    // Adjacent to the BUILD/HALT/PASS exit itself: an acceptance that arrived
+    // while effects were settling must not leave an obsolete route standing.
+    let exitResolved: ReadonlySet<string>;
+    if (options.resolvedAtEntry) {
+      exitResolved = options.resolvedAtEntry;
+    } else {
+      try { exitResolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+    }
+    const exitSourceIds = [...liveSourceIdsFor(exitResolved)];
+    const acceptedSourceIds = new Set(sources
+      .filter((source) => exitResolved.has(source.findingId))
+      .map(buildReviewAdjudicationSourceId));
+    // Operator disposition remains its own authority. This leased mutation only
+    // retires autonomous rows it covers, then keeps the published order bound to
+    // a surviving applied action effect.
+    const neutralized = await store.mutate<
+      | { readonly ok: true; readonly cases: readonly import('./remediation-case-store.js').RemediationCaseRecord[] }
+      | { readonly ok: false; readonly reason: string }
+    >(async (state) => {
+      const cases = state.cases.map((record) => {
+        if (record.resolution !== 'open' || record.sources.length === 0 ||
+          !record.sources.every((source) => acceptedSourceIds.has(source.sourceId))) return record;
+        // An accepted source never completed this reserved effect. Preserve the
+        // durable row as a retired failure rather than falsely recording work as
+        // applied; the reducer ignores resolved rows through the shared open-case
+        // vocabulary.
+        const effect = record.effect.kind !== 'none' && record.effect.status === 'reserved'
+          ? { id: record.effect.id, kind: record.effect.kind, status: 'failed' as const, diagnostic: 'retired by operator acceptance' }
+          : record.effect;
+        return { ...record, resolution: 'resolved' as const, effect };
+      });
+      const eligible = cases.filter(isBuildEligibleActionCase);
+      if (eligible.length === 0 || !options.republishWorkOrder) {
+        return { value: { ok: true as const, cases }, nextState: { ...state, cases } };
+      }
+      const workOrderCases = [] as Array<{ caseId: string; priority: 'critical' | 'high' | 'medium' | 'low'; tasks: readonly { readonly title: string }[] }>;
+      for (const record of eligible) {
+        const tasks = options.tasksByCaseId.get(record.id);
+        if (!tasks || tasks.length === 0) {
+          return { value: { ok: false as const, reason: `action case ${record.id} has no work-order tasks` } };
+        }
+        workOrderCases.push({ caseId: record.id, priority: record.priority, tasks });
+      }
+      const orderedCases = orderBuildReviewActionCases(workOrderCases);
+      const primary = eligible.find((record) => record.id === orderedCases[0]!.caseId)!;
+      const published = await publishBuildReviewWorkOrder(input.projectRoot, {
+        version: 'v1', domain: 'build_review', feature: input.feature, effectId: primary.effect.id, cases: orderedCases,
+      });
+      if (!published.ok) return { value: { ok: false as const, reason: `work-order ${published.reason}` } };
+      return { value: { ok: true as const, cases }, nextState: { ...state, cases } };
+    });
+    if (!neutralized.ok) return fail(`case store ${neutralized.reason}`);
+    if (!neutralized.value.ok) return fail(neutralized.value.reason);
+    const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: neutralized.value.cases, mechanical: input.mechanical });
+    await input.emit?.({
+      type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
+      caseIds: neutralized.value.cases.map((record) => record.id),
+      effectIds: neutralized.value.cases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
+    });
+    return {
+      ok: true, route: transition.route, detail: transition.reason,
+      trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(neutralized.value.cases)}`,
+      remainingMechanical: transition.remainingMechanical,
+    };
+  };
   const freshContext = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
@@ -196,7 +288,11 @@ export async function coordinateBuildReviewAdjudication(input: {
   const reconciledCasesById = new Map(reconciled.state.cases.map((record) => [record.id, record]));
   const priorCasesById = new Map(prior.state.cases.map((record) => [record.id, record]));
   const emittedCaseIds = new Set<string>();
-  for (const caseId of caseIdsByRef.values()) {
+  // Every persisted transition gets exactly one occurrence. A prior attempted
+  // case absent from this lap's admitted graph is resolved by reconciliation
+  // and named by no `caseRef`, so iterating the ref map alone changed durable
+  // state with nothing on the event spine.
+  for (const caseId of [...caseIdsByRef.values(), ...reconciled.resolvedAbsentCaseIds]) {
     if (emittedCaseIds.has(caseId)) continue;
     emittedCaseIds.add(caseId);
     const record = reconciledCasesById.get(caseId);
@@ -241,8 +337,12 @@ export async function coordinateBuildReviewAdjudication(input: {
   // authority immediately before entering it so a finding accepted while case
   // reconciliation was settling cannot consume a route or a budget.
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
-  const preActionOperatorRoute = routeIfAllOperatorResolved(resolved);
-  if (preActionOperatorRoute) return preActionOperatorRoute;
+  // Reconciliation has already persisted cases and reserved their effects, so
+  // an acceptance arriving here cannot take the bare shortcut: it must settle
+  // that durable state first and choose its route from what survives.
+  if (sources.every((source) => resolved.has(source.findingId))) {
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
+  }
   const liveSourceIdsBeforeAction = liveSourceIdsFor(resolved);
   const tasksByCaseId = new Map<string, readonly { readonly title: string }[]>();
   for (const proposed of admitted) {
@@ -311,63 +411,5 @@ export async function coordinateBuildReviewAdjudication(input: {
       }
     }
   }
-  const settled = await store.read();
-  if (!settled.ok) return fail(`case store ${settled.reason}`);
-  // Adjacent to the BUILD/HALT/PASS exit itself: an acceptance that arrived
-  // while effects were settling must not leave an obsolete route standing.
-  try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
-  const exitSourceIds = [...liveSourceIdsFor(resolved)];
-  const acceptedSourceIds = new Set(sources
-    .filter((source) => resolved.has(source.findingId))
-    .map(buildReviewAdjudicationSourceId));
-  // Operator disposition remains its own authority. This leased mutation only
-  // retires autonomous rows it covers, then keeps the published order bound to
-  // a surviving applied action effect.
-  const neutralized = await store.mutate<
-    | { readonly ok: true; readonly cases: readonly import('./remediation-case-store.js').RemediationCaseRecord[] }
-    | { readonly ok: false; readonly reason: string }
-  >(async (state) => {
-    const cases = state.cases.map((record) => {
-      if (record.resolution !== 'open' || record.sources.length === 0 ||
-        !record.sources.every((source) => acceptedSourceIds.has(source.sourceId))) return record;
-      // An accepted source never completed this reserved effect. Preserve the
-      // durable row as a retired failure rather than falsely recording work as
-      // applied; the reducer ignores resolved rows through the shared open-case
-      // vocabulary.
-      const effect = record.effect.kind !== 'none' && record.effect.status === 'reserved'
-        ? { id: record.effect.id, kind: record.effect.kind, status: 'failed' as const, diagnostic: 'retired by operator acceptance' }
-        : record.effect;
-      return { ...record, resolution: 'resolved' as const, effect };
-    });
-    const eligible = cases.filter(isBuildEligibleActionCase);
-    if (eligible.length === 0) return { value: { ok: true as const, cases }, nextState: { ...state, cases } };
-    const workOrderCases = [] as Array<{ caseId: string; priority: 'critical' | 'high' | 'medium' | 'low'; tasks: readonly { readonly title: string }[] }>;
-    for (const record of eligible) {
-      const tasks = tasksByCaseId.get(record.id);
-      if (!tasks || tasks.length === 0) {
-        return { value: { ok: false as const, reason: `action case ${record.id} has no work-order tasks` } };
-      }
-      workOrderCases.push({ caseId: record.id, priority: record.priority, tasks });
-    }
-    const orderedCases = orderBuildReviewActionCases(workOrderCases);
-    const primary = eligible.find((record) => record.id === orderedCases[0]!.caseId)!;
-    const published = await publishBuildReviewWorkOrder(input.projectRoot, {
-      version: 'v1', domain: 'build_review', feature: input.feature, effectId: primary.effect.id, cases: orderedCases,
-    });
-    if (!published.ok) return { value: { ok: false as const, reason: `work-order ${published.reason}` } };
-    return { value: { ok: true as const, cases }, nextState: { ...state, cases } };
-  });
-  if (!neutralized.ok) return fail(`case store ${neutralized.reason}`);
-  if (!neutralized.value.ok) return fail(neutralized.value.reason);
-  const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: neutralized.value.cases, mechanical: input.mechanical });
-  await input.emit?.({
-    type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
-    caseIds: neutralized.value.cases.map((record) => record.id),
-    effectIds: neutralized.value.cases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
-  });
-  return {
-    ok: true, route: transition.route, detail: transition.reason,
-    trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(neutralized.value.cases)}`,
-    remainingMechanical: transition.remainingMechanical,
-  };
+  return finalize({ tasksByCaseId, republishWorkOrder: true });
 }

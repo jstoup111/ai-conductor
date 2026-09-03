@@ -80,6 +80,8 @@ describe('remediation case reconciler', () => {
     expect(result).toEqual({
       ok: true,
       caseIdsByRef: new Map([['new-action', 'case-1']]),
+      // Nothing prior was absent, so no unreferenced case transitioned.
+      resolvedAbsentCaseIds: [],
       state: {
         version: 'v1',
         feature: FEATURE,
@@ -223,7 +225,11 @@ describe('remediation case reconciler', () => {
   it('reports the durable identity for every proposed reference, stamped or bound', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
-    await store.replace({ version: 'v1', feature: FEATURE, cases: [durableAction()] });
+    // `mutate` is the store's only write seam; seeding goes through it too.
+    const seeded = await store.mutate(async () => ({
+      value: null, nextState: { version: 'v1' as const, feature: FEATURE, cases: [durableAction()] },
+    }));
+    if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
 
     const result = await reconcileRemediationCases(store, {
       graph: graph({ ...ACTION_CASE, caseRef: 'bound', existingCaseId: 'case-1' } as never),
