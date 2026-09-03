@@ -9,7 +9,7 @@
 //   - three distinct error kinds, never collapsed into one generic error
 
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -1144,6 +1144,77 @@ describe('checkOrphanTasks', () => {
 });
 
 describe('checkCoverageTableConsistency', () => {
+  // Snapshot captured against the parent of Task 1. Every plan not named here
+  // produced no legacy `claim-<row>` gaps in that corpus.
+  const legacyCoverageGapSnapshot: Record<string, string[]> = {
+    '2026-05-01-wave-c-json-stdout-subscriber.md': [
+      'claim-1', 'claim-2', 'claim-3', 'claim-4', 'claim-5', 'claim-6',
+      'claim-7', 'claim-8', 'claim-9', 'claim-9', 'claim-10',
+    ],
+    '2026-05-01-wave-c-telemetry-event-log.md': [
+      'claim-1', 'claim-2', 'claim-3', 'claim-4', 'claim-4', 'claim-5',
+      'claim-6', 'claim-7', 'claim-8', 'claim-8', 'claim-9', 'claim-10',
+      'claim-11', 'claim-12', 'claim-13', 'claim-14', 'claim-15', 'claim-16',
+      'claim-17', 'claim-18',
+    ],
+    '2026-07-12-wiring-reachability-gate.md': [
+      'claim-1', 'claim-1', 'claim-1', 'claim-1', 'claim-1', 'claim-2',
+      'claim-3', 'claim-3', 'claim-3', 'claim-4', 'claim-4', 'claim-4',
+      'claim-5', 'claim-5', 'claim-5', 'claim-5', 'claim-5', 'claim-5',
+      'claim-6', 'claim-6', 'claim-6', 'claim-7', 'claim-7', 'claim-7',
+      'claim-8', 'claim-8', 'claim-8', 'claim-8', 'claim-9', 'claim-9',
+    ],
+    'decide-artifact-coherence-check.md': [
+      'claim-1', 'claim-1', 'claim-1', 'claim-1', 'claim-2', 'claim-2',
+      'claim-2', 'claim-2', 'claim-2', 'claim-3', 'claim-4', 'claim-5',
+      'claim-6', 'claim-7', 'claim-8', 'claim-9', 'claim-10', 'claim-11',
+      'claim-12', 'claim-13', 'claim-13', 'claim-13', 'claim-13', 'claim-14',
+      'claim-14', 'claim-14',
+    ],
+    'decide-pipeline-restructure.md': [
+      'claim-1', 'claim-1', 'claim-1', 'claim-2', 'claim-2', 'claim-2',
+      'claim-3', 'claim-3', 'claim-3', 'claim-3', 'claim-3', 'claim-4',
+      'claim-5', 'claim-5', 'claim-6', 'claim-7', 'claim-7', 'claim-8',
+      'claim-8', 'claim-9', 'claim-10', 'claim-10', 'claim-11', 'claim-11',
+      'claim-11', 'claim-11', 'claim-11', 'claim-12', 'claim-12', 'claim-12',
+    ],
+    'engineer-claim-delivery-guard.md': [
+      'claim-1', 'claim-1', 'claim-2', 'claim-2', 'claim-3', 'claim-4',
+      'claim-5', 'claim-6', 'claim-7', 'claim-7', 'claim-8', 'claim-9',
+      'claim-10', 'claim-11', 'claim-12', 'claim-13', 'claim-14', 'claim-15',
+      'claim-16', 'claim-17', 'claim-18',
+    ],
+  };
+
+  it('pins every merged plan\'s legacy claim-<row> gap set from before criterion rows existed', async () => {
+    const plansDirectory = join(process.cwd(), '../..', '.docs/plans');
+    const planFiles = (await readdir(plansDirectory)).filter((file) => file.endsWith('.md')).sort();
+
+    for (const planFile of planFiles) {
+      const planText = await readFile(join(plansDirectory, planFile), 'utf8');
+      const result = checkCoverageTableConsistency(planText);
+      expect(result.ok ? [] : result.gaps.map((gap) => gap.gapId)).toEqual(
+        legacyCoverageGapSnapshot[planFile] ?? [],
+      );
+    }
+  });
+
+  it('does not reinterpret a four-cell criterion row as a legacy story-to-task claim', () => {
+    const planText = `# Plan
+
+### Task 4: Ship widget
+**Story:** Story 2
+
+## Coverage Check
+
+| Criterion | Task | Quote | Disposition |
+| --- | --- | --- | --- |
+| Story 2 happy: Given a widget, when shipped, then it arrives. | 4 | Ship widget. | diff-local |
+`;
+
+    expect(checkCoverageTableConsistency(planText)).toEqual({ ok: true });
+  });
+
   it('reports claim-<row> when a coverage-table row cites a task id absent from the task tree', () => {
     const planText = `# Plan
 
@@ -1959,6 +2030,53 @@ Cover the two acceptance variants: created and updated.
       expect.arrayContaining(['criterion:quote-ungrounded:1', 'criterion:task-missing:2:99']),
     );
     expect(result.gaps.map((gap) => gap.detail).join('\n')).toContain(criterion);
+  });
+
+  it('resolves a trailing task annotation before checking criterion evidence', () => {
+    const annotatedPlan = `${plan}
+### Task 4: Ship widget after landing
+**Story:** Story 1
+
+**Done when:**
+- Ship the widget with arrival tracking.
+`;
+    const annotated = rows([
+      `| criterion | ${criterion} | 4 (landed) | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
+    ]);
+
+    expect(checkCriterionCoverage(annotated, stories, annotatedPlan)).toEqual({ ok: true });
+  });
+
+  it('keeps the existing missing-task id when a criterion cites task 9 outside the plan task set', () => {
+    const missingTask = rows([
+      `| criterion | ${criterion} | task-9 | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
+    ]);
+
+    const result = checkCriterionCoverage(missingTask, stories, plan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        gapId: 'criterion:task-missing:1:9',
+        criterion,
+      }),
+    ]));
+  });
+
+  it('keeps the existing invented id when a criterion is absent from the stories file', () => {
+    const invented = rows([
+      `| criterion | Story 99 happy: Given an invented widget, when shipped, then it arrives. | task-1 | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
+    ]);
+
+    const result = checkCriterionCoverage(invented, stories, plan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ gapId: 'criterion:invented:1' }),
+    ]));
   });
 
   it('requires a non-negative, closed diff-locality disposition without inspecting criterion prose', () => {

@@ -387,7 +387,7 @@ function normalizeWhitespace(text: string): string {
 }
 
 function taskIdFromCitation(citedId: string): string {
-  return citedId.trim().replace(/^task-/i, '');
+  return citedId.trim().replace(/\s+\([^()]*\)\s*$/, '').replace(/^task-/i, '');
 }
 
 /**
@@ -937,7 +937,9 @@ function parseCoverageCheckTableRows(planText: string): CoverageTableRow[] | nul
       sawSeparator = true;
       continue;
     }
-    if (cells.length < 2) continue;
+    // Four-cell rows are criterion claims, parsed by the plan-carrier reader.
+    // They must not be reinterpreted as legacy story-to-task coverage rows.
+    if (cells.length < 2 || cells.length >= 4) continue;
     const storyId = cells[0].trim();
     const taskIds = cells[1]
       .split(',')
