@@ -56,6 +56,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 > = {
   project_setup: 'not-audited-by-design',
   setup_repair: 'not-audited-by-design',
+  coverage_binding_judged: 'not-audited-by-design',
+  coverage_binding_disabled: 'not-audited-by-design',
   config_deprecated_key: 'not-audited-by-design',
   contained_live_checkout_drift: 'not-audited-by-design',
   self_host_containment_verdict: 'not-audited-by-design',
@@ -182,6 +184,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     disposition: 'engine-committed',
     preservedPaths: [],
   },
+  coverage_binding_judged: {
+    type: 'coverage_binding_judged',
+    step: 'coverage_binding',
+    verdict: 'asserts',
+    digest: 'sha256:claim',
+    taskIds: ['1'],
+  },
+  coverage_binding_disabled: { type: 'coverage_binding_disabled', step: 'coverage_binding' },
   config_deprecated_key: {
     type: 'config_deprecated_key',
     key: 'build_review.rubrics.scope',
