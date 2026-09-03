@@ -257,13 +257,14 @@ import {
 } from './finish-publication.js';
 import {
   bumpKickbackGateInLedger,
-  bumpMechanicalFaultsInLedger,
+  bumpMechanicalFaultsInLedgerResult,
   clearKickbackLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   readGrowth,
   readKickbackLedger,
+  readKickbackLedgerResult,
   recordGrowth,
   writeKickbackLedger,
   type KickbackGateEntry,
@@ -10484,8 +10485,17 @@ export class Conductor {
                   // with an exact reduced-coverage decision as a live fault, so
                   // a content-complete PASS was unreachable.
                   const uncoveredInfrastructure = effective.effective.uncoveredInfrastructureFailureRubrics;
-                  const mechanicalFaults =
-                    (await readKickbackLedger(this.projectRoot)).gates.build_review?.mechanicalFaults ?? 0;
+                  const mechanicalLedger = await readKickbackLedgerResult(this.projectRoot);
+                  if (mechanicalLedger.kind === 'unreadable') {
+                    const reason = `build_review adjudication halted: ${mechanicalLedger.reason}`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    await this.emitLoopHalt(reason);
+                    return;
+                  }
+                  const mechanicalFaults = mechanicalLedger.kind === 'ok'
+                    ? mechanicalLedger.ledger.gates.build_review?.mechanicalFaults ?? 0
+                    : 0;
                   const mechanical = uncoveredInfrastructure.length === 0
                     ? 'healthy'
                     : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW ? 'halt' : 'retry';
@@ -10576,7 +10586,7 @@ export class Conductor {
                   // already finalized back to BUILD as raw reasons.
                   const uncoveredRubric = uncoveredInfrastructure[0];
                   const uncoveredResult = uncoveredRubric ? aggregate.results[uncoveredRubric] : undefined;
-                  await bumpMechanicalFaultsInLedger(this.projectRoot, 'build_review',
+                  const bumpedMechanicalFaults = await bumpMechanicalFaultsInLedgerResult(this.projectRoot, 'build_review',
                     uncoveredRubric && uncoveredResult?.kind === 'infrastructure-failure'
                       ? {
                           rubric: uncoveredRubric,
@@ -10586,6 +10596,13 @@ export class Conductor {
                         }
                       : undefined,
                   );
+                  if (bumpedMechanicalFaults.kind === 'unreadable') {
+                    const reason = `build_review adjudication halted: ${bumpedMechanicalFaults.reason}`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    await this.emitLoopHalt(reason);
+                    return;
+                  }
                   await this.saveConductorStepStatus(state, step.name, 'failed');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = i - 1; // for-loop i++ re-lands on build_review

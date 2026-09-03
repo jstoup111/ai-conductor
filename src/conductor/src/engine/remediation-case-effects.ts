@@ -64,7 +64,13 @@ export async function applyBuildReviewActionEffects(input: {
   readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
 }): Promise<RemediationEffectResult> {
   const mutation = await input.store.mutate<RemediationEffectResult>(async (state) => {
-    const actionCases = state.cases.filter(isActionCase);
+    // The coordinator's authority read may suppress a newly accepted case
+    // after reconciliation reserved it but before this lease begins. Only the
+    // surviving task-bearing cases may publish or consume an effect; the exit
+    // reconciliation resolves the suppressed reservation separately.
+    const actionCases = state.cases
+      .filter(isActionCase)
+      .filter((record) => input.tasksByCaseId.has(record.id));
     if (actionCases.length === 0) return { value: { ok: false as const, reason: 'no open action effects' } };
     const pending = actionCases.filter((record) => record.effect.kind === 'action' && record.effect.status === 'reserved');
     if (pending.length === 0) {

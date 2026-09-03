@@ -118,6 +118,11 @@ export type KickbackLedgerReadResult =
   | { readonly kind: 'ok'; readonly ledger: KickbackLedger }
   | { readonly kind: 'unreadable'; readonly reason: string };
 
+/** Typed mechanical-fault write for enforcement boundaries that fail closed. */
+export type BumpMechanicalFaultsInLedgerResult =
+  | { readonly kind: 'ok'; readonly entry: KickbackGateEntry }
+  | { readonly kind: 'unreadable'; readonly reason: string };
+
 const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set(['count', 'resolvedBefore']);
 
 function isLapCountingValue(value: unknown): value is number | Record<string, number> {
@@ -553,14 +558,8 @@ export function bumpMechanicalFaults(
   };
 }
 
-/** Load, update, and atomically persist one gate's mechanical-fault allowance. */
-export async function bumpMechanicalFaultsInLedger(
-  projectRoot: string,
-  gate: string,
-  fault?: KickbackLastMechanicalFault,
-): Promise<KickbackGateEntry> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const entry = ledger.gates[gate] ?? {
+function emptyKickbackGateEntry(gate: string): KickbackGateEntry {
+  return {
     count: 0,
     cumulative: 0,
     ...(gate === 'build_review' ? { chargedEffectIds: [] } : {}),
@@ -570,6 +569,15 @@ export async function bumpMechanicalFaultsInLedger(
     priorVerdict: true,
     resolvedBefore: 0,
   };
+}
+
+async function bumpMechanicalFaultsInLedgerFromLedger(
+  projectRoot: string,
+  ledger: KickbackLedger,
+  gate: string,
+  fault?: KickbackLastMechanicalFault,
+): Promise<KickbackGateEntry> {
+  const entry = ledger.gates[gate] ?? emptyKickbackGateEntry(gate);
 
   const nextEntry = bumpMechanicalFaults(entry, fault);
   await writeKickbackLedger(projectRoot, {
@@ -578,4 +586,33 @@ export async function bumpMechanicalFaultsInLedger(
   });
 
   return nextEntry;
+}
+
+/**
+ * Load, update, and atomically persist one mechanical-fault allowance without
+ * ever treating unreadable enforcement state as an empty budget.
+ */
+export async function bumpMechanicalFaultsInLedgerResult(
+  projectRoot: string,
+  gate: string,
+  fault?: KickbackLastMechanicalFault,
+): Promise<BumpMechanicalFaultsInLedgerResult> {
+  const result = await readKickbackLedgerResult(projectRoot);
+  if (result.kind === 'unreadable') return result;
+  const ledger = result.kind === 'ok' ? result.ledger : emptyLedger();
+  return { kind: 'ok', entry: await bumpMechanicalFaultsInLedgerFromLedger(projectRoot, ledger, gate, fault) };
+}
+
+/**
+ * Legacy callers intentionally retain the historical fail-open behavior.
+ * New enforcement boundaries use bumpMechanicalFaultsInLedgerResult instead.
+ */
+export async function bumpMechanicalFaultsInLedger(
+  projectRoot: string,
+  gate: string,
+  fault?: KickbackLastMechanicalFault,
+): Promise<KickbackGateEntry> {
+  const result = await bumpMechanicalFaultsInLedgerResult(projectRoot, gate, fault);
+  if (result.kind === 'ok') return result.entry;
+  return bumpMechanicalFaultsInLedgerFromLedger(projectRoot, await readKickbackLedger(projectRoot), gate, fault);
 }
