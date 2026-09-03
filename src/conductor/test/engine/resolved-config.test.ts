@@ -14,6 +14,7 @@ import {
   resolveProviderPreparationTimeoutMinutes,
   resolveDispatchStartTimeoutSeconds,
   resolveTeardownTimeoutSeconds,
+  resolveCoverageBindingConfig,
 } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
@@ -22,6 +23,17 @@ type TeardownTimeoutConfig = HarnessConfig & { teardown_timeout_seconds?: unknow
 type DispatchStartTimeoutConfig = HarnessConfig & { dispatch_start_timeout_seconds?: unknown };
 
 describe('engine/resolved-config', () => {
+  describe('resolveCoverageBindingConfig', () => {
+    it('defaults the judge to disabled', () => {
+      expect(resolveCoverageBindingConfig(undefined)).toEqual({ judgeEnabled: false });
+    });
+
+    it('resolves an explicitly enabled judge', () => {
+      expect(resolveCoverageBindingConfig({ coverage_binding: { judge: { enabled: true } } }))
+        .toEqual({ judgeEnabled: true });
+    });
+  });
+
   describe('resolveDispatchStartTimeoutSeconds', () => {
     it.each([
       { name: 'is absent', value: undefined, expected: 120, warnings: 0 },

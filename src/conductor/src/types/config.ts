@@ -332,6 +332,16 @@ export interface RetryRoutingConfig {
 }
 
 /**
+ * Opt-in pre-BUILD judge that confirms each criterion claim is asserted by
+ * the cited task's Done when checks. The shipped default is disabled.
+ */
+export interface CoverageBindingConfig {
+  judge?: {
+    enabled?: boolean;
+  };
+}
+
+/**
  * How harness self-host mode is decided (adr-2026-06-30-self-host-detection-seam):
  *   - 'auto'      → path-based auto-detection (build repo root == harness root)
  *   - 'force_on'  → treat ANY repo as the harness self-build (testing)
@@ -500,6 +510,8 @@ export interface HarnessConfig {
    * runtime resolution (not this type). See `RetryRoutingConfig`.
    */
   retry_routing?: RetryRoutingConfig;
+  /** Pre-BUILD criterion-to-Done-when binding judge. Absent → disabled. */
+  coverage_binding?: CoverageBindingConfig;
   /**
    * Owner-gate (adr-2026-06-30-owner-gate-identity-resolution / FR-1): the
    * configured operator identity the daemon builds specs for. Wins over the

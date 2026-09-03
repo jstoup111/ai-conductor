@@ -44,6 +44,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   architecture_diagram: 3,
   architecture_review: 5,
   worktree: 1,
+  coverage_binding: 1,
   acceptance_specs: 3,
   build: 3,
   build_review: 3,
@@ -73,6 +74,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   architecture_diagram: 'auto',
   architecture_review: 'conditional',
   worktree: 'auto',
+  coverage_binding: 'auto', // engine-native gate; the judge config is resolved separately
   acceptance_specs: 'auto',
   build: 'auto',
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
@@ -99,6 +101,13 @@ export const FALLBACK_REVIEW: ReviewMode = 'manual';
  * by default — the intended behavior change, documented as a migration note.
  */
 export const DEFAULT_STEP_ESCALATE = true;
+
+/** Resolve the default-off coverage-binding judge configuration. */
+export function resolveCoverageBindingConfig(
+  config: Pick<HarnessConfig, 'coverage_binding'> | undefined,
+): { judgeEnabled: boolean } {
+  return { judgeEnabled: config?.coverage_binding?.judge?.enabled ?? false };
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Resolution
