@@ -19,6 +19,7 @@ import type { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import * as remediationCaseReconciler from '../../src/engine/remediation-case-reconciler.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -222,6 +223,8 @@ async function fixture(options: FixtureOptions = {}) {
     remediateDispatches: () => remediateDispatches, artifactMtimes,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
+    state: async (): Promise<ConductState> =>
+      JSON.parse(await readFile(statePath, 'utf8')) as ConductState,
     haltMarker: async (): Promise<string> => readFile(join(projectRoot, '.pipeline/HALT'), 'utf8').catch(() => ''),
   };
 }
@@ -490,6 +493,82 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       type: 'remediation_case_reconciled', caseId: settled.cases[0]!.id, resolution: 'resolved',
     }));
   });
+
+  it.each([
+    ['no durable case store', async () => {}],
+    ['a durable case store but no work order', async (root: string) => {
+      const first = await fixture();
+      const cases = await first.readJson('.pipeline/remediation-cases.json');
+      await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(cases), 'utf8');
+    }],
+  ])('keeps a clean PASS terminal when there is %s', async (_name, seedPipeline) => {
+    const run = await fixture({ rawVerdict: 'PASS', seedPipeline });
+
+    expect(await run.haltMarker()).toBe('');
+    expect((await run.state()).build_review).toBe('done');
+  });
+
+  it.each([
+    ['malformed', async (root: string) => {
+      await writeFile(join(root, '.pipeline/remediation-cases.json'), '{not json', 'utf8');
+    }, 'malformed-json'],
+    ['foreign-domain', async (root: string) => {
+      const first = await fixture();
+      const cases = await first.readJson('.pipeline/remediation-cases.json') as { cases: Array<Record<string, unknown>> };
+      await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify({
+        ...cases,
+        cases: cases.cases.map((record, index) => index === 0 ? { ...record, domain: 'foreign-domain' } : record),
+      }), 'utf8');
+    }, 'foreign-domain'],
+  ])('halts a clean PASS when the durable case store is %s', async (_name, seedPipeline, reason) => {
+    const run = await fixture({ rawVerdict: 'PASS', seedPipeline });
+
+    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: case store ${reason}`);
+    expect((await run.state()).build_review).not.toBe('done');
+  });
+
+  it('halts a clean PASS when durable work-order attempt evidence is invalid', async () => {
+    const first = await fixture();
+    const cases = await first.readJson('.pipeline/remediation-cases.json');
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(cases), 'utf8');
+        await mkdir(join(root, '.pipeline/build-review-work-order.json'));
+      },
+    });
+
+    expect(await run.haltMarker()).toContain('build_review clean-PASS durable settlement halted: work order attempt unreadable-work-order');
+    expect((await run.state()).build_review).not.toBe('done');
+  });
+
+  it('halts a clean PASS when durable case reconciliation cannot persist', async () => {
+    const first = await fixture();
+    const [cases, order] = await Promise.all([
+      first.readJson('.pipeline/remediation-cases.json'),
+      first.readJson('.pipeline/build-review-work-order.json'),
+    ]);
+    const reconcile = vi.spyOn(remediationCaseReconciler, 'reconcileRemediationCases').mockResolvedValue({
+      ok: false,
+      reason: 'store-failure',
+      storeReason: 'atomic-replace-failed',
+    });
+    try {
+      const run = await fixture({
+        rawVerdict: 'PASS',
+        seedPipeline: async (root) => {
+          await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(cases), 'utf8');
+          await writeFile(join(root, '.pipeline/build-review-work-order.json'), JSON.stringify(order), 'utf8');
+        },
+      });
+
+      expect(await run.haltMarker()).toContain('build_review clean-PASS durable settlement halted: case reconciliation store-failure');
+      expect((await run.state()).build_review).not.toBe('done');
+    } finally {
+      reconcile.mockRestore();
+    }
+  });
+
   it('takes the mechanical lane for a non-action lap with uncovered infrastructure, spending no semantic kickback', async () => {
     const run = await fixture({ judgement: deferralJudgement(), reportUncoveredInfrastructure: true });
 

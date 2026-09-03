@@ -4640,12 +4640,16 @@ export class Conductor {
    * empty graph resolves exactly the prior attempted cases absent from it.
    *
    * The mechanical verdict is never changed here. This is state settlement
-   * before terminal PASS routing, and it is best-effort by design: an
-   * unreadable store logs and leaves the PASS alone rather than converting a
-   * passing lap into a halt.
+   * before terminal PASS routing: genuinely absent prior state is benign, but
+   * unreadable or unpersisted durable state must halt before it can permit a
+   * terminal PASS.
    */
-  private async settleRemediationCasesOnCleanBuildReview(): Promise<void> {
-    if (!this.daemon || !this.buildReviewAdjudicationEnabled()) return;
+  private async settleRemediationCasesOnCleanBuildReview(): Promise<
+    | { readonly kind: 'absent' }
+    | { readonly kind: 'settled' }
+    | { readonly kind: 'invalid'; readonly reason: string }
+  > {
+    if (!this.daemon || !this.buildReviewAdjudicationEnabled()) return { kind: 'absent' };
     // The lap's own aggregate is both the PASS evidence and the lap identity
     // every lifecycle occurrence is keyed by. A scalar/legacy verdict has
     // neither and keeps its historical behavior.
@@ -4653,16 +4657,19 @@ export class Conductor {
     try {
       verdictRaw = JSON.parse(await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'));
     } catch {
-      return;
+      return { kind: 'absent' };
     }
     const aggregate = parseBuildReviewAggregate(verdictRaw);
-    if (!aggregate || aggregate.verdict !== 'PASS') return;
+    if (!aggregate || aggregate.verdict !== 'PASS') return { kind: 'absent' };
     const featureRead = await readRemediationCaseStoreFeature(this.projectRoot);
-    if (!featureRead.ok || !featureRead.feature) return;
+    if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
+    if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
+    if (!featureRead.feature) return { kind: 'absent' };
     const feature = featureRead.feature;
     const store = new RemediationCaseStore(this.projectRoot, feature);
     const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
-    if (!attemptEvidence.ok) return;
+    if (classifyBuildReviewDurableRead(attemptEvidence) === 'absent') return { kind: 'absent' };
+    if (!attemptEvidence.ok) return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
     const reconciled = await reconcileRemediationCases(store, {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: new Date().toISOString(),
@@ -4670,11 +4677,12 @@ export class Conductor {
       attemptedCaseIds: attemptEvidence.attemptedCaseIds,
     });
     if (!reconciled.ok) {
-      this.log?.(
-        `WARNING: clean build_review lap could not settle remediation cases (${reconciled.reason}) — ` +
-          'a prior work order may still be BUILD-eligible',
-      );
-      return;
+      return {
+        kind: 'invalid',
+        reason: `case reconciliation ${reconciled.reason}${
+          'storeReason' in reconciled ? ` (${reconciled.storeReason})` : ''
+        }`,
+      };
     }
     for (const caseId of reconciled.resolvedAbsentCaseIds) {
       await this.events.emit({
@@ -4685,6 +4693,7 @@ export class Conductor {
         resolution: 'resolved',
       });
     }
+    return { kind: 'settled' };
   }
 
   /** Best-effort compact remediation context from existing build-review evidence. */
@@ -11407,7 +11416,16 @@ export class Conductor {
           // A clean build_review lap settles its durable remediation cases
           // before the PASS becomes terminal, so no repaired work order stays
           // BUILD-eligible for a later lap to replay.
-          if (step.name === 'build_review') await this.settleRemediationCasesOnCleanBuildReview();
+          if (step.name === 'build_review') {
+            const settlement = await this.settleRemediationCasesOnCleanBuildReview();
+            if (settlement.kind === 'invalid') {
+              await this.writeHaltMarker(
+                `build_review clean-PASS durable settlement halted: ${settlement.reason}\n`,
+                'needs-human',
+              );
+              return;
+            }
+          }
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are
           // written atomically in their engine handlers. `rebase` is also
