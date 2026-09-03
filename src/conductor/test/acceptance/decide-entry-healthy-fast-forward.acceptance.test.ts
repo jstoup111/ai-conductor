@@ -9,7 +9,6 @@ import {
   conductorFor,
   createDecideEntryFixture,
   pathExists,
-  recordingFailureRunner,
   seedHealthyDecideArtifacts,
   type DecideEntryFixture,
   writeFixtureState,
@@ -57,11 +56,13 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       run: async (step) => {
         ran.push(step);
         haltedBeforeFirstDispatch = await pathExists(fixture.root, '.pipeline/HALT');
-        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+        return step === 'coverage_binding'
+          ? { success: true }
+          : { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
       },
     }).run();
 
-    expect(ran[0]).toBe('acceptance_specs');
+    expect(ran).toEqual(['coverage_binding', 'acceptance_specs']);
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.explore).toBe('skipped');
@@ -84,11 +85,13 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       run: async (step) => {
         ran.push(step);
         haltedBeforeFirstDispatch = await pathExists(fixture.root, '.pipeline/HALT');
-        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+        return step === 'coverage_binding'
+          ? { success: true }
+          : { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
       },
     }).run();
 
-    expect(ran[0]).toBe('build');
+    expect(ran).toEqual(['coverage_binding', 'build']);
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.architecture_diagram).toBe('skipped');
@@ -111,9 +114,16 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
     });
     const ran: StepName[] = [];
 
-    await conductorFor(fixture, recordingFailureRunner(ran)).run();
+    await conductorFor(fixture, {
+      run: async (step) => {
+        ran.push(step);
+        return step === 'coverage_binding'
+          ? { success: true }
+          : { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+      },
+    }).run();
 
-    expect(ran[0]).toBe('acceptance_specs');
+    expect(ran).toEqual(['coverage_binding', 'acceptance_specs']);
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.architecture_diagram).toBe('done');

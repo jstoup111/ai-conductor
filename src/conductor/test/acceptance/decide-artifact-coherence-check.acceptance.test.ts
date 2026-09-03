@@ -115,8 +115,8 @@ const PLAN = [
   'implement outcome one and reject an unmapped outcome',
   '',
   '**Done when:**',
-  '- A staged outcome is committed to the intake marker.',
-  '- An unmapped outcome is rejected at land.',
+  '- Given a mapped outcome, when land validates, then it passes.',
+  '- Given an unmapped outcome, when land validates, then it is rejected.',
   '',
   '### Task 2: implement story two',
   '**Story:** Story 2 (happy path — stories map)',
@@ -126,8 +126,8 @@ const PLAN = [
   'implement story two and reject an uncovered story',
   '',
   '**Done when:**',
-  '- A covered story maps to its plan task.',
-  '- An uncovered story is rejected at land.',
+  '- Given a covered story, when land validates, then it passes.',
+  '- Given an uncovered story, when land validates, then it is rejected.',
   '',
   '## Task Dependency Graph',
   '```',
@@ -140,6 +140,10 @@ const PLAN = [
   '|---|---|',
   '| 1 | 1 |',
   '| 2 | 2 |',
+  '| Story 1 happy: Given a mapped outcome, when land validates, then it passes. | 1 | Given a mapped outcome, when land validates, then it passes. | diff-local |',
+  '| Story 1 negative: Given an unmapped outcome, when land validates, then it is rejected. | 1 | Given an unmapped outcome, when land validates, then it is rejected. | diff-local |',
+  '| Story 2 happy: Given a covered story, when land validates, then it passes. | 2 | Given a covered story, when land validates, then it passes. | diff-local |',
+  '| Story 2 negative: Given an uncovered story, when land validates, then it is rejected. | 2 | Given an uncovered story, when land validates, then it is rejected. | diff-local |',
   '',
   '## Architecture Obligation Coverage',
   '',
@@ -168,10 +172,10 @@ const COHERENCE = [
   '| task    | task-1    | story-1  | covered | "task 1 maps to story 1"     |',
   '| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |',
   '| adr     | adr-coherence | story-1 | covered | "ADR is adjudicated by story 1" |',
-  '| criterion | Story 1 happy: Given a mapped outcome, when land validates, then it passes. | task-1 | covered | "implement outcome one" | diff-local |',
-  '| criterion | Story 1 negative: Given an unmapped outcome, when land validates, then it is rejected. | task-1 | covered | "reject an unmapped outcome" | diff-local |',
-  '| criterion | Story 2 happy: Given a covered story, when land validates, then it passes. | task-2 | covered | "implement story two" | diff-local |',
-  '| criterion | Story 2 negative: Given an uncovered story, when land validates, then it is rejected. | task-2 | covered | "reject an uncovered story" | diff-local |',
+  '| criterion | Story 1 happy: Given a mapped outcome, when land validates, then it passes. | task-1 | covered | "Given a mapped outcome, when land validates, then it passes." | diff-local |',
+  '| criterion | Story 1 negative: Given an unmapped outcome, when land validates, then it is rejected. | task-1 | covered | "Given an unmapped outcome, when land validates, then it is rejected." | diff-local |',
+  '| criterion | Story 2 happy: Given a covered story, when land validates, then it passes. | task-2 | covered | "Given a covered story, when land validates, then it passes." | diff-local |',
+  '| criterion | Story 2 negative: Given an uncovered story, when land validates, then it is rejected. | task-2 | covered | "Given an uncovered story, when land validates, then it is rejected." | diff-local |',
   '',
 ].join('\n');
 
@@ -584,8 +588,8 @@ describe('Story 6 / FR-5 — orphan-task detection (task-<id>)', () => {
       .replace('| fr      | FR-2      | story-2  | covered | "FR-2 maps to story 2"       |\n', '')
       .replace('| story   | story-2   | task-2   | covered | "story 2 maps to task 2"     |\n', '')
       .replace('| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |\n', '')
-      .replace('| criterion | Story 2 happy: Given a covered story, when land validates, then it passes. | task-2 | covered | "implement story two" | diff-local |\n', '')
-      .replace('| criterion | Story 2 negative: Given an uncovered story, when land validates, then it is rejected. | task-2 | covered | "reject an uncovered story" | diff-local |\n', '');
+      .replace('| criterion | Story 2 happy: Given a covered story, when land validates, then it passes. | task-2 | covered | "Given a covered story, when land validates, then it passes." | diff-local |\n', '')
+      .replace('| criterion | Story 2 negative: Given an uncovered story, when land validates, then it is rejected. | task-2 | covered | "Given an uncovered story, when land validates, then it is rejected." | diff-local |\n', '');
     const wt = await seedWorktree('coherence demo', { plan, stories, prd, coherence });
     await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
   });
