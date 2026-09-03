@@ -1,4 +1,4 @@
-// Covers: tasks:3,4
+// Covers: tasks:3,4,5
 //
 // These run the conductor across the custom-step boundary: the runner writes
 // its configured completion marker, while artifact review remains uncalled
@@ -134,6 +134,41 @@ describe('custom step post-success artifact review gate', () => {
       });
     });
   }
+
+  it('fails closed with the configured marker path when a custom step writes no marker', async () => {
+    const events = new ConductorEventEmitter();
+    const failures: string[] = [];
+    events.on('step_failed', (event) => {
+      if (event.type === 'step_failed') failures.push(event.error);
+    });
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async (): Promise<StepRunResult> => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      mode: 'default',
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: CUSTOM_STEP,
+      config: config(),
+      onRecovery: async () => 'quit',
+    }).run();
+
+    const state = await readState(statePath);
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8').catch(() => '');
+    expect({
+      customStep: state.ok ? state.value[CUSTOM_STEP] : undefined,
+      failure: failures[0],
+      diagnostic: `${failures.join('\n')}${halt}`,
+    }).toEqual({
+      customStep: 'failed',
+      failure:
+        `Step '${CUSTOM_STEP}' completed but completion check failed: ` +
+        `configured completion artifact "${PASS_MARKER}" is missing — ${CUSTOM_STEP} must write it after a passing review`,
+      diagnostic: expect.not.stringContaining('not iterable'),
+    });
+  });
 
   it('silently approves an acceptance-spec file matched only by its configured extra glob', async () => {
     const specPath = join(dir, 'custom-specs', 'reviewed.test.ts');
