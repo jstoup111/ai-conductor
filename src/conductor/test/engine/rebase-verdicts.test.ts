@@ -53,7 +53,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       preVerified: ['build', 'test_suite'],
       result: {
         satisfied: true,
-        kickedBack: ['build_review', 'prd_audit', 'architecture_review_as_built'],
+        kickedBack: ['coverage_binding', 'build_review', 'prd_audit', 'architecture_review_as_built'],
         reverified: ['build', 'test_suite'],
       },
       testSuite: expect.objectContaining({
@@ -77,7 +77,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       testSuite: await readVerdict(projectRoot, 'test_suite'),
     }).toEqual({
       preVerified: ['build', 'test_suite'],
-      kickedBack: ['test_suite', 'build_review', 'prd_audit', 'architecture_review_as_built'],
+      kickedBack: ['coverage_binding', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
       testSuite: expect.objectContaining({
         satisfied: false,
         reason: 'invalidated by file-changing rebase',
@@ -100,7 +100,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       testSuite: await readVerdict(projectRoot, 'test_suite'),
     }).toEqual({
       preVerified: ['build', 'test_suite'],
-      kickedBack: ['test_suite', 'build_review', 'prd_audit', 'architecture_review_as_built'],
+      kickedBack: ['coverage_binding', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
       testSuite: expect.objectContaining({
         satisfied: false,
         reason: 'invalidated by file-changing rebase',
@@ -130,6 +130,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       preVerified: ['build', 'test_suite'],
       kickedBack: [
         'build',
+        'coverage_binding',
         'build_review',
         'test_suite',
         'manual_test',

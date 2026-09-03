@@ -750,8 +750,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -766,8 +767,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, false);
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'prd_audit',
       'architecture_review_as_built',
     ]);
@@ -790,8 +792,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -828,8 +831,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // build is reverified, NOT in kickedBack (featureSurface uncomputable —
     // fail-closed set, includes the judged audits per the ADR amendment)
     expect(r.kickedBack).toEqual([
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -870,8 +874,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // fail-closed set, includes the judged audits per the ADR amendment)
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -914,8 +919,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // uncomputable here too — fail-closed set includes the judged audits)
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -958,8 +964,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // uncomputable here too, so the fail-closed set still includes the
     // judged audits (ADR amendment) regardless of ranManualTest.
     expect(r.kickedBack).toEqual([
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'prd_audit',
       'architecture_review_as_built',
     ]);
@@ -999,8 +1006,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // audits (featureSurface uncomputable, ADR amendment).
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'prd_audit',
       'architecture_review_as_built',
     ]);
@@ -1144,11 +1152,12 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     const byGate = Object.fromEntries(preserved.map((e) => [e.gate, e]));
     expect(Object.keys(byGate).sort()).toEqual(
-      ['prd_audit', 'architecture_review_as_built'].sort(),
+      ['coverage_binding', 'prd_audit', 'architecture_review_as_built'].sort(),
     );
     // prd_audit now has a document-input surface as well as feature runtime,
     // so its non-enumerable declaration uses the broad surface sentinel.
     expect(byGate.prd_audit.surface).toEqual(['<all runtime source>']);
+    expect(byGate.coverage_binding.surface).toEqual(['<all runtime source>']);
     // The as-built review remains feature-runtime scoped; its test path is
     // excluded from the declared source surface.
     expect(byGate.architecture_review_as_built.surface).toEqual(['src/feature.ts']);
@@ -1156,6 +1165,10 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // neither path is a declared story/PRD input, so classification still
     // preserves the audit despite retaining the diagnostic context.
     expect(byGate.prd_audit.deltaConsidered).toEqual([
+      'src/feature.test.ts',
+      'src/foreign.ts',
+    ]);
+    expect(byGate.coverage_binding.deltaConsidered).toEqual([
       'src/feature.test.ts',
       'src/foreign.ts',
     ]);
@@ -1287,6 +1300,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
       'build',
+      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -1326,8 +1340,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -1922,7 +1937,7 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     });
     if (outcome.kind === 'changed' && outcome.featureSurface) {
       expect(classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, true)).toEqual({
-        invalidated: ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
+        invalidated: ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
         preserved: [],
       });
     }
@@ -1995,8 +2010,9 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -2049,8 +2065,9 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -2138,8 +2155,9 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'test_suite',
+      'coverage_binding',
       'build_review',
+      'test_suite',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
