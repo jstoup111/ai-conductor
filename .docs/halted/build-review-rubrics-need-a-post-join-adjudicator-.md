@@ -1,21 +1,20 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-08-31T15:57:01.290Z
+Status: halted
 Slug: build-review-rubrics-need-a-post-join-adjudicator-
-Class: protected-artifact
-Halting step: test_suite
-Phase: BUILD
+Class: needs-human
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-build-review-rubrics-need-a-post-join-adjudicator-
-Head SHA: a3c9477640f95cf098be2ab5821f4bf415e6bfa0
-Halted at: 2026-08-31T15:14:37.833Z
+Head SHA: ae9c8c2b29066866eb3f6390a6a34338a5228e43
+Halted at: 2026-09-03T12:05:06.235Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Protected artifact changed: .docs/plans/build-review-rubrics-need-a-post-join-adjudicator-.md
-Feature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.
+Validation group "prd_audit" halted: as-built BLOCKED findings block is unparseable: As-built Blocking Findings table has a malformed header.; re-run the as-built review
+
+Blocking Findings parse fault: As-built Blocking Findings table has a malformed header.
 ```
