@@ -11,6 +11,7 @@ import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-a
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
+import { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
@@ -126,6 +127,26 @@ function deferralJudgement(): RemediationCaseJudgement {
   };
 }
 
+function mixedDeferralJudgement(): RemediationCaseJudgement {
+  return {
+    mode: 'case-v1', domain: 'build_review',
+    sourceOutcomes: [
+      { sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'deferred', caseRef: 'case-accepted' },
+      { sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'deferred', caseRef: 'case-live' },
+    ],
+    cases: [
+      {
+        caseRef: 'case-accepted', disposition: 'defer', priority: 'low', confidence: 'high', rationale: 'The first finding belongs outside this feature.',
+        effect: { kind: 'deferral', title: 'Track the first finding', body: 'The first changed test is insensitive.', exclusionRationale: 'It belongs outside this feature.' },
+      },
+      {
+        caseRef: 'case-live', disposition: 'defer', priority: 'low', confidence: 'high', rationale: 'The second finding belongs outside this feature.',
+        effect: { kind: 'deferral', title: 'Track the second finding', body: 'The second changed test is insensitive.', exclusionRationale: 'It belongs outside this feature.' },
+      },
+    ],
+  };
+}
+
 type RemediationCaseLifecycleEvent = Extract<ConductorEvent, {
   type: 'remediation_adjudication_started' | 'remediation_adjudication_completed' | 'remediation_adjudication_failed'
     | 'remediation_case_reconciled' | 'remediation_effect_reserved' | 'remediation_effect_applied'
@@ -201,19 +222,67 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(judge).not.toHaveBeenCalled();
   });
 
-  it('re-reads late exact operator authority before it can reserve an autonomous effect', async () => {
+  it('re-reads late exact operator authority before it can publish or charge an autonomous action', async () => {
     const root = await projectRoot();
-    const resolutions = [new Set<string>(), new Set<string>(), new Set([findingId])];
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const ledgerPath = join(root, '.pipeline/kickback-ledger.json');
+    const ledgerBefore = JSON.stringify({ version: 1, gates: {} });
+    await writeFile(ledgerPath, ledgerBefore, 'utf8');
+    const resolutions = [new Set<string>(), new Set<string>(), new Set<string>(), new Set([findingId])];
     const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift()!);
+    const chargeEffect = vi.fn(chargeBuildReviewEffectInLedger);
 
     const result = await coordinateBuildReviewAdjudication({
-      ...input(root, async () => actionJudgement()), resolveOperatorResolvedFindingIds,
+      ...input(root, async () => actionJudgement()), resolveOperatorResolvedFindingIds, chargeEffect,
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'pass' });
-    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(3);
-    // The historical order remains durable evidence, but its only case is
-    // resolved, so it is no longer BUILD-eligible.
+    expect(result).toMatchObject({ ok: true });
+    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(4);
+    expect(chargeEffect).not.toHaveBeenCalled();
+    await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(ledgerBefore);
+    await expect(access(join(root, '.pipeline/build-review-work-order.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('effects and charges only the unaccepted sibling when authority changes before action reservation', async () => {
+    const root = await projectRoot();
+    const resolutions = [
+      new Set<string>(), new Set<string>(), new Set<string>(),
+      new Set([acceptedSource.findingId]), new Set([acceptedSource.findingId]), new Set([acceptedSource.findingId]),
+    ];
+    const chargeEffect = vi.fn(chargeBuildReviewEffectInLedger);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => resolutions.shift() ?? new Set([acceptedSource.findingId]),
+      chargeEffect, generateId: sequentialIds('pre-action'),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(chargeEffect).toHaveBeenCalledTimes(1);
+    const order = JSON.parse(await readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8')) as {
+      cases: Array<{ tasks: Array<{ title: string }> }>;
+    };
+    expect(order.cases).toMatchObject([{ tasks: [{ title: 'Repair the second test' }] }]);
+  });
+
+  it('does not file a deferred issue for a source accepted before intake reservation', async () => {
+    const root = await projectRoot();
+    const resolutions = [
+      new Set<string>(), new Set<string>(), new Set<string>(), new Set<string>(),
+      new Set([acceptedSource.findingId]), new Set([acceptedSource.findingId]),
+    ];
+    const fileIssue = vi.fn(async () => ({ issueUrl: 'https://example.test/issues/1' }));
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedDeferralJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => resolutions.shift() ?? new Set([acceptedSource.findingId]),
+      tracker: { findIssueByEffectMarker: async () => undefined } as unknown as EffectMarkerTrackerClient,
+      repo: 'acme/conductor', fileIssue, generateId: sequentialIds('pre-deferral'),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    expect(fileIssue).toHaveBeenCalledTimes(1);
+    expect(fileIssue).toHaveBeenCalledWith(expect.objectContaining({ title: 'Track the second finding' }));
   });
 
   it('emits a failed deferral effect through the same coordinator event port', async () => {
@@ -323,7 +392,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   it('re-reads operator authority adjacent to the final exit and drops the obsolete route', async () => {
     const root = await projectRoot();
     // Unresolved through reservation and effects; accepted only at the exit.
-    const resolutions = [new Set<string>(), new Set<string>(), new Set<string>(), new Set([findingId])];
+    const resolutions = [new Set<string>(), new Set<string>(), new Set<string>(), new Set<string>(), new Set([findingId])];
     const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift() ?? new Set([findingId]));
 
     const result = await coordinateBuildReviewAdjudication({
@@ -331,7 +400,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
 
     expect(result).toMatchObject({ ok: true, route: 'pass' });
-    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(4);
+    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(5);
     const settled = await new RemediationCaseStore(root, feature).read();
     expect(settled).toMatchObject({
       ok: true,
@@ -345,7 +414,10 @@ describe('coordinateBuildReviewAdjudication', () => {
     const root = await projectRoot();
     // Both cases reach reservation; only the first source is accepted in the
     // final authority read immediately before the coordinator exits.
-    const resolutions = [new Set<string>(), new Set<string>(), new Set<string>(), new Set([acceptedSource.findingId])];
+    const resolutions = [
+      new Set<string>(), new Set<string>(), new Set<string>(), new Set<string>(),
+      new Set([acceptedSource.findingId]),
+    ];
     const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift() ?? new Set([acceptedSource.findingId]));
 
     const result = await coordinateBuildReviewAdjudication({

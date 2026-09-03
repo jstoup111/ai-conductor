@@ -400,6 +400,30 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     });
     expect(await uncovered.haltMarker()).toContain('build_review adjudication halted');
   });
+
+  it.each([
+    ['malformed ledger', 'not valid json {', 'kickback ledger is unreadable'],
+    ['version-incompatible ledger', JSON.stringify({ version: 2, gates: {} }), 'kickback ledger has an unsupported version'],
+  ])('halts before adjudication when the mechanical ledger is %s', async (_name, rawLedger, reason) => {
+    const charge = vi.fn(async () => ({
+      status: 'charged' as const,
+      exhausted: false,
+      cumulativeExhausted: false,
+      entry: { count: 1, cumulative: 1 },
+    }));
+    const run = await fixture({
+      infrastructure: 'uncovered', chargeEffect: charge as never,
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/kickback-ledger.json'), rawLedger, 'utf8');
+      },
+    });
+
+    expect(await run.haltMarker()).toContain(reason);
+    expect(run.remediateDispatches()).toBe(0);
+    expect(run.dispatched).not.toContain('build');
+    expect(charge).not.toHaveBeenCalled();
+    await expect(readFile(join(run.projectRoot, '.pipeline/kickback-ledger.json'), 'utf8')).resolves.toBe(rawLedger);
+  });
   it('does not leak a settled work order into a later unrelated BUILD dispatch', async () => {
     const first = await fixture();
     const order = await first.readJson('.pipeline/build-review-work-order.json');
