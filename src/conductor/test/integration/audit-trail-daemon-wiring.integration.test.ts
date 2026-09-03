@@ -120,7 +120,7 @@ describe('Acceptance: audit-trail dual-mode wiring — inline and daemon entry p
     await conductor.run();
 
     expect(stepsRun).not.toContain('coherence_check');
-    expect(stepsRun[0]).toBe('acceptance_specs');
+    expect(stepsRun[0]).toBe('coverage_binding');
     expect(stepsRun).not.toContain('explore'); // front-half never re-executed
 
     const records = await readRecords(dir);

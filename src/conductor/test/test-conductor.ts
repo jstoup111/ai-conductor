@@ -1,6 +1,7 @@
 import {
   Conductor as ProductionConductor,
   type ConductorOptions,
+  type StepRunner,
 } from '../src/engine/conductor.js';
 import type { FullSuitePassEvidence } from '../src/engine/full-suite-evidence.js';
 import { access, mkdir, writeFile } from 'node:fs/promises';

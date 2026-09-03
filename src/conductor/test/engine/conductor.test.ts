@@ -7970,7 +7970,6 @@ describe('engine/conductor', () => {
       coverage_binding: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
-      coverage_binding: 'done',
       acceptance_specs: 'done',
     } as ConductState);
 
