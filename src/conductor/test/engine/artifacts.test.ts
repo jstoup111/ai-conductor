@@ -491,7 +491,6 @@ describe('engine/artifacts', () => {
               criterion: 'S2.1',
               grade: 'FIXABLE',
               planTask: '3',
-              planTasks: ['3'],
               prdIds: [],
               evidence: 'Missing guard',
             },
@@ -516,12 +515,10 @@ describe('engine/artifacts', () => {
 
       if (!result.ok) throw new Error(result.error);
       expect(result.value.rejectedRows).toEqual([]);
-      expect(result.value.findings[0]).toMatchObject({
-        criterion: 'S4.1',
-        grade: 'PASS',
-        planTasks: ['3', '4'],
-      });
-      // No single parent is claimed when the row names several.
+      expect(result.value.findings[0]).toMatchObject({ criterion: 'S4.1', grade: 'PASS' });
+      // Every cited id was validated against the plan, but no single parent is
+      // claimed when the row names several — nothing downstream binds to a
+      // multi-task citation.
       expect(result.value.findings[0]).not.toHaveProperty('planTask');
     });
 

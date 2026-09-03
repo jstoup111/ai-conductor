@@ -4236,11 +4236,12 @@ export interface PrdAuditFinding {
   /**
    * The single cited plan task, present only when the row cites exactly one.
    * A FIXABLE row always has it — the parser rejects a multi-task FIXABLE
-   * citation, because its repair must bind to one parent task.
+   * citation, because its repair must bind to one parent task. A row citing
+   * several tasks validates every id against the plan and carries none here:
+   * nothing downstream binds to a multi-task citation, so exposing the list
+   * would add an API with no consumer.
    */
   planTask?: string;
-  /** Every plan task the row cites, in cited order. */
-  planTasks?: readonly string[];
   /** Intent FR associations from the table's PRD: column. */
   prdIds: readonly string[];
   evidence: string;
@@ -4563,7 +4564,6 @@ export function parsePrdAuditReport(
         criterion,
         grade: rawGrade as PrdAuditGrade,
         ...(planTask === undefined ? {} : { planTask }),
-        ...(planTasks === undefined ? {} : { planTasks: Object.freeze([...planTasks]) }),
         prdIds: Object.freeze([...(prdIndex === -1 ? '' : cells[prdIndex] ?? '').matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((match) => match[0].toUpperCase())),
         evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
       },
