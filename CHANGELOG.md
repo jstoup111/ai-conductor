@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.0.1] - 2026-09-02
+## [1.0.1] - 2026-09-03
 
 ### Added
 
@@ -36,6 +36,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A remediation halt caused by a planner gap-id mismatch now reports the halt rationale the planner recorded, instead of only the id mismatch. ([implementation PR #2129](https://github.com/jstoup111/ai-conductor/pull/2129)).
 - Build review distinguishes counterfactual test sensitivity from infrastructure failures. ([implementation PR #2109](https://github.com/jstoup111/ai-conductor/pull/2109)).
 - A plan task citing a placeholder artifact path such as `.docs/plans/<slug>.md` is no longer treated as targeting another feature's sealed artifact. ([implementation PR #2130](https://github.com/jstoup111/ai-conductor/pull/2130)).
+- A prd-audit Verdict Table row may cite every plan task its evidence spans, as a comma-separated list; a FIXABLE row must still cite exactly one owning task. ([implementation PR #2134](https://github.com/jstoup111/ai-conductor/pull/2134)).
+- Prevents approved ADRs without citable decisions from landing. ([implementation PR #2133](https://github.com/jstoup111/ai-conductor/pull/2133)).
 
 ## [1.0.0] - 2026-08-31
 
