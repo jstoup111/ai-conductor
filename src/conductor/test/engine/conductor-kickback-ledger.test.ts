@@ -58,7 +58,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       track: 'technical',
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
       conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
-      architecture_review: 'skipped', acceptance_specs: 'skipped', build: 'done',
+      architecture_review: 'skipped', acceptance_specs: 'skipped', coverage_binding: 'done', build: 'done',
        test_suite: 'done',
     });
 
@@ -112,6 +112,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       architecture_diagram: 'skipped',
       architecture_review: 'skipped',
       acceptance_specs: 'skipped',
+      coverage_binding: 'done',
       build: 'done',
        test_suite: 'done',
     });
@@ -354,7 +355,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       track: 'technical',
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
       conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
-      architecture_review: 'skipped', acceptance_specs: 'skipped',
+      architecture_review: 'skipped', acceptance_specs: 'skipped', coverage_binding: 'done',
        test_suite: 'done',
     });
     const calls: string[] = [];
@@ -402,7 +403,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       track: 'technical',
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
       conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
-      architecture_review: 'skipped', acceptance_specs: 'skipped',
+      architecture_review: 'skipped', acceptance_specs: 'skipped', coverage_binding: 'done',
        test_suite: 'done',
     });
     await writeKickbackLedger(dir, {
@@ -486,7 +487,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         track: 'technical',
         worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
         conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
-        architecture_review: 'skipped', acceptance_specs: 'skipped', build: 'done',
+        architecture_review: 'skipped', acceptance_specs: 'skipped', coverage_binding: 'done', build: 'done',
          test_suite: 'done',
       });
       await writeKickbackLedger(dir, { version: 1, gates: { build_review: initialEntry } });
@@ -851,7 +852,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         track: 'technical',
         worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
         conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
-        architecture_review: 'skipped', acceptance_specs: 'skipped',
+        architecture_review: 'skipped', acceptance_specs: 'skipped', coverage_binding: 'done',
          test_suite: 'done',
       });
       await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({

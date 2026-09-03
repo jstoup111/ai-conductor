@@ -7969,6 +7969,7 @@ describe('engine/conductor', () => {
       plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
+      coverage_binding: 'done',
       acceptance_specs: 'done',
     } as ConductState);
 
@@ -8007,6 +8008,7 @@ describe('engine/conductor', () => {
       plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
+      coverage_binding: 'done',
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
@@ -9013,6 +9015,7 @@ describe('engine/conductor', () => {
       plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
+      coverage_binding: 'done',
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'skipped',
@@ -10346,6 +10349,7 @@ describe('engine/conductor', () => {
         plan: 'done', coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
+        coverage_binding: 'done',
         acceptance_specs: 'done',
         build: 'done',
         build_review: 'done',
@@ -11252,6 +11256,7 @@ describe('engine/conductor', () => {
         plan: 'done', coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
+        coverage_binding: 'done',
         acceptance_specs: 'done',
       } as ConductState);
 
@@ -11479,6 +11484,7 @@ describe('engine/conductor', () => {
         plan: 'done', coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
+        coverage_binding: 'done',
         acceptance_specs: 'done',
         build: 'done',
         build_review: 'done',
@@ -14196,6 +14202,7 @@ describe('engine/conductor', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'pending' }] }),
       );
+      await writeState(statePath, { coverage_binding: 'done' } as ConductState);
 
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
       const conductor = new Conductor({
@@ -14320,6 +14327,9 @@ describe('engine/conductor', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify(passingBuildReviewAggregate()),
             );
+          } else if (step === 'coverage_binding') {
+            await _mkdir(join(dir, '.pipeline'), { recursive: true });
+            await _wf(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'test-feature', runId: 'test-run', status: 'disabled', entries: [] }));
           } else if (step === 'manual_test') {
             await _wf(
               join(dir, '.pipeline/manual-test-results.md'),
@@ -14790,6 +14800,10 @@ describe('build-step stall circuit breaker', () => {
       await mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
       await writeFile(full, content);
     }
+    // Stall tests own the build transition. Pre-resolve the intervening
+    // coverage-binding gate so its default-off envelope is not a prerequisite
+    // for every fixture here.
+    await writeState(statePath, { coverage_binding: 'done' } as ConductState);
   }
 
   // Writes the plan (Task 1..total headings), the status rows, AND a sidecar
@@ -15299,6 +15313,17 @@ describe('build-step stall circuit breaker', () => {
     vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
     const git: GitRunner = async (args, { cwd }) => {
       const result = await execa('git', args, { cwd });
+      // The conductor persists its own runtime state while this fixture is
+      // exercising the content-dirty exhaustion branch. Keep the probe scoped
+      // to the authored file the scenario owns.
+      if (args[0] === 'status' && args.includes('--porcelain')) {
+        return {
+          stdout: result.stdout
+            .split('\n')
+            .filter((line) => !line.includes('.pipeline/') && !line.includes('conduct-state.json'))
+            .join('\n'),
+        };
+      }
       return { stdout: result.stdout };
     };
     let headSha = 'base-head';
@@ -15354,7 +15379,7 @@ describe('build-step stall circuit breaker', () => {
       // Reset only the terminal state from the first scenario. The worktree
       // remains dirty, but this second run must use the existing no-progress
       // remediation route rather than the commit-movement escape.
-      await writeState(statePath, {} as ConductState);
+      await writeState(statePath, { coverage_binding: 'done' } as ConductState);
       await writeFile(join(dir, '.pipeline/HALT'), '');
       const noMovementEvents = new ConductorEventEmitter();
       const noMovementHalts: string[] = [];
@@ -15746,6 +15771,7 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
       await mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
       await writeFile(full, content);
     }
+    await writeState(statePath, { coverage_binding: 'done' } as ConductState);
 
     // Re-write the halt marker on every run() call so the predicate keeps
     // failing even after the conductor's stall handler clears it.

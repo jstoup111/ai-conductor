@@ -38,6 +38,7 @@ const FRONT_DONE: ConductState = {
   conflict_check: 'skipped',
   plan: 'done',
   coherence_check: 'done',
+  coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
@@ -114,6 +115,9 @@ describe('integration/gate-loop', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: taskIds.map((id) => ({ id, status: 'completed' })) }),
       );
+    } else if (step === 'coverage_binding') {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'add-foo', runId: 'test-run', status: 'disabled', entries: [] }));
     } else if (step === 'build_review') {
       // The build_review judgement gate's completion predicate requires a
       // fresh, valid PASS verdict at .pipeline/build-review.json (see
