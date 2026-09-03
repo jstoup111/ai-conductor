@@ -280,9 +280,25 @@ describe('coordinateBuildReviewAdjudication', () => {
       repo: 'acme/conductor', fileIssue, generateId: sequentialIds('pre-deferral'),
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
     expect(fileIssue).toHaveBeenCalledTimes(1);
     expect(fileIssue).toHaveBeenCalledWith(expect.objectContaining({ title: 'Track the second finding' }));
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled).toMatchObject({
+      ok: true,
+      state: { cases: expect.arrayContaining([
+        expect.objectContaining({
+          resolution: 'resolved',
+          sources: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(acceptedSource) })],
+          effect: expect.objectContaining({ kind: 'deferral', status: 'failed', diagnostic: 'retired by operator acceptance' }),
+        }),
+        expect.objectContaining({
+          resolution: 'open',
+          sources: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(liveSource) })],
+          effect: expect.objectContaining({ kind: 'deferral', status: 'applied' }),
+        }),
+      ]) },
+    });
   });
 
   it('emits a failed deferral effect through the same coordinator event port', async () => {

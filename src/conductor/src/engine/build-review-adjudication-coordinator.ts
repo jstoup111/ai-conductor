@@ -327,12 +327,18 @@ export async function coordinateBuildReviewAdjudication(input: {
     | { readonly ok: true; readonly cases: readonly import('./remediation-case-store.js').RemediationCaseRecord[] }
     | { readonly ok: false; readonly reason: string }
   >(async (state) => {
-    const cases = state.cases.map((record) =>
-      record.resolution === 'open' && record.sources.length > 0 &&
-      record.sources.every((source) => acceptedSourceIds.has(source.sourceId))
-        ? { ...record, resolution: 'resolved' as const }
-        : record,
-    );
+    const cases = state.cases.map((record) => {
+      if (record.resolution !== 'open' || record.sources.length === 0 ||
+        !record.sources.every((source) => acceptedSourceIds.has(source.sourceId))) return record;
+      // An accepted source never completed this reserved effect. Preserve the
+      // durable row as a retired failure rather than falsely recording work as
+      // applied; the reducer ignores resolved rows through the shared open-case
+      // vocabulary.
+      const effect = record.effect.kind !== 'none' && record.effect.status === 'reserved'
+        ? { id: record.effect.id, kind: record.effect.kind, status: 'failed' as const, diagnostic: 'retired by operator acceptance' }
+        : record.effect;
+      return { ...record, resolution: 'resolved' as const, effect };
+    });
     const eligible = cases.filter(isBuildEligibleActionCase);
     if (eligible.length === 0) return { value: { ok: true as const, cases }, nextState: { ...state, cases } };
     const workOrderCases = [] as Array<{ caseId: string; priority: 'critical' | 'high' | 'medium' | 'low'; tasks: readonly { readonly title: string }[] }>;

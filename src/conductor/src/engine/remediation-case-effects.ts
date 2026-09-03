@@ -31,8 +31,13 @@ type DeferralCase = RemediationCaseRecord & {
   readonly effect: Extract<RemediationCaseRecord['effect'], { readonly kind: 'deferral' }>;
 };
 
+/** The shared lifecycle vocabulary for reducers and effect execution. */
+export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
+  return record.resolution === 'open';
+}
+
 function isActionCase(record: RemediationCaseRecord): record is ActionCase {
-  return record.resolution === 'open' && record.effect.kind === 'action';
+  return isOpenRemediationCase(record) && record.effect.kind === 'action';
 }
 
 /** The one durable vocabulary for action cases that may enter a BUILD retry. */
@@ -99,12 +104,17 @@ export async function applyBuildReviewActionEffects(input: {
     // reported `already-charged`, and the new route was never counted against
     // the convergence bound.
     const orderedPendingIds = new Set(pending.map((record) => record.effect.id));
+    // This selection is the effect executor's lease-local authority. A
+    // reservation from an earlier aborted lap is durable evidence, not current
+    // work, and must remain untouched by either terminal mutation below.
+    const isSettling = (record: RemediationCaseRecord): record is ActionCase =>
+      record.effect.kind === 'action' && record.effect.status === 'reserved' && orderedPendingIds.has(record.effect.id);
     const primaryEffectId = orderBuildReviewActionCases(cases)
       .map((row) => actionCases.find((record) => record.id === row.caseId)!.effect.id)
       .find((effectId) => orderedPendingIds.has(effectId))!;
     const workOrderId = input.workOrderId?.() ?? randomUUID();
     const failPending = (diagnostic: string): RemediationCaseStoreState => replaceCases(state, (record) =>
-      record.effect.kind === 'action' && record.effect.status === 'reserved'
+      isSettling(record)
         ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'failed', diagnostic } }
         : record,
     );
@@ -135,7 +145,7 @@ export async function applyBuildReviewActionEffects(input: {
         `count ${charged.entry.count}, cumulative ${charged.entry.cumulative}`;
       return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
     }
-    const next = replaceCases(state, (record) => record.effect.kind === 'action' && record.effect.status === 'reserved'
+    const next = replaceCases(state, (record) => isSettling(record)
       ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'applied', workOrderId } }
       : record);
     return { value: { ok: true as const, status: 'applied' as const, effectId: primaryEffectId }, nextState: next };
