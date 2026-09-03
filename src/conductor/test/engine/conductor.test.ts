@@ -13357,19 +13357,10 @@ describe('engine/conductor', () => {
         verifyArtifacts: true,
       }).run();
 
-      const conductorSource = await readFile(
-        join(process.cwd(), 'src/engine/conductor.ts'),
-        'utf-8',
-      );
-      const completionCheckArguments = [
-        ...conductorSource.matchAll(/stepHasCompletionCheck\(([^)]*)\)/g),
-      ].map((match) => match[1].replace(/\s+/g, ' ').trim());
-
       expect({
         stepsRun,
         customFailure: failed.find((event) => event.step === customStep),
         freshness,
-        completionCheckArguments,
       }).toEqual({
         stepsRun: [customStep],
         customFailure: {
@@ -13378,12 +13369,6 @@ describe('engine/conductor', () => {
             'Step \'maintain-documentation\' completed but completion check failed: configured completion artifact ".pipeline/maintain-documentation-pass" is missing — maintain-documentation must write it after a passing review',
         },
         freshness: [{ step: customStep, floorSource: 'attempt', fresh: true }],
-        completionCheckArguments: [
-          'step: StepName, config: HarnessConfig',
-          'step.name, this.config',
-          'step.name, this.config',
-          'step.name, this.config',
-        ],
       });
     });
 

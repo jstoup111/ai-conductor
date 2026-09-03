@@ -35,9 +35,16 @@ vi.mock('../../src/engine/rebase.js', async () => {
   const actual = await vi.importActual('../../src/engine/rebase.js');
   return { ...actual, performRebase: vi.fn().mockResolvedValue({ kind: 'noop' }) };
 });
+vi.mock('../../src/engine/artifacts.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/engine/artifacts.js')>(
+    '../../src/engine/artifacts.js',
+  );
+  return { ...actual, resolveArtifactFiles: vi.fn(actual.resolveArtifactFiles) };
+});
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import { resolveArtifactFiles } from '../../src/engine/artifacts.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, HarnessConfig, StepName } from '../../src/types/index.js';
@@ -104,12 +111,18 @@ describe('custom step post-success artifact review gate', () => {
     it(`${mode} mode advances a completion-marker custom step without artifact review`, async () => {
       const calls: StepName[] = [];
       const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
+      const failures: string[] = [];
+      const events = new ConductorEventEmitter();
+      events.on('step_failed', (event) => {
+        if (event.type === 'step_failed') failures.push(event.error);
+      });
       const runner = markerWritingRunner(calls);
+      vi.mocked(resolveArtifactFiles).mockClear();
 
       await new Conductor({
         stateFilePath: statePath,
         stepRunner: runner,
-        events: new ConductorEventEmitter(),
+        events,
         projectRoot: dir,
         mode,
         verifyArtifacts: true,
@@ -123,11 +136,15 @@ describe('custom step post-success artifact review gate', () => {
       const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8').catch(() => undefined);
       expect({
         reviewCalls: onReviewArtifacts.mock.calls.length,
+        artifactResolutionCalls: vi.mocked(resolveArtifactFiles).mock.calls.length,
+        failures,
         customStep: state.ok ? state.value[CUSTOM_STEP] : undefined,
         advancedToNextStep: calls.includes('post-documentation' as StepName),
         halt,
       }).toEqual({
         reviewCalls: 0,
+        artifactResolutionCalls: 0,
+        failures: [],
         customStep: 'done',
         advancedToNextStep: true,
         halt: undefined,
