@@ -54,6 +54,29 @@ describe('parseCoherenceWaiver', () => {
 });
 
 describe('evaluateCoherenceWaiver', () => {
+  it('waives a criterion quote-not-done-when coverage gap', async () => {
+    const gapId = 'criterion:quote-not-done-when:2';
+    const gaps = [gap(gapId)];
+    const changedFiles: CoherenceWaiverChangedFile[] = [
+      { status: 'A', path: WAIVER_PATH },
+    ];
+    const text =
+      `Waives: ${gapId}\n` +
+      'Rationale: this coverage claim is deliberately deferred for follow-up review.\n';
+
+    expect(parseCoherenceWaiver(text, gaps.map(({ gapId: known }) => known))).toEqual({
+      gapIds: [gapId],
+      rationale: 'this coverage claim is deliberately deferred for follow-up review.',
+    });
+
+    const result = await evaluateCoherenceWaiver({
+      gaps,
+      changedFiles,
+      readText: async (path) => (path === WAIVER_PATH ? text : null),
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
   it('passes with waiver when the waiver is fresh-in-diff and covers every gap id', async () => {
     const gaps = [gap('outcome-2'), gap('story-4')];
     const changedFiles: CoherenceWaiverChangedFile[] = [
