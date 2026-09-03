@@ -236,16 +236,25 @@ export async function coordinateBuildReviewAdjudication(input: {
     }
   }
 
+  // The action reservation is an irreversible boundary: publishing the order
+  // and charging its stable effect happen under its lease. Re-read operator
+  // authority immediately before entering it so a finding accepted while case
+  // reconciliation was settling cannot consume a route or a budget.
+  try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+  const preActionOperatorRoute = routeIfAllOperatorResolved(resolved);
+  if (preActionOperatorRoute) return preActionOperatorRoute;
+  const liveSourceIdsBeforeAction = liveSourceIdsFor(resolved);
   const tasksByCaseId = new Map<string, readonly { readonly title: string }[]>();
   for (const proposed of admitted) {
     if (proposed.case.disposition !== 'act') continue;
+    if (proposed.sources.every((source) => !liveSourceIdsBeforeAction.has(source.sourceId))) continue;
     const caseId = caseIdsByRef.get(proposed.case.caseRef);
     if (!caseId || proposed.case.effect.kind !== 'action') return fail('action case identity was not reconciled');
     tasksByCaseId.set(caseId, proposed.case.effect.tasks);
   }
   if (tasksByCaseId.size > 0) {
     const pendingActionEffects = reconciled.state.cases.filter((record) =>
-      record.effect.kind === 'action' && record.effect.status === 'reserved',
+      record.effect.kind === 'action' && record.effect.status === 'reserved' && tasksByCaseId.has(record.id),
     );
     const action = await applyBuildReviewActionEffects({
       projectRoot: input.projectRoot, feature: input.feature, store, tasksByCaseId, chargeInput: input.chargeInput,
@@ -272,8 +281,13 @@ export async function coordinateBuildReviewAdjudication(input: {
     }
   }
   if (input.tracker && input.repo && input.fileIssue) {
+    // Deferral reservation files a real tracker issue, so it receives its own
+    // adjacent authority read rather than relying on the action boundary.
+    try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+    const liveSourceIdsBeforeDeferral = liveSourceIdsFor(resolved);
     for (const proposed of admitted) {
       if (proposed.case.disposition !== 'defer' || proposed.case.effect.kind !== 'deferral') continue;
+      if (proposed.sources.every((source) => !liveSourceIdsBeforeDeferral.has(source.sourceId))) continue;
       const caseId = caseIdsByRef.get(proposed.case.caseRef);
       if (!caseId) return fail('deferral case identity was not reconciled');
       const deferred = await applyBuildReviewDeferralEffect({

@@ -12,6 +12,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 import { rename } from 'node:fs/promises';
 import {
   bumpMechanicalFaults,
+  bumpMechanicalFaultsInLedger,
   bumpKickbackGate,
   bumpKickbackGateInLedger,
   chargeBuildReviewEffect,
@@ -796,6 +797,22 @@ describe('kickback-ledger', () => {
         cumulative: 0,
         mechanicalFaults: 0,
       });
+    });
+
+    it('keeps the legacy mechanical caller fail-open when its ledger is unreadable', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+      await writeFile(ledgerPath, 'not valid json {', 'utf8');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        await expect(bumpMechanicalFaultsInLedger(dir, 'build_review')).resolves.toMatchObject({ mechanicalFaults: 1 });
+        await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+          gates: { build_review: { mechanicalFaults: 1 } },
+        });
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 });
