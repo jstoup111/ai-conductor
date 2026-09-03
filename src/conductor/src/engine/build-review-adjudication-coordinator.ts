@@ -16,7 +16,7 @@ import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, isBuildE
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
-import { RemediationCaseStore } from './remediation-case-store.js';
+import { RemediationCaseStore, type RemediationCaseRecord } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
@@ -29,6 +29,15 @@ type RemediationCaseLifecycleEvent = Extract<ConductorEvent, {
     | 'remediation_case_reconciled' | 'remediation_effect_reserved' | 'remediation_effect_applied'
     | 'remediation_effect_failed' | 'remediation_semantic_repeat_halt';
 }>;
+
+type OperatorRetirementTransition = {
+  readonly caseId: string;
+  readonly retiredEffect?: {
+    readonly effectId: string;
+    readonly effectKind: 'action' | 'deferral';
+    readonly reason: 'retired by operator acceptance';
+  };
+};
 
 export type BuildReviewAdjudicationCoordinatorResult =
   | { readonly ok: true; readonly route: 'pass' | 'build' | 'mechanical-retry' | 'halt'; readonly detail: string; readonly trace: string; readonly remainingMechanical: boolean }
@@ -203,9 +212,14 @@ export async function coordinateBuildReviewAdjudication(input: {
     // retires autonomous rows it covers, then keeps the published order bound to
     // a surviving applied action effect.
     const neutralized = await store.mutate<
-      | { readonly ok: true; readonly cases: readonly import('./remediation-case-store.js').RemediationCaseRecord[] }
+      | {
+        readonly ok: true;
+        readonly cases: readonly RemediationCaseRecord[];
+        readonly retirementTransitions: readonly OperatorRetirementTransition[];
+      }
       | { readonly ok: false; readonly reason: string }
     >(async (state) => {
+      const retirementTransitions: OperatorRetirementTransition[] = [];
       const cases = state.cases.map((record) => {
         if (record.resolution !== 'open' || record.sources.length === 0 ||
           !record.sources.every((source) => acceptedSourceIds.has(source.sourceId))) return record;
@@ -213,14 +227,23 @@ export async function coordinateBuildReviewAdjudication(input: {
         // durable row as a retired failure rather than falsely recording work as
         // applied; the reducer ignores resolved rows through the shared open-case
         // vocabulary.
+        let retiredEffect: OperatorRetirementTransition['retiredEffect'];
         const effect = record.effect.kind !== 'none' && record.effect.status === 'reserved'
-          ? { id: record.effect.id, kind: record.effect.kind, status: 'failed' as const, diagnostic: 'retired by operator acceptance' }
+          ? (() => {
+            retiredEffect = {
+              effectId: record.effect.id,
+              effectKind: record.effect.kind,
+              reason: 'retired by operator acceptance',
+            };
+            return { id: record.effect.id, kind: record.effect.kind, status: 'failed' as const, diagnostic: retiredEffect.reason };
+          })()
           : record.effect;
+        retirementTransitions.push({ caseId: record.id, ...(retiredEffect ? { retiredEffect } : {}) });
         return { ...record, resolution: 'resolved' as const, effect };
       });
       const eligible = cases.filter(isBuildEligibleActionCase);
       if (eligible.length === 0 || !options.republishWorkOrder) {
-        return { value: { ok: true as const, cases }, nextState: { ...state, cases } };
+        return { value: { ok: true as const, cases, retirementTransitions }, nextState: { ...state, cases } };
       }
       const workOrderCases = [] as Array<{ caseId: string; priority: 'critical' | 'high' | 'medium' | 'low'; tasks: readonly { readonly title: string }[] }>;
       for (const record of eligible) {
@@ -236,11 +259,23 @@ export async function coordinateBuildReviewAdjudication(input: {
         version: 'v1', domain: 'build_review', feature: input.feature, effectId: primary.effect.id, cases: orderedCases,
       });
       if (!published.ok) return { value: { ok: false as const, reason: `work-order ${published.reason}` } };
-      return { value: { ok: true as const, cases }, nextState: { ...state, cases } };
+      return { value: { ok: true as const, cases, retirementTransitions }, nextState: { ...state, cases } };
     });
     if (!neutralized.ok) return fail(`case store ${neutralized.reason}`);
     if (!neutralized.value.ok) return fail(neutralized.value.reason);
     const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: neutralized.value.cases, mechanical: input.mechanical });
+    for (const retirement of neutralized.value.retirementTransitions) {
+      await input.emit?.({
+        type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
+        caseId: retirement.caseId, resolution: 'resolved',
+      });
+      if (retirement.retiredEffect) {
+        await input.emit?.({
+          type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
+          caseId: retirement.caseId, ...retirement.retiredEffect,
+        });
+      }
+    }
     await input.emit?.({
       type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
       caseIds: neutralized.value.cases.map((record) => record.id),

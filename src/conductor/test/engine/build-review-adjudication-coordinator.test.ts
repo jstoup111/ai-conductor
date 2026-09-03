@@ -238,9 +238,11 @@ describe('coordinateBuildReviewAdjudication', () => {
     const resolutions = [new Set<string>(), new Set<string>(), new Set<string>(), new Set([findingId])];
     const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift()!);
     const chargeEffect = vi.fn(chargeBuildReviewEffectInLedger);
+    const events: RemediationCaseLifecycleEvent[] = [];
 
     const result = await coordinateBuildReviewAdjudication({
       ...input(root, async () => actionJudgement()), resolveOperatorResolvedFindingIds, chargeEffect,
+      emit: async (event) => { events.push(event); },
     });
 
     expect(result).toMatchObject({ ok: true });
@@ -261,6 +263,18 @@ describe('coordinateBuildReviewAdjudication', () => {
         }],
       },
     });
+    expect(events.map((event) => event.type)).toEqual([
+      'remediation_adjudication_started', 'remediation_case_reconciled', 'remediation_effect_reserved',
+      'remediation_case_reconciled', 'remediation_effect_failed', 'remediation_adjudication_completed',
+    ]);
+    expect(events.slice(-3)).toEqual([
+      expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-durable', resolution: 'resolved' }),
+      expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: 'case-durable', effectId: 'effect-durable', effectKind: 'action',
+        reason: 'retired by operator acceptance',
+      }),
+      expect.objectContaining({ type: 'remediation_adjudication_completed' }),
+    ]);
   });
 
   it('effects and charges only the unaccepted sibling when authority changes before action reservation', async () => {
@@ -479,6 +493,50 @@ describe('coordinateBuildReviewAdjudication', () => {
       effectId: (settled.state.cases[1]!.effect as { id: string }).id,
       cases: [{ caseId: settled.state.cases[1]!.id, priority: 'high', tasks: [{ title: 'Repair the second test' }] }],
     });
+  });
+
+  it('emits retirement occurrences before completion when partial acceptance republishes the surviving action order', async () => {
+    const root = await projectRoot();
+    // The accepted case remains reserved at the action boundary; the live
+    // sibling applies, then finalization retires the accepted transition and
+    // republishes the live work order.
+    const resolutions = [
+      new Set<string>(), new Set<string>(), new Set<string>(),
+      new Set([acceptedSource.findingId]), new Set([acceptedSource.findingId]),
+    ];
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => resolutions.shift() ?? new Set([acceptedSource.findingId]),
+      generateId: sequentialIds('partial-retirement'), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled.ok).toBe(true);
+    if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
+    const accepted = settled.state.cases.find((record) =>
+      record.sources.some((source) => source.sourceId === buildReviewAdjudicationSourceId(acceptedSource)),
+    );
+    expect(accepted).toMatchObject({ resolution: 'resolved', effect: { status: 'failed' } });
+    if (!accepted || accepted.effect.kind === 'none') throw new Error('accepted case was not retired with an effect');
+    expect(events.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === accepted.id && event.resolution === 'resolved')).toEqual([
+      expect.objectContaining({ type: 'remediation_case_reconciled', caseId: accepted.id, resolution: 'resolved' }),
+    ]);
+    expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted.id)).toEqual([
+      expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: accepted.id, effectId: accepted.effect.id, effectKind: 'action',
+        reason: 'retired by operator acceptance',
+      }),
+    ]);
+    const completionIndex = events.findIndex((event) => event.type === 'remediation_adjudication_completed');
+    expect(events.findIndex((event) => event.type === 'remediation_case_reconciled' && event.caseId === accepted.id && event.resolution === 'resolved')).toBeLessThan(completionIndex);
+    expect(events.findIndex((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted.id)).toBeLessThan(completionIndex);
+    const order = JSON.parse(await readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')) as {
+      cases: Array<{ caseId: string }>;
+    };
+    expect(order.cases).toMatchObject([{ caseId: settled.state.cases.find((record) => record.id !== accepted.id)!.id }]);
   });
   it.each([
     ['explicit provider binding', true],
