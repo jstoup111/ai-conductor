@@ -1692,29 +1692,38 @@ describe('advisoryDuplicateClaimWarn (fail-open, reuses overlap-scan.ts)', () =>
   });
 });
 
-describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-retroactivity)', () => {
+describe('resolveRequiredLayers (tier gating, layer degradation, no-retroactivity)', () => {
   const WITH_COHERENCE = ['.docs/coherence/my-plan.md'];
   const LEGACY = ['.docs/plan/my-plan.md', 'src/foo.ts'];
 
-  it('disengages for tier S BEFORE any other check — even with a legacy change set and no outcomes', () => {
+  it('engages tier S with only the plan-carried criterion layer before legacy-change-set handling', () => {
     const result = resolveRequiredLayers('/wt', 'S', 'product', [], LEGACY);
-    expect(result).toEqual({ engaged: false, reason: 'tier-exempt' });
+    expect(result).toEqual({
+      engaged: true,
+      layers: new Set(['criterion']),
+      carrier: 'plan',
+    });
   });
 
-  it('disengages for tier S even when the change set carries a coherence artifact', () => {
+  it('keeps tier S on the plan carrier even when the change set carries a coherence artifact', () => {
     const result = resolveRequiredLayers('/wt', 'S', 'technical', ['outcome bullet'], WITH_COHERENCE);
-    expect(result.engaged).toBe(false);
-    if (result.engaged) return;
-    expect(result.reason).toBe('tier-exempt');
+    expect(result.engaged).toBe(true);
+    if (!result.engaged) return;
+    expect(result.carrier).toBe('plan');
+    expect(result.layers).toEqual(new Set(['criterion']));
   });
 
-  it('disengages tier S before deriving ADR requirements', () => {
+  it('keeps tier S restricted to criterion even when outcomes and ADRs are present', () => {
     expect(
       resolveRequiredLayers('/wt', 'S', 'product', [], [
         '.docs/coherence/foo.md',
         '.docs/decisions/adr-foo.md',
       ]),
-    ).toEqual({ engaged: false, reason: 'tier-exempt' });
+    ).toEqual({
+      engaged: true,
+      layers: new Set(['criterion']),
+      carrier: 'plan',
+    });
   });
 
   it('technical track marker skips the FR layer but keeps story/orphan-task/coverage-table enforced', () => {
@@ -1799,12 +1808,80 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
     expect(result).toEqual({
       engaged: true,
       layers: new Set(['fr', 'story', 'criterion', 'orphan-task', 'coverage-table']),
+      carrier: 'coherence',
     });
   });
 
-  it('L-tier engages normally too', () => {
+  it('pins the unchanged L-tier layer set on the coherence carrier', () => {
     const result = resolveRequiredLayers('/wt', 'L', 'product', [], WITH_COHERENCE);
-    expect(result.engaged).toBe(true);
+    expect(result).toEqual({
+      engaged: true,
+      layers: new Set(['fr', 'story', 'criterion', 'orphan-task', 'coverage-table']),
+      carrier: 'coherence',
+    });
+  });
+});
+
+describe('runCoherenceGate tier-S plan carrier', () => {
+  const storiesText = `# Stories
+
+## Story 1: Widget
+
+### Happy Path
+- Given a widget, when it ships, then it arrives
+`;
+  const criterion = 'Story 1 happy: Given a widget, when it ships, then it arrives';
+
+  async function createWorktree(): Promise<{ canonicalPath: string; worktreePath: string }> {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-tier-s-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(canonicalPath, 'README.md'), '# fixture\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed fixture']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+    return { canonicalPath, worktreePath };
+  }
+
+  function plan(disposition: string): string {
+    return `# Plan
+
+### Task 1: Ship widget
+**Story:** Story 1
+**Type:** happy-path
+
+**Done when:**
+- Ship the widget with arrival tracking.
+
+## Coverage Check
+
+| Criterion | Task ids | Quote | Disposition |
+| --- | --- | --- | --- |
+| ${criterion} | 1 | "Ship the widget with arrival tracking." | ${disposition} |
+`;
+  }
+
+  it('passes a fully grounded plan-carried claim without a coherence artifact', async () => {
+    const { canonicalPath, worktreePath } = await createWorktree();
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText, planText: plan('diff-local'), prdText: null,
+      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).resolves.toBeUndefined();
+  });
+
+  it('rejects a negative disposition in a plan-carried tier-S claim', async () => {
+    const { canonicalPath, worktreePath } = await createWorktree();
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText, planText: plan('outside-diff'), prdText: null,
+      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow('criterion:disposition-negative:1');
   });
 });
 

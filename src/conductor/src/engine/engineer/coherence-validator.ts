@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import {
   isSeparatorRow,
   parseCoherenceArtifact,
+  parsePlanCoverageCriterionRows,
   splitRow,
   type CoherenceRow,
   type CriterionCoherenceRow,
@@ -1386,6 +1387,8 @@ export type RequiredLayersResult =
       /** The gate runs; only the layers listed here are enforced. */
       engaged: true;
       layers: ReadonlySet<CoherenceRequiredLayer>;
+      /** The committed artifact that carries the required rows. */
+      carrier: 'coherence' | 'plan';
     };
 
 /**
@@ -1419,10 +1422,10 @@ export function resolveRequiredLayers(
 ): RequiredLayersResult {
   void worktree;
 
-  // 1. Tier exemption, checked first and unconditionally: never let a later
-  // check (missing artifact, legacy change set) misclassify an exempt spec.
+  // 1. Tier S carries criterion claims in its plan, so it engages only that
+  // layer before the M/L-only legacy coherence-artifact rule.
   if (tier === 'S') {
-    return { engaged: false, reason: 'tier-exempt' };
+    return { engaged: true, layers: new Set(['criterion']), carrier: 'plan' };
   }
 
   // 2. No-retroactivity trigger: a legacy change set (no coherence artifact
@@ -1455,7 +1458,7 @@ export function resolveRequiredLayers(
     layers.add('adr');
   }
 
-  return { engaged: true, layers };
+  return { engaged: true, layers, carrier: 'coherence' };
 }
 
 // --- `runCoherenceGate` facade (Task 16) ───────────────────────────────────
@@ -1566,27 +1569,33 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
   const required = resolveRequiredLayers(worktreePath, tier, track, outcomeBullets, ideaFiles);
   if (!required.engaged) return;
 
-  // Parse the committed coherence artifact (fail-closed on missing/empty/unparseable).
-  const coherenceRelPath = `.docs/coherence/${planStem}.md`;
-  const coherenceAbsPath = join(worktreePath, coherenceRelPath);
-  guard.assertWriteAllowed(coherenceAbsPath);
-  let coherenceText: string | null;
-  try {
-    coherenceText = await readFile(coherenceAbsPath, 'utf-8');
-  } catch {
-    coherenceText = null;
-  }
+  let rows: CoherenceRow[];
+  if (required.carrier === 'plan') {
+    rows = parsePlanCoverageCriterionRows(planText ?? '');
+  } else {
+    // Parse the committed coherence artifact (fail-closed on missing/empty/unparseable).
+    const coherenceRelPath = `.docs/coherence/${planStem}.md`;
+    const coherenceAbsPath = join(worktreePath, coherenceRelPath);
+    guard.assertWriteAllowed(coherenceAbsPath);
+    let coherenceText: string | null;
+    try {
+      coherenceText = await readFile(coherenceAbsPath, 'utf-8');
+    } catch {
+      coherenceText = null;
+    }
 
-  const parsed = parseCoherenceArtifact(coherenceText);
-  if (!parsed.ok) {
-    const detail = parsed.detail
-      ? ` Detail: line ${parsed.detail.line}: ${parsed.detail.message}.`
-      : '';
-    throw new Error(
-      `landSpec: coherence gate: ${parsed.reason} at "${coherenceRelPath}". ` +
-        detail +
-        'Run /coherence-check to author the traceability record before landing.',
-    );
+    const parsed = parseCoherenceArtifact(coherenceText);
+    if (!parsed.ok) {
+      const detail = parsed.detail
+        ? ` Detail: line ${parsed.detail.line}: ${parsed.detail.message}.`
+        : '';
+      throw new Error(
+        `landSpec: coherence gate: ${parsed.reason} at "${coherenceRelPath}". ` +
+          detail +
+          'Run /coherence-check to author the traceability record before landing.',
+      );
+    }
+    rows = parsed.rows;
   }
 
   const git = makeGitRunner(worktreePath);
@@ -1630,7 +1639,7 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
 
   // Fabricated-citation fail-closed reject — never waivable (an evidentiary
   // defect, not a coverage gap).
-  const crossCheck = crossCheckIds(parsed.rows, {
+  const crossCheck = crossCheckIds(rows, {
     storiesText,
     planText,
     prdText,
@@ -1649,8 +1658,9 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
   // A stories file with no extractable criteria is malformed evidence, not a
   // coverage gap. Reject it before aggregation so a coherence waiver cannot
   // turn a failed criterion check into a successful land.
+  let criterionResult: CriterionCoverageResult | undefined;
   if (required.layers.has('criterion')) {
-    const criterionResult = checkCriterionCoverage(parsed.rows, storiesText, planText);
+    criterionResult = checkCriterionCoverage(rows, storiesText, planText);
     if (!criterionResult.ok && criterionResult.reason === 'unparseable-stories') {
       throw new Error(
         'landSpec: coherence gate: criterion:stories-unparseable — stories file has no ' +
@@ -1662,25 +1672,38 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
   const effectivePrdText = required.layers.has('fr') ? prdText : null;
   const effectiveOutcomeBullets = required.layers.has('outcome') ? outcomeBullets : [];
 
-  const coverage = validateCoherence({
-    rows: parsed.rows,
-    adrIds,
-    requiredLayers: required.layers,
-    outcomeBullets: [...effectiveOutcomeBullets],
-    prdText: effectivePrdText,
-    storiesText,
-    planText,
-  });
+  const coverage = required.carrier === 'coherence'
+    ? validateCoherence({
+        rows,
+        adrIds,
+        requiredLayers: required.layers,
+        outcomeBullets: [...effectiveOutcomeBullets],
+        prdText: effectivePrdText,
+        storiesText,
+        planText,
+      })
+    : undefined;
 
-  const gaps: CoherenceGap[] = coverage.ok ? [] : [...coverage.gaps];
+  const gaps: CoherenceGap[] = coverage
+    ? (coverage.ok ? [] : [...coverage.gaps])
+    : (!criterionResult || criterionResult.ok
+      ? []
+      : criterionResult.gaps.map((gap) => ({
+          layer: 'criterion' as const,
+          gapId: gap.gapId,
+          artifact: 'stories / plan',
+          item: gap.detail,
+        })));
 
   const defaultBranch = await deriveDefaultBranch(canonicalPath);
-  const duplicate = await scanDuplicateClaim(worktreePath, defaultBranch, sourceRef, {
-    git,
-    excludeSlug: planStem,
-  });
-  if (!duplicate.ok) {
-    gaps.push(duplicate.gap);
+  if (required.carrier === 'coherence') {
+    const duplicate = await scanDuplicateClaim(worktreePath, defaultBranch, sourceRef, {
+      git,
+      excludeSlug: planStem,
+    });
+    if (!duplicate.ok) {
+      gaps.push(duplicate.gap);
+    }
   }
 
   // Advisory open-PR overlap scan (Story 8, "Done When" #3): never blocks —
