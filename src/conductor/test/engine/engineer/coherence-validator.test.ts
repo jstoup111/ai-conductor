@@ -1883,6 +1883,75 @@ describe('runCoherenceGate tier-S plan carrier', () => {
       guard: new AuthoringGuard(worktreePath),
     })).rejects.toThrow('criterion:disposition-negative:1');
   });
+
+  it('rejects every extracted criterion omitted from a tier-S plan carrier', async () => {
+    const { canonicalPath, worktreePath } = await createWorktree();
+    const omittedStories = `${storiesText}
+### Negative Path
+- Given a widget, when its tracking fails, then shipping is rejected
+`;
+    const negativeCriterion =
+      'Story 1 negative: Given a widget, when its tracking fails, then shipping is rejected';
+
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText: omittedStories,
+      planText: plan('diff-local').replace(/\n## Coverage Check[\s\S]*/, '\n'), prdText: null,
+      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow(new RegExp(
+      `criterion:omitted:1[\\s\\S]*${criterion}[\\s\\S]*criterion:omitted:2[\\s\\S]*${negativeCriterion}`,
+    ));
+  });
+
+  it('rejects a tier-S quote found only outside the cited task Done when block', async () => {
+    const { canonicalPath, worktreePath } = await createWorktree();
+    const stepsOnlyQuote = 'Record the arrival details before completion.';
+    const stepsOnlyPlan = `# Plan
+
+### Task 1: Ship widget
+**Story:** Story 1
+**Type:** happy-path
+
+${stepsOnlyQuote}
+
+**Done when:**
+- Ship the widget with arrival tracking.
+
+## Coverage Check
+
+| Criterion | Task ids | Quote | Disposition |
+| --- | --- | --- | --- |
+| ${criterion} | 1 | "${stepsOnlyQuote}" | diff-local |
+`;
+
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText, planText: stepsOnlyPlan, prdText: null,
+      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow('criterion:quote-not-done-when:1');
+  });
+
+  it('refuses unparseable tier-S stories even when a fresh waiver names the gap', async () => {
+    const { canonicalPath, worktreePath } = await createWorktree();
+    await mkdir(join(worktreePath, '.docs/coherence-waivers'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence-waivers/idea.md'),
+      'Waives: criterion:stories-unparseable\nRationale: malformed story evidence cannot be waived.\n',
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'add attempted tier S criterion waiver']);
+
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText: '# Stories\n\n## Story 1: Widget\n',
+      planText: plan('diff-local'), prdText: null,
+      outcomeBullets: [],
+      ideaFiles: new Set(['.docs/plans/idea.md', '.docs/coherence-waivers/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow('criterion:stories-unparseable');
+  });
 });
 
 describe('criterion coverage (Tasks 4-18, 24)', () => {
