@@ -9,6 +9,7 @@ import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
+import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
@@ -21,6 +22,12 @@ async function projectRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'build-review-adjudication-'));
   temporaryDirectories.push(root);
   return root;
+}
+
+/** Seeds durable prior state through `mutate`, the store's only write seam. */
+async function seedCases(store: RemediationCaseStore, state: RemediationCaseStoreState): Promise<void> {
+  const seeded = await store.mutate(async () => ({ value: null, nextState: state }));
+  if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
 }
 
 afterEach(async () => {
@@ -241,6 +248,19 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(chargeEffect).not.toHaveBeenCalled();
     await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(ledgerBefore);
     await expect(access(join(root, '.pipeline/build-review-work-order.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    // Absence of a charge and of a published order is not enough: reconciliation
+    // already persisted this case with a reserved effect, so the acceptance must
+    // settle that durable row rather than return past it and leave autonomous
+    // state a later BUILD entry can replay.
+    await expect(new RemediationCaseStore(root, feature).read()).resolves.toMatchObject({
+      ok: true,
+      state: {
+        cases: [{
+          resolution: 'resolved',
+          effect: { status: 'failed', diagnostic: 'retired by operator acceptance' },
+        }],
+      },
+    });
   });
 
   it('effects and charges only the unaccepted sibling when authority changes before action reservation', async () => {
@@ -327,7 +347,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   it('emits a semantic-repeat halt when an already-resolved action case is bound again', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
-    await store.replace({
+    await seedCases(store, {
       version: 'v1', feature,
       cases: [{
         id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
@@ -466,7 +486,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   ] as const)('halts an attempted action case through %s instead of granting a second free route', async (_origin, explicitlyBound) => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
-    await store.replace({
+    await seedCases(store, {
       version: 'v1', feature,
       cases: [{
         id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
@@ -505,7 +525,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   it('resolves an attempted open case that the current lap no longer reports', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
-    await store.replace({
+    await seedCases(store, {
       version: 'v1', feature,
       cases: [{
         id: 'case-gone', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
@@ -520,13 +540,22 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
     await markBuildReviewWorkOrderAttempted(root, feature);
 
-    const result = await coordinateBuildReviewAdjudication({ ...input(root, async () => actionJudgement()) });
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), emit: async (event) => { events.push(event); },
+    });
 
     expect(result).toMatchObject({ ok: true, route: 'build' });
     const settled = await store.read();
     expect(settled.ok && settled.state.cases.map((record) => [record.id, record.resolution])).toEqual([
       ['case-gone', 'resolved'], ['case-durable', 'open'],
     ]);
+    // The absent case is named by no caseRef, so emitting only from the ref map
+    // changed durable state with nothing on the event spine.
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_case_reconciled', caseId: 'case-gone', resolution: 'resolved',
+    }));
   });
   it('hands the judge the case-v1 contract, sourcing plan and task evidence from the worktree', async () => {
     const root = await projectRoot();

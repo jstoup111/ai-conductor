@@ -31,7 +31,19 @@ export type RemediationCaseReconciliationRejection =
   | 'id-collision';
 
 export type ReconcileRemediationCasesResult =
-  | { readonly ok: true; readonly state: RemediationCaseStoreState; readonly caseIdsByRef: ReadonlyMap<string, string> }
+  | {
+      readonly ok: true;
+      readonly state: RemediationCaseStoreState;
+      readonly caseIdsByRef: ReadonlyMap<string, string>;
+      /**
+       * Every case this reconciliation transitioned that no current `caseRef`
+       * points at — today, prior attempted action cases absent from the
+       * admitted graph, which are resolved here. `caseIdsByRef` cannot name
+       * them (they have no proposal), so a caller emitting lifecycle
+       * occurrences from that map alone would change durable state silently.
+       */
+      readonly resolvedAbsentCaseIds: readonly string[];
+    }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
   | { readonly ok: false; readonly reason: 'store-failure'; readonly storeReason: RemediationCaseStoreFailureReason };
 
@@ -48,7 +60,13 @@ export function classifyRemediationCaseReuse(
 }
 
 type Reconciliation =
-  | { readonly ok: true; readonly state: RemediationCaseStoreState; readonly changed: boolean; readonly caseIdsByRef: ReadonlyMap<string, string> }
+  | {
+      readonly ok: true;
+      readonly state: RemediationCaseStoreState;
+      readonly changed: boolean;
+      readonly caseIdsByRef: ReadonlyMap<string, string>;
+      readonly resolvedAbsentCaseIds: readonly string[];
+    }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection };
 
 function isDurableId(value: string): boolean {
@@ -182,6 +200,9 @@ function reconcileState(
   }
 
   let changed = additions.length > 0 || replacements.size > 0;
+  // Resolved here, but named by no `caseRef` — reported separately so the
+  // caller can emit one lifecycle occurrence per persisted transition.
+  const resolvedAbsentCaseIds: string[] = [];
   const cases = state.cases.map((record) => {
     const replacement = replacements.get(record.id) ?? record;
     if (
@@ -192,11 +213,18 @@ function reconcileState(
       && attemptedIds.has(replacement.id)
     ) {
       changed = true;
+      resolvedAbsentCaseIds.push(replacement.id);
       return { ...replacement, resolution: 'resolved' as const };
     }
     return replacement;
   });
-  return { ok: true, state: { ...state, cases: [...cases, ...additions] }, changed, caseIdsByRef };
+  return {
+    ok: true,
+    state: { ...state, cases: [...cases, ...additions] },
+    changed,
+    caseIdsByRef,
+    resolvedAbsentCaseIds,
+  };
 }
 
 /**
@@ -215,6 +243,11 @@ export async function reconcileRemediationCases(
   });
   if (!mutation.ok) return { ok: false, reason: 'store-failure', storeReason: mutation.reason };
   return mutation.value.ok
-    ? { ok: true, state: mutation.value.state, caseIdsByRef: mutation.value.caseIdsByRef }
+    ? {
+        ok: true,
+        state: mutation.value.state,
+        caseIdsByRef: mutation.value.caseIdsByRef,
+        resolvedAbsentCaseIds: mutation.value.resolvedAbsentCaseIds,
+      }
     : mutation.value;
 }
