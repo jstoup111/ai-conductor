@@ -143,6 +143,74 @@ describe('sealed-artifact remediation routing', () => {
     expect(outcome.target).not.toBe('acceptance_specs');
   });
 
+  it('keeps a build gap whose task title only CITES a protected artifact on the build route', async () => {
+    // The real AB-2/AB-8 shape (2026-09-04): source-work tasks that quote a
+    // .docs contract as evidence were rerouted to the undispatchable `plan`
+    // disposition and surfaced as bare `Missing:` exact-match halts.
+    const dispatched: StepName[] = [];
+    const redirects: unknown[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('remediation_sealed_artifact_redirect', (event) => redirects.push(event));
+    const runner: StepRunner = {
+      run: async (step) => {
+        dispatched.push(step);
+        await writeFile(
+          join(projectRoot, '.pipeline/remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: 'citation-only',
+                disposition: 'build',
+                category: null,
+                rationale: 'Implementation drift; an existing plan task owns the remedy.',
+                tasks: [
+                  {
+                    id: 'rem-cite-1',
+                    title:
+                      'src/engine/conductor.ts:4671 — stop returning absent before any case is read, '
+                      + 'so unmatched open cases still resolve before PASS '
+                      + '(the sequence contract at .docs/architecture/sequences/another-feature.md:87), '
+                      + 'and a feature whose plan declares **Stories:** .docs/stories/other-name.md is admitted.',
+                    status: 'pending',
+                  },
+                ],
+              },
+            ],
+          }),
+          'utf8',
+        );
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events,
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidenceFile: string },
+      ) => Promise<{ kind: string; target?: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'prd audit blocked',
+      { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+    );
+
+    expect(redirects).toEqual([]);
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+  });
+
   it.each([
     ['build', 'route', 'build'],
     ['acceptance_specs', 'route', 'acceptance_specs'],

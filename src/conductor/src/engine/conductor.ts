@@ -12595,30 +12595,46 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
   gap: RemediationGap,
   activePlanStem: string,
 ): string | undefined {
-  const taskScopes = gap.tasks
-    .map(
-      (task) => `### Task ${task.id}: remediation\n\n**Files:** ${task.title}`,
-    )
-    .join('\n\n');
-  const taskTarget = scanPlanProtectedTargets(taskScopes, activePlanStem)[0]?.path;
+  // Task titles are prose, not plan Files declarations — remediation tasks
+  // routinely cite .docs artifacts as evidence ("the sequence contract at
+  // .docs/architecture/sequences/<slug>.md:87 requires ..."), and treating the
+  // whole title as a Files line rerouted such gaps to the undispatchable
+  // `plan` disposition and surfaced them as bare `Missing:` halts. Apply the
+  // same directed-edit clause test the rationale already uses: only a
+  // protected path with an edit verb in its own preceding clause is a target.
+  const taskTarget = gap.tasks
+    .map((task) => directedProtectedTarget(task.title, activePlanStem))
+    .find((path) => path !== undefined);
   if (taskTarget) return taskTarget;
 
   // Rationale is prose rather than a plan Files declaration. Treat it as a
   // target only when it both names a resolvable protected artifact and directs
   // an edit; a context-only citation must not re-route source work.
-  const rationalePaths = Array.from(
-    gap.rationale.matchAll(
+  return directedProtectedTarget(gap.rationale, activePlanStem);
+}
+
+/**
+ * A protected `.docs` path counts as an edit target only when a directing
+ * verb appears in the same clause before it; a context-only citation never
+ * re-routes source work.
+ */
+function directedProtectedTarget(
+  prose: string,
+  activePlanStem: string,
+): string | undefined {
+  const prosePaths = Array.from(
+    prose.matchAll(
       /(?:^|[\s`])((?:\.\/)?\.docs\/(?:architecture|decisions|plans|stories|specs)\/[A-Za-z0-9._-]+\.md)\b/g,
     ),
   );
-  if (rationalePaths.length === 0) return undefined;
+  if (prosePaths.length === 0) return undefined;
   const action = /\b(?:amend|change|delete|edit|remove|rewrite|update)\b/i;
-  const directedPaths = rationalePaths.flatMap((match) => {
+  const directedPaths = prosePaths.flatMap((match) => {
     const path = match[1];
     const pathOffset = (match.index ?? 0) + match[0].lastIndexOf(path);
     // A semicolon separates independent clauses just as a sentence boundary
     // does. Only an action in this path's own preceding clause can direct it.
-    const beforePath = gap.rationale.slice(0, pathOffset);
+    const beforePath = prose.slice(0, pathOffset);
     const clauseStart = Math.max(
       beforePath.lastIndexOf('.'),
       beforePath.lastIndexOf(';'),
@@ -12627,8 +12643,8 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
     return action.test(beforePath.slice(clauseStart + 1)) ? [path] : [];
   });
   if (directedPaths.length === 0) return undefined;
-  const rationaleScope = `### Task ${gap.id}: remediation\n\n**Files:** ${directedPaths.join(', ')}`;
-  return scanPlanProtectedTargets(rationaleScope, activePlanStem)[0]?.path;
+  const directedScope = `### Task directed: remediation\n\n**Files:** ${directedPaths.join(', ')}`;
+  return scanPlanProtectedTargets(directedScope, activePlanStem)[0]?.path;
 }
 
 /**
