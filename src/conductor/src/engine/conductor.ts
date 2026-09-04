@@ -11709,10 +11709,19 @@ export class Conductor {
           if (step.name === 'build_review') {
             const settlement = await this.settleRemediationCasesOnCleanBuildReview();
             if (settlement.kind === 'invalid') {
-              await this.writeHaltMarker(
-                `build_review clean-PASS durable settlement halted: ${settlement.reason}\n`,
-                'needs-human',
-              );
+              // adr-2026-08-11 decision 1: a halt reaches the operator through
+              // the persisted spine, never a bare marker write. Writing the
+              // marker alone left the active execution open and emitted no
+              // `loop_halt` — and the daemon's fallback emitter is suppressed
+              // precisely because a marker now exists, so the halt was
+              // invisible to every spine consumer.
+              await this.haltSerialExecution({
+                reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
+                haltClass: 'needs-human',
+                persistState: async () => {
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                },
+              });
               return;
             }
           }
