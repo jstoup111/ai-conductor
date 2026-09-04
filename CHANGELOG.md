@@ -40,6 +40,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Prevents approved ADRs without citable decisions from landing. ([implementation PR #2133](https://github.com/jstoup111/ai-conductor/pull/2133)).
 - ADR decisions numbered as `**1. Title.**` are now citable as governing clauses, so a remediable as-built finding naming one no longer halts for a human. ([implementation PR #2141](https://github.com/jstoup111/ai-conductor/pull/2141)).
 - Install and uninstall banners now say AI Conductor Harness. ([implementation PR #2142](https://github.com/jstoup111/ai-conductor/pull/2142)).
+- Operator over-scope decisions on no-owner (NC) findings now survive prd_audit lap renumbering and line-anchor drift instead of re-halting as unknown-criterion. ([implementation PR #2144](https://github.com/jstoup111/ai-conductor/pull/2144)).
 
 ## [1.0.0] - 2026-08-31
 
