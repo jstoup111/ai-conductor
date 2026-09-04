@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:3
+// Covers: task:1, task:2, task:2.1, task:3, task:9
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -13,6 +13,7 @@ import {
   resolveMemoryProvider,
   resolveValidationConcurrency,
 } from '../../src/engine/config.js';
+import { resolveDaemonConcurrency } from '../../src/engine/resolved-config.js';
 import * as resolvedConfig from '../../src/engine/resolved-config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
@@ -535,6 +536,27 @@ steps:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toContain('validation_concurrency');
+    });
+
+    it.each([0, -1, 1.5, 'two'] as const)(
+      'rejects daemon_concurrency %j outside the accepted integer range [1, ∞)',
+      (daemonConcurrency) => {
+        const result = validateConfig({ daemon_concurrency: daemonConcurrency as never });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.message).toContain('daemon_concurrency');
+        expect(result.error.message).toContain('[1, ∞)');
+      },
+    );
+
+    it('accepts daemon_concurrency 2 and resolveDaemonConcurrency returns it', () => {
+      const result = validateConfig({ daemon_concurrency: 2 });
+      expect(result.ok).toBe(true);
+      expect(resolveDaemonConcurrency({ daemon_concurrency: 2 })).toBe(2);
+    });
+
+    it('resolveDaemonConcurrency defaults to 1 when daemon_concurrency is absent', () => {
+      expect(resolveDaemonConcurrency({})).toBe(1);
     });
 
     it('resolveValidationConcurrency defaults to 4 when absent', () => {

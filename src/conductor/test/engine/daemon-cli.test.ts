@@ -1,3 +1,4 @@
+// Covers: task:14
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon must
 // write `.daemon/gated.json` on EVERY discovery pass — populated, explicitly
@@ -16,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { access, chmod, mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -26,6 +27,9 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
 import { acquireScratchHome } from '../../src/engine/self-host/provider-scratch.js';
+import { RESTART_MARKER, readRestartPending, writeRestartPending } from '../../src/engine/restart-marker.js';
+import { computeStatusRow } from '../../src/engine/daemon-observe-cli.js';
+import { getPidfilePath } from '../../src/engine/daemon-lock.js';
 import type { ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
@@ -642,13 +646,83 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
       vi.restoreAllMocks();
     }
   });
+
+  it('releases the lock then exits after the daemon consumes a queued restart marker', async () => {
+    const events: string[] = [];
+    const started: string[] = [];
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(
+      join(root, '.ai-conductor', 'config.yml'),
+      'daemon_concurrency: 2\nharness_self_host:\n  build_auth:\n    mode: api-key\n',
+    );
+    let releaseWorkers: (() => void) | undefined;
+    const workersReleased = new Promise<void>((resolve) => {
+      releaseWorkers = resolve;
+    });
+    await runDaemonMode({
+        projectRoot: root,
+        concurrency: 2,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        runHaltClassMigration: async () => join(root, '.worktrees'),
+        workSource: {
+          discover: async () => [
+            { slug: 'first' },
+            { slug: 'second' },
+            { slug: 'later' },
+          ],
+        },
+        watch: false,
+        runFeature: async (item) => {
+          started.push(item.slug);
+          if (started.length === 2) {
+            await writeRestartPending(root, { blockingSlug: 'first' });
+            await vi.waitFor(async () => {
+              await expect(readRestartPending(root)).resolves.toMatchObject({
+                drainSlugs: ['first', 'second'],
+              });
+            });
+            const status = await computeStatusRow(
+              {
+                schemaVersion: 1,
+                name: 'repo',
+                path: root,
+                status: 'registered',
+                registeredAt: '2026-08-30T00:00:00.000Z',
+              },
+              () => true,
+              async () => false,
+            );
+            events.push(`status:${status.restartPending?.drainSlugs?.join(',')}`);
+            releaseWorkers?.();
+          }
+          await workersReleased;
+          return { slug: item.slug, status: 'done' };
+        },
+        exitProcess: () => {
+          events.push(existsSync(join(root, RESTART_MARKER)) ? 'marker-present' : 'marker-consumed');
+          events.push(existsSync(getPidfilePath(root)) ? 'lock-held' : 'lock-released');
+          events.push('exited');
+        },
+      });
+
+    const durableDrainLines = (await readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
+      .split('\n')
+      .filter((line) => line.includes('drain started: restart-pending'));
+    expect(durableDrainLines).toEqual([
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[^ ]+ \[daemon\] drain started: restart-pending$/),
+    ]);
+    expect({ started, events }).toEqual({
+      started: ['first', 'second'],
+      events: ['status:first,second', 'marker-consumed', 'lock-released', 'exited'],
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 3 (#561, daemon-releases-the-lock-only-after-draining-in-fl): SIGTERM
 // must drain (via runDaemon's shouldStop) before the lock is released, with a
-// bounded force-release if the drain never completes. Static source-assert
-// checks mirroring the Task 22 SIGTERM block above.
+// bounded force-release if the drain never completes.
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () => {
@@ -674,18 +748,65 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?shouldStop:\s*\(\)\s*=>\s*teardown\.shouldStop\(\),/);
   });
 
-  it('onForceRelease synchronously releases the lock and logs a greppable force-release line', () => {
-    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
-
-    const teardownMatch = src.match(
-      /createDaemonTeardown\(\{([\s\S]*?)\n  \}\);/,
+  it('force-releases a wedged two-executor daemon after its scaled bound and drops the lock before exit', async () => {
+    const started: string[] = [];
+    const exits: Array<{ code: number; lockPresent: boolean }> = [];
+    let releaseWorkers: (() => void) | undefined;
+    const workersReleased = new Promise<void>((resolve) => {
+      releaseWorkers = resolve;
+    });
+    let workersStarted!: () => void;
+    const startedWorkers = new Promise<void>((resolve) => {
+      workersStarted = resolve;
+    });
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(
+      join(root, '.ai-conductor', 'config.yml'),
+      'daemon_concurrency: 2\nharness_self_host:\n  build_auth:\n    mode: api-key\n',
     );
-    expect(teardownMatch).not.toBeNull();
-    const teardownArgs = teardownMatch![1];
 
-    expect(teardownArgs).toContain('onForceRelease');
-    expect(teardownArgs).toContain('releaseBackstop()');
-    expect(teardownArgs).toMatch(/force-release/);
+    const daemon = runDaemonMode({
+      projectRoot: root,
+      concurrency: 2,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      runHaltClassMigration: async () => join(root, '.worktrees'),
+      workSource: {
+        discover: async () => [{ slug: 'first' }, { slug: 'second' }],
+      },
+      watch: false,
+      runFeature: async (item) => {
+        started.push(item.slug);
+        if (started.length === 2) workersStarted();
+        await workersReleased;
+        return { slug: item.slug, status: 'done' };
+      },
+      exitProcess: (code) => {
+        exits.push({ code, lockPresent: existsSync(getPidfilePath(root)) });
+      },
+    });
+
+    try {
+      await startedWorkers;
+      vi.useFakeTimers();
+      process.emit('SIGTERM');
+      // The two running executors each receive the full 30-second allowance.
+      // Stopping just short of 60 seconds makes the scaled boundary observable:
+      // the former single-executor 30-second timeout would have force-released
+      // the lock already.
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(exits).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(exits).toEqual([{ code: 1, lockPresent: false }]);
+      await expect(readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
+        .resolves.toContain('teardown force-release');
+    } finally {
+      releaseWorkers?.();
+      await daemon;
+      vi.useRealTimers();
+    }
   });
 
   it('normal-completion path cancels the teardown controller before/around releasing the lock', () => {

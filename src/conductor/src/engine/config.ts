@@ -98,7 +98,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'markdown_viewer', 'mermaid_renderer', 'assess', 'acceptance_spec_globs', 'test_suite',
     'llm_provider', 'ui_renderer', 'visualizers', 'memory_provider', 'otel', 'build_progress',
     'provider_stream', 'spec_owner', 'owner_gate_cutover', 'attribution_audit_sample_pct',
-    'rebase_resolution_attempts', 'validation_concurrency', 'harness_self_host',
+    'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'harness_self_host',
     'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
     'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'build_review', 'conflict_check',
     'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
@@ -879,6 +879,20 @@ export function validateConfig(
   if (obj.validation_concurrency !== undefined) {
     if (typeof obj.validation_concurrency !== 'number') {
       return errVal('validation_concurrency must be a number');
+    }
+  }
+
+  // daemon_concurrency — daemon feature-executor pool width. A zero-width,
+  // fractional, or non-finite pool cannot make progress, so fail at startup
+  // rather than silently reducing it to the serial default.
+  if (obj.daemon_concurrency !== undefined) {
+    if (
+      typeof obj.daemon_concurrency !== 'number' ||
+      !Number.isFinite(obj.daemon_concurrency) ||
+      !Number.isInteger(obj.daemon_concurrency) ||
+      obj.daemon_concurrency < 1
+    ) {
+      return errVal('daemon_concurrency must be an integer in the accepted range [1, ∞)');
     }
   }
 

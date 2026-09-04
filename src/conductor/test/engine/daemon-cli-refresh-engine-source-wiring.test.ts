@@ -42,7 +42,8 @@ describe('daemon-cli wires refreshEngineSource (self-host only) into runDaemon d
       source.indexOf('// Task T30: consume restart marker', source.indexOf('const result = await runDaemon(')),
     );
 
-    expect(runDaemonDeps).toMatch(/relink\s*:\s*\(\)\s*=>\s*relinkSkillsForSelfBuild\(\{\s*log\s*\}\)/);
+    expect(runDaemonDeps).toMatch(/relink\s*:\s*\(\)\s*=>\s*liveBoundaryCoordinator!\.runMutation\(/);
+    expect(runDaemonDeps).toMatch(/\(\)\s*=>\s*relinkSkillsForSelfBuild\(\{\s*log\s*\}\)/);
   });
 
   it('refreshEngineSource is gated on isSelfHost — undefined off self-host (NP4)', async () => {

@@ -6,9 +6,11 @@
  * subscription, and log sink are production code.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import {
   AggregationTemporality,
@@ -68,6 +70,8 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
 
+const execFile = promisify(execFileCb);
+
 function failingMetricExporter(): PushMetricExporter {
   return {
     export(_metrics: ResourceMetrics, callback: (result: ExportResult) => void): void {
@@ -98,11 +102,20 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
   dirs.push(repo);
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true });
+  await mkdir(join(repo, '.docs', 'stories'), { recursive: true });
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+  await writeFile(join(repo, '.docs', 'stories', 'feature-a.md'), '# feature-a\n');
+  await writeFile(join(repo, '.docs', 'plans', 'feature-a.md'), '# feature-a\n');
   await writeFile(
     join(repo, '.ai-conductor/config.yml'),
     'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n',
   );
+  await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+  await execFile('git', ['config', 'user.name', 'Test'], { cwd: repo });
+  await execFile('git', ['add', '.'], { cwd: repo });
+  await execFile('git', ['commit', '-qm', 'fixture'], { cwd: repo });
   buildExporters.mockReturnValueOnce({
     spanExporter: new InMemorySpanExporter(),
     metricExporter,

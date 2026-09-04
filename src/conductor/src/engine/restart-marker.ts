@@ -24,6 +24,8 @@ export interface RestartIntent {
   requestedBy?: string;
   /** The in-flight feature slug the restart is waiting behind, when known. */
   blockingSlug?: string;
+  /** Complete active-claim snapshot captured when the daemon begins its drain. */
+  drainSlugs?: string[];
 }
 
 /**
@@ -46,6 +48,24 @@ export async function writeRestartPending(
     ...(opts.blockingSlug !== undefined ? { blockingSlug: opts.blockingSlug } : {}),
   };
   await writeFile(join(projectRoot, RESTART_MARKER), JSON.stringify(intent, null, 2), 'utf-8');
+}
+
+/**
+ * Annotate an already-queued restart with the claims it is waiting to drain.
+ * The restart marker remains the sole durable restart-state record, so status
+ * can report the snapshot without introducing a second daemon ledger.
+ */
+export async function recordRestartPendingDrain(
+  projectRoot: string,
+  drainSlugs: readonly string[],
+): Promise<void> {
+  const intent = await readRestartPending(projectRoot);
+  if (!intent) return;
+  await writeFile(
+    join(projectRoot, RESTART_MARKER),
+    JSON.stringify({ ...intent, drainSlugs: [...drainSlugs] }, null, 2),
+    'utf-8',
+  );
 }
 
 /**

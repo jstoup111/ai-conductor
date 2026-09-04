@@ -135,7 +135,7 @@ conflict_check:
 # remains far outside it and still halts for an operator.
 prd_audit:
   max_appended_tasks: 8
-  max_appended_ratio: 0.5
+  max_appended_ratio: 0.6
 
 steps:
   explore:

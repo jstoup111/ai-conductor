@@ -126,12 +126,12 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
       transientResolutionWorktree: list.includes('resolve-widget'),
       logs,
     }).toEqual({
-      eligibility: { eligible: false, reason: 'active feature run for widget; resolution deferred' },
+      eligibility: { eligible: false, reason: 'active work claim for widget; resolution worktree deferred' },
       resolutionAttempted: false,
       retainedFeatureWorktree: true,
       transientResolutionWorktree: false,
       logs: [
-        'outcome: pr=https://github.com/acme/widget/pull/1 stage=eligibility result=skipped(active feature run for widget; resolution deferred)',
+        'outcome: pr=https://github.com/acme/widget/pull/1 stage=eligibility result=skipped(active work claim for widget; resolution worktree deferred)',
       ],
     });
   });

@@ -5,7 +5,7 @@
  * Temp directories are created per-suite and cleaned up in afterEach.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -15,6 +15,11 @@ import {
   rewriteWatch,
   sweepMergeableLabels,
 } from '../../src/engine/mergeable-sweep.js';
+import {
+  makeWorkClaimLivenessPredicate,
+  makeWorktreeRemovalPredicate,
+} from '../../src/engine/daemon-deps.js';
+import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 
@@ -546,6 +551,37 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
       '[mergeable-sweep] reaped test-feature — reason: shipped-record-on-main',
     );
     expect(await readWatch(tmpDir)).toEqual([]);
+  });
+
+  it('refuses a shipped-record reap for an active work claim, logs the reason, and retains the watch entry', async () => {
+    const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
+    const claims = new InMemoryWorkClaims();
+    const logs: string[] = [];
+    const teardownWorktree = vi.fn();
+    claims.claim('test-feature');
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      shippedRecordProbe: async () => 'present',
+      canRemoveWorktree: makeWorktreeRemovalPredicate(
+        makeWorkClaimLivenessPredicate(claims),
+        (message) => logs.push(message),
+      ),
+      teardownWorktree,
+    });
+
+    expect({
+      teardownCalls: teardownWorktree.mock.calls.length,
+      survivors: (await readWatch(tmpDir)).map((watched) => watched.slug),
+      refusal: logs.filter((line) => line.includes('active work claim')),
+    }).toEqual({
+      teardownCalls: 0,
+      survivors: ['test-feature'],
+      refusal: ['[daemon] worktree removal refused test-feature — reason: active work claim'],
+    });
   });
 
   it('retains merged entries until a later shipped-record probe proves present and keeps processing', async () => {

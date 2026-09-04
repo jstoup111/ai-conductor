@@ -18,13 +18,44 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
+import { WorktreeLifecycleQueue } from './worktree.js';
 import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
 import { escalateBuildFailure } from './build-failure-escalation.js';
 import { makeGitRunner } from './rebase.js';
 import { surfaceQuarantine } from './setup-triage.js';
+import type { WorkOrder } from './work-order.js';
 import type { SetupFailureError } from './worktree-prepare.js';
 import type { TriageOutcome } from './setup-triage.js';
 import type { OperatorParkedTermination } from './conductor.js';
+import type { WorkClaims } from './work-claims.js';
+
+/** Read-only liveness view of the daemon's active work-claim registry. */
+export type IsWorkClaimActive = (slug: string) => boolean;
+
+/**
+ * Keep every maintenance boundary on the daemon's one active-work authority.
+ * A claim is intentionally process-local: after a restart, durable worktree
+ * state drives re-dispatch as before.
+ */
+export function makeWorkClaimLivenessPredicate(claims: WorkClaims): IsWorkClaimActive {
+  return (slug) => claims.list().includes(slug);
+}
+
+/**
+ * Turns active-claim liveness into a worktree-removal decision. The refusal is
+ * deliberately loud and stable so `daemon logs` can identify why a terminal
+ * worktree was retained for the running executor.
+ */
+export function makeWorktreeRemovalPredicate(
+  isWorkClaimActive: IsWorkClaimActive,
+  log: (message: string) => void,
+): (slug: string) => boolean {
+  return (slug) => {
+    if (!isWorkClaimActive(slug)) return true;
+    log(`[daemon] worktree removal refused ${slug} — reason: active work claim`);
+    return false;
+  };
+}
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -76,12 +107,24 @@ export interface RealDepsConfig {
   ) => Promise<TriageOutcome>;
 }
 
+/**
+ * Daemon adapter surface that accepts a dispatcher-built order when one is
+ * available. It remains assignable to FeatureRunnerDeps during the seam
+ * migration, whose runner still supplies only a slug.
+ */
+export interface DaemonFeatureRunnerDeps extends FeatureRunnerDeps {
+  createWorktree: (slug: string, order?: WorkOrder) => Promise<FeatureWorktree>;
+}
+
 const PROCESSED_SUBDIR = '.daemon/processed';
 const WARNED_SUBDIR = '.daemon/warned';
 
 /** Concrete (git/fs) implementation of the feature-runner primitives. */
-export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
+export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerDeps {
   const processedDir = join(cfg.projectRoot, PROCESSED_SUBDIR);
+  // The dispatcher owns this queue for its lifetime. All linked worktree
+  // add/remove operations share cfg.projectRoot's `.git` bookkeeping.
+  const worktreeLifecycle = new WorktreeLifecycleQueue();
 
   return {
     log: cfg.log,
@@ -102,7 +145,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // FR-16: production gh runner for clear-on-success label ops.
     runGh: makeProductionGh(),
 
-    createWorktree: async (slug) => {
+    createWorktree: async (slug, order?: WorkOrder) => worktreeLifecycle.run(async () => {
       const branch = `feat/daemon-${slug}`;
       const path = join(cfg.worktreeBase, slug);
       const root = cfg.projectRoot;
@@ -113,17 +156,21 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         root,
         path,
         branch,
-        resolveBase: () => resolveWorktreeBase(root, cfg.baseBranch),
+        resolveBase: async () => {
+          const baseSha = order?.baseSha ?? await resolveWorktreeBase(root, cfg.baseBranch);
+          cfg.log?.(`[daemon] work claim ${slug} pinned base ${baseSha}`);
+          return baseSha;
+        },
         log: cfg.log,
       });
       return { path: p, branch: b };
-    },
+    }),
 
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
     // each project translate the namespace into its own shared/namespaced infra.
-    prepareWorktree: async (wt, log, events) => {
-      const baseSha = await resolveDaemonBaseSha(cfg.projectRoot, cfg.baseBranch);
+    prepareWorktree: async (wt, log, events, order) => {
+      const baseSha = order?.baseSha ?? await resolveDaemonBaseSha(cfg.projectRoot, cfg.baseBranch);
       await prepareWorktree(wt.path, log ?? cfg.log, {
         verbose: cfg.verbose ?? false,
         baseSha,
@@ -144,10 +191,12 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         verbose: cfg.verbose ?? false,
         timeoutSeconds: cfg.teardownTimeoutSeconds,
       });
-      await execa('git', ['worktree', 'remove', '--force', wt.path], {
-        cwd: cfg.projectRoot,
-      }).catch(() => {
-        /* best-effort cleanup */
+      await worktreeLifecycle.run(async () => {
+        await execa('git', ['worktree', 'remove', '--force', wt.path], {
+          cwd: cfg.projectRoot,
+        }).catch(() => {
+          /* best-effort cleanup */
+        });
       });
     },
 
@@ -198,7 +247,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
 }
 
 /**
- * The ref a fresh feature worktree forks from. Prefer the remote-tracking
+ * The SHA a fresh feature worktree forks from. Prefer the remote-tracking
  * `origin/<baseBranch>` so the build starts from the latest *fetched* origin tip
  * rather than the LOCAL `<baseBranch>`, which can lag origin: `fastForwardRoot`
  * only advances local `<baseBranch>` while the root checkout is actually on it,
@@ -213,10 +262,9 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
 async function resolveWorktreeBase(projectRoot: string, baseBranch: string): Promise<string> {
   const remote = `origin/${baseBranch}`;
   try {
-    await execa('git', ['rev-parse', '--verify', '--quiet', remote], { cwd: projectRoot });
-    return remote;
+    return (await execa('git', ['rev-parse', '--verify', '--quiet', remote], { cwd: projectRoot })).stdout.trim();
   } catch {
-    return baseBranch;
+    return (await execa('git', ['rev-parse', '--verify', '--quiet', baseBranch], { cwd: projectRoot })).stdout.trim();
   }
 }
 

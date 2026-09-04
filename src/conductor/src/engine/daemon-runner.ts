@@ -94,7 +94,12 @@ export interface FeatureRunnerDeps {
    * aborts the feature (worktree kept) rather than building against a
    * half-prepared environment.
    */
-  prepareWorktree?: (worktree: FeatureWorktree, log?: (message: string) => void, events?: ConductorEventEmitter) => Promise<void>;
+  prepareWorktree?: (
+    worktree: FeatureWorktree,
+    log?: (message: string) => void,
+    events?: ConductorEventEmitter,
+    order?: import('./work-order.js').WorkOrder,
+  ) => Promise<void>;
   /** Run the conductor's gate loop in the worktree to DONE/HALT (finish=open PR). */
   runConductor: (
     worktree: FeatureWorktree,

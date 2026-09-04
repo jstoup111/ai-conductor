@@ -1,7 +1,9 @@
+// Covers: task:4
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { setImmediate as waitForImmediate } from 'node:timers/promises';
 import {
   runDaemon,
   guardedDispatchWith,
@@ -17,6 +19,7 @@ import { isOperatorParked, removeOperatorPark } from '../../src/engine/park-mark
 import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
 import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
+import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 
 function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -63,6 +66,112 @@ function makeSetupTriageParkingRunner(
 }
 
 describe('engine/daemon — runDaemon', () => {
+  it('uses injected claims to make repeated fill passes dispatch an eligible feature once', async () => {
+    const claims = new InMemoryWorkClaims();
+    let finishFeature: (() => void) | undefined;
+    let observedDispatch: (() => void) | undefined;
+    const dispatched = new Promise<void>((resolve) => {
+      observedDispatch = resolve;
+    });
+    const feature = new Promise<void>((resolve) => {
+      finishFeature = resolve;
+    });
+    let dispatches = 0;
+
+    const daemon = runDaemon({
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature: async (item) => {
+        dispatches += 1;
+        observedDispatch?.();
+        expect(claims.list()).toEqual([item.slug]);
+        await feature;
+        return { slug: item.slug, status: 'done' };
+      },
+      claims,
+    } as DaemonDeps, { concurrency: 3, once: true });
+
+    await dispatched;
+    expect(claims.list()).toEqual(['f0']);
+    finishFeature?.();
+    await expect(daemon).resolves.toMatchObject({
+      processed: [{ slug: 'f0', status: 'done' }],
+      stoppedReason: 'backlog_drained',
+    });
+    expect({ dispatches, activeClaims: claims.list() }).toEqual({
+      dispatches: 1,
+      activeClaims: [],
+    });
+  });
+
+  it('keeps a churning backlog exactly-once across three fill and collect cycles', async () => {
+    const claims = new InMemoryWorkClaims();
+    const calls = new Map<string, number>();
+    let discovery = 0;
+    const backlog = items(3);
+
+    const result = await runDaemon({
+      discoverBacklog: async () => {
+        const rotation = discovery++ % backlog.length;
+        return [...backlog.slice(rotation), ...backlog.slice(0, rotation)];
+      },
+      runFeature: async (item) => {
+        expect(claims.list()).toContain(item.slug);
+        calls.set(item.slug, (calls.get(item.slug) ?? 0) + 1);
+        return { slug: item.slug, status: 'done' };
+      },
+      claims,
+    } as DaemonDeps, { concurrency: 3, once: true });
+
+    expect({
+      calls: [...calls.entries()].sort(),
+      processed: result.processed.map(({ slug, status }) => ({ slug, status })).sort((a, b) => a.slug.localeCompare(b.slug)),
+      activeClaims: claims.list(),
+    }).toEqual({
+      calls: [['f0', 1], ['f1', 1], ['f2', 1]],
+      processed: [
+        { slug: 'f0', status: 'done' },
+        { slug: 'f1', status: 'done' },
+        { slug: 'f2', status: 'done' },
+      ],
+      activeClaims: [],
+    });
+  });
+
+  it('with a fresh claims registry after restart dispatches each unfinished feature once', async () => {
+    const completed = new Set<string>();
+    const calls = new Map<string, number>();
+    const runFeature = async (item: BacklogItem, claims: InMemoryWorkClaims) => {
+      expect(claims.list()).toContain(item.slug);
+      calls.set(item.slug, (calls.get(item.slug) ?? 0) + 1);
+      completed.add(item.slug);
+      return { slug: item.slug, status: 'done' as const };
+    };
+    const beforeRestartClaims = new InMemoryWorkClaims();
+    const beforeRestart = await runDaemon({
+      discoverBacklog: staticBacklog(items(2)),
+      runFeature: (item) => runFeature(item, beforeRestartClaims),
+      claims: beforeRestartClaims,
+    } as DaemonDeps, { concurrency: 3, once: true });
+    const afterRestartClaims = new InMemoryWorkClaims();
+    const afterRestart = await runDaemon({
+      discoverBacklog: async () => items(3).filter((item) => !completed.has(item.slug)),
+      runFeature: (item) => runFeature(item, afterRestartClaims),
+      claims: afterRestartClaims,
+    } as DaemonDeps, { concurrency: 3, once: true });
+
+    expect({
+      beforeRestart: beforeRestart.processed.map((outcome) => outcome.slug).sort(),
+      afterRestart: afterRestart.processed.map((outcome) => outcome.slug).sort(),
+      calls: [...calls.entries()].sort(),
+      claims: [beforeRestartClaims.list(), afterRestartClaims.list()],
+    }).toEqual({
+      beforeRestart: ['f0', 'f1'],
+      afterRestart: ['f2'],
+      calls: [['f0', 1], ['f1', 1], ['f2', 1]],
+      claims: [[], []],
+    });
+  });
+
   it('processes the whole backlog once (concurrency 1) and drains', async () => {
     const deps: DaemonDeps = {
       discoverBacklog: staticBacklog(items(3)),
@@ -357,7 +466,7 @@ describe('engine/daemon — runDaemon', () => {
           discoverBacklog: staticBacklog([item]),
           runFeature,
           isParked: (slug) => isOperatorParked(projectRoot, slug),
-          sleep: async () => {},
+          sleep: async () => { await waitForImmediate(); },
         }, { concurrency: 1, once: false, maxIdlePolls: 3 });
 
         expect(triageCalls).toBe(1);
@@ -382,7 +491,7 @@ describe('engine/daemon — runDaemon', () => {
           discoverBacklog: staticBacklog([item]),
           runFeature,
           isParked: (slug) => isOperatorParked(projectRoot, slug),
-          sleep: async () => {},
+          sleep: async () => { await waitForImmediate(); },
         }, { concurrency: 1, once: false, maxIdlePolls: 2 });
 
         expect(triageCalls).toBe(1);
@@ -407,7 +516,7 @@ describe('engine/daemon — runDaemon', () => {
           discoverBacklog: staticBacklog([item]),
           runFeature,
           isParked: (slug) => isOperatorParked(projectRoot, slug),
-          sleep: async () => {},
+          sleep: async () => { await waitForImmediate(); },
         }, { concurrency: 1, once: false, maxIdlePolls: 2 });
 
         expect(triageCalls).toBe(1);
@@ -436,7 +545,7 @@ describe('engine/daemon — runDaemon', () => {
           discoverBacklog: staticBacklog([item]),
           runFeature,
           isParked: (slug) => isOperatorParked(projectRoot, slug),
-          sleep: async () => {},
+          sleep: async () => { await waitForImmediate(); },
         }, { concurrency: 1, once: true });
 
         expect(triageCalls).toBe(2);
@@ -1040,35 +1149,34 @@ describe('engine/daemon — runDaemon', () => {
     it('negative: in-flight re-verify prevents call when inFlight becomes non-empty', async () => {
       const { vi } = await import('vitest');
       const requestRestart = vi.fn(async () => ({ fired: false }));
-
-      // This test simulates the scenario where:
-      // 1. First idle poll: backlog is empty, stale check runs and returns 'stale'
-      // 2. But by the time we re-verify, a feature has appeared in inFlight
-      // 3. The re-verify check should prevent calling requestRestart
-
-      const discoverySequence = [
-        [], // First call: empty backlog, enters idle branch
-        [{ slug: 'injected-feature' }], // Second call: after idle, a feature appears
-      ];
-      let discoveryIndex = 0;
+      const claims = new InMemoryWorkClaims();
+      let stagedClaim = false;
 
       const deps: DaemonDeps = {
-        discoverBacklog: async () => {
-          if (discoveryIndex < discoverySequence.length) {
-            return discoverySequence[discoveryIndex++];
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        claims,
+        // `isSuppressed` is awaited between the stale verdict and the
+        // in-flight re-verify. Hold a claim across that exact boundary, then
+        // release it on the following microtask so this fixture cannot leave
+        // a workerless claim behind or depend on a real timer.
+        isSuppressed: async () => {
+          if (!stagedClaim) {
+            stagedClaim = true;
+            expect(claims.claim('injected-feature')).toBe(true);
+            queueMicrotask(() => {
+              queueMicrotask(() => {
+                claims.release('injected-feature');
+              });
+            });
           }
-          return [];
-        },
-        runFeature: async (it) => {
-          await new Promise((r) => setTimeout(r, 5));
-          return { slug: it.slug, status: 'done' };
+          return false;
         },
         staleEngineChecker: {
           check: () => 'stale',
           capturedIdentity: () => 'captured-v1-hash',
           targetIdentity: () => 'current-v2-hash',
         },
-        sleep: async () => {},
         requestRestart,
       };
 
@@ -1077,13 +1185,12 @@ describe('engine/daemon — runDaemon', () => {
         once: false,
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
-        maxIdlePolls: 2,
+        maxIdlePolls: 0,
       });
 
-      // The test verifies that the re-verify logic is in place by checking
-      // that requestRestart was not called when the daemon finishes.
-      // (This test may need adjustment based on actual behavior.)
-      // expect(requestRestart).toHaveBeenCalledTimes(0);
+      expect(stagedClaim).toBe(true);
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(claims.list()).toEqual([]);
     });
 
     it('requestRestart returns { fired: false } → ≥2 invocations across idle boundaries, NO engine_restart stop (Task 8)', async () => {
@@ -1332,6 +1439,10 @@ describe('engine/daemon — runDaemon', () => {
     let dispatches = 0;
     let repoCheckCount = 0;
     let resolveWorker: ((value: FeatureOutcome) => void) | undefined;
+    let signalMissingRoot!: () => void;
+    const missingRootObserved = new Promise<void>((resolve) => {
+      signalMissingRoot = resolve;
+    });
     const workerPromise = new Promise<FeatureOutcome>((resolve) => {
       resolveWorker = resolve;
     });
@@ -1347,7 +1458,11 @@ describe('engine/daemon — runDaemon', () => {
         // After dispatch but while feature is in-flight, the repo vanishes.
         // Return null on first check (initial discovery), then missing path
         // on second check (main loop iter when dispatch starts).
-        return repoCheckCount > 1 ? '/gone/repo' : null;
+        if (repoCheckCount > 1) {
+          signalMissingRoot();
+          return '/gone/repo';
+        }
+        return null;
       },
       sleep: async () => {},
       log: () => {},
@@ -1358,9 +1473,9 @@ describe('engine/daemon — runDaemon', () => {
       concurrency: 1,
       once: true,
     });
-    // Yield to let the daemon dispatch and detect the missing repo
-    await new Promise((r) => setTimeout(r, 10));
-    // Now resolve the worker with a done outcome
+    // The daemon has dispatched the worker and observed the missing root.
+    // Resolve only after that boundary, without a timing-based real wait.
+    await missingRootObserved;
     resolveWorker?.({ slug: 'f0', status: 'done' });
     // Now collect the result
     const res = await daemonPromise;
@@ -1653,15 +1768,33 @@ describe('engine/daemon — runDaemon', () => {
       // Then episode clears, and Feature B is picked/dispatched.
       let episodeActive = false;
       let resolveFeatureA: ((value: FeatureOutcome) => void) | undefined;
+      let signalFeatureADispatched!: () => void;
+      const featureADispatched = new Promise<void>((resolve) => {
+        signalFeatureADispatched = resolve;
+      });
       const featureAPromise = new Promise<FeatureOutcome>((resolve) => {
         resolveFeatureA = resolve;
       });
+      let releaseBusyPoll!: () => void;
+      const busyPoll = new Promise<void>((resolve) => {
+        releaseBusyPoll = resolve;
+      });
+      let signalEpisodeSleep!: () => void;
+      const episodeSleepObserved = new Promise<void>((resolve) => {
+        signalEpisodeSleep = resolve;
+      });
+      let releaseEpisodeSleep!: () => void;
+      const episodeSleep = new Promise<void>((resolve) => {
+        releaseEpisodeSleep = resolve;
+      });
+      let sleepCalls = 0;
 
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(2)), // f0 and f1
         runFeature: async (it: BacklogItem) => {
           if (it.slug === 'f0') {
             // Feature A: return pending promise — blocks until we resolve it
+            signalFeatureADispatched();
             return featureAPromise;
           }
           // Feature B: completes immediately
@@ -1673,28 +1806,40 @@ describe('engine/daemon — runDaemon', () => {
           clear: () => Promise.resolve(),
           nextWaitSeconds: () => 60,
         },
-        sleep: async () => {},
+        sleep: async () => {
+          sleepCalls++;
+          if (sleepCalls === 1) {
+            await busyPoll;
+            return;
+          }
+          if (episodeActive) {
+            signalEpisodeSleep();
+            await episodeSleep;
+          }
+        },
       };
 
       // Start daemon without awaiting
       const daemonPromise = runDaemon(deps, {
-        concurrency: 2,
-        once: true,
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 1,
       });
 
-      // Yield to let daemon dispatch f0
-      await new Promise((r) => setTimeout(r, 10));
-
-      // Now activate episode while f0 is in flight
+      // Activate the gate only after f0 is definitely in flight.
+      await featureADispatched;
       episodeActive = true;
-      await new Promise((r) => setTimeout(r, 10));
 
       // Resolve feature A; episode is still active
       resolveFeatureA?.({ slug: 'f0', status: 'done' });
+      releaseBusyPoll();
 
-      // Clear episode before the daemon loop completes
-      await new Promise((r) => setTimeout(r, 10));
+      // The daemon reaches the gated idle sleep after collecting f0.  Release
+      // that exact boundary rather than relying on a timer to run between
+      // immediate test sleeps.
+      await episodeSleepObserved;
       episodeActive = false;
+      releaseEpisodeSleep();
 
       // Collect result
       const res = await daemonPromise;
@@ -2595,6 +2740,10 @@ describe('engine/daemon — runDaemon', () => {
       try {
         const gateChecks: boolean[] = [];
         let preflightResult: Awaited<ReturnType<typeof preflightBuildAuthCheck>>;
+        let signalPreflightComplete!: () => void;
+        const preflightComplete = new Promise<void>((resolve) => {
+          signalPreflightComplete = resolve;
+        });
 
         const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
           discoverBacklog: staticBacklog(items(1)),
@@ -2611,10 +2760,15 @@ describe('engine/daemon — runDaemon', () => {
             // before this feature's own preflight check runs.
             await rm(tokenPath, { force: true });
             preflightResult = await preflightBuildAuthCheck('daemon-token', tokenPath, projectRoot);
+            signalPreflightComplete();
             return { slug: it.slug, status: 'done' as const };
           }),
           log: () => {},
-          sleep: async () => {},
+          // Hold the busy poll at the preflight boundary, rather than spinning
+          // an immediately fulfilled sleep while the injected local I/O runs.
+          sleep: async () => {
+            await preflightComplete;
+          },
         };
 
         const res = await runDaemon(deps as DaemonDeps, {
@@ -2687,18 +2841,29 @@ describe('engine/daemon — runDaemon', () => {
       const featureAPromise = new Promise<FeatureOutcome>((resolve) => {
         resolveFeatureA = resolve;
       });
+      let signalFeatureADispatched!: () => void;
+      const featureADispatched = new Promise<void>((resolve) => {
+        signalFeatureADispatched = resolve;
+      });
+      let releaseBusyPoll!: () => void;
+      const busyPoll = new Promise<void>((resolve) => {
+        releaseBusyPoll = resolve;
+      });
 
       const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
         discoverBacklog: staticBacklog(items(2)), // f0, f1
-        runFeature: async (it: BacklogItem) => {
+        runFeature: vi.fn(async (it: BacklogItem) => {
           if (it.slug === 'f0') {
             // Feature A: stays in flight until we resolve it below.
+            signalFeatureADispatched();
             return featureAPromise;
           }
-          return { slug: it.slug, status: 'done' };
-        },
+          return { slug: it.slug, status: 'done' as const };
+        }),
         isBuildAuthMissing: async () => credentialMissing,
-        sleep: async () => {},
+        sleep: async () => {
+          await busyPoll;
+        },
       };
 
       const daemonPromise = runDaemon(deps as DaemonDeps, {
@@ -2706,21 +2871,19 @@ describe('engine/daemon — runDaemon', () => {
         once: true,
       });
 
-      // Yield to let f0 be picked/dispatched (in flight) before the credential
-      // goes missing.
-      await new Promise((r) => setTimeout(r, 10));
-
-      // Credential becomes missing while f0 is in flight.
+      // Credential becomes missing only after f0 is definitely in flight.
+      await featureADispatched;
       credentialMissing = true;
-      await new Promise((r) => setTimeout(r, 10));
 
       // Resolve the in-flight feature — it must complete normally, untouched
       // by the credential gate having gone active mid-flight.
       resolveFeatureA?.({ slug: 'f0', status: 'done' });
+      releaseBusyPoll();
 
       const res = await daemonPromise;
 
       expect(res.processed.find((o) => o.slug === 'f0')?.status).toBe('done');
+      expect(deps.runFeature).toHaveBeenCalledTimes(1); // f1 remained blocked
     });
 
     it('api-key mode (isBuildAuthMissing absent) never blocks dispatch regardless of PAUSE/park state — gates are independent, not coupled', async () => {

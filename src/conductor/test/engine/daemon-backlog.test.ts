@@ -3123,6 +3123,47 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
     expect(currentBranch).toBe(baseBranch);
   });
 
+  it('multiple in-flight candidates explaining different dirty entries → refuses all-or-nothing heal loudly without partial mutation (Task 13)', async () => {
+    // feat/daemon-x already supplies src/file.ts. Give the second in-flight
+    // candidate its own dirty entry, so no one candidate can explain both.
+    await execFile('git', ['checkout', '-q', '-b', 'feat/daemon-y'], { cwd: dir });
+    await writeFile(join(dir, 'src/other.ts'), 'const y = 2;\n');
+    await execFile('git', ['add', 'src/other.ts'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'feat: modify other file'], { cwd: dir });
+    await execFile('git', ['push', '-q', '-u', 'origin', 'feat/daemon-y'], { cwd: dir });
+    await execFile('git', ['checkout', '-q', baseBranch], { cwd: dir });
+
+    await writeFile(join(dir, 'src/file.ts'), 'const x = 1;\n');
+    await writeFile(join(dir, 'src/other.ts'), 'const y = 2;\n');
+    const beforeStatus = await git(['status', '--porcelain']);
+    expect(beforeStatus).toContain('src/file.ts');
+    expect(beforeStatus).toContain('src/other.ts');
+
+    const logs: string[] = [];
+    let restoreCount = 0;
+    const trackingGit = async (args: string[]) => {
+      if (args[0] === 'restore') restoreCount += 1;
+      return makeGitRunner(dir)(args);
+    };
+
+    const outcome = await fastForwardRoot(dir, (message) => logs.push(message), trackingGit);
+
+    expect(outcome).toMatchObject({ status: 'skipped', cause: 'dirty' });
+    expect(restoreCount).toBe(0);
+    expect(await git(['status', '--porcelain'])).toBe(beforeStatus);
+    expect(await fsReadFile(join(dir, 'src/file.ts'), 'utf-8')).toBe('const x = 1;\n');
+    expect(await fsReadFile(join(dir, 'src/other.ts'), 'utf-8')).toBe('const y = 2;\n');
+
+    const refusalLogs = logs.filter((message) =>
+      message.includes('FAST_FORWARD_REFUSED_MULTI_BRANCH_LEAK'),
+    );
+    expect(refusalLogs).toHaveLength(1);
+    expect(refusalLogs[0]).toContain('src/file.ts');
+    expect(refusalLogs[0]).toContain('src/other.ts');
+    expect(refusalLogs[0]).toContain('feat/daemon-x');
+    expect(refusalLogs[0]).toContain('feat/daemon-y');
+  });
+
   it('partial-explanation veto: 5 explained + 1 unexplained → no restore, no delete, FF skipped (Task 8 / TR-2 negative)', async () => {
     // Setup: Create additional explained files on feat/daemon-x that we'll replicate on main
     await execFile('git', ['checkout', '-q', 'feat/daemon-x'], { cwd: dir });
