@@ -39,6 +39,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A prd-audit Verdict Table row may cite every plan task its evidence spans, as a comma-separated list; a FIXABLE row must still cite exactly one owning task. ([implementation PR #2134](https://github.com/jstoup111/ai-conductor/pull/2134)).
 - Prevents approved ADRs without citable decisions from landing. ([implementation PR #2133](https://github.com/jstoup111/ai-conductor/pull/2133)).
 - ADR decisions numbered as `**1. Title.**` are now citable as governing clauses, so a remediable as-built finding naming one no longer halts for a human. ([implementation PR #2141](https://github.com/jstoup111/ai-conductor/pull/2141)).
+- Install and uninstall banners now say AI Conductor Harness. ([implementation PR #2142](https://github.com/jstoup111/ai-conductor/pull/2142)).
 
 ## [1.0.0] - 2026-08-31
 
