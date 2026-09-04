@@ -30,8 +30,22 @@ import {
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
+import { isBuildEligibleActionCase } from './remediation-case-effects.js';
+import {
+  appendBuildReviewWorkOrderContext,
+  classifyBuildReviewDurableRead,
+  markBuildReviewWorkOrderAttempted,
+  readBuildReviewWorkOrder,
+  readBuildReviewWorkOrderAttemptedCaseIds,
+} from './build-review-work-order.js';
+import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
+import { reconcileRemediationCases } from './remediation-case-reconciler.js';
+import { createGithubTrackerClient } from './tracker-client.js';
+import { fileIntakeIssue } from './engineer/intake/file-issue.js';
+import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
-import { planContractPointers, priorAttemptPointers } from './remediation-context-pointers.js';
+import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
 import type {
   AuthenticationReadiness,
   CodexProbeFailure,
@@ -238,16 +252,19 @@ import {
 } from './finish-publication.js';
 import {
   bumpKickbackGateInLedger,
+  bumpMechanicalFaultsInLedgerResult,
   clearKickbackLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   readGrowth,
   readKickbackLedger,
+  readKickbackLedgerResult,
   recordGrowth,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
+  type chargeBuildReviewEffectInLedger,
   type PendingAsBuiltRemediationFinding,
   type PlanGrowth,
   type PlanGrowthEventSink,
@@ -1493,6 +1510,8 @@ export interface ConductorOptions {
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   /** Test seam for the disposition-aware build_review completion join. */
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
+  /** Test seam for an adjudicated action-effect charge failure. */
+  buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
@@ -2149,6 +2168,7 @@ export class Conductor {
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
+  private readonly buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
@@ -3142,6 +3162,7 @@ export class Conductor {
     this.fullSuiteVerifier =
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
     this.buildReviewEffectiveResolver = opts.buildReviewEffectiveResolver;
+    this.buildReviewChargeEffect = opts.buildReviewChargeEffect;
     this.featureDesc = opts.featureDesc;
     this.worktreeBranch = opts.worktreeBranch;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
@@ -4510,16 +4531,152 @@ export class Conductor {
 
   /** Read the active plan path from engine state, or null if not recorded. */
   private async getActivePlanPath(): Promise<string | null> {
+    return readActivePlanPath(this.projectRoot);
+  }
+
+  /**
+   * The `owner/repo` slug the deferred-intake effects publish against.
+   *
+   * `undefined` leaves the coordinator without its tracker dependencies, so a
+   * deferral stays unfinalized and the reducer blocks — never a silent skip.
+   */
+  private trackerRepoSlug: string | null | undefined;
+  private async resolveTrackerRepoSlug(): Promise<string | undefined> {
+    if (this.trackerRepoSlug !== undefined) return this.trackerRepoSlug ?? undefined;
     try {
-      const engineStatePath = join(this.projectRoot, '.pipeline', 'engine-state.json');
-      const content = await readFile(engineStatePath, 'utf-8');
-      const engineState = JSON.parse(content) as Record<string, unknown>;
-      const activePlanPath = engineState.activePlanPath;
-      return typeof activePlanPath === 'string' ? activePlanPath : null;
+      const { stdout } = await this.gh(['repo', 'view', '--json', 'nameWithOwner'], { cwd: this.projectRoot });
+      const parsed = JSON.parse(stdout || '{}') as { nameWithOwner?: unknown };
+      this.trackerRepoSlug = typeof parsed.nameWithOwner === 'string' && parsed.nameWithOwner ? parsed.nameWithOwner : null;
     } catch {
-      // Engine state doesn't exist or is invalid
-      return null;
+      this.trackerRepoSlug = null;
     }
+    return this.trackerRepoSlug ?? undefined;
+  }
+
+  /**
+   * BUILD's durable remediation input.
+   *
+   * The adjudicated route used to survive only in the process-local
+   * `pendingRetryHints` map, so an ordinary restart lost the accepted work
+   * order entirely. The order and the case store are written as a pair: the
+   * store's recorded feature identity AND its recorded stable action effects
+   * bind the order without needing git or in-memory state, so a fresh process
+   * reconstructs the same prioritized work from the stable effect id — and
+   * only that work. The attempt is stamped BEFORE provider work, so a repeat
+   * of an already-attempted case cannot take a second free route.
+   */
+  private async durableBuildReviewRetryContext(retryHint: string | undefined): Promise<
+    | { readonly kind: 'ready'; readonly context: string }
+    | { readonly kind: 'absent' }
+    | { readonly kind: 'invalid'; readonly reason: string }
+  > {
+    const featureRead = await readRemediationCaseStoreFeature(this.projectRoot);
+    if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
+    if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
+    if (!featureRead.feature) return { kind: 'absent' };
+    const feature = featureRead.feature;
+    // The case store is read FIRST because it owns both bindings this recovery
+    // needs. A settled order stays on disk as evidence, so openness is what
+    // makes it BUILD input — without it the artifact would keep re-entering
+    // every later BUILD prompt long after its cases were resolved — and the
+    // stable action effects it recorded are what bind the order's own effect
+    // identity. No open action case means no live route, which is the same
+    // benign absence as no order at all.
+    const state = await new RemediationCaseStore(this.projectRoot, feature).read();
+    if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
+    const openActionCases = new Map(state.state.cases.flatMap((record) =>
+      isBuildEligibleActionCase(record)
+        ? [[record.id, record.effect.id] as const]
+        : [],
+    ));
+    if (openActionCases.size === 0) return { kind: 'absent' };
+    // Effect-bound, not feature-bound: an order carrying a stable effect this
+    // feature's case store never recorded is foreign and must never reach BUILD
+    // prompt construction, even when it names an open case of this feature.
+    const order = await readBuildReviewWorkOrder(this.projectRoot, feature, [...openActionCases.values()]);
+    if (classifyBuildReviewDurableRead(order) === 'absent') return { kind: 'absent' };
+    if (!order.ok) return { kind: 'invalid', reason: `work order ${order.reason}` };
+    if (!order.workOrder.cases.some((row) => openActionCases.has(row.caseId))) return { kind: 'absent' };
+    const attempt = await markBuildReviewWorkOrderAttempted(this.projectRoot, feature);
+    if (!attempt.ok) return { kind: 'invalid', reason: `work order attempt ${attempt.reason}` };
+    return { kind: 'ready', context: appendBuildReviewWorkOrderContext(
+      retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
+      order.workOrder,
+    ) };
+  }
+
+  /** Keep every adjudication gate on the same resolved configuration accessor. */
+  private buildReviewAdjudicationEnabled(): boolean {
+    return resolveBuildReviewConfig(this.config).adjudication.enabled;
+  }
+
+  /**
+   * Settle durable remediation cases when a lap ends in a mechanically clean
+   * raw PASS.
+   *
+   * The adjudication coordinator runs only on a raw FAIL, so nothing closed
+   * cases a later clean lap no longer reports: an attempted action case stayed
+   * `open` with an `applied` effect forever, and every subsequent BUILD entry —
+   * for any gate — read its stale work order back through
+   * `durableBuildReviewRetryContext` and re-injected repaired work. A clean PASS
+   * IS the evidence that its content set is empty, so reconciling against an
+   * empty graph resolves exactly the prior attempted cases absent from it.
+   *
+   * The mechanical verdict is never changed here. This is state settlement
+   * before terminal PASS routing: genuinely absent prior state is benign, but
+   * unreadable or unpersisted durable state must halt before it can permit a
+   * terminal PASS.
+   */
+  private async settleRemediationCasesOnCleanBuildReview(): Promise<
+    | { readonly kind: 'absent' }
+    | { readonly kind: 'settled' }
+    | { readonly kind: 'invalid'; readonly reason: string }
+  > {
+    if (!this.daemon || !this.buildReviewAdjudicationEnabled()) return { kind: 'absent' };
+    // The lap's own aggregate is both the PASS evidence and the lap identity
+    // every lifecycle occurrence is keyed by. A scalar/legacy verdict has
+    // neither and keeps its historical behavior.
+    let verdictRaw: unknown;
+    try {
+      verdictRaw = JSON.parse(await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'));
+    } catch {
+      return { kind: 'absent' };
+    }
+    const aggregate = parseBuildReviewAggregate(verdictRaw);
+    if (!aggregate || aggregate.verdict !== 'PASS') return { kind: 'absent' };
+    const featureRead = await readRemediationCaseStoreFeature(this.projectRoot);
+    if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
+    if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
+    if (!featureRead.feature) return { kind: 'absent' };
+    const feature = featureRead.feature;
+    const store = new RemediationCaseStore(this.projectRoot, feature);
+    const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
+    if (classifyBuildReviewDurableRead(attemptEvidence) === 'absent') return { kind: 'absent' };
+    if (!attemptEvidence.ok) return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
+    const reconciled = await reconcileRemediationCases(store, {
+      graph: { sourceOutcomes: [], cases: [] },
+      recordedAt: new Date().toISOString(),
+      generateId: randomUUID,
+      attemptedCaseIds: attemptEvidence.attemptedCaseIds,
+    });
+    if (!reconciled.ok) {
+      return {
+        kind: 'invalid',
+        reason: `case reconciliation ${reconciled.reason}${
+          'storeReason' in reconciled ? ` (${reconciled.storeReason})` : ''
+        }`,
+      };
+    }
+    for (const caseId of reconciled.resolvedAbsentCaseIds) {
+      await this.events.emit({
+        type: 'remediation_case_reconciled',
+        domain: 'build_review',
+        lapId: aggregate.lapId,
+        caseId,
+        resolution: 'resolved',
+      });
+    }
+    return { kind: 'settled' };
   }
 
   /** Best-effort compact remediation context from existing build-review evidence. */
@@ -7713,6 +7870,19 @@ export class Conductor {
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
         pendingRetryHints.delete(step.name);
+        if (step.name === 'build' && this.buildReviewAdjudicationEnabled()) {
+          // Durable, not process-local: this is the clause an in-memory hint
+          // alone can never satisfy (Task 18 Done-when 5).
+          const durableRetry = await this.durableBuildReviewRetryContext(retryHint);
+          if (durableRetry.kind === 'invalid') {
+            const reason = `BUILD durable remediation recovery halted: ${durableRetry.reason}`;
+            await this.writeHaltMarker(reason + '\n', 'needs-human');
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            await this.emitLoopHalt(reason);
+            return;
+          }
+          if (durableRetry.kind === 'ready') retryHint = durableRetry.context;
+        }
         let successOutput: string | undefined;
         let stepResult: StepRunResult | undefined;
         let failedStepResult: StepRunResult | undefined;
@@ -10058,6 +10228,162 @@ export class Conductor {
                   i = i - 1; // for-loop i++ re-lands on build_review
                   continue;
                 }
+                const aggregate = parseBuildReviewAggregate(verdictRaw);
+                // The compatibility selector lives at the conductor boundary:
+                // scalar/legacy verdicts retain the historical raw route, while
+                // a current raw aggregate defaults to the post-join path.
+                if (aggregate && this.buildReviewAdjudicationEnabled()) {
+                  const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
+                    this.projectRoot,
+                    verdictRaw,
+                    { emit: async (event) => { await this.events.emit(event); } },
+                  );
+                  // Old raw aggregate fixtures (and pre-adjudication callers)
+                  // have no worktree identity from which a feature-local case
+                  // store can be selected.  They retain the exact historical
+                  // raw lane.  Every other disposition/state failure is still
+                  // authoritative and therefore fail-closed.
+                  const legacyAdjudicationInput = !effective.ok
+                    ? effective.reason === 'build-review feature identity is unavailable'
+                    : !('feature' in effective) || effective.feature === undefined;
+                  if (!effective.ok && !legacyAdjudicationInput) {
+                    const reason = `build_review adjudication halted: ${effective.reason}`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    await this.emitLoopHalt(reason);
+                    return;
+                  }
+                  if (effective.ok && !legacyAdjudicationInput) {
+                  // adr-2026-08-29 D3: only UNCOVERED infrastructure pins the
+                  // mechanical lane. Mapping the undifferentiated list to
+                  // `retry` treated a branch the operator had already covered
+                  // with an exact reduced-coverage decision as a live fault, so
+                  // a content-complete PASS was unreachable.
+                  const uncoveredInfrastructure = effective.effective.uncoveredInfrastructureFailureRubrics;
+                  const mechanicalLedger = await readKickbackLedgerResult(this.projectRoot);
+                  if (mechanicalLedger.kind === 'unreadable') {
+                    const reason = `build_review adjudication halted: ${mechanicalLedger.reason}`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    await this.emitLoopHalt(reason);
+                    return;
+                  }
+                  const mechanicalFaults = mechanicalLedger.kind === 'ok'
+                    ? mechanicalLedger.ledger.gates.build_review?.mechanicalFaults ?? 0
+                    : 0;
+                  const mechanical = uncoveredInfrastructure.length === 0
+                    ? 'healthy'
+                    : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW ? 'halt' : 'retry';
+                  const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
+                    const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
+                      this.projectRoot,
+                      verdictRaw,
+                      { emit: async (event) => { await this.events.emit(event); } },
+                    );
+                    if (!latest.ok) throw new Error(latest.reason);
+                    return new Set(latest.effective.acceptedFindingIds);
+                  };
+                  const trackerRepo = await this.resolveTrackerRepoSlug();
+                  const adjudication = await coordinateBuildReviewAdjudication({
+                    projectRoot: this.projectRoot,
+                    feature: effective.feature,
+                    aggregate,
+                    operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
+                    resolveOperatorResolvedFindingIds,
+                    mechanical,
+                    chargeInput: {
+                      treeHash: await currentTreeHash(this.projectRoot),
+                      resolvedCount: await countResolvedTasks(this.projectRoot),
+                      reason: buildReviewFailureDetails(parsed).join('\n') || 'build_review adjudicated action',
+                    },
+                    ...(this.buildReviewChargeEffect === undefined ? {} : { chargeEffect: this.buildReviewChargeEffect }),
+                    judge: async (context) => {
+                      const dispatched = await this.stepRunner.run('remediate', state, {
+                        retryReason: `Adjudicate this complete build-review context only; write case-v1 remediation output.\n${JSON.stringify(context)}`,
+                      });
+                      if (!dispatched.success) throw new Error('remediate dispatch failed');
+                      const judgement = await readRemediationCaseJudgement(this.projectRoot, state.session_started_at);
+                      if (!judgement.ok) throw new Error(judgement.reason);
+                      return judgement.judgement;
+                    },
+                    // Task 18 Done-when 4: the deferral path is only reachable
+                    // when the production call carries all three dependencies.
+                    // Omitting them left marker lookup, issue filing, and
+                    // deferral completion dead in production while an injected
+                    // coordinator fixture kept passing.
+                    ...(trackerRepo === undefined ? {} : {
+                      repo: trackerRepo,
+                      tracker: createGithubTrackerClient(this.gh),
+                      fileIssue: async (issue: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => {
+                        const filed = await fileIntakeIssue(
+                          { title: issue.title, body: issue.body, priority: issue.priority, repo: trackerRepo },
+                          { tracker: createGithubTrackerClient(this.gh), gh: this.gh, cwd: this.projectRoot },
+                        );
+                        return { issueUrl: filed.issueUrl };
+                      },
+                    }),
+                    emit: async (event) => { await this.events.emit(event); },
+                  });
+                  if (!adjudication.ok || adjudication.route === 'halt') {
+                    const reason = `build_review adjudication halted: ${adjudication.detail}` +
+                      (adjudication.ok ? `\n${adjudication.trace}` : '');
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    await this.emitLoopHalt(reason);
+                    return;
+                  }
+                  if (adjudication.route === 'pass') {
+                    await this.saveConductorStepStatus(state, step.name, 'done');
+                    continue;
+                  }
+                  if (adjudication.route === 'build') {
+                    const ledger = await readKickbackLedger(this.projectRoot);
+                    const count = ledger.gates.build_review?.count ?? 1;
+                    const evidence = `${adjudication.detail}\n${adjudication.trace}`;
+                    await emitTracked({ type: 'kickback', from: 'build_review', to: 'build', evidence, count });
+                    pendingRetryHints.set('build', `build_review adjudication: ${evidence}`);
+                    if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
+                    await captureKickbackToBuildContext('build_review');
+                    const navigationIndex = await this.navigateStateBack(state, 'build', steps);
+                    await this.commitStateChanges(
+                      state,
+                      'restage BUILD review after adjudicated kickback',
+                      filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
+                    );
+                    i = navigationIndex - 1;
+                    continue;
+                  }
+                  // adr-2026-08-29 D3.2: no actionable content route remains
+                  // and infrastructure is uncovered. That is the MECHANICAL
+                  // lane — re-land build_review under its own bounded
+                  // allowance. Falling through to the legacy raw route spent a
+                  // semantic kickback and re-sent content the judgement had
+                  // already finalized back to BUILD as raw reasons.
+                  const uncoveredRubric = uncoveredInfrastructure[0];
+                  const uncoveredResult = uncoveredRubric ? aggregate.results[uncoveredRubric] : undefined;
+                  const bumpedMechanicalFaults = await bumpMechanicalFaultsInLedgerResult(this.projectRoot, 'build_review',
+                    uncoveredRubric && uncoveredResult?.kind === 'infrastructure-failure'
+                      ? {
+                          rubric: uncoveredRubric,
+                          reason: uncoveredResult.reason,
+                          detail: uncoveredResult.detail ?? 'uncovered infrastructure failure on a settled lap',
+                          lapId: aggregate.lapId,
+                        }
+                      : undefined,
+                  );
+                  if (bumpedMechanicalFaults.kind === 'unreadable') {
+                    const reason = `build_review adjudication halted: ${bumpedMechanicalFaults.reason}`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    await this.emitLoopHalt(reason);
+                    return;
+                  }
+                  await this.saveConductorStepStatus(state, step.name, 'failed');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  i = i - 1; // for-loop i++ re-lands on build_review
+                  continue;
+                  }
+                }
                 const failureDetails = buildReviewFailureDetails(parsed);
                 let kickbackLedgerBeforeConsumption: KickbackLedger | undefined;
                 // The raw aggregate can outlive a concurrent operator acceptance.
@@ -11069,6 +11395,20 @@ export class Conductor {
                   notBeforeMs: state.session_started_at,
                 })
               : null;
+
+          // A clean build_review lap settles its durable remediation cases
+          // before the PASS becomes terminal, so no repaired work order stays
+          // BUILD-eligible for a later lap to replay.
+          if (step.name === 'build_review') {
+            const settlement = await this.settleRemediationCasesOnCleanBuildReview();
+            if (settlement.kind === 'invalid') {
+              await this.writeHaltMarker(
+                `build_review clean-PASS durable settlement halted: ${settlement.reason}\n`,
+                'needs-human',
+              );
+              return;
+            }
+          }
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are
           // written atomically in their engine handlers. `rebase` is also

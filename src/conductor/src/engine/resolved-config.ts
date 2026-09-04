@@ -663,6 +663,7 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
 // ────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_BUILD_REVIEW_ENABLED = true;
+const DEFAULT_BUILD_REVIEW_ADJUDICATION_ENABLED = true;
 const DEFAULT_SCOPE_CONTAINMENT_ENFORCED = false;
 const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 1;
 const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = ['testQuality'];
@@ -678,9 +679,15 @@ export interface ResolvedBuildReviewRubricPolicy {
   escalate: boolean;
 }
 
+/** Concrete post-join remediation adjudication setting. */
+export interface ResolvedBuildReviewAdjudicationConfig {
+  enabled: boolean;
+}
+
 /** Fully-resolved build_review settings (no optional fields). */
 export interface ResolvedBuildReviewConfig {
   enabled: boolean;
+  adjudication: ResolvedBuildReviewAdjudicationConfig;
   scopeContainmentEnforced: boolean;
   maxParallel: number;
   rubrics: Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
@@ -793,6 +800,9 @@ export function resolveBuildReviewConfig(
 
   return {
     enabled: block?.enabled ?? DEFAULT_BUILD_REVIEW_ENABLED,
+    adjudication: {
+      enabled: block?.adjudication?.enabled ?? DEFAULT_BUILD_REVIEW_ADJUDICATION_ENABLED,
+    },
     scopeContainmentEnforced:
       typeof block?.scopeContainmentEnforced === 'boolean'
         ? block.scopeContainmentEnforced

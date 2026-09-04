@@ -3,7 +3,9 @@ import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
+  type BuildReviewFindingAnchor,
   type BuildReviewLapId,
+  type BuildReviewRubricContractVersion,
   type BuildReviewInfrastructureFailure,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
@@ -63,6 +65,25 @@ export interface BuildReviewEffectiveVerdict {
   readonly unresolvedFindingIds: readonly string[];
   readonly skippedRubrics: readonly BuildReviewRubricId[];
   readonly infrastructureFailureRubrics: readonly BuildReviewRubricId[];
+  /**
+   * The subset of `infrastructureFailureRubrics` with no exact current operator
+   * reduced-coverage decision. Callers routing the mechanical lane MUST use
+   * this, not the undifferentiated list: a branch the operator has already
+   * covered is not a reason to keep retrying, and treating it as one made a
+   * content-complete PASS unreachable (adr-2026-08-29 D3.3).
+   */
+  readonly uncoveredInfrastructureFailureRubrics: readonly BuildReviewRubricId[];
+}
+
+/** Raw, registry-neutral content preserved by the mechanical aggregate join. */
+export interface BuildReviewRawSourceProjection {
+  readonly rubric: BuildReviewRubricId;
+  readonly findingId: string;
+  readonly contractVersion: BuildReviewRubricContractVersion;
+  readonly concernKind: string;
+  readonly anchor: BuildReviewFindingAnchor;
+  readonly summary: string;
+  readonly evidenceLocations: readonly string[];
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -258,6 +279,40 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
 }
 
 /**
+ * Projects every raw adjudicable content finding without changing the stored
+ * aggregate shape. Coverage failures are intentionally excluded: they are not
+ * semantic sources for the post-join remediate judgement.
+ */
+export function projectBuildReviewAggregateSources(value: unknown): readonly BuildReviewRawSourceProjection[] | undefined {
+  const aggregate = parseBuildReviewAggregate(value);
+  if (!aggregate) return undefined;
+  const sources: BuildReviewRawSourceProjection[] = [];
+  for (const rubric of RUBRICS) {
+    const result = aggregate.results[rubric];
+    if (result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric,
+        contractVersion: result.contractVersion,
+        concernKind: finding.concernKind,
+        anchor: finding.anchor,
+      });
+      if (!identity) return undefined;
+      sources.push(Object.freeze({
+        rubric,
+        findingId: identity.id,
+        contractVersion: result.contractVersion,
+        concernKind: finding.concernKind,
+        anchor: finding.anchor,
+        summary: finding.summary,
+        evidenceLocations: Object.freeze([...finding.evidenceLocations]),
+      }));
+    }
+  }
+  return Object.freeze(sources);
+}
+
+/**
  * Applies only already-verified canonical finding IDs after strict raw join.
  * Legacy objects cannot enter this reducer, and skips/infrastructure failures
  * remain blocking even when every content finding has an accepted ID.
@@ -273,7 +328,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const unresolved: string[] = [];
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
-  let uncoveredInfrastructureCount = 0;
+  const uncoveredInfrastructure: BuildReviewRubricId[] = [];
   let judgedCount = 0;
   for (const rubric of RUBRICS) {
     const result = aggregate.results[rubric];
@@ -287,7 +342,7 @@ export function deriveEffectiveBuildReviewVerdict(
         decision.feature,
         { rubric, reason: result.reason },
         [decision],
-      ))) uncoveredInfrastructureCount += 1;
+      ))) uncoveredInfrastructure.push(rubric);
       continue;
     }
     judgedCount += 1;
@@ -301,9 +356,10 @@ export function deriveEffectiveBuildReviewVerdict(
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
-    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructureCount === 0 ? 'PASS' : 'FAIL',
+    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
+    uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
   });
 }
 

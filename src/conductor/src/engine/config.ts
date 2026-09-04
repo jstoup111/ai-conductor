@@ -117,8 +117,9 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   mergeable_autoresolve: ['enabled', 'cooldownMinutes', 'suiteCommand'],
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
+  'build_review.adjudication': ['enabled'],
   'build_review.rubrics': ['enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate'],
-  build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'rubrics'],
+  build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics'],
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],
   cumulative_kickback_bound: ['enabled'],
@@ -256,6 +257,29 @@ function validateBuildReviewRubrics(
     if (policy.escalate !== undefined && typeof policy.escalate !== 'boolean') {
       return { type: 'validation_error', message: `${path}.escalate must be a boolean` };
     }
+  }
+  return null;
+}
+
+function validateBuildReviewAdjudication(adjudication: unknown): ConfigError | null {
+  if (adjudication === undefined) return null;
+  if (!isPlainObject(adjudication)) {
+    return { type: 'validation_error', message: 'build_review.adjudication must be an object' };
+  }
+  const allowedKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS['build_review.adjudication']);
+  for (const key of Object.keys(adjudication)) {
+    if (!allowedKeys.has(key)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in build_review.adjudication: "${key}"`,
+      };
+    }
+  }
+  if (adjudication.enabled !== undefined && typeof adjudication.enabled !== 'boolean') {
+    return {
+      type: 'validation_error',
+      message: 'build_review.adjudication.enabled must be a boolean',
+    };
   }
   return null;
 }
@@ -1113,6 +1137,7 @@ export function validateConfig(
           key,
           isValid: (value: unknown) => {
             if (key === 'enabled' || key === 'scopeContainmentEnforced') return typeof value === 'boolean';
+            if (key === 'adjudication') return true;
             return key === 'perTaskFloor' || key === 'maxParallel' || key === 'rubrics';
           },
         })),
@@ -1129,6 +1154,8 @@ export function validateConfig(
         delete br.perTaskFloor;
       }
       const rubricInput = br.rubrics;
+      const adjudicationError = validateBuildReviewAdjudication(br.adjudication);
+      if (adjudicationError) return { ok: false, error: adjudicationError };
       const rubricError = validateBuildReviewRubrics(
         br.maxParallel,
         rubricInput,
@@ -1147,6 +1174,12 @@ export function validateConfig(
         ...br,
         enabled: typeof br.enabled === 'boolean' ? br.enabled : true,
         maxParallel: typeof br.maxParallel === 'number' ? br.maxParallel : 1,
+        adjudication: {
+          enabled:
+            typeof (br.adjudication as Record<string, unknown> | undefined)?.enabled === 'boolean'
+              ? (br.adjudication as Record<string, boolean>).enabled
+              : true,
+        },
         rubrics: Object.fromEntries(
           BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
             rubricId,
@@ -1168,6 +1201,7 @@ export function validateConfig(
       obj.build_review = {
         enabled: true,
         maxParallel: 1,
+        adjudication: { enabled: true },
         rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
       };
     }
@@ -1175,6 +1209,7 @@ export function validateConfig(
     obj.build_review = {
       enabled: true,
       maxParallel: 1,
+      adjudication: { enabled: true },
       rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
     };
   }
