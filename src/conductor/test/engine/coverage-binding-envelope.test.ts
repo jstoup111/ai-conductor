@@ -49,9 +49,15 @@ describe('coverage binding envelope', () => {
 
   it('hashes normalized criterion and Done when checks', () => {
     const unchanged = claimDigest({ criterion: ' Given  a criterion ', doneWhen: [[' First\ncheck ', 'second check']] });
-    expect([unchanged, claimDigest({ criterion: 'Given a criterion', doneWhen: [['First check', 'second   check']] }), claimDigest({ criterion: 'Given a criterion', doneWhen: [['First check', 'changed check']] })]).toEqual([
+    expect([
+      unchanged,
+      claimDigest({ criterion: 'Given a criterion', doneWhen: [['First check', 'second   check']] }),
+      claimDigest({ criterion: 'A different criterion', doneWhen: [['First check', 'second check']] }),
+      claimDigest({ criterion: 'Given a criterion', doneWhen: [['First check', 'changed check']] }),
+    ]).toEqual([
       unchanged,
       unchanged,
+      expect.not.stringMatching(new RegExp(`^${unchanged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)),
       expect.not.stringMatching(new RegExp(`^${unchanged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)),
     ]);
   });
