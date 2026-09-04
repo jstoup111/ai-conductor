@@ -4077,7 +4077,16 @@ const ADR_SECTION_HEADING_RE = /^\s{0,3}##\s+/;
  * Extract citable decision ids from an ADR's `## Decision` section.
  *
  * The accepted forms preserve the AB-R12 compatibility contract: numbered
- * list items, bolded D-headings, and ATX D-headings with optional emphasis.
+ * list items with the emphasis either after the number (`4. **Termination.**`)
+ * or wrapping it (`**4. Termination.**`), bolded D-headings, and ATX
+ * D-headings with optional emphasis.
+ *
+ * The bold-wrapped number is not a stylistic nicety: seven APPROVED ADRs on the
+ * default branch number their decisions that way, including
+ * `adr-2026-08-11-halt-events-ride-the-persisted-spine`. `^\s*\d+\.` cannot step
+ * over the leading `**`, so each of those decisions was uncitable as a governing
+ * clause, and a REMEDIABLE as-built finding naming one halted `needs-human` on
+ * punctuation rather than on anything a human had to decide.
  */
 export function parseAdrDecisions(content: string): AdrDecisionParseResult {
   const withoutFencedCodeBlocks = content.replace(
@@ -4098,7 +4107,9 @@ export function parseAdrDecisions(content: string): AdrDecisionParseResult {
   for (const line of lines.slice(sectionStart + 1)) {
     if (ADR_SECTION_HEADING_RE.test(line)) break;
     const decisionLine = line.replace(/^\s{0,3}>\s?/, '');
-    const numberedItem = decisionLine.match(/^\s*(\d+)\.\s+\S/);
+    // `\*{0,2}` before the digit, never after it: `**1.` must match while
+    // `**12.` must not answer for decision 1, so the `.` stays required.
+    const numberedItem = decisionLine.match(/^\s*\*{0,2}(\d+)\.\s+\S/);
     const dHeading = decisionLine.match(/^\s*#{0,6}\s*\*{0,2}D(\d+)\b/);
     const id = numberedItem?.[1] ?? dHeading?.[1];
     if (id !== undefined) ids.add(id);
