@@ -28,15 +28,24 @@ function isNoOwnerCriterion(criterion: string): boolean {
   return /^NC\.\d+$/i.test(criterion);
 }
 
+/**
+ * NC ordinals are lap-local and evidence summaries re-anchor their `file:line`
+ * spans on every re-grade, so neither is stable identity on its own. Comparing
+ * with the anchors collapsed lets a decision survive a re-graded lap.
+ */
+export function normalizeOverScopeSummary(summary: string): string {
+  return summary.replace(/:\d+(?:-\d+)?\b/g, ':L').replace(/\s+/g, ' ').trim();
+}
+
 /** NC decisions bind their evidence summary; regular criterion decisions remain criterion-keyed. */
 function decisionMatchesFinding(
   decision: Pick<OverScopeDecision, 'criterion' | 'summary'>,
   criterion: string,
   summary: string,
 ): boolean {
-  return decision.criterion === criterion && (
-    !isNoOwnerCriterion(criterion) || decision.summary.trim() === summary.trim()
-  );
+  if (!isNoOwnerCriterion(criterion)) return decision.criterion === criterion;
+  return isNoOwnerCriterion(decision.criterion)
+    && normalizeOverScopeSummary(decision.summary) === normalizeOverScopeSummary(summary);
 }
 
 /** Append new decisions atomically; repeated decisions are inert and the last decision is authoritative. */
@@ -123,18 +132,30 @@ export function parseClearedOverScopeDecisions(
   for (const raw of entries) {
     const entry = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
     const criterion = typeof entry.criterion === 'string' ? entry.criterion.trim() : undefined;
-    if (!criterion || !blockingFindings.has(criterion)) { defects.push({ kind: 'unknown-criterion', ...(criterion ? { criterion } : {}) }); continue; }
+    const authoredSummary = typeof entry.summary === 'string' ? entry.summary.trim() : '';
+    // NC ordinals are lap-local, so a re-graded lap may renumber the same
+    // finding out from under a recorded decision. Rebind by evidence summary
+    // (anchors normalized) when it identifies exactly one current NC finding.
+    let bound = criterion;
+    if (criterion && !blockingFindings.has(criterion) && isNoOwnerCriterion(criterion) && authoredSummary && 'get' in blockingFindings) {
+      const rebound = [...blockingFindings.entries()].filter(([id, evidence]) =>
+        isNoOwnerCriterion(id) && normalizeOverScopeSummary(evidence) === normalizeOverScopeSummary(authoredSummary));
+      if (rebound.length === 1) bound = rebound[0]![0];
+    }
+    if (!bound || !blockingFindings.has(bound)) { defects.push({ kind: 'unknown-criterion', ...(criterion ? { criterion } : {}) }); continue; }
     if (entry.decision === 'pending' || entry.decision === undefined) continue;
-    if (entry.decision !== 'accept' && entry.decision !== 'refuse') { defects.push({ kind: 'invalid-decision', criterion }); continue; }
-    if (typeof entry.rationale !== 'string' || !entry.rationale.trim()) { defects.push({ kind: 'missing-rationale', criterion }); continue; }
-    if (typeof entry.summary !== 'string' || !entry.summary.trim()) { defects.push({ kind: 'invalid-decision', criterion }); continue; }
-    const summary = entry.summary.trim();
-    const currentSummary = 'get' in blockingFindings ? blockingFindings.get(criterion) : undefined;
-    if (isNoOwnerCriterion(criterion) && currentSummary !== undefined && currentSummary.trim() !== summary) {
-      defects.push({ kind: 'invalid-decision', criterion });
+    if (entry.decision !== 'accept' && entry.decision !== 'refuse') { defects.push({ kind: 'invalid-decision', criterion: bound }); continue; }
+    if (typeof entry.rationale !== 'string' || !entry.rationale.trim()) { defects.push({ kind: 'missing-rationale', criterion: bound }); continue; }
+    if (!authoredSummary) { defects.push({ kind: 'invalid-decision', criterion: bound }); continue; }
+    const currentSummary = 'get' in blockingFindings ? blockingFindings.get(bound) : undefined;
+    if (isNoOwnerCriterion(bound) && currentSummary !== undefined
+      && normalizeOverScopeSummary(currentSummary) !== normalizeOverScopeSummary(authoredSummary)) {
+      defects.push({ kind: 'invalid-decision', criterion: bound });
       continue;
     }
-    decisions.push({ criterion, summary, decision: entry.decision, rationale: entry.rationale.trim() });
+    // Record under the current lap's id and summary so the stored decision
+    // matches this lap's report verbatim.
+    decisions.push({ criterion: bound, summary: currentSummary ?? authoredSummary, decision: entry.decision, rationale: entry.rationale.trim() });
   }
   return { kind: 'parsed', decisions, defects };
 }

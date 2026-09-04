@@ -526,7 +526,8 @@ describe('prd_audit kickback', () => {
     ];
 
     expect(classifyOverScopeCriterion('NC.1', 'Visible addition X.', relations, decisions)).toBe('accepted');
-    expect(classifyOverScopeCriterion('NC.2', 'Visible addition X.', relations, decisions)).toBe('blocking-undecided');
+    // NC ordinals are lap-local: the same summary renumbered to NC.2 is the same finding.
+    expect(classifyOverScopeCriterion('NC.2', 'Visible addition X.', relations, decisions)).toBe('accepted');
     expect(classifyOverScopeCriterion('NC.1', 'Visible addition Y.', relations, decisions)).toBe('blocking-undecided');
     expect(classifyOverScopeCriterion('S3.1', 'Drifted evidence.', relations, decisions)).toBe('accepted');
 
@@ -788,6 +789,28 @@ describe('prd_audit kickback', () => {
     expect(parseClearedOverScopeDecisions('```json over-scope-decisions\n{ nope\n```', new Map([['S3.1', 'x']]))).toMatchObject({ defects: [{ kind: 'malformed-block' }] });
     const body = '```json over-scope-decisions\n[{"criterion":"S3.1","summary":"x","decision":"pending"},{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"},{"criterion":"S3.1","summary":"x","decision":"wat","rationale":"x"}]\n```';
     expect(parseClearedOverScopeDecisions(body, new Map([['S3.1', 'x']]))).toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }, { kind: 'invalid-decision', criterion: 'S3.1' }] });
+  });
+
+  it('rebinds a cleared NC decision across renumbering and line-anchor drift by normalized summary', () => {
+    // Lap 1 numbered the finding NC.2 anchored at conductor.ts:661-681; the
+    // re-graded lap renumbered it NC.1 and re-anchored to :664-679.
+    const parsed = parseClearedOverScopeDecisions(
+      '```json over-scope-decisions\n[{"criterion":"NC.2","summary":"conductor.ts:661-681 — widened decision shape.","decision":"accept","rationale":"Approved."}]\n```',
+      new Map([['NC.1', 'conductor.ts:664-679 — widened decision shape.']]),
+    );
+    expect(parsed).toMatchObject({
+      kind: 'parsed',
+      decisions: [{ criterion: 'NC.1', summary: 'conductor.ts:664-679 — widened decision shape.', decision: 'accept', rationale: 'Approved.' }],
+      defects: [],
+    });
+  });
+
+  it('keeps unknown-criterion when a drifted NC summary matches no current finding or more than one', () => {
+    const body = '```json over-scope-decisions\n[{"criterion":"NC.9","summary":"conductor.ts:10 — thing.","decision":"accept","rationale":"Approved."}]\n```';
+    expect(parseClearedOverScopeDecisions(body, new Map([['NC.1', 'other evidence entirely']])))
+      .toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'NC.9' }] });
+    expect(parseClearedOverScopeDecisions(body, new Map([['NC.1', 'conductor.ts:11 — thing.'], ['NC.2', 'conductor.ts:12 — thing.']])))
+      .toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'NC.9' }] });
   });
 
   it('rejects a cleared NC decision whose summary differs from the current report without recording it', async () => {
