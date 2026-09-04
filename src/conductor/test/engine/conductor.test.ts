@@ -102,7 +102,7 @@ import {
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
-import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -952,7 +952,7 @@ describe('engine/conductor', () => {
 
   });
 
-  it('re-dispatches a typed coverage-binding payload failure without halting', async () => {
+  it('re-dispatches a failed coverage-binding step without halting', async () => {
     const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
     state.coverage_binding = 'pending';
     await writeState(statePath, state);
@@ -970,8 +970,7 @@ describe('engine/conductor', () => {
             join(dir, '.pipeline', 'coverage-binding.json'),
             JSON.stringify({ version: 1, slug: 'test-feature', runId: 'test-run', status: 'failed', entries: [] }),
           );
-          const infrastructureFailure = new CoverageBindingPayloadError('out-of-vocabulary verdict');
-          return { success: false, infrastructureFailure, output: infrastructureFailure.message };
+          return { success: false, output: 'coverage-binding provider failed' };
         }
         return { success: true };
       }),
