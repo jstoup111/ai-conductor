@@ -42,7 +42,9 @@ describe('daemon-cli wires refreshEngineSource (self-host only) into runDaemon d
       source.indexOf('// Task T30: consume restart marker', source.indexOf('const result = await runDaemon(')),
     );
 
-    expect(runDaemonDeps).toMatch(/relink\s*:\s*\(\)\s*=>\s*liveBoundaryCoordinator!\.runMutation\(/);
+    // All dispatcher-side root mutations share the helper so their
+    // live-boundary defer semantics cannot drift.
+    expect(runDaemonDeps).toMatch(/relink\s*:\s*\(\)\s*=>\s*coordinatedRootMutation\(/);
     expect(runDaemonDeps).toMatch(/\(\)\s*=>\s*relinkSkillsForSelfBuild\(\{\s*log\s*\}\)/);
   });
 
