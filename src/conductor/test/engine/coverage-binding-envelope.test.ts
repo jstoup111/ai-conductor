@@ -7,6 +7,7 @@ import {
   parseJudgePayload,
   readCoverageBindingEnvelope,
   writeCoverageBindingEnvelope,
+  type CoverageBindingEnvelope,
   type CoverageBindingEnvelopeFilesystem,
 } from '../../src/engine/coverage-binding-envelope.js';
 
@@ -55,7 +56,7 @@ describe('coverage binding envelope', () => {
     ]);
   });
 
-  it('atomically writes and reads engine-stamped entries while missing or malformed files are ignored', async () => {
+  it('atomically writes and reads engine-stamped entries while missing, malformed, or structurally invalid files are ignored', async () => {
     const root = '/feature';
     const fs = memoryFilesystem();
     const entry = { digest: 'sha256:claim', criterion: 'Given a criterion', taskIds: ['11'], doneWhen: [['The requirement is asserted.']], verdict: 'asserts' as const };
@@ -74,5 +75,31 @@ describe('coverage binding envelope', () => {
     });
     fs.files[path] = '{malformed';
     await expect(readCoverageBindingEnvelope(root, fs)).resolves.toBeNull();
+    fs.files[path] = JSON.stringify({
+      version: 1, slug: 'feature', runId: 'run-1', status: 'foreign', entries: [entry],
+    });
+    await expect(readCoverageBindingEnvelope(root, fs)).resolves.toBeNull();
+  });
+
+  it('refuses to write a structurally invalid envelope', async () => {
+    const fs = memoryFilesystem();
+    const invalidEnvelope = {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [{
+        digest: 'sha256:claim',
+        criterion: 'Given a criterion',
+        taskIds: ['11'],
+        doneWhen: [['The requirement is asserted.']],
+        verdict: 'asserts',
+        missingAssertion: 'asserts entries must not carry this field',
+      }],
+    };
+
+    await expect(writeCoverageBindingEnvelope('/feature', invalidEnvelope as CoverageBindingEnvelope, fs))
+      .rejects.toThrow('coverage-binding envelope: invalid envelope');
+    expect(fs.writeFile).not.toHaveBeenCalled();
   });
 });
