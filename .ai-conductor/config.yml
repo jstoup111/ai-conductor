@@ -136,6 +136,14 @@ conflict_check:
 prd_audit:
   max_appended_tasks: 8
   max_appended_ratio: 0.5
+  # TEMPORARY (operator, 2026-09-04): second lap granted to clear the
+  # bin-setup S4.2 and a-coverage AB-1/AB-2 halts; revert to the default 1
+  # once both features pass (see #2147 for the per-feature grant design).
+  max_remediation_laps: 2
+
+# TEMPORARY (operator, 2026-09-04): same grant as above; revert with it.
+architecture_review_as_built:
+  max_remediation_laps: 2
 
 steps:
   explore:
