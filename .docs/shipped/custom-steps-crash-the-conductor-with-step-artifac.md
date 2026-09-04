@@ -12,18 +12,20 @@ output: 204509
 cache_read: 46099089
 cache_creation: 1658488
 cost_usd: 40.2733
-dispatches: 34
+dispatches: 35
 retries: 2
 halts: 1
-unmetered: count: 10, duration_ms: 0
+unmetered: count: 11, duration_ms: 0
 cost_unmetered: count: 0
 providers:
   codex: input: 1612577, output: 111030, cache_read: 31035264, cache_creation: 0, cost_usd: 13.818, dispatches: 13, cost_unmetered: 0
   claude: input: 302, output: 93479, cache_read: 15063825, cache_creation: 1658488, cost_usd: 26.4553, dispatches: 11, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:finish
+state: measured
+active_ms: 7503884
+provider_active_ms: 6872028
+no_provider_active_ms: 631856
 
 ## Build Review
 laps_to_pass: 3
