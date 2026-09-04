@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-04T03:50:45.038Z
+Status: halted
 Slug: build-review-rubrics-need-a-post-join-adjudicator-
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-build-review-rubrics-need-a-post-join-adjudicator-
-Head SHA: 3a24e8dafab4ce050d56fc0fcf0863ab85050a6a
-Halted at: 2026-09-03T17:07:42.103Z
+Head SHA: 326f66c111c6f89460c881b5385ba1fb681628e8
+Halted at: 2026-09-04T04:05:30.258Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
