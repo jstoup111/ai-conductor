@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.0.1] - 2026-09-03
+## [1.0.1] - 2026-09-04
 
 ### Added
 
@@ -38,6 +38,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A plan task citing a placeholder artifact path such as `.docs/plans/<slug>.md` is no longer treated as targeting another feature's sealed artifact. ([implementation PR #2130](https://github.com/jstoup111/ai-conductor/pull/2130)).
 - A prd-audit Verdict Table row may cite every plan task its evidence spans, as a comma-separated list; a FIXABLE row must still cite exactly one owning task. ([implementation PR #2134](https://github.com/jstoup111/ai-conductor/pull/2134)).
 - Prevents approved ADRs without citable decisions from landing. ([implementation PR #2133](https://github.com/jstoup111/ai-conductor/pull/2133)).
+- ADR decisions numbered as `**1. Title.**` are now citable as governing clauses, so a remediable as-built finding naming one no longer halts for a human. ([implementation PR #2141](https://github.com/jstoup111/ai-conductor/pull/2141)).
 
 ## [1.0.0] - 2026-08-31
 
