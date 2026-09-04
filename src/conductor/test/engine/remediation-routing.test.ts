@@ -150,7 +150,9 @@ describe('sealed-artifact remediation routing', () => {
     const dispatched: StepName[] = [];
     const redirects: unknown[] = [];
     const events = new ConductorEventEmitter();
-    events.on('remediation_sealed_artifact_redirect', (event) => redirects.push(event));
+    events.on('remediation_sealed_artifact_redirect', (event) => {
+      redirects.push(event);
+    });
     const runner: StepRunner = {
       run: async (step) => {
         dispatched.push(step);
