@@ -3868,6 +3868,18 @@ describe('engine/artifacts', () => {
           '| --- | --- | --- | --- |\n' +
           '| NC.1 | OVER_SCOPE | outside-visible | Changed visible behavior outside the approved plan. |\n',
       );
+      // A reworded rendering of the same finding stays accepted (#2145).
+      expect((await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 })).done).toBe(true);
+
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+          '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
+          '## Findings without an owning criterion\n' +
+          '| Finding | Grade | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- |\n' +
+          '| NC.1 | OVER_SCOPE | outside-visible | Removed the daemon retry backoff and its config key entirely. |\n',
+      );
       const mismatched = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
       expect(mismatched.done).toBe(false);
       expect(mismatched.reason).toContain('NC.1 (OVER_SCOPE)');

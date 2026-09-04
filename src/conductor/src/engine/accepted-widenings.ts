@@ -37,6 +37,37 @@ export function normalizeOverScopeSummary(summary: string): string {
   return summary.replace(/:\d+(?:-\d+)?\b/g, ':L').replace(/\s+/g, ' ').trim();
 }
 
+const SUMMARY_EQUIVALENCE_THRESHOLD = 0.8;
+
+function summaryTokens(summary: string): Set<string> {
+  return new Set(
+    normalizeOverScopeSummary(summary)
+      .toLowerCase()
+      .replace(/[`*"'()\[\]{};,.]/g, ' ')
+      .split(/\s+/)
+      .filter((token) => token.length > 0),
+  );
+}
+
+/**
+ * The evidence summary is LLM-authored prose that re-grades reword freely (a
+ * fourth halt on one feature rewrote the same finding four ways, and one lap
+ * appended decision history into the summary itself — #2145), so exact
+ * equality drops recorded decisions. Equivalence is exact normalized match,
+ * or a token-overlap coefficient (shared over the smaller token set) at
+ * 0.8+: the smaller-set denominator keeps a summary equivalent to itself
+ * plus appended history, while a genuinely different finding fails closed.
+ */
+export function overScopeSummariesEquivalent(a: string, b: string): boolean {
+  if (normalizeOverScopeSummary(a) === normalizeOverScopeSummary(b)) return true;
+  const tokensA = summaryTokens(a);
+  const tokensB = summaryTokens(b);
+  if (!tokensA.size || !tokensB.size) return false;
+  let shared = 0;
+  for (const token of tokensA) if (tokensB.has(token)) shared += 1;
+  return shared / Math.min(tokensA.size, tokensB.size) >= SUMMARY_EQUIVALENCE_THRESHOLD;
+}
+
 /** NC decisions bind their evidence summary; regular criterion decisions remain criterion-keyed. */
 function decisionMatchesFinding(
   decision: Pick<OverScopeDecision, 'criterion' | 'summary'>,
@@ -45,7 +76,7 @@ function decisionMatchesFinding(
 ): boolean {
   if (!isNoOwnerCriterion(criterion)) return decision.criterion === criterion;
   return isNoOwnerCriterion(decision.criterion)
-    && normalizeOverScopeSummary(decision.summary) === normalizeOverScopeSummary(summary);
+    && overScopeSummariesEquivalent(decision.summary, summary);
 }
 
 /** Append new decisions atomically; repeated decisions are inert and the last decision is authoritative. */
@@ -137,10 +168,16 @@ export function parseClearedOverScopeDecisions(
     // finding out from under a recorded decision. Rebind by evidence summary
     // (anchors normalized) when it identifies exactly one current NC finding.
     let bound = criterion;
-    if (criterion && !blockingFindings.has(criterion) && isNoOwnerCriterion(criterion) && authoredSummary && 'get' in blockingFindings) {
-      const rebound = [...blockingFindings.entries()].filter(([id, evidence]) =>
-        isNoOwnerCriterion(id) && normalizeOverScopeSummary(evidence) === normalizeOverScopeSummary(authoredSummary));
-      if (rebound.length === 1) bound = rebound[0]![0];
+    if (criterion && isNoOwnerCriterion(criterion) && authoredSummary && 'get' in blockingFindings) {
+      const currentEvidence = blockingFindings.get(criterion);
+      const summaryDrifted = currentEvidence !== undefined
+        && !overScopeSummariesEquivalent(currentEvidence, authoredSummary);
+      if (!blockingFindings.has(criterion) || summaryDrifted) {
+        const rebound = [...blockingFindings.entries()].filter(([id, evidence]) =>
+          isNoOwnerCriterion(id) && overScopeSummariesEquivalent(evidence, authoredSummary));
+        if (rebound.length === 1) bound = rebound[0]![0];
+        else if (summaryDrifted) bound = criterion; // fall through to the strict check's defect
+      }
     }
     if (!bound || !blockingFindings.has(bound)) { defects.push({ kind: 'unknown-criterion', ...(criterion ? { criterion } : {}) }); continue; }
     if (entry.decision === 'pending' || entry.decision === undefined) continue;
@@ -149,7 +186,7 @@ export function parseClearedOverScopeDecisions(
     if (!authoredSummary) { defects.push({ kind: 'invalid-decision', criterion: bound }); continue; }
     const currentSummary = 'get' in blockingFindings ? blockingFindings.get(bound) : undefined;
     if (isNoOwnerCriterion(bound) && currentSummary !== undefined
-      && normalizeOverScopeSummary(currentSummary) !== normalizeOverScopeSummary(authoredSummary)) {
+      && !overScopeSummariesEquivalent(currentSummary, authoredSummary)) {
       defects.push({ kind: 'invalid-decision', criterion: bound });
       continue;
     }
