@@ -120,55 +120,28 @@ export async function coordinateBuildReviewAdjudication(input: {
   if (!sources) return { ok: false, detail: 'invalid raw aggregate source projection' };
   const operatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> =>
     input.resolveOperatorResolvedFindingIds ? input.resolveOperatorResolvedFindingIds() : input.operatorResolvedFindingIds;
-  const routeIfAllOperatorResolved = (resolved: ReadonlySet<string>): BuildReviewAdjudicationCoordinatorResult | undefined => {
-    if (sources.some((source) => !resolved.has(source.findingId))) return undefined;
-    const transition = reduceBuildReviewAdjudication({ currentSourceIds: [], cases: [], mechanical: input.mechanical });
-    return { ok: true, route: transition.route, detail: transition.reason, trace: `route: ${transition.route}; all current sources are operator-resolved`, remainingMechanical: transition.remainingMechanical };
-  };
-  let resolved: ReadonlySet<string>;
-  try { resolved = await operatorResolvedFindingIds(); } catch { return { ok: false, detail: 'operator disposition state is unavailable' }; }
-  const initialOperatorRoute = routeIfAllOperatorResolved(resolved);
-  if (initialOperatorRoute) return initialOperatorRoute;
-  let currentSources = sources.filter((source) => !resolved.has(source.findingId));
-  // Operator authority is terminal for an all-resolved content lap.  In
-  // particular, do not turn it into an empty model prompt or case-store read.
+  /**
+   * Whether operator authority now covers every current source.
+   *
+   * Deliberately a PREDICATE and not a route. It used to return a finished
+   * result computed from `cases: []` — an answer derived from pretending no
+   * durable case existed — and four separate exits used it to report a healthy
+   * route while leftover work they never looked at stayed live. Answering the
+   * question is this helper's whole job; choosing a route belongs to `finalize`,
+   * which reads the store first.
+   */
+  const allOperatorResolved = (accepted: ReadonlySet<string>): boolean =>
+    sources.every((source) => accepted.has(source.findingId));
   const fail = async (detail: string): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     await input.emit?.({ type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail });
     return { ok: false, detail };
   };
   const store = new RemediationCaseStore(input.projectRoot, input.feature);
-  const prior = await store.read();
-  if (!prior.ok) return fail(`case store ${prior.reason}`);
-  // Durable BUILD-attempt evidence, read from the published work order rather
-  // than process memory. Without it an attempted case is indistinguishable from
-  // an interrupted one, so a repeat could take a second free route and an
-  // absent repaired case could never resolve.
-  const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
-  if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) === 'invalid') {
-    return fail(`build-review work order ${attemptEvidence.reason}`);
-  }
-  const attemptedCaseIds = attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [];
-  const attempted = new Set(attemptedCaseIds);
-  const planContract = await (input.readPlanContract ?? (() => sourcePlanContract(input.projectRoot, input.aggregate)))();
-  const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
-  const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
-  const context = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
-  });
-  if (!context.ok) return fail(`adjudication context ${context.stop.code}`);
-  // A disposition arriving while the case store was read wins before the one
-  // provider dispatch.  Rebuild the complete projection rather than letting
-  // the provider see an obsolete source.
-  try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
-  const preDispatchOperatorRoute = routeIfAllOperatorResolved(resolved);
-  if (preDispatchOperatorRoute) return preDispatchOperatorRoute;
-  currentSources = sources.filter((source) => !resolved.has(source.findingId));
-  // Frozen at dispatch: the exact source set the judge was asked about. Every
-  // later authority read is a delta against this, never against the raw join.
-  const dispatchSources = currentSources;
-  const dispatchSourceIds = dispatchSources.map(buildReviewAdjudicationSourceId);
-  const liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
-    new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
+  // Before the judge is dispatched there is no frozen dispatch set, so live ids
+  // are computed against the raw join. The two agree for every all-accepted lap,
+  // and this is reassigned to the frozen set once one exists.
+  let liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
+    new Set(sources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   /**
    * The single terminal exit: settle durable state, then choose a route from
    * what actually survived.
@@ -287,6 +260,49 @@ export async function coordinateBuildReviewAdjudication(input: {
       remainingMechanical: transition.remainingMechanical,
     };
   };
+  let resolved: ReadonlySet<string>;
+  try { resolved = await operatorResolvedFindingIds(); } catch { return { ok: false, detail: 'operator disposition state is unavailable' }; }
+  // Operator authority is terminal for an all-resolved content lap, but it is
+  // not evidence that nothing is outstanding: an earlier lap's case can still
+  // be open with a live work order. Settle durable state and route from what
+  // survives, rather than reporting a route no one checked.
+  if (allOperatorResolved(resolved)) {
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
+  }
+  let currentSources = sources.filter((source) => !resolved.has(source.findingId));
+  const prior = await store.read();
+  if (!prior.ok) return fail(`case store ${prior.reason}`);
+  // Durable BUILD-attempt evidence, read from the published work order rather
+  // than process memory. Without it an attempted case is indistinguishable from
+  // an interrupted one, so a repeat could take a second free route and an
+  // absent repaired case could never resolve.
+  const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
+  if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) === 'invalid') {
+    return fail(`build-review work order ${attemptEvidence.reason}`);
+  }
+  const attemptedCaseIds = attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [];
+  const attempted = new Set(attemptedCaseIds);
+  const planContract = await (input.readPlanContract ?? (() => sourcePlanContract(input.projectRoot, input.aggregate)))();
+  const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
+  const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
+  const context = assembleBuildReviewAdjudicationContext({
+    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
+  });
+  if (!context.ok) return fail(`adjudication context ${context.stop.code}`);
+  // A disposition arriving while the case store was read wins before the one
+  // provider dispatch.  Rebuild the complete projection rather than letting
+  // the provider see an obsolete source.
+  try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+  if (allOperatorResolved(resolved)) {
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
+  }
+  currentSources = sources.filter((source) => !resolved.has(source.findingId));
+  // Frozen at dispatch: the exact source set the judge was asked about. Every
+  // later authority read is a delta against this, never against the raw join.
+  const dispatchSources = currentSources;
+  const dispatchSourceIds = dispatchSources.map(buildReviewAdjudicationSourceId);
+  liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
+    new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
@@ -297,8 +313,9 @@ export async function coordinateBuildReviewAdjudication(input: {
   // Do not reconcile or effect a provider result after a late exact operator
   // acceptance made every source non-autonomous.
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
-  const postJudgeOperatorRoute = routeIfAllOperatorResolved(resolved);
-  if (postJudgeOperatorRoute) return postJudgeOperatorRoute;
+  if (allOperatorResolved(resolved)) {
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
+  }
   // The judgement is validated against exactly the sources the judge was handed.
   // An acceptance that landed while it was thinking suppresses only its own
   // source: its case is dropped before reservation, and every sibling case is

@@ -192,7 +192,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     ]);
   });
 
-  it('bypasses provider and case state when every current source is operator-resolved', async () => {
+  it('bypasses the provider but still settles case state when every current source is operator-resolved', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async () => actionJudgement());
 
@@ -200,8 +200,43 @@ describe('coordinateBuildReviewAdjudication', () => {
       ...input(root, judge), operatorResolvedFindingIds: new Set([findingId]),
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'pass', trace: expect.stringContaining('operator-resolved') });
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
     expect(judge).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['at entry', 0],
+    ['before dispatch', 1],
+    ['after the judgement', 2],
+  ] as const)('routes leftover work rather than passing when authority arrives %s', async (_when, reads) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    // An earlier lap reserved this effect and never finished it. Every exit
+    // below used to answer `pass` from `cases: []` — deciding without looking.
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-stranded', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'An earlier lap reserved this and was interrupted.', resolution: 'open',
+        sources: [{ sourceId: 'testQuality:sha256-earlier', outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-stranded', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const unresolved = Array.from({ length: reads }, () => new Set<string>());
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge),
+      resolveOperatorResolvedFindingIds: async () => unresolved.shift() ?? new Set([findingId]),
+    });
+
+    // The stranded effect is neither applied nor retired by this acceptance —
+    // its source is not one the operator accepted — so the lap surfaces it for
+    // a human instead of reporting a healthy route past it.
+    expect(result).toMatchObject({ ok: true, route: 'halt', detail: 'remediation effect is not finalized' });
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true, state: { cases: [{ id: 'case-stranded', resolution: 'open' }] },
+    });
   });
 
   it('emits a typed failure and never returns a partial route when the one judgement throws', async () => {
