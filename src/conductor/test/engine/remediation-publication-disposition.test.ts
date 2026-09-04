@@ -23,7 +23,11 @@ import {
   Conductor,
 } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
-import { readRemediationPlan } from '../../src/engine/artifacts.js';
+import {
+  readRemediationPlan,
+  remediationDispositionAppendsToPlan,
+  remediationDispositionStep,
+} from '../../src/engine/artifacts.js';
 import type { RemediationGap } from '../../src/engine/artifacts.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -36,6 +40,14 @@ const PUBLICATION_GAP = {
   rationale:
     'The shipped code satisfies FR-2; only the PR body still describes the superseded approach.',
   tasks: [{ id: 'rem-fr2-1', title: 'rewrite the PR body ## What Changed section', status: 'pending' }],
+};
+
+const EXISTING_TASK_GAP = {
+  id: 'FR-3',
+  disposition: 'existing-task',
+  category: null,
+  rationale: 'Task 1 already owns the approved guard.',
+  tasks: [{ id: '1', title: 'Add the approved guard' }],
 };
 
 describe('remediation `publication` disposition', () => {
@@ -146,5 +158,64 @@ describe('remediation `publication` disposition', () => {
     expect(dispatched).toEqual(['remediate']);
     // The plan is a protected artifact: a PR-prose fix must never amend it.
     expect(await readFile(planPath, 'utf8')).toBe(planBefore);
+  });
+});
+
+describe('remediation `existing-task` disposition', () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'remediation-existing-task-'));
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('admits non-empty bound task ids', async () => {
+    await writeFile(
+      join(projectRoot, '.pipeline/remediation.json'),
+      JSON.stringify({ dispositions: [EXISTING_TASK_GAP] }),
+      'utf8',
+    );
+
+    const plan = await readRemediationPlan(projectRoot, Date.now() - 60_000, 'prd-audit');
+
+    expect(plan?.gaps).toHaveLength(1);
+    expect(plan?.gaps[0]).toMatchObject({ disposition: 'existing-task', tasks: [{ id: '1' }] });
+  });
+
+  it('rejects an empty task binding as malformed', async () => {
+    await writeFile(
+      join(projectRoot, '.pipeline/remediation.json'),
+      JSON.stringify({ dispositions: [{ ...EXISTING_TASK_GAP, tasks: [] }] }),
+      'utf8',
+    );
+
+    await expect(readRemediationPlan(projectRoot, Date.now() - 60_000, 'prd-audit')).resolves.toBeNull();
+  });
+
+  it('drops unknown dispositions without dropping a valid existing-task gap', async () => {
+    await writeFile(
+      join(projectRoot, '.pipeline/remediation.json'),
+      JSON.stringify({
+        dispositions: [
+          { ...EXISTING_TASK_GAP, id: 'unknown', disposition: 'unknown-disposition' },
+          EXISTING_TASK_GAP,
+        ],
+      }),
+      'utf8',
+    );
+
+    const plan = await readRemediationPlan(projectRoot, Date.now() - 60_000, 'prd-audit');
+
+    expect(plan?.gaps).toHaveLength(1);
+    expect(plan?.gaps[0]?.disposition).toBe('existing-task');
+  });
+
+  it('routes to build without appending to the plan', () => {
+    expect(remediationDispositionStep('existing-task')).toBe('build');
+    expect(remediationDispositionAppendsToPlan('existing-task')).toBe(false);
   });
 });

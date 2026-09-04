@@ -5080,16 +5080,30 @@ export type RemediationTarget = (typeof REMEDIATION_TARGET_STEPS)[number];
  */
 export const REMEDIATION_PUBLICATION_DISPOSITION = 'publication';
 
+/**
+ * Disposition for a finding already owned by one or more tasks in the active
+ * plan. It rewinds BUILD without appending replacement tasks to that plan.
+ */
+export const REMEDIATION_EXISTING_TASK_DISPOSITION = 'existing-task';
+
 export type RemediationDisposition =
   | RemediationTarget
   | typeof REMEDIATION_PUBLICATION_DISPOSITION
+  | typeof REMEDIATION_EXISTING_TASK_DISPOSITION
   | 'halt';
 
-/** The step a disposition rewinds to. `publication` is prose-only work owned by `finish`. */
+/** The step a disposition rewinds to. */
 export function remediationDispositionStep(
   disposition: RemediationDisposition,
 ): string {
-  return disposition === REMEDIATION_PUBLICATION_DISPOSITION ? 'finish' : disposition;
+  switch (disposition) {
+    case REMEDIATION_PUBLICATION_DISPOSITION:
+      return 'finish';
+    case REMEDIATION_EXISTING_TASK_DISPOSITION:
+      return 'build';
+    default:
+      return disposition;
+  }
 }
 
 /**
@@ -5099,7 +5113,10 @@ export function remediationDispositionStep(
 export function remediationDispositionAppendsToPlan(
   disposition: RemediationDisposition,
 ): boolean {
-  return (REMEDIATION_TARGET_STEPS as readonly string[]).includes(disposition);
+  return (
+    disposition !== REMEDIATION_EXISTING_TASK_DISPOSITION &&
+    (REMEDIATION_TARGET_STEPS as readonly string[]).includes(disposition)
+  );
 }
 export type RemediationHaltCategory = 'architectural-clarity' | 'product-scope';
 
@@ -5145,6 +5162,7 @@ export async function readRemediationPlan(
   const valid: RemediationDisposition[] = [
     ...REMEDIATION_TARGET_STEPS,
     REMEDIATION_PUBLICATION_DISPOSITION,
+    REMEDIATION_EXISTING_TASK_DISPOSITION,
     'halt',
   ];
   const gaps: RemediationGap[] = [];
@@ -5182,6 +5200,12 @@ export async function readRemediationPlan(
       source !== 'build_stall_zero_work'
     ) {
       invalidTasklessBuild = true;
+      continue;
+    }
+    if (
+      disposition === REMEDIATION_EXISTING_TASK_DISPOSITION &&
+      (tasks.length === 0 || tasks.some((task) => task.id.trim() === ''))
+    ) {
       continue;
     }
     gaps.push({

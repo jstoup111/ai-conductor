@@ -70,6 +70,29 @@ read-modify-write paths share the existing bounded lease; the adjustment is stag
 idempotent same-schema external event; the CLI never directly clears the halt; adjustment history
 and the pure budget view remain authoritative; and mechanical-fault state remains separate.
 
+## Amendment
+
+**Amended by:** DECIDE for `plan-growth-allowance-is-spent-on-work-existing-ta` (2026-09-01,
+operator-authorized) — D1 is **scoped, not reversed**.
+
+D1 governs the cumulative `build_review` convergence cap terminal only. It does not reach the
+remediation-append cap terminals of `adr-2026-08-25-as-built-remediable-findings-bounded-build-route`
+decision 4 — the per-gate lap cap and the shared plan-growth allowance for `prd_audit` and
+`architecture_review_as_built` — which continue to persist `HALT.class = kickback-cap`.
+
+This corrects a framing error in Options Considered above, which described `kickback-cap` as a
+proposed *third* class. It is not new: it is declared in
+`src/conductor/src/engine/halt-classification.ts`, adr-2026-07-28-total-halt-classification-legacy-boundary
+D1 already reused it rather than adding one, and adr-2026-08-25 decision 4 states the same ("A second
+lap, an exceeded allowance, or a no-op escalation halts with the existing `kickback-cap` class... No
+new halt class is introduced (adr-2026-07-28 D1 unchanged)") while explicitly deferring to D2 of this
+ADR for the typed-ledger authority. The sealed stories of the shipped feature
+`every-as-built-blocked-verdict-halts-needs-human-i` require `kickback-cap` at exactly those two
+terminals.
+
+Reading D1 as universal would therefore regress a sibling feature's sealed acceptance criterion
+rather than fix drift. No code change follows from this amendment; D2-D8 are untouched.
+
 ## Consequences
 
 - Recovery adds no halt class and does not widen any existing classifier or migration.

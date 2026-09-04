@@ -159,6 +159,7 @@ import {
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   readRemediationPlan,
+  REMEDIATION_EXISTING_TASK_DISPOSITION,
   REMEDIATION_PUBLICATION_DISPOSITION,
   remediationDispositionAppendsToPlan,
   remediationDispositionStep,
@@ -187,7 +188,8 @@ import {
   stampGateRunIdentity,
   isVerdictRunIdentityStep,
 } from './artifacts.js';
-import { parsePlanTaskBodies } from './plan-task-parse.js';
+import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
+import { canonicalTaskId } from './autoheal.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
@@ -713,7 +715,11 @@ function remediationGateAppendBudgetExhausted(
   budget: RemediationGateAppendBudget,
 ): 'laps' | 'growth' | undefined {
   if (budget.priorLaps >= budget.lapCap) return 'laps';
-  return budget.taskCount > budget.growth.remaining ? 'growth' : undefined;
+  // A gate can spend a remediation lap by restaging work already in the
+  // sealed plan. That route has no plan-growth authority, so its terminal
+  // outcome must never be rendered as a growth-cap exhaustion.
+  if (budget.growthTaskCount === 0) return undefined;
+  return budget.growthTaskCount > budget.growth.remaining ? 'growth' : undefined;
 }
 
 /** Persist one successful remediation append while keeping each gate's ledger and growth isolated. */
@@ -2146,6 +2152,12 @@ export class Conductor {
    * the grant. No durable artifact is written by the daemon.
    */
   private readonly remediationDecideReentryTargets = new Set<StepName>();
+  /**
+   * Existing-task remediation re-stages completed rows immediately before a
+   * BUILD rewind. Preserve the D2 baseline from before that bookkeeping write
+   * so re-completing the same rows cannot impersonate build progress.
+   */
+  private pendingNoOpBaseline?: { treeHash: string | null; resolvedCount: number };
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
@@ -4002,28 +4014,96 @@ export class Conductor {
     // gate's bounded append allowance.
     const prdAuditCapEnforced = prdAuditRemediation && prdAuditValidated;
     const prdAuditTasks: Array<{ id: string; title: string }> = [];
+    const prdAuditGrowthTasks: Array<{ id: string; title: string }> = [];
     const asBuiltCapEnforced = asBuiltRemediation && asBuiltValidated;
     // A shared PRD/as-built task consumes the as-built lap, but remains
     // attributed to prd_audit for the single shared plan-growth record.
     const asBuiltTasks: Array<{ id: string; title: string }> = [];
     const asBuiltGrowthTasks: Array<{ id: string; title: string }> = [];
+    // Task 2 records canonical plan ids here. Task 3 consumes the record when
+    // it admits existing-task gaps without sending them through plan growth.
+    const resolvedExistingTaskIdsByGapId = new Map<string, string[]>();
+    // An existing-task binding is the non-appending authorization event for
+    // an as-built finding. Keep its validated record until the rebuilt gate
+    // projects the remediated outcome, just as the append path does after its
+    // successful append authorization.
+    const boundExistingAsBuiltFindings = new Map<string, RecordedAsBuiltRemediationFinding>();
+    let activePlanTaskIds: ReadonlySet<string> | undefined;
     const admittedAsBuiltFindingCounts = new Map<string, number>();
     const unexpectedAsBuiltGapIds = new Set<string>();
+    const gateAdmissions = (gapId: string) => ({
+      prdAuditAdmits: prdAuditValidated && prdAuditFindings.has(gapId.toUpperCase()),
+      asBuiltAdmits: asBuiltValidated && asBuiltFindings.has(gapId),
+    });
     for (const gap of gaps) {
+      if (gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) {
+        const { prdAuditAdmits, asBuiltAdmits } = gateAdmissions(gap.id);
+        // Unlike appended work's compatibility guard below, existing-task is
+        // authorized only by D9's two current gate findings. This must be
+        // unconditional so build-stall and finish callers cannot re-stage an
+        // unrelated active-plan task.
+        if (!prdAuditAdmits && !asBuiltAdmits) {
+          if (asBuiltCapEnforced) unexpectedAsBuiltGapIds.add(gap.id);
+          continue;
+        }
+        if (activePlanTaskIds === undefined) {
+          if (!planPath) {
+            return {
+              kind: 'halt',
+              haltClass: 'needs-human',
+              detail: `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': active plan is unavailable.`,
+            };
+          }
+          try {
+            activePlanText = activePlanText || await readFile(planPath, 'utf8');
+            activePlanTaskIds = new Set(parsePlanTaskBodies(activePlanText).keys());
+          } catch (error) {
+            return {
+              kind: 'halt',
+              haltClass: 'needs-human',
+              detail:
+                `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': ` +
+                `active plan could not be read (${error instanceof Error ? error.message : String(error)}).`,
+            };
+          }
+        }
+        const bindings = resolveExistingTaskBindingsForAdmission(gap.tasks, activePlanTaskIds);
+        if (bindings.kind === 'unresolvable') {
+          return {
+            kind: 'halt',
+            haltClass: 'needs-human',
+            detail: `existing-task remediation cannot resolve bound id '${bindings.id}' in the active plan.`,
+          };
+        }
+        resolvedExistingTaskIdsByGapId.set(gap.id, bindings.ids);
+        // Existing-task gaps reopen the task that already owns the repair.
+        // They consume the validating gate's lap, but never draw from the
+        // shared plan-growth allowance reserved for appended work.
+        if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
+        if (asBuiltAdmits) {
+          asBuiltTasks.push(...gap.tasks);
+          const finding = asBuiltRecordedFindings.get(gap.id);
+          if (finding) boundExistingAsBuiltFindings.set(finding.finding, finding);
+        }
+      }
       if (
         sealedArtifactGapIds.has(gap.id) ||
         gap.disposition === REMEDIATION_PUBLICATION_DISPOSITION ||
-        gap.disposition === 'halt'
+        gap.disposition === 'halt' ||
+        gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
       ) {
         admittedGaps.push(gap);
-        // A `halt` disposition IS the planner addressing this finding — it
-        // judged the repair a human decision rather than plan growth. Count it
-        // so the exact-match check below does not report it `Missing` and
-        // preempt the halt at the `halts.length > 0` branch, which names the
-        // finding's own category and rationale. Deliberately scoped to `halt`:
-        // the sealed-artifact and publication dispositions sharing this early
-        // return keep their existing `Missing` reporting untouched.
-        if (gap.disposition === 'halt' && asBuiltFindings.has(gap.id)) {
+        // A `halt` or `existing-task` disposition IS the planner addressing
+        // this finding: the former judges it a human decision, while the
+        // latter binds it to already-authored work rather than plan growth.
+        // Count both so the exact-match check below does not report the
+        // finding `Missing`. Sealed-artifact and publication dispositions
+        // sharing this early return keep their existing `Missing` reporting
+        // untouched.
+        if (
+          (gap.disposition === 'halt' || gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) &&
+          asBuiltFindings.has(gap.id)
+        ) {
           admittedAsBuiltFindingCounts.set(
             gap.id,
             (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1,
@@ -4043,8 +4123,10 @@ export class Conductor {
         // finding and its existing parent plan task.  The planner's FR-N id
         // is associated above through the report's PRD: column. In a mixed
         // validation group either validated gate may admit its own gap.
-        const prdAuditAdmits = prdAuditValidated && prdAuditFinding !== undefined;
-        const asBuiltAdmits = asBuiltValidated && asBuiltFinding !== undefined;
+        const { prdAuditAdmits, asBuiltAdmits } = gateAdmissions(gap.id);
+        // Appending retains this conditional guard for older direct callers
+        // that do not carry either validated gate. Existing-task above does
+        // not: D9 limits that non-appending route to the two gates outright.
         if ((prdAuditValidated || asBuiltValidated) && !prdAuditAdmits && !asBuiltAdmits) {
           if (asBuiltCapEnforced) unexpectedAsBuiltGapIds.add(gap.id);
           continue;
@@ -4075,7 +4157,10 @@ export class Conductor {
         admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
         if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
-        if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
+        if (prdAuditAdmits) {
+          prdAuditTasks.push(...gap.tasks);
+          prdAuditGrowthTasks.push(...gap.tasks);
+        }
         else if (asBuiltAdmits) asBuiltGrowthTasks.push(...gap.tasks);
       }
     }
@@ -4160,20 +4245,22 @@ export class Conductor {
     // legitimate self-heal on an unrelated append plumbing gap.
     let appendAttempted = allTasks.length === 0;
 
-    if (allTasks.length > 0) {
+    let prdAuditBudget: RemediationGateAppendBudget | undefined;
+    let asBuiltBudget: RemediationGateAppendBudget | undefined;
+    if (allTasks.length > 0 || prdAuditTasks.length > 0 || asBuiltTasks.length > 0) {
       const authoredTaskCount = activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
-      const prdAuditBudget = prdAuditCapEnforced
+      prdAuditBudget = prdAuditCapEnforced
         ? await readRemediationGateAppendBudget(
           this.projectRoot,
           this.config,
           'prd_audit',
           prdAuditLapCap,
           prdAuditTasks.length,
-          prdAuditTasks.length,
+          prdAuditGrowthTasks.length,
           authoredTaskCount,
         )
         : undefined;
-      const asBuiltBudget = asBuiltCapEnforced
+      asBuiltBudget = asBuiltCapEnforced
         ? await readRemediationGateAppendBudget(
           this.projectRoot,
           this.config,
@@ -4193,7 +4280,7 @@ export class Conductor {
             ? `lap cap reached (${prdAuditBudget.priorLaps}/${prdAuditBudget.lapCap})`
             :
               `growth cap reached (${prdAuditBudget.growth.added}/${prdAuditBudget.growthCap} appended; ` +
-              `${prdAuditBudget.taskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
+              `${prdAuditBudget.growthTaskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
@@ -4217,7 +4304,7 @@ export class Conductor {
             ? `lap cap reached (${asBuiltBudget.priorLaps}/${asBuiltBudget.lapCap})`
             :
               `shared plan-growth allowance exhausted (${asBuiltBudget.growth.added}/${asBuiltBudget.growthCap} appended; ` +
-              `${asBuiltBudget.taskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
+              `${asBuiltBudget.growthTaskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
@@ -4247,8 +4334,9 @@ export class Conductor {
             renderAsBuiltBlockedFindingDetail(asBuiltReport),
         };
       }
-      // Append remediation tasks to the plan
-      if (planPath) {
+      // Existing-task remediation deliberately reaches the budget block above
+      // and records a gate lap below, but never enters plan append/staging.
+      if (allTasks.length > 0 && planPath) {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
           ...(prdAuditRemediation || (asBuiltRemediation && asBuiltValidated)
             ? {
@@ -4270,16 +4358,6 @@ export class Conductor {
             }
           }
           if (appendedAsBuiltFinding) await this.persistPendingAsBuiltRemediationFindings();
-          if (prdAuditBudget) await recordRemediationGateAppend(
-            this.projectRoot,
-            prdAuditBudget,
-            this.events,
-          );
-          if (asBuiltBudget) await recordRemediationGateAppend(
-            this.projectRoot,
-            asBuiltBudget,
-            this.events,
-          );
           // Record the appended ids so the build completion predicate can
           // reject a later removal of their headings from the plan.
           try {
@@ -4333,13 +4411,36 @@ export class Conductor {
             `WARNING: remediation task append failed (${allTasks.length} task(s) dropped): ${appendResult.error}`,
           );
         }
-      } else {
+      } else if (allTasks.length > 0) {
         // Fail-open stays (routing must not be blocked by append plumbing),
         // but never silently: a dropped append means the builder re-enters
         // with none of the remediation tasks it was just told to deliver.
         this.log?.(
           `WARNING: remediation task append skipped — no plan path resolved; ${allTasks.length} remediation task(s) never reached the plan or task list`,
         );
+      }
+    }
+
+    // Both appends and existing-task rounds spend a gate lap only after the
+    // route has successfully admitted its work. The latter has no append
+    // attempt, but still needs this durable ledger update.
+    if (appendAttempted) {
+      if (prdAuditBudget) await recordRemediationGateAppend(
+        this.projectRoot,
+        prdAuditBudget,
+        this.events,
+      );
+      if (asBuiltBudget) await recordRemediationGateAppend(
+        this.projectRoot,
+        asBuiltBudget,
+        this.events,
+      );
+      if (boundExistingAsBuiltFindings.size > 0) {
+        await this.reloadPendingAsBuiltRemediationFindings();
+        for (const finding of boundExistingAsBuiltFindings.values()) {
+          this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
+        }
+        await this.persistPendingAsBuiltRemediationFindings();
       }
     }
 
@@ -4468,6 +4569,28 @@ export class Conductor {
       }
       if (remediationReopensSatisfiedDecideArtifact && disposition.kind === 'enter') {
         this.remediationDecideReentryTargets.add(target);
+      }
+      // Existing-task remediation reopens work already named in the plan.
+      // Do this only after admission and budget checks have passed, but before
+      // the caller rewinds to the repair target.
+      if (resolvedExistingTaskIdsByGapId.size > 0 && planPath) {
+        this.pendingNoOpBaseline = {
+          treeHash: await currentTreeHash(this.projectRoot),
+          resolvedCount: await countResolvedTasks(this.projectRoot),
+        };
+        const restage = await restageExistingRemediationTaskStatuses(
+          this.projectRoot,
+          planPath,
+          new Set([...resolvedExistingTaskIdsByGapId.values()].flat()),
+        );
+        if (restage.kind === 'failed') {
+          this.pendingNoOpBaseline = undefined;
+          return {
+            kind: 'halt',
+            haltClass: 'needs-human',
+            detail: `existing-task remediation could not re-stage task-status.json: ${restage.detail}`,
+          };
+        }
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
       // when the appended/upserted rem-* task(s) are already evidence-
@@ -5818,10 +5941,13 @@ export class Conductor {
      * cycle made any real progress.
      */
     const captureKickbackToBuildContext = async (sourceGate: StepName): Promise<void> => {
-      const [treeBefore, resolvedBefore] = await Promise.all([
-        currentTreeHash(this.projectRoot),
-        countResolvedTasks(this.projectRoot),
-      ]);
+      const baseline = this.pendingNoOpBaseline;
+      const [treeBefore, resolvedBefore] = baseline
+        ? [baseline.treeHash, baseline.resolvedCount]
+        : await Promise.all([
+          currentTreeHash(this.projectRoot),
+          countResolvedTasks(this.projectRoot),
+        ]);
       const ledger = await readKickbackLedger(this.projectRoot);
       const existing = ledger.gates[sourceGate];
       await writeKickbackLedger(this.projectRoot, {
@@ -5839,6 +5965,9 @@ export class Conductor {
           },
         },
       });
+      // This producer/consumer hand-off is only for the immediately following
+      // existing-task BUILD rewind; every other capture samples afresh.
+      if (baseline) this.pendingNoOpBaseline = undefined;
     };
 
     /**
@@ -12584,6 +12713,84 @@ export function earliestRemediationTarget(
     }
   }
   return { target: best, unresolved: [...unresolved] };
+}
+
+export type ExistingTaskBindingResolution =
+  | { kind: 'resolved'; ids: string[] }
+  | { kind: 'unresolvable'; id: string };
+
+type ExistingTaskRestageResult =
+  | { kind: 'restaged' }
+  | { kind: 'failed'; detail: string };
+
+/**
+ * Reopen the already-authored work selected by an existing-task remediation
+ * disposition. The following seedTaskStatus call is deliberately retained as
+ * the authoritative re-seed write path; this only changes the statuses that
+ * must not survive that re-seed as terminal rows.
+ */
+async function restageExistingRemediationTaskStatuses(
+  projectRoot: string,
+  planPath: string,
+  boundIds: ReadonlySet<string>,
+): Promise<ExistingTaskRestageResult> {
+  const statusPath = join(projectRoot, '.pipeline', 'task-status.json');
+  try {
+    const statusFile = JSON.parse(await readFile(statusPath, 'utf8')) as {
+      tasks?: Array<Record<string, unknown>>;
+    };
+    if (!Array.isArray(statusFile.tasks)) {
+      return { kind: 'failed', detail: 'task-status.json has no task rows to re-stage' };
+    }
+
+    const boundCanonicalIds = new Set([...boundIds].map(canonicalTaskId));
+    const stagedCanonicalIds = new Set(statusFile.tasks.flatMap((task) =>
+      typeof task.id === 'string' ? [canonicalTaskId(task.id)] : [],
+    ));
+    const missingIds = [...boundCanonicalIds].filter((id) => !stagedCanonicalIds.has(id));
+    if (missingIds.length > 0) {
+      return {
+        kind: 'failed',
+        detail:
+          `bound id${missingIds.length === 1 ? '' : 's'} ` +
+          `${missingIds.map((id) => `'${id}'`).join(', ')} is absent from task-status.json`,
+      };
+    }
+
+    for (const task of statusFile.tasks) {
+      if (typeof task.id === 'string' && boundCanonicalIds.has(canonicalTaskId(task.id))) {
+        task.status = 'pending';
+      }
+    }
+    await writeFile(statusPath, JSON.stringify(statusFile, null, 2) + '\n');
+    await seedTaskStatus(projectRoot, planPath);
+    return { kind: 'restaged' };
+  } catch (error) {
+    return {
+      kind: 'failed',
+      detail: `task-status.json could not be read or re-staged (${error instanceof Error ? error.message : String(error)})`,
+    };
+  }
+}
+
+/**
+ * Resolve an existing-task remediation binding against the active plan. Keep
+ * this at the admission seam so every caller shares plan-task-parse's grammar
+ * and trailing-annotation normalization rather than recreating either locally.
+ */
+export function resolveExistingTaskBindingsForAdmission(
+  tasks: ReadonlyArray<Pick<RemediationGap['tasks'][number], 'id'>>,
+  activePlanTaskIds: ReadonlySet<string>,
+): ExistingTaskBindingResolution {
+  const ids: string[] = [];
+  for (const task of tasks) {
+    const resolved = resolvePlanTaskReference(task.id, activePlanTaskIds);
+    if (resolved.kind !== 'resolved') {
+      return { kind: 'unresolvable', id: resolved.kind === 'unresolvable' ? resolved.id : task.id };
+    }
+    ids.push(resolved.id);
+  }
+  return { kind: 'resolved', ids };
 }
 
 /**
