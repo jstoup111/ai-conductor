@@ -1181,9 +1181,13 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
 
     const backlog = await discover();
     expect(backlog).toHaveLength(1);
-    // The item carries only the slug — the vetted plan+stories live on the
-    // (fast-forwarded) default branch the worktree is cut from, so no paths travel.
-    expect(backlog[0]).toEqual({ slug: 'feature-a' });
+    // The item preserves the source identity and carries the already-vetted
+    // document refs across the dispatcher-to-executor boundary.
+    expect(backlog[0]).toMatchObject({ slug: 'feature-a' });
+    expect(backlog[0]).toMatchObject({
+      storiesPath: '.docs/stories/feature-a.md',
+      planPath: '.docs/plans/feature-a.md',
+    });
   });
 
   it('includes a feature whose Stories reference is a relative Markdown link', async () => {
@@ -1301,7 +1305,11 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     await writeFile(join(dir, '.docs/complexity/big.md'), '# Complexity\n\nTier: L\n');
 
     const backlog = await discover();
-    expect(backlog).toEqual([{ slug: 'big', tier: 'L' }]);
+    expect(backlog).toMatchObject([{ slug: 'big', tier: 'L' }]);
+    expect(backlog[0]).toMatchObject({
+      storiesPath: '.docs/stories/big.md',
+      planPath: '.docs/plans/big.md',
+    });
   });
 
   it('leaves tier undefined when no complexity marker is present', async () => {

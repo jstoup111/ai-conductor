@@ -955,11 +955,11 @@ export async function runDaemon(
       deps.onExecutorStarted?.();
       try {
         if (deps.featureExecution) {
-          return deps.featureExecution.executor.execute(
+          return await deps.featureExecution.executor.execute(
             await deps.featureExecution.createWorkOrder(item),
           );
         }
-        return deps.runFeature(item);
+        return await deps.runFeature(item);
       } finally {
         deps.onExecutorSettled?.();
       }
