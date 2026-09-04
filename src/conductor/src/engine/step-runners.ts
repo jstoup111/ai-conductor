@@ -87,6 +87,7 @@ import {
   bumpMechanicalFaultsInLedger,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
 } from './kickback-ledger.js';
+
 import {
   deriveBuildReviewInfrastructureFailureReason,
   makeBuildReviewDispatchFailure,
@@ -145,6 +146,16 @@ import {
   resolveAsBuiltPolicy,
   type AsBuiltPolicyConfig,
 } from './as-built-policy.js';
+
+/** A closed coverage-binding payload that cannot be treated as a verdict. */
+export class CoverageBindingPayloadError extends Error {
+  readonly kind = 'coverage-binding-payload' as const;
+
+  constructor(readonly reason: string) {
+    super(`coverage_binding invalid judge payload: ${reason}`);
+    this.name = 'CoverageBindingPayloadError';
+  }
+}
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -2472,9 +2483,10 @@ export class DefaultStepRunner implements StepRunner {
       }
       const hit = cached.get(digest);
       if (hit && hit.verdict !== 'not-applicable') {
-        entries.push(hit);
-        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: hit.verdict, digest, taskIds: [...hit.taskIds] });
-        if (hit.verdict === 'does-not-assert') refused.push(hit);
+        const entry = entryFor(claim, digest, hit.verdict, hit.missingAssertion);
+        entries.push(entry);
+        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
+        if (entry.verdict === 'does-not-assert') refused.push(entry);
         continue;
       }
       const prompt = [
@@ -2515,7 +2527,7 @@ export class DefaultStepRunner implements StepRunner {
       const parsed = parseJudgePayload(result.output);
       if (!parsed.ok) {
         await writeEnvelope('failed', entries);
-        return { success: false, output: `coverage_binding invalid judge payload: ${parsed.reason}` };
+        throw new CoverageBindingPayloadError(parsed.reason);
       }
       const entry = entryFor(claim, digest, parsed.value.verdict, parsed.value.missingAssertion);
       entries.push(entry);

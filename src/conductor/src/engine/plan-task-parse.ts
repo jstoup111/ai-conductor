@@ -32,6 +32,17 @@ export function normalizePlanTaskId(raw: string): string {
   return raw.trim().replace(/\s*\([^()]*\)$/, '');
 }
 
+/**
+ * Normalize a criterion carrier's `task-<id>` citation to its plan heading id.
+ *
+ * Both the land-time and runtime coverage-binding carriers use this exact
+ * projection, so an annotated citation cannot resolve differently between
+ * those two gates.
+ */
+export function taskIdFromCitation(citedId: string): string {
+  return normalizePlanTaskId(citedId).replace(/^task-/i, '');
+}
+
 /** Resolves a cited plan-task id against the active plan's declared task ids. */
 export function resolvePlanTaskReference(
   raw: string,

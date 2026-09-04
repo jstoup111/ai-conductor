@@ -14,7 +14,11 @@ export interface CoverageBindingJudgePayload {
 }
 
 export type CoverageBindingEntryVerdict = CoverageBindingJudgeVerdict | 'not-applicable';
-export type CoverageBindingEnvelopeStatus = 'disabled' | 'done' | 'failed' | 'refused';
+export const COVERAGE_BINDING_ENVELOPE_STATUSES = ['disabled', 'done', 'failed', 'refused'] as const;
+export type CoverageBindingEnvelopeStatus = (typeof COVERAGE_BINDING_ENVELOPE_STATUSES)[number];
+/** Statuses that are valid completion evidence for the coverage-binding gate. */
+export const COVERAGE_BINDING_COMPLETION_STATUSES: readonly CoverageBindingEnvelopeStatus[] =
+  ['disabled', 'done'];
 
 export interface CoverageBindingEnvelopeEntry {
   readonly digest: string;
@@ -127,13 +131,19 @@ export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnv
   const candidate = value as Record<string, unknown>;
   if (!exactKeys(candidate, ['version', 'slug', 'runId', 'status', 'entries']) || candidate.version !== ENVELOPE_VERSION ||
     !text(candidate.slug) || !text(candidate.runId) || !Array.isArray(candidate.entries) ||
-    (candidate.status !== 'disabled' && candidate.status !== 'done' && candidate.status !== 'failed' && candidate.status !== 'refused')) {
+    !(COVERAGE_BINDING_ENVELOPE_STATUSES as readonly unknown[]).includes(candidate.status)) {
     return null;
   }
   const entries = candidate.entries.map(parseEntry);
   return entries.some((entry) => entry === null)
     ? null
-    : { version: ENVELOPE_VERSION, slug: candidate.slug, runId: candidate.runId, status: candidate.status, entries: entries as CoverageBindingEnvelopeEntry[] };
+    : {
+      version: ENVELOPE_VERSION,
+      slug: candidate.slug,
+      runId: candidate.runId,
+      status: candidate.status as CoverageBindingEnvelopeStatus,
+      entries: entries as CoverageBindingEnvelopeEntry[],
+    };
 }
 
 /** Writes a complete replacement through a sibling temp file, never in place. */

@@ -29,7 +29,12 @@ import {
   extractAuthoritativeStoryCriteria,
   parseAdrDecisions,
 } from '../artifacts.js';
-import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskPaths } from '../plan-task-parse.js';
+import {
+  parsePlanTaskBodies,
+  parsePlanTaskDoneWhen,
+  parsePlanTaskPaths,
+  taskIdFromCitation,
+} from '../plan-task-parse.js';
 import {
   formatArchitectureDecisionId,
   validateArchitectureObligationCoverage,
@@ -385,10 +390,6 @@ export type CriterionCoverageResult =
 
 function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
-}
-
-function taskIdFromCitation(citedId: string): string {
-  return citedId.trim().replace(/\s+\([^()]*\)\s*$/, '').replace(/^task-/i, '');
 }
 
 /**

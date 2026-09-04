@@ -147,6 +147,23 @@ describe('engine/artifacts', () => {
     await writeFile(fullPath, content);
   }
 
+  it.each([
+    ['disabled', true],
+    ['done', true],
+    ['failed', false],
+    ['refused', false],
+  ] as const)('accepts coverage-binding completion evidence only when status is %s', async (status, done) => {
+    await createFile('.pipeline/coverage-binding.json', JSON.stringify({
+      version: 1,
+      slug: 'coverage-feature',
+      runId: 'coverage-run',
+      status,
+      entries: [],
+    }));
+
+    expect(await checkStepCompletion(dir, 'coverage_binding')).toMatchObject({ done });
+  });
+
   describe('parsePrdAuditReport', () => {
     // The plan is the parser's citation authority: a Verdict Table row naming
     // a `Plan task` is resolved against the ids THIS text declares, never

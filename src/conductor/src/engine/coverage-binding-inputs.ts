@@ -3,7 +3,7 @@ import {
   parsePlanCoverageCriterionRows,
   type CriterionCoherenceRow,
 } from './coherence-parse.js';
-import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
+import { parsePlanTaskDoneWhen, taskIdFromCitation } from './plan-task-parse.js';
 import type { ComplexityTier } from '../types/steps.js';
 
 /** The only plan-derived material that may be sent to the coverage-binding judge. */
@@ -19,11 +19,6 @@ export interface AssembleCoverageBindingClaimsInput {
   tier: ComplexityTier;
   coherenceText: string | null;
   planText: string;
-}
-
-/** Coherence rows cite `task-<id>` while plan headings store their bare task id. */
-function taskIdFromCitation(citedId: string): string {
-  return citedId.trim().replace(/^task-/i, '');
 }
 
 function carrierRows({ tier, coherenceText, planText }: AssembleCoverageBindingClaimsInput): CriterionCoherenceRow[] {

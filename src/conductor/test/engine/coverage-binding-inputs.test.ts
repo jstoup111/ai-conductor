@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { assembleCoverageBindingClaims } from '../../src/engine/coverage-binding-inputs.js';
+import { taskIdFromCitation } from '../../src/engine/plan-task-parse.js';
 
 const PLAN_WITH_TASKS = `# Plan
 
@@ -98,6 +99,38 @@ Task prose without a completion-check block.
         doneWhen: [],
         quote: 'legacy quote',
         applicability: 'not-applicable',
+      },
+    ]);
+  });
+
+  it('normalizes annotated task citations through the shared resolver for S and M/L carriers', () => {
+    const planText = `${PLAN_WITH_TASKS}
+### Task 7: Annotated task
+**Done when:**
+- The annotated task check is true.
+
+## Coverage Check
+
+| Criterion | Tasks | Done when quote | Disposition |
+| --- | --- | --- | --- |
+| S criterion | task-7 (landed) | "annotated task check" | diff-local |
+`;
+    const coherenceText = `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | M criterion | task-7 (landed) | covered | "annotated task check" | diff-local |
+`;
+
+    expect(taskIdFromCitation(' task-7 (landed) ')).toBe('7');
+    expect(assembleCoverageBindingClaims({ tier: 'S', coherenceText: null, planText })).toMatchObject([
+      { taskIds: ['7'], doneWhen: [['The annotated task check is true.']], applicability: 'applicable' },
+    ]);
+    expect(assembleCoverageBindingClaims({ tier: 'M', coherenceText, planText })).toEqual([
+      {
+        criterion: 'M criterion',
+        taskIds: ['7'],
+        doneWhen: [['The annotated task check is true.']],
+        quote: 'annotated task check',
+        applicability: 'applicable',
       },
     ]);
   });
