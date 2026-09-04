@@ -131,8 +131,8 @@ function renderPlan(slug: string, files: string, inherited = false): string {
     '**Wired-into:** none (no new production surface)',
     '',
     '**Done when:**',
-    '- The requested file target is recorded.',
-    '- The protected-target boundary is validated at land.',
+    '- Given an own-feature target, when land validates, then the boundary verdict is recorded.',
+    '- Given a foreign protected target, when land validates, then the land is refused.',
     inheritedTask,
     '',
     '## Task Dependency Graph',
@@ -140,6 +140,13 @@ function renderPlan(slug: string, files: string, inherited = false): string {
     '```text',
     inherited ? '1 → 2' : '1',
     '```',
+    '',
+    '## Coverage Check',
+    '',
+    '| Criterion | Tasks | Quote | Disposition |',
+    '|---|---|---|---|',
+    '| Story 1 happy: Given an own-feature target, when land validates, then the boundary verdict is recorded. | 1 | Given an own-feature target, when land validates, then the boundary verdict is recorded. | diff-local |',
+    '| Story 1 negative: Given a foreign protected target, when land validates, then the land is refused. | 1 | Given a foreign protected target, when land validates, then the land is refused. | diff-local |',
     '',
   ].join('\n');
 }
@@ -172,7 +179,20 @@ async function makeLandFixture(
   await writeFile(join(worktree, '.docs', 'complexity', `${slug}.md`), `Tier: ${tier}\n`);
   await writeFile(
     join(worktree, '.docs', 'stories', `${slug}.md`),
-    ['**Status:** Accepted', '', `# Stories: ${slug}`, '', '## Story', 'Given X, when Y, then Z.', ''].join('\n'),
+    [
+      '**Status:** Accepted',
+      '',
+      `# Stories: ${slug}`,
+      '',
+      '## Story 1: protected-target boundary',
+      '',
+      '### Acceptance Criteria',
+      '#### Happy Path',
+      '- Given an own-feature target, when land validates, then the boundary verdict is recorded.',
+      '#### Negative Paths',
+      '- Given a foreign protected target, when land validates, then the land is refused.',
+      '',
+    ].join('\n'),
   );
   await writeFile(join(worktree, '.docs', 'plans', `${slug}.md`), renderPlan(slug, files, inherited));
 
