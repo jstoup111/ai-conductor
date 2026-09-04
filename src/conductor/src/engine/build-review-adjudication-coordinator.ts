@@ -160,6 +160,8 @@ export async function coordinateBuildReviewAdjudication(input: {
   const finalize = async (options: {
     readonly tasksByCaseId: ReadonlyMap<string, readonly { readonly title: string }[]>;
     readonly republishWorkOrder: boolean;
+    /** An already-failed effect that operator acceptance retires is not an effect failure to emit. */
+    readonly suppressRetiredEffectFailures?: boolean;
     /**
      * Supplied only by the acceptance-terminal path, which just read authority
      * and applies no effect before arriving here — so a second read could not
@@ -242,7 +244,7 @@ export async function coordinateBuildReviewAdjudication(input: {
         type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId: retirement.caseId, resolution: 'resolved',
       });
-      if (retirement.retiredEffect) {
+      if (retirement.retiredEffect && !options.suppressRetiredEffectFailures) {
         await input.emit?.({
           type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseId: retirement.caseId, ...retirement.retiredEffect,
@@ -363,7 +365,17 @@ export async function coordinateBuildReviewAdjudication(input: {
     }
   }
 
+  // Reconciliation awaited durable work, so its earlier authority snapshot
+  // cannot decide a content-specific HALT. Re-read once at this boundary and
+  // skip only the case whose complete source set is no longer autonomous.
+  // The frozen dispatch projection remains the one authority for source ids.
+  try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+  if (allOperatorResolved(resolved)) {
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
+  }
+  const liveSourceIdsBeforeRepeat = liveSourceIdsFor(resolved);
   for (const proposed of admitted) {
+    if (proposed.sources.every((source) => !liveSourceIdsBeforeRepeat.has(source.sourceId))) continue;
     const caseId = caseIdsByRef.get(proposed.case.caseRef);
     const record = caseId ? reconciledCasesById.get(caseId) : undefined;
     if (!caseId || !record) {
@@ -413,11 +425,26 @@ export async function coordinateBuildReviewAdjudication(input: {
       ...(input.chargeEffect === undefined ? {} : { chargeEffect: input.chargeEffect }),
     });
     if (!action.ok) {
+      // The effect boundary itself awaited durable work. A late acceptance can
+      // retire only the covered case before this content-specific failure is
+      // surfaced; a remaining sibling still reduces to the normal HALT route.
+      try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+      const liveSourceIdsAfterActionFailure = liveSourceIdsFor(resolved);
+      const retiredByAcceptance = new Set(pendingActionEffects
+        .filter((record) => record.sources.every((source) => !liveSourceIdsAfterActionFailure.has(source.sourceId)))
+        .map((record) => record.id));
       for (const record of pendingActionEffects) {
         if (record.effect.kind !== 'action') continue;
+        if (retiredByAcceptance.has(record.id)) continue;
         await input.emit?.({
           type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseId: record.id, effectId: record.effect.id, effectKind: 'action', reason: action.reason,
+        });
+      }
+      if (retiredByAcceptance.size > 0) {
+        return finalize({
+          tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved,
+          suppressRetiredEffectFailures: true,
         });
       }
       return fail(action.reason);
@@ -437,6 +464,7 @@ export async function coordinateBuildReviewAdjudication(input: {
     // adjacent authority read rather than relying on the action boundary.
     try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
     const liveSourceIdsBeforeDeferral = liveSourceIdsFor(resolved);
+    let deferredFailureRetiredByAcceptance = false;
     for (const proposed of admitted) {
       if (proposed.case.disposition !== 'defer' || proposed.case.effect.kind !== 'deferral') continue;
       if (proposed.sources.every((source) => !liveSourceIdsBeforeDeferral.has(source.sourceId))) continue;
@@ -449,10 +477,27 @@ export async function coordinateBuildReviewAdjudication(input: {
       const record = reconciledCasesById.get(caseId);
       if (!record || record.effect.kind !== 'deferral') return fail('deferral case effect was not reconciled');
       if (!deferred.ok) {
+        // A tracker call is external work: re-read the exact operator authority
+        // beside the failure exit, not at the earlier reservation boundary.
+        try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+        const liveSourceIdsAfterDeferralFailure = liveSourceIdsFor(resolved);
+        const retiredByAcceptance = record.sources.every((source) =>
+          !liveSourceIdsAfterDeferralFailure.has(source.sourceId),
+        );
+        if (retiredByAcceptance) {
+          deferredFailureRetiredByAcceptance = true;
+          continue;
+        }
         await input.emit?.({
           type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseId, effectId: record.effect.id, effectKind: 'deferral', reason: deferred.reason,
         });
+        if (deferredFailureRetiredByAcceptance) {
+          return finalize({
+            tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved,
+            suppressRetiredEffectFailures: true,
+          });
+        }
         return fail(deferred.reason);
       }
       if (deferred.status === 'applied') {
@@ -461,6 +506,12 @@ export async function coordinateBuildReviewAdjudication(input: {
           caseId, effectId: record.effect.id, effectKind: 'deferral',
         });
       }
+    }
+    if (deferredFailureRetiredByAcceptance) {
+      return finalize({
+        tasksByCaseId, republishWorkOrder: true, resolvedAtEntry: resolved,
+        suppressRetiredEffectFailures: true,
+      });
     }
   }
   return finalize({ tasksByCaseId, republishWorkOrder: true });

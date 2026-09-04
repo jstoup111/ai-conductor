@@ -393,6 +393,112 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
+  it('re-reads authority before a semantic-repeat halt and leaves an unaccepted sibling fail-closed', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-accepted', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The first test needs a focused assertion.', resolution: 'open',
+          sources: [{ sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+          effect: { id: 'effect-accepted', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+        },
+        {
+          id: 'case-live', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The second test needs a focused assertion.', resolution: 'open',
+          sources: [{ sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+          effect: { id: 'effect-live', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+        },
+      ],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-accepted',
+      cases: [
+        { caseId: 'case-accepted', priority: 'high', tasks: [{ title: 'Repair the first test' }] },
+        { caseId: 'case-live', priority: 'high', tasks: [{ title: 'Repair the second test' }] },
+      ],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const resolutions = [new Set<string>(), new Set<string>(), new Set<string>(), new Set([acceptedSource.findingId])];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => resolutions.shift() ?? new Set([acceptedSource.findingId]),
+      generateId: sequentialIds('semantic-window'), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case repeat case-live' });
+    expect(events.filter((event) => event.type === 'remediation_semantic_repeat_halt')).toEqual([
+      expect.objectContaining({ type: 'remediation_semantic_repeat_halt', caseId: 'case-live' }),
+    ]);
+    expect(events.some((event) => event.type === 'remediation_semantic_repeat_halt' && event.caseId === 'case-accepted')).toBe(false);
+    expect(events.filter((event) => event.type === 'remediation_adjudication_started')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
+  });
+
+  it('retires an accepted action-effect failure but halts for an unaccepted sibling', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const resolutions = [
+      new Set<string>(), new Set<string>(), new Set<string>(), new Set<string>(), new Set<string>(),
+      new Set([acceptedSource.findingId]),
+    ];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => resolutions.shift() ?? new Set([acceptedSource.findingId]),
+      chargeEffect: async () => ({ status: 'unreadable', reason: 'ledger unavailable' }),
+      generateId: sequentialIds('action-window'), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled.ok).toBe(true);
+    if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
+    const accepted = settled.state.cases.find((record) => record.id === 'action-window-1');
+    const live = settled.state.cases.find((record) => record.id === 'action-window-3');
+    expect(accepted).toMatchObject({ resolution: 'resolved', effect: { status: 'failed' } });
+    expect(live).toMatchObject({ resolution: 'open', effect: { status: 'failed' } });
+    expect(events.some((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted?.id)).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed', caseId: live?.id, effectKind: 'action' }));
+    expect(events.filter((event) => event.type === 'remediation_adjudication_started')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
+  });
+
+  it('retires an accepted deferral-effect failure but still files and halts for an unaccepted sibling', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const fileIssue = vi.fn(async () => { throw new Error('tracker unavailable'); });
+    const resolutions = [
+      new Set<string>(), new Set<string>(), new Set<string>(), new Set<string>(), new Set<string>(),
+      new Set<string>(), new Set([acceptedSource.findingId]), new Set([acceptedSource.findingId]),
+    ];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedDeferralJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => resolutions.shift() ?? new Set([acceptedSource.findingId]),
+      tracker: { findIssueByEffectMarker: async () => undefined } as unknown as EffectMarkerTrackerClient,
+      repo: 'acme/conductor', fileIssue, generateId: sequentialIds('deferral-window'), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    expect(fileIssue).toHaveBeenCalledTimes(2);
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled.ok).toBe(true);
+    if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
+    const accepted = settled.state.cases.find((record) => record.id === 'deferral-window-1');
+    const live = settled.state.cases.find((record) => record.id === 'deferral-window-3');
+    expect(accepted).toMatchObject({ resolution: 'resolved', effect: { status: 'failed', diagnostic: 'retired by operator acceptance' } });
+    expect(live).toMatchObject({ resolution: 'open', effect: { status: 'reserved' } });
+    expect(events.some((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted?.id)).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed', caseId: live?.id, effectKind: 'deferral' }));
+    expect(events.filter((event) => event.type === 'remediation_adjudication_started')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
+  });
+
   it('emits a semantic-repeat halt when an already-resolved action case is bound again', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

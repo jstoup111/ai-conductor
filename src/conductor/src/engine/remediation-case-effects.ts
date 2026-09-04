@@ -45,6 +45,11 @@ export function isBuildEligibleActionCase(record: RemediationCaseRecord): record
   return isActionCase(record) && record.effect.status === 'applied';
 }
 
+/** Action effects that require a durable work order before recovery or terminal PASS. */
+export function isBuildReviewWorkOrderObligationActionCase(record: RemediationCaseRecord): record is ActionCase {
+  return isActionCase(record) && ['reserved', 'applied', 'failed'].includes(record.effect.status);
+}
+
 function replaceCases(
   state: RemediationCaseStoreState,
   replace: (record: RemediationCaseRecord) => RemediationCaseRecord,

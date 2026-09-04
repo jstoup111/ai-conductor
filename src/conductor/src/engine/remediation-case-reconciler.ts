@@ -17,6 +17,8 @@ export interface ReconcileRemediationCasesInput {
   readonly generateId: () => string;
   /** Durable BUILD-work-order evidence, supplied by the later work-order seam. */
   readonly attemptedCaseIds?: readonly string[];
+  /** A clean PASS with no order settles absent non-action case history too. */
+  readonly resolveAbsentOpenNonActionCases?: boolean;
   /** Case identities known by the caller to belong to another feature/domain. */
   readonly foreignCaseIds?: readonly string[];
 }
@@ -211,6 +213,16 @@ function reconcileState(
       && replacement.effect.kind === 'action'
       && !referencedExisting.has(replacement.id)
       && attemptedIds.has(replacement.id)
+    ) {
+      changed = true;
+      resolvedAbsentCaseIds.push(replacement.id);
+      return { ...replacement, resolution: 'resolved' as const };
+    }
+    if (
+      replacement.resolution === 'open'
+      && replacement.disposition !== 'act'
+      && !referencedExisting.has(replacement.id)
+      && input.resolveAbsentOpenNonActionCases
     ) {
       changed = true;
       resolvedAbsentCaseIds.push(replacement.id);
