@@ -695,6 +695,8 @@ export async function terminateFeature({
       triage.treeUnchangedSinceDispatch?.before === triage.treeUnchangedSinceDispatch?.after
     ) {
       note += `\nNo repair state was preserved because none was produced; the tree is unchanged since dispatch (${triage.treeUnchangedSinceDispatch.after}).\n`;
+    } else if (triage.contractOutcome === 'preservation-failed') {
+      note += `\nNo quarantine ref was created because preserving the attempted repair failed. The attempted state was not restored and remains in the worktree on the feature branch; inspect and clear it before unparking.\n`;
     } else {
       note += `\nNo quarantine ref exists (clean-HEAD case)\n`;
     }

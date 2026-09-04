@@ -313,10 +313,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-terminate-feature-evidence-'));
     const withQuarantine = join(projectRoot, '.worktrees', 'with-quarantine');
     const withoutQuarantine = join(projectRoot, '.worktrees', 'without-quarantine');
+    const preservationFailed = join(projectRoot, '.worktrees', 'preservation-failed');
     try {
       await Promise.all([
         mkdir(withQuarantine, { recursive: true }),
         mkdir(withoutQuarantine, { recursive: true }),
+        mkdir(preservationFailed, { recursive: true }),
       ]);
 
       await terminateFeature({
@@ -344,11 +346,24 @@ describe('engine/daemon-runner — makeRunFeature', () => {
           preservedPaths: ['src/still-needed.ts'],
         } satisfies TriageOutcome,
       });
+      await terminateFeature({
+        worktreePath: preservationFailed,
+        reason: 'setup triage requires intervention',
+        park: false,
+        slug: 'preservation-failed',
+        triageEvidence: {
+          kind: 'park',
+          outputTail: 'could not preserve rejected repair ref: branch is checked out',
+          contractOutcome: 'preservation-failed',
+          preservedPaths: [],
+        } satisfies TriageOutcome,
+      });
 
-      const [withQuarantineHalt, withQuarantineClass, withoutQuarantineHalt] = await Promise.all([
+      const [withQuarantineHalt, withQuarantineClass, withoutQuarantineHalt, preservationFailedHalt] = await Promise.all([
         readFile(join(withQuarantine, '.pipeline', 'HALT'), 'utf-8'),
         readFile(join(withQuarantine, '.pipeline', 'HALT.class'), 'utf-8'),
         readFile(join(withoutQuarantine, '.pipeline', 'HALT'), 'utf-8'),
+        readFile(join(preservationFailed, '.pipeline', 'HALT'), 'utf-8'),
       ]);
 
       expect(withQuarantineClass).toBe('needs-human');
@@ -362,6 +377,10 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(withoutQuarantineHalt).toContain('No quarantine ref exists (clean-HEAD case)');
       expect(withoutQuarantineHalt).toContain('Contract outcome: clean-head-contract-failed');
       expect(withoutQuarantineHalt).toContain('src/still-needed.ts');
+      expect(preservationFailedHalt).toContain('could not preserve rejected repair ref: branch is checked out');
+      expect(preservationFailedHalt).toContain('Contract outcome: preservation-failed');
+      expect(preservationFailedHalt).toContain('No quarantine ref was created because preserving the attempted repair failed');
+      expect(preservationFailedHalt).not.toContain('No quarantine ref exists (clean-HEAD case)');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }

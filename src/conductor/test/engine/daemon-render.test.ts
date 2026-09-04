@@ -172,6 +172,32 @@ describe('renderDaemonEvent', () => {
     expect(lines(event)).toEqual([expected]);
   });
 
+  it.each([
+    'engine-committed',
+    'accepted-existing-commit',
+    'verified-no-tree-change',
+  ] as const)('renders setup repair success disposition %s', (disposition) => {
+    expect(lines({ type: 'setup_repair', disposition, preservedPaths: [] })).toEqual([
+      `· setup repair ${disposition}`,
+    ]);
+  });
+
+  it('renders setup repair rejections with only the evidence that exists', () => {
+    expect(lines({
+      type: 'setup_repair',
+      disposition: 'rejected',
+      reason: 'setup-drift',
+      quarantineRef: 'wip/setup-quarantine-render',
+      preservedPaths: ['src/repair.ts'],
+    })).toEqual(['· setup repair rejected (setup-drift; wip/setup-quarantine-render)']);
+    expect(lines({
+      type: 'setup_repair',
+      disposition: 'rejected',
+      reason: 'preservation-failed',
+      preservedPaths: [],
+    })).toEqual(['· setup repair rejected (preservation-failed)']);
+  });
+
   it('renders plan-growth counts with each gate and the current cap', () => {
     expect(lines({
       type: 'plan_growth',

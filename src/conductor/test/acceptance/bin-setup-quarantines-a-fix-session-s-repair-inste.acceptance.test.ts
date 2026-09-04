@@ -285,4 +285,54 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
     expect(halt).toContain('No repair state was preserved because none was produced');
     expect(halt).not.toContain('No quarantine ref exists (clean-HEAD case)');
   });
+
+  it('keeps an unpreserved repair in the worktree and names the preservation failure', async () => {
+    const quarantineRef = `wip/setup-quarantine-${SLUG}`;
+    const occupiedWorktree = await mkdtemp(join(tmpdir(), 'setup-repair-occupied-ref-'));
+    await rm(occupiedWorktree, { recursive: true, force: true });
+    await git('branch', quarantineRef);
+    await git('worktree', 'add', '-q', occupiedWorktree, quarantineRef);
+    try {
+      const deps: FeatureRunnerDeps = {
+        createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
+        prepareWorktree: async () => {
+          throw new SetupFailureError('setup failed', 'fixture compile failure');
+        },
+        runSetupTriage: async (_error, worktree, item, _providerExecution, _log, events) => fixSession(
+          makeGitRunner(worktree.path),
+          worktree.path,
+          item.slug,
+          async () => {
+            await writeFile(join(root, 'rejected-repair.txt'), 'still present\n', 'utf8');
+          },
+          async () => {
+            throw new Error('forced setup still fails');
+          },
+          events,
+        ),
+        runConductor: async () => {
+          throw new Error('must remain parked');
+        },
+        readOutcome: async () => ({ done: false, halted: false }),
+        teardownWorktree: async () => {},
+        markProcessed: async () => {},
+        daemon: true,
+        project: 'acceptance-project',
+        projectRoot: root,
+      };
+
+      const result = await makeRunFeature(deps)({ slug: SLUG } as BacklogItem);
+
+      expect(result.status).toBe('error');
+      expect(await readFile(join(root, 'rejected-repair.txt'), 'utf8')).toBe('still present\n');
+      const halt = await readFile(join(root, '.pipeline', 'HALT'), 'utf8');
+      expect(halt).toContain('preserving the attempted repair failed');
+      expect(halt).toContain(`cannot force update the branch '${quarantineRef}'`);
+      expect(halt).toContain('Contract outcome: preservation-failed');
+      expect(halt).not.toContain('No quarantine ref exists (clean-HEAD case)');
+    } finally {
+      await git('worktree', 'remove', '--force', occupiedWorktree);
+      await rm(occupiedWorktree, { recursive: true, force: true });
+    }
+  });
 });
