@@ -496,18 +496,68 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     }));
   });
 
-  it.each([
-    ['no durable case store', async () => {}],
-    ['a durable case store but no work order', async (root: string) => {
-      const first = await fixture();
-      const cases = await first.readJson('.pipeline/remediation-cases.json');
-      await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(cases), 'utf8');
-    }],
-  ])('keeps a clean PASS terminal when there is %s', async (_name, seedPipeline) => {
-    const run = await fixture({ rawVerdict: 'PASS', seedPipeline });
+  it('keeps a clean PASS terminal when there is no durable case store', async () => {
+    const run = await fixture({ rawVerdict: 'PASS' });
 
     expect(await run.haltMarker()).toBe('');
     expect((await run.state()).build_review).toBe('done');
+  });
+
+  it('settles an open non-action case without an order before terminal PASS', async () => {
+    const first = await fixture({ judgement: deferralJudgement() });
+    const cases = await first.readJson('.pipeline/remediation-cases.json');
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(cases), 'utf8'),
+    });
+
+    expect(await run.haltMarker()).toBe('');
+    expect((await run.state()).build_review).toBe('done');
+    const settled = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ id: string; resolution: string }> };
+    expect(settled.cases).toEqual([expect.objectContaining({ resolution: 'resolved' })]);
+    expect(run.lifecycle).toContainEqual(expect.objectContaining({
+      type: 'remediation_case_reconciled', caseId: settled.cases[0]!.id, resolution: 'resolved',
+    }));
+  });
+
+  it.each(['reserved', 'applied', 'failed'] as const)('halts a clean PASS when an open %s action effect has no order', async (status) => {
+    const first = await fixture();
+    const cases = await first.readJson('.pipeline/remediation-cases.json') as {
+      cases: Array<{ id: string; effect: { id: string; kind: string; status: string; workOrderId?: string; diagnostic?: string } }>;
+    };
+    const seeded = {
+      ...cases,
+      cases: cases.cases.map((record) => ({
+        ...record,
+        effect: {
+          ...record.effect,
+          status,
+          ...(status === 'reserved' || status === 'failed' ? { workOrderId: undefined } : {}),
+          ...(status === 'failed' ? { diagnostic: 'previous effect failure' } : {}),
+        },
+      })),
+    };
+    const caseId = seeded.cases[0]!.id;
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(seeded), 'utf8'),
+    });
+
+    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: work order attempt missing-work-order with open action case ${caseId} (${status})`);
+    expect((await run.state()).build_review).not.toBe('done');
+  });
+
+  it('halts BUILD recovery when an open applied action case has no work order', async () => {
+    const first = await fixture();
+    const cases = await first.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ id: string; effect: { status: string } }> };
+    const caseId = cases.cases[0]!.id;
+    const restart = await fixture({
+      startFrom: 'build',
+      seedPipeline: async (root) => writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(cases), 'utf8'),
+    });
+
+    expect(restart.dispatched).not.toContain('build');
+    expect(await restart.haltMarker()).toContain(`BUILD durable remediation recovery halted: work order missing-work-order with open action case ${caseId} (applied)`);
   });
 
   it.each([

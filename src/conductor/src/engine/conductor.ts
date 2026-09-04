@@ -31,7 +31,7 @@ import {
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
-import { isBuildEligibleActionCase } from './remediation-case-effects.js';
+import { isBuildEligibleActionCase, isBuildReviewWorkOrderObligationActionCase } from './remediation-case-effects.js';
 import {
   appendBuildReviewWorkOrderContext,
   classifyBuildReviewDurableRead,
@@ -4821,7 +4821,13 @@ export class Conductor {
     // feature's case store never recorded is foreign and must never reach BUILD
     // prompt construction, even when it names an open case of this feature.
     const order = await readBuildReviewWorkOrder(this.projectRoot, feature, [...openActionCases.values()]);
-    if (classifyBuildReviewDurableRead(order) === 'absent') return { kind: 'absent' };
+    if (classifyBuildReviewDurableRead(order) === 'absent') {
+      const openCase = state.state.cases.find(isBuildEligibleActionCase)!;
+      return {
+        kind: 'invalid',
+        reason: `work order missing-work-order with open action case ${openCase.id} (${openCase.effect.status})`,
+      };
+    }
     if (!order.ok) return { kind: 'invalid', reason: `work order ${order.reason}` };
     if (!order.workOrder.cases.some((row) => openActionCases.has(row.caseId))) return { kind: 'absent' };
     const attempt = await markBuildReviewWorkOrderAttempted(this.projectRoot, feature);
@@ -4878,13 +4884,27 @@ export class Conductor {
     const feature = featureRead.feature;
     const store = new RemediationCaseStore(this.projectRoot, feature);
     const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
-    if (classifyBuildReviewDurableRead(attemptEvidence) === 'absent') return { kind: 'absent' };
-    if (!attemptEvidence.ok) return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
+    const missingAttemptEvidence = classifyBuildReviewDurableRead(attemptEvidence) === 'absent';
+    if (missingAttemptEvidence) {
+      const state = await store.read();
+      if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
+      const openActionCase = state.state.cases.find(isBuildReviewWorkOrderObligationActionCase);
+      if (openActionCase) {
+        return {
+          kind: 'invalid',
+          reason: `work order attempt missing-work-order with open action case ${openActionCase.id} (${openActionCase.effect.status})`,
+        };
+      }
+    }
+    if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) !== 'absent') {
+      return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
+    }
     const reconciled = await reconcileRemediationCases(store, {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: new Date().toISOString(),
       generateId: randomUUID,
-      attemptedCaseIds: attemptEvidence.attemptedCaseIds,
+      attemptedCaseIds: attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [],
+      ...(missingAttemptEvidence ? { resolveAbsentOpenNonActionCases: true } : {}),
     });
     if (!reconciled.ok) {
       return {
