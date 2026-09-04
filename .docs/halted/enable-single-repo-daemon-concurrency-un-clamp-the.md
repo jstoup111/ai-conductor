@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-04T23:20:55.809Z
 Slug: enable-single-repo-daemon-concurrency-un-clamp-the
 Class: needs-human
 Halting step: prd_audit
