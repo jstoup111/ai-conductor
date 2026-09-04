@@ -42,6 +42,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Install and uninstall banners now say AI Conductor Harness. ([implementation PR #2142](https://github.com/jstoup111/ai-conductor/pull/2142)).
 - Operator over-scope decisions on no-owner (NC) findings now survive prd_audit lap renumbering and line-anchor drift instead of re-halting as unknown-criterion. ([implementation PR #2144](https://github.com/jstoup111/ai-conductor/pull/2144)).
 - Operator over-scope decisions on NC findings now survive laps that reword the evidence summary, not just renumbering and line-anchor drift. ([implementation PR #2146](https://github.com/jstoup111/ai-conductor/pull/2146)).
+- The prd_audit skill reuses recorded operator-decision wording for already-decided no-owner findings, so decisions keep matching across re-graded laps. ([implementation PR #2148](https://github.com/jstoup111/ai-conductor/pull/2148)).
 
 ## [1.0.0] - 2026-08-31
 
