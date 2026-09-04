@@ -1,5 +1,13 @@
 import type { WorkOrder } from './work-order.js';
 
+/** Dispatcher-owned effects requested by an executor after its feature work ends. */
+export interface FeatureTerminalEffects {
+  cleanupHaltPresentation?: { prUrl: string };
+  enrollWatch?: { prUrl: string };
+  markProcessed?: { prUrl?: string };
+  sweep?: true;
+}
+
 /** Result returned by a single feature executor. */
 export interface FeatureExecutionOutcome {
   slug: string;
@@ -7,6 +15,7 @@ export interface FeatureExecutionOutcome {
   prUrl?: string;
   reason?: string;
   costTokens?: number;
+  terminalEffects?: FeatureTerminalEffects;
 }
 
 /**

@@ -199,6 +199,8 @@ describe('engine/daemon-maintenance', () => {
       () => false,
       100,
       () => now,
+      () => [],
+      2,
     );
     const operations: string[] = [];
     const refresh = async () => {

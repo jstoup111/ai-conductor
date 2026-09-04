@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { posix, win32 } from 'node:path';
+import type { ComplexityTier, Track } from '../types/steps.js';
 
 /** A document carried across the dispatcher-to-executor boundary. */
 export interface ManifestEntry {
@@ -19,6 +20,12 @@ export interface WorkOrder {
   /** Immutable base commit captured when the dispatcher claims this work. */
   baseSha: string;
   manifest: ManifestEntry[];
+  /** Executor inputs formerly recovered from dispatcher-local bookkeeping. */
+  tier?: ComplexityTier;
+  sourceRef?: string;
+  track?: Track;
+  band?: string;
+  resolutionMode?: 'banded' | 'fallback' | 'off';
 }
 
 export interface WorkOrderGitResult {
@@ -49,6 +56,11 @@ export interface BuildWorkOrderInput {
   slug: string;
   baseSha: string;
   documentRefs: readonly string[];
+  tier?: ComplexityTier;
+  sourceRef?: string;
+  track?: Track;
+  band?: string;
+  resolutionMode?: 'banded' | 'fallback' | 'off';
 }
 
 /**
@@ -81,15 +93,17 @@ export async function buildWorkOrder(
     slug: input.slug,
     baseSha: input.baseSha,
     manifest,
+    ...(input.tier ? { tier: input.tier } : {}),
+    ...(input.sourceRef ? { sourceRef: input.sourceRef } : {}),
+    ...(input.track ? { track: input.track } : {}),
+    ...(input.band ? { band: input.band } : {}),
+    ...(input.resolutionMode ? { resolutionMode: input.resolutionMode } : {}),
   };
 }
 
-/**
- * Verifies a work order's pinned inputs, then creates its isolated worktree.
- */
-export async function materializeWorkOrder(
+/** Verifies a dispatcher-built order before any executor worktree is created. */
+export async function verifyWorkOrder(
   order: WorkOrder,
-  worktreePath: string,
   git: WorkOrderGitRunner,
 ): Promise<void> {
   const baseResult = await git(['cat-file', '-e', order.baseSha]);
@@ -104,6 +118,17 @@ export async function materializeWorkOrder(
       throw new WorkOrderManifestMismatchError(entry.ref);
     }
   }
+}
+
+/**
+ * Verifies a work order's pinned inputs, then creates its isolated worktree.
+ */
+export async function materializeWorkOrder(
+  order: WorkOrder,
+  worktreePath: string,
+  git: WorkOrderGitRunner,
+): Promise<void> {
+  await verifyWorkOrder(order, git);
 
   const worktreeResult = await git(['worktree', 'add', worktreePath, order.baseSha]);
   if (worktreeResult.exitCode !== 0) {

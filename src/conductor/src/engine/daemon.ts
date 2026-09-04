@@ -22,6 +22,7 @@ import { InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
 import type { FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import { DaemonMaintenance } from './daemon-maintenance.js';
+import type { FeatureTerminalEffects } from './feature-executor.js';
 
 type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
 
@@ -80,6 +81,10 @@ export interface BacklogItem {
    *  reordered (banded), fell back due to resolver error (fallback), or were
    *  not prioritized (off). Used by the dashboard to render band annotations. */
   resolutionMode?: 'banded' | 'fallback' | 'off';
+  /** Governing Stories artifact resolved from the plan on the pinned tree. */
+  storiesPath?: string;
+  /** Governing plan artifact resolved during backlog discovery. */
+  planPath?: string;
 }
 
 /**
@@ -185,6 +190,7 @@ export interface FeatureOutcome {
   reason?: string;
   /** Output tokens this feature spent, for the global cost ceiling. */
   costTokens?: number;
+  terminalEffects?: FeatureTerminalEffects;
 }
 
 /** Read-only feature ownership exposed to daemon sweep adapters. */
@@ -215,6 +221,11 @@ export interface DaemonDeps {
     createWorkOrder: (item: BacklogItem) => Promise<WorkOrder>;
     executor: FeatureExecutor;
   };
+  /** Lifecycle accounting shared by both executor and legacy runner routes. */
+  onExecutorStarted?: () => void;
+  onExecutorSettled?: () => void;
+  /** Runs root/.daemon terminal effects only after the claim is released. */
+  onFeatureTerminalEffects?: (outcome: FeatureOutcome) => Promise<void>;
   /**
    * The daemon-run-scoped authority for active feature dispatches. An omitted
    * registry gets the in-memory default, while tests and future composition
@@ -853,6 +864,7 @@ export async function runDaemon(
     idlePollMs,
     now,
     () => claims.list(),
+    options.concurrency,
   );
   const workers: Array<{ slug: string; tagged: Tagged }> = [];
   // Keep one completion observer for the current worker set. A busy poll must
@@ -940,12 +952,17 @@ export async function runDaemon(
       featureLog(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
     }
     const runFeature = async (): Promise<FeatureOutcome> => {
-      if (deps.featureExecution) {
-        return deps.featureExecution.executor.execute(
-          await deps.featureExecution.createWorkOrder(item),
-        );
+      deps.onExecutorStarted?.();
+      try {
+        if (deps.featureExecution) {
+          return deps.featureExecution.executor.execute(
+            await deps.featureExecution.createWorkOrder(item),
+          );
+        }
+        return deps.runFeature(item);
+      } finally {
+        deps.onExecutorSettled?.();
       }
-      return deps.runFeature(item);
     };
     const tagged: Tagged = runFeature()
       .then((outcome) => ({ slug: item.slug, outcome }))
@@ -980,6 +997,8 @@ export async function runDaemon(
     const workerIndex = workers.findIndex((worker) => worker.slug === slug);
     if (workerIndex >= 0) workers.splice(workerIndex, 1);
     observeWorkerSet();
+    await deps.onFeatureTerminalEffects?.(outcome);
+    if (outcome.terminalEffects?.sweep) await sweepBestEffort();
     processed.push(outcome);
     if (outcome.costTokens) totalCost += outcome.costTokens;
     // A halted OR errored feature is parked for a human, not finished. Both now
@@ -1564,7 +1583,7 @@ export async function runDaemon(
 
     // Observe restart conditions only after the claim attempt. A drain begun
     // here stops the next free slot from being filled after a worker settles.
-    await observeBusyDrainRequest();
+    if (maintenance.busyMaintenanceEnabled()) await observeBusyDrainRequest();
 
     // Workers are running. Race their completion against the poll timer so
     // busy pools still execute the scheduler-owned periodic sweep; a timer
@@ -1610,7 +1629,9 @@ export async function runDaemon(
     await yieldToEventLoop();
     if (wakeBusyPoll === resolveBusyPoll) wakeBusyPoll = undefined;
     if (!completedWorker) {
-      await maintenance.afterBusyPoll(sweepBestEffort);
+      if (maintenance.busyMaintenanceEnabled()) {
+        await maintenance.afterBusyPoll(sweepBestEffort);
+      }
       continue;
     }
 

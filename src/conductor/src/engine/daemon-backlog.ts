@@ -1151,7 +1151,14 @@ export async function discoverBacklog(
     // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
     // vetted stories/plan physically exist in it already — the item only needs to
     // carry the slug (+ tier + sourceRef + track); no working-tree paths to copy.
-    items.push({ slug, tier, ...(sourceRef ? { sourceRef } : {}), ...(track ? { track } : {}) });
+    items.push({
+      slug,
+      planPath: planRel,
+      storiesPath: storiesRel,
+      tier,
+      ...(sourceRef ? { sourceRef } : {}),
+      ...(track ? { track } : {}),
+    });
   }
 
   // Dependency gate — the final gauntlet step, run AFTER content eligibility and

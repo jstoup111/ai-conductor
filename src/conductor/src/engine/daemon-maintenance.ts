@@ -45,7 +45,13 @@ export class DaemonMaintenance {
     private readonly refreshIntervalMs = 0,
     private readonly now: () => number = Date.now,
     private readonly activeWorkSlugs: () => readonly string[] = () => [],
+    private readonly effectivePoolWidth = 1,
   ) {}
+
+  /** Busy-pool maintenance is a concurrent-only policy; N=1 keeps serial flow. */
+  busyMaintenanceEnabled(): boolean {
+    return this.effectivePoolWidth > 1;
+  }
 
   isDrained(): boolean {
     return this.activeWorkCount() === 0;
@@ -130,7 +136,7 @@ export class DaemonMaintenance {
       case 'drained':
         return this.isDrained();
       case 'busy-allowed':
-        return true;
+        return this.busyMaintenanceEnabled() || this.isDrained();
     }
   }
 

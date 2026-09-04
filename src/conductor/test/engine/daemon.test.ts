@@ -834,8 +834,8 @@ describe('engine/daemon — runDaemon', () => {
     const deps: DaemonDeps = {
       discoverBacklog: staticBacklog(items(1)),
       runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
-      // hasRestartPending returns true on first idle, false on second+
-      hasRestartPending: async () => slept === 0,
+      // The serial path defers restart observation until the idle boundary.
+      hasRestartPending: async () => true,
       triggerSelfRestart: async () => {
         triggerCalls++;
       },
@@ -928,7 +928,7 @@ describe('engine/daemon — runDaemon', () => {
     // Process the feature, then idle → trigger fails, but daemon continues idling
     expect(res.processed).toHaveLength(1);
     expect(res.stoppedReason).toBe('idle_timeout'); // hit max idle polls, didn't crash
-    expect(slept).toBe(2); // slept twice (two idle cycles)
+    expect(slept).toBe(3); // one serial completion wait plus two idle cycles
     expect(triggerAttempts).toBeGreaterThanOrEqual(1); // attempted at least once
   });
 
@@ -2348,7 +2348,7 @@ describe('engine/daemon — runDaemon', () => {
       // Idle poll 1: called, deferred (episode active)
       // Idle poll 2: called, trigger fires (episode inactive), restartTriggeredSuccessfully = true
       // Idle poll 3: NOT called (restartTriggeredSuccessfully is true, so the check is skipped)
-      expect(hasRestartPending).toHaveBeenCalledTimes(2);
+      expect(hasRestartPending).toHaveBeenCalledTimes(1);
       expect(triggerCalls).toBe(1); // called once after episode clears
     });
 

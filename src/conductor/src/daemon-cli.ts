@@ -110,10 +110,10 @@ import {
 } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
-import { buildWorkOrder } from './engine/work-order.js';
+import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
-import { resolveSpecPrUrl } from './engine/pr-labels.js';
+import { cleanupHaltPresentation, resolveSpecPrUrl } from './engine/pr-labels.js';
 import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
 import { initStaleEngineState } from './engine/stale-engine-init.js';
 import {
@@ -136,6 +136,7 @@ import {
   resolveDaemonBaseSha,
 } from './engine/daemon-deps.js';
 import { InMemoryWorkClaims } from './engine/work-claims.js';
+import { WorktreeLifecycleQueue } from './engine/worktree.js';
 import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
@@ -173,7 +174,7 @@ import {
 } from './engine/daemon-rekick.js';
 import { readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
-import { sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
+import { enrollWatch, sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
 import type { PrMergeState } from './engine/pr-labels.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
@@ -189,6 +190,35 @@ import { createEpisodeHaltTracker } from './engine/episode-halt-tracker.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFile = promisify(execFileCb);
+
+/** One git adapter for WorkOrder build and its executor-side verification. */
+export function createWorkOrderGitRunner(projectRoot: string): WorkOrderGitRunner {
+  return async (args) => {
+    try {
+      const { stdout, stderr } = await execFile('git', [...args], { cwd: projectRoot });
+      return { exitCode: 0, stdout, stderr };
+    } catch (error) {
+      const failure = error as { code?: number; stdout?: string; stderr?: string };
+      return {
+        exitCode: typeof failure.code === 'number' ? failure.code : 1,
+        stdout: failure.stdout ?? '',
+        stderr: failure.stderr ?? '',
+      };
+    }
+  };
+}
+
+/** The only transformation from the serializable executor contract to runner input. */
+export function workOrderToBacklogItem(order: WorkOrder): BacklogItem {
+  return {
+    slug: order.slug,
+    ...(order.tier ? { tier: order.tier } : {}),
+    ...(order.sourceRef ? { sourceRef: order.sourceRef } : {}),
+    ...(order.track ? { track: order.track } : {}),
+    ...(order.band ? { band: order.band } : {}),
+    ...(order.resolutionMode ? { resolutionMode: order.resolutionMode } : {}),
+  };
+}
 
 /**
  * Task 17: Create a transition-aware discovery logger that tracks fetch state
@@ -961,6 +991,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // One daemon process owns both dispatcher root mutations and every
   // in-process self-host executor's fingerprint window.
   const liveBoundaryCoordinator = isSelfHost ? new LiveBoundaryCoordinator() : undefined;
+  const coordinatedRootMutation = <T>(
+    mutation: () => Promise<T>,
+    deferLog: (reason: string) => void,
+  ): Promise<T> => liveBoundaryCoordinator
+    ? liveBoundaryCoordinator.runMutation(mutation, deferLog)
+    : mutation();
   if (isSelfHost) {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');
   }
@@ -1419,8 +1455,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // check. A sweep may observe a terminal PR while its executor still owns the
   // worktree; that worktree must remain until the claim is released.
   const workClaims = new InMemoryWorkClaims();
+  const worktreeLifecycle = new WorktreeLifecycleQueue();
   const isWorkClaimActive = makeWorkClaimLivenessPredicate(workClaims);
   const canRemoveWorktree = makeWorktreeRemovalPredicate(isWorkClaimActive, log);
+  const workOrderGit = createWorkOrderGitRunner(projectRoot);
 
   const deps = makeFeatureRunnerDeps({
     projectRoot,
@@ -1435,61 +1473,46 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
     teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
     runSetupTriage,
+    workOrderGit,
+    worktreeLifecycle,
   });
-  const workOrderItems = new Map<string, BacklogItem>();
   const createWorkOrder = async (item: BacklogItem) => {
     const baseSha = await resolveDaemonBaseSha(projectRoot, baseBranch);
     if (!baseSha) {
       throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
     }
-    workOrderItems.set(item.slug, item);
     return buildWorkOrder(
       {
         repository: basename(projectRoot),
         slug: item.slug,
         baseSha,
         documentRefs: [
-          `.docs/stories/${item.slug}.md`,
-          `.docs/plans/${item.slug}.md`,
+          item.storiesPath ?? `.docs/stories/${item.slug}.md`,
+          item.planPath ?? `.docs/plans/${item.slug}.md`,
         ],
+        tier: item.tier,
+        sourceRef: item.sourceRef,
+        track: item.track,
+        band: item.band,
+        resolutionMode: item.resolutionMode,
       },
-      async (args) => {
-        try {
-          const { stdout, stderr } = await execFile('git', [...args], { cwd: projectRoot });
-          return { exitCode: 0, stdout, stderr };
-        } catch (error) {
-          const failure = error as { code?: number; stdout?: string; stderr?: string };
-          return {
-            exitCode: typeof failure.code === 'number' ? failure.code : 1,
-            stdout: failure.stdout ?? '',
-            stderr: failure.stderr ?? '',
-          };
-        }
-      },
+      workOrderGit,
     );
   };
   const executor = createInProcessFeatureExecutor({
     withFeatureOwnership: withDaemonLogFeatureOwnership,
     run: async (order) => {
-      const item = workOrderItems.get(order.slug);
-      if (!item) throw new Error(`daemon executor received unknown work order: ${order.slug}`);
+      const item = workOrderToBacklogItem(order);
       return makeRunFeature({
         ...deps,
+        deferTerminalEffects: true,
         createWorktree: (slug) => deps.createWorktree(slug, order),
         prepareWorktree: (wt, log, events) => deps.prepareWorktree!(wt, log, events, order),
       })(item);
     },
   });
   const executeFeature = opts.runFeature ?? makeRunFeature(deps);
-  const runFeature = async (item: BacklogItem): Promise<FeatureOutcome> => {
-    activeExecutorCount += 1;
-    try {
-      return await executeFeature(item);
-    } finally {
-      activeExecutorCount -= 1;
-      teardown.executorSettled();
-    }
-  };
+  const runFeature = (item: BacklogItem): Promise<FeatureOutcome> => executeFeature(item);
 
   const continuous = opts.continuous ?? false;
   // Continuous with no ceiling at all runs unbounded — surface that loudly
@@ -1628,7 +1651,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         access(join(projectRoot, '.worktrees', slug, '.pipeline', 'finish-choice'))
           .then(() => true)
           .catch(() => false),
-      fastForwardRoot,
+      fastForwardRoot: (root, sourceLog) => coordinatedRootMutation(
+        () => fastForwardRoot(root, sourceLog),
+        (reason) => log(`[daemon] root refresh deferred: ${reason}`),
+      ),
       discoverBacklog,
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug) => readSpecOwnerStamp(ownerGit, baseBranch, slug),
@@ -1700,12 +1726,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // relink rebuilds the harness skill symlinks before self-host dispatches
   // triggerSelfRestart is injected from opts (respawn pane in session-hosted mode)
   const requestRestart = createRestartRequester(projectRoot, log, lock, process, {
-    relink: () => liveBoundaryCoordinator
-      ? liveBoundaryCoordinator.runMutation(
-        () => relinkSkillsForSelfBuild({ log }),
-        (reason) => log(`[daemon] root relink deferred: ${reason}`),
-      )
-      : relinkSkillsForSelfBuild({ log }),
+    relink: () => coordinatedRootMutation(
+      () => relinkSkillsForSelfBuild({ log }),
+      (reason) => log(`[daemon] root relink deferred: ${reason}`),
+    ),
     triggerSelfRestart: opts.triggerSelfRestart,
   });
 
@@ -1792,6 +1816,43 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         }
       },
       runFeature,
+      onExecutorStarted: () => {
+        activeExecutorCount += 1;
+      },
+      onExecutorSettled: () => {
+        activeExecutorCount -= 1;
+        teardown.executorSettled();
+      },
+      onFeatureTerminalEffects: async (outcome) => {
+        const effects = outcome.terminalEffects;
+        if (!effects) return;
+        const featureLog = featureLogFor(outcome.slug);
+        if (effects.cleanupHaltPresentation && deps.projectRoot && deps.runGh) {
+          try {
+            const result = await (deps.cleanupHaltPresentation ?? cleanupHaltPresentation)(
+              deps.runGh,
+              deps.projectRoot,
+              effects.cleanupHaltPresentation.prUrl,
+              featureLog,
+            );
+            featureLog(`[daemon-runner] cleanup result: ${result}`);
+          } catch (err) {
+            featureLog(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (effects.enrollWatch && deps.projectRoot) {
+          try {
+            await (deps.enrollWatch ?? enrollWatch)(deps.projectRoot, {
+              prUrl: effects.enrollWatch.prUrl,
+              slug: outcome.slug,
+              repoCwd: deps.projectRoot,
+            });
+          } catch (err) {
+            featureLog(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (effects.markProcessed) await deps.markProcessed(outcome.slug, effects.markProcessed.prUrl);
+      },
       // An explicit runFeature is the composition-test executor boundary. The
       // normal production path continues through the WorkOrder executor.
       ...(opts.runFeature ? {} : { featureExecution: { createWorkOrder, executor } }),
@@ -1804,7 +1865,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // (#309) hides. projectRoot is the harness root under self-host, so
       // src/conductor is its build package.
       rebuildEngine: isSelfHost
-        ? () => liveBoundaryCoordinator!.runMutation(
+        ? () => coordinatedRootMutation(
           () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor')),
           (reason) => log(`[daemon] engine rebuild deferred: ${reason}`),
         )
@@ -1827,7 +1888,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             return async (refreshOpts?: { force?: boolean }) => {
               if (!refreshOpts?.force && !throttle.shouldRun()) return;
               throttle.markRan();
-              const outcome = await liveBoundaryCoordinator!.runMutation(
+              const outcome = await coordinatedRootMutation(
                 () => fastForwardRoot(projectRoot, log),
                 (reason) => log(`[daemon] root refresh deferred: ${reason}`),
               );
@@ -1917,6 +1978,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           // and is the sole consumer of the startup-resolved toggle.
           autoCleanup: false,
           verbose: config?.daemon_verbose ?? false,
+          worktreeLifecycle,
         });
         const annotations = new Map(
           reconciliation.entries.map(({ slug, classification }) => [
@@ -1976,7 +2038,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // the backlog reads. A scheduler-approved refresh fast-forwards it first
       // so the SHA reflects origin's latest (driving ADR-013 re-kick on advance).
       resolveBaseSha: async ({ refresh }) => {
-        if (refresh) await fastForwardRoot(projectRoot, log, undefined, discoveryLogger);
+        if (refresh) await coordinatedRootMutation(
+          () => fastForwardRoot(projectRoot, log, undefined, discoveryLogger),
+          (reason) => log(`[daemon] root refresh deferred: ${reason}`),
+        );
         return readBaseSha(makeGitRunner(projectRoot), baseBranch);
       },
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
@@ -2022,6 +2087,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           disposeHaltWatcher,
           teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
           verbose: config?.daemon_verbose ?? false,
+          worktreeLifecycle,
         });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
@@ -2141,7 +2207,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
                     attemptCap,
                   },
-                  { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive },
+                  { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle },
                 );
 
                 log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
@@ -2263,7 +2329,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       triggerSelfRestart: opts.triggerSelfRestart,
       // Queued supervisor restarts rebuild/relink only for the harness self-host.
       ...(isSelfHost ? {
-        relink: () => liveBoundaryCoordinator!.runMutation(
+        relink: () => coordinatedRootMutation(
           () => relinkSkillsForSelfBuild({ log }),
           (reason) => log(`[daemon] root relink deferred: ${reason}`),
         ),

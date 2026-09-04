@@ -32,6 +32,7 @@ import {
   makeGitRunner,
 } from './rebase.js';
 import { execa } from 'execa';
+import type { WorktreeLifecycleQueue } from './worktree.js';
 import { rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -270,6 +271,7 @@ export function isResolutionInFlight(): boolean {
 export interface ResolveWorktreeLiveness {
   isFeatureInFlight?: IsFeatureInFlight;
   log?: (message: string) => void;
+  worktreeLifecycle?: WorktreeLifecycleQueue;
 }
 
 /**
@@ -332,6 +334,9 @@ export async function withResolveWorktree<T>(
   // (any slug) until this attempt's finally clears it below.
   resolutionInFlight = true;
   const worktreePath = join(repoCwd, '.worktrees', `resolve-${slug}`);
+  const lifecycle = liveness.worktreeLifecycle;
+  const mutateWorktree = <T>(work: () => Promise<T>): Promise<T> =>
+    lifecycle ? lifecycle.run(work) : work();
 
   try {
     // Remove stale worktree directory if it exists (crashed prior run)
@@ -343,7 +348,7 @@ export async function withResolveWorktree<T>(
     // A retained feature worktree may already have `branch` checked out. A
     // detached transient checkout still starts at that exact branch tip while
     // avoiding Git's one-worktree-per-branch restriction.
-    await execa('git', ['worktree', 'add', '--detach', worktreePath, branch], { cwd: repoCwd });
+    await mutateWorktree(() => execa('git', ['worktree', 'add', '--detach', worktreePath, branch], { cwd: repoCwd }));
 
     // Prepare the worktree using the injected prepareWorktree function (or default)
     const prepare = prepareWorktree ?? defaultPrepareWorktree;
@@ -360,7 +365,7 @@ export async function withResolveWorktree<T>(
 
     if (!(await removalRefused())) {
       try {
-        await execa('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoCwd });
+        await mutateWorktree(() => execa('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoCwd }));
       } catch (err) {
         // Log but don't throw on cleanup failure; the primary goal is to remove
         // the in-flight marker so future attempts aren't blocked
@@ -895,6 +900,7 @@ export async function resolveConflictingPr(
     log: (msg: string) => void;
     /** Re-check active daemon ownership at each resolution-worktree removal. */
     isFeatureInFlight?: IsFeatureInFlight;
+    worktreeLifecycle?: WorktreeLifecycleQueue;
   },
 ): Promise<{ kind: 'refreshed' | 'escalated' }> {
   const { prUrl, slug, repoCwd } = entry;
@@ -1023,5 +1029,5 @@ export async function resolveConflictingPr(
     // Success
     logOutcome(log, prUrl, 'lease-push', 'refreshed');
     return { kind: 'refreshed' };
-  }, undefined, { isFeatureInFlight: deps.isFeatureInFlight, log });
+  }, undefined, { isFeatureInFlight: deps.isFeatureInFlight, log, worktreeLifecycle: deps.worktreeLifecycle });
 }

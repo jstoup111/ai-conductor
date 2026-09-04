@@ -23,7 +23,7 @@ import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
 import { escalateBuildFailure } from './build-failure-escalation.js';
 import { makeGitRunner } from './rebase.js';
 import { surfaceQuarantine } from './setup-triage.js';
-import type { WorkOrder } from './work-order.js';
+import { verifyWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './work-order.js';
 import type { SetupFailureError } from './worktree-prepare.js';
 import type { TriageOutcome } from './setup-triage.js';
 import type { OperatorParkedTermination } from './conductor.js';
@@ -105,6 +105,10 @@ export interface RealDepsConfig {
     log?: (message: string) => void,
     events?: ConductorEventEmitter,
   ) => Promise<TriageOutcome>;
+  /** Dispatcher-composed git runner used for WorkOrder verification. */
+  workOrderGit?: WorkOrderGitRunner;
+  /** One dispatcher-owned queue for every shared `.git` worktree mutation. */
+  worktreeLifecycle?: WorktreeLifecycleQueue;
 }
 
 /**
@@ -124,7 +128,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
   const processedDir = join(cfg.projectRoot, PROCESSED_SUBDIR);
   // The dispatcher owns this queue for its lifetime. All linked worktree
   // add/remove operations share cfg.projectRoot's `.git` bookkeeping.
-  const worktreeLifecycle = new WorktreeLifecycleQueue();
+  const worktreeLifecycle = cfg.worktreeLifecycle ?? new WorktreeLifecycleQueue();
 
   return {
     log: cfg.log,
@@ -149,6 +153,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
       const branch = `feat/daemon-${slug}`;
       const path = join(cfg.worktreeBase, slug);
       const root = cfg.projectRoot;
+      if (order && cfg.workOrderGit) await verifyWorkOrder(order, cfg.workOrderGit);
       // Idempotent create/reconcile via the shared worktree mechanism (parity with
       // the engineer). The base ref is resolved lazily — only when a fresh branch is
       // cut — so the reuse/attach paths issue no extra git call.

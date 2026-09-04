@@ -25,6 +25,11 @@ describe('engine/work-order', () => {
         slug: 'parallel-dispatch',
         baseSha: 'a'.repeat(40),
         documentRefs: [...documents.keys()],
+        tier: 'L',
+        sourceRef: 'owner/repo#42',
+        track: 'technical',
+        band: 'P0',
+        resolutionMode: 'banded',
       },
       async (args) => {
         gitCalls.push([...args]);
@@ -49,6 +54,11 @@ describe('engine/work-order', () => {
         repository: 'jstoup/ai-conductor',
         slug: 'parallel-dispatch',
         baseSha: 'a'.repeat(40),
+        tier: 'L',
+        sourceRef: 'owner/repo#42',
+        track: 'technical',
+        band: 'P0',
+        resolutionMode: 'banded',
         manifest: [
           ...[...documents.entries()].map(([ref, content]) => ({
             ref,
@@ -61,7 +71,7 @@ describe('engine/work-order', () => {
         (content) => `sha256:${createHash('sha256').update(content).digest('hex')}`,
       ),
       gitCalls: [...documents.keys()].map((ref) => ['show', `${'a'.repeat(40)}:${ref}`]),
-      serializedKeys: ['baseSha', 'manifest', 'repository', 'slug'],
+      serializedKeys: ['band', 'baseSha', 'manifest', 'repository', 'resolutionMode', 'slug', 'sourceRef', 'tier', 'track'],
       containsAbsolutePath: false,
     });
   });

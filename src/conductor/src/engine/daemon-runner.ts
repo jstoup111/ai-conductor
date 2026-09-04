@@ -160,7 +160,7 @@ export interface FeatureRunnerDeps {
    */
   runGh?: GhRunner;
   /** Clear halt presentation after a verified ship. Injected in tests. */
-  cleanupHaltPresentation?: typeof cleanupHaltPresentation;
+  cleanupHaltPresentation?: typeof import('./pr-labels.js').cleanupHaltPresentation;
   /**
    * FR-9: enroll a shipped PR in the mergeable watch registry.
    * Defaults to the real enrollWatch; injected in tests to assert call order and
@@ -173,6 +173,8 @@ export interface FeatureRunnerDeps {
    * and verify throw-isolation (feature result unaffected by sweep errors).
    */
   sweepMergeableLabels?: (opts: SweepOpts) => Promise<void>;
+  /** WorkOrder executors defer root/.daemon terminal effects to collection. */
+  deferTerminalEffects?: boolean;
   /**
    * Escalate a false-ship outcome by pushing the worktree branch and opening a
    * draft `needs-remediation` PR, preserving the work on origin. Called when an
@@ -320,20 +322,40 @@ export function makeRunFeature(
   const enroll = deps.enrollWatch ?? enrollWatchImpl;
   const sweep = deps.sweepMergeableLabels ?? sweepMergeableLabelsImpl;
   const cleanup = deps.cleanupHaltPresentation ?? cleanupHaltPresentation;
-
-  /** FR-14: best-effort sweep; never throws, never disrupts feature processing. */
-  const maybeSweep = async (): Promise<void> => {
-    if (!deps.projectRoot) return;
-    try {
-      await sweep({
-        projectRoot: deps.projectRoot,
-        log,
-        runGh: deps.runGh,
-        teardownWorktree: deps.teardownWorktree,
-      });
-    } catch (err) {
-      log(`[daemon-runner] sweep error: ${err instanceof Error ? err.message : String(err)}`);
+  const runTerminalEffects = async (
+    effects: import('./feature-executor.js').FeatureTerminalEffects,
+    item: BacklogItem,
+    featureLog: (message: string) => void,
+  ): Promise<import('./feature-executor.js').FeatureTerminalEffects | undefined> => {
+    if (deps.deferTerminalEffects) return effects;
+    if (effects.cleanupHaltPresentation && deps.projectRoot) {
+      try {
+        const result = await cleanup(gh, deps.projectRoot, effects.cleanupHaltPresentation.prUrl, featureLog);
+        featureLog(`[daemon-runner] cleanup result: ${result}`);
+      } catch (err) {
+        featureLog(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
+    if (effects.enrollWatch && deps.projectRoot) {
+      try {
+        await enroll(deps.projectRoot, {
+          prUrl: effects.enrollWatch.prUrl,
+          slug: item.slug,
+          repoCwd: deps.projectRoot,
+        });
+      } catch (err) {
+        featureLog(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (effects.markProcessed) await deps.markProcessed(item.slug, effects.markProcessed.prUrl);
+    if (effects.sweep && deps.projectRoot) {
+      try {
+        await sweep({ projectRoot: deps.projectRoot, log, runGh: deps.runGh, teardownWorktree: deps.teardownWorktree });
+      } catch (err) {
+        log(`[daemon-runner] sweep error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return undefined;
   };
 
   return async (item: BacklogItem): Promise<FeatureOutcome> => {
@@ -458,45 +480,7 @@ export function makeRunFeature(
         );
         if (shipmentFailure === null) {
           // Happy path: outcome is a verified ship (done=true, finishChoice='pr', prUrl != null).
-          // Run the existing ship side effects.
-
-          // FR-16: clear-on-success — verify-after-write cleanup of halt presentation
-          // markers (label, draft status, body marker). Returns 'confirmed' on success,
-          // 'partial' on any residual markers. Best-effort: logged and swallowed so
-          // enroll + teardown still run regardless.
-          if (outcome.prUrl && deps.projectRoot) {
-            try {
-              const cleanupResult = await cleanup(
-                gh,
-                deps.projectRoot,
-                outcome.prUrl,
-                featureLog,
-              );
-              featureLog(`[daemon-runner] cleanup result: ${cleanupResult}`);
-            } catch (err) {
-              featureLog(
-                `[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
-          }
-
-          // FR-9: enroll the shipped PR in the mergeable watch registry BEFORE
-          // teardown (worktree path still valid for context). Best-effort: enroll
-          // internally swallows; the outer wrap logs any re-throw so teardown still
-          // runs.
-          if (outcome.prUrl && deps.projectRoot) {
-            try {
-              await enroll(deps.projectRoot, {
-                prUrl: outcome.prUrl,
-                slug: item.slug,
-                repoCwd: deps.projectRoot,
-              });
-            } catch (err) {
-              featureLog(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
-            }
-          }
-
-          await deps.markProcessed(item.slug, outcome.prUrl);
+          // Root/.daemon writes are intentionally returned to the dispatcher.
           featureLog(`[daemon-runner] worktree retained at ${worktree.path}`);
           featureLog(`[daemon-runner] retained ${item.slug} — reason: pr-open-awaiting-main`);
 
@@ -509,13 +493,20 @@ export function makeRunFeature(
           // `.daemon/processed/` ledger marker written above.
 
           featureLog(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
-          // FR-14: sweep mergeable labels after feature completes.
-          await maybeSweep();
+          const terminalEffects = await runTerminalEffects({
+            ...(outcome.prUrl ? {
+              cleanupHaltPresentation: { prUrl: outcome.prUrl },
+              enrollWatch: { prUrl: outcome.prUrl },
+            } : {}),
+            markProcessed: { prUrl: outcome.prUrl },
+            sweep: true,
+          }, item, featureLog);
           return {
             slug: item.slug,
             status: 'done',
             prUrl: outcome.prUrl,
             costTokens: outcome.costTokens,
+            ...(terminalEffects ? { terminalEffects } : {}),
           };
         }
 
@@ -558,26 +549,26 @@ export function makeRunFeature(
 
         await deps.teardownWorktree(worktree, true);
         featureLog(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
-        // FR-14: sweep mergeable labels after feature completes (failed-ship).
-        await maybeSweep();
+        const terminalEffects = await runTerminalEffects({ sweep: true }, item, featureLog);
         return {
           slug: item.slug,
           status: 'halted',
           reason,
           costTokens: outcome.costTokens,
+          ...(terminalEffects ? { terminalEffects } : {}),
         };
       }
 
       if (outcome.halted) {
         await deps.teardownWorktree(worktree, true); // keep for the human
         featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
-        // FR-14: sweep mergeable labels after feature completes (halted).
-        await maybeSweep();
+        const terminalEffects = await runTerminalEffects({ sweep: true }, item, featureLog);
         return {
           slug: item.slug,
           status: 'halted',
           reason: outcome.reason,
           costTokens: outcome.costTokens,
+          ...(terminalEffects ? { terminalEffects } : {}),
         };
       }
 
@@ -599,13 +590,13 @@ export function makeRunFeature(
       events: featureRun?.events,
               });
       await deps.teardownWorktree(worktree, true);
-      // FR-14: sweep mergeable labels after feature completes (error/no-marker).
-      await maybeSweep();
+      const terminalEffects = await runTerminalEffects({ sweep: true }, item, featureLog);
       return {
         slug: item.slug,
         status: 'error',
         reason: noMarkerReason,
         costTokens: outcome.costTokens,
+        ...(terminalEffects ? { terminalEffects } : {}),
       };
     } catch (err) {
       // Any thrown error (a step crash, or worktree-prep / bin/setup failing) —
