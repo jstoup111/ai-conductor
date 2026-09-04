@@ -1255,7 +1255,7 @@ reconcile_legacy_codex_links() {
 install() {
   guard_worktree_root
 
-  echo -e "${BOLD}${CYAN}Installing James Stoup Agents Harness${NC}"
+  echo -e "${BOLD}${CYAN}Installing AI Conductor Harness${NC}"
   echo -e "  Source: ${HARNESS_DIR}"
   echo ""
 
@@ -1493,7 +1493,7 @@ install() {
 # ─── Uninstall ────────────────────────────────────────────────────────────────
 
 uninstall() {
-  echo -e "${BOLD}${CYAN}Uninstalling James Stoup Agents Harness${NC}"
+  echo -e "${BOLD}${CYAN}Uninstalling AI Conductor Harness${NC}"
   echo ""
 
   local removed=0
