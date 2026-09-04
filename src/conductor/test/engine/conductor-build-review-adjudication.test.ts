@@ -187,7 +187,9 @@ async function fixture(options: FixtureOptions = {}) {
   const events = new ConductorEventEmitter();
   const kickbacks: Array<{ from: string; to: string }> = [];
   const lifecycle: ConductorEvent[] = [];
+  const loopHalts: ConductorEvent[] = [];
   events.on('kickback', (event) => { if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to }); });
+  events.on('loop_halt', (event) => { loopHalts.push(event); });
   for (const type of ['remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_effect_applied', 'remediation_case_reconciled'] as const) {
     events.on(type, (event) => { lifecycle.push(event); });
   }
@@ -219,7 +221,7 @@ async function fixture(options: FixtureOptions = {}) {
   });
 
   return {
-    projectRoot, feature, dispatched, retryReasons, kickbacks, lifecycle, ghCalls,
+    projectRoot, feature, dispatched, retryReasons, kickbacks, lifecycle, loopHalts, ghCalls,
     remediateDispatches: () => remediateDispatches, artifactMtimes,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
@@ -525,6 +527,13 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
 
     expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: case store ${reason}`);
     expect((await run.state()).build_review).not.toBe('done');
+    // adr-2026-08-11 decision 1: the marker is not the halt. A halt reaches the
+    // operator on the persisted spine, and the daemon's fallback emitter is
+    // suppressed once a marker exists — so a bare marker write is silent.
+    expect(run.loopHalts).toContainEqual(expect.objectContaining({
+      type: 'loop_halt',
+      reason: expect.stringContaining('build_review clean-PASS durable settlement halted'),
+    }));
   });
 
   it('halts a clean PASS when durable work-order attempt evidence is invalid', async () => {
