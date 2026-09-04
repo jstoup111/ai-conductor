@@ -44,6 +44,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operator over-scope decisions on NC findings now survive laps that reword the evidence summary, not just renumbering and line-anchor drift. ([implementation PR #2146](https://github.com/jstoup111/ai-conductor/pull/2146)).
 - The prd_audit skill reuses recorded operator-decision wording for already-decided no-owner findings, so decisions keep matching across re-graded laps. ([implementation PR #2148](https://github.com/jstoup111/ai-conductor/pull/2148)).
 - Remediation gaps whose tasks merely cite a protected artifact as evidence stay dispatchable instead of halting as Missing. ([implementation PR #2150](https://github.com/jstoup111/ai-conductor/pull/2150)).
+- Custom steps with only a completion artifact no longer crash interactive conductor runs. ([implementation PR #2136](https://github.com/jstoup111/ai-conductor/pull/2136)).
 
 ## [1.0.0] - 2026-08-31
 
