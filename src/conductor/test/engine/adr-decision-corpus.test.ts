@@ -66,4 +66,43 @@ describe('ADR decision corpus compatibility', () => {
       }
     }
   });
+
+  /**
+   * The land-time gate inspects only ADRs a PR changes, so no existing APPROVED
+   * ADR was ever scanned: the first evidence that one is uncitable is a feature
+   * halting `needs-human` on a REMEDIABLE finding that names it. This walks the
+   * whole corpus instead.
+   *
+   * A prose decision with no id at all cannot be made citable by a parser and is
+   * out of scope here — that needs an author to decide what the decisions are.
+   * What this DOES hold is that no APPROVED ADR which numbers its decisions is
+   * uncitable, whichever of the accepted shapes it uses.
+   */
+  it('leaves no numbered decision in an APPROVED ADR uncitable', async () => {
+    const decisionDirectory = join(REPOSITORY_ROOT, '.docs', 'decisions');
+    const files = await decisionMarkdownFiles(decisionDirectory);
+    const uncitable: string[] = [];
+
+    for (const path of files) {
+      const content = await readFile(path, 'utf8');
+      if (!/^(?:\*\*)?status(?:\*\*)?\s*:(?:\*\*)?\s*approved\b/im.test(content)) continue;
+      const section = decisionSection(content);
+      if (section === null) continue;
+
+      // Any line that opens with a decision number, under any emphasis the
+      // template permits. This is deliberately looser than the parser: a shape
+      // matched here and missed there is exactly the gap that halts a feature.
+      const numbered = [...section.matchAll(/^\s*[*_]{0,2}(\d+)\.\s+\S/gm)].map((match) => match[1]!);
+      if (numbered.length === 0) continue;
+
+      const parsed = parseAdrDecisions(content);
+      const cited = parsed.kind === 'decisions' ? parsed.ids : new Set<string>();
+      const missing = numbered.filter((id) => !cited.has(id));
+      if (missing.length > 0) {
+        uncitable.push(`${relative(REPOSITORY_ROOT, path)}: decision ${missing.join(', ')}`);
+      }
+    }
+
+    expect(uncitable, 'APPROVED ADRs whose numbered decisions cannot be cited as governing clauses').toEqual([]);
+  });
 });

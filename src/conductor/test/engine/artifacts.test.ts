@@ -4270,6 +4270,9 @@ describe('engine/artifacts', () => {
 
     it.each([
       ['numbered decision item', '4. **Termination.**'],
+      // Seven APPROVED ADRs number this way — the bold wraps the number rather
+      // than following it — and every one of their decisions was uncitable.
+      ['bold-wrapped numbered item', '**4. Termination.** Prose follows.'],
       ['bolded D-heading', '**D4 — Termination.**'],
       ['ATX D-heading', '### D4 — Termination'],
       ['emphasized ATX D-heading', '### **D4** — X'],
@@ -4282,6 +4285,15 @@ describe('engine/artifacts', () => {
       expect(parsed).toMatchObject({ kind: 'decisions' });
       if (parsed.kind === 'decisions') {
         expect(parsed.ids).toContain('4');
+      }
+    });
+
+    it('never lets a bold-wrapped number answer for a different decision id', () => {
+      const parsed = parseAdrDecisions('# ADR\n\n## Decision\n\n**12. Termination.** Prose follows.\n');
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set(['12']));
       }
     });
 
