@@ -661,18 +661,20 @@ export async function resolveAsBuiltGoverningClause(
   const decisionBody = decisionText.slice(decisionHeading.index + decisionHeading[0].length);
   const nextHeading = decisionBody.search(/^##\s+/m);
   const section = nextHeading === -1 ? decisionBody : decisionBody.slice(0, nextHeading);
-  // AB-R12: APPROVED ADRs in this repo write decisions three ways — a numbered
-  // list (`4. **Termination.**`), a bolded D-heading (`**D4 — Termination.**`),
-  // and an ATX heading (`### D4 — Termination`). `templates/adr.md.template`
-  // prescribes no shape for the `## Decision` section, so all three are
+  // AB-R12: APPROVED ADRs in this repo write decisions four ways — a numbered
+  // list (`4. **Termination.**`), a bold-wrapped numbered item
+  // (`**4. Termination.**`), a bolded D-heading (`**D4 — Termination.**`), and
+  // an ATX heading (`### D4 — Termination`). `templates/adr.md.template`
+  // prescribes no shape for the `## Decision` section, so all four are
   // legitimate and this consumer must accept every one of them: a form it
   // rejects makes that decision uncitable as a governing clause, and its
   // REMEDIABLE finding halts needs-human instead of entering the bounded
   // remediation path. Both the `#` run and the `**` are optional and may
   // combine (`### **D4** — ...`). `D${n}` stays word-bounded so D1 never
-  // matches D10.
+  // matches D10, and the digit form keeps its `.` so `**1.` never matches
+  // `**12.`.
   const decisionPresent = new RegExp(
-    `^\\s*(?:${decisionNumber}\\.\\s+\\S|#{0,6}\\s*\\*{0,2}D${decisionNumber}\\b)`,
+    `^\\s*(?:\\*{0,2}${decisionNumber}\\.\\s+\\S|#{0,6}\\s*\\*{0,2}D${decisionNumber}\\b)`,
     'm',
   );
   if (!decisionPresent.test(section)) return null;
@@ -11419,10 +11421,19 @@ export class Conductor {
           if (step.name === 'build_review') {
             const settlement = await this.settleRemediationCasesOnCleanBuildReview();
             if (settlement.kind === 'invalid') {
-              await this.writeHaltMarker(
-                `build_review clean-PASS durable settlement halted: ${settlement.reason}\n`,
-                'needs-human',
-              );
+              // adr-2026-08-11 decision 1: a halt reaches the operator through
+              // the persisted spine, never a bare marker write. Writing the
+              // marker alone left the active execution open and emitted no
+              // `loop_halt` — and the daemon's fallback emitter is suppressed
+              // precisely because a marker now exists, so the halt was
+              // invisible to every spine consumer.
+              await this.haltSerialExecution({
+                reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
+                haltClass: 'needs-human',
+                persistState: async () => {
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                },
+              });
               return;
             }
           }
