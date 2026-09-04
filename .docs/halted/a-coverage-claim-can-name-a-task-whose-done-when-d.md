@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-04T15:22:01.576Z
 Slug: a-coverage-claim-can-name-a-task-whose-done-when-d
 Class: needs-human
 Halting step: unknown
