@@ -65,8 +65,9 @@ Load, in order:
    enumerated `FR-N` requirements.
 3. The stories file — `.docs/stories/<plan-stem>.md`, for `**Requirement:**` and story
    ids.
-4. The plan — `.docs/plans/<plan-stem>.md`, for `**Story:**` lines, task ids, and the
-   plan's own `## Coverage Check` table if present.
+4. The plan — `.docs/plans/<plan-stem>.md`, for `**Story:**` lines, task ids, the
+   plan's own `## Coverage Check` table if present, and its `## Architecture Obligation
+   Coverage` table when the changed ADR pool contains citable decisions.
 5. The ADR files in the current spec change set — each non-deleted
    `.docs/decisions/adr-*.md` file. This is the row set when the coherence gate engages;
    do not expand it to every decision that conceptually constrains the stories.
@@ -100,7 +101,8 @@ The artifact is a Markdown table (or one table per row class) with these columns
 5. **adr** — when the coherence gate engages, one row per non-deleted
    `.docs/decisions/adr-*.md` file in the current spec change set. Cited id:
    `adr-<stem>`. Counterpart: the story id(s) that implement or are constrained by the
-   decision.
+   decision. Its verdict also covers the decision-by-decision plan mapping required by
+   Section 4f; any incorrect mapping makes this ADR row `fail`.
 6. **criterion** — one row per exact happy or negative Given/When/Then
    criterion extracted from the stories file. Its cells are the exact criterion
    text, cited task id(s), verdict, a verbatim quote from one cited task's
@@ -245,6 +247,21 @@ FR is this one's, and nothing else in DECIDE sees it. Do not re-report a conflic
 here, and do not assume conflict-check's clean pass says anything about PRD agreement — it
 never reads the PRD's FRs as a party to the comparison.
 
+### 4f. Architecture-Decision ↔ Plan Tie-Out
+
+For every citable decision in each non-deleted ADR in the current spec change set, independently judge
+the plan's `## Architecture Obligation Coverage` row. A `task` disposition is `covered` only when the
+cited task's `Done when:` semantically asserts the decision—not merely because the task id and quoted
+text exist. An `existing` disposition is covered only with verified implementation evidence; a
+`no-change` disposition is covered only when the decision genuinely imposes no implementation change on
+this feature. If any decision mapping is semantically wrong, mark the parent `adr` row `fail` and identify
+the decision id plus opposing evidence in Notes.
+
+The land-time gate owns the mechanical checks: complete and unique decision ids, the closed disposition
+vocabulary, real task citations, and exact Done-when evidence. Do not duplicate those string/set checks.
+This skill owns the judgement the engine cannot compute: whether that real evidence actually fulfills the
+architecture obligation.
+
 ## 5. Semantic-Judging Instructions (verify-claims protocol)
 
 Per `/verify-claims`, this skill is a **verifier/judge** role: it renders a verdict
@@ -292,6 +309,8 @@ per row and must never assert "covered" that it has not actually confirmed.
       with `CONTRADICTS:` notes quoting the opposing text from both artifacts
 - [ ] §4e PRD↔stories tie-out checked in BOTH directions — no FR without a story, and no
       story citing a phantom FR or citing no FR at all
+- [ ] §4f architecture-decision mappings judged semantically; every `task`, `existing`, or
+      `no-change` disposition actually satisfies its cited ADR decision
 - [ ] Every story's cited FR confirmed to be actually delivered by that story's scenarios —
       a correct citation that the acceptance criteria contradict is `fail`, not `covered`
 - [ ] Story-vs-story conflicts left to `/conflict-check`; this artifact reports story-vs-PRD only

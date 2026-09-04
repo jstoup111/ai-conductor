@@ -2158,7 +2158,10 @@ describe('runCoherenceGate ADR pool (Task 7)', () => {
     await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
 
     await unlink(join(worktreePath, '.docs/decisions/adr-deleted.md'));
-    await writeFile(join(worktreePath, '.docs/decisions/adr-added.md'), '# Added ADR\n');
+    await writeFile(
+      join(worktreePath, '.docs/decisions/adr-added.md'),
+      '# Added ADR\n\n## Decision\n\n1. Route widget work through the declared task.\n',
+    );
     await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
     await writeFile(
       join(worktreePath, '.docs/coherence/idea.md'),
@@ -2203,11 +2206,23 @@ describe('runCoherenceGate ADR pool (Task 7)', () => {
 **Story:** Story 1 (FR-1)
 **Type:** happy-path
 **Files:** src/widget.ts
+**Done when:**
+- Widget work is routed through the declared task.
+- The widget behavior is covered.
 
 ### Task 2: Ship widget
 **Story:** Story 1 (FR-1)
 **Type:** happy-path
 **Files:** src/ship.ts
+**Done when:**
+- Widget shipment is observable.
+- The shipment behavior is covered.
+
+## Architecture Obligation Coverage
+
+| Decision | Disposition | Task(s) | Evidence |
+| --- | --- | --- | --- |
+| adr-added#D1 | task | task-1 | Widget work is routed through the declared task. |
 `,
         prdText: `# PRD
 

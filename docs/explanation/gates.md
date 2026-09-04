@@ -69,7 +69,7 @@ different times against different evidence.
 | --- | --- | --- | --- |
 | prerequisite | before every step | that step | 1 (universal) |
 | per-step completion | after a step runs, and whenever the loop re-scores it | that step, and the loop | 12 |
-| land-time | when a spec PR is landed | the spec, before anything is built | 9 |
+| land-time | when a spec PR is landed | the spec, before anything is built | 10 |
 | self-host | before the finish step, only when the harness is building itself | the PR | 6 |
 | hook | at the moment of a tool call | the individual edit, command, or dispatch | see [settings and hooks](../reference/settings-and-hooks.md) |
 
@@ -186,6 +186,7 @@ from specs that would waste a build.
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |
 | protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
 | plan completion checks | a task with no `Done when:` block, a blank check, fewer than two checks, or more than five checks; fenced-code examples are ignored |
+| architecture obligation coverage | a decision in a changed land-accepted ADR (`APPROVED` or `SUPERSEDED`) with no unique disposition, an invented decision, an invalid disposition, a nonexistent task, or task evidence absent from the cited task's `Done when:` block |
 
 Before land, plan authoring runs `ai-conductor plan-protected-targets <plan-path>`. It is a blocking,
 read-only check that reports every offending task/path pair. Land repeats the same judgment against
@@ -201,6 +202,14 @@ deletion. The ADR row pool itself contains only non-deleted ADRs, so a deletion-
 layer but passes with no ADR row. It aggregates every waivable gap rather than stopping at the first, and
 reports them as one error. Already-landed specs whose coherence artifacts predate criterion rows remain
 valid for daemon discovery and BUILD. See [composer loop](../guides/engineer-loop.md).
+
+When that ADR pool contains citable decisions, the plan must also carry an `## Architecture Obligation
+Coverage` table with exactly one row per `<adr-stem>#D<n>`. A row dispositions the decision to real plan
+tasks, existing implementation, or no implementation change. The engine validates complete and unique
+decision coverage, the closed disposition vocabulary, real task ids, and an exact evidence fragment from
+a cited task's `Done when:` block. Missing or malformed bookkeeping is non-waivable. The subsequent
+`coherence-check` judgement decides whether the mapped task or existing/no-change evidence actually
+satisfies the decision; the engine does not derive that semantic answer from matching text.
 
 The criterion layer requires exactly one row for every happy- and negative-path criterion extracted from
 the stories artifact. Each row must mark the criterion `covered`, cite an existing plan task, quote an

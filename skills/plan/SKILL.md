@@ -116,7 +116,7 @@ mark a removal task `Verify-only:` merely to document that absence.
 5. Commit with message: "[descriptive message]"
 
 **Done when:**
-- [2-5 enumerated, falsifiable checks — see 3d. Each is a definite yes/no a
+- [2-5 enumerated, falsifiable checks — see 3c and 3d. Each is a definite yes/no a
   zero-context reviewer can evaluate: a named test that passes, a command and
   its expected output, a concrete property of the diff.]
 
@@ -231,6 +231,21 @@ Do not restate Steps or duplicate story acceptance criteria; the block states th
 state, not the route there. For a `Verify-only:` task the block names what the verification must
 observe.
 
+### 3d. Cross-Boundary Integration Ownership (REQUIRED WHEN APPLICABLE)
+
+For each new or changed behavior that crosses a production boundary, assign exactly one task to own
+the integration proof. That task's `Done when:` must state the observable behavior through an
+appropriate project entry point: for example, a public API or route, CLI, job or worker, event
+consumer, framework hook, application-service boundary, or the project's equivalent. A direct unit
+test of a new helper proves the helper works; it does not prove the application reaches it.
+
+This rule follows behavior, not file type. Do not force an entry-point test onto every task that
+touches non-test code: an internal helper, type-only edit, or refactor can remain unit-scoped when a
+sibling task owns the boundary integration. At Medium/Large tier, derive the owning tasks from the
+approved architecture's `## Wiring Surface`; at Small tier, identify any changed production boundary
+directly from the scoped behavior. Name stable observable behavior, not a `file:line` or private
+caller that will drift under refactoring.
+
 ### 4. Task Ordering Rules
 
 1. **Infrastructure first** — Database migrations, model definitions, route setup
@@ -318,12 +333,17 @@ the shape of the work before reading individual tasks.]
 ## Integration Points
 - After Task [N]: [What can be tested end-to-end at this point]
 
+## Architecture Obligation Coverage
+[Required only when the current spec change set contains a non-deleted land-accepted ADR (`APPROVED`
+or `SUPERSEDED`) with citable
+decisions. Use the exact table contract from Section 7.]
+
 ## Verification
 - [ ] All happy path criteria covered by at least one task
 - [ ] All negative path criteria covered by at least one task
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left
-      without its closed enumeration or named mechanism (3d)
+      without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
 ```
 
@@ -372,6 +392,29 @@ After generating the plan, cross-reference:
 - For each acceptance criterion in `.docs/stories/`, find the task(s) that cover it
 - If any criterion is uncovered, add a task
 - Present the coverage mapping to the user
+
+**GATE: Every citable decision in each non-deleted land-accepted ADR (`APPROVED` or `SUPERSEDED`) in
+the current spec change set must have exactly one row in `## Architecture Obligation Coverage`.** Use
+this table:
+
+```markdown
+| Decision | Disposition | Task(s) | Evidence |
+| --- | --- | --- | --- |
+| adr-<stem>#D<n> | task | task-<id>[, task-<id>] | <exact fragment from a cited task's Done-when block> |
+| adr-<stem>#D<n> | existing | none | <specific existing implementation evidence> |
+| adr-<stem>#D<n> | no-change | none | <why this decision imposes no implementation change> |
+```
+
+`task` is for implementation work and must cite real task ids plus an exact Done-when fragment.
+`existing` is for a decision already satisfied by the codebase. `no-change` is for a constraint or
+recorded choice that requires no implementation change in this feature. The latter two cite no task
+and require concrete evidence; they are not escape hatches for undecided work.
+
+The land-time coherence machinery enumerates the ADR decisions and rejects missing, duplicate, or
+invented rows, invalid dispositions, nonexistent task ids, and task evidence absent from the cited
+Done-when block. `/coherence-check` independently judges whether the cited task or existing/no-change
+evidence actually satisfies the decision; deterministic validation establishes bookkeeping, not
+semantic truth.
 
 ### 8. Save and Suggest
 
@@ -424,6 +467,10 @@ any code is written. The full flow from here is:
 
 - [ ] Preconditions validated (stories exist, both paths, conflict-check clean)
 - [ ] Every acceptance criterion maps to at least one task
+- [ ] Every citable decision in each non-deleted land-accepted ADR in the current change set has one
+      mechanically valid Architecture Obligation Coverage row
+- [ ] Every changed cross-boundary behavior has exactly one integration-owning task whose `Done
+      when:` states observable behavior through an appropriate project entry point
 - [ ] Negative paths are explicit tasks (not grouped into catch-alls)
 - [ ] The plan has no terminal catch-all task that re-validates the completed feature
 - [ ] Tasks are 2-5 minute granularity

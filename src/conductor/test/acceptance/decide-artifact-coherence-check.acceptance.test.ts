@@ -141,6 +141,12 @@ const PLAN = [
   '| 1 | 1 |',
   '| 2 | 2 |',
   '',
+  '## Architecture Obligation Coverage',
+  '',
+  '| Decision | Disposition | Task(s) | Evidence |',
+  '| --- | --- | --- | --- |',
+  '| adr-coherence#D1 | task | task-1 | An unmapped outcome is rejected at land. |',
+  '',
 ].join('\n');
 
 // A plausible traceability record (plan §5a: row classes outcome/fr/story/task,
@@ -348,6 +354,14 @@ describe('Story 2 / FR-1 — mapping artifact authored + cross-checked at land',
   it('happy: a coherent M-tier chain WITH a mapping artifact lands', async () => {
     const wt = await seedWorktree('coherence demo');
     await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
+  });
+
+  it('negative: a changed ADR decision without plan-level obligation coverage is refused', async () => {
+    const plan = PLAN.replace(/\n## Architecture Obligation Coverage[\s\S]*$/, '\n');
+    const wt = await seedWorktree('coherence demo', { plan });
+    await expect(
+      landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
+    ).rejects.toThrow(/adr-coherence#D1 \(missing\)/i);
   });
 
   it('negative: a mapping row citing a nonexistent story id is refused (fabricated citation)', async () => {

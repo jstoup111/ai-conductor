@@ -110,6 +110,25 @@ never satisfy a later one. See [releases](../contributing/releases.md) and
 
 ### Coherence mapping shape
 
+An M/L plan whose current change set contains citable decisions in non-deleted land-accepted ADRs
+(`APPROVED` or `SUPERSEDED`) carries this table:
+
+```markdown
+## Architecture Obligation Coverage
+
+| Decision | Disposition | Task(s) | Evidence |
+| --- | --- | --- | --- |
+| adr-<stem>#D<n> | task | task-<id>[, ...] | <exact Done-when fragment> |
+| adr-<stem>#D<n> | existing | none | <specific existing implementation evidence> |
+| adr-<stem>#D<n> | no-change | none | <why no implementation change is required> |
+```
+
+The land gate derives the required decision ids from the ADRs rather than trusting the table. `task` rows
+must cite real plan tasks and quote an exact substring of one cited task's `Done when:` block after
+whitespace normalization. `existing` and `no-change` rows cite no tasks and require non-empty evidence.
+Bookkeeping validation is mechanical; `coherence-check` judges whether the evidence semantically satisfies
+the decision.
+
 The five legacy row classes — `outcome`, `fr`, `story`, `task`, and `adr` — use five cells:
 
 ```markdown

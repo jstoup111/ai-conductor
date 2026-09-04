@@ -26,8 +26,13 @@ import {
   splitStoryBlocks,
   collectPlanCoverage,
   extractAuthoritativeStoryCriteria,
+  parseAdrDecisions,
 } from '../artifacts.js';
 import { parsePlanTaskBodies, parsePlanTaskPaths } from '../plan-task-parse.js';
+import {
+  formatArchitectureDecisionId,
+  validateArchitectureObligationCoverage,
+} from '../architecture-obligation-coverage.js';
 import { extractPrdFrIds } from '../prd-fr-ids.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { runOverlapScan, type RunOverlapScanArgs, type OverlapReport } from '../overlap-scan.js';
@@ -1571,6 +1576,34 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
       )
       .map(({ path }) => path.slice('.docs/decisions/'.length).replace(/\.md$/, '')),
   );
+
+  const architectureDecisionIds = new Set<string>();
+  for (const adrId of adrIds) {
+    const adrText = await readFile(join(worktreePath, '.docs', 'decisions', `${adrId}.md`), 'utf-8');
+    const decisions = parseAdrDecisions(adrText);
+    // ADR shape/status validation already has an owning land gate. This layer
+    // validates only decision ids that the established ADR parser can cite;
+    // it must not create a second, stricter ADR-validity judgement.
+    if (decisions.kind !== 'decisions') continue;
+    for (const decisionId of decisions.ids) {
+      architectureDecisionIds.add(formatArchitectureDecisionId(adrId, decisionId));
+    }
+  }
+
+  const architectureCoverageViolations = validateArchitectureObligationCoverage(
+    planText ?? '',
+    architectureDecisionIds,
+  );
+  if (architectureCoverageViolations.length > 0) {
+    const details = architectureCoverageViolations
+      .map(({ decisionId, reason }) => `${decisionId} (${reason})`)
+      .join(', ');
+    throw new Error(
+      `landSpec: coherence gate: invalid architecture obligation coverage: ${details}. ` +
+        'Map every changed ADR decision to a real task with exact Done-when evidence, or record ' +
+        'an evidenced existing/no-change disposition.',
+    );
+  }
 
   // Fabricated-citation fail-closed reject — never waivable (an evidentiary
   // defect, not a coverage gap).
