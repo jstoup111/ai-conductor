@@ -57,7 +57,7 @@ prompt, without a crash, and without weakening its completion check.
 #### Happy Path
 - Given a config declaring a custom step with a `completion_artifact` under `.pipeline/` and a conductor constructed in `default` mode, when that step's skill writes the marker and the step succeeds, then the conductor records the step `done`, emits no artifact-review prompt for it, and advances to the following step with no HALT written.
 - Given a built-in step with feature-scoped artifact contracts (for example `plan`) and a conductor in `default` mode with `review: manual`, when the step succeeds with an unapproved artifact on disk, then the artifact-review prompt is still raised for that artifact exactly as before.
-- Given the `acceptance_specs` step with `acceptance_spec_globs` configured and a conductor in `default` mode with `review: manual`, when the step succeeds with a spec file matching only the configured extra glob, then the artifact-review gate still considers that file.
+- Given the `acceptance_specs` step with `acceptance_spec_globs` configured and a conductor in `default` mode, when the step succeeds with a spec file matching only the configured extra glob, then the artifact-review gate still considers that file and records it in `artifact_approvals` under the step's fixed `auto` review policy, so a caller-supplied extra glob is never dropped by the gate predicate.
 
 #### Negative Paths
 - Given a config declaring a custom step with a `completion_artifact` and a conductor in `default` mode, when the step's skill exits without writing the marker, then the completion check still fails the step naming the configured `completion_artifact` path, and no `TypeError` reaches the HALT or the console.
@@ -67,7 +67,7 @@ prompt, without a crash, and without weakening its completion check.
 ### Done When
 - [ ] `src/conductor/src/engine/conductor.ts` gates the post-success artifact-review block on a predicate meaning "this step declares reviewable artifacts" (non-empty artifact contracts or non-empty extra artifact globs for the step), not on `stepHasCompletionCheck`; `stepHasCompletionCheck` keeps governing completion checks.
 - [ ] An engine test drives `Conductor.run` in `default` mode over a config with a custom step carrying a `completion_artifact`, asserts the step reaches `done`, the run advances past it, and no HALT is written; the same test fails against pre-change code with `STEP_ARTIFACT_CONTRACTS[step] is not iterable`.
-- [ ] Tests assert the review prompt still fires for a contract-declaring built-in step and for an `acceptance_specs` extra glob in `default` mode with `review: manual`.
+- [ ] Tests assert the review prompt still fires in `default` mode for a contract-declaring built-in step whose fixed review policy is `manual` (for example `plan`), and that an `acceptance_specs` extra-glob-only file is still resolved through the gate and recorded in `artifact_approvals`.
 - [ ] A test asserts a custom step with a missing `completion_artifact` still fails its completion check in `default` mode.
 
 ## Story 3: `inline --from` recovers a pipeline through its custom SHIP-tail steps

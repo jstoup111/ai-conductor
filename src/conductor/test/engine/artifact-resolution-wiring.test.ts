@@ -177,11 +177,11 @@ function callsThisMethodWithSymbol(node: ts.Node, method: string, symbol: ts.Sym
   return found;
 }
 
-function isStepCompletionGuard(file: ts.SourceFile, expression: ts.Expression): boolean {
+function isReviewableArtifactsGuard(file: ts.SourceFile, expression: ts.Expression): boolean {
   if (!ts.isBinaryExpression(expression)) return false;
   if (expression.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken) return false;
 
-  const expected = topLevelSymbol(file, 'stepHasCompletionCheck');
+  const expected = topLevelSymbol(file, 'stepDeclaresReviewableArtifacts');
   const left = expression.left;
   const right = expression.right;
   return (
@@ -205,7 +205,7 @@ function hasInteractiveArtifactReviewFlow(file: ts.SourceFile): boolean {
   if (!run) return false;
   let found = false;
   const visit = (node: ts.Node): void => {
-    if (!ts.isIfStatement(node) || !isStepCompletionGuard(file, node.expression)) {
+    if (!ts.isIfStatement(node) || !isReviewableArtifactsGuard(file, node.expression)) {
       if (!found) ts.forEachChild(node, visit);
       return;
     }

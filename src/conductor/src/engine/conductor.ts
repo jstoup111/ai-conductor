@@ -145,6 +145,7 @@ import {
   buildArtifactResolutionContext,
   findArtifactFiles as findArtifactFilesForStep,
   resolveArtifactFiles,
+  stepArtifactContracts,
   extraArtifactGlobs,
   resolveFeaturePlanPath,
   resolveFeatureStoriesPath,
@@ -1710,6 +1711,10 @@ function hasCompletionContract(step: StepName, config: HarnessConfig): boolean {
   if (config.steps?.[step]?.completion_artifact) return true;
   if (CUSTOM_COMPLETION_PREDICATES[step]) return true;
   return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
+}
+
+function stepDeclaresReviewableArtifacts(step: StepName, config: HarnessConfig): boolean {
+  return stepArtifactContracts(step).length > 0 || extraArtifactGlobs(step, config).length > 0;
 }
 
 function stepHasCompletionCheck(step: StepName, config: HarnessConfig): boolean {
@@ -10919,7 +10924,7 @@ export class Conductor {
           //                  `.pipeline/review-required-<step>` (signalling it
           //                  found issues worth human attention)
           // Approved (path + sha256 match) files skip re-prompting across runs.
-          if (stepHasCompletionCheck(step.name, this.config) && this.mode !== 'auto') {
+          if (stepDeclaresReviewableArtifacts(step.name, this.config) && this.mode !== 'auto') {
             const completionContext = await this.completionCtx(state);
             const artifactResolution =
               completionContext.artifactResolution ??

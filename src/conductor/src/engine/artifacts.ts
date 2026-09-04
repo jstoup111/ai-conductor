@@ -308,6 +308,17 @@ export const STEP_ARTIFACT_CONTRACTS = {
   attribution_verify: [],
 } satisfies Record<StepName, readonly ArtifactPatternContract[]>;
 
+export function stepArtifactContracts(
+  step: StepName,
+): readonly ArtifactPatternContract[] {
+  return (
+    STEP_ARTIFACT_CONTRACTS as Record<
+      string,
+      readonly ArtifactPatternContract[] | undefined
+    >
+  )[step] ?? [];
+}
+
 export interface FeatureArtifactStemValidationEntry {
   step: StepName;
   paths: readonly string[];
@@ -355,7 +366,7 @@ function exampleArtifactPath(pattern: string, featureIdentity: string): string {
  * with no second list to update.
  */
 export function featureArtifactPatternsAreRecursive(step: StepName): boolean {
-  return STEP_ARTIFACT_CONTRACTS[step].some(
+  return stepArtifactContracts(step).some(
     (contract) => contract.scope === 'feature' && contract.pattern.includes('**/'),
   );
 }
@@ -374,7 +385,7 @@ export function validateFeatureArtifactStems(
 
   for (const { step, paths } of entries) {
     for (const path of paths) {
-      for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
+      for (const contract of stepArtifactContracts(step)) {
         if (contract.scope !== 'feature') continue;
         if (!artifactPathMatchesPattern(path, contract.pattern)) continue;
         if (artifactMatchesFeatureIdentity(path, featureIdentity, contract.identity)) continue;
@@ -589,7 +600,7 @@ export async function resolveArtifactFiles(
     };
   };
   let firstFeatureContract: Extract<ArtifactPatternContract, { scope: 'feature' }> | undefined;
-  for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
+  for (const contract of stepArtifactContracts(step)) {
     const candidates = await matchGlob(dir, contract.pattern);
     if (contract.scope !== 'feature') {
       candidates.forEach((file) => files.add(file));

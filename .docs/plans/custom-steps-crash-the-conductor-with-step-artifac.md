@@ -125,14 +125,14 @@ without crashing. Seven tasks.
 **Type:** negative-path
 
 **Steps:**
-1. In `test/engine/custom-step-review-gate.test.ts`, add: (a) a `default`-mode run over a config with `steps.plan.review: 'manual'` and one unapproved plan-family artifact for the feature on disk, asserting `onReviewArtifacts` is called with `'plan'` and that file — if an equivalent assertion already exists in `test/engine/conductor.test.ts` (`artifact_approvals` block), cite it in the test file header comment and skip re-authoring; (b) a `default`-mode run of `acceptance_specs` with `acceptance_spec_globs: ['custom-specs/**/*.test.ts']`, `review: 'manual'`, and one file under `custom-specs/`, asserting `onReviewArtifacts` receives that file; (c) a `default`-mode run of a step with a `CUSTOM_COMPLETION_PREDICATES` entry and an empty contract list (`worktree`) with `review: 'manual'`, asserting `onReviewArtifacts` is never called and the step completes.
+1. In `test/engine/custom-step-review-gate.test.ts`, add: (a) a `default`-mode run over a config with `steps.plan.review: 'manual'` and one unapproved plan-family artifact for the feature on disk, asserting `onReviewArtifacts` is called with `'plan'` and that file — if an equivalent assertion already exists in `test/engine/conductor.test.ts` (`artifact_approvals` block), cite it in the test file header comment and skip re-authoring; (b) a `default`-mode run of `acceptance_specs` with `acceptance_spec_globs: ['custom-specs/**/*.test.ts']` and one file under `custom-specs/`, asserting the file is recorded in `state.artifact_approvals` (the step's review policy is fixed `auto`; `review` is not config-settable — see `src/conductor/src/engine/resolved-config.ts:366`), so the gate resolved it rather than skipping it; (c) a `default`-mode run of a step with a `CUSTOM_COMPLETION_PREDICATES` entry and an empty contract list (`worktree`) with `review: 'manual'`, asserting `onReviewArtifacts` is never called and the step completes.
 2. Verify (b) and (c) pass against Task 3's code (they pin behavior the gate must preserve); confirm (c) would also pass before Task 3 only because `allFiles.length === 0` — record that in the test comment.
 3. No production change expected; if (b) fails, the predicate is missing the `extraArtifactGlobs` term — fix it in `src/conductor/src/engine/conductor.ts`.
 4. Commit: "test(conductor): review gate still prompts for contract and extra-glob steps"
 
 **Done when:**
 - Cases (a) (or its cited existing equivalent), (b), and (c) pass.
-- Removing the `extraArtifactGlobs(...)` term from `stepDeclaresReviewableArtifacts` makes case (b) fail (checked once by hand or by a temporary mutation; not committed).
+- The test file header records that the `extraArtifactGlobs(...)` term is not falsifiable via `acceptance_specs` (its built-in contracts already satisfy the predicate's first term); mutation sensitivity for that term is documented rather than mechanically checked. (Amended 2026-09-04: plan-gap PG-1 — `review` is fixed per step, so the original mutation check was unreachable.)
 
 **Files likely touched:**
 - `src/conductor/test/engine/custom-step-review-gate.test.ts` — three cases

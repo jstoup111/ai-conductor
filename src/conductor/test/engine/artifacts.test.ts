@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, task:1, task:3, task:6, task:10
+// Covers: S1.1, S1.2, S1.3, task:1, task:2, task:3, task:6, task:10
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
@@ -61,6 +61,7 @@ import {
   STEP_ARTIFACT_CONTRACTS,
   STEP_ARTIFACT_GLOBS,
   validateFeatureArtifactStems,
+  featureArtifactPatternsAreRecursive,
   buildArtifactResolutionContext,
   resolveArtifactFiles,
   findArtifactFiles,
@@ -738,6 +739,25 @@ describe('engine/artifacts', () => {
         ),
       ).toEqual([]);
     });
+
+    it('ignores unrelated plan-family paths for a custom step', () => {
+      expect(
+        validateFeatureArtifactStems(
+          [{ step: 'release-disposition' as StepName, paths: ['.docs/plans/unrelated.md'] }],
+          'my-feature',
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe('featureArtifactPatternsAreRecursive', () => {
+    it('returns false for a custom step', () => {
+      expect(featureArtifactPatternsAreRecursive('release-disposition' as StepName)).toBe(false);
+    });
+
+    it('returns true for the built-in recursive stories family', () => {
+      expect(featureArtifactPatternsAreRecursive('stories')).toBe(true);
+    });
   });
 
   describe('buildArtifactResolutionContext', () => {
@@ -833,6 +853,64 @@ describe('engine/artifacts', () => {
   });
 
   describe('resolveArtifactFiles', () => {
+    it('resolves an absent contract entry to no files without a diagnostic', async () => {
+      await createFile('.docs/plans/unrelated-feature.md');
+      await createFile('.pipeline/maintain-documentation-pass');
+
+      await expect(
+        resolveArtifactFiles(dir, 'maintain-documentation' as StepName, {
+          featureIdentities: [],
+          changedPaths: new Set<string>(),
+        }),
+      ).resolves.toEqual({ files: [] });
+    });
+
+    it('still resolves extra globs for a step absent from the contract table', async () => {
+      await createFile('.pipeline/maintain-documentation-pass');
+
+      await expect(
+        resolveArtifactFiles(
+          dir,
+          'maintain-documentation' as StepName,
+          { featureIdentities: [], changedPaths: new Set<string>() },
+          ['.pipeline/*-pass'],
+        ),
+      ).resolves.toEqual({ files: [join(dir, '.pipeline/maintain-documentation-pass')] });
+    });
+
+    it('resolves complexity identically to an absent contract entry', async () => {
+      await createFile('.docs/plans/unrelated-feature.md');
+      await createFile('.pipeline/maintain-documentation-pass');
+      const context = { featureIdentities: [], changedPaths: new Set<string>() };
+      const absentContractResult = await resolveArtifactFiles(
+        dir,
+        'maintain-documentation' as StepName,
+        context,
+      );
+      const complexityResult = await resolveArtifactFiles(dir, 'complexity', context);
+
+      expect(complexityResult).toEqual(absentContractResult);
+    });
+
+    it('preserves the plan ambiguous diagnostic for unrelated plan candidates', async () => {
+      await createFile('.docs/plans/another-feature.md');
+      await createFile('.docs/plans/yet-another-feature.md');
+
+      await expect(
+        resolveArtifactFiles(dir, 'plan', {
+          featureIdentities: ['active-feature'],
+          changedPaths: new Set<string>(),
+        }),
+      ).resolves.toEqual({
+        files: [],
+        diagnostic: {
+          code: 'ambiguous',
+          reason:
+            'plan has 2 artifact candidates and none can be associated with active feature "active-feature". Naming rule: plan-stem; expected stem "active-feature"; example expected filename ".docs/plans/active-feature.md".',
+        },
+      });
+    });
+
     it('selects associated feature files while preserving broad and raw corpora', async () => {
       await createFile('.docs/specs/feature-a.md');
       await createFile('.docs/specs/2026-07-28-feature-b.md');

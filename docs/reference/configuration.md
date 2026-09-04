@@ -462,6 +462,11 @@ its `mtimeMs` must be at or above the attempt or session freshness floor; a stal
 `… is stale — <step> must rewrite it during this attempt`, and a missing floor reports that completion
 `cannot be verified without an attempt or session freshness floor`.
 
+`completion_artifact` is completion evidence, not an artifact-review declaration. In default and
+interactive runs, the conductor opens an artifact-review prompt only for a step with built-in artifact
+contracts or configured extra artifact globs. A custom step that declares only a completion marker
+therefore completes without an empty review prompt; its marker is still checked fail-closed.
+
 This repo's own custom step is documented in [self-hosting](../guides/self-hosting.md).
 
 ## complexity
