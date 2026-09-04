@@ -2169,6 +2169,12 @@ export class Conductor {
    * the grant. No durable artifact is written by the daemon.
    */
   private readonly remediationDecideReentryTargets = new Set<StepName>();
+  /**
+   * Existing-task remediation re-stages completed rows immediately before a
+   * BUILD rewind. Preserve the D2 baseline from before that bookkeeping write
+   * so re-completing the same rows cannot impersonate build progress.
+   */
+  private pendingNoOpBaseline?: { treeHash: string | null; resolvedCount: number };
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
@@ -4042,8 +4048,21 @@ export class Conductor {
     let activePlanTaskIds: ReadonlySet<string> | undefined;
     const admittedAsBuiltFindingCounts = new Map<string, number>();
     const unexpectedAsBuiltGapIds = new Set<string>();
+    const gateAdmissions = (gapId: string) => ({
+      prdAuditAdmits: prdAuditValidated && prdAuditFindings.has(gapId.toUpperCase()),
+      asBuiltAdmits: asBuiltValidated && asBuiltFindings.has(gapId),
+    });
     for (const gap of gaps) {
       if (gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) {
+        const { prdAuditAdmits, asBuiltAdmits } = gateAdmissions(gap.id);
+        // Unlike appended work's compatibility guard below, existing-task is
+        // authorized only by D9's two current gate findings. This must be
+        // unconditional so build-stall and finish callers cannot re-stage an
+        // unrelated active-plan task.
+        if (!prdAuditAdmits && !asBuiltAdmits) {
+          if (asBuiltCapEnforced) unexpectedAsBuiltGapIds.add(gap.id);
+          continue;
+        }
         if (activePlanTaskIds === undefined) {
           if (!planPath) {
             return {
@@ -4077,8 +4096,6 @@ export class Conductor {
         // Existing-task gaps reopen the task that already owns the repair.
         // They consume the validating gate's lap, but never draw from the
         // shared plan-growth allowance reserved for appended work.
-        const prdAuditAdmits = prdAuditValidated && prdAuditFindings.has(gap.id.toUpperCase());
-        const asBuiltAdmits = asBuiltValidated && asBuiltFindings.has(gap.id);
         if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
         if (asBuiltAdmits) {
           asBuiltTasks.push(...gap.tasks);
@@ -4123,8 +4140,10 @@ export class Conductor {
         // finding and its existing parent plan task.  The planner's FR-N id
         // is associated above through the report's PRD: column. In a mixed
         // validation group either validated gate may admit its own gap.
-        const prdAuditAdmits = prdAuditValidated && prdAuditFinding !== undefined;
-        const asBuiltAdmits = asBuiltValidated && asBuiltFinding !== undefined;
+        const { prdAuditAdmits, asBuiltAdmits } = gateAdmissions(gap.id);
+        // Appending retains this conditional guard for older direct callers
+        // that do not carry either validated gate. Existing-task above does
+        // not: D9 limits that non-appending route to the two gates outright.
         if ((prdAuditValidated || asBuiltValidated) && !prdAuditAdmits && !asBuiltAdmits) {
           if (asBuiltCapEnforced) unexpectedAsBuiltGapIds.add(gap.id);
           continue;
@@ -4332,8 +4351,9 @@ export class Conductor {
             renderAsBuiltBlockedFindingDetail(asBuiltReport),
         };
       }
-      // Append remediation tasks to the plan
-      if (planPath) {
+      // Existing-task remediation deliberately reaches the budget block above
+      // and records a gate lap below, but never enters plan append/staging.
+      if (allTasks.length > 0 && planPath) {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
           ...(prdAuditRemediation || (asBuiltRemediation && asBuiltValidated)
             ? {
@@ -4408,7 +4428,7 @@ export class Conductor {
             `WARNING: remediation task append failed (${allTasks.length} task(s) dropped): ${appendResult.error}`,
           );
         }
-      } else {
+      } else if (allTasks.length > 0) {
         // Fail-open stays (routing must not be blocked by append plumbing),
         // but never silently: a dropped append means the builder re-enters
         // with none of the remediation tasks it was just told to deliver.
@@ -4571,12 +4591,17 @@ export class Conductor {
       // Do this only after admission and budget checks have passed, but before
       // the caller rewinds to the repair target.
       if (resolvedExistingTaskIdsByGapId.size > 0 && planPath) {
+        this.pendingNoOpBaseline = {
+          treeHash: await currentTreeHash(this.projectRoot),
+          resolvedCount: await countResolvedTasks(this.projectRoot),
+        };
         const restage = await restageExistingRemediationTaskStatuses(
           this.projectRoot,
           planPath,
           new Set([...resolvedExistingTaskIdsByGapId.values()].flat()),
         );
         if (restage.kind === 'failed') {
+          this.pendingNoOpBaseline = undefined;
           return {
             kind: 'halt',
             haltClass: 'needs-human',
@@ -5933,10 +5958,13 @@ export class Conductor {
      * cycle made any real progress.
      */
     const captureKickbackToBuildContext = async (sourceGate: StepName): Promise<void> => {
-      const [treeBefore, resolvedBefore] = await Promise.all([
-        currentTreeHash(this.projectRoot),
-        countResolvedTasks(this.projectRoot),
-      ]);
+      const baseline = this.pendingNoOpBaseline;
+      const [treeBefore, resolvedBefore] = baseline
+        ? [baseline.treeHash, baseline.resolvedCount]
+        : await Promise.all([
+          currentTreeHash(this.projectRoot),
+          countResolvedTasks(this.projectRoot),
+        ]);
       const ledger = await readKickbackLedger(this.projectRoot);
       const existing = ledger.gates[sourceGate];
       await writeKickbackLedger(this.projectRoot, {
@@ -5954,6 +5982,9 @@ export class Conductor {
           },
         },
       });
+      // This producer/consumer hand-off is only for the immediately following
+      // existing-task BUILD rewind; every other capture samples afresh.
+      if (baseline) this.pendingNoOpBaseline = undefined;
     };
 
     /**

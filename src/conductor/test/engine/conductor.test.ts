@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
+import { execFile as execFileCb } from 'child_process';
 import { basename, join } from 'path';
 import { tmpdir } from 'os';
+import { promisify } from 'util';
+
+const execFile = promisify(execFileCb);
 
 vi.mock('execa', () => ({
   execa: vi.fn(() =>
@@ -215,7 +219,7 @@ describe('engine/conductor', () => {
       expect(result).toEqual({ kind: 'unresolvable', id: 'missing-task' });
     });
 
-    it('halts needs-human at routing admission when a bound id is absent from the active plan', async () => {
+    it('drops a non-gate existing-task gap before binding or re-staging it', async () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
@@ -248,8 +252,50 @@ describe('engine/conductor', () => {
         { source: 'finish' },
       );
 
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+      expect(outcome.detail).toContain('no admitted remediation gap');
+    });
+
+    it('fails closed on an unexpected existing-task id in an enforced as-built round', async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '1', status: 'completed' }],
+      }));
+      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+        'Verdict: BLOCKED', '', '## Blocking Findings', '',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | REMEDIABLE | Task 1 | Existing work |',
+      ].join('\n'));
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: async () => {
+          await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+            dispositions: [{
+              id: 'unexpected-existing', disposition: 'existing-task', category: null,
+              rationale: 'Incorrect binding.', tasks: [{ id: '1', title: 'Existing work' }],
+            }],
+          }));
+          return { success: true };
+        } },
+        events,
+        projectRoot: dir,
+        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
+        ALL_STEPS,
+        'unexpected existing-task',
+        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+      );
+
       expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
-      expect(outcome.detail).toContain('missing-task');
+      expect(outcome.detail).toContain('unexpected-existing');
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
+        .toEqual([{ id: '1', status: 'completed' }]);
     });
 
     it.each([
@@ -259,6 +305,12 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
+      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+        'Verdict: BLOCKED', '', '## Blocking Findings', '',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| existing-binding | REMEDIABLE | Task 1 | Existing work |',
+      ].join('\n'));
       if (taskStatus !== undefined) {
         await writeFile(join(dir, '.pipeline', 'task-status.json'), taskStatus);
       }
@@ -291,7 +343,7 @@ describe('engine/conductor', () => {
         { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000, build: 'done' },
         ALL_STEPS,
         'test re-stage failure',
-        { source: 'finish' },
+        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
       );
 
       expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
@@ -302,6 +354,12 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
+      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+        'Verdict: BLOCKED', '', '## Blocking Findings', '',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| missing-status-binding | REMEDIABLE | Task 1 | Existing work |',
+      ].join('\n'));
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '2', status: 'completed' }],
       }));
@@ -331,7 +389,7 @@ describe('engine/conductor', () => {
         { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000, build: 'done' },
         ALL_STEPS,
         'test missing re-stage id',
-        { source: 'finish' },
+        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
       );
 
       expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
@@ -358,6 +416,14 @@ describe('engine/conductor', () => {
         (_, index) => `### Task ${index + 1}: Existing work ${index + 1}`,
       ).join('\n');
       await writeFile(planPath, authoredPlan);
+      const git = (args: string[]) => execFile('git', args, { cwd: dir });
+      await git(['init']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Conductor test']);
+      await git(['add', '--', '.docs/plans/existing-task-bindings.md']);
+      await git(['commit', '-m', 'test: seed plan']);
+      const uncommittedPlan = `${authoredPlan}\n\nOperator edit that must not be staged\n`;
+      await writeFile(planPath, uncommittedPlan);
       await writeFile(
         join(dir, '.pipeline', 'task-status.json'),
         JSON.stringify({ tasks: Array.from({ length: 8 }, (_, index) => ({
@@ -416,7 +482,11 @@ describe('engine/conductor', () => {
       );
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
-      expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
+      expect(await readFile(planPath, 'utf8')).toBe(uncommittedPlan);
+      await expect(git(['diff', '--cached', '--quiet', '--', '.docs/plans/existing-task-bindings.md']))
+        .resolves.toBeDefined();
+      const commits = await git(['log', '--format=%s']);
+      expect(commits.stdout).not.toContain('chore(plan): record appended remediation tasks');
       // Re-stage every bound task before the caller rewinds to build. Task 3
       // is deliberately completed but unbound: it must stay completed, proving
       // this route does not broadly reset task tracking.
@@ -596,6 +666,9 @@ describe('engine/conductor', () => {
         '| --- | --- | --- | --- |',
         '| ARCH-1 | REMEDIABLE | Task 2 | Repair task two |',
       ].join('\n'));
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
+      }));
       await writeKickbackLedger(dir, {
         version: 1,
         gates: {},
