@@ -97,7 +97,7 @@ gap must be turned into concrete work:
 | Disposition | When | Daemon effect |
 |---|---|---|
 | `build` | impl / test bug with clear evidence (the fix is obvious from the gap); **implementation/test/documentation drift that preserves the approved architecture**; OR **stall-question is answerable from committed artifacts** | inject the emitted tasks → kick to **build**; for stall-questions, answer lives in `rationale`, `tasks: []` |
-| `existing-task` | the remedy is admitted by an existing active-plan task's **Done when**; bind that disposition to the real active-plan task ID(s) | re-stage the bound task(s) → kick to **build**; no task is appended and no plan-growth allowance is spent |
+| `existing-task` | a current `prd_audit` **FIXABLE** or as-built **REMEDIABLE** finding's remedy is admitted by an existing active-plan task's **Done when**; bind that disposition to the real active-plan task ID(s) | re-stage the bound task(s) → kick to **build**; no task is appended and no plan-growth allowance is spent. Never use it for a `build_stall` question or a finish failure. |
 | `acceptance_specs` | the gap exists because acceptance coverage is missing or too weak to pin the behavior | kick to **acceptance_specs** (regenerate failing specs), then build |
 | `architecture_review` | changing or clarifying **approved architecture** is required before the gap can be closed | kick to **architecture_review** |
 | `plan` | functionality that **is in scope** but the plan simply omitted or missed (a planning omission, not an architecture or design decision) | In a daemon run, a `plan` disposition is a terminal needs-human HALT and never re-plans. |
@@ -220,7 +220,9 @@ The conductor reads this file to route, so the shape is exact:
 Field rules:
 - `id` — the blocking FR id (`FR-N`). For a `prd_audit` report row where `PRD: none`, use that row's report criterion exactly as `S<story>.<ordinal>` (e.g. `S5.1`); real `FR-N` rows remain `FR-N`. For an as-built finding, use the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`); for a finish test failure, `test:<failing file stem>` (e.g. `test:loop-intake`); for a `build_review` trigger gap, `build_review:<stem>` (e.g. `build_review:completeness`); for a stall-question, `stall:<slug>` where `<slug>` is a 1-3 word summary of the question topic (e.g. `stall:validation-layer`, `stall:acceptance-test-fidelity`).
 - `disposition` — one of `build` | `existing-task` | `acceptance_specs` | `architecture_review` | `plan` | `publication` | `halt`.
-  Use `existing-task` only when an existing active-plan task's **Done when** admits the remedy.
+  Use `existing-task` only when a current `prd_audit` **FIXABLE** or as-built **REMEDIABLE** finding
+  is admitted by an existing active-plan task's **Done when**. It is never valid for a `build_stall`
+  question or a finish failure.
   Its `tasks` must be non-empty bindings whose `id` values are real active-plan task IDs; it never
   creates new remediation tasks.
   Use `publication` when the shipped code is already correct and the ONLY defect is in what the

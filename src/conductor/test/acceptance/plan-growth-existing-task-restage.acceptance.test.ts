@@ -100,6 +100,12 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
           pendingAtBuildDispatch = status.tasks.some(
             (task) => task.id === '1' && task.status === 'pending',
           );
+          // Re-completing the same re-staged row is bookkeeping-only: it
+          // moves no source tree bytes and must not defeat D2's no-op guard.
+          await writeFile(
+            join(projectRoot, '.pipeline', 'task-status.json'),
+            JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+          );
           return { success: false, error: 'sentinel: stop after observing BUILD dispatch' };
         }
         return { success: true };
@@ -135,5 +141,39 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
 
     const finalState = await readState(stateFilePath);
     expect(finalState.ok && finalState.value.architecture_review_as_built).toBe('stale');
+    const captured = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8'),
+    );
+    // This is the pre-re-stage count. Sampling after re-stage made this zero,
+    // so the BUILD re-completion above incorrectly looked like progress.
+    expect(captured.gates.architecture_review_as_built.resolvedBefore).toBe(1);
+
+    await writeState(stateFilePath, {
+      ...(finalState.ok ? finalState.value : {}),
+      architecture_review_as_built: 'pending',
+      build: 'done',
+    });
+    await rm(join(projectRoot, '.pipeline', 'HALT'), { force: true });
+    await rm(join(projectRoot, '.pipeline', 'HALT.class'), { force: true });
+    await new Conductor({
+      projectRoot,
+      stateFilePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'architecture_review_as_built',
+      maxRetries: 1,
+      config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+      escalateBuildFailure: async () => ({}),
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+      sleepFn: async () => {},
+    }).run();
+    expect(dispatched.filter((step) => step === 'remediate')).toHaveLength(1);
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8'))
+      .resolves.toMatch(/as-built architecture review kickback-to-build no-op/);
   });
 });
