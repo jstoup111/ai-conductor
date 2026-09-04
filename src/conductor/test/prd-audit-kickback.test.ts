@@ -805,6 +805,34 @@ describe('prd_audit kickback', () => {
     });
   });
 
+  it('harvests a cleared NC decision whose evidence was reworded by the re-graded lap', () => {
+    // Real drift seen 2026-09-04 (#2145): same finding, prose rewritten and
+    // "(blob at HEAD)" inserted; a lap also appended decision history.
+    const recorded = '.ai-conductor/config.yml:139 — `prd_audit.max_remediation_laps: 2` added on the feature branch by 3dc215fe8; the plan\'s Prerequisites state "No configuration change is required"';
+    const reworded = '.ai-conductor/config.yml:139 (blob at HEAD) — `prd_audit.max_remediation_laps: 2` added on the feature branch by 3dc215fe8; the plan\'s Prerequisites state "No configuration change is required"; operator REFUSED this widening on 2026-09-03';
+    const parsed = parseClearedOverScopeDecisions(
+      `\`\`\`json over-scope-decisions\n${JSON.stringify([{ criterion: 'NC.1', summary: recorded, decision: 'accept', rationale: 'Operator recovery action.' }])}\n\`\`\``,
+      new Map([['NC.1', reworded]]),
+    );
+    expect(parsed).toMatchObject({
+      kind: 'parsed',
+      decisions: [{ criterion: 'NC.1', summary: reworded, decision: 'accept' }],
+      defects: [],
+    });
+  });
+
+  it('still rejects an NC decision whose summary describes a different finding', () => {
+    const parsed = parseClearedOverScopeDecisions(
+      '```json over-scope-decisions\n[{"criterion":"NC.1","summary":"conductor.ts:100 — a completely unrelated route bypasses the shared plan-task resolver in daemon dispatch.","decision":"accept","rationale":"Approved."}]\n```',
+      new Map([['NC.1', 'conduct-state-lease.ts:178 — new initializing lease status changes shared lease race classification for all consumers.']]),
+    );
+    expect(parsed).toMatchObject({
+      kind: 'parsed',
+      decisions: [],
+      defects: [{ kind: 'invalid-decision', criterion: 'NC.1' }],
+    });
+  });
+
   it('keeps unknown-criterion when a drifted NC summary matches no current finding or more than one', () => {
     const body = '```json over-scope-decisions\n[{"criterion":"NC.9","summary":"conductor.ts:10 — thing.","decision":"accept","rationale":"Approved."}]\n```';
     expect(parseClearedOverScopeDecisions(body, new Map([['NC.1', 'other evidence entirely']])))
@@ -817,7 +845,7 @@ describe('prd_audit kickback', () => {
     const root = await mkdtemp(join(tmpdir(), 'over-scope-nc-cleared-'));
     dirs.push(root);
     const parsed = parseClearedOverScopeDecisions(
-      '```json over-scope-decisions\n[{"criterion":"NC.1","summary":"Reworded visible addition.","decision":"accept","rationale":"Approved."}]\n```',
+      '```json over-scope-decisions\n[{"criterion":"NC.1","summary":"An entirely different daemon retry behavior was removed.","decision":"accept","rationale":"Approved."}]\n```',
       new Map([['NC.1', 'Visible addition.']]),
     );
 
