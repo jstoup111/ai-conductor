@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-04T03:50:45.038Z
 Slug: build-review-rubrics-need-a-post-join-adjudicator-
 Class: needs-human
 Halting step: prd_audit
