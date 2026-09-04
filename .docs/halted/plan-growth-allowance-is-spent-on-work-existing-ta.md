@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-02T16:11:12.030Z
+Status: halted
 Slug: plan-growth-allowance-is-spent-on-work-existing-ta
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-plan-growth-allowance-is-spent-on-work-existing-ta
-Head SHA: ec872066998dd681ee4ebe1323d895b0e68bd43e
-Halted at: 2026-09-02T15:20:39.587Z
+Head SHA: cb767364e66dc5b1f094ff506281e70cd8f439ed
+Halted at: 2026-09-04T17:57:42.041Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings. Missing: AB-1.
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED — shipped code violates an approved architecture decision
 ```
