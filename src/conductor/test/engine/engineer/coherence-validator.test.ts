@@ -1864,7 +1864,7 @@ describe('runCoherenceGate tier-S plan carrier', () => {
 `;
   }
 
-  it('passes a fully grounded plan-carried claim without a coherence artifact', async () => {
+  it('runs the tier-S plan carrier: it accepts a grounded claim and rejects a quote outside Done when', async () => {
     const { canonicalPath, worktreePath } = await createWorktree();
     await expect(runCoherenceGate({
       worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
@@ -1872,6 +1872,17 @@ describe('runCoherenceGate tier-S plan carrier', () => {
       outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
       guard: new AuthoringGuard(worktreePath),
     })).resolves.toBeUndefined();
+
+    const stepsOnlyQuote = 'Record the arrival details before completion.';
+    const planWithStepsOnlyQuote = plan('diff-local')
+      .replace('**Done when:**', `${stepsOnlyQuote}\n\n**Done when:**`)
+      .replace('"Ship the widget with arrival tracking."', `"${stepsOnlyQuote}"`);
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText, planText: planWithStepsOnlyQuote, prdText: null,
+      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow('criterion:quote-not-done-when:1');
   });
 
   it('rejects a negative disposition in a plan-carried tier-S claim', async () => {
@@ -1902,35 +1913,6 @@ describe('runCoherenceGate tier-S plan carrier', () => {
     })).rejects.toThrow(new RegExp(
       `criterion:omitted:1[\\s\\S]*${criterion}[\\s\\S]*criterion:omitted:2[\\s\\S]*${negativeCriterion}`,
     ));
-  });
-
-  it('rejects a tier-S quote found only outside the cited task Done when block', async () => {
-    const { canonicalPath, worktreePath } = await createWorktree();
-    const stepsOnlyQuote = 'Record the arrival details before completion.';
-    const stepsOnlyPlan = `# Plan
-
-### Task 1: Ship widget
-**Story:** Story 1
-**Type:** happy-path
-
-${stepsOnlyQuote}
-
-**Done when:**
-- Ship the widget with arrival tracking.
-
-## Coverage Check
-
-| Criterion | Task ids | Quote | Disposition |
-| --- | --- | --- | --- |
-| ${criterion} | 1 | "${stepsOnlyQuote}" | diff-local |
-`;
-
-    await expect(runCoherenceGate({
-      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
-      planStem: 'idea', storiesText, planText: stepsOnlyPlan, prdText: null,
-      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
-      guard: new AuthoringGuard(worktreePath),
-    })).rejects.toThrow('criterion:quote-not-done-when:1');
   });
 
   it('refuses unparseable tier-S stories even when a fresh waiver names the gap', async () => {
