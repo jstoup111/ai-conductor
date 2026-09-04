@@ -123,10 +123,7 @@ export function parsePlanCoverageCriterionRows(planText: string): CriterionCoher
     rows.push({
       rowClass: 'criterion',
       criterion,
-      citedIds: rawCitedIds
-        .split(',')
-        .map((id) => id.trim())
-        .filter((id) => id.length > 0),
+      citedIds: rawCitedIds.split(',').map((id) => id.trim()),
       verdict: 'covered',
       quote: unquote(rawQuote),
       disposition: rawDisposition === '' ? undefined : (rawDisposition as CriterionDiffLocalityDisposition),
@@ -215,11 +212,8 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
           message: `unknown criterion verdict "${verdict}"`,
         });
       }
-      const citedIds = rawCitedIds
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-      if (citedIds.length === 0) {
+      const citedIds = rawCitedIds.split(',').map((s) => s.trim());
+      if (rawCitedIds.trim().length === 0) {
         return structuralParseFailure('unparseable-criterion-row', {
           line,
           message: 'criterion row must cite at least one task id',

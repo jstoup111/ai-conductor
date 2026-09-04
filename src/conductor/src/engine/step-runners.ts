@@ -2527,7 +2527,12 @@ export class DefaultStepRunner implements StepRunner {
       const parsed = parseJudgePayload(result.output);
       if (!parsed.ok) {
         await writeEnvelope('failed', entries);
-        throw new CoverageBindingPayloadError(parsed.reason);
+        const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
+        return {
+          success: false,
+          output: infrastructureFailure.message,
+          infrastructureFailure,
+        };
       }
       const entry = entryFor(claim, digest, parsed.value.verdict, parsed.value.missingAssertion);
       entries.push(entry);

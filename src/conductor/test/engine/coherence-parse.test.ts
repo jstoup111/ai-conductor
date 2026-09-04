@@ -276,4 +276,20 @@ describe('parsePlanCoverageCriterionRows', () => {
   it('returns no rows when the plan has no Coverage Check section', () => {
     expect(parsePlanCoverageCriterionRows('## Tasks\n\n### Task 1\n')).toEqual([]);
   });
+
+  it('preserves empty citation segments for the shared resolver to reject', () => {
+    const planRows = parsePlanCoverageCriterionRows(`## Coverage Check
+
+| Criterion | Tasks | Done when quote | Disposition |
+| --- | --- | --- | --- |
+| Criterion | 4, , 5 | "quote" | diff-local |
+`);
+    expect(planRows[0]?.citedIds).toEqual(['4', '', '5']);
+
+    const coherence = parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Criterion | task-4, , task-5 | covered | quote | diff-local |
+`);
+    expect(coherence).toMatchObject({ ok: true, rows: [{ citedIds: ['task-4', '', 'task-5'] }] });
+  });
 });

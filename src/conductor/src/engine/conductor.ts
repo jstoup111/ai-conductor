@@ -32,6 +32,7 @@ import {
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { planContractPointers, priorAttemptPointers } from './remediation-context-pointers.js';
+import type { CoverageBindingPayloadError } from './step-runners.js';
 import type {
   AuthenticationReadiness,
   CodexProbeFailure,
@@ -1129,6 +1130,8 @@ export interface StepRunResult {
     kind: 'seal' | 'needs-human' | 'validation-verdict';
     reason: string;
   };
+  /** Retryable typed infrastructure failure from the coverage-binding judge. */
+  infrastructureFailure?: Pick<CoverageBindingPayloadError, 'name' | 'kind' | 'reason'>;
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
   /**

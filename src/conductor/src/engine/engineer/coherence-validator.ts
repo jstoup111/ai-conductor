@@ -33,7 +33,7 @@ import {
   parsePlanTaskBodies,
   parsePlanTaskDoneWhen,
   parsePlanTaskPaths,
-  taskIdFromCitation,
+  resolveCitedPlanTaskIds,
 } from '../plan-task-parse.js';
 import {
   formatArchitectureDecisionId,
@@ -479,9 +479,11 @@ export function checkCriterionCoverage(
       });
     }
 
-    const citedTaskIds = row.citedIds.map(taskIdFromCitation);
-    const missingTask = citedTaskIds.find((id) => !taskBodies.has(id));
-    if (missingTask) {
+    const taskResolution = resolveCitedPlanTaskIds(row.citedIds, new Set(taskBodies.keys()));
+    if (taskResolution.kind !== 'resolved') {
+      const missingTask = taskResolution.kind === 'unresolvable'
+        ? taskResolution.ids[0]
+        : row.citedIds.join(', ');
       gaps.push({
         gapId: `criterion:task-missing:${index + 1}:${missingTask}`,
         criterion: row.criterion,
@@ -489,6 +491,7 @@ export function checkCriterionCoverage(
       });
       continue;
     }
+    const citedTaskIds = taskResolution.ids;
 
     const quote = normalizeWhitespace(row.quote);
     if (!quote) {

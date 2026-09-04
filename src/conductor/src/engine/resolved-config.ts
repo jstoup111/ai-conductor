@@ -44,7 +44,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   architecture_diagram: 3,
   architecture_review: 5,
   worktree: 1,
-  coverage_binding: 1,
+  coverage_binding: 3,
   acceptance_specs: 3,
   build: 3,
   build_review: 3,

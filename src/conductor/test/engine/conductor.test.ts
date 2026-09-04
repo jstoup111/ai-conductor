@@ -102,7 +102,7 @@ import {
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -950,6 +950,50 @@ describe('engine/conductor', () => {
       expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
     });
 
+  });
+
+  it('re-dispatches a typed coverage-binding payload failure without halting', async () => {
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+    state.coverage_binding = 'pending';
+    await writeState(statePath, state);
+
+    let coverageDispatches = 0;
+    const loopHalts: ConductorEvent[] = [];
+    events.on('loop_halt', (event) => { loopHalts.push(event); });
+    const runner: StepRunner = {
+      run: vi.fn().mockImplementation(async (step) => {
+        if (step !== 'coverage_binding') return { success: true };
+        coverageDispatches++;
+        if (coverageDispatches === 1) {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline', 'coverage-binding.json'),
+            JSON.stringify({ version: 1, slug: 'test-feature', runId: 'test-run', status: 'failed', entries: [] }),
+          );
+          const infrastructureFailure = new CoverageBindingPayloadError('out-of-vocabulary verdict');
+          return { success: false, infrastructureFailure, output: infrastructureFailure.message };
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'coverage_binding',
+      verifyArtifacts: false,
+      config: { steps: { coverage_binding: { max_retries: 2 } } },
+    });
+
+    await conductor.run();
+
+    expect(coverageDispatches).toBe(2);
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
+    expect(loopHalts).toEqual([]);
+    expect(JSON.parse(await readFile(join(dir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+      status: 'failed', entries: [],
+    });
   });
 
   it('credits lap counts once immediately before reopening an invalidated build_review after rebase', async () => {

@@ -343,6 +343,7 @@ describe('engine/resolved-config', () => {
       expect(DEFAULT_STEP_RETRIES.finish).toBeGreaterThanOrEqual(6);
       expect(DEFAULT_STEP_RETRIES.bootstrap).toBe(1);
       expect(DEFAULT_STEP_RETRIES.test_suite).toBe(1);
+      expect(DEFAULT_STEP_RETRIES.coverage_binding).toBeGreaterThanOrEqual(2);
     });
 
     it('fallbacks are sensible', () => {

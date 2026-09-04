@@ -32,17 +32,6 @@ export function normalizePlanTaskId(raw: string): string {
   return raw.trim().replace(/\s*\([^()]*\)$/, '');
 }
 
-/**
- * Normalize a criterion carrier's `task-<id>` citation to its plan heading id.
- *
- * Both the land-time and runtime coverage-binding carriers use this exact
- * projection, so an annotated citation cannot resolve differently between
- * those two gates.
- */
-export function taskIdFromCitation(citedId: string): string {
-  return normalizePlanTaskId(citedId).replace(/^task-/i, '');
-}
-
 /** Resolves a cited plan-task id against the active plan's declared task ids. */
 export function resolvePlanTaskReference(
   raw: string,
@@ -67,6 +56,19 @@ export function resolvePlanTaskReference(
   return absent.length === 0
     ? { kind: 'resolved', ids }
     : { kind: 'unresolvable', ids: absent };
+}
+
+/** Resolves criterion-carrier citations against plan headings. */
+export function resolveCitedPlanTaskIds(
+  citedIds: readonly string[],
+  planTaskIds: ReadonlySet<string>,
+): PlanTaskReferenceResolution {
+  // `task-` is carrier presentation only. The shared resolver owns all
+  // remaining normalization, grammar, de-duplication, and membership rules.
+  return resolvePlanTaskReference(
+    citedIds.map((segment) => segment.replace(/^\s*task-/i, '')).join(','),
+    planTaskIds,
+  );
 }
 
 // Shared task-header grammar for parsers that identify task blocks without

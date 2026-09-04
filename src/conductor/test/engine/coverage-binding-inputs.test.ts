@@ -3,7 +3,6 @@
 
 import { describe, expect, it } from 'vitest';
 import { assembleCoverageBindingClaims } from '../../src/engine/coverage-binding-inputs.js';
-import { taskIdFromCitation } from '../../src/engine/plan-task-parse.js';
 
 const PLAN_WITH_TASKS = `# Plan
 
@@ -120,7 +119,6 @@ Task prose without a completion-check block.
 | criterion | M criterion | task-7 (landed) | covered | "annotated task check" | diff-local |
 `;
 
-    expect(taskIdFromCitation(' task-7 (landed) ')).toBe('7');
     expect(assembleCoverageBindingClaims({ tier: 'S', coherenceText: null, planText })).toMatchObject([
       { taskIds: ['7'], doneWhen: [['The annotated task check is true.']], applicability: 'applicable' },
     ]);
@@ -133,6 +131,33 @@ Task prose without a completion-check block.
         applicability: 'applicable',
       },
     ]);
+  });
+
+  it.each([
+    ['annotated', 'task-2 (landed)', ['2']],
+    ['multi-id', 'task-1, task-3', ['1', '3']],
+    ['malformed', 'task#7', []],
+    ['absent', 'task-9', []],
+  ] as const)('uses shared citation resolution for %s citations on both carriers', (_label, citation, taskIds) => {
+    const coherenceText = `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | M criterion | ${citation} | covered | "check" | diff-local |
+`;
+    const planText = `${PLAN_WITH_TASKS}
+## Coverage Check
+
+| Criterion | Tasks | Done when quote | Disposition |
+| --- | --- | --- | --- |
+| S criterion | ${citation} | "check" | diff-local |
+`;
+
+    for (const tier of ['M', 'S'] as const) {
+      const [claim] = assembleCoverageBindingClaims({ tier, coherenceText, planText });
+      expect(claim).toMatchObject({
+        taskIds,
+        applicability: taskIds.length === 0 ? 'not-applicable' : 'applicable',
+      });
+    }
   });
 
   it('returns no claims when the selected carrier has no criterion rows', () => {

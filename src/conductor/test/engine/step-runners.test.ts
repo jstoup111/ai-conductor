@@ -12,7 +12,6 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
   extractJudgedResultCandidate,
-  CoverageBindingPayloadError,
   DefaultStepRunner,
   parseTierFromOutput,
   parseSignalCountsFromOutput,
@@ -197,9 +196,12 @@ describe('DefaultStepRunner', () => {
     });
 
     try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).rejects.toMatchObject({
-        name: 'CoverageBindingPayloadError', kind: 'coverage-binding-payload',
-      } satisfies Pick<CoverageBindingPayloadError, 'name' | 'kind'>);
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
+        success: false,
+        infrastructureFailure: {
+          name: 'CoverageBindingPayloadError', kind: 'coverage-binding-payload',
+        },
+      });
       const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
       expect(envelope).toMatchObject({ status: 'failed', entries: [] });
       await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();

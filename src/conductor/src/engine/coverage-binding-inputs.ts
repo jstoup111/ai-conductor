@@ -3,7 +3,11 @@ import {
   parsePlanCoverageCriterionRows,
   type CriterionCoherenceRow,
 } from './coherence-parse.js';
-import { parsePlanTaskDoneWhen, taskIdFromCitation } from './plan-task-parse.js';
+import {
+  parsePlanTaskBodies,
+  parsePlanTaskDoneWhen,
+  resolveCitedPlanTaskIds,
+} from './plan-task-parse.js';
 import type { ComplexityTier } from '../types/steps.js';
 
 /** The only plan-derived material that may be sent to the coverage-binding judge. */
@@ -40,9 +44,20 @@ export function assembleCoverageBindingClaims(
   input: AssembleCoverageBindingClaimsInput,
 ): CoverageBindingClaim[] {
   const taskDoneWhen = parsePlanTaskDoneWhen(input.planText);
+  const planTaskIds = new Set(parsePlanTaskBodies(input.planText).keys());
 
   return carrierRows(input).map((row) => {
-    const taskIds = row.citedIds.map(taskIdFromCitation);
+    const resolution = resolveCitedPlanTaskIds(row.citedIds, planTaskIds);
+    if (resolution.kind !== 'resolved') {
+      return {
+        criterion: row.criterion,
+        taskIds: [],
+        doneWhen: [],
+        quote: row.quote,
+        applicability: 'not-applicable' as const,
+      };
+    }
+    const taskIds = resolution.ids;
     const checks = taskIds.map((id) => taskDoneWhen.get(id));
     const hasMissingDoneWhen = checks.some((taskChecks) => taskChecks === undefined);
 
