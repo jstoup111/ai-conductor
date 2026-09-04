@@ -72,6 +72,16 @@ For every story criterion, record one row.
   be a unique `NC.<n>` key (for example, `NC.1`). `NC.<n>` keys belong only in this section, where
   every row must be `OVER_SCOPE`; do not use another grade. Give each no-owner finding exactly one
   row — duplicate `NC.<n>` keys are rejected. Include its judgement in Criterion detail as usual.
+  **Reuse recorded wording for findings the operator has already decided.** Before authoring any
+  no-owner row, read `.pipeline/accepted-widenings.json` (it survives re-dispatch; it may be
+  absent). If a finding you are about to report describes the same widening as a recorded
+  decision — same file, mechanism, and behavior, regardless of how that entry words it — copy that
+  entry's `summary` into your Evidence cell **verbatim**: do not reword, re-anchor line numbers,
+  append decision history, or otherwise improve it, and keep the entry's `NC.<n>` key when no
+  other row claims it. The engine matches operator decisions to findings by summary text, so a
+  reworded rendering of an already-decided finding discards the operator's decision and re-halts
+  the feature on a question they already answered. Only a finding with no matching recorded entry
+  gets freshly authored evidence.
 
 Do not conflate grades: an unmet criterion with an existing owner is FIXABLE even if another
 criterion is a PLAN_GAP. One row carries one grade.
@@ -139,4 +149,5 @@ the policy to this evidence.
 - [ ] Each finding cites `file:line` evidence and has calibrated confidence where ambiguous
 - [ ] Every OVER_SCOPE row carries an `Intent relation` of `within`, `outside-harmless`, or `outside-visible`; detail judges intent, user visibility, Scope trailers, and reseal rationale
 - [ ] Every Verdict Table key is an active story criterion id, each appearing on exactly one row; a finding owning no criterion is reported below the table as one unique `NC.<n>` OVER_SCOPE row, never keyed to an invented or unrelated id
+- [ ] Every no-owner finding that matches a recorded entry in `.pipeline/accepted-widenings.json` carries that entry's `summary` verbatim as its Evidence cell (and its `NC.<n>` key where free), not a reworded rendering
 - [ ] Report written to `.pipeline/prd-audit.md`; no implementation, plan mutation, or routing performed

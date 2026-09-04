@@ -642,7 +642,9 @@ after `build` and before `build_review`.
 - **Inputs** — the feature's committed stories (the audit key) via the active plan's `**Stories:**`
   reference; the active plan and any coherence mapping; the matching non-`SUPERSEDED-` PRD when present
   (context, not the key); the implementation, changed tests, and BUILD `Scope:` trailers; operator
-  reseal and `Scope:` trailer rationales as immutable `OVER_SCOPE` intent evidence.
+  reseal and `Scope:` trailer rationales as immutable `OVER_SCOPE` intent evidence;
+  `.pipeline/accepted-widenings.json` when present — a no-owner finding matching a recorded operator
+  decision reuses that entry's summary verbatim so the decision keeps matching across laps.
 - **Outputs** — `.pipeline/prd-audit.md`, overwritten each run; a code-stamp sidecar on the pass path.
 - **Gate role** — blocking. Each finding carries exactly one grade — `PASS`, `FIXABLE`, `PLAN_GAP`, or
   `OVER_SCOPE` — and the report needs exactly one graded verdict row per acceptance criterion. A
