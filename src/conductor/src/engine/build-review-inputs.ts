@@ -18,6 +18,7 @@ import { parsePlanTaskPaths } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { classifyTautologyPaths } from './build-review-test-quality-preflight.js';
 import { parseCoversMarkers } from './covers-marker.js';
+import { extractStoryCriterionIds } from './story-criteria.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -287,8 +288,12 @@ async function snapshotTestQualityScope(
   const storiesBody = storiesPath === undefined
     ? ''
     : await readFile(storiesPath, 'utf-8').catch(() => '');
+  // Criterion ids are positional — derived from each story's Given/When/Then
+  // bullets — because the stories skill never writes literal `S<n>.<m>` ids
+  // into the artifact body. A literal grep here would resolve nothing but
+  // incidental prose, silently dropping criterion-bound tests from scope.
   const criterionIds = new Set(
-    [...storiesBody.matchAll(/\bS\d+\.\d+\b/gi)].map((match) => match[0].toUpperCase()),
+    extractStoryCriterionIds(storiesBody).map((id) => id.toUpperCase()),
   );
   const frIds = new Set(
     [...storiesBody.matchAll(/\bFR-\d+\b/gi)].map((match) => match[0].toUpperCase()),

@@ -51,6 +51,9 @@ import {
   type BuildReviewEffectiveResolverDeps,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
+import { extractStoryCriterionIds, sectionBody, splitStoryBlocks } from './story-criteria.js';
+
+export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -4842,30 +4845,6 @@ function extractStoryCoveredFrIds(storiesText: string): Set<string> {
   return ids;
 }
 
-/** Map each authoritative Given/When/Then row to its report-table criterion id. */
-function extractStoryCriterionIds(storiesText: string): string[] {
-  const ids: string[] = [];
-  for (const block of splitStoryBlocks(storiesText)) {
-    const story = block.id?.match(/\d+/)?.[0];
-    if (!story) continue;
-    let ordinal = 0;
-    for (const type of ['happy', 'negative'] as const) {
-      const body = sectionBody(
-        block.text,
-        type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i,
-      );
-      if (body === null) continue;
-      for (const line of body.split('\n')) {
-        const match = line.match(/^\s*(?:[-*+] |\d+[.)] )(.+?)\s*$/);
-        if (!match || !/\bgiven\b/i.test(match[1]) || !/\bthen\b/i.test(match[1])) continue;
-        ordinal += 1;
-        ids.push(`S${story}.${ordinal}`);
-      }
-    }
-  }
-  return ids;
-}
-
 /**
  * Scan a PRD-audit report for functional-requirement verdict rows that are not
  * ALIGNED and not human-ACCEPTED. Returns the FR identifier of every still-
@@ -5196,32 +5175,9 @@ export async function readRemediationPlan(
 }
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---
-
-export interface StoryBlock {
-  id?: string;
-  text: string;
-}
-
-/**
- * Split a stories file into per-story blocks on `## Story <id>:` headings.
- * Single-story files (no such heading) return one block spanning the file.
- */
-export function splitStoryBlocks(content: string): StoryBlock[] {
-  const heading = /^##\s+Story\s+([A-Za-z0-9.\-]+)/i;
-  const blocks: StoryBlock[] = [];
-  let current: { id: string; lines: string[] } | null = null;
-  for (const line of content.split('\n')) {
-    const m = line.match(heading);
-    if (m) {
-      if (current) blocks.push({ id: current.id, text: current.lines.join('\n') });
-      current = { id: m[1], lines: [line] };
-    } else if (current) {
-      current.lines.push(line);
-    }
-  }
-  if (current) blocks.push({ id: current.id, text: current.lines.join('\n') });
-  return blocks.length > 0 ? blocks : [{ text: content }];
-}
+// Block splitting, section extraction, and positional criterion-id derivation
+// live in `story-criteria.ts` so consumers outside this module (for example
+// build_review's Covers-marker resolver) can share the identical authority.
 
 /** True if the block has a Happy/Negative path section containing a G/W/T bullet. */
 function hasPathSection(blockText: string, type: 'happy' | 'negative'): boolean {
@@ -5231,29 +5187,6 @@ function hasPathSection(blockText: string, type: 'happy' | 'negative'): boolean 
   );
   if (body === null) return false;
   return /\bgiven\b/i.test(body) && /\bthen\b/i.test(body);
-}
-
-/**
- * Return the text under the first heading matching `headingRegex`, up to the
- * next heading of the same or higher level, or null if no such heading exists.
- */
-function sectionBody(text: string, headingRegex: RegExp): string | null {
-  let capturing = false;
-  let level = 0;
-  const body: string[] = [];
-  for (const line of text.split('\n')) {
-    const hm = line.match(/^(#{1,6})\s+(.*)$/);
-    if (hm) {
-      if (capturing && hm[1].length <= level) break;
-      if (!capturing && headingRegex.test(hm[2])) {
-        capturing = true;
-        level = hm[1].length;
-        continue;
-      }
-    }
-    if (capturing) body.push(line);
-  }
-  return capturing ? body.join('\n') : null;
 }
 
 /** Extract a `ST-0NN` / `EP-0NN` id from a single-story filename, if present. */

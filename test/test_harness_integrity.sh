@@ -1423,7 +1423,7 @@ else
 fi
 
 # ── 20. Stories heading grammar agrees with the engine ─────────────────────
-# `splitStoryBlocks` (src/conductor/src/engine/artifacts.ts) splits a stories
+# `splitStoryBlocks` (src/conductor/src/engine/story-criteria.ts) splits a stories
 # file into per-story blocks by matching `## Story` + whitespace + an id. When
 # the /stories template teaches an id-less heading, nothing errors — the file
 # becomes one unnamed block, the per-story happy/negative gate runs once over
@@ -1435,18 +1435,18 @@ echo ""
 echo -e "${BOLD}20. Stories heading grammar agrees with the engine${NC}"
 
 stories_skill="${HARNESS_DIR}/skills/stories/SKILL.md"
-artifacts_ts="${HARNESS_DIR}/src/conductor/src/engine/artifacts.ts"
+story_criteria_ts="${HARNESS_DIR}/src/conductor/src/engine/story-criteria.ts"
 
-if [ ! -f "$stories_skill" ] || [ ! -f "$artifacts_ts" ]; then
-  assert "skills/stories/SKILL.md and src/conductor/src/engine/artifacts.ts exist" 1
+if [ ! -f "$stories_skill" ] || [ ! -f "$story_criteria_ts" ]; then
+  assert "skills/stories/SKILL.md and src/conductor/src/engine/story-criteria.ts exist" 1
 else
   # The engine's grammar, asserted to still be the one this check assumes. If
   # splitStoryBlocks' regex is ever changed, this fails first and names itself,
   # rather than letting the template silently drift to the new form.
-  if grep -qF 'const heading = /^##\s+Story\s+([A-Za-z0-9.\-]+)/i;' "$artifacts_ts"; then
+  if grep -qF 'const heading = /^##\s+Story\s+([A-Za-z0-9.\-]+)/i;' "$story_criteria_ts"; then
     assert "splitStoryBlocks still requires '## Story <id>' (engine grammar unchanged)" 0
   else
-    echo "    artifacts.ts#splitStoryBlocks no longer declares the expected heading regex." | sed 's/^/  /'
+    echo "    story-criteria.ts#splitStoryBlocks no longer declares the expected heading regex." | sed 's/^/  /'
     echo "    Update this check AND skills/stories/SKILL.md together." | sed 's/^/  /'
     assert "splitStoryBlocks still requires '## Story <id>' (engine grammar unchanged)" 1
   fi

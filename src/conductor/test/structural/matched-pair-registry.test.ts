@@ -1,3 +1,4 @@
+// Covers: S2.1, S2.2, S2.4, S2.5, S2.6, S3.1, S3.3, S3.5, task:2, task:4
 import { readFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
