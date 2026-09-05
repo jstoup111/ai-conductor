@@ -160,7 +160,8 @@ import {
   isNoOwnerKey,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
-  readRemediationPlan,
+  readRemediationPlanResult,
+  renderRemediationPlanAbsence,
   REMEDIATION_EXISTING_TASK_DISPOSITION,
   REMEDIATION_PUBLICATION_DISPOSITION,
   remediationDispositionAppendsToPlan,
@@ -3815,15 +3816,18 @@ export class Conductor {
       haltClass?: KickbackCapHaltClass | 'mechanical' | 'needs-human';
       kickbackOutcome?: string;
     }
-    | { kind: 'none' }
+    | { kind: 'none'; reason: string }
   > {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
-    const plan = await readRemediationPlan(
+    const planResult = await readRemediationPlanResult(
       this.projectRoot,
       state.session_started_at,
       hintSource.source,
     );
-    if (!plan) return { kind: 'none' };
+    if (!planResult.plan) {
+      return { kind: 'none', reason: renderRemediationPlanAbsence(planResult.cause) };
+    }
+    const plan = planResult.plan;
     for (const rejection of plan.rejected) {
       try {
         await this.events.emit({
@@ -4702,7 +4706,7 @@ export class Conductor {
         evidence: remediationEvidence + droppedSuffix,
       };
     }
-    return { kind: 'none' };
+    return { kind: 'none', reason: 'the planner produced no routable remediation work' };
   }
 
   /** Read the active plan path from engine state, or null if not recorded. */
@@ -7171,6 +7175,7 @@ export class Conductor {
               const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
                 architecture_review_as_built?: { remediation?: { enabled?: boolean } };
               }).architecture_review_as_built?.remediation?.enabled ?? true;
+              let remediableNoPlanReason: string | undefined;
               // AB-R13 / APPROVED decision 4: the as-built gate's lap budget is
               // the configured, durable `gates.architecture_review_as_built`
               // record that `planRemediation` enforces. `remediationRounds` is a
@@ -7320,6 +7325,9 @@ export class Conductor {
                   process.off('SIGTERM', sigterm);
                   return;
                 }
+                if (remediationOutcome.kind === 'none') {
+                  remediableNoPlanReason = remediationOutcome.reason;
+                }
               } else if (
                 this.daemon &&
                 prdAuditUnsatisfied &&
@@ -7369,9 +7377,21 @@ export class Conductor {
               ) {
                 const asBuiltReason = gateVerdicts.get('architecture_review_as_built')?.reason ??
                   'as-built architecture review gate unsatisfied';
+                const remediationCause = asBuiltOutcome.kind === 'blocked-remediable'
+                  ? !asBuiltRemediationEnabled
+                    ? 'remediation is disabled by architecture_review_as_built.remediation.enabled'
+                    : !this.daemon
+                      ? 'remediation runs only in daemon mode'
+                      : remediableNoPlanReason
+                  : undefined;
                 const reason =
                   `Validation group "${step.name}" halted: ${asBuiltReason}` +
-                  (asBuiltOutcome.kind === 'blocked-design' || asBuiltOutcome.kind === 'invalid'
+                  (remediationCause
+                    ? ` — remediation did not route: ${remediationCause}`
+                    : '') +
+                  (asBuiltOutcome.kind === 'blocked-design' ||
+                    asBuiltOutcome.kind === 'blocked-remediable' ||
+                    asBuiltOutcome.kind === 'invalid'
                     ? renderAsBuiltBlockedFindingDetail(asBuiltReport)
                     : '');
                 await this.writeHaltMarker(
@@ -10802,6 +10822,7 @@ export class Conductor {
               const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
                 architecture_review_as_built?: { remediation?: { enabled?: boolean } };
               }).architecture_review_as_built?.remediation?.enabled ?? true;
+              let remediableNoPlanReason: string | undefined;
               if (
                 this.daemon &&
                 asBuiltRemediationEnabled &&
@@ -10881,9 +10902,16 @@ export class Conductor {
                   process.off('SIGTERM', sigterm);
                   return;
                 }
+                if (remediation.kind === 'none') {
+                  remediableNoPlanReason = remediation.reason;
+                }
               }
               const asBuiltFindingDetail = renderAsBuiltBlockedFindingDetail(asBuiltReport);
-              const reason = `as-built architecture review halted: ${lastError}`;
+              const reason =
+                `as-built architecture review halted: ${lastError}` +
+                (asBuiltOutcome.kind === 'blocked-remediable' && remediableNoPlanReason
+                  ? ` — remediation did not route: ${remediableNoPlanReason}`
+                  : '');
               await this.writeHaltMarker(
                 reason + asBuiltFindingDetail + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',

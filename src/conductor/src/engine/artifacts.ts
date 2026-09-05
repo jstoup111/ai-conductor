@@ -1553,7 +1553,7 @@ export type AsBuiltReviewOutcome =
   | { kind: 'plan-gap-delivered' }
   | { kind: 'plan-gap-undelivered' }
   | { kind: 'blocked-remediable' }
-  | { kind: 'blocked-design' }
+  | { kind: 'blocked-design'; designFindings: { id: string; clause: string }[] }
   | { kind: 'invalid'; cause: 'no-verdict-line' }
   | { kind: 'invalid'; cause: 'unrecognized-verdict'; value: string }
   | { kind: 'invalid'; cause: 'plan-gap-missing-outcome' }
@@ -1578,8 +1578,11 @@ export function classifyAsBuiltReviewOutcome(content: string): AsBuiltReviewOutc
     if (!findings.ok) {
       return { kind: 'invalid', cause: 'unparseable-blocked-findings', detail: findings.error };
     }
-    return findings.value.findings.some((finding) => finding.class === 'DESIGN')
-      ? { kind: 'blocked-design' }
+    const designFindings = findings.value.findings
+      .filter((finding) => finding.class === 'DESIGN')
+      .map(({ id, clause }) => ({ id, clause }));
+    return designFindings.length > 0
+      ? { kind: 'blocked-design', designFindings }
       : { kind: 'blocked-remediable' };
   }
   if (recognizedVerdict !== 'PLAN_GAP') return { kind: 'invalid', cause: 'unrecognized-verdict', value: recognizedVerdict };
@@ -3460,10 +3463,21 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           routeClass: 'named-route',
         };
       }
-      if (outcome.kind === 'blocked-remediable' || outcome.kind === 'blocked-design') {
+      if (outcome.kind === 'blocked-design') {
         return {
           done: false,
-          reason: 'as-built review verdict is BLOCKED — shipped code violates an approved architecture decision',
+          reason:
+            'as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): ' +
+            outcome.designFindings.map((finding) => `${finding.id} (${finding.clause})`).join(', '),
+          routeClass: 'named-route',
+        };
+      }
+      if (outcome.kind === 'blocked-remediable') {
+        return {
+          done: false,
+          reason:
+            'as-built review verdict is BLOCKED and every blocking finding is REMEDIABLE — ' +
+            'a repair, not a decision',
           routeClass: 'named-route',
         };
       }
@@ -5168,6 +5182,34 @@ export interface RemediationDispositionRejection {
   accepted: readonly string[];
 }
 
+/** Why the remediation planner did not produce a readable plan. */
+export type RemediationPlanAbsenceCause =
+  | 'absent'
+  | 'stale'
+  | 'unparseable'
+  | 'non-array-dispositions'
+  | 'no-routable-dispositions';
+
+export type RemediationPlanReadResult =
+  | { plan: RemediationPlan }
+  | { plan: null; cause: RemediationPlanAbsenceCause };
+
+/** Render a no-plan cause for a halt which needs operator-facing diagnosis. */
+export function renderRemediationPlanAbsence(cause: RemediationPlanAbsenceCause): string {
+  switch (cause) {
+    case 'absent':
+      return 'the planner wrote no remediation plan';
+    case 'stale':
+      return "the planner's remediation plan is stale (predates this session)";
+    case 'unparseable':
+      return "the planner's remediation plan is not valid JSON";
+    case 'non-array-dispositions':
+      return "the planner's remediation plan has no dispositions array";
+    case 'no-routable-dispositions':
+      return "the planner's remediation plan contains no routable dispositions";
+  }
+}
+
 /**
  * Read + validate `.pipeline/remediation.json` (the /remediate skill's output).
  * Returns null when the file is absent, stale (predates this session), malformed,
@@ -5180,16 +5222,36 @@ export async function readRemediationPlan(
   sessionStartedAt: number | undefined,
   source?: string,
 ): Promise<RemediationPlan | null> {
+  return (await readRemediationPlanResult(dir, sessionStartedAt, source)).plan;
+}
+
+/**
+ * Read a remediation plan while retaining why no usable plan was available.
+ * Callers which only need the historic nullable result use readRemediationPlan.
+ */
+export async function readRemediationPlanResult(
+  dir: string,
+  sessionStartedAt: number | undefined,
+  source?: string,
+): Promise<RemediationPlanReadResult> {
   const path = join(dir, '.pipeline/remediation.json');
-  if (!(await fileIsFreshSinceSession(path, sessionStartedAt))) return null;
+  let planStat;
+  try {
+    planStat = await stat(path);
+  } catch {
+    return { plan: null, cause: 'absent' };
+  }
+  if (sessionStartedAt !== undefined && planStat.mtimeMs < sessionStartedAt) {
+    return { plan: null, cause: 'stale' };
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(path, 'utf-8'));
   } catch {
-    return null;
+    return { plan: null, cause: 'unparseable' };
   }
   const rawGaps = (parsed as { dispositions?: unknown })?.dispositions;
-  if (!Array.isArray(rawGaps)) return null;
+  if (!Array.isArray(rawGaps)) return { plan: null, cause: 'non-array-dispositions' };
 
   const valid: RemediationDisposition[] = [
     ...REMEDIATION_TARGET_STEPS,
@@ -5260,8 +5322,8 @@ export async function readRemediationPlan(
     });
   }
   return gaps.length > 0 || invalidTasklessBuild || rejected.length > 0
-    ? { gaps, rejected, invalidTasklessBuild }
-    : null;
+    ? { plan: { gaps, rejected, invalidTasklessBuild } }
+    : { plan: null, cause: 'no-routable-dispositions' };
 }
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---
