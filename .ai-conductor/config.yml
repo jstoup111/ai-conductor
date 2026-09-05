@@ -148,9 +148,7 @@ prd_audit:
 # AB-1 converged to the conductor-consumption half only. Worktree-local
 # recovery, not feature scope; revert with the grant above.
 architecture_review_as_built:
-  # TEMPORARY (operator, 2026-09-05): fourth lap to re-verify the hand-landed
-  # AB-1 pin-log suppression; revert with the grants above before ship.
-  max_remediation_laps: 4
+  max_remediation_laps: 3
 
 steps:
   explore:
