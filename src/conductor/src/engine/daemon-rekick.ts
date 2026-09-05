@@ -29,6 +29,38 @@ import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { ALL_STEPS } from './steps.js';
+import { consumeKickbackResumeAuthorization, readKickbackLedger } from './kickback-ledger.js';
+
+/** Consume one-shot operator authorizations; this sweep only clears markers. */
+export async function consumeResumeAuthorizations(deps: {
+  listHaltedWorktrees: () => Promise<string[]>;
+  worktreePath: (slug: string) => string;
+  isOperatorParked: (slug: string) => Promise<boolean>;
+  clearMarker: (slug: string) => Promise<void>;
+  emit?: (event: { type: 'halt_cleared'; cause: 'kickback-budget' }) => void | Promise<void>;
+  log?: (message: string) => void;
+}): Promise<string[]> {
+  const cleared: string[] = [];
+  for (const slug of await deps.listHaltedWorktrees()) {
+    try {
+      if (await deps.isOperatorParked(slug)) continue;
+      const path = deps.worktreePath(slug);
+      const ledger = await readKickbackLedger(path);
+      const match = Object.entries(ledger.gates).find(([, entry]) =>
+        entry.capEvidence && entry.resumeAuthorization && !entry.resumeAuthorization.consumed &&
+        entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
+      );
+      if (!match) continue;
+      const [gate, entry] = match;
+      await deps.clearMarker(slug);
+      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId)) {
+        await deps.emit?.({ type: 'halt_cleared', cause: 'kickback-budget' });
+        cleared.push(slug);
+      }
+    } catch (error) { deps.log?.(`kickback-budget ${slug}: retained (${errMsg(error)})`); }
+  }
+  return cleared;
+}
 
 // ── Main-advance re-kick sweep (ADR-013 / FR-7, FR-9, FR-12) ──────────────────
 //

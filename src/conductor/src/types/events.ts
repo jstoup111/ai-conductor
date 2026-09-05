@@ -1036,7 +1036,15 @@ export type ConductorEvent =
       /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */
       type: 'halt_cleared';
       step?: StepName;
-      cause: 'operator' | 'rekick';
+      cause: 'operator' | 'rekick' | 'kickback-budget';
+    }
+  | {
+      /** Operator authorized a bounded recovery for one halted kickback gate. */
+      type: 'kickback_budget_adjustment_authorized';
+      adjustmentId: string;
+      gate: string;
+      kind: 'raise' | 'reset';
+      ts: string;
     }
   // ── Ship→CI feedback loop (Task 5): CI failure events ──
   | {

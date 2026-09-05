@@ -25,7 +25,8 @@ import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
 import { prdAuditAppendCap } from './conductor.js';
 import { loadConfig } from './config.js';
-import { readGrowth } from './kickback-ledger.js';
+import { readGrowth, readKickbackLedger } from './kickback-ledger.js';
+import { renderKickbackBudgetView } from './kickback-budget-view.js';
 import type { HarnessConfig } from '../types/config.js';
 
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
@@ -485,6 +486,13 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
       `added ${growth.added}${byGate ? ` (${byGate})` : ''}; ` +
       `remaining ${growth.remaining}/${cap}`,
     );
+    const ledger = await readKickbackLedger(featureRoot);
+    for (const [gate, entry] of Object.entries(ledger.gates)) {
+      if ((entry.adjustments?.length ?? 0) === 0) continue;
+      const limit = gate === 'build_review' ? 5 : 1;
+      const view = renderKickbackBudgetView(entry, gate, limit).split('\n')[0];
+      out(`  KICKBACK BUDGET [${feature.slug}]: ${view}`);
+    }
   }
 }
 

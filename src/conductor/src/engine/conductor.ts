@@ -252,6 +252,7 @@ import {
   readKickbackLedger,
   readSuiteInfrastructureRetries,
   recordGrowth,
+  recordKickbackCapEvidence,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
@@ -727,7 +728,8 @@ async function readRemediationGateAppendBudget(
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
   )?.laps ?? 0;
-  return { gate, priorLaps, lapCap, taskCount, growthTaskCount, growthCap, growth };
+  const effectiveLapCap = ledger.gates[gate]?.effectiveLapCap ?? lapCap;
+  return { gate, priorLaps, lapCap: effectiveLapCap, taskCount, growthTaskCount, growthCap, growth };
 }
 
 function remediationGateAppendBudgetExhausted(
@@ -10473,6 +10475,11 @@ export class Conductor {
                     `build_review cumulative kickback cap exceeded (cumulative ` +
                     `${kickback.entry.cumulative}, cap ${MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
                     `${kickback.entry.lastReason || 'no reasons recorded'}`;
+                  await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
+                    consumed: kickback.entry.cumulative,
+                    limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                    latestReason: kickback.entry.lastReason,
+                  });
                   const markerResult = await this.writeHaltMarker(reason + '\n', 'needs-human');
                   if (markerResult.status === 'failed') {
                     this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);

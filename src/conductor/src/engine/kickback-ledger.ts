@@ -751,3 +751,73 @@ export async function bumpSuiteInfrastructureRetriesInLedger(
     return nextEntry;
   });
 }
+
+/** Persist the evidence that makes an operator budget recovery eligible. */
+export async function recordKickbackCapEvidence(
+  projectRoot: string,
+  gate: string,
+  evidence: Omit<KickbackCapEvidence, 'gate' | 'haltGeneration'> & { haltGeneration?: string },
+): Promise<KickbackGateEntry> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    const existing = ledger.gates[gate] ?? {
+      count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+    };
+    const next = {
+      ...existing,
+      capEvidence: {
+        gate,
+        ...evidence,
+        haltGeneration: evidence.haltGeneration ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      },
+    };
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } });
+    return next;
+  });
+}
+
+/** Mark a matching recovery authorization consumed without changing budget state. */
+export async function consumeKickbackResumeAuthorization(
+  projectRoot: string,
+  gate: string,
+  adjustmentId: string,
+): Promise<boolean> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    const entry = ledger.gates[gate];
+    if (!entry?.resumeAuthorization || entry.resumeAuthorization.adjustmentId !== adjustmentId || entry.resumeAuthorization.consumed) return false;
+    const next = { ...entry, resumeAuthorization: { ...entry.resumeAuthorization, consumed: true } };
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } });
+    return true;
+  });
+}
+
+export async function applyKickbackBudgetAdjustment(
+  projectRoot: string,
+  gate: string,
+  adjustment: KickbackBudgetAdjustment,
+  defaultLimit: number,
+): Promise<KickbackGateEntry> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    const entry = ledger.gates[gate];
+    if (!entry?.capEvidence || entry.capEvidence.haltGeneration !== adjustment.haltGeneration) {
+      throw new Error('current cap evidence is missing or no longer matches the live halt');
+    }
+    const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
+    const beforeLimit = remediation ? (entry.effectiveLapCap ?? defaultLimit) : (entry.effectiveLimit ?? defaultLimit);
+    const beforeConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
+    const raised = adjustment.kind === 'raise' ? adjustment.afterLimit : beforeLimit;
+    const next: KickbackGateEntry = {
+      ...entry,
+      ...(remediation
+        ? { effectiveLapCap: raised, laps: adjustment.kind === 'reset' ? 0 : entry.laps ?? 0 }
+        : { effectiveLimit: raised, cumulative: adjustment.kind === 'reset' ? 0 : entry.cumulative }),
+      adjustments: [...(entry.adjustments ?? []), { ...adjustment, beforeLimit, beforeConsumed, afterLimit: raised, afterConsumed: adjustment.kind === 'reset' ? 0 : beforeConsumed }],
+      pendingAdjustment: undefined,
+      resumeAuthorization: { adjustmentId: adjustment.id, haltGeneration: adjustment.haltGeneration, consumed: false },
+    };
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } });
+    return next;
+  });
+}

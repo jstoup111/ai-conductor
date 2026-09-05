@@ -1,6 +1,6 @@
 export * from './types/index.js';
 export { wireOtelVisualizer } from './engine/otel/wire.js';
-export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
 export { runReleasePrAction } from './engine/release-pr-action.js';
@@ -68,6 +68,7 @@ import {
   detectBuildReviewRecordReducedCoverageCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
+  detectKickbackBudgetCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
   createProgram,
@@ -79,6 +80,7 @@ import {
   userConfigSetCommand,
   type CLIOptions,
 } from './cli.js';
+import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
 import type { ConductState, StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
@@ -667,6 +669,12 @@ async function main(): Promise<void> {
   const decideGrantCmd = detectDecideGrantCommand(process.argv);
   if (decideGrantCmd) {
     process.exitCode = await dispatchDecideGrantCommand(decideGrantCmd);
+    return;
+  }
+
+  const kickbackBudgetCmd = detectKickbackBudgetCommand(process.argv);
+  if (kickbackBudgetCmd) {
+    process.exitCode = await dispatchKickbackBudgetCommand(kickbackBudgetCmd);
     return;
   }
 

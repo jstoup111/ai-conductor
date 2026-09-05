@@ -153,6 +153,7 @@ import {
   hasRebaseInProgress,
   abortRebase,
   clearMarker,
+  consumeResumeAuthorizations,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { readHaltClass } from './engine/halt-marker.js';
@@ -1815,6 +1816,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         // Reconcile stranded park markers at the TOP of the sweep so the same
         // sweep that moves them also skips them (#486).
         await reconcileStrandedParkMarkers(projectRoot, log);
+        await consumeResumeAuthorizations({
+          listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
+          worktreePath: (slug) => join(worktreeBase, slug),
+          isOperatorParked: (slug) => isOperatorParked(projectRoot, slug),
+          clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
+          emit: (event) => events.emit(event),
+          log,
+        });
         // Fresh resolver per sweep: makeIsProcessed caches the shipped-record
         // listing per instance, and this sweep runs because the base branch
         // just advanced — a run-long cache would miss records merged mid-run.
