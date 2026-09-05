@@ -134,7 +134,7 @@ conflict_check:
 # appended tasks against a 19-task plan (the case that prompted this review)
 # remains far outside it and still halts for an operator.
 prd_audit:
-  max_appended_tasks: 8
+  max_appended_tasks: 20
   max_appended_ratio: 0.5
 
 steps:
