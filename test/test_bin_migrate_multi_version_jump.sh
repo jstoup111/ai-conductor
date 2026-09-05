@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Covers: task:1
 # Story-level acceptance coverage for the safe multi-version migration feature.
 # Covers: FR-1, FR-2, FR-3, FR-4, FR-5, FR-6, FR-7, FR-8, FR-9, FR-10, FR-11, FR-12, FR-13
 # The real bin/migrate entry point is copied into an isolated harness fixture;
@@ -11,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIGRATE_SRC="$REPO_ROOT/bin/migrate"
 COMMON_SRC="$REPO_ROOT/bin/lib/harness-common.sh"
+MIGRATION_FENCES_SRC="$REPO_ROOT/bin/lib/migration_fences.py"
 
 PASS=0
 FAIL=0
@@ -74,6 +76,7 @@ make_harness() {
   mkdir -p "$harness/bin/lib"
   cp "$MIGRATE_SRC" "$harness/bin/migrate"
   cp "$COMMON_SRC" "$harness/bin/lib/harness-common.sh"
+  cp "$MIGRATION_FENCES_SRC" "$harness/bin/lib/migration_fences.py"
   chmod +x "$harness/bin/migrate"
   # Installation has its own acceptance suite. Keep this fixture at the
   # migration-command boundary and prevent writes outside the isolated home.
