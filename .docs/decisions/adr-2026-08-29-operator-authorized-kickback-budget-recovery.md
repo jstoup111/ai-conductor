@@ -100,6 +100,14 @@ Repeated raises are allowed because each is an explicit operator decision with a
 bound remains active at the resulting effective limit; another raise requires another exhausted
 halt and another recorded decision.
 
+> **Amended 2026-09-05 by #2190:** `reset` and `raise` take a required `--gate` selector. For
+> `build_review` the semantics above apply to `cumulative` and the effective cumulative limit. For
+> `prd_audit` and `architecture_review_as_built` they apply to the gate entry's consumed `laps` and a
+> new feature-local effective lap cap that the gate's append-budget resolution honors in place of the
+> repository's `max_remediation_laps`. Plan-growth allowance is not adjustable by this family (#2119).
+> Every other clause — attribution, positive integer `N`, no cross-gate or cross-feature effect,
+> non-lap-counting survival of rebase credit — is unchanged and applies per gate.
+
 ### D3 — The public interface is one named, operator-only command family
 
 The stable callable interface is:
@@ -117,6 +125,10 @@ processes cannot invoke the authority path. Every refusal leaves active budget s
 
 Feature resolution reuses the named-worktree behavior already used by `build-review` operator
 commands, factored into a shared module rather than copied.
+
+> **Amended 2026-09-05 by #2190:** the grammar gains `--gate «build_review|prd_audit|architecture_review_as_built»`
+> on `reset` and `raise`; `inspect` renders every gate. An unknown gate is refused before any park or
+> ledger access.
 
 ### D4 — The command establishes and preserves quiescence
 
