@@ -4,6 +4,17 @@ spec_hash: 581c7921ee0b9935b63c69166f2beef4c9cab1f0a82c6e3262c18e176b55390f
 pr: https://github.com/jstoup111/ai-conductor/pull/2194
 shipped: 2026-09-05
 engine_version: 20260905T014027Z-b9d908fa9678
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "`src/conductor/src/engine/artifacts.ts:5221` — surviving gaps now take `id: gapId`, so a recognized gap with no `id` renders as `#3` instead of the previous `?` in halt and route text"
+    accepted: true
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.2
+    summary: "`src/conductor/test/acceptance/off-tag-checkout-reports-up-to-date-forever-tagged.acceptance.test.ts:101` and `src/conductor/test/acceptance/update-check-config-single-source-of-truth.acceptance.test.ts:110` — commit 738632d87 symlinks `/usr/bin/python3` into two update-check acceptance fixtures, unrelated to remediation dispositions"
+    accepted: false
 ---
 
 ## Cost
