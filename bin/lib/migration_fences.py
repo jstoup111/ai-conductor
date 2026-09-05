@@ -7,7 +7,9 @@ release parsing, version filtering, and output ordering policy.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import re
+import sys
 from typing import Iterator
 
 
@@ -106,3 +108,35 @@ def runnable_migration_fences(text: str) -> Iterator[MigrationFence]:
         for candidate in scan_migration_fences(text)
         if candidate.in_migration_section and candidate.closed
     )
+
+
+def emit_authoring_records(text: str) -> None:
+    """Write NUL-delimited candidate records for the Bash authoring gate."""
+
+    output = sys.stdout.buffer
+    for candidate in scan_migration_fences(text):
+        line = text.count("\n", 0, candidate.source_start) + 1
+        output.write(
+            f"{line}\0candidate\0{int(candidate.closed)}\0"
+            f"{int(candidate.in_migration_section)}\0".encode()
+        )
+        output.write(candidate.script.encode())
+        output.write(b"\0")
+
+
+def main() -> int:
+    """Provide the deliberately small, checked authoring-gate entry point."""
+
+    if len(sys.argv) != 3 or sys.argv[1] != "--authoring-records":
+        print("usage: migration_fences.py --authoring-records CHANGELOG", file=sys.stderr)
+        return 2
+    try:
+        emit_authoring_records(Path(sys.argv[2]).read_text())
+    except (OSError, UnicodeError) as error:
+        print(f"migration fence recognizer: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
