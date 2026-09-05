@@ -16,10 +16,9 @@ COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin
 SCAN=$(printf '%s' "$COMMAND" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
 
 # Patterns that are destructive and hard to reverse
-# Allow --force-with-lease (safe) but block bare --force/-f (destructive)
-if echo "$SCAN" | grep -qE 'git\s+push\s+.*--force-with-lease'; then
-  : # safe — allows push if remote hasn't changed since last fetch
-elif echo "$SCAN" | grep -qE 'git\s+push\s+.*--force|git\s+push\s+-f\b'; then
+# Allow --force-with-lease (safe) but block exact bare --force/-f tokens.
+# A lease option never suppresses detection of a later bare force option.
+if echo "$SCAN" | grep -qE 'git[[:space:]]+push([[:space:]]+[^[:space:]]+)*[[:space:]]+(--force|-f)([[:space:];|&]|$)'; then
   echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force push blocked by harness. Use --force-with-lease instead, or ask the user for explicit confirmation."}}' >&2
   exit 2
 fi
