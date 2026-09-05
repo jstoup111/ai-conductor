@@ -46,6 +46,12 @@ describe('Task 5 — park guard covers the claim path', () => {
       claim: vi.fn(() => true),
       release: vi.fn(),
       list: vi.fn(() => []),
+      complete: vi.fn(),
+      isCompleted: vi.fn(() => false),
+      park: vi.fn(),
+      unpark: vi.fn(),
+      isParked: vi.fn(() => false),
+      listParked: vi.fn(() => []),
     };
     const runFeature = vi.fn(async () => ({ slug: item.slug, status: 'done' as const }));
     let parkChecks = 0;

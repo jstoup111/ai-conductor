@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildWorkOrder,
-  materializeWorkOrder,
+  verifyWorkOrder,
   WorkOrderBaseShaMissingError,
   WorkOrderManifestMismatchError,
 } from '../../src/engine/work-order.js';
@@ -128,7 +128,7 @@ describe('engine/work-order', () => {
     try {
       let caught: unknown;
       try {
-        await materializeWorkOrder(order, worktreePath, async (args) => {
+        await verifyWorkOrder(order, async (args) => {
           gitCalls.push([...args]);
           if (args[0] === 'cat-file') {
             return { exitCode: 0, stdout: '', stderr: '' };
@@ -172,7 +172,7 @@ describe('engine/work-order', () => {
     try {
       let caught: unknown;
       try {
-        await materializeWorkOrder(order, worktreePath, async (args) => {
+        await verifyWorkOrder(order, async (args) => {
           gitCalls.push([...args]);
           return args[0] === 'cat-file' && args[1] === '-e' && args[2] === baseSha
             ? { exitCode: 1, stdout: '', stderr: 'missing base' }

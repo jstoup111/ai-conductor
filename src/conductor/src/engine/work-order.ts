@@ -119,19 +119,3 @@ export async function verifyWorkOrder(
     }
   }
 }
-
-/**
- * Verifies a work order's pinned inputs, then creates its isolated worktree.
- */
-export async function materializeWorkOrder(
-  order: WorkOrder,
-  worktreePath: string,
-  git: WorkOrderGitRunner,
-): Promise<void> {
-  await verifyWorkOrder(order, git);
-
-  const worktreeResult = await git(['worktree', 'add', worktreePath, order.baseSha]);
-  if (worktreeResult.exitCode !== 0) {
-    throw new Error(`could not create worktree at ${worktreePath}: ${worktreeResult.stderr}`);
-  }
-}

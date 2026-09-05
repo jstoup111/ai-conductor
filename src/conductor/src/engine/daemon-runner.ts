@@ -31,7 +31,6 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { writeHaltMarker } from './halt-marker.js';
-import { writeAutoPark } from './park-marker.js';
 import type { OperatorParkedTermination } from './conductor.js';
 
 /**
@@ -408,9 +407,9 @@ export function makeRunFeature(
               );
               await terminateFeature({
                 worktreePath: worktree.path,
-                projectRoot: deps.projectRoot,
                 reason: triageOutcome.outputTail,
                 park: true,
+                deferAutoPark: true,
                 log: featureLog,
                 triageEvidence: triageOutcome,
                 slug: item.slug,
@@ -421,6 +420,7 @@ export function makeRunFeature(
                 slug: item.slug,
                 status: 'error',
                 reason: triageOutcome.outputTail || 'parked after setup triage',
+                terminalEffects: { autoPark: { reason: triageOutcome.outputTail } },
               };
             }
             // Other triage outcomes (pass, quarantined-pass, fixed-pass) → continue to runConductor
@@ -636,6 +636,8 @@ export interface TerminateFeatureOptions {
   worktreePath: string;
   reason: string;
   park: boolean;
+  /** The dispatcher will write the root marker after executor settlement. */
+  deferAutoPark?: boolean;
   log?: (msg: string) => void;
   triageEvidence?: unknown;
   slug?: string;
@@ -643,7 +645,7 @@ export interface TerminateFeatureOptions {
   events?: ConductorEventEmitter;
 }
 
-type AutoParkWriteOutcome = 'not-requested' | 'written' | 'failed';
+type AutoParkWriteOutcome = 'not-requested' | 'deferred';
 
 /**
  * Record an errored feature's diagnostic HALT. A non-parked termination leaves
@@ -653,31 +655,20 @@ export async function terminateFeature({
   worktreePath,
   reason,
   park,
+  deferAutoPark,
   log,
   triageEvidence,
   slug,
-  projectRoot,
   events,
 }: TerminateFeatureOptions): Promise<void> {
-  let autoParkWriteError: string | undefined;
-  const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug
-    ? await writeAutoPark(projectRoot ?? worktreePath, slug, reason)
-      .then(() => 'written' as const)
-      .catch((err) => {
-        autoParkWriteError = err instanceof Error ? err.message : String(err);
-        log?.(`[daemon-runner] auto-park write failed for ${slug}: ${autoParkWriteError}`);
-        return 'failed' as const;
-      })
+  const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug && deferAutoPark
+    ? 'deferred'
     : 'not-requested';
-  const haltReason = autoParkWriteOutcome === 'failed'
-    ? `${reason}\n\nAutomatic park marker write failed: ${autoParkWriteError}\nRun: ai-conductor daemon park ${slug}`
-    : reason;
+  const haltReason = reason;
 
-  const heading = autoParkWriteOutcome === 'written'
+  const heading = autoParkWriteOutcome === 'deferred'
     ? 'feature parked — will not re-dispatch on the next scan'
-    : autoParkWriteOutcome === 'not-requested'
-      ? 'feature errored — will re-dispatch on the next scan'
-      : `feature errored — automatic park failed: ${autoParkWriteError}; run ai-conductor daemon park ${slug}`;
+    : 'feature errored — will re-dispatch on the next scan';
   let note = `${heading}\n${haltReason}\n`;
 
   const triage = triageEvidence as any;
@@ -702,7 +693,7 @@ export async function terminateFeature({
     }
   }
 
-  const resumeProcedure = autoParkWriteOutcome === 'written'
+  const resumeProcedure = autoParkWriteOutcome === 'deferred'
     ?
       `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
       `  2. rm .pipeline/HALT\n` +

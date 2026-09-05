@@ -24,6 +24,7 @@ vi.mock('../../src/engine/daemon-maintenance.js', async (importOriginal) => {
 });
 
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
+import { formatDaemonStartupLog } from '../../src/engine/daemon-command.js';
 
 /**
  * Recorded serial baseline for the full dispatch loop before the pool became
@@ -110,6 +111,13 @@ const RECORDED_N1_TRACE = {
 } as const;
 
 describe('daemon serial equivalence (Task 25)', () => {
+  it('keeps both resolved-concurrency-one startup lines byte-for-byte serial', () => {
+    expect(formatDaemonStartupLog({ concurrency: 1, source: 'default' }, false))
+      .toBe('scanning backlog (concurrency 1)…');
+    expect(formatDaemonStartupLog({ concurrency: 1, source: 'flag' }, true))
+      .toBe('scanning backlog (concurrency 1, continuous)…');
+  });
+
   it('keeps the recorded N=1 dispatch, refresh, restart, stale, sweep, and lifecycle ordering', async () => {
     serialTrace.entries.length = 0;
     const backlog = [{ slug: 'alpha' }, { slug: 'beta' }, { slug: 'gamma' }];

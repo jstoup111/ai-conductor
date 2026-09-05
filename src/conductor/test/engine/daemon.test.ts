@@ -15,7 +15,7 @@ import {
   makeRunFeature,
   type FeatureRunnerDeps,
 } from '../../src/engine/daemon-runner.js';
-import { isOperatorParked, removeOperatorPark } from '../../src/engine/park-marker.js';
+import { isOperatorParked, removeOperatorPark, writeAutoPark } from '../../src/engine/park-marker.js';
 import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
 import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
@@ -65,7 +65,35 @@ function makeSetupTriageParkingRunner(
   } satisfies FeatureRunnerDeps);
 }
 
+async function applyTerminalEffects(projectRoot: string, outcome: FeatureOutcome): Promise<void> {
+  if (outcome.terminalEffects?.autoPark) {
+    await writeAutoPark(projectRoot, outcome.slug, outcome.terminalEffects.autoPark.reason);
+  }
+}
+
 describe('engine/daemon — runDaemon', () => {
+  it('applies setup-triage auto-park requests only after collecting the executor outcome', async () => {
+    const terminalEffects: FeatureOutcome[] = [];
+
+    await runDaemon({
+      discoverBacklog: staticBacklog([{ slug: 'setup-triage-park' }]),
+      runFeature: async () => ({
+        slug: 'setup-triage-park',
+        status: 'error',
+        terminalEffects: { autoPark: { reason: 'setup triage failed' } },
+      }),
+      onFeatureTerminalEffects: async (outcome) => {
+        terminalEffects.push(outcome);
+      },
+    }, { concurrency: 1, once: true });
+
+    expect(terminalEffects).toEqual([{
+      slug: 'setup-triage-park',
+      status: 'error',
+      terminalEffects: { autoPark: { reason: 'setup triage failed' } },
+    }]);
+  });
+
   it('uses injected claims to make repeated fill passes dispatch an eligible feature once', async () => {
     const claims = new InMemoryWorkClaims();
     let finishFeature: (() => void) | undefined;
@@ -466,6 +494,7 @@ describe('engine/daemon — runDaemon', () => {
           discoverBacklog: staticBacklog([item]),
           runFeature,
           isParked: (slug) => isOperatorParked(projectRoot, slug),
+          onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
           sleep: async () => { await waitForImmediate(); },
         }, { concurrency: 1, once: false, maxIdlePolls: 3 });
 
@@ -485,12 +514,13 @@ describe('engine/daemon — runDaemon', () => {
           () => 'setup still broken',
           () => { triageCalls++; },
         );
-        await runFeature(item);
+        await applyTerminalEffects(projectRoot, await runFeature(item));
 
         await runDaemon({
           discoverBacklog: staticBacklog([item]),
           runFeature,
           isParked: (slug) => isOperatorParked(projectRoot, slug),
+          onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
           sleep: async () => { await waitForImmediate(); },
         }, { concurrency: 1, once: false, maxIdlePolls: 2 });
 
@@ -509,13 +539,14 @@ describe('engine/daemon — runDaemon', () => {
           () => 'setup still broken',
           () => { triageCalls++; },
         );
-        await runFeature(item);
+        await applyTerminalEffects(projectRoot, await runFeature(item));
         await rm(join(projectRoot, '.worktrees', item.slug, '.pipeline', 'HALT'), { force: true });
 
         await runDaemon({
           discoverBacklog: staticBacklog([item]),
           runFeature,
           isParked: (slug) => isOperatorParked(projectRoot, slug),
+          onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
           sleep: async () => { await waitForImmediate(); },
         }, { concurrency: 1, once: false, maxIdlePolls: 2 });
 
@@ -535,7 +566,7 @@ describe('engine/daemon — runDaemon', () => {
           () => failureReason,
           () => { triageCalls++; },
         );
-        await runFeature(item);
+        await applyTerminalEffects(projectRoot, await runFeature(item));
 
         await removeOperatorPark(projectRoot, item.slug);
         await rm(join(projectRoot, '.worktrees', item.slug, '.pipeline', 'HALT'), { force: true });
@@ -545,6 +576,7 @@ describe('engine/daemon — runDaemon', () => {
           discoverBacklog: staticBacklog([item]),
           runFeature,
           isParked: (slug) => isOperatorParked(projectRoot, slug),
+          onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
           sleep: async () => { await waitForImmediate(); },
         }, { concurrency: 1, once: true });
 

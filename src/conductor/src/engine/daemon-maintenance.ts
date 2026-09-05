@@ -99,6 +99,11 @@ export class DaemonMaintenance {
     await this.run('sweep', sweep);
   }
 
+  /** Runs a completion-triggered sweep through the same policy gate as every other sweep. */
+  async afterTerminalCollection(sweep: () => Promise<void>): Promise<void> {
+    await this.run('sweep', sweep);
+  }
+
   async idleBoundary<T extends string>(
     restartPending: (episodeActive: boolean) => Promise<T | null>,
     staleEngine: (episodeActive: boolean) => Promise<T | null>,

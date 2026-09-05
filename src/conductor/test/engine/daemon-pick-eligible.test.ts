@@ -6,6 +6,15 @@
 
 import { describe, it, expect } from 'vitest';
 import { pickEligible, type BacklogItem } from '../../src/engine/daemon.js';
+import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
+
+function claimsFor(opts: { active?: string[]; completed?: string[]; parked?: string[] } = {}): InMemoryWorkClaims {
+  const claims = new InMemoryWorkClaims();
+  for (const slug of opts.active ?? []) claims.claim(slug);
+  for (const slug of opts.completed ?? []) claims.complete(slug);
+  for (const slug of opts.parked ?? []) claims.park(slug);
+  return claims;
+}
 
 describe('pickEligible — no head-of-line blocking (FR-4 negative)', () => {
   it('skips a lexicographically-first spec parked in waiting and returns the next eligible item', async () => {
@@ -17,7 +26,7 @@ describe('pickEligible — no head-of-line blocking (FR-4 negative)', () => {
 
     const result = await pickEligible(
       { items },
-      { inFlight: new Set(), parked: new Set(), started: new Set() },
+      { claims: claimsFor() },
     );
 
     expect(result?.slug).toBe('clear-spec');
@@ -29,7 +38,7 @@ describe('pickEligible — no head-of-line blocking (FR-4 negative)', () => {
   it('returns undefined when items is empty, even if waiting has entries', async () => {
     const result = await pickEligible(
       { items: [] },
-      { inFlight: new Set(), parked: new Set(), started: new Set() },
+      { claims: claimsFor() },
     );
     expect(result).toBeUndefined();
   });
@@ -39,9 +48,7 @@ describe('pickEligible — no head-of-line blocking (FR-4 negative)', () => {
     const result = await pickEligible(
       { items },
       {
-        inFlight: new Set(['in-flight-spec']),
-        parked: new Set(),
-        started: new Set(['started-spec']),
+        claims: claimsFor({ active: ['in-flight-spec'], completed: ['started-spec'] }),
       },
     );
     expect(result?.slug).toBe('free-spec');
@@ -59,9 +66,7 @@ describe('pickEligible — progress-gated re-kick eligibility (D2 happy)', () =>
     const result = await pickEligible(
       { items },
       {
-        inFlight: new Set(),
-        parked: new Set(['progressing-spec']),
-        started: new Set(['progressing-spec']),
+        claims: claimsFor({ parked: ['progressing-spec'], completed: ['progressing-spec'] }),
         isHalted: async () => true, // still parked — no base advance cleared it
         isProgressReKickEligible: async (slug) => slug === 'progressing-spec',
       },
@@ -74,9 +79,7 @@ describe('pickEligible — progress-gated re-kick eligibility (D2 happy)', () =>
     const result = await pickEligible(
       { items },
       {
-        inFlight: new Set(),
-        parked: new Set(['stalled-spec']),
-        started: new Set(['stalled-spec']),
+        claims: claimsFor({ parked: ['stalled-spec'], completed: ['stalled-spec'] }),
         isHalted: async () => true,
         isProgressReKickEligible: async () => false,
       },
@@ -95,9 +98,7 @@ describe('pickEligible — operator-parked slugs are ineligible for dispatch (FR
     const result = await pickEligible(
       { items },
       {
-        inFlight: new Set(),
-        parked: new Set(),
-        started: new Set(),
+        claims: claimsFor(),
         isParked: async (slug) => slug === 'parked-spec',
       },
     );
@@ -112,9 +113,7 @@ describe('pickEligible — operator-parked slugs are ineligible for dispatch (FR
     const result = await pickEligible(
       { items },
       {
-        inFlight: new Set(),
-        parked: new Set(['parked-spec']),
-        started: new Set(),
+        claims: claimsFor({ parked: ['parked-spec'] }),
         isHalted: async () => false,
         isParked: async (slug) => slug === 'parked-spec',
       },
@@ -131,9 +130,7 @@ describe('pickEligible — operator-parked slugs are ineligible for dispatch (FR
     const result = await pickEligible(
       { items },
       {
-        inFlight: new Set(),
-        parked: new Set(),
-        started: new Set(),
+        claims: claimsFor(),
         isHalted: async () => false,
         isParked: async (slug) => slug === 'parked-spec',
       },

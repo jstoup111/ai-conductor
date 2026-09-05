@@ -152,7 +152,7 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
-  it('reports a failed auto-park write loudly without crashing the daemon', async () => {
+  it('does not write an auto-park marker from the executor', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-auto-park-write-failure-'));
     const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
     const logs: string[] = [];
@@ -165,6 +165,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         projectRoot,
         reason: 'runtime dispatch failure',
         park: true,
+        deferAutoPark: true,
         slug: ITEM.slug,
         log: (message) => logs.push(message),
       })).resolves.toBeUndefined();
@@ -178,11 +179,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         parkFailureLogs: logs.filter((line) => line.includes(ITEM.slug) && /park.*write.*fail/i.test(line)),
         haltVerificationLogs: logs.filter((line) => line.includes('HALT marker write failed')),
       }).toEqual({
-        haltFirstLine: 'feature errored — automatic park failed: EACCES: permission denied writing auto-park marker; run ai-conductor daemon park feat-x',
-        containsWriteFailure: true,
-        containsRemedy: true,
-        containsParkedClaim: false,
-        parkFailureLogs: ['[daemon-runner] auto-park write failed for feat-x: EACCES: permission denied writing auto-park marker'],
+        haltFirstLine: 'feature parked — will not re-dispatch on the next scan',
+        containsWriteFailure: false,
+        containsRemedy: false,
+        containsParkedClaim: true,
+        parkFailureLogs: [],
         haltVerificationLogs: [],
       });
     } finally {
@@ -191,7 +192,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     }
   });
 
-  it('terminateFeature writes the settled auto-park outcome before its parked HALT, including EEXIST', async () => {
+  it('terminateFeature records a deferred auto-park request without touching the root marker', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-auto-park-marker-'));
     try {
       const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
@@ -204,49 +205,20 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         projectRoot,
         reason: 'runtime dispatch failure',
         park: true,
+        deferAutoPark: true,
         slug: ITEM.slug,
       });
 
-      const marker = await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8');
       const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8');
 
-      expect(marker).toMatch(/^auto-parked: runtime dispatch failure\ntimestamp: .+\n$/);
       expect(halt.split('\n', 1)[0]).toBe('feature parked — will not re-dispatch on the next scan');
-      expect(filesystemWriteOrder.events).toEqual([
-        'park-marker:issued',
-        'park-marker:settled',
-        'halt:issued',
-        'park-marker:present-at-halt',
-        'halt:settled',
-      ]);
-
-      const originalMarker = marker;
-      filesystemWriteOrder.events.length = 0;
-      filesystemWriteOrder.markerPath = '';
-      await terminateFeature({
-        worktreePath,
-        projectRoot,
-        reason: 'new reason must not replace an existing park',
-        park: true,
-        slug: ITEM.slug,
-      });
-
-      expect(await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')).toBe(originalMarker);
-      expect((await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8')).split('\n', 1)[0])
-        .toBe('feature parked — will not re-dispatch on the next scan');
-      expect(filesystemWriteOrder.events).toEqual([
-        'park-marker:issued',
-        'park-marker:already-parked',
-        'halt:issued',
-        'park-marker:present-at-halt',
-        'halt:settled',
-      ]);
+      await expect(readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
   });
 
-  it('terminateFeature with park true writes a worktree marker at the main repository root', async () => {
+  it('terminateFeature with park true leaves root marker ownership to the dispatcher', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-auto-park-worktree-'));
     const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
     try {
@@ -270,7 +242,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       ).then(() => true).catch(() => false);
 
       expect({ markerAtMainRoot, markerAtWorktree }).toEqual({
-        markerAtMainRoot: true,
+        markerAtMainRoot: false,
         markerAtWorktree: false,
       });
     } finally {
@@ -1041,7 +1013,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         haltClass: 'needs-human',
         status: 'error',
         teardownKeep: true,
-        parkMarkerExists: true,
+        parkMarkerExists: false,
         containsParkedClaim: true,
       },
     },
@@ -1171,33 +1143,33 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     return { outcome: await makeRunFeature(featureDeps)(item), runConductorCalls };
   }
 
-  it('keeps the first automatic marker bytes when triage parks the same slug twice', async () => {
+  it('returns the same declarative auto-park request when triage parks the same slug twice', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-triage-park-idempotent-'));
     try {
-      await runSetupTriageOutcome(projectRoot, ITEM, { kind: 'park', outputTail: 'first failure' });
-      const markerPath = join(projectRoot, '.daemon', 'parked', ITEM.slug);
-      const firstMarker = await readFile(markerPath, 'utf-8');
+      const first = await runSetupTriageOutcome(projectRoot, ITEM, { kind: 'park', outputTail: 'first failure' });
+      const second = await runSetupTriageOutcome(projectRoot, ITEM, { kind: 'park', outputTail: 'second failure' });
 
-      await runSetupTriageOutcome(projectRoot, ITEM, { kind: 'park', outputTail: 'second failure' });
-
-      await expect(readFile(markerPath, 'utf-8')).resolves.toBe(firstMarker);
+      expect([first.outcome.terminalEffects, second.outcome.terminalEffects]).toEqual([
+        { autoPark: { reason: 'first failure' } },
+        { autoPark: { reason: 'second failure' } },
+      ]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
   });
 
-  it('writes distinct main-root automatic markers and reasons for separately triaged slugs', async () => {
+  it('returns distinct auto-park requests and reasons for separately triaged slugs', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-triage-park-distinct-'));
     const first: BacklogItem = { slug: 'first-feature' };
     const second: BacklogItem = { slug: 'second-feature' };
     try {
-      await runSetupTriageOutcome(projectRoot, first, { kind: 'park', outputTail: 'first setup failure' });
-      await runSetupTriageOutcome(projectRoot, second, { kind: 'park', outputTail: 'second setup failure' });
+      const firstOutcome = await runSetupTriageOutcome(projectRoot, first, { kind: 'park', outputTail: 'first setup failure' });
+      const secondOutcome = await runSetupTriageOutcome(projectRoot, second, { kind: 'park', outputTail: 'second setup failure' });
 
-      await expect(readFile(join(projectRoot, '.daemon', 'parked', first.slug), 'utf-8'))
-        .resolves.toContain('first setup failure');
-      await expect(readFile(join(projectRoot, '.daemon', 'parked', second.slug), 'utf-8'))
-        .resolves.toContain('second setup failure');
+      expect([firstOutcome.outcome.terminalEffects, secondOutcome.outcome.terminalEffects]).toEqual([
+        { autoPark: { reason: 'first setup failure' } },
+        { autoPark: { reason: 'second setup failure' } },
+      ]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }

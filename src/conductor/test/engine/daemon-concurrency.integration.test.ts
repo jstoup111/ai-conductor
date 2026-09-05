@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runDaemon, type BacklogItem } from '../../src/engine/daemon.js';
 import { makeFeatureRunnerDeps } from '../../src/engine/daemon-deps.js';
 import { makeRunFeature, terminateFeature } from '../../src/engine/daemon-runner.js';
+import { writeAutoPark } from '../../src/engine/park-marker.js';
 import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
 import { acquireScratchHome, sweepFeatureWorktreeScratch } from '../../src/engine/self-host/provider-scratch.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -165,6 +166,7 @@ describe('daemon N=2 worktree isolation', () => {
             reason: 'fake provider requested human intervention',
             events,
           });
+          await writeAutoPark(root, beta, 'fake provider requested human intervention');
           betaHalted.resolve();
           return;
         }

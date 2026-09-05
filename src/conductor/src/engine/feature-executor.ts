@@ -5,6 +5,8 @@ export interface FeatureTerminalEffects {
   cleanupHaltPresentation?: { prUrl: string };
   enrollWatch?: { prUrl: string };
   markProcessed?: { prUrl?: string };
+  /** Root `.daemon` marker requested by setup triage; written on collection. */
+  autoPark?: { reason: string };
   sweep?: true;
 }
 

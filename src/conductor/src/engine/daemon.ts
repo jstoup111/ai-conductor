@@ -101,9 +101,7 @@ export interface PickEligibleBacklog {
 
 /** In-run dispatch bookkeeping `pickEligible` consults to skip ineligible slugs. */
 export interface PickEligibleCtx {
-  inFlight: { has(slug: string): boolean };
-  parked: Set<string>;
-  started: { has(slug: string): boolean };
+  claims: WorkClaims;
   isHalted?: (slug: string) => Promise<boolean>;
   /**
    * True while `slug` carries a durable `.daemon/parked/<slug>` operator-park
@@ -128,8 +126,8 @@ export interface PickEligibleCtx {
 }
 
 /**
- * First-in-`items`-order eligible feature. `inFlight`/`started` guard against
- * double-dispatch. The one slug allowed back past `started` is a parked
+ * First-in-`items`-order eligible feature. The claim registry guards against
+ * double-dispatch. The one slug allowed back past completed state is a parked
  * (halted) one — and only once its HALT marker is gone, detected by the
  * injected `isHalted`. Without that dep a parked feature stays parked.
  *
@@ -142,12 +140,12 @@ export async function pickEligible(
   ctx: PickEligibleCtx,
 ): Promise<BacklogItem | undefined> {
   for (const b of backlog.items) {
-    if (ctx.inFlight.has(b.slug)) continue;
+    if (ctx.claims.list().includes(b.slug)) continue;
     // Operator-park (Task 7): a durable, HALT-independent stop. Checked
     // alongside `isHalted` below, but never lifted by a cleared HALT marker —
     // only an explicit un-park makes the slug eligible again.
     if (ctx.isParked && (await ctx.isParked(b.slug))) continue;
-    if (ctx.parked.has(b.slug)) {
+    if (ctx.claims.isParked(b.slug)) {
       if (!ctx.isHalted || (await ctx.isHalted(b.slug))) {
         // Still parked by the HALT marker (no base advance cleared it). Task 8
         // (D2): a live-HALT parked slug is ALSO eligible when its last dispatch
@@ -160,7 +158,7 @@ export async function pickEligible(
         }
       }
       // marker cleared, or progress-gated re-kick eligible → fall through
-    } else if (ctx.started.has(b.slug)) {
+    } else if (ctx.claims.isCompleted(b.slug)) {
       continue; // done/error — permanently excluded this run
     } else if (ctx.isHalted && (await ctx.isHalted(b.slug))) {
       // A feature this process never dispatched but whose worktree carries a
@@ -171,7 +169,7 @@ export async function pickEligible(
       // processed ledger) and gets re-dispatched, re-entering the conductor over
       // the kept worktree and clobbering its persisted state. Honor the durable
       // marker: park it so the un-park-on-clear path above governs re-dispatch.
-      ctx.parked.add(b.slug);
+      ctx.claims.park(b.slug);
       continue;
     }
     return b;
@@ -904,19 +902,6 @@ export async function runDaemon(
   // Task 21: track whether a stale-engine restart request has been made in this
   // run. Once requested, don't retry (the restart would exit the process).
   let staleEngineRestartRequested = false;
-  // Completed outcomes are the existing terminal record. `pickEligible` only
-  // consults it after the claims-backed active check and park handling, so the
-  // predicate order and parked re-dispatch behavior remain unchanged.
-  const started = {
-    has: (slug: string): boolean =>
-      processed.some((outcome) => outcome.slug === slug && outcome.status === 'done'),
-  };
-  // Slugs that halted this run and are parked for a human. A parked slug is the
-  // one exception to `started`'s permanent exclusion: it becomes eligible again
-  // once its `.pipeline/HALT` marker is cleared, detected via the injected
-  // `isHalted`. Without that dep (pure-core default) a parked feature stays
-  // parked for the run — exactly the pre-fix behavior.
-  const parked = new Set<string>();
   let totalCost = 0;
   let idlePolls = 0;
 
@@ -938,9 +923,9 @@ export async function runDaemon(
     if (!claims.claim(item.slug)) return false;
     const featureLog = deps.featureLog?.(item.slug) ?? log;
     // Task 16: Detect if this is a re-dispatch (slug was parked)
-    const isResume = parked.has(item.slug);
+    const isResume = claims.isParked(item.slug);
 
-    parked.delete(item.slug); // re-dispatching a cleared feature un-parks it
+    claims.unpark(item.slug); // re-dispatching a cleared feature un-parks it
     // Dispose any existing watcher before re-dispatching (to avoid stale watchers
     // from the previous dispatch)
     disposeWatcher(item.slug);
@@ -998,7 +983,7 @@ export async function runDaemon(
     if (workerIndex >= 0) workers.splice(workerIndex, 1);
     observeWorkerSet();
     await deps.onFeatureTerminalEffects?.(outcome);
-    if (outcome.terminalEffects?.sweep) await sweepBestEffort();
+    if (outcome.terminalEffects?.sweep) await maintenance.afterTerminalCollection(sweepBestEffort);
     processed.push(outcome);
     if (outcome.costTokens) totalCost += outcome.costTokens;
     // A halted OR errored feature is parked for a human, not finished. Both now
@@ -1007,7 +992,7 @@ export async function runDaemon(
     // the cause and clears the marker (gated by `isHalted` below). Only `done`
     // stays permanently excluded.
     if (outcome.status === 'halted' || outcome.status === 'error') {
-      parked.add(slug);
+      claims.park(slug);
       // Register a watcher for event-driven wake when this feature's HALT is cleared
       registerWatcher(slug);
       // Task 20: stamp the park with the episode state at collection time so
@@ -1026,12 +1011,14 @@ export async function runDaemon(
       // an explicit unpark clears it, the ordinary HALT/state checks decide
       // whether the preserved worktree can resume. No lifecycle status is
       // manufactured or cleared here.
-      parked.add(slug);
+      claims.park(slug);
       (deps.featureLog?.(slug) ?? log)(
         `${chalk.yellow('■')} parked ${chalk.bold(slug)}: ${chalk.yellow('parked')} — intentional operator stop`,
       );
       return;
     }
+
+    if (outcome.status === 'done') claims.complete(slug);
 
     const ok = outcome.status === 'done';
     const marker = ok ? chalk.green('■') : chalk.red('■');
@@ -1290,9 +1277,7 @@ export async function runDaemon(
       // only `items`, never `waiting`, so a dependency-gated spec never causes
       // head-of-line blocking of a later, unblocked one).
       const pickCtx: PickEligibleCtx = {
-        inFlight,
-        parked,
-        started,
+        claims,
         isHalted: deps.isHalted,
         isParked: deps.isParked,
         isProgressReKickEligible: isProgressReKickEligibleBounded,
@@ -1302,12 +1287,12 @@ export async function runDaemon(
       if (!paused && !episodeActive && !buildAuthMissing) {
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.
-        const parkedBeforeLocal = new Set(parked);
+        const parkedBeforeLocal = new Set(claims.listParked());
         next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
         // pickEligible's "durable HALT from a prior run" branch adds directly to
         // `parked` for a slug this run never dispatched — register its watcher
         // here (collectOne never sees it, since it never went through runFeature).
-        for (const slug of parked) {
+        for (const slug of claims.listParked()) {
           if (!parkedBeforeLocal.has(slug)) registerWatcher(slug);
         }
 
@@ -1325,9 +1310,9 @@ export async function runDaemon(
             // advance, re-kick before consuming the backlog so a freshly-cleared
             // marker is un-parked in THIS iteration (its dispatch still flows through
             // the existing un-park path, FR-8 — the sweep issues none).
-            const parkedBeforeRefresh = new Set(parked);
+            const parkedBeforeRefresh = new Set(claims.listParked());
             next = await pickEligible({ items: refreshed }, pickCtx);
-            for (const slug of parked) {
+            for (const slug of claims.listParked()) {
               if (!parkedBeforeRefresh.has(slug)) registerWatcher(slug);
             }
           }

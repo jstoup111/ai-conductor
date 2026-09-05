@@ -196,7 +196,8 @@ export function formatDaemonStartupLog(
   resolution: DaemonConcurrencyResolution,
   continuous: boolean,
 ): string {
-  return `scanning backlog (concurrency ${resolution.concurrency}, source ${resolution.source}${continuous ? ', continuous' : ''})…`;
+  const source = resolution.concurrency === 1 ? '' : `, source ${resolution.source}`;
+  return `scanning backlog (concurrency ${resolution.concurrency}${source}${continuous ? ', continuous' : ''})…`;
 }
 
 /**

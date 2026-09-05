@@ -137,7 +137,7 @@ import {
 } from './engine/daemon-deps.js';
 import { InMemoryWorkClaims } from './engine/work-claims.js';
 import { WorktreeLifecycleQueue } from './engine/worktree.js';
-import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
+import { isOperatorParked, reconcileStrandedParkMarkers, writeAutoPark } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
 import {
@@ -707,6 +707,8 @@ export function createForcedSetupPrepare(
   base: {
     projectRoot: string;
     baseBranch: string;
+    /** Dispatcher's immutable WorkOrder base; legacy callers resolve lazily. */
+    baseSha?: string;
     events?: ConductorEventEmitter;
     /**
      * The other half of the `dispatchStart` contract. `dispatchStart` and
@@ -720,7 +722,7 @@ export function createForcedSetupPrepare(
   },
 ): (worktreePath: string) => Promise<void> {
   return async (worktreePath) => {
-    const baseSha = await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
+    const baseSha = base.baseSha ?? await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
     await prepare(worktreePath, log, {
       verbose,
       force: true,
@@ -1382,6 +1384,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     providerExecution = createProviderExecution(),
     featureLog = log,
     featureEvents?: ConductorEventEmitter,
+    workOrderBaseSha?: string,
   ) => {
     // Kill-switch for testing: prevent actual LLM dispatch
     if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
@@ -1402,6 +1405,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       {
         projectRoot,
         baseBranch,
+        baseSha: workOrderBaseSha,
         events: featureEvents,
         // Same resolved value the ordinary dispatch path threads into
         // makeFeatureRunnerDeps below, so triage's hook and dispatch's hook
@@ -1506,6 +1510,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       return makeRunFeature({
         ...deps,
         deferTerminalEffects: true,
+        runSetupTriage: (
+          error,
+          worktree,
+          item,
+          providerExecution,
+          featureLog,
+          featureEvents,
+        ) => runSetupTriage(
+          error,
+          worktree,
+          item,
+          providerExecution,
+          featureLog,
+          featureEvents,
+          order.baseSha,
+        ),
         createWorktree: (slug) => deps.createWorktree(slug, order),
         prepareWorktree: (wt, log, events) => deps.prepareWorktree!(wt, log, events, order),
       })(item);
@@ -1827,6 +1847,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         const effects = outcome.terminalEffects;
         if (!effects) return;
         const featureLog = featureLogFor(outcome.slug);
+        if (effects.autoPark) {
+          try {
+            await writeAutoPark(projectRoot, outcome.slug, effects.autoPark.reason);
+          } catch (err) {
+            featureLog(`[daemon-runner] auto-park write failed for ${outcome.slug}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         if (effects.cleanupHaltPresentation && deps.projectRoot && deps.runGh) {
           try {
             const result = await (deps.cleanupHaltPresentation ?? cleanupHaltPresentation)(

@@ -69,7 +69,7 @@ class RecordingConductStateStore implements ConductStateStore<ConductState> {
 
 describe('daemon termination guidance', () => {
   // Covers: task:10
-  it('uses the canonical CLI spelling for auto-park failure and parked-feature recovery', async () => {
+  it('keeps parked-feature recovery guidance in the executor HALT', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-cli-guidance-'));
     const slug = 'canonical-cli-guidance';
     const failedWorktree = join(projectRoot, 'failed-worktree');
@@ -95,6 +95,7 @@ describe('daemon termination guidance', () => {
         projectRoot,
         reason: 'feature needs operator recovery',
         park: true,
+        deferAutoPark: true,
         slug,
       });
 
@@ -103,7 +104,7 @@ describe('daemon termination guidance', () => {
         readFile(join(parkedWorktree, '.pipeline', 'HALT'), 'utf-8'),
       ]);
 
-      expect(failedHalt).toContain(`ai-conductor daemon park ${slug}`);
+      expect(failedHalt).toContain('feature errored — will re-dispatch on the next scan');
       expect(parkedHalt).toContain(`ai-conductor daemon unpark ${slug}`);
       expect(`${failedHalt}\n${parkedHalt}`).not.toContain('conduct-ts daemon');
     } finally {
@@ -193,6 +194,24 @@ describe('daemon setup-triage prepare wiring', () => {
     expect(secondBase).not.toBe(firstBase);
     expect(prepare.mock.calls.map((call) => (call as unknown as [string, unknown, { baseSha?: string }])[2].baseSha))
       .toEqual([firstBase, secondBase]);
+  });
+
+  it('keeps forced setup pinned to the dispatched order when the root advances', async () => {
+    const prepare = vi.fn(async () => {});
+    const pinnedBase = await git('rev-parse', 'main');
+    const runPrepare = createForcedSetupPrepare(
+      prepare as typeof prepareWorktree,
+      undefined,
+      false,
+      { projectRoot, baseBranch: 'main', baseSha: pinnedBase },
+    );
+
+    await runPrepare('/worktrees/before-advance');
+    await git('commit', '--allow-empty', '-m', 'root advances after dispatch');
+    await runPrepare('/worktrees/after-advance');
+
+    expect(prepare.mock.calls.map((call) => (call as unknown as [string, unknown, { baseSha?: string }])[2].baseSha))
+      .toEqual([pinnedBase, pinnedBase]);
   });
 });
 

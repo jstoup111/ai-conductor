@@ -13,6 +13,8 @@ const maintenanceTrace = vi.hoisted(() => ({ operations: [] as DaemonMaintenance
 
 function trackedClaims(attempts: string[]): WorkClaims {
   const active = new Set<string>();
+  const completed = new Set<string>();
+  const parked = new Set<string>();
   return {
     claim(slug) {
       attempts.push(slug);
@@ -26,6 +28,12 @@ function trackedClaims(attempts: string[]): WorkClaims {
     list() {
       return [...active];
     },
+    complete(slug) { completed.add(slug); },
+    isCompleted(slug) { return completed.has(slug); },
+    park(slug) { parked.add(slug); },
+    unpark(slug) { parked.delete(slug); },
+    isParked(slug) { return parked.has(slug); },
+    listParked() { return [...parked]; },
   };
 }
 

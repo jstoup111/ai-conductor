@@ -87,14 +87,23 @@ describe('detectDaemonCommand', () => {
     );
   });
 
-  it('defaults concurrency to one when no flag or config exists and names default source in startup log', async () => {
+  it('defaults concurrency to one when no flag or config exists with the serial startup log', async () => {
     const { resolve, formatStartupLog } = await concurrencyContract();
     const command = detectDaemonCommand(argv('daemon'))!;
     const resolution = resolve(command, undefined);
 
     expect(resolution).toEqual({ concurrency: 1, source: 'default' });
     expect(formatStartupLog(resolution, false)).toBe(
-      'scanning backlog (concurrency 1, source default)…',
+      'scanning backlog (concurrency 1)…',
+    );
+  });
+
+  it('keeps config provenance in the startup log at concurrency above one', async () => {
+    const { resolve, formatStartupLog } = await concurrencyContract();
+    const resolution = resolve(detectDaemonCommand(argv('daemon'))!, 2);
+
+    expect(formatStartupLog(resolution, false)).toBe(
+      'scanning backlog (concurrency 2, source config)…',
     );
   });
 

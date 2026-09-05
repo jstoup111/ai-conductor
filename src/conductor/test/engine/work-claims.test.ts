@@ -12,16 +12,22 @@ describe('InMemoryWorkClaims', () => {
       firstClaim: claims.claim('feature-a'),
       duplicateClaim: claims.claim('feature-a'),
       activeClaims: claims.list(),
+      completed: (claims.complete('feature-done'), claims.isCompleted('feature-done')),
+      parked: (claims.park('feature-parked'), claims.isParked('feature-parked')),
+      unparked: (claims.unpark('feature-parked'), claims.isParked('feature-parked')),
       claimAfterRelease: (claims.release('feature-a'), claims.claim('feature-a')),
       activeClaimsAfterRelease: claims.list(),
     }).toEqual({
       exports: ['InMemoryWorkClaims'],
-      operations: ['claim', 'constructor', 'list', 'release'],
+      operations: ['claim', 'complete', 'constructor', 'isCompleted', 'isParked', 'list', 'listParked', 'park', 'release', 'unpark'],
       firstClaim: true,
       duplicateClaim: false,
       activeClaims: ['feature-a'],
       claimAfterRelease: true,
       activeClaimsAfterRelease: ['feature-a'],
+      completed: true,
+      parked: true,
+      unparked: false,
     });
   });
 });
