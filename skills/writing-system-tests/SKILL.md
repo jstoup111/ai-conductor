@@ -409,7 +409,9 @@ verify outcome). Neither duplicates the other.
 - Every generated spec must declare feature coverage in a leading comment line. Where the active
   stories or plan are available, use resolvable `Covers: S<n>.<m>[, task:<id>]` markers (technical
   and product tracks alike); the marker must name a criterion in the active stories or a task in the
-  active plan. On the product track, also retain `Covers: FR-N[, FR-M]` for PRD coverage reporting.
+  active plan. Criterion ids are positional: `S<n>.<m>` is the m-th Given/When/Then bullet of Story n,
+  counting happy-path bullets first and then negative-path bullets — story files never carry literal
+  ids. On the product track, also retain `Covers: FR-N[, FR-M]` for PRD coverage reporting.
   Do not use a test path as a substitute for a Covers marker.
 
 **Helpers:** Create shared request helpers (e.g. response-body parsing and auth-header

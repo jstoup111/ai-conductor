@@ -690,10 +690,29 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       await git('checkout', 'main');
       await mkdir(join(dir, '.docs/stories'), { recursive: true });
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await writeFile(selectedStoriesPath, '# Selected stories\n\nCriterion S3.1 exists here.\n');
-      // This criterion must not resolve `Covers: S9.9`: the plan selects the
+      // Criterion ids are positional: story files carry Given/When/Then
+      // bullets, never literal `S<n>.<m>` ids. `S3.1` must resolve from the
+      // first happy-path bullet of Story 3, not from a body grep.
+      await writeFile(selectedStoriesPath, [
+        '# Selected stories',
+        '',
+        '## Story 3: Selected behavior',
+        '',
+        '#### Happy Path',
+        '- Given the selected stories artifact, when build_review resolves markers, then the first criterion binds positionally',
+        '',
+      ].join('\n'));
+      // This criterion must not resolve `Covers: S9.1`: the plan selects the
       // preceding artifact, and build_review must never glob `.docs/stories`.
-      await writeFile(join(dir, '.docs/stories/unrelated.md'), '# Unrelated stories\n\nCriterion S9.9 exists here.\n');
+      await writeFile(join(dir, '.docs/stories/unrelated.md'), [
+        '# Unrelated stories',
+        '',
+        '## Story 9: Unrelated behavior',
+        '',
+        '#### Happy Path',
+        '- Given an unrelated stories artifact, when build_review resolves markers, then this criterion stays invisible',
+        '',
+      ].join('\n'));
       await writeFile(scopedPlanPath, [
         '**Stories:** .docs/stories/selected.md',
         '',
@@ -713,7 +732,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         writeFile(join(dir, 'test/criterion.test.ts'), '// Covers: S3.1\nit(\'criterion\', () => {});\n'),
         writeFile(join(dir, 'test/task.test.ts'), '// Covers: task:7\nit(\'task\', () => {});\n'),
         writeFile(join(dir, 'test/unmarked.test.ts'), 'it(\'unmarked\', () => {});\n'),
-        writeFile(join(dir, 'test/unresolved.test.ts'), '// Covers: S9.9\nit(\'unresolved\', () => {});\n'),
+        writeFile(join(dir, 'test/unresolved.test.ts'), '// Covers: S9.1\nit(\'unresolved\', () => {});\n'),
+        // Story 3 has exactly one criterion: an id beyond the positional
+        // count stays advisory, never a scope binding.
+        writeFile(join(dir, 'test/beyond.test.ts'), '// Covers: S3.2\nit(\'beyond criterion count\', () => {});\n'),
         writeFile(join(dir, 'test/malformed.test.ts'), '// Covers: FR-, S3, task:\nit(\'malformed\', () => {});\n'),
       ]);
       await git('add', 'test', 'src/technical-coverage.ts');
@@ -730,10 +752,11 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(beforeRebase.sourceSnapshot.testQuality).toEqual({
         inScopeTests: ['src/technical-coverage.ts', 'test/criterion.test.ts', 'test/task.test.ts'],
         unresolvedMarkers: [
+          { selector: 'test/beyond.test.ts', reference: 'S3.2' },
           { selector: 'test/malformed.test.ts', reference: 'FR-' },
           { selector: 'test/malformed.test.ts', reference: 'S3' },
           { selector: 'test/malformed.test.ts', reference: 'task:' },
-          { selector: 'test/unresolved.test.ts', reference: 'S9.9' },
+          { selector: 'test/unresolved.test.ts', reference: 'S9.1' },
         ],
       });
 

@@ -1,3 +1,4 @@
+// Covers: S3.2, task:3
 import { describe, expect, it } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';

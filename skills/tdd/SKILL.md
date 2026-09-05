@@ -110,7 +110,9 @@ Never call a raw project aggregate command directly.
   changes carries a leading comment line binding it to the active feature, using the same marker
   contract as `/writing-system-tests`: a criterion in the active stories (`Covers: S<n>.<m>`), a
   task in the active plan (`Covers: task:<id>`), or — product track — a PRD requirement
-  (`Covers: FR-N`). Markers are resolvable only against the feature's own stories and plan; the
+  (`Covers: FR-N`). Criterion ids are positional — `S<n>.<m>` names the m-th Given/When/Then bullet
+  of Story n, happy-path bullets before negative-path ones; story files carry no literal ids.
+  Markers are resolvable only against the feature's own stories and plan; the
   build_review test-quality rubric scopes itself to changed tests with a resolvable `Covers:`
   binding, so a changed test without one is invisible to that review and the rubric passes
   vacuously. A file-level marker listing every covered id is sufficient; keep it current when the

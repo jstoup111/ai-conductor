@@ -1,3 +1,4 @@
+// Covers: S1.1, S1.2, S1.4, task:1
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

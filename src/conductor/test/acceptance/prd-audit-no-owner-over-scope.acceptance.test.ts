@@ -1,5 +1,5 @@
 /**
- * Covers: S4.1, S5.1, task:8
+ * Covers: S4.1, S5.1
  *
  * Drives the no-owner finding through the real parser, scope router, operator
  * decision block, durable decision store, and next-lap router. The temporary
