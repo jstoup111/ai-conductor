@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-05T13:26:02.002Z
+Status: halted
 Slug: a-coverage-claim-can-name-a-task-whose-done-when-d
-Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Class: protected-artifact
+Halting step: test_suite
+Phase: BUILD
 Branch: feat/daemon-a-coverage-claim-can-name-a-task-whose-done-when-d
-Head SHA: ed45ff1c871f0f939c8c97e5cc19f6bd46fd4a09
-Halted at: 2026-09-05T12:04:43.316Z
+Head SHA: 546c77c01ef8a2efa81dcb6a1fba8b5a9f04d155
+Halted at: 2026-09-05T14:01:48.860Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: no parseable `Verdict:` line was found in the as-built review; record one `Verdict: <value>` line and re-run the as-built review
+Protected artifact deleted: .docs/architecture/the-cumulative-kickback-cap-never-resets-so-a-reco.md
 ```
