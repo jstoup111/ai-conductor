@@ -66,6 +66,7 @@ const BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES = [
 
 const REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES = [
   'remediation_sealed_artifact_redirect',
+  'remediation_disposition_rejected',
 ] satisfies Array<ConductorEvent['type']>;
 
 const RESEAL_EVENT_TYPES = [
