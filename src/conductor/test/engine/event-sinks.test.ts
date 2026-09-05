@@ -175,6 +175,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'step_status_write_refused',
   'halt_cleared',
   'operator_rewind',
+  'kickback_budget_adjustment_authorized',
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
@@ -784,7 +785,6 @@ describe('event sink subscriptions', () => {
       'shipment_evidence_refused',
       'build_review_disposition_version_invalidated',
       'build_review_cache_discarded',
-      'kickback_budget_adjustment_authorized',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
     ]));
