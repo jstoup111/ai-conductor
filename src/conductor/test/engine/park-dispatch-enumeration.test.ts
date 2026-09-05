@@ -8,7 +8,9 @@ import {
   type BacklogItem,
   type DaemonDeps,
 } from '../../src/engine/daemon.js';
+import type { FeatureExecutor } from '../../src/engine/feature-executor.js';
 import type { WorkClaims } from '../../src/engine/work-claims.js';
+import type { WorkOrder } from '../../src/engine/work-order.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON_SRC = join(__dirname, '../../src/engine/daemon.ts');
@@ -18,7 +20,7 @@ const item: BacklogItem = {
 };
 
 describe('Task 5 — park guard covers the claim path', () => {
-  it('derives the claim path as a guarded dispatch entry point', async () => {
+  it('enumerates the sole claim path and refuses a post-selection park before executor work starts', async () => {
     const source = await readFile(DAEMON_SRC, 'utf-8');
     const dispatch = source.match(
       /const dispatch = async \(item: BacklogItem\): Promise<boolean> => \{[\s\S]*?\n  \};/,
@@ -27,21 +29,18 @@ describe('Task 5 — park guard covers the claim path', () => {
       /const guardedDispatch = \(item: BacklogItem\): Promise<boolean> =>\n    guardedDispatchWith\(item, deps\.isParked, dispatch, log\);/,
     )?.[0];
 
-    const claimIndex = dispatch!.indexOf('claims.claim(item.slug)');
-    const dispatchIndex = dispatch!.indexOf('.runFeature(item)');
+    const claimPaths = [...source.matchAll(/claims\.claim\(item\.slug\)/g)];
     expect({
       guarded: guardedDispatch?.includes('deps.isParked, dispatch, log'),
-      paths: [{
+      paths: claimPaths.map((path) => ({
         name: 'claim-and-dispatch',
-        claimPrecedesDispatch: claimIndex > -1 && dispatchIndex > claimIndex,
-      }],
+        containedByDispatch: (path.index ?? -1) >= source.indexOf(dispatch!),
+      })),
     }).toEqual({
       guarded: true,
-      paths: [{ name: 'claim-and-dispatch', claimPrecedesDispatch: true }],
+      paths: [{ name: 'claim-and-dispatch', containedByDispatch: true }],
     });
-  });
 
-  it('refuses a slug parked after selection before claiming or dispatching it', async () => {
     const claims: WorkClaims = {
       claim: vi.fn(() => true),
       release: vi.fn(),
@@ -53,7 +52,15 @@ describe('Task 5 — park guard covers the claim path', () => {
       isParked: vi.fn(() => false),
       listParked: vi.fn(() => []),
     };
-    const runFeature = vi.fn(async () => ({ slug: item.slug, status: 'done' as const }));
+    const createWorkOrder = vi.fn(async (): Promise<WorkOrder> => ({
+      repository: 'test/repository',
+      slug: item.slug,
+      baseSha: 'deadbeef',
+      manifest: [],
+    }));
+    const executor: FeatureExecutor = {
+      execute: vi.fn(async () => ({ slug: item.slug, status: 'done' as const })),
+    };
     let parkChecks = 0;
 
     await runDaemon(
@@ -61,7 +68,8 @@ describe('Task 5 — park guard covers the claim path', () => {
         claims,
         discoverBacklog: async () => [item],
         isParked: async () => ++parkChecks > 1,
-        runFeature,
+        runFeature: vi.fn(),
+        featureExecution: { createWorkOrder, executor },
       } as DaemonDeps,
       { concurrency: 1, once: true },
     );
@@ -69,7 +77,8 @@ describe('Task 5 — park guard covers the claim path', () => {
     expect({
       parkChecks,
       claimCalls: vi.mocked(claims.claim).mock.calls.length,
-      worktreeStarts: runFeature.mock.calls.length,
-    }).toEqual({ parkChecks: 2, claimCalls: 0, worktreeStarts: 0 });
+      workOrderBuilds: createWorkOrder.mock.calls.length,
+      executorStarts: vi.mocked(executor.execute).mock.calls.length,
+    }).toEqual({ parkChecks: 2, claimCalls: 0, workOrderBuilds: 0, executorStarts: 0 });
   });
 });
