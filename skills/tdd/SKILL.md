@@ -98,8 +98,9 @@ coverage, and need no RED of their own.
 Any unrelated scoped test failure blocks the current RED phase; fix that
 failure before proceeding to DOMAIN. If one of the repository's documented
 intermediate fallback triggers makes the affected set genuinely unsafe, name
-the exact trigger and reason and invoke the configured aggregate verifier.
-Never call a raw project aggregate command directly.
+the exact trigger and reason and defer aggregate proof to the engine's
+dedicated aggregate gate. Never run the full suite — or any aggregate
+command — inside this session.
 
 **Rules:**
 - One test, one behavior, one assertion
@@ -159,8 +160,9 @@ conforms to the applicable recorded basis.
 A known failure in that scoped set blocks the current GREEN phase; fix it here
 rather than deferring it to a later gate. If one of the repository's documented
 intermediate fallback triggers makes the affected set genuinely unsafe, name
-the exact trigger and invoke the configured aggregate verifier. Never call a
-raw project aggregate command directly.
+the exact trigger and defer aggregate proof to the engine's dedicated
+aggregate gate. Never run the full suite — or any aggregate command —
+inside this session.
 
 **Rules:**
 - The smallest behavior-complete change must conform to an applicable recorded basis; a passing

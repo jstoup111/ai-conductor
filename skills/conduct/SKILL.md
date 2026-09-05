@@ -242,8 +242,9 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - If a known scoped test fails, BLOCK this BUILD activity and fix it here; do
   not defer it to the later aggregate gate
 - If one of the repository's documented intermediate fallback triggers makes
-  the union genuinely unsafe, name the exact trigger and invoke the configured
-  aggregate verifier; never call the raw aggregate command
+  the union genuinely unsafe, name the exact trigger and defer aggregate proof
+  to the engine-native configured-verifier gate that follows; never run the
+  aggregate suite (or its raw command) inside this BUILD activity
 - Check git status for uncommitted changes
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
