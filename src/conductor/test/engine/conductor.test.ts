@@ -418,7 +418,7 @@ describe('engine/conductor', () => {
       ).join('\n');
       await writeFile(planPath, authoredPlan);
       const git = (args: string[]) => execFile('git', args, { cwd: dir });
-      await git(['init']);
+      await git(['init', '-b', 'main']);
       await git(['config', 'user.email', 'test@example.com']);
       await git(['config', 'user.name', 'Conductor test']);
       await git(['add', '--', '.docs/plans/existing-task-bindings.md']);
@@ -713,6 +713,81 @@ describe('engine/conductor', () => {
       expect(ledger.gates.prd_audit?.laps).toBe(1);
       expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
       expect(ledger.growth).toEqual({ authored: 2, added: 0, byGate: {} });
+    });
+
+    it('carries an existing-task finding through a consolidated manual-test FAIL round without a lap, pending finding, or re-stage (AB-1)', async () => {
+      // Covers: task:8
+      // adr-2026-08-25 decision 8/9 + Story 4: when the same validation-group
+      // round carries a manual_test FAIL, the consolidated kickback owns the
+      // work order. The as-built finding still rides the merged route, but
+      // the gate-local existing-task mechanics — lap charge, pending finding,
+      // task-status re-stage, no-op baseline — must be unreachable.
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
+      await writeFile(planPath, '### Task 1: Existing work 1\n\n### Task 2: Existing work 2\n');
+      const taskStatus = JSON.stringify({
+        tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
+      });
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), taskStatus);
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {},
+        growth: { authored: 2, added: 0, byGate: {} },
+      });
+      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
+        'Verdict: BLOCKED', '', '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-1 | REMEDIABLE | Task 1 | Repair task one |',
+      ].join('\n'));
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'remediate') {
+              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+                dispositions: [{
+                  id: 'ARCH-1',
+                  disposition: 'existing-task',
+                  category: null,
+                  rationale: 'Task 1 already owns this repair.',
+                  tasks: [{ id: '1', title: 'Existing work 1' }],
+                }],
+              }));
+            }
+            return { success: true };
+          },
+        },
+        events,
+        projectRoot: dir,
+        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+      });
+
+      const outcome = await (conductor as any).planRemediation(
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
+        ALL_STEPS,
+        'test consolidated existing-task round',
+        {
+          source: 'validation-group',
+          evidence: [{
+            gate: 'architecture_review_as_built',
+            evidenceFile: '.pipeline/architecture-review-as-built.md',
+          }],
+          consolidatedManualTestFail: true,
+        },
+      );
+
+      // The finding is still addressed and rides the merged work order.
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      expect((outcome as { hint: string }).hint).toContain('ARCH-1');
+      // ...but none of the gate-local existing-task mechanics ran.
+      expect(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).toBe(taskStatus);
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger.gates.architecture_review_as_built?.laps).toBeUndefined();
+      expect(ledger.pendingAsBuiltRemediationFindings).toBeUndefined();
+      expect(ledger.growth).toEqual({ authored: 2, added: 0, byGate: {} });
+      expect((conductor as any).pendingNoOpBaselines.size).toBe(0);
     });
 
     it('keeps an appending PRD-audit remediation on the growth path and halts only when that growth is truly exhausted', async () => {

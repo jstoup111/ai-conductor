@@ -557,6 +557,14 @@ interface RemediationGateProvenance {
 interface RemediationHintSource {
   source: string;
   evidence: readonly RemediationGateProvenance[];
+  /**
+   * adr-2026-08-25 decision 8 (retained by decision 9): the same
+   * validation-group round carries a manual_test FAIL, so the consolidated
+   * kickback owns the work order. An existing-task gap still rides that
+   * merged route, but its gate-local mechanics — lap charge, pending finding,
+   * task-status re-stage, no-op baseline — must not run for this round.
+   */
+  consolidatedManualTestFail?: boolean;
 }
 
 /** PRD-audit and as-built review own configured remediation allowances; other gates share the generic cap. */
@@ -2162,7 +2170,20 @@ export class Conductor {
    * BUILD rewind. Preserve the D2 baseline from before that bookkeeping write
    * so re-completing the same rows cannot impersonate build progress.
    */
-  private pendingNoOpBaseline?: { treeHash: string | null; resolvedCount: number };
+  /**
+   * Pre-re-stage no-op baseline for the immediately following existing-task
+   * BUILD rewind, keyed by the gate that will capture it. One producer
+   * (planRemediation, before it re-stages) and one consumer
+   * (captureKickbackToBuildContext). Keyed per gate because a mixed
+   * prd_audit/as-built route captures once per participating gate, and every
+   * one of them must bank the same pre-re-stage count — a gate that samples
+   * the depressed post-re-stage count sees the next BUILD's re-completion of
+   * those rows as progress on a byte-identical tree (Task 7, decision 9).
+   */
+  private readonly pendingNoOpBaselines = new Map<
+    StepName,
+    { treeHash: string | null; resolvedCount: number }
+  >();
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
@@ -4051,44 +4072,50 @@ export class Conductor {
           if (asBuiltCapEnforced) unexpectedAsBuiltGapIds.add(gap.id);
           continue;
         }
-        if (activePlanTaskIds === undefined) {
-          if (!planPath) {
+        // Decision 8: a consolidated manual-test FAIL round keeps the finding
+        // in the merged work order (it is admitted below and counted as
+        // addressed), but the existing-task route itself does not run — no
+        // binding, no lap, no pending finding, no re-stage.
+        if (!hintSource.consolidatedManualTestFail) {
+          if (activePlanTaskIds === undefined) {
+            if (!planPath) {
+              return {
+                kind: 'halt',
+                haltClass: 'needs-human',
+                detail: `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': active plan is unavailable.`,
+              };
+            }
+            try {
+              activePlanText = activePlanText || await readFile(planPath, 'utf8');
+              activePlanTaskIds = new Set(parsePlanTaskBodies(activePlanText).keys());
+            } catch (error) {
+              return {
+                kind: 'halt',
+                haltClass: 'needs-human',
+                detail:
+                  `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': ` +
+                  `active plan could not be read (${error instanceof Error ? error.message : String(error)}).`,
+              };
+            }
+          }
+          const bindings = resolveExistingTaskBindingsForAdmission(gap.tasks, activePlanTaskIds);
+          if (bindings.kind === 'unresolvable') {
             return {
               kind: 'halt',
               haltClass: 'needs-human',
-              detail: `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': active plan is unavailable.`,
+              detail: `existing-task remediation cannot resolve bound id '${bindings.id}' in the active plan.`,
             };
           }
-          try {
-            activePlanText = activePlanText || await readFile(planPath, 'utf8');
-            activePlanTaskIds = new Set(parsePlanTaskBodies(activePlanText).keys());
-          } catch (error) {
-            return {
-              kind: 'halt',
-              haltClass: 'needs-human',
-              detail:
-                `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': ` +
-                `active plan could not be read (${error instanceof Error ? error.message : String(error)}).`,
-            };
+          resolvedExistingTaskIdsByGapId.set(gap.id, bindings.ids);
+          // Existing-task gaps reopen the task that already owns the repair.
+          // They consume the validating gate's lap, but never draw from the
+          // shared plan-growth allowance reserved for appended work.
+          if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
+          if (asBuiltAdmits) {
+            asBuiltTasks.push(...gap.tasks);
+            const finding = asBuiltRecordedFindings.get(gap.id);
+            if (finding) boundExistingAsBuiltFindings.set(finding.finding, finding);
           }
-        }
-        const bindings = resolveExistingTaskBindingsForAdmission(gap.tasks, activePlanTaskIds);
-        if (bindings.kind === 'unresolvable') {
-          return {
-            kind: 'halt',
-            haltClass: 'needs-human',
-            detail: `existing-task remediation cannot resolve bound id '${bindings.id}' in the active plan.`,
-          };
-        }
-        resolvedExistingTaskIdsByGapId.set(gap.id, bindings.ids);
-        // Existing-task gaps reopen the task that already owns the repair.
-        // They consume the validating gate's lap, but never draw from the
-        // shared plan-growth allowance reserved for appended work.
-        if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
-        if (asBuiltAdmits) {
-          asBuiltTasks.push(...gap.tasks);
-          const finding = asBuiltRecordedFindings.get(gap.id);
-          if (finding) boundExistingAsBuiltFindings.set(finding.finding, finding);
         }
       }
       if (
@@ -4579,17 +4606,21 @@ export class Conductor {
       // Do this only after admission and budget checks have passed, but before
       // the caller rewinds to the repair target.
       if (resolvedExistingTaskIdsByGapId.size > 0 && planPath) {
-        this.pendingNoOpBaseline = {
+        const baseline = {
           treeHash: await currentTreeHash(this.projectRoot),
           resolvedCount: await countResolvedTasks(this.projectRoot),
         };
+        this.pendingNoOpBaselines.clear();
+        for (const provenance of remediationEvidenceSources) {
+          this.pendingNoOpBaselines.set(provenance.gate, baseline);
+        }
         const restage = await restageExistingRemediationTaskStatuses(
           this.projectRoot,
           planPath,
           new Set([...resolvedExistingTaskIdsByGapId.values()].flat()),
         );
         if (restage.kind === 'failed') {
-          this.pendingNoOpBaseline = undefined;
+          this.pendingNoOpBaselines.clear();
           return {
             kind: 'halt',
             haltClass: 'needs-human',
@@ -4605,7 +4636,14 @@ export class Conductor {
       // predicate the build gate itself uses — right after append+re-seed;
       // if there is nothing left to dispatch, HALT with the gap ledger
       // instead of re-entering a build that cannot produce real rework.
-      if (target === 'build' && appendAttempted) {
+      //
+      // Decision 8: on a consolidated manual-test FAIL round the merged work
+      // order's dispatchable work is the FAIL itself (bugs in shipped code,
+      // not plan tasks), and an existing-task gap deliberately re-stages
+      // nothing here. An all-complete task list is therefore not a no-op
+      // build for that round; the manual_test gate still refuses a
+      // FAIL->PASS rewrite that adds no commits.
+      if (target === 'build' && appendAttempted && !hintSource.consolidatedManualTestFail) {
         const ctx = await this.completionCtx(state);
         const result = await checkStepCompletion(this.projectRoot, 'build', ctx);
         if (result.done) {
@@ -5946,7 +5984,7 @@ export class Conductor {
      * cycle made any real progress.
      */
     const captureKickbackToBuildContext = async (sourceGate: StepName): Promise<void> => {
-      const baseline = this.pendingNoOpBaseline;
+      const baseline = this.pendingNoOpBaselines.get(sourceGate);
       const [treeBefore, resolvedBefore] = baseline
         ? [baseline.treeHash, baseline.resolvedCount]
         : await Promise.all([
@@ -5971,8 +6009,10 @@ export class Conductor {
         },
       });
       // This producer/consumer hand-off is only for the immediately following
-      // existing-task BUILD rewind; every other capture samples afresh.
-      if (baseline) this.pendingNoOpBaseline = undefined;
+      // existing-task BUILD rewind; every other capture samples afresh. Each
+      // participating gate consumes its own entry, so the other gates on a
+      // mixed route still find the same pre-re-stage snapshot.
+      this.pendingNoOpBaselines.delete(sourceGate);
     };
 
     /**
@@ -7274,6 +7314,7 @@ export class Conductor {
                     '/remediate skill and write .pipeline/remediation.json.',
                   {
                     source: 'validation-group',
+                    consolidatedManualTestFail: manualTestFailRows.length > 0,
                     evidence: [
                       { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
                       ...(asBuiltEvidenceIsTerminal
@@ -7420,6 +7461,10 @@ export class Conductor {
                 remediationRounds++;
                 const remediationOutcome = await this.planRemediation(state, steps, dispatchContext, {
                   source: 'validation-group',
+                  // Decision 8: this merge IS the consolidated kickback. The
+                  // as-built finding rides its single rewind; the gate-local
+                  // existing-task mechanics stay unreachable for the round.
+                  consolidatedManualTestFail: manualTestFailRows.length > 0,
                   evidence,
                 });
 
@@ -12791,9 +12836,9 @@ export function resolveExistingTaskBindingsForAdmission(
   for (const task of tasks) {
     const resolved = resolvePlanTaskReference(task.id, activePlanTaskIds);
     if (resolved.kind !== 'resolved') {
-      return { kind: 'unresolvable', id: resolved.kind === 'unresolvable' ? resolved.id : task.id };
+      return { kind: 'unresolvable', id: resolved.kind === 'unresolvable' ? resolved.ids.join(', ') : task.id };
     }
-    ids.push(resolved.id);
+    for (const id of resolved.ids) if (!ids.includes(id)) ids.push(id);
   }
   return { kind: 'resolved', ids };
 }
