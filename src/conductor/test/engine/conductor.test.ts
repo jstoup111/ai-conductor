@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -1358,7 +1358,7 @@ describe('engine/conductor', () => {
     });
 
     it('consumes exactly one test_suite kickback for a genuine rerun nonzero exit', async () => {
-      // Covers: task:12
+      // Covers: task:3
       await writeTestSuiteOnlyState();
       const kickbacks: ConductorEvent[] = [];
       events.on('kickback', (event) => { kickbacks.push(event); });
@@ -1391,6 +1391,9 @@ describe('engine/conductor', () => {
         count: 1,
         cumulative: 1,
       }));
+      expect((await readKickbackLedger(dir)).gates.test_suite).not.toHaveProperty(
+        'suiteInfrastructureRetries',
+      );
       expect(kickbacks).toEqual([expect.objectContaining({
         type: 'kickback',
         from: 'test_suite',
@@ -1402,15 +1405,69 @@ describe('engine/conductor', () => {
       expect(runner.run).toHaveBeenCalledWith('build', expect.anything(), expect.anything());
     });
 
+    it('retries a timeout within test_suite without consuming a code-repair kickback', async () => {
+      // Covers: task:3
+      await writeTestSuiteOnlyState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), ledgerBytes);
+      const timeoutFailure = {
+        status: 'FAILED' as const,
+        reason: 'timeout' as const,
+        message: 'fixture suite timeout',
+      };
+      const retryEvents: ConductorEvent[] = [];
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry' && event.step === 'test_suite') retryEvents.push(event);
+      });
+      const verifier = {
+        inspect: vi.fn()
+          .mockResolvedValueOnce(timeoutFailure)
+          .mockResolvedValueOnce({ status: 'CURRENT' as const, evidence: preservedEvidence }),
+        ensure: vi.fn()
+          .mockResolvedValueOnce(timeoutFailure)
+          .mockResolvedValueOnce({ status: 'REUSED' as const, evidence: preservedEvidence }),
+      };
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      const finalState = await readState(statePath);
+      expect(finalState.ok).toBe(true);
+      if (!finalState.ok) throw new Error(finalState.error.message);
+      expect(finalState.value.test_suite).toBe('done');
+      expect(retryEvents).toEqual([expect.objectContaining({
+        type: 'step_retry',
+        step: 'test_suite',
+        attempt: 1,
+        reason: expect.stringContaining('infrastructure'),
+      })]);
+      expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
+        count: 1,
+        cumulative: 1,
+      }));
+      expect(verifier.inspect).toHaveBeenCalledTimes(2);
+      expect(verifier.ensure).toHaveBeenCalledTimes(2);
+      expect(runner.run).not.toHaveBeenCalled();
+    });
+
     it.each(['timeout', 'unlaunchable'] as const)(
       'halts %s test_suite infrastructure failures without consuming a kickback',
       async (reason) => {
-        // Covers: task:12
+        // Covers: task:3, task:12
         await writeTestSuiteOnlyState();
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
         await writeFile(ledgerPath, ledgerBytes);
-        const before = await readFile(ledgerPath, 'utf8');
         const kickbacks: ConductorEvent[] = [];
         events.on('kickback', (event) => { kickbacks.push(event); });
         const suiteFailure = {
@@ -1436,10 +1493,13 @@ describe('engine/conductor', () => {
 
         await conductor.run();
 
-        expect(await readFile(ledgerPath, 'utf8')).toBe(before);
+        expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
+          count: 1,
+          cumulative: 1,
+        }));
         expect(kickbacks).toEqual([]);
-        expect(verifier.inspect).toHaveBeenCalledTimes(1);
-        expect(verifier.ensure).toHaveBeenCalledTimes(1);
+        expect(verifier.inspect).toHaveBeenCalledTimes(3);
+        expect(verifier.ensure).toHaveBeenCalledTimes(3);
         expect(runner.run).not.toHaveBeenCalled();
         await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
         await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(

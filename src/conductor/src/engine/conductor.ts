@@ -246,8 +246,11 @@ import {
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  MAX_SUITE_INFRASTRUCTURE_RETRIES,
+  bumpSuiteInfrastructureRetriesInLedger,
   readGrowth,
   readKickbackLedger,
+  readSuiteInfrastructureRetries,
   recordGrowth,
   writeKickbackLedger,
   type KickbackGateEntry,
@@ -8989,6 +8992,35 @@ export class Conductor {
               `Step '${step.name}' produced no output — the step runner exited without a result ` +
                 `(the grader/subprocess likely failed to start or died before writing a verdict)`;
             retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;
+
+            const fullSuiteFailure = result.fullSuiteVerification;
+            if (
+              step.name === 'test_suite' &&
+              fullSuiteFailure?.status === 'FAILED' &&
+              fullSuiteFailure.reason !== 'nonzero_exit'
+            ) {
+              const retries = await readSuiteInfrastructureRetries(this.projectRoot);
+              if (
+                typeof retries === 'number' &&
+                retries < MAX_SUITE_INFRASTRUCTURE_RETRIES
+              ) {
+                const entry = await bumpSuiteInfrastructureRetriesInLedger(this.projectRoot);
+                const infrastructureAttempt = entry.suiteInfrastructureRetries ?? retries + 1;
+                await emitTracked({
+                  type: 'step_retry',
+                  step: 'test_suite',
+                  attempt: infrastructureAttempt,
+                  maxAttempts: MAX_SUITE_INFRASTRUCTURE_RETRIES,
+                  reason:
+                    `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` +
+                    fullSuiteFailure.message,
+                });
+                // Infrastructure retries are bounded in their own durable
+                // allowance and must not consume the generic step budget.
+                attempt--;
+                continue;
+              }
+            }
 
             // #814: a grader-dispatch failure (build_review's grader could not
             // RUN — distinct from it running and returning a not-PASS verdict,
