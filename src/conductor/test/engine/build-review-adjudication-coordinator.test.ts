@@ -370,6 +370,53 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  it('suppresses the second deferred issue when its acceptance lands during the first intake', async () => {
+    const root = await projectRoot();
+    const acceptedFindingIds = new Set<string>();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    // The first successful intake is the awaited external work the acceptance
+    // races: filing the first issue lands the operator acceptance of the
+    // SECOND source, so only a per-iteration authority re-read can see it.
+    const fileIssue = vi.fn(async (issue: { title: string }) => {
+      acceptedFindingIds.add(liveSource.findingId);
+      return { issueUrl: `https://example.test/issues/${issue.title}` };
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedDeferralJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => new Set(acceptedFindingIds),
+      tracker: { findIssueByEffectMarker: async () => undefined } as unknown as EffectMarkerTrackerClient,
+      repo: 'acme/conductor', fileIssue, generateId: sequentialIds('mid-intake'), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(fileIssue).toHaveBeenCalledTimes(1);
+    expect(fileIssue).toHaveBeenCalledWith(expect.objectContaining({ title: 'Track the first finding' }));
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled).toMatchObject({
+      ok: true,
+      state: { cases: expect.arrayContaining([
+        expect.objectContaining({
+          resolution: 'open',
+          sources: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(acceptedSource) })],
+          effect: expect.objectContaining({ kind: 'deferral', status: 'applied' }),
+        }),
+        expect.objectContaining({
+          resolution: 'resolved',
+          sources: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(liveSource) })],
+          effect: expect.objectContaining({ kind: 'deferral', status: 'failed', diagnostic: 'retired by operator acceptance' }),
+        }),
+      ]) },
+    });
+    // The suppressed reservation is retired at the exit as a durable
+    // reserved->failed transition, and that transition emits.
+    const retired = settled.ok ? settled.state.cases.find((record) => record.effect.kind === 'deferral' && record.effect.status === 'failed') : undefined;
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_effect_failed', caseId: retired?.id, effectKind: 'deferral',
+      reason: 'retired by operator acceptance',
+    }));
+  });
+
   it('emits a failed deferral effect through the same coordinator event port', async () => {
     const root = await projectRoot();
     const events: RemediationCaseLifecycleEvent[] = [];

@@ -460,14 +460,16 @@ export async function coordinateBuildReviewAdjudication(input: {
     }
   }
   if (input.tracker && input.repo && input.fileIssue) {
-    // Deferral reservation files a real tracker issue, so it receives its own
-    // adjacent authority read rather than relying on the action boundary.
-    try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
-    const liveSourceIdsBeforeDeferral = liveSourceIdsFor(resolved);
     let deferredFailureRetiredByAcceptance = false;
     for (const proposed of admitted) {
       if (proposed.case.disposition !== 'defer' || proposed.case.effect.kind !== 'deferral') continue;
-      if (proposed.sources.every((source) => !liveSourceIdsBeforeDeferral.has(source.sourceId))) continue;
+      // Deferral reservation files a real tracker issue, and every iteration
+      // awaits that external work — so operator authority is re-read before
+      // EACH reservation, never from a pre-loop snapshot: an acceptance
+      // landing during an earlier successful intake must suppress a later
+      // covered case's obsolete issue create.
+      try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+      if (proposed.sources.every((source) => !liveSourceIdsFor(resolved).has(source.sourceId))) continue;
       const caseId = caseIdsByRef.get(proposed.case.caseRef);
       if (!caseId) return fail('deferral case identity was not reconciled');
       const deferred = await applyBuildReviewDeferralEffect({
