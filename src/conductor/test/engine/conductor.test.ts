@@ -1,4 +1,4 @@
-// Covers: task:1, task:3
+// Covers: task:1, task:3, task:4
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -89,6 +89,7 @@ import {
 import * as artifactModule from '../../src/engine/artifacts.js';
 import {
   creditKickbackGateLaps,
+  MAX_SUITE_INFRASTRUCTURE_RETRIES,
   readKickbackLedger,
   writeKickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
@@ -1458,6 +1459,123 @@ describe('engine/conductor', () => {
       expect(verifier.inspect).toHaveBeenCalledTimes(2);
       expect(verifier.ensure).toHaveBeenCalledTimes(2);
       expect(runner.run).not.toHaveBeenCalled();
+    });
+
+    it('halts needs-human when test_suite infrastructure retries are exhausted', async () => {
+      // Covers: task:4
+      await writeTestSuiteOnlyState();
+      const suiteFailure = {
+        status: 'FAILED' as const,
+        reason: 'spawn_failed' as const,
+        message: 'fixture suite process could not start',
+      };
+      const verifier = {
+        inspect: vi.fn().mockResolvedValue(suiteFailure),
+        ensure: vi.fn().mockResolvedValue(suiteFailure),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        `test_suite infrastructure failure (spawn_failed): ${suiteFailure.message}`,
+      );
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        `retries spent: ${MAX_SUITE_INFRASTRUCTURE_RETRIES}`,
+      );
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        'Evidence: .pipeline/test-suite-evidence.json',
+      );
+      expect(verifier.inspect).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
+      expect(verifier.ensure).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
+    });
+
+    it('halts needs-human without a test_suite re-run when its durable retry counter is unreadable', async () => {
+      // Covers: task:4
+      await writeTestSuiteOnlyState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: { test_suite: { suiteInfrastructureRetries: 1.5 } },
+      }));
+      const suiteFailure = {
+        status: 'FAILED' as const,
+        reason: 'spawn_failed' as const,
+        message: 'fixture suite process could not start',
+      };
+      const verifier = {
+        inspect: vi.fn().mockResolvedValue(suiteFailure),
+        ensure: vi.fn().mockResolvedValue(suiteFailure),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        maxRetries: 1,
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        'test_suite infrastructure retry counter is unreadable',
+      );
+      expect(verifier.inspect).toHaveBeenCalledTimes(1);
+      expect(verifier.ensure).toHaveBeenCalledTimes(1);
+    });
+
+    it('continues a persisted test_suite infrastructure retry counter before halting at its allowance', async () => {
+      // Covers: task:4
+      await writeTestSuiteOnlyState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), ledgerBytes.replace(
+        '"resolvedBefore": 4',
+        '"resolvedBefore": 4,\n          "suiteInfrastructureRetries": 1',
+      ));
+      const suiteFailure = {
+        status: 'FAILED' as const,
+        reason: 'spawn_failed' as const,
+        message: 'fixture suite process could not start',
+      };
+      const verifier = {
+        inspect: vi.fn().mockResolvedValue(suiteFailure),
+        ensure: vi.fn().mockResolvedValue(suiteFailure),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      expect((await readKickbackLedger(dir)).gates.test_suite.suiteInfrastructureRetries)
+        .toBe(MAX_SUITE_INFRASTRUCTURE_RETRIES);
+      expect(verifier.inspect).toHaveBeenCalledTimes(2);
+      expect(verifier.ensure).toHaveBeenCalledTimes(2);
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        `retries spent: ${MAX_SUITE_INFRASTRUCTURE_RETRIES}`,
+      );
     });
 
     it.each(['timeout', 'unlaunchable'] as const)(

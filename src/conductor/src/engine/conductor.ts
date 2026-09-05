@@ -9000,6 +9000,30 @@ export class Conductor {
               fullSuiteFailure.reason !== 'nonzero_exit'
             ) {
               const retries = await readSuiteInfrastructureRetries(this.projectRoot);
+              const infrastructureFailure =
+                `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` +
+                fullSuiteFailure.message;
+              let haltReason: string | undefined;
+              if (retries === 'unreadable') {
+                haltReason =
+                  `test_suite infrastructure retry counter is unreadable; unable to safely retry ` +
+                  `${infrastructureFailure}\nEvidence: .pipeline/test-suite-evidence.json`;
+              } else if (retries >= MAX_SUITE_INFRASTRUCTURE_RETRIES) {
+                haltReason =
+                  `${infrastructureFailure}\nretries spent: ${retries} ` +
+                  `(cap ${MAX_SUITE_INFRASTRUCTURE_RETRIES})\n` +
+                  'Evidence: .pipeline/test-suite-evidence.json';
+              }
+              if (haltReason !== undefined) {
+                state[step.name] = 'failed';
+                await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(haltReason);
+                await this.emitLoopHalt(haltReason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               if (
                 typeof retries === 'number' &&
                 retries < MAX_SUITE_INFRASTRUCTURE_RETRIES
