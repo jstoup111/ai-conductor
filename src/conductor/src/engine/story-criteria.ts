@@ -59,7 +59,11 @@ export function sectionBody(text: string, headingRegex: RegExp): string | null {
 export function extractStoryCriterionIds(storiesText: string): string[] {
   const ids: string[] = [];
   for (const block of splitStoryBlocks(storiesText)) {
-    const story = block.id?.match(/\d+/)?.[0];
+    // The heading id is carried VERBATIM. Reducing it to its first digit run
+    // made stories `5` and `5a` derive the same `S5.<n>` ids (and `2` and
+    // `2.1` the same `S2.<n>`), so one story's criteria deduped away against
+    // the other's and became unaddressable by any key.
+    const story = block.id;
     if (!story) continue;
     let ordinal = 0;
     for (const type of ['happy', 'negative'] as const) {

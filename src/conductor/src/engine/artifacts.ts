@@ -4363,7 +4363,16 @@ const PRD_AUDIT_GRADES: ReadonlySet<PrdAuditGrade> = new Set([
   'PLAN_GAP',
   'OVER_SCOPE',
 ]);
-const CRITERION_ID_RE = /^S\d+\.\d+$/i;
+/**
+ * A criterion key is `S<story-id>.<number>`. The story id uses the same
+ * alphabet the stories parser accepts for `## Story <id>:` headings
+ * (`[A-Za-z0-9.-]`, see `story-criteria.ts`), so alphanumeric ids like `S5a.1`
+ * and nested ids like `S2.1.3` validate. The final dot-separated segment is
+ * the criterion number and stays numeric, and the story id must be non-empty —
+ * `S.1`, `S1`, and `S1.a` are still rejected, as is the `NC.<number>` findings
+ * form.
+ */
+const CRITERION_ID_RE = /^S[A-Za-z0-9.-]+\.\d+$/i;
 const NO_OWNER_KEY_RE = /^NC\.\d+$/i;
 
 export function isNoOwnerKey(key: string): boolean {
@@ -4521,7 +4530,7 @@ function rejectedPrdAuditRow(
 }
 
 const CRITERION_KEY_REASON =
-  'Criterion has invalid key; accepted key forms are S<number>.<number> in the Verdict Table and NC.<number> in Findings without an owning criterion.';
+  'Criterion has invalid key; accepted key forms are S<story-id>.<number> in the Verdict Table — where <story-id> is the story heading id (letters, digits, dots, hyphens; for example S1.1, S5a.1, S2.1.3) and <number> is the numeric criterion — and NC.<number> in Findings without an owning criterion.';
 const NO_OWNER_KEY_REASON =
   'Finding has invalid key; accepted key forms are NC.<number> in Findings without an owning criterion.';
 
@@ -4816,7 +4825,10 @@ async function prdAuditStoryCoverageGap(
     return `PRD audit cannot read story criteria at ${relative(projectRoot, storiesPath)}.`;
   }
 
-  const criterionIds = extractStoryCriterionIds(storiesText);
+  // Reported keys are upper-cased at parse time, so the expected set must be
+  // too: a story id carrying letters (`5a`) otherwise derives `S5a.1` here and
+  // never matches the reported `S5A.1`.
+  const criterionIds = extractStoryCriterionIds(storiesText).map((id) => id.toUpperCase());
   if (criterionIds.length === 0) {
     return `PRD audit cannot parse story criteria in ${relative(projectRoot, storiesPath)}.`;
   }

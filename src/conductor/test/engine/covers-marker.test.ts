@@ -18,7 +18,14 @@ describe('parseCoversMarkers', () => {
       .toEqual(expectedReferences);
   });
 
-  it.each(['FR-', 'S3', 'task:'])('contains malformed token %s as unresolved', (token) => {
+  // Story heading ids use the `[A-Za-z0-9.-]` alphabet, so a test covering
+  // `## Story 5a:` cites `S5a.1` and must resolve as a criterion rather than
+  // as an unresolved token.
+  it.each(['S5a.1', 'S2.1.3'])('resolves criterion %s over the story-id alphabet', (id) => {
+    expect(parseCoversMarkers(`Covers: ${id}`)).toEqual([{ kind: 'criterion', id }]);
+  });
+
+  it.each(['FR-', 'S3', 'task:', 'S1.a', 'S.1'])('contains malformed token %s as unresolved', (token) => {
     expect(parseCoversMarkers(`Covers: ${token}`)).toEqual([
       { kind: 'unresolved', id: token },
     ]);

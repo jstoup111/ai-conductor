@@ -213,6 +213,47 @@ describe('engine/artifacts', () => {
       }
     });
 
+    // Story heading ids are `[A-Za-z0-9.-]` (skills/stories/SKILL.md), so a
+    // criterion owned by `## Story 5a:` is keyed `S5a.1`. Keying it anything
+    // else would break the story link, so the gate must accept the whole
+    // story-id alphabet — while still rejecting keys that name no story.
+    it('accepts criterion keys whose story id is alphanumeric or nested', () => {
+      const parsed = parsePrdAuditReport(`
+**PRD:** present
+
+## Verdict Table
+
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S1.1 | PASS | — | FR-1 | Numeric story id |
+| S5a.1 | PASS | — | FR-1 | Alphanumeric story id |
+| S2.1.3 | PLAN_GAP | — | FR-2 | Nested story id |
+| OS.1 | PASS | — | FR-1 | Does not name a story |
+| S1 | PASS | — | FR-1 | Missing criterion number |
+| S1.a | PASS | — | FR-1 | Non-numeric criterion number |
+| S.1 | PASS | — | FR-1 | Empty story id |
+| NC.1 | PASS | — | FR-1 | Findings form, not a criterion |
+`, activePlan);
+
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.value.findings.map(({ criterion }) => criterion)).toEqual([
+          'S1.1',
+          // Canonicalized to upper case at parse time; the expected set derived
+          // from the stories file is upper-cased to match.
+          'S5A.1',
+          'S2.1.3',
+        ]);
+        expect(parsed.value.rejectedRows.map(({ key }) => key)).toEqual([
+          'OS.1',
+          'S1',
+          'S1.a',
+          'S.1',
+          'NC.1',
+        ]);
+      }
+    });
+
     it('rejects only invalid rows while retaining their valid siblings', () => {
       const activePlan = '### Task 3: existing task\n';
       const parsed = parsePrdAuditReport(`
