@@ -48,6 +48,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Remediation gaps whose tasks merely cite a protected artifact as evidence stay dispatchable instead of halting as Missing. ([implementation PR #2150](https://github.com/jstoup111/ai-conductor/pull/2150)).
 - Custom steps with only a completion artifact no longer crash interactive conductor runs. ([implementation PR #2136](https://github.com/jstoup111/ai-conductor/pull/2136)).
 - Covers: story-criterion markers now resolve against positional criterion ids, so criterion-bound tests actually enter test-quality scope. ([implementation PR #2182](https://github.com/jstoup111/ai-conductor/pull/2182)).
+- Rejected remediation dispositions now halt with actionable details instead of being silently dropped. ([implementation PR #2194](https://github.com/jstoup111/ai-conductor/pull/2194)).
 
 ## [1.0.0] - 2026-08-31
 
