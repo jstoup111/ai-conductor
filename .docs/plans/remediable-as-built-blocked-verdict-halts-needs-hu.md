@@ -19,7 +19,7 @@ budget, halt-class, or config change.
   and its `prd_audit` callers rely on that `null` to fall back to deterministic routing, so the
   `none` kind must survive. Add an exported `readRemediationPlanResult` that returns either the
   plan or a `{ plan: null, cause }` with a closed `RemediationPlanAbsenceCause` union of those five
-  values; keep `readRemediationPlan` as a thin wrapper so its callers are untouched. `planRemediation`
+  values; remove the now caller-less `readRemediationPlan` export entirely and migrate every remaining caller and test to `readRemediationPlanResult` (as-built AB-1: the wrapper is a materially changed exported primitive with no production consumer). `planRemediation`
   then returns `{ kind: 'none', reason }` where `reason` is rendered from the cause. The `none`
   result type gains a required `reason`, so no caller can receive a reason-less no-plan result.
 - **Gate reason by class.** `AsBuiltReviewOutcome`'s `blocked-design` member gains
@@ -57,16 +57,16 @@ budget, halt-class, or config change.
 1. Write failing tests: `readRemediationPlanResult` returns `{ plan: null, cause: 'absent' }` with no file, `'stale'` when the file's mtime predates `sessionStartedAt`, `'unparseable'` on invalid JSON, `'non-array-dispositions'` when `dispositions` is an object, `'no-routable-dispositions'` when `dispositions` is a well-formed array yielding no routable disposition (empty array, non-object entries, `halt` entries without a category, `existing-task` entries with blank task ids); and returns `{ plan }` for a valid fresh file.
 2. Verify tests fail (RED).
 3. Implement: add `RemediationPlanAbsenceCause` and `readRemediationPlanResult` beside `readRemediationPlan`; reimplement `readRemediationPlan` as `(await readRemediationPlanResult(...)).plan`.
-4. Verify tests pass (GREEN); the existing `readRemediationPlan` tests still pass unchanged.
+4. Verify tests pass (GREEN); former `readRemediationPlan` tests are migrated to `readRemediationPlanResult` and pass.
 5. Commit: "feat(remediate): expose the cause when no remediation plan is readable".
 
 **Done when:**
 - `readRemediationPlanResult` is exported and a unit test asserts each of the five causes `absent`, `stale`, `unparseable`, `non-array-dispositions`, `no-routable-dispositions` from the matching fixture.
-- `readRemediationPlan` still returns `null` for all four fixtures and the plan for a valid one, proven by the existing tests passing without edits.
+- `readRemediationPlan` is no longer exported; every former caller and test uses `readRemediationPlanResult`, and a tree-wide grep for `readRemediationPlan(` outside `readRemediationPlanResult` finds nothing.
 - `RemediationPlanAbsenceCause` is a string-literal union of exactly those five values.
 
 **Files likely touched:**
-- `src/conductor/src/engine/artifacts.ts` — new cause type, `readRemediationPlanResult`, wrapper
+- `src/conductor/src/engine/artifacts.ts` — new cause type, `readRemediationPlanResult`, wrapper removal
 - `src/conductor/test/engine/remediation-plan-absence.test.ts` — cause tests
 
 **Dependencies:** none
