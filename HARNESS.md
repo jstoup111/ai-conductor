@@ -28,6 +28,12 @@ a schema/API, or code. At those points the `verify-claims` skill's protocol appl
   assumption that — if wrong — changes a requirement, design, schema, task, or code behavior,
   until the operator explicitly approves it. Interactive: present and wait. Autonomous/daemon:
   write a HALT with the assumption ledger — never silently pick the most likely value.
+- **Diagnosis and recommended commands are load-bearing too.** A stated cause for a failure, and
+  any command handed to the operator, carry the same basis label as an artifact claim — the
+  operator acts on both. Before asserting how a tool, command, gate, or code path behaves, read
+  what defines it: the CLI definition for a command, the runbook for a recovery sequence, the
+  implementation for a mechanism. Producing no artifact does not lower the bar; it removes the
+  downstream gate that would have caught the error.
 
 This applies across all skills and dispatched agents, and is enforced concretely by two roles that
 cite `verify-claims` in their own SKILL.md:
@@ -42,7 +48,9 @@ Execution steps that merely act on an already-gated artifact (`tdd`, `pipeline`)
 (`conduct`, `composer`), and mechanical steps (`bootstrap`, `memory`, `architecture-diagram`,
 `simplify`, `finish`, `pr`, `rebase`) do **not** self-cite — they rely on this rule and on
 the upstream/surrounding gates. Casual conversation and trivially-verifiable mechanics with no
-downstream blast radius are out of scope.
+downstream blast radius are out of scope — but the diagnosis-and-commands rule above is not
+scoped by step or role: it binds wherever a cause or a command reaches the operator, orchestration
+and triage included.
 
 ## SDLC Phase Flow
 
