@@ -334,6 +334,19 @@ the planner's task, so a case-only spelling difference cannot strand an otherwis
 An ID that matches neither an admitted criterion nor another authorized gate finding halts with the
 rejected IDs and the available admission keys rather than appending unbounded work.
 
+A sixth disposition, `existing-task`, covers a current `prd_audit` `FIXABLE` or as-built `REMEDIABLE`
+finding whose remedy an existing active-plan task's **Done when** already admits. The planner binds the
+gap to the real plan task id(s); the engine re-stages those rows to `pending` in
+`.pipeline/task-status.json` and kicks back to `build` without appending anything to the plan. It charges
+one lap under the owning gate's key (`gates.prd_audit` or `gates.architecture_review_as_built`) and never
+draws from the shared plan-growth allowance, so a lap-cap halt names `lap cap reached (n/n)` rather than
+the growth figures. A bound id absent from the active plan halts `needs-human` naming that id. The no-op
+escalation stays armed for every gate on the lap: each participating gate banks the pre-re-stage resolved
+count, so a BUILD that only re-completes the re-staged rows on a byte-identical tree is classified
+`no-work` and halts instead of admitting another lap. When the same validation-group round also carries a
+`manual_test` FAIL, the consolidated kickback owns the work order: the finding rides that single merged
+rewind, and the existing-task lap, pending-finding, and re-stage mechanics do not run.
+
 Remediation tasks must not order a regression. A task that removes, replaces, rewrites, or relaxes
 existing code, tests, or assertions has to name the completed plan task or story criterion whose
 delivered behavior and coverage survive the change, and — unless the evidence shows that coverage is
