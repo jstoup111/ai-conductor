@@ -455,19 +455,10 @@ SUITE "Authentication" (driven through a real UI driver):
 
 ### 6. Run and Verify RED (Generated or Copied Acceptance/System Specs)
 
-Run the acceptance suite using the project's test runner against its acceptance directory.
-Examples (use whatever the project actually uses):
-
-```bash
-# Ruby + RSpec
-bundle exec rspec spec/integration/        # or spec/system/
-# Python + pytest
-pytest tests/integration/                  # or tests/e2e/
-# JS/TS
-npm test -- test/integration               # or test/e2e
-# Go
-go test ./... -run Integration
-```
+Run only the generated or copied specs needed to establish this feature's RED evidence through
+`ai-conductor scoped-run <selectors...>`. Select the specific spec files; do not run the whole
+acceptance directory or a full/aggregate suite. The `test_suite` step owns configured suite
+verification after implementation.
 
 Confirm tests fail for the **right reasons**. This is critical:
 
@@ -489,7 +480,7 @@ not a failing test. Two rules follow:
 
 - **Run the command that actually includes the new specs.** Never scope the RED run to a unit-only
   subset (e.g. `pytest tests/` when the specs live under `spec/integration/`, or `npm test -- test/unit`).
-  Run against the directory the specs were written to.
+  Select the generated or copied spec files themselves.
 - **Bring up the infrastructure the specs need** (containers, DB, Redis, services, env) so they
   execute and FAIL for the right reason. A spec that only runs in CI but is skipped locally/in the
   daemon is a gate hole: the build will be declared GREEN while the specs never ran, and CI (which

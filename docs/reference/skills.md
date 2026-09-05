@@ -616,9 +616,15 @@ skills; their raw verdicts are joined before effective dispositions are applied.
 after `build` and before `build_review`.
 
 BUILD implementation and repair activities (including implementation agents, `code-removal`,
-`pipeline`, `tdd`, `conduct` progression, and `debugging`) run scoped
+`tdd`, and `debugging`) run scoped
 affected tests. If scope is uncertain, they record the trigger and defer aggregate proof
-to `test_suite`, rather than running an intermediate aggregate verifier. Batch evaluators and `code-review` inspect supplied results without routine reruns; targeted
+to `test_suite`, rather than running an intermediate aggregate verifier.
+
+Bootstrap inventories tests without executing them. Acceptance-spec RED runs select only the
+feature's generated or copied specs. Progression checks, batch boundaries, and worktree merges
+consume existing evidence; only concrete changed behavior or interaction risk justifies targeted
+checks. Full-suite or aggregate runs, as configured, belong to `test_suite`.
+Batch evaluators and `code-review` inspect supplied results without routine reruns; targeted
 runs are reserved for reproducing a specific suspected defect. Known scoped
 failures still block BUILD. On an auto-mode suite-failure kickback, the engine supplies
 failure diagnostics and the `.pipeline/test-suite-evidence.json` path to BUILD; repair

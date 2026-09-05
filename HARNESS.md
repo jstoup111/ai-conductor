@@ -392,8 +392,9 @@ they never silently serialize.
 **Intermediate test execution policy:** Ordinary TDD RED/GREEN runs the scoped union of affected tests
 through `ai-conductor scoped-run <selectors...>`. The agent derives the selectors; it does not
 hand-assemble or narrate a test command. Debugging and conduct progression use the same policy.
-Pipeline batch boundaries and parallel joins use pipeline's existing named
-`BATCH_AFFECTED_TESTS` union through the same interface. Evaluators inspect the supplied results
+Pipeline batch boundaries and parallel joins retain pipeline's named `BATCH_AFFECTED_TESTS`
+union and supplied results without routine reruns. A concrete interaction risk or changed behavior
+may justify a minimal targeted check through the same interface. Evaluators inspect the supplied results
 without routine reruns; they run targeted tests only to reproduce a specific suspected defect.
 A known scoped failure blocks its current
 BUILD activity; it is never deferred to the aggregate gate.
@@ -407,12 +408,15 @@ email/payment services, webhooks, package registries, and other network services
 named smoke tests (`test/smoke/**` or `*.smoke.test.*`) may use the real third party. Smoke tests
 are opt-in and excluded from the default test command and CI aggregate suite.
 
-Aggregate execution and evidence belong to the engine-native `test_suite` gate after BUILD.
+The engine-native `test_suite` step owns full-suite or aggregate suite execution and evidence,
+as selected by project configuration. Other skills inspect existing evidence and run only minimal
+targeted tests when needed to implement, repair, or reproduce changed behavior; they never
+launch full-suite or aggregate runs. Missing or stale suite proof returns to `test_suite`.
 BUILD skills record uncertain affected-test scope and defer aggregate proof to that gate;
 uncertainty never authorizes an intermediate aggregate run. See `pipeline` for scope triggers.
 On a suite-failure kickback, use the supplied diagnostics and referenced evidence to repair
-and verify the affected tests; the gate owns the aggregate rerun. Finish reuse/fallback,
-mutation-specific repair checks, and independent CI authority remain separate boundaries.
+and verify the affected tests; the gate owns the aggregate rerun. FINISH consumes the configured verification evidence; its provider session never launches a suite.
+Independent CI remains a separate authority.
 
 **Rules for the orchestrator (the session running /pipeline or /tdd):**
 - Do NOT narrate what you are about to do. Just do it.
@@ -485,8 +489,8 @@ Skills with Memory Checkpoint sections define when writes are expected — check
 ## Push Policy
 
 **Never push to a remote until confident the work is complete and passing.**
-Run whatever verification the project requires (tests, lint, type-check, etc.) locally
-before pushing. The `/finish` skill presents the user with completion options and, when the
+Require current configured verification evidence before pushing; missing or stale suite proof
+returns to `test_suite`. Do not rerun tests merely because publication is next. The `/finish` skill presents the user with completion options and, when the
 outcome is Push & PR, performs the push and PR creation **inline** — it does not delegate to
 `/pr`, because a delegated skill invocation ends the finish turn before
 `ai-conductor finish-record` writes `.pipeline/finish-choice`. `/pr` remains available as a

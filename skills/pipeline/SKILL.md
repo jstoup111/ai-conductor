@@ -96,8 +96,9 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   implementer runs `/code-removal` for that task instead of opening a RED cycle — a
                   deletion has no failing test to write, and an absence assertion is never the subject.
                   `/code-removal` carries the survivor method, test triage, and completeness sweep; the
-                  evidence is the deletion diff plus the full surviving suite green.
-3. VERIFY       — Run `ai-conductor scoped-run <selectors...>` for the scoped affected-test set (see Scoped VERIFY below) to confirm the implementer's work
+                  evidence is the deletion diff plus scoped survivor-test evidence;
+                  `test_suite` owns configured suite verification.
+3. VERIFY       — Inspect the implementer's scoped test evidence (see Scoped VERIFY below); run only a minimal targeted check if the evidence is missing or a concrete defect needs reproduction
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch implementer with error context
 5. COMMIT       — Verify the implementer's commit carries the `Task: <id>` trailer with <id> as the bare plan id
                   (e.g. Task: 9, not Task: task-9). The trailer is non-authoritative routing
@@ -279,14 +280,16 @@ Changes to unrelated code in the same file (e.g., changing a CI command while fi
 definition, or "improving" a method signature while adding a validation) are scope violations.
 The evaluator should flag scope violations as IMPORTANT severity.
 
-**Scoped VERIFY (step 3):** Per-task VERIFY runs only the affected-test set, not the full suite.
+**Scoped VERIFY (step 3):** Inspect the implementer's scoped evidence without routine reruns.
+Missing evidence or a concrete suspected defect may require a minimal targeted check, never a suite.
 Scoping logic:
 1. Collect the task's diff (`git diff <pre-task-commit>..HEAD`) to identify new/modified production files.
 2. Build the scoped test set: (a) all new/modified test files in the diff, plus (b) existing test
    files covering the modified production modules. Discover these by naming convention (e.g.,
    `src/foo/bar.ts` → `test/foo/bar.test.ts`) and by grepping test files for imports of or
    references to modified modules.
-3. The agent derives the selectors from that scoped set and runs `ai-conductor scoped-run <selectors...>`.
+3. Match the supplied results to the changed behavior. If a targeted check is needed, derive
+   minimal selectors from that set and use `ai-conductor scoped-run <selectors...>`.
 4. Retain the named affected-test set for the batch-boundary union described below.
 
 **Broad fallback:**
@@ -311,10 +314,9 @@ through `ai-conductor scoped-run <selectors...>`, then commit and leave the aggr
 `test_suite`. A scoped PASS does not establish an aggregate PASS.
 
 **Batch affected-test union:** At each batch boundary, compute one named
-`BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set, then run
-that union once to catch regressions from task interactions.
-
-Batch verification MUST run only the named `BATCH_AFFECTED_TESTS` union.
+`BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set and retain
+the supplied results. Do not rerun the union routinely. A concrete task-interaction risk or
+changed behavior may justify a minimal targeted check through `ai-conductor scoped-run <selectors...>`.
 The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.
 When `BATCH_AFFECTED_TESTS` cannot be determined with confidence, record that in the REPORT and defer aggregate proof to the engine's dedicated aggregate gate — the build session never runs the full test suite.
 
@@ -337,7 +339,7 @@ this marker; a missing or malformed line 1 blocks the dispatch. Provide the eval
 - The **git diff** for this batch only (not the full codebase)
 - The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
 - The named **`BATCH_AFFECTED_TESTS` union and its result summary** (pass/fail counts + failure
-  snippets, not full verbose output), or the full-suite fallback result when the union was indeterminate
+  snippets, not full verbose output), plus any scope uncertainty deferred to `test_suite`
 - The tech-context review checklist if loaded in session
 - The same focused **current-HEAD pattern basis** supplied to each affected task's implementer:
   current-checkout paths, stable symbol or role hints, and the relevant semantic traits. The
@@ -604,9 +606,10 @@ isolation does not make dependent or overlapping-file tasks eligible for the sam
 3. Dispatch all selected tasks in one host-native fan-out operation
 4. Each agent receives: the task description, the test directory, the source directory
 5. Wait for every concurrent dispatch to complete before verification
-6. Compute `BATCH_AFFECTED_TESTS` from every task's scoped affected-test set and run that union
-   once to verify no conflicts; use the full-suite fallback only if the union is indeterminate
-7. If tests fail: identify the conflict, fix sequentially, re-run
+6. Collect `BATCH_AFFECTED_TESTS` and supplied results without routine reruns. If a concrete
+   interaction risk needs checking, run only the relevant tests. Uncertain scope returns
+   configured suite proof to `test_suite`; never use a full-suite fallback here.
+7. If tests fail: identify the conflict, fix sequentially, and verify only the affected behavior
 
 **Worktree-based parallelism (Full autonomy only):**
 For mutually independent tasks that need stronger isolation:
@@ -615,7 +618,8 @@ For mutually independent tasks that need stronger isolation:
   isolated-worktree responsibility.
 - Each worktree gets its own task batch
 - After completion, merge results back sequentially
-- The worktree-manager handles merge order, conflict resolution, and post-merge testing
+- The worktree-manager handles merge order and conflict resolution, using targeted checks
+  only for changed behavior and leaving configured suite verification to `test_suite`
 - Never place dependent or overlapping-file tasks in the same ready frontier; defer them even when
   separate worktrees could be created.
 
@@ -626,8 +630,8 @@ For mutually independent tasks that need stronger isolation:
 At natural batch boundaries (after completing a group of related tasks):
 
 **Pre-batch verification (before starting next batch):**
-- Compute `BATCH_AFFECTED_TESTS` as the union of every task's scoped affected-test set and run
-  the named union once. If ANY test fails that is NOT an expected RED test, stop and fix before
+- Inspect the supplied results for `BATCH_AFFECTED_TESTS`; do not rerun the union as a
+  batch-boundary ritual. If ANY test fails that is NOT an expected RED test, stop and fix before
   proceeding. If the union cannot be determined confidently, record that and defer aggregate
   proof to the engine's dedicated aggregate gate — never run the full suite in this session.
   Previous session bugs must not accumulate.

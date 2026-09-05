@@ -471,7 +471,7 @@ any code is written. The full flow from here is:
   → /architecture-diagram (generate/update current-state diagrams)
   → /architecture-review (feasibility, alignment, risks — consumes diagrams, may BLOCK)
   → /writing-system-tests (failing acceptance specs from stories)
-  → /pipeline or /tdd (implement until all tests pass)
+  → /pipeline or /tdd (implement and verify affected tests; `test_suite` owns configured suite verification)
 ```
 
 ## Verification

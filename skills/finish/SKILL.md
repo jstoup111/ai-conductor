@@ -39,6 +39,9 @@ publication *mechanics* are the coordinator's.
 
 ### 1. Fresh Verification
 
+The FINISH provider session never runs tests or launches full-suite or aggregate verification.
+It consumes the coordinator's evidence; missing or stale suite proof belongs to `test_suite`.
+
 Before any provider receives FINISH work, the coordinator uses the engine's
 configured aggregate verifier for current completion evidence. It reuses a
 current passing result; when evidence is missing or stale, the verifier obtains

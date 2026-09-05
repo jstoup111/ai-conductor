@@ -270,7 +270,8 @@ This step performs a **structural scan only** — file counts, directory layout,
 **Skip for new/fresh projects.** Build an inventory:
 
 - **Codebase:** models, controllers, services, jobs — count source and test files
-- **Test coverage:** run suite, identify files with NO specs
+- **Test coverage:** inspect test files and existing coverage reports; identify files with no specs
+  without executing tests. The `test_suite` step owns configured suite verification.
 - **Architecture:** routes, patterns (service objects, concerns), auth approach, existing docs
 - **In-flight work:** open PRs/issues (`gh pr list`, `gh issue list`), TODO comments
 - **Git history:** `git log --oneline -20`, `git shortlog -sn --no-merges`
