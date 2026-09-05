@@ -5153,7 +5153,8 @@ export type RemediationPlanAbsenceCause =
   | 'absent'
   | 'stale'
   | 'unparseable'
-  | 'non-array-dispositions';
+  | 'non-array-dispositions'
+  | 'no-routable-dispositions';
 
 export type RemediationPlanReadResult =
   | { plan: RemediationPlan }
@@ -5170,6 +5171,8 @@ export function renderRemediationPlanAbsence(cause: RemediationPlanAbsenceCause)
       return "the planner's remediation plan is not valid JSON";
     case 'non-array-dispositions':
       return "the planner's remediation plan has no dispositions array";
+    case 'no-routable-dispositions':
+      return "the planner's remediation plan contains no routable dispositions";
   }
 }
 
@@ -5286,7 +5289,7 @@ export async function readRemediationPlanResult(
   }
   return gaps.length > 0 || invalidTasklessBuild || rejected.length > 0
     ? { plan: { gaps, rejected, invalidTasklessBuild } }
-    : { plan: null, cause: 'non-array-dispositions' };
+    : { plan: null, cause: 'no-routable-dispositions' };
 }
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---

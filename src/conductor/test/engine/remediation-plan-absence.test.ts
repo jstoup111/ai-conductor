@@ -57,5 +57,29 @@ describe('remediation plan absence causes', () => {
     expect(renderRemediationPlanAbsence('stale')).toContain('stale');
     expect(renderRemediationPlanAbsence('unparseable')).toContain('not valid JSON');
     expect(renderRemediationPlanAbsence('non-array-dispositions')).toContain('no dispositions array');
+    expect(renderRemediationPlanAbsence('no-routable-dispositions')).toContain('no routable dispositions');
+  });
+
+  it.each([
+    ['an empty array', []],
+    ['non-object entries', [null, 'not an object', 42]],
+    ['a halt without a category', [{ id: 'AB-1', disposition: 'halt' }]],
+    ['an existing-task disposition with a blank task id', [{
+      id: 'AB-1',
+      disposition: 'existing-task',
+      tasks: [{ id: '  ', title: 'Already planned work' }],
+    }]],
+  ])('reports no-routable-dispositions for %s', async (_description, dispositions) => {
+    const dir = await fixture();
+    await writeFile(
+      join(dir, '.pipeline', 'remediation.json'),
+      JSON.stringify({ dispositions }),
+    );
+
+    await expect(readRemediationPlanResult(dir, Date.now() - 1_000)).resolves.toEqual({
+      plan: null,
+      cause: 'no-routable-dispositions',
+    });
+    await expect(readRemediationPlan(dir, Date.now() - 1_000)).resolves.toBeNull();
   });
 });
