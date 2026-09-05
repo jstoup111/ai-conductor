@@ -160,8 +160,6 @@ export async function coordinateBuildReviewAdjudication(input: {
   const finalize = async (options: {
     readonly tasksByCaseId: ReadonlyMap<string, readonly { readonly title: string }[]>;
     readonly republishWorkOrder: boolean;
-    /** An already-failed effect that operator acceptance retires is not an effect failure to emit. */
-    readonly suppressRetiredEffectFailures?: boolean;
     /**
      * Supplied only by the acceptance-terminal path, which just read authority
      * and applies no effect before arriving here — so a second read could not
@@ -244,7 +242,10 @@ export async function coordinateBuildReviewAdjudication(input: {
         type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId: retirement.caseId, resolution: 'resolved',
       });
-      if (retirement.retiredEffect && !options.suppressRetiredEffectFailures) {
+      // This retirement is itself a durable reserved->failed transition, so it
+      // emits unconditionally: operator acceptance changes who owns the
+      // follow-up, never whether the durable failure occurred.
+      if (retirement.retiredEffect) {
         await input.emit?.({
           type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseId: retirement.caseId, ...retirement.retiredEffect,
@@ -433,19 +434,25 @@ export async function coordinateBuildReviewAdjudication(input: {
       const retiredByAcceptance = new Set(pendingActionEffects
         .filter((record) => record.sources.every((source) => !liveSourceIdsAfterActionFailure.has(source.sourceId)))
         .map((record) => record.id));
+      // The effect executor may have already settled these reservations to a
+      // durable failed status under its own lease. Every durable
+      // reserved->failed transition emits, retired or not — only a case whose
+      // reservation is still untouched leaves its emission to the exit
+      // retirement path in `finalize`.
+      const afterFailure = await store.read();
+      const durablyFailedCaseIds = new Set((afterFailure.ok ? afterFailure.state.cases : [])
+        .filter((record) => record.effect.kind === 'action' && record.effect.status === 'failed')
+        .map((record) => record.id));
       for (const record of pendingActionEffects) {
         if (record.effect.kind !== 'action') continue;
-        if (retiredByAcceptance.has(record.id)) continue;
+        if (retiredByAcceptance.has(record.id) && !durablyFailedCaseIds.has(record.id)) continue;
         await input.emit?.({
           type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseId: record.id, effectId: record.effect.id, effectKind: 'action', reason: action.reason,
         });
       }
       if (retiredByAcceptance.size > 0) {
-        return finalize({
-          tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved,
-          suppressRetiredEffectFailures: true,
-        });
+        return finalize({ tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved });
       }
       return fail(action.reason);
     }
@@ -495,10 +502,7 @@ export async function coordinateBuildReviewAdjudication(input: {
           caseId, effectId: record.effect.id, effectKind: 'deferral', reason: deferred.reason,
         });
         if (deferredFailureRetiredByAcceptance) {
-          return finalize({
-            tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved,
-            suppressRetiredEffectFailures: true,
-          });
+          return finalize({ tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved });
         }
         return fail(deferred.reason);
       }
@@ -510,10 +514,7 @@ export async function coordinateBuildReviewAdjudication(input: {
       }
     }
     if (deferredFailureRetiredByAcceptance) {
-      return finalize({
-        tasksByCaseId, republishWorkOrder: true, resolvedAtEntry: resolved,
-        suppressRetiredEffectFailures: true,
-      });
+      return finalize({ tasksByCaseId, republishWorkOrder: true, resolvedAtEntry: resolved });
     }
   }
   return finalize({ tasksByCaseId, republishWorkOrder: true });
