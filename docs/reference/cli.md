@@ -284,7 +284,7 @@ ai-conductor daemon [--concurrency <n>] [--max-items <n>] [--continuous] [--max-
 
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `--concurrency <n>` | integer | `1` | Requested worker count. Any value above 1 is clamped to 1 and logged as `concurrency clamped to 1 (serial …)`. |
+| `--concurrency <n>` | integer | `1` | Effective feature-executor pool width. An explicit flag wins over [`daemon_concurrency`](configuration.md#daemon_concurrency); otherwise the configured value wins over the default. Values above 1 run up to that many eligible features concurrently. |
 | `--max-items <n>` | integer | unset | Stop after this many features. |
 | `--continuous` | boolean | `false` | Idle-poll instead of draining the backlog once. |
 | `--max-cost <tokens>` | integer | unset | Total output-token ceiling for the run. |
@@ -293,11 +293,6 @@ ai-conductor daemon [--concurrency <n>] [--max-items <n>] [--continuous] [--max-
 | `--max-idle-polls <n>` | integer | unbounded | Stop after this many consecutive empty polls. |
 | `--no-watch` | boolean | watcher on | Drops the HALT-marker filesystem watcher and relies on polling alone. Not listed in `--help`. |
 | `--completed`, `--all` | boolean | `false` | Include already-processed features in the startup dashboard's console output. The persisted log sink never includes them. Not listed in `--help`. |
-
-> **Known limitation.** `--concurrency` accepts any integer, but the run loop clamps every value above
-> 1 down to 1, so `--concurrency 4` behaves exactly like `--concurrency 1` and only the clamp notice
-> tells you. Real multi-feature concurrency is out of scope for the current run loop (ADR-014 /
-> FR-13). Tracked in [#568](https://github.com/jstoup111/ai-conductor/issues/568).
 
 > **Known limitation.** `--idle-poll`'s help string reports a default of 5 seconds; the code supplies
 > 60 when the flag is absent, so an unflagged `--continuous` daemon polls once a minute, not every five
