@@ -18,7 +18,9 @@ SCAN=$(printf '%s' "$COMMAND" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
 # Patterns that are destructive and hard to reverse
 # Allow --force-with-lease (safe) but block exact bare --force/-f tokens.
 # A lease option never suppresses detection of a later bare force option.
-if echo "$SCAN" | grep -qE 'git[[:space:]]+push([[:space:]]+[^[:space:]]+)*[[:space:]]+(--force|-f)([[:space:];|&]|$)'; then
+# Split unquoted compound commands before looking for a direct `git push`, so
+# an option belonging to a neighbouring command cannot be mistaken for push.
+if printf '%s' "$SCAN" | tr ';|&' '\n' | grep -qE 'git[[:space:]]+push([[:space:]]+[^[:space:]]+)*[[:space:]]+(--force|-f)([[:space:]]|$)'; then
   echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force push blocked by harness. Use --force-with-lease instead, or ask the user for explicit confirmation."}}' >&2
   exit 2
 fi

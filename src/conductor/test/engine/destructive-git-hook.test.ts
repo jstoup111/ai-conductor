@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -91,6 +91,42 @@ describe('block-destructive-git hook force-push protection', () => {
   );
 
   it.each(separators)(
+    'allows a lease push followed by a non-push --force token across %s',
+    (_name, separator) => {
+      const result = invoke(`git push --force-with-lease origin a${separator}echo --force`);
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.calledGitOrGh).toBe(false);
+      expect(result.stderr).not.toMatch(/force.*push/i);
+    },
+  );
+
+  it.each(separators)(
+    'allows a non-push --force token followed by a lease push across %s',
+    (_name, separator) => {
+      const result = invoke(`echo --force${separator}git push --force-with-lease origin a`);
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.calledGitOrGh).toBe(false);
+      expect(result.stderr).not.toMatch(/force.*push/i);
+    },
+  );
+
+  it.each(separators)(
+    'allows quoted --force data beside a lease push across %s',
+    (_name, separator) => {
+      const result = invoke(`git push --force-with-lease origin a${separator}echo '--force'`);
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.calledGitOrGh).toBe(false);
+      expect(result.stderr).not.toMatch(/force.*push/i);
+    },
+  );
+
+  it.each(separators)(
     'denies a bare --force immediately before %s',
     (_name, separator) => {
       expectForcePushDenied(`git push origin main --force${separator}git status`);
@@ -130,6 +166,33 @@ describe('block-destructive-git hook force-push protection', () => {
 
   it('denies bare -f alongside --force-with-lease in one push invocation', () => {
     expectForcePushDenied('git push --force-with-lease -f origin main');
+  });
+
+  it('still blocks a hard reset beside a lease push', () => {
+    const result = invoke('git push --force-with-lease origin a && git reset --hard');
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.calledGitOrGh).toBe(false);
+    expect(result.stderr).toMatch(/git reset --hard is destructive and irreversible/i);
+  });
+
+  it('keeps the existing reminder for an ordinary rebase beside a lease push', () => {
+    const result = invoke('git push --force-with-lease origin a && git rebase main');
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
+    expect(result.stderr).toMatch(/git rebase.*allowed.*rare/i);
+  });
+
+  it('does not remind for a rebase continuation beside a lease push', () => {
+    const result = invoke('git push --force-with-lease origin a && git rebase --continue');
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
+    expect(result.stderr).not.toMatch(/git rebase.*allowed.*rare/i);
   });
 
   it.each([
