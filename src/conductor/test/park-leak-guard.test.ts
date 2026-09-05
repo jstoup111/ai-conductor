@@ -9,15 +9,20 @@ import {
   snapshotParkedMarkers,
 } from './park-leak-guard.js';
 import { applyParkTeardownDecision } from './global-setup.js';
+import { RUN_TMP_ROOT_ENV } from './tmpdir-leak-guard.js';
 import { writeAutoPark } from '../src/engine/park-marker.js';
 
 const CHILD_FIXTURE_ENV = 'AI_CONDUCTOR_PARK_LEAK_CHILD_FIXTURE';
 const DOCUMENTED_LEAKED_SLUGS = ['slug-1', 'non-git-feature', 'callback-fire-test'];
 
+function runTmpdir(): string {
+  return process.env[RUN_TMP_ROOT_ENV] ?? tmpdir();
+}
+
 if (process.env[CHILD_FIXTURE_ENV] === '1') {
   describe('park leak ceiling child fixture', () => {
     it('writes documented slugs under config-owned run root', async () => {
-      const fixture = await mkdtemp(join(tmpdir(), 'park-leak-fixture-'));
+      const fixture = await mkdtemp(join(runTmpdir(), 'park-leak-fixture-'));
       try {
         expect(process.env.GIT_CEILING_DIRECTORIES?.split(':')).toContain(tmpdir());
 
@@ -39,7 +44,7 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
   const temporaryDirectories: string[] = [];
 
   async function createMarkerDirectory(): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-test-'));
+    const root = await mkdtemp(join(runTmpdir(), 'park-leak-guard-test-'));
     temporaryDirectories.push(root);
     const markers = join(root, '.daemon', 'parked');
     await mkdir(markers, { recursive: true });
@@ -47,7 +52,7 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
   }
 
   async function createGitRepository(): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-repo-'));
+    const root = await mkdtemp(join(runTmpdir(), 'park-leak-guard-repo-'));
     temporaryDirectories.push(root);
     await execa('git', ['init', '--initial-branch=main', root]);
     await execa('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
@@ -72,7 +77,7 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
   });
 
   it('returns an empty snapshot when the parked marker directory is absent', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-test-'));
+    const root = await mkdtemp(join(runTmpdir(), 'park-leak-guard-test-'));
     temporaryDirectories.push(root);
 
     await expect(snapshotParkedMarkers(join(root, '.daemon', 'parked'))).resolves.toEqual({
@@ -82,7 +87,7 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
   });
 
   it('returns an absent snapshot when the parked marker baseline cannot be read', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-test-'));
+    const root = await mkdtemp(join(runTmpdir(), 'park-leak-guard-test-'));
     temporaryDirectories.push(root);
     const markers = join(root, '.daemon', 'parked');
     await mkdir(join(root, '.daemon'));
@@ -155,7 +160,7 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
   });
 
   it('returns null outside a Git repository', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-non-git-'));
+    const root = await mkdtemp(join(runTmpdir(), 'park-leak-guard-non-git-'));
     temporaryDirectories.push(root);
 
     await expect(resolveRealParkedDir(root)).resolves.toBeNull();

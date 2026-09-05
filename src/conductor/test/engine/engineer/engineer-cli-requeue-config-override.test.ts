@@ -10,7 +10,8 @@
 // override (but NOT stale under the 24h default) gets requeued.
 
 import { describe, it, expect } from 'vitest';
-import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dispatchEngineer } from '../../../src/engine/engineer-cli.js';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
@@ -25,7 +26,7 @@ function captureOut() {
 
 describe('engineer requeue --stale: honors stale_claim_window_hours config override', () => {
   it('requeues an entry stale under the override window but fresh under the 24h default', async () => {
-    const testDir = `/tmp/requeue-config-override-test-${Date.now()}-${Math.random()}`;
+    const testDir = await mkdtemp(join(tmpdir(), 'requeue-config-override-test-'));
     const originalCwd = process.cwd();
     try {
       const engDir = join(testDir, 'engineer');
