@@ -1,4 +1,4 @@
-// Covers: task:2, task:7, task:rem-as-built-rem-ab4-1
+// Covers: task:2, task:7, task:8, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -567,6 +567,63 @@ describe('kickback-ledger', () => {
 
     const raw = await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8');
     expect(() => JSON.parse(raw)).not.toThrow();
+  });
+
+  it('serializes concurrent gate bumps so both increments land in the ledger', async () => {
+    const input = {
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      resolvedCount: 0,
+      reason: 'concurrent build review failure',
+    };
+
+    await Promise.all([
+      bumpKickbackGateInLedger(dir, 'build_review', input),
+      bumpKickbackGateInLedger(dir, 'build_review', input),
+    ]);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { build_review: { count: 2, cumulative: 2 } },
+    });
+  });
+
+  it('refuses a live foreign kickback-ledger lease without changing the ledger', async () => {
+    const ledger: KickbackLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 1,
+          cumulative: 1,
+          mechanicalFaults: 0,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'existing failure',
+          priorVerdict: false,
+          resolvedBefore: 0,
+        },
+      },
+    };
+    const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+    const leasePath = `${ledgerPath}.lease`;
+    await writeKickbackLedger(dir, ledger);
+    const before = await readFile(ledgerPath, 'utf8');
+    await mkdir(leasePath, { recursive: true });
+    await writeFile(join(leasePath, 'owner.json'), `${JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      token: 'foreign-owner',
+      acquiredAt: new Date().toISOString(),
+    })}\n`);
+
+    await expect(bumpKickbackGateInLedger(dir, 'build_review', {
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      resolvedCount: 0,
+      reason: 'new failure',
+    })).rejects.toMatchObject({
+      name: 'KickbackLedgerLeaseError',
+      kind: 'timeout',
+      message: expect.stringContaining('kickback-ledger'),
+    });
+    await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(before);
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject(ledger);
   });
 
   describe('creditKickbackGateLaps', () => {

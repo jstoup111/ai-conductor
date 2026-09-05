@@ -8,6 +8,8 @@ import {
   type BuildReviewInfrastructureFailureReason,
 } from './build-review-domain.js';
 import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js';
+import { createConductStateLease } from './conduct-state-lease.js';
+import type { ConductStateLeaseFailureKind } from './conduct-state-lease.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {
@@ -127,6 +129,40 @@ interface PersistedKickbackLedger {
 }
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
+
+/** A feature-local ledger mutation could not obtain its exclusive lease. */
+export class KickbackLedgerLeaseError extends Error {
+  constructor(readonly kind: ConductStateLeaseFailureKind, message: string) {
+    super(message);
+    this.name = 'KickbackLedgerLeaseError';
+  }
+}
+
+/**
+ * Run one ledger read-modify-write transaction under the feature-local lease.
+ * The private writer below deliberately bypasses this wrapper so one
+ * transaction never attempts to acquire its own non-reentrant lease.
+ */
+export async function withKickbackLedgerLease<T>(
+  projectRoot: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const lease = createConductStateLease(join(projectRoot, KICKBACK_LEDGER_PATH), {
+    label: 'kickback-ledger',
+  });
+  const acquired = await lease.acquire();
+  if (!acquired.ok) throw new KickbackLedgerLeaseError(acquired.kind, acquired.message);
+
+  let operationSucceeded = false;
+  try {
+    const result = await operation();
+    operationSucceeded = true;
+    return result;
+  } finally {
+    const released = await acquired.handle.release();
+    if (!released.ok && operationSucceeded) throw new KickbackLedgerLeaseError('filesystem', released.message);
+  }
+}
 
 /** A gate may be kicked back to BUILD this many times for one progress state. */
 export const MAX_KICKBACKS_PER_GATE = 2;
@@ -376,20 +412,22 @@ export async function settleRemediationRound(
   receiptId: string,
   gates: readonly string[],
 ): Promise<{ settled: boolean }> {
-  const ledger = await readKickbackLedger(projectRoot);
-  if (ledger.settlementReceipts?.[receiptId]) return { settled: false };
-  const uniqueGates = [...new Set(gates)];
-  const nextGates = { ...ledger.gates };
-  for (const gate of uniqueGates) {
-    const current = nextGates[gate] ?? { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 };
-    nextGates[gate] = { ...current, laps: (current.laps ?? 0) + 1 };
-  }
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    gates: nextGates,
-    settlementReceipts: { ...ledger.settlementReceipts, [receiptId]: { gates: uniqueGates } },
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    if (ledger.settlementReceipts?.[receiptId]) return { settled: false };
+    const uniqueGates = [...new Set(gates)];
+    const nextGates = { ...ledger.gates };
+    for (const gate of uniqueGates) {
+      const current = nextGates[gate] ?? { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 };
+      nextGates[gate] = { ...current, laps: (current.laps ?? 0) + 1 };
+    }
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      gates: nextGates,
+      settlementReceipts: { ...ledger.settlementReceipts, [receiptId]: { gates: uniqueGates } },
+    });
+    return { settled: true };
   });
-  return { settled: true };
 }
 
 function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedger {
@@ -527,7 +565,7 @@ export async function readSuiteInfrastructureRetries(
 }
 
 /** Write the ledger atomically, so readers never observe a partially written file. */
-export async function writeKickbackLedger(
+async function writeKickbackLedgerUnsafe(
   projectRoot: string,
   ledger: KickbackLedger,
 ): Promise<void> {
@@ -548,9 +586,19 @@ export async function writeKickbackLedger(
   }
 }
 
+/** Write the ledger atomically while holding its feature-local mutation lease. */
+export async function writeKickbackLedger(
+  projectRoot: string,
+  ledger: KickbackLedger,
+): Promise<void> {
+  await withKickbackLedgerLease(projectRoot, () => writeKickbackLedgerUnsafe(projectRoot, ledger));
+}
+
 /** Remove the ledger when a genuinely fresh feature session begins. */
 export async function clearKickbackLedger(projectRoot: string): Promise<void> {
-  await rm(join(projectRoot, KICKBACK_LEDGER_PATH), { force: true });
+  await withKickbackLedgerLease(projectRoot, async () => {
+    await rm(join(projectRoot, KICKBACK_LEDGER_PATH), { force: true });
+  });
 }
 
 function withRemaining(growth: PlanGrowthRecord, cap: number): PlanGrowth {
@@ -606,32 +654,34 @@ async function deriveGrowthFromActivePlan(
  * included in that denominator: they predate this feature's growth record.
  */
 export async function readGrowth(projectRoot: string, cap: number): Promise<PlanGrowth> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const derived = await deriveGrowthFromActivePlan(projectRoot);
-  const stored = ledger.growth;
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    const derived = await deriveGrowthFromActivePlan(projectRoot);
+    const stored = ledger.growth;
 
-  if (!stored) return withRemaining(derived.growth, cap);
+    if (!stored) return withRemaining(derived.growth, cap);
 
-  const matchesPlan = !derived.resolved || stored.authored + stored.added === derived.growth.authored;
-  if (growthTotalsAgree(stored) && matchesPlan) return withRemaining(stored, cap);
+    const matchesPlan = !derived.resolved || stored.authored + stored.added === derived.growth.authored;
+    if (growthTotalsAgree(stored) && matchesPlan) return withRemaining(stored, cap);
 
-  // A plan can contain an old unrecorded foreign append from before append
-  // authorization was centralized. Preserve every recorded addition rather
-  // than reclassifying it as authored and refunding its allowance.
-  if (growthTotalsAgree(stored) && derived.resolved) {
-    const reconciled = {
-      authored: Math.max(0, derived.growth.authored - stored.added),
-      added: stored.added,
-      byGate: { ...stored.byGate },
-    };
-    console.warn('[kickback-ledger] plan count diverged; preserving recorded growth allowance');
-    await writeKickbackLedger(projectRoot, { ...ledger, growth: reconciled });
-    return withRemaining(reconciled, cap);
-  }
+    // A plan can contain an old unrecorded foreign append from before append
+    // authorization was centralized. Preserve every recorded addition rather
+    // than reclassifying it as authored and refunding its allowance.
+    if (growthTotalsAgree(stored) && derived.resolved) {
+      const reconciled = {
+        authored: Math.max(0, derived.growth.authored - stored.added),
+        added: stored.added,
+        byGate: { ...stored.byGate },
+      };
+      console.warn('[kickback-ledger] plan count diverged; preserving recorded growth allowance');
+      await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: reconciled });
+      return withRemaining(reconciled, cap);
+    }
 
-  console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
-  await writeKickbackLedger(projectRoot, { ...ledger, growth: derived.growth });
-  return withRemaining(derived.growth, cap);
+    console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
+    return withRemaining(derived.growth, cap);
+  });
 }
 
 /** Persist a growth update and publish the resulting cap state on the event spine. */
@@ -644,12 +694,15 @@ export async function recordGrowth(
     throw new Error('plan growth must have non-negative counts whose gate total equals added');
   }
 
-  const ledger = await readKickbackLedger(projectRoot);
-  const cap = options.cap ?? growth.added;
-  const recorded = withRemaining(growth, cap);
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    growth: { authored: growth.authored, added: growth.added, byGate: { ...growth.byGate } },
+  const recorded = await withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    const cap = options.cap ?? growth.added;
+    const next = withRemaining(growth, cap);
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      growth: { authored: growth.authored, added: growth.added, byGate: { ...growth.byGate } },
+    });
+    return next;
   });
   await options.events?.emit({ type: 'plan_growth', ...recorded });
   return recorded;
@@ -724,15 +777,15 @@ export async function bumpKickbackGateInLedger(
   gate: string,
   input: BumpKickbackGateInput,
 ): Promise<BumpKickbackGateResult> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const result = bumpKickbackGate(ledger.gates[gate], input);
-
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    gates: { ...ledger.gates, [gate]: result.entry },
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    const result = bumpKickbackGate(ledger.gates[gate], input);
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      gates: { ...ledger.gates, [gate]: result.entry },
+    });
+    return result;
   });
-
-  return result;
 }
 
 /** Load, idempotently charge, and atomically persist one build-review effect. */
@@ -741,19 +794,21 @@ export async function chargeBuildReviewEffectInLedger(
   effectId: string,
   input: BumpKickbackGateInput,
 ): Promise<ChargeBuildReviewEffectResult> {
-  const read = await readKickbackLedgerResult(projectRoot);
-  if (read.kind === 'unreadable') return { status: 'unreadable', reason: read.reason };
-  const ledger = read.kind === 'ok' ? read.ledger : emptyLedger();
-  const result = chargeBuildReviewEffect(ledger.gates.build_review, effectId, input);
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const read = await readKickbackLedgerResult(projectRoot);
+    if (read.kind === 'unreadable') return { status: 'unreadable', reason: read.reason };
+    const ledger = read.kind === 'ok' ? read.ledger : emptyLedger();
+    const result = chargeBuildReviewEffect(ledger.gates.build_review, effectId, input);
 
-  if (result.status === 'charged') {
-    await writeKickbackLedger(projectRoot, {
-      ...ledger,
-      gates: { ...ledger.gates, build_review: result.entry },
-    });
-  }
+    if (result.status === 'charged') {
+      await writeKickbackLedgerUnsafe(projectRoot, {
+        ...ledger,
+        gates: { ...ledger.gates, build_review: result.entry },
+      });
+    }
 
-  return result;
+    return result;
+  });
 }
 /** Purely consume one build-review mechanical-fault allowance. */
 export function bumpMechanicalFaults(
@@ -797,7 +852,7 @@ async function bumpMechanicalFaultsInLedgerFromLedger(
   const entry = ledger.gates[gate] ?? emptyKickbackGateEntry(gate);
 
   const nextEntry = bumpMechanicalFaults(entry, fault);
-  await writeKickbackLedger(projectRoot, {
+  await writeKickbackLedgerUnsafe(projectRoot, {
     ...ledger,
     gates: { ...ledger.gates, [gate]: nextEntry },
   });
@@ -814,10 +869,12 @@ export async function bumpMechanicalFaultsInLedgerResult(
   gate: string,
   fault?: KickbackLastMechanicalFault,
 ): Promise<BumpMechanicalFaultsInLedgerResult> {
-  const result = await readKickbackLedgerResult(projectRoot);
-  if (result.kind === 'unreadable') return result;
-  const ledger = result.kind === 'ok' ? result.ledger : emptyLedger();
-  return { kind: 'ok', entry: await bumpMechanicalFaultsInLedgerFromLedger(projectRoot, ledger, gate, fault) };
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const result = await readKickbackLedgerResult(projectRoot);
+    if (result.kind === 'unreadable') return result;
+    const ledger = result.kind === 'ok' ? result.ledger : emptyLedger();
+    return { kind: 'ok', entry: await bumpMechanicalFaultsInLedgerFromLedger(projectRoot, ledger, gate, fault) };
+  });
 }
 
 /**
@@ -831,31 +888,32 @@ export async function bumpMechanicalFaultsInLedger(
 ): Promise<KickbackGateEntry> {
   const result = await bumpMechanicalFaultsInLedgerResult(projectRoot, gate, fault);
   if (result.kind === 'ok') return result.entry;
-  return bumpMechanicalFaultsInLedgerFromLedger(projectRoot, await readKickbackLedger(projectRoot), gate, fault);
+  return withKickbackLedgerLease(projectRoot, async () =>
+    bumpMechanicalFaultsInLedgerFromLedger(projectRoot, await readKickbackLedger(projectRoot), gate, fault));
 }
 
 /** Increment the non-charging test-suite infrastructure retry allowance. */
 export async function bumpSuiteInfrastructureRetriesInLedger(
   projectRoot: string,
 ): Promise<KickbackGateEntry> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const entry = ledger.gates.test_suite ?? {
-    count: 0,
-    cumulative: 0,
-    treeHash: null,
-    lastReason: '',
-    priorVerdict: true,
-    resolvedBefore: 0,
-  };
-  const nextEntry: KickbackGateEntry = {
-    ...entry,
-    suiteInfrastructureRetries: (entry.suiteInfrastructureRetries ?? 0) + 1,
-  };
-
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    gates: { ...ledger.gates, test_suite: nextEntry },
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    const entry = ledger.gates.test_suite ?? {
+      count: 0,
+      cumulative: 0,
+      treeHash: null,
+      lastReason: '',
+      priorVerdict: true,
+      resolvedBefore: 0,
+    };
+    const nextEntry: KickbackGateEntry = {
+      ...entry,
+      suiteInfrastructureRetries: (entry.suiteInfrastructureRetries ?? 0) + 1,
+    };
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      gates: { ...ledger.gates, test_suite: nextEntry },
+    });
+    return nextEntry;
   });
-
-  return nextEntry;
 }
