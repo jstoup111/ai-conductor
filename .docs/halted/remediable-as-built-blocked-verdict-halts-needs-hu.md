@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-05T14:03:05.246Z
 Slug: remediable-as-built-blocked-verdict-halts-needs-hu
 Class: plan-gap
 Halting step: prd_audit
