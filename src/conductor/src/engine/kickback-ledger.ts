@@ -17,6 +17,33 @@ export interface KickbackLastMechanicalFault {
   lapId: string;
 }
 
+export interface KickbackBudgetAdjustment {
+  id: string;
+  kind: 'raise' | 'reset';
+  beforeConsumed: number;
+  afterConsumed: number;
+  beforeLimit: number;
+  afterLimit: number;
+  operator: string;
+  rationale: string;
+  timestamp: string;
+  haltGeneration: string;
+}
+
+export interface KickbackCapEvidence {
+  gate: string;
+  consumed: number;
+  limit: number;
+  latestReason: string;
+  haltGeneration: string;
+}
+
+export interface KickbackResumeAuthorization {
+  adjustmentId: string;
+  haltGeneration: string;
+  consumed: boolean;
+}
+
 /** Durable state for a gate's cross-dispatch kickback budget. */
 export interface KickbackGateEntry {
   count: number;
@@ -29,6 +56,18 @@ export interface KickbackGateEntry {
   /** Non-charging retry laps for test-suite infrastructure failures. */
   suiteInfrastructureRetries?: number;
   lastMechanicalFault?: KickbackLastMechanicalFault;
+  /** Feature-specific cumulative limit authorized by an operator. */
+  effectiveLimit?: number;
+  /** Feature-specific remediation lap limit authorized by an operator. */
+  effectiveLapCap?: number;
+  /** Completed operator-authorized budget changes. */
+  adjustments?: KickbackBudgetAdjustment[];
+  /** A staged adjustment awaiting its audit event and durable application. */
+  pendingAdjustment?: KickbackBudgetAdjustment;
+  /** Typed evidence captured before a budget-cap halt. */
+  capEvidence?: KickbackCapEvidence;
+  /** Authorization for the daemon to resume one matching cap halt. */
+  resumeAuthorization?: KickbackResumeAuthorization;
   treeHash: string | null;
   lastReason: string;
   priorVerdict: boolean;
@@ -134,7 +173,16 @@ export type BumpMechanicalFaultsInLedgerResult =
   | { readonly kind: 'ok'; readonly entry: KickbackGateEntry }
   | { readonly kind: 'unreadable'; readonly reason: string };
 
-const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set(['count', 'resolvedBefore']);
+const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set([
+  'count',
+  'resolvedBefore',
+  'effectiveLimit',
+  'effectiveLapCap',
+  'adjustments',
+  'pendingAdjustment',
+  'capEvidence',
+  'resumeAuthorization',
+]);
 
 function isLapCountingValue(value: unknown): value is number | Record<string, number> {
   return (
@@ -180,6 +228,43 @@ function isLastMechanicalFault(value: unknown): value is KickbackLastMechanicalF
     typeof fault.lapId === 'string' && fault.lapId.trim().length > 0;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isBudgetAdjustment(value: unknown): value is KickbackBudgetAdjustment {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const adjustment = value as Record<string, unknown>;
+  return isNonEmptyString(adjustment.id) &&
+    (adjustment.kind === 'raise' || adjustment.kind === 'reset') &&
+    isNonNegativeInteger(adjustment.beforeConsumed) &&
+    isNonNegativeInteger(adjustment.afterConsumed) &&
+    isNonNegativeInteger(adjustment.beforeLimit) &&
+    isNonNegativeInteger(adjustment.afterLimit) &&
+    isNonEmptyString(adjustment.operator) &&
+    isNonEmptyString(adjustment.rationale) &&
+    isNonEmptyString(adjustment.timestamp) &&
+    isNonEmptyString(adjustment.haltGeneration);
+}
+
+function isCapEvidence(value: unknown): value is KickbackCapEvidence {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const evidence = value as Record<string, unknown>;
+  return isNonEmptyString(evidence.gate) &&
+    isNonNegativeInteger(evidence.consumed) &&
+    isNonNegativeInteger(evidence.limit) &&
+    isNonEmptyString(evidence.latestReason) &&
+    isNonEmptyString(evidence.haltGeneration);
+}
+
+function isResumeAuthorization(value: unknown): value is KickbackResumeAuthorization {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const authorization = value as Record<string, unknown>;
+  return isNonEmptyString(authorization.adjustmentId) &&
+    isNonEmptyString(authorization.haltGeneration) &&
+    typeof authorization.consumed === 'boolean';
+}
+
 function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntry {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
@@ -196,6 +281,12 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
     )) &&
     (entry.suiteInfrastructureRetries === undefined || isNonNegativeInteger(entry.suiteInfrastructureRetries)) &&
     (entry.lastMechanicalFault === undefined || isLastMechanicalFault(entry.lastMechanicalFault)) &&
+    (entry.effectiveLimit === undefined || isPositiveSafeInteger(entry.effectiveLimit)) &&
+    (entry.effectiveLapCap === undefined || isPositiveSafeInteger(entry.effectiveLapCap)) &&
+    (entry.adjustments === undefined || (Array.isArray(entry.adjustments) && entry.adjustments.every(isBudgetAdjustment))) &&
+    (entry.pendingAdjustment === undefined || isBudgetAdjustment(entry.pendingAdjustment)) &&
+    (entry.capEvidence === undefined || isCapEvidence(entry.capEvidence)) &&
+    (entry.resumeAuthorization === undefined || isResumeAuthorization(entry.resumeAuthorization)) &&
     (typeof entry.treeHash === 'string' || entry.treeHash === null) &&
     typeof entry.lastReason === 'string' &&
     typeof entry.priorVerdict === 'boolean' &&
@@ -207,6 +298,10 @@ function isChargedEffectIds(value: unknown): value is string[] {
   return Array.isArray(value) &&
     value.every((effectId) => typeof effectId === 'string' && effectId.trim().length > 0) &&
     new Set(value).size === value.length;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -249,6 +344,16 @@ function isPendingAsBuiltRemediationFindings(
     new Set(value.map((finding) => finding.finding)).size === value.length;
 }
 
+function isSettlementReceipts(value: unknown): value is Record<string, { gates: string[] }> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
+    Object.entries(value).every(([key, receipt]) =>
+      key.trim().length > 0 && typeof receipt === 'object' && receipt !== null &&
+      Array.isArray((receipt as { gates?: unknown }).gates) &&
+      (receipt as { gates: unknown[] }).gates.every(
+        (gate) => typeof gate === 'string' && gate.trim().length > 0,
+      ));
+}
+
 function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
@@ -262,12 +367,7 @@ function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
     (
       ledger.pendingAsBuiltRemediationFindings === undefined ||
       isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
-    ) && (ledger.settlementReceipts === undefined ||
-      (typeof ledger.settlementReceipts === 'object' && ledger.settlementReceipts !== null &&
-        !Array.isArray(ledger.settlementReceipts) && Object.entries(ledger.settlementReceipts).every(([key, receipt]) =>
-          key.trim().length > 0 && typeof receipt === 'object' && receipt !== null &&
-          Array.isArray((receipt as { gates?: unknown }).gates) &&
-          (receipt as { gates: unknown[] }).gates.every((gate) => typeof gate === 'string' && gate.trim().length > 0))));
+    ) && (ledger.settlementReceipts === undefined || isSettlementReceipts(ledger.settlementReceipts));
 }
 
 /** Atomically record one admitted round's gate charges; replay is a no-op. */
@@ -309,6 +409,45 @@ function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedge
   };
 }
 
+function normalizeKickbackGateEntry(value: unknown): PersistedKickbackGateEntry | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const entry = value as Record<string, unknown>;
+  const withoutHistory = { ...entry };
+  const historyIsValid = entry.adjustments === undefined || (
+    Array.isArray(entry.adjustments) && entry.adjustments.every(isBudgetAdjustment)
+  );
+  if (!historyIsValid) delete withoutHistory.adjustments;
+
+  return isKickbackGateEntry(withoutHistory) ? withoutHistory : undefined;
+}
+
+function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const ledger = value as Record<string, unknown>;
+  if (ledger.version !== 1 || typeof ledger.gates !== 'object' || ledger.gates === null || Array.isArray(ledger.gates)) {
+    return undefined;
+  }
+
+  const gates = Object.fromEntries(
+    Object.entries(ledger.gates as Record<string, unknown>).flatMap(([gate, entry]) => {
+      const normalized = normalizeKickbackGateEntry(entry);
+      return normalized === undefined ? [] : [[gate, normalized]];
+    }),
+  );
+  const parsed: PersistedKickbackLedger = {
+    version: 1,
+    gates,
+    ...(ledger.growth === undefined || isPlanGrowthRecord(ledger.growth) ? { growth: ledger.growth } : {}),
+    ...(ledger.pendingAsBuiltRemediationFindings === undefined || isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
+      ? { pendingAsBuiltRemediationFindings: ledger.pendingAsBuiltRemediationFindings }
+      : {}),
+    ...(ledger.settlementReceipts === undefined || isSettlementReceipts(ledger.settlementReceipts)
+      ? { settlementReceipts: ledger.settlementReceipts }
+      : {}),
+  };
+  return normalizeKickbackLedger(parsed);
+}
+
 /**
  * Read the durable kickback state. Missing, malformed, and incompatible
  * ledgers deliberately fail open to an empty budget and never interrupt a run.
@@ -336,15 +475,29 @@ export async function readKickbackLedgerResult(projectRoot: string): Promise<Kic
  */
 export async function readKickbackLedger(projectRoot: string): Promise<KickbackLedger> {
   const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
-  const result = await readKickbackLedgerResult(projectRoot);
-  if (result.kind === 'ok') return result.ledger;
-  if (result.kind === 'unreadable') {
-    if (result.reason === 'kickback ledger has an unsupported version') {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(ledgerPath, 'utf-8'));
+    const ledger = parseKickbackLedger(parsed);
+    if (ledger) {
+      const storedGates = (parsed as { gates?: unknown }).gates;
+      if (
+        typeof storedGates === 'object' && storedGates !== null && !Array.isArray(storedGates) &&
+        Object.keys(storedGates).length !== Object.keys(ledger.gates).length
+      ) {
+        console.warn(`[kickback-ledger] corrupt ledger gate entry at ${ledgerPath}; ignoring that gate`);
+      }
+      return ledger;
+    }
+    if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version !== 1) {
       console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}; using empty ledger`);
-    } else if (result.reason === 'kickback ledger is corrupt') {
-      console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}; using empty ledger`);
     } else {
-      console.warn(`[kickback-ledger] unable to read ledger at ${ledgerPath}; using empty ledger: ${result.reason.slice('kickback ledger is unreadable: '.length)}`);
+      console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}; using empty ledger`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(
+        `[kickback-ledger] unable to read ledger at ${ledgerPath}; using empty ledger: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
   return emptyLedger();
@@ -536,7 +689,9 @@ export function bumpKickbackGate(
 
   return {
     entry: nextEntry,
-    cumulativeExhausted: nextEntry.cumulative > MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+    cumulativeExhausted: nextEntry.cumulative > (
+      nextEntry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW
+    ),
     exhausted: !madeProgress && previous.count >= MAX_KICKBACKS_PER_GATE,
   };
 }
