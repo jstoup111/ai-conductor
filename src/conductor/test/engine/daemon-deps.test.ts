@@ -355,6 +355,7 @@ describe('engine/daemon-deps', () => {
           projectRoot: repository,
           worktreeBase: join(repository, '.worktrees'),
           baseBranch: 'main',
+          effectiveConcurrency: 2,
           log,
           runConductorInWorktree: async () => {},
         }).createWorktree(
@@ -377,6 +378,22 @@ describe('engine/daemon-deps', () => {
         mockExeca.mockReset();
         await rm(repository, { recursive: true, force: true });
       }
+    });
+
+    it('suppresses the pin log at effective concurrency 1 while still pinning the base', async () => {
+      const { addCalls } = routeGit({ worktreeListed: false, branchExists: false });
+      const log = vi.fn();
+      const wt = await makeFeatureRunnerDeps({
+        projectRoot: dir,
+        worktreeBase: join(dir, '.worktrees'),
+        baseBranch: 'main',
+        effectiveConcurrency: 1,
+        log,
+        runConductorInWorktree: async () => {},
+      }).createWorktree(slug);
+      expect(wt.branch).toBe(`feat/daemon-${slug}`);
+      expect(addCalls[0]).toContain('deadbeef');
+      expect(log.mock.calls.flat().filter((line) => String(line).includes('pinned base'))).toEqual([]);
     });
 
     it('creates a fresh branch+worktree off origin/<base> when neither exists', async () => {

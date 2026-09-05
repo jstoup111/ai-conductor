@@ -1471,6 +1471,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     projectRoot,
     worktreeBase,
     baseBranch,
+    effectiveConcurrency: daemonConcurrency.concurrency,
     runConductorInWorktree,
     providerExecution: createProviderExecution,
     beginFeatureRun,

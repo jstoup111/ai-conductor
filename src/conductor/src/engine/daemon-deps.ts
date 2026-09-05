@@ -109,6 +109,8 @@ export interface RealDepsConfig {
   workOrderGit?: WorkOrderGitRunner;
   /** One dispatcher-owned queue for every shared `.git` worktree mutation. */
   worktreeLifecycle?: WorktreeLifecycleQueue;
+  /** Resolved daemon pool width; the pin log is suppressed at effective concurrency 1 (Story 2 / adr-2026-08-27 D7 N=1 log equivalence). */
+  effectiveConcurrency?: number;
 }
 
 /**
@@ -163,7 +165,12 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
         branch,
         resolveBase: async () => {
           const baseSha = order?.baseSha ?? await resolveWorktreeBase(root, cfg.baseBranch);
-          cfg.log?.(`[daemon] work claim ${slug} pinned base ${baseSha}`);
+          // Amended Task 6: the pin stays recorded on the order at every width, but the
+          // log line is N>1-only so effective concurrency 1 keeps byte-for-byte log
+          // equivalence with the pre-change daemon (Story 2 / adr-2026-08-27 D7).
+          if ((cfg.effectiveConcurrency ?? 1) > 1) {
+            cfg.log?.(`[daemon] work claim ${slug} pinned base ${baseSha}`);
+          }
           return baseSha;
         },
         log: cfg.log,
