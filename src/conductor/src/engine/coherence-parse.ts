@@ -90,6 +90,49 @@ export function isSeparatorRow(cells: string[]): boolean {
   return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell));
 }
 
+/**
+ * Parse criterion-level rows from a plan's `## Coverage Check` table.
+ *
+ * The plan carrier has no verdict cell, so its affirmative coverage claim is
+ * represented by the shared shape's `covered` verdict. Legacy two-cell
+ * story-to-task rows remain the responsibility of the validator's reader.
+ */
+export function parsePlanCoverageCriterionRows(planText: string): CriterionCoherenceRow[] {
+  const rows: CriterionCoherenceRow[] = [];
+  let inCoverageCheck = false;
+  let sawSeparator = false;
+
+  for (const line of planText.split('\n')) {
+    if (/^## Coverage Check\s*$/.test(line)) {
+      inCoverageCheck = true;
+      sawSeparator = false;
+      continue;
+    }
+    if (inCoverageCheck && /^##\s+/.test(line)) break;
+    if (!inCoverageCheck) continue;
+
+    const cells = splitRow(line);
+    if (cells === null) continue;
+    if (!sawSeparator) {
+      if (isSeparatorRow(cells)) sawSeparator = true;
+      continue;
+    }
+    if (cells.length !== 4) continue;
+
+    const [criterion, rawCitedIds, rawQuote, rawDisposition] = cells;
+    rows.push({
+      rowClass: 'criterion',
+      criterion,
+      citedIds: rawCitedIds.split(',').map((id) => id.trim()),
+      verdict: 'covered',
+      quote: unquote(rawQuote),
+      disposition: rawDisposition === '' ? undefined : (rawDisposition as CriterionDiffLocalityDisposition),
+    });
+  }
+
+  return rows;
+}
+
 function structuralParseFailure(
   reason: CoherenceParseFailureReason,
   detail: CoherenceParseFailureDetail,
@@ -169,11 +212,8 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
           message: `unknown criterion verdict "${verdict}"`,
         });
       }
-      const citedIds = rawCitedIds
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-      if (citedIds.length === 0) {
+      const citedIds = rawCitedIds.split(',').map((s) => s.trim());
+      if (rawCitedIds.trim().length === 0) {
         return structuralParseFailure('unparseable-criterion-row', {
           line,
           message: 'criterion row must cite at least one task id',

@@ -54,6 +54,7 @@ const FRONT_DONE: ConductState = {
   coherence_check: 'done',
   architecture_diagram: 'done',
   architecture_review: 'done',
+  coverage_binding: 'done',
   acceptance_specs: 'done',
   build: 'done',
   build_review: 'done',

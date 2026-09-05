@@ -48,11 +48,17 @@ const PLAN = [
   '**Type:** happy-path',
   'Honor the governing decision and refuse contradictions.',
   '',
+  '**Done when:**',
+  '- Honor the governing decision when the story is implemented.',
+  '- The land gate must refuse contradictions.',
+  '',
   '## Coverage Check',
   '',
   '| Story | Tasks |',
   '| --- | --- |',
   '| 1 | 1 |',
+  '| Story 1 happy: Given an approved decision, when the story is implemented, then the decision is honored. | 1 | Honor the governing decision when the story is implemented. | diff-local |',
+  '| Story 1 negative: Given a contradiction, when land validates it, then the spec is refused. | 1 | The land gate must refuse contradictions. | diff-local |',
   '',
 ].join('\n');
 
@@ -259,9 +265,12 @@ describe('Stories 5 and 7 — committed signals preserve compatibility', () => {
       adrFiles: { '.docs/decisions/adr-warning-once.md': APPROVED_ADR },
       coherenceText: 'not a parseable coherence artifact',
     });
+    // Tier S now engages the criterion layer with the plan as its carrier
+    // (coverage_binding feature) instead of the historical full exemption.
     expect(resolveRequiredLayers(worktreePath, 'S', 'technical', [], tierSIdeaFiles)).toEqual({
-      engaged: false,
-      reason: 'tier-exempt',
+      engaged: true,
+      layers: new Set(['criterion']),
+      carrier: 'plan',
     });
     await expect(runGate(tierSIdeaFiles, 'S')).resolves.toBeUndefined();
 

@@ -38,7 +38,7 @@ render_changelog_range() {
   local changelog="${HARNESS_DIR}/CHANGELOG.md"
   [ -f "$changelog" ] || return 0
   local preview
-  preview=$(FROM_VER="$from_ver" TO_VER="$to_ver" python3 - "$changelog" <<'PY'
+  preview=$(FROM_VER="$from_ver" TO_VER="$to_ver" conductor_python - "$changelog" <<'PY'
 import os, re, sys
 from pathlib import Path
 

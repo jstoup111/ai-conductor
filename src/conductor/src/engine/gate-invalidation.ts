@@ -56,6 +56,7 @@ function isPrdAuditDocumentInput(path: string): boolean {
 }
 
 export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
+  coverage_binding: 'feature-runtime-or-prd-inputs',
   // Grades THE FEATURE'S OWN diff against its plan (plan-vs-diff
   // completeness), so only the feature's own code or tests can change the
   // grade — a foreign main-side delta leaves that diff, and therefore the

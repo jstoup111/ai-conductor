@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { parseCoherenceArtifact } from '../../src/engine/coherence-parse.js';
+import { parseCoherenceArtifact, parsePlanCoverageCriterionRows } from '../../src/engine/coherence-parse.js';
 import {
   coherenceRegressionCorpus,
   retiredHasCoherenceTableDataRow,
@@ -217,5 +217,79 @@ ${row}
       'five-wide header over six-wide separator and criterion row',
       'six-wide header over five-wide separator and legacy row',
     ]);
+  });
+});
+
+describe('parsePlanCoverageCriterionRows', () => {
+  it('parses a four-cell Coverage Check row into the shared criterion claim shape', () => {
+    expect(
+      parsePlanCoverageCriterionRows(`## Coverage Check
+
+| Criterion | Tasks | Done when quote | Disposition |
+| --- | --- | --- | --- |
+| Story 2 happy: Given a plan, when it is parsed, then it yields a claim | 4 | "that quote" | diff-local |
+`),
+    ).toEqual([
+      {
+        rowClass: 'criterion',
+        criterion: 'Story 2 happy: Given a plan, when it is parsed, then it yields a claim',
+        citedIds: ['4'],
+        verdict: 'covered',
+        quote: 'that quote',
+        disposition: 'diff-local',
+      },
+    ]);
+  });
+
+  it('does not return a legacy two-cell story-to-task row', () => {
+    expect(
+      parsePlanCoverageCriterionRows(`## Coverage Check
+
+| Story | Tasks |
+| --- | --- |
+| 2 | 4, 5 |
+`),
+    ).toEqual([]);
+  });
+
+  it('returns only four-cell criterion rows from a mixed Coverage Check table', () => {
+    expect(
+      parsePlanCoverageCriterionRows(`## Coverage Check
+
+| Story | Tasks | Quote | Disposition |
+| --- | --- | --- | --- |
+| 2 | 4, 5 |
+| Story 2 happy: Given a plan, when it is parsed, then it yields a claim | 4 | “quoted evidence” | diff-local |
+`),
+    ).toEqual([
+      {
+        rowClass: 'criterion',
+        criterion: 'Story 2 happy: Given a plan, when it is parsed, then it yields a claim',
+        citedIds: ['4'],
+        verdict: 'covered',
+        quote: 'quoted evidence',
+        disposition: 'diff-local',
+      },
+    ]);
+  });
+
+  it('returns no rows when the plan has no Coverage Check section', () => {
+    expect(parsePlanCoverageCriterionRows('## Tasks\n\n### Task 1\n')).toEqual([]);
+  });
+
+  it('preserves empty citation segments for the shared resolver to reject', () => {
+    const planRows = parsePlanCoverageCriterionRows(`## Coverage Check
+
+| Criterion | Tasks | Done when quote | Disposition |
+| --- | --- | --- | --- |
+| Criterion | 4, , 5 | "quote" | diff-local |
+`);
+    expect(planRows[0]?.citedIds).toEqual(['4', '', '5']);
+
+    const coherence = parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Criterion | task-4, , task-5 | covered | quote | diff-local |
+`);
+    expect(coherence).toMatchObject({ ok: true, rows: [{ citedIds: ['task-4', '', 'task-5'] }] });
   });
 });

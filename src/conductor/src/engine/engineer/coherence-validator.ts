@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import {
   isSeparatorRow,
   parseCoherenceArtifact,
+  parsePlanCoverageCriterionRows,
   splitRow,
   type CoherenceRow,
   type CriterionCoherenceRow,
@@ -28,7 +29,12 @@ import {
   extractAuthoritativeStoryCriteria,
   parseAdrDecisions,
 } from '../artifacts.js';
-import { parsePlanTaskBodies, parsePlanTaskPaths } from '../plan-task-parse.js';
+import {
+  parsePlanTaskBodies,
+  parsePlanTaskDoneWhen,
+  parsePlanTaskPaths,
+  resolveCitedPlanTaskIds,
+} from '../plan-task-parse.js';
 import {
   formatArchitectureDecisionId,
   validateArchitectureObligationCoverage,
@@ -367,7 +373,11 @@ export function checkStoryCoverage(
 
 // --- Criterion-coverage layer ---
 
-/** A criterion-level rejection, with a stable id suitable for the existing waiver mechanism. */
+/**
+ * A criterion-level rejection, with a stable id suitable for the existing
+ * waiver mechanism. `criterion:quote-not-done-when:<n>` means the quote was
+ * found in the cited task body but not in its `Done when` checks.
+ */
 export interface CriterionGapFinding {
   gapId: string;
   criterion: string;
@@ -382,15 +392,12 @@ function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-function taskIdFromCitation(citedId: string): string {
-  return citedId.trim().replace(/^task-/i, '');
-}
-
 /**
  * Compare every authored criterion claim to the authoritative story extractor
- * and to the body of the plan task it cites. This is deliberately evidence
- * grounding, not a semantic re-judgement of whether the task implements the
- * criterion: the engine only proves that the asserted task text is real.
+ * and to the `Done when` checks of the plan task it cites. This is deliberately
+ * evidence grounding, not a semantic re-judgement of whether the task
+ * implements the criterion: the engine only proves that the asserted task
+ * completion-check text is real.
  */
 export function checkCriterionCoverage(
   rows: CoherenceRow[],
@@ -414,6 +421,7 @@ export function checkCriterionCoverage(
     (row): row is CriterionCoherenceRow => row.rowClass === 'criterion',
   );
   const taskBodies = parsePlanTaskBodies(planText ?? '');
+  const taskDoneWhen = parsePlanTaskDoneWhen(planText ?? '');
   const gaps: CriterionGapFinding[] = [];
   const rowsByCriterion = new Map<string, CriterionCoherenceRow[]>();
   for (const row of criterionRows) {
@@ -471,9 +479,11 @@ export function checkCriterionCoverage(
       });
     }
 
-    const citedTaskIds = row.citedIds.map(taskIdFromCitation);
-    const missingTask = citedTaskIds.find((id) => !taskBodies.has(id));
-    if (missingTask) {
+    const taskResolution = resolveCitedPlanTaskIds(row.citedIds, new Set(taskBodies.keys()));
+    if (taskResolution.kind !== 'resolved') {
+      const missingTask = taskResolution.kind === 'unresolvable'
+        ? taskResolution.ids[0]
+        : row.citedIds.join(', ');
       gaps.push({
         gapId: `criterion:task-missing:${index + 1}:${missingTask}`,
         criterion: row.criterion,
@@ -481,6 +491,7 @@ export function checkCriterionCoverage(
       });
       continue;
     }
+    const citedTaskIds = taskResolution.ids;
 
     const quote = normalizeWhitespace(row.quote);
     if (!quote) {
@@ -491,14 +502,29 @@ export function checkCriterionCoverage(
       });
       continue;
     }
-    const quoteFound = citedTaskIds.some((id) =>
+    const quoteFoundInBody = citedTaskIds.some((id) =>
       normalizeWhitespace(taskBodies.get(id) ?? '').includes(quote),
     );
-    if (!quoteFound) {
+    if (!quoteFoundInBody) {
       gaps.push({
         gapId: `criterion:quote-ungrounded:${index + 1}`,
         criterion: row.criterion,
         detail: `criterion "${row.criterion}" is attributed to task ${row.citedIds.join(', ')}, but its quote is absent from the cited task body`,
+      });
+      continue;
+    }
+
+    const quoteFoundInDoneWhen = citedTaskIds.some((id) =>
+      (taskDoneWhen.get(id) ?? []).some((check) => normalizeWhitespace(check).includes(quote)),
+    );
+    if (!quoteFoundInDoneWhen) {
+      const doneWhenChecks = citedTaskIds
+        .map((id) => `task-${id}: ${(taskDoneWhen.get(id) ?? []).join('; ') || '(none)'}`)
+        .join('; ');
+      gaps.push({
+        gapId: `criterion:quote-not-done-when:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion "${row.criterion}" is attributed to task ${row.citedIds.join(', ')}, but its quote is absent from the cited task Done when checks: ${doneWhenChecks}`,
       });
     }
   }
@@ -916,7 +942,9 @@ function parseCoverageCheckTableRows(planText: string): CoverageTableRow[] | nul
       sawSeparator = true;
       continue;
     }
-    if (cells.length < 2) continue;
+    // Four-cell rows are criterion claims, parsed by the plan-carrier reader.
+    // They must not be reinterpreted as legacy story-to-task coverage rows.
+    if (cells.length < 2 || cells.length >= 4) continue;
     const storyId = cells[0].trim();
     const taskIds = cells[1]
       .split(',')
@@ -1363,6 +1391,8 @@ export type RequiredLayersResult =
       /** The gate runs; only the layers listed here are enforced. */
       engaged: true;
       layers: ReadonlySet<CoherenceRequiredLayer>;
+      /** The committed artifact that carries the required rows. */
+      carrier: 'coherence' | 'plan';
     };
 
 /**
@@ -1396,10 +1426,10 @@ export function resolveRequiredLayers(
 ): RequiredLayersResult {
   void worktree;
 
-  // 1. Tier exemption, checked first and unconditionally: never let a later
-  // check (missing artifact, legacy change set) misclassify an exempt spec.
+  // 1. Tier S carries criterion claims in its plan, so it engages only that
+  // layer before the M/L-only legacy coherence-artifact rule.
   if (tier === 'S') {
-    return { engaged: false, reason: 'tier-exempt' };
+    return { engaged: true, layers: new Set(['criterion']), carrier: 'plan' };
   }
 
   // 2. No-retroactivity trigger: a legacy change set (no coherence artifact
@@ -1432,7 +1462,7 @@ export function resolveRequiredLayers(
     layers.add('adr');
   }
 
-  return { engaged: true, layers };
+  return { engaged: true, layers, carrier: 'coherence' };
 }
 
 // --- `runCoherenceGate` facade (Task 16) ───────────────────────────────────
@@ -1543,27 +1573,33 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
   const required = resolveRequiredLayers(worktreePath, tier, track, outcomeBullets, ideaFiles);
   if (!required.engaged) return;
 
-  // Parse the committed coherence artifact (fail-closed on missing/empty/unparseable).
-  const coherenceRelPath = `.docs/coherence/${planStem}.md`;
-  const coherenceAbsPath = join(worktreePath, coherenceRelPath);
-  guard.assertWriteAllowed(coherenceAbsPath);
-  let coherenceText: string | null;
-  try {
-    coherenceText = await readFile(coherenceAbsPath, 'utf-8');
-  } catch {
-    coherenceText = null;
-  }
+  let rows: CoherenceRow[];
+  if (required.carrier === 'plan') {
+    rows = parsePlanCoverageCriterionRows(planText ?? '');
+  } else {
+    // Parse the committed coherence artifact (fail-closed on missing/empty/unparseable).
+    const coherenceRelPath = `.docs/coherence/${planStem}.md`;
+    const coherenceAbsPath = join(worktreePath, coherenceRelPath);
+    guard.assertWriteAllowed(coherenceAbsPath);
+    let coherenceText: string | null;
+    try {
+      coherenceText = await readFile(coherenceAbsPath, 'utf-8');
+    } catch {
+      coherenceText = null;
+    }
 
-  const parsed = parseCoherenceArtifact(coherenceText);
-  if (!parsed.ok) {
-    const detail = parsed.detail
-      ? ` Detail: line ${parsed.detail.line}: ${parsed.detail.message}.`
-      : '';
-    throw new Error(
-      `landSpec: coherence gate: ${parsed.reason} at "${coherenceRelPath}". ` +
-        detail +
-        'Run /coherence-check to author the traceability record before landing.',
-    );
+    const parsed = parseCoherenceArtifact(coherenceText);
+    if (!parsed.ok) {
+      const detail = parsed.detail
+        ? ` Detail: line ${parsed.detail.line}: ${parsed.detail.message}.`
+        : '';
+      throw new Error(
+        `landSpec: coherence gate: ${parsed.reason} at "${coherenceRelPath}". ` +
+          detail +
+          'Run /coherence-check to author the traceability record before landing.',
+      );
+    }
+    rows = parsed.rows;
   }
 
   const git = makeGitRunner(worktreePath);
@@ -1577,37 +1613,41 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
       .map(({ path }) => path.slice('.docs/decisions/'.length).replace(/\.md$/, '')),
   );
 
-  const architectureDecisionIds = new Set<string>();
-  for (const adrId of adrIds) {
-    const adrText = await readFile(join(worktreePath, '.docs', 'decisions', `${adrId}.md`), 'utf-8');
-    const decisions = parseAdrDecisions(adrText);
-    // ADR shape/status validation already has an owning land gate. This layer
-    // validates only decision ids that the established ADR parser can cite;
-    // it must not create a second, stricter ADR-validity judgement.
-    if (decisions.kind !== 'decisions') continue;
-    for (const decisionId of decisions.ids) {
-      architectureDecisionIds.add(formatArchitectureDecisionId(adrId, decisionId));
+  // Tier S intentionally enforces only plan-carried criterion claims. Its
+  // architecture-obligation rows are not part of that reduced surface.
+  if (required.layers.has('adr')) {
+    const architectureDecisionIds = new Set<string>();
+    for (const adrId of adrIds) {
+      const adrText = await readFile(join(worktreePath, '.docs', 'decisions', `${adrId}.md`), 'utf-8');
+      const decisions = parseAdrDecisions(adrText);
+      // ADR shape/status validation already has an owning land gate. This layer
+      // validates only decision ids that the established ADR parser can cite;
+      // it must not create a second, stricter ADR-validity judgement.
+      if (decisions.kind !== 'decisions') continue;
+      for (const decisionId of decisions.ids) {
+        architectureDecisionIds.add(formatArchitectureDecisionId(adrId, decisionId));
+      }
     }
-  }
 
-  const architectureCoverageViolations = validateArchitectureObligationCoverage(
-    planText ?? '',
-    architectureDecisionIds,
-  );
-  if (architectureCoverageViolations.length > 0) {
-    const details = architectureCoverageViolations
-      .map(({ decisionId, reason }) => `${decisionId} (${reason})`)
-      .join(', ');
-    throw new Error(
-      `landSpec: coherence gate: invalid architecture obligation coverage: ${details}. ` +
-        'Map every changed ADR decision to a real task with exact Done-when evidence, or record ' +
-        'an evidenced existing/no-change disposition.',
+    const architectureCoverageViolations = validateArchitectureObligationCoverage(
+      planText ?? '',
+      architectureDecisionIds,
     );
+    if (architectureCoverageViolations.length > 0) {
+      const details = architectureCoverageViolations
+        .map(({ decisionId, reason }) => `${decisionId} (${reason})`)
+        .join(', ');
+      throw new Error(
+        `landSpec: coherence gate: invalid architecture obligation coverage: ${details}. ` +
+          'Map every changed ADR decision to a real task with exact Done-when evidence, or record ' +
+          'an evidenced existing/no-change disposition.',
+      );
+    }
   }
 
   // Fabricated-citation fail-closed reject — never waivable (an evidentiary
   // defect, not a coverage gap).
-  const crossCheck = crossCheckIds(parsed.rows, {
+  const crossCheck = crossCheckIds(rows, {
     storiesText,
     planText,
     prdText,
@@ -1626,8 +1666,9 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
   // A stories file with no extractable criteria is malformed evidence, not a
   // coverage gap. Reject it before aggregation so a coherence waiver cannot
   // turn a failed criterion check into a successful land.
+  let criterionResult: CriterionCoverageResult | undefined;
   if (required.layers.has('criterion')) {
-    const criterionResult = checkCriterionCoverage(parsed.rows, storiesText, planText);
+    criterionResult = checkCriterionCoverage(rows, storiesText, planText);
     if (!criterionResult.ok && criterionResult.reason === 'unparseable-stories') {
       throw new Error(
         'landSpec: coherence gate: criterion:stories-unparseable — stories file has no ' +
@@ -1639,25 +1680,38 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
   const effectivePrdText = required.layers.has('fr') ? prdText : null;
   const effectiveOutcomeBullets = required.layers.has('outcome') ? outcomeBullets : [];
 
-  const coverage = validateCoherence({
-    rows: parsed.rows,
-    adrIds,
-    requiredLayers: required.layers,
-    outcomeBullets: [...effectiveOutcomeBullets],
-    prdText: effectivePrdText,
-    storiesText,
-    planText,
-  });
+  const coverage = required.carrier === 'coherence'
+    ? validateCoherence({
+        rows,
+        adrIds,
+        requiredLayers: required.layers,
+        outcomeBullets: [...effectiveOutcomeBullets],
+        prdText: effectivePrdText,
+        storiesText,
+        planText,
+      })
+    : undefined;
 
-  const gaps: CoherenceGap[] = coverage.ok ? [] : [...coverage.gaps];
+  const gaps: CoherenceGap[] = coverage
+    ? (coverage.ok ? [] : [...coverage.gaps])
+    : (!criterionResult || criterionResult.ok
+      ? []
+      : criterionResult.gaps.map((gap) => ({
+          layer: 'criterion' as const,
+          gapId: gap.gapId,
+          artifact: 'stories / plan',
+          item: gap.detail,
+        })));
 
   const defaultBranch = await deriveDefaultBranch(canonicalPath);
-  const duplicate = await scanDuplicateClaim(worktreePath, defaultBranch, sourceRef, {
-    git,
-    excludeSlug: planStem,
-  });
-  if (!duplicate.ok) {
-    gaps.push(duplicate.gap);
+  if (required.carrier === 'coherence') {
+    const duplicate = await scanDuplicateClaim(worktreePath, defaultBranch, sourceRef, {
+      git,
+      excludeSlug: planStem,
+    });
+    if (!duplicate.ok) {
+      gaps.push(duplicate.gap);
+    }
   }
 
   // Advisory open-PR overlap scan (Story 8, "Done When" #3): never blocks —

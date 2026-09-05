@@ -79,6 +79,7 @@ const FRONT_DONE: ConductState = {
   conflict_check: 'skipped',
   plan: 'done',
   coherence_check: 'done',
+  coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
@@ -102,6 +103,7 @@ const FRONT_DONE_M: ConductState = {
   conflict_check: 'skipped',
   plan: 'done',
   coherence_check: 'done',
+  coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'done',
   acceptance_specs: 'skipped',
@@ -282,6 +284,9 @@ describe('integration/rebase-loop', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
       );
+    } else if (step === 'coverage_binding') {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'add-foo', runId: 'test-run', status: 'disabled', entries: [] }));
     } else if (step === 'build_review') {
       // The build_review judgement gate's completion predicate requires a
       // fresh, valid PASS verdict at .pipeline/build-review.json (see
@@ -1433,8 +1438,9 @@ describe('integration/rebase-loop', () => {
           }).toEqual({
             kickedBack: [
               'build',
-              'test_suite',
+              'coverage_binding',
               'build_review',
+              'test_suite',
               ...manualTarget,
               'prd_audit',
               'architecture_review_as_built',
@@ -1480,8 +1486,9 @@ describe('integration/rebase-loop', () => {
         // Full legacy invalidation set (fail-closed fallback), no preservations.
         expect(result.kickedBack).toEqual([
           'build',
-          'test_suite',
+          'coverage_binding',
           'build_review',
+          'test_suite',
           'manual_test',
           'prd_audit',
           'architecture_review_as_built',

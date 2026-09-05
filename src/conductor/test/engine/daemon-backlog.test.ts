@@ -486,7 +486,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(logs.filter((message) => message.startsWith(`skip ${slug}:`))).toHaveLength(1);
   });
 
-  it('does not block a merged S-tier spec with no coherence file', async () => {
+  it('keeps a merged S-tier spec with no plan-carried criterion rows eligible at discovery', async () => {
     const slug = 's-tier-without-coherence';
     await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
     await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);

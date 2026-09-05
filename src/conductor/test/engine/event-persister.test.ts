@@ -96,6 +96,24 @@ describe('EventPersister', () => {
     expect(line.waitSeconds).toBe(30);
   });
 
+  it('persists a coverage-binding judgement to the shared pipeline ledger', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'coverage_binding_judged',
+      step: 'coverage_binding',
+      verdict: 'asserts',
+      digest: 'sha256:claim',
+      taskIds: ['17'],
+    } satisfies ConductorEvent;
+    persister.start();
+
+    await emitter.emit(event);
+    persister.stop();
+
+    const { ts: _ts, ...record } = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
+    expect(record).toEqual(event);
+  });
+
   it('persists a step-scoped loop halt without closing the active step interval', async () => {
     const persister = new EventPersister(eventsPath, emitter, scriptedClock(1_000, 1_025));
     persister.start();

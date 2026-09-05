@@ -1,8 +1,11 @@
 import {
   Conductor as ProductionConductor,
   type ConductorOptions,
+  type StepRunner,
 } from '../src/engine/conductor.js';
 import type { FullSuitePassEvidence } from '../src/engine/full-suite-evidence.js';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const PASS_EVIDENCE: FullSuitePassEvidence = {
   version: 3,
@@ -38,8 +41,33 @@ export const PASSING_FULL_SUITE_VERIFIER = {
 /** Production conductor with the native aggregate gate satisfied by default. */
 export class Conductor extends ProductionConductor {
   constructor(options: ConductorOptions) {
+    const suppliedRunner = options.stepRunner;
+    // Preserve prototype-supplied runner capabilities (for example,
+    // DefaultStepRunner.resetSession and rebase conflict resolution). Object
+    // spread copies only own enumerable properties, which silently strips
+    // those methods from class-backed runners.
+    const coverageAwareRunner = Object.create(suppliedRunner) as StepRunner;
+    coverageAwareRunner.run = async (step, state, runOptions) => {
+      const result = await suppliedRunner.run(step, state, runOptions);
+      if (step === 'coverage_binding' && result.success) {
+        const envelope = join(options.projectRoot, '.pipeline/coverage-binding.json');
+        const exists = await access(envelope).then(() => true, () => false);
+        if (!exists) {
+          await mkdir(join(options.projectRoot, '.pipeline'), { recursive: true });
+          await writeFile(envelope, JSON.stringify({
+            version: 1, slug: 'test-feature', runId: 'test-run', status: 'disabled', entries: [],
+          }));
+        }
+      }
+      return result;
+    };
     super({
       ...options,
+      // Most conductor fixtures deliberately model their subject step and
+      // leave unrelated default-off gates to the test harness.  Production's
+      // runner writes this envelope itself; faithfully emulate that boundary
+      // here so those fixtures continue to exercise their intended transition.
+      stepRunner: coverageAwareRunner,
       fullSuiteVerifier: options.fullSuiteVerifier ?? PASSING_FULL_SUITE_VERIFIER,
     });
   }

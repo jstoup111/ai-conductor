@@ -59,6 +59,21 @@ conductor_cli() {
   fi
 }
 
+# Run the standard-library-only Python helpers used by the shell update flow.
+# An installed checkout normally respects the caller's PATH (including test
+# fixtures).  asdf's shim is the exception: it resolves Python against the
+# checkout's tool file and can fail before Python starts when that file is
+# absent.  In that case, use the POSIX default search path instead.
+# Usage: conductor_python <python arguments...>
+conductor_python() {
+  local python
+  python="$(command -v python3 || true)"
+  case "$python" in
+    */.asdf/shims/python3|*/asdf/shims/python3) command -p python3 "$@" ;;
+    *) python3 "$@" ;;
+  esac
+}
+
 # Read a scalar field from the schema-owned conductor block.
 #
 # The optional default is retained for callers migrating from the legacy
@@ -134,7 +149,7 @@ seed_conductor_config_from_legacy() {
 
   [ -e "$CONDUCTOR_CONFIG" ] || return 0
 
-  if ! legacy_values=$(CONDUCTOR_CONFIG="$CONDUCTOR_CONFIG" python3 - <<'PY'
+  if ! legacy_values=$(CONDUCTOR_CONFIG="$CONDUCTOR_CONFIG" conductor_python - <<'PY'
 import json
 import os
 import sys

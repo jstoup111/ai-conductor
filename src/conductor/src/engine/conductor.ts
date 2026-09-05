@@ -32,6 +32,7 @@ import {
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { planContractPointers, priorAttemptPointers } from './remediation-context-pointers.js';
+import type { CoverageBindingPayloadError } from './step-runners.js';
 import type {
   AuthenticationReadiness,
   CodexProbeFailure,
@@ -1129,6 +1130,8 @@ export interface StepRunResult {
     kind: 'seal' | 'needs-human' | 'validation-verdict';
     reason: string;
   };
+  /** Retryable typed infrastructure failure from the coverage-binding judge. */
+  infrastructureFailure?: Pick<CoverageBindingPayloadError, 'name' | 'kind' | 'reason'>;
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
   /**
@@ -8967,8 +8970,20 @@ export class Conductor {
               typeof result.output === 'string' && result.output.trim().length > 0
                 ? result.output
                 : undefined;
+            // An invalid coverage-binding judge payload is a typed, retryable
+            // infrastructure failure. Keep it distinct from an arbitrary
+            // runner failure so the ordinary retry ladder preserves the
+            // classifier's diagnostic rather than treating it as provider text.
+            const coverageBindingPayloadReason =
+              step.name === 'coverage_binding' &&
+              result.infrastructureFailure?.name === 'CoverageBindingPayloadError' &&
+              result.infrastructureFailure.kind === 'coverage-binding-payload'
+                ? result.infrastructureFailure.reason
+                : undefined;
             lastError =
-              runnerOutput ??
+              coverageBindingPayloadReason !== undefined
+                ? `coverage-binding judge infrastructure failure: ${coverageBindingPayloadReason}`
+                : runnerOutput ??
               `Step '${step.name}' produced no output — the step runner exited without a result ` +
                 `(the grader/subprocess likely failed to start or died before writing a verdict)`;
             retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;
@@ -11797,6 +11812,7 @@ export class Conductor {
         // manual_test → prd_audit →
         // architecture_review_as_built).
         for (const target of [
+          'coverage_binding',
           'build',
           'test_suite',
           'build_review',

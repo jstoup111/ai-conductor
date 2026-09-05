@@ -144,9 +144,11 @@ prd_audit:
   # once both features pass (see #2147 for the per-feature grant design).
   max_remediation_laps: 2
 
-# TEMPORARY (operator, 2026-09-04): same grant as above; revert with it.
+# TEMPORARY (operator, 2026-09-04, laps raised 2026-09-05): third lap granted —
+# AB-1 converged to the conductor-consumption half only. Worktree-local
+# recovery, not feature scope; revert with the grant above.
 architecture_review_as_built:
-  max_remediation_laps: 2
+  max_remediation_laps: 3
 
 steps:
   explore:

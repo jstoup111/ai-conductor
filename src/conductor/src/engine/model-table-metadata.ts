@@ -39,6 +39,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   architecture_review:
     'Pre-implementation design feasibility and alignment requires a high-capability model from the selected provider policy.',
   worktree: 'Git operations — mechanical branch/worktree management.',
+  coverage_binding: 'Engine-native coverage-claim gate; its later auxiliary judge has a separate model-table row.',
   acceptance_specs: 'Translating acceptance criteria into executable boundary-level specs requires strong reasoning to preserve behavioral intent and negative paths, using MEDIUM effort for S/M and HIGH effort for Large work.',
   build:
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
@@ -127,22 +128,35 @@ export interface ExtraModelTableRow {
   why: string;
 }
 
-/**
- * Rows for engine-managed auxiliary judgements. These are intentionally not
- * `StepName`s: each row inherits its independently resolved rubric policy
- * from the public build_review gate rather than inventing a lifecycle step.
- */
-export interface AuxiliaryModelTableRow {
+interface AuxiliaryModelTableRowBase {
   name: string;
-  executionPath: 'engine-managed auxiliary rubric';
-  claudeModel: 'inherits resolved rubric policy';
-  claudeEffort: 'inherits resolved rubric policy';
-  codexModel: 'inherits resolved rubric policy';
-  codexEffort: 'inherits resolved rubric policy';
   why: string;
 }
 
+/**
+ * Rows for engine-managed auxiliary judgements. These are intentionally not
+ * `StepName`s: each judge inherits its owning gate's resolved provider policy
+ * rather than inventing a lifecycle step.
+ */
+export type AuxiliaryModelTableRow = AuxiliaryModelTableRowBase & (
+  | {
+      executionPath: 'engine-managed auxiliary rubric';
+      claudeModel: 'inherits resolved rubric policy';
+      claudeEffort: 'inherits resolved rubric policy';
+      codexModel: 'inherits resolved rubric policy';
+      codexEffort: 'inherits resolved rubric policy';
+    }
+  | {
+      executionPath: 'engine-managed auxiliary judge';
+      claudeModel: 'inherits resolved coverage-binding policy';
+      claudeEffort: 'inherits resolved coverage-binding policy';
+      codexModel: 'inherits resolved coverage-binding policy';
+      codexEffort: 'inherits resolved coverage-binding policy';
+    }
+);
+
 const RESOLVED_RUBRIC_POLICY = 'inherits resolved rubric policy' as const;
+const RESOLVED_COVERAGE_BINDING_POLICY = 'inherits resolved coverage-binding policy' as const;
 
 export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
   {
@@ -153,6 +167,15 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     codexModel: RESOLVED_RUBRIC_POLICY,
     codexEffort: RESOLVED_RUBRIC_POLICY,
     why: 'Judges whether criterion-bound changed tests are insensitive to the behavior they claim to cover; preflight is evidence, never a verdict.',
+  },
+  {
+    name: 'coverage-binding',
+    executionPath: 'engine-managed auxiliary judge',
+    claudeModel: RESOLVED_COVERAGE_BINDING_POLICY,
+    claudeEffort: RESOLVED_COVERAGE_BINDING_POLICY,
+    codexModel: RESOLVED_COVERAGE_BINDING_POLICY,
+    codexEffort: RESOLVED_COVERAGE_BINDING_POLICY,
+    why: 'Fresh per-claim judgement of whether cited Done when checks assert the criterion; the engine scopes inputs, validates the closed verdict, and owns the gate outcome.',
   },
 ];
 

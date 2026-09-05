@@ -58,6 +58,19 @@ export function resolvePlanTaskReference(
     : { kind: 'unresolvable', ids: absent };
 }
 
+/** Resolves criterion-carrier citations against plan headings. */
+export function resolveCitedPlanTaskIds(
+  citedIds: readonly string[],
+  planTaskIds: ReadonlySet<string>,
+): PlanTaskReferenceResolution {
+  // `task-` is carrier presentation only. The shared resolver owns all
+  // remaining normalization, grammar, de-duplication, and membership rules.
+  return resolvePlanTaskReference(
+    citedIds.map((segment) => segment.replace(/^\s*task-/i, '')).join(','),
+    planTaskIds,
+  );
+}
+
 // Shared task-header grammar for parsers that identify task blocks without
 // requiring a title. Keep every consumer on this expression so a supported
 // heading form cannot silently drift between Files and Verify-only metadata.

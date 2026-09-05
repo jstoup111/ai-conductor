@@ -1351,25 +1351,12 @@ export async function applyRebaseVerdicts(
   const partition = outcome.featureSurface !== undefined
     ? classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, ranManualTest)
     : undefined;
-  const targets: StepName[] =
-    partition !== undefined
-      ? (['build', ...partition.invalidated] as StepName[])
-      : ranManualTest
-        ? ([
-            'build',
-            'test_suite',
-            'build_review',
-            'manual_test',
-            'prd_audit',
-            'architecture_review_as_built',
-          ] as StepName[])
-        : ([
-            'build',
-            'test_suite',
-            'build_review',
-            'prd_audit',
-            'architecture_review_as_built',
-          ] as StepName[]);
+  const targets: StepName[] = partition !== undefined
+    ? (['build', ...partition.invalidated] as StepName[])
+    : ([
+        'build',
+        ...Object.keys(GATE_SURFACE).filter((gate) => ranManualTest || gate !== 'manual_test'),
+      ] as StepName[]);
   for (const target of targets) {
     // A successful tree-attesting pre-verify has already written this gate's
     // fresh satisfied verdict, so it is not kicked back.

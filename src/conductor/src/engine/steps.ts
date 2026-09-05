@@ -130,6 +130,20 @@ export const ALL_STEPS: StepDefinition[] = [
     skillName: 'coherence-check',
   },
   {
+    // Engine-native BUILD gate: judges whether each criterion coverage claim
+    // is actually asserted by its cited task's Done when checks (ADR D4).
+    name: 'coverage_binding',
+    label: 'Coverage Binding',
+    phase: 'BUILD',
+    enforcement: 'gating',
+    prerequisites: ['plan'],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    // A changed rebase invalidates this feature/runtime-derived judgement, so
+    // it must participate in the shared verdict and kickback topology.
+    kickbackTarget: true,
+  },
+  {
     name: 'acceptance_specs',
     label: 'Acceptance Specs',
     phase: 'BUILD',

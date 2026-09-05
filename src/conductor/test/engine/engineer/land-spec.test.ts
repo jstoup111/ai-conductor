@@ -44,6 +44,37 @@ const PLAN_WITH_DEPS = [
   '',
 ].join('\n');
 
+const SMALL_TIER_STORIES = [
+  '# Stories: dep bump',
+  '',
+  '**Status:** Accepted',
+  '',
+  '## Story 1: bump',
+  '### Happy Path',
+  '- Given X, when Y, then Z.',
+  '',
+].join('\n');
+
+const SMALL_TIER_PLAN = [
+  '# Implementation Plan: dep bump',
+  '',
+  '**Stories:** .docs/stories/dep-bump.md',
+  '',
+  '### Task 1: Bump dependency',
+  '**Story:** Story 1',
+  '',
+  '**Done when:**',
+  '- Given X, when Y, then Z.',
+  '- The dependency update is documented.',
+  '',
+  '## Coverage Check',
+  '',
+  '| Criterion | Task ids | Quote | Disposition |',
+  '| --- | --- | --- | --- |',
+  '| Story 1 happy: Given X, when Y, then Z. | 1 | "Given X, when Y, then Z." | diff-local |',
+  '',
+].join('\n');
+
 /** Stories artifact with a DRAFT ADR present — an "also invalid" artifact set
  *  (Task 8): stories itself is Accepted (so the stories-approval guard alone
  *  doesn't fire first), but a DRAFT ADR under .docs/decisions/ must still
@@ -937,8 +968,8 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
-    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
-    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), SMALL_TIER_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), SMALL_TIER_PLAN);
     // Idea's own complexity file declares Small — no conflicts/architecture/decisions needed.
     await writeFile(join(dir, '.docs', 'complexity', 'dep-bump.md'), '# Complexity\n\nTier: S\n');
 

@@ -54,6 +54,11 @@ import {
 import { extractStoryCriterionIds, sectionBody, splitStoryBlocks } from './story-criteria.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
+import {
+  COVERAGE_BINDING_COMPLETION_STATUSES,
+  coverageBindingEnvelopePath,
+  parseCoverageBindingEnvelope,
+} from './coverage-binding-envelope.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -280,6 +285,7 @@ export const STEP_ARTIFACT_CONTRACTS = {
     },
   ],
   worktree: [],
+  coverage_binding: [{ pattern: '.pipeline/coverage-binding.json', scope: 'run' }],
   acceptance_specs: [
     'spec/acceptance/**/*',
     'spec/requests/**/*',
@@ -2591,6 +2597,22 @@ async function writeArchitectureReviewAsBuiltCodeStamp(
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
+  coverage_binding: async (dir): Promise<CompletionResult> => {
+    const path = coverageBindingEnvelopePath(dir);
+    let envelope;
+    try {
+      envelope = parseCoverageBindingEnvelope(JSON.parse(await readFile(path, 'utf8')));
+    } catch {
+      envelope = null;
+    }
+    if (envelope === null) {
+      return { done: false, reason: '.pipeline/coverage-binding.json is missing or invalid' };
+    }
+    if (!(COVERAGE_BINDING_COMPLETION_STATUSES as readonly string[]).includes(envelope.status)) {
+      return { done: false, reason: `.pipeline/coverage-binding.json has non-completing status: ${envelope.status}` };
+    }
+    return { done: true };
+  },
   // Build is "done" only when (a) no halt marker is present and (b) every
   // task in .pipeline/task-status.json is completed or skipped. The halt-
   // marker check exists because a pipeline session that exits at the user's

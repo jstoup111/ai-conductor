@@ -100,6 +100,7 @@ const FRONT_DONE: ConductState = {
   conflict_check: 'skipped',
   plan: 'done',
   coherence_check: 'done',
+  coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
@@ -133,6 +134,12 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
     events = new ConductorEventEmitter();
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs'), { recursive: true });
+    // The default-off coverage_binding gate predates this fixture; satisfy its
+    // run-scoped envelope up front so it never interleaves with the steps
+    // these specs assert on.
+    await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({
+      version: 1, slug: 'decide-kickback-halt', runId: 'test-run', status: 'disabled', entries: [],
+    }));
   });
 
   afterEach(async () => {

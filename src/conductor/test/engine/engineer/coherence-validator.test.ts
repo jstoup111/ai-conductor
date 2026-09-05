@@ -9,7 +9,7 @@
 //   - three distinct error kinds, never collapsed into one generic error
 
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -1144,6 +1144,77 @@ describe('checkOrphanTasks', () => {
 });
 
 describe('checkCoverageTableConsistency', () => {
+  // Snapshot captured against the parent of Task 1. Every plan not named here
+  // produced no legacy `claim-<row>` gaps in that corpus.
+  const legacyCoverageGapSnapshot: Record<string, string[]> = {
+    '2026-05-01-wave-c-json-stdout-subscriber.md': [
+      'claim-1', 'claim-2', 'claim-3', 'claim-4', 'claim-5', 'claim-6',
+      'claim-7', 'claim-8', 'claim-9', 'claim-9', 'claim-10',
+    ],
+    '2026-05-01-wave-c-telemetry-event-log.md': [
+      'claim-1', 'claim-2', 'claim-3', 'claim-4', 'claim-4', 'claim-5',
+      'claim-6', 'claim-7', 'claim-8', 'claim-8', 'claim-9', 'claim-10',
+      'claim-11', 'claim-12', 'claim-13', 'claim-14', 'claim-15', 'claim-16',
+      'claim-17', 'claim-18',
+    ],
+    '2026-07-12-wiring-reachability-gate.md': [
+      'claim-1', 'claim-1', 'claim-1', 'claim-1', 'claim-1', 'claim-2',
+      'claim-3', 'claim-3', 'claim-3', 'claim-4', 'claim-4', 'claim-4',
+      'claim-5', 'claim-5', 'claim-5', 'claim-5', 'claim-5', 'claim-5',
+      'claim-6', 'claim-6', 'claim-6', 'claim-7', 'claim-7', 'claim-7',
+      'claim-8', 'claim-8', 'claim-8', 'claim-8', 'claim-9', 'claim-9',
+    ],
+    'decide-artifact-coherence-check.md': [
+      'claim-1', 'claim-1', 'claim-1', 'claim-1', 'claim-2', 'claim-2',
+      'claim-2', 'claim-2', 'claim-2', 'claim-3', 'claim-4', 'claim-5',
+      'claim-6', 'claim-7', 'claim-8', 'claim-9', 'claim-10', 'claim-11',
+      'claim-12', 'claim-13', 'claim-13', 'claim-13', 'claim-13', 'claim-14',
+      'claim-14', 'claim-14',
+    ],
+    'decide-pipeline-restructure.md': [
+      'claim-1', 'claim-1', 'claim-1', 'claim-2', 'claim-2', 'claim-2',
+      'claim-3', 'claim-3', 'claim-3', 'claim-3', 'claim-3', 'claim-4',
+      'claim-5', 'claim-5', 'claim-6', 'claim-7', 'claim-7', 'claim-8',
+      'claim-8', 'claim-9', 'claim-10', 'claim-10', 'claim-11', 'claim-11',
+      'claim-11', 'claim-11', 'claim-11', 'claim-12', 'claim-12', 'claim-12',
+    ],
+    'engineer-claim-delivery-guard.md': [
+      'claim-1', 'claim-1', 'claim-2', 'claim-2', 'claim-3', 'claim-4',
+      'claim-5', 'claim-6', 'claim-7', 'claim-7', 'claim-8', 'claim-9',
+      'claim-10', 'claim-11', 'claim-12', 'claim-13', 'claim-14', 'claim-15',
+      'claim-16', 'claim-17', 'claim-18',
+    ],
+  };
+
+  it('pins every merged plan\'s legacy claim-<row> gap set from before criterion rows existed', async () => {
+    const plansDirectory = join(process.cwd(), '../..', '.docs/plans');
+    const planFiles = (await readdir(plansDirectory)).filter((file) => file.endsWith('.md')).sort();
+
+    for (const planFile of planFiles) {
+      const planText = await readFile(join(plansDirectory, planFile), 'utf8');
+      const result = checkCoverageTableConsistency(planText);
+      expect(result.ok ? [] : result.gaps.map((gap) => gap.gapId)).toEqual(
+        legacyCoverageGapSnapshot[planFile] ?? [],
+      );
+    }
+  });
+
+  it('does not reinterpret a four-cell criterion row as a legacy story-to-task claim', () => {
+    const planText = `# Plan
+
+### Task 4: Ship widget
+**Story:** Story 2
+
+## Coverage Check
+
+| Criterion | Task | Quote | Disposition |
+| --- | --- | --- | --- |
+| Story 2 happy: Given a widget, when shipped, then it arrives. | 4 | Ship widget. | diff-local |
+`;
+
+    expect(checkCoverageTableConsistency(planText)).toEqual({ ok: true });
+  });
+
   it('reports claim-<row> when a coverage-table row cites a task id absent from the task tree', () => {
     const planText = `# Plan
 
@@ -1621,29 +1692,38 @@ describe('advisoryDuplicateClaimWarn (fail-open, reuses overlap-scan.ts)', () =>
   });
 });
 
-describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-retroactivity)', () => {
+describe('resolveRequiredLayers (tier gating, layer degradation, no-retroactivity)', () => {
   const WITH_COHERENCE = ['.docs/coherence/my-plan.md'];
   const LEGACY = ['.docs/plan/my-plan.md', 'src/foo.ts'];
 
-  it('disengages for tier S BEFORE any other check — even with a legacy change set and no outcomes', () => {
+  it('engages tier S with only the plan-carried criterion layer before legacy-change-set handling', () => {
     const result = resolveRequiredLayers('/wt', 'S', 'product', [], LEGACY);
-    expect(result).toEqual({ engaged: false, reason: 'tier-exempt' });
+    expect(result).toEqual({
+      engaged: true,
+      layers: new Set(['criterion']),
+      carrier: 'plan',
+    });
   });
 
-  it('disengages for tier S even when the change set carries a coherence artifact', () => {
+  it('keeps tier S on the plan carrier even when the change set carries a coherence artifact', () => {
     const result = resolveRequiredLayers('/wt', 'S', 'technical', ['outcome bullet'], WITH_COHERENCE);
-    expect(result.engaged).toBe(false);
-    if (result.engaged) return;
-    expect(result.reason).toBe('tier-exempt');
+    expect(result.engaged).toBe(true);
+    if (!result.engaged) return;
+    expect(result.carrier).toBe('plan');
+    expect(result.layers).toEqual(new Set(['criterion']));
   });
 
-  it('disengages tier S before deriving ADR requirements', () => {
+  it('keeps tier S restricted to criterion even when outcomes and ADRs are present', () => {
     expect(
       resolveRequiredLayers('/wt', 'S', 'product', [], [
         '.docs/coherence/foo.md',
         '.docs/decisions/adr-foo.md',
       ]),
-    ).toEqual({ engaged: false, reason: 'tier-exempt' });
+    ).toEqual({
+      engaged: true,
+      layers: new Set(['criterion']),
+      carrier: 'plan',
+    });
   });
 
   it('technical track marker skips the FR layer but keeps story/orphan-task/coverage-table enforced', () => {
@@ -1728,12 +1808,131 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
     expect(result).toEqual({
       engaged: true,
       layers: new Set(['fr', 'story', 'criterion', 'orphan-task', 'coverage-table']),
+      carrier: 'coherence',
     });
   });
 
-  it('L-tier engages normally too', () => {
+  it('pins the unchanged L-tier layer set on the coherence carrier', () => {
     const result = resolveRequiredLayers('/wt', 'L', 'product', [], WITH_COHERENCE);
-    expect(result.engaged).toBe(true);
+    expect(result).toEqual({
+      engaged: true,
+      layers: new Set(['fr', 'story', 'criterion', 'orphan-task', 'coverage-table']),
+      carrier: 'coherence',
+    });
+  });
+});
+
+describe('runCoherenceGate tier-S plan carrier', () => {
+  const storiesText = `# Stories
+
+## Story 1: Widget
+
+### Happy Path
+- Given a widget, when it ships, then it arrives
+`;
+  const criterion = 'Story 1 happy: Given a widget, when it ships, then it arrives';
+
+  async function createWorktree(): Promise<{ canonicalPath: string; worktreePath: string }> {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-tier-s-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(canonicalPath, 'README.md'), '# fixture\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed fixture']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+    return { canonicalPath, worktreePath };
+  }
+
+  function plan(disposition: string): string {
+    return `# Plan
+
+### Task 1: Ship widget
+**Story:** Story 1
+**Type:** happy-path
+
+**Done when:**
+- Ship the widget with arrival tracking.
+
+## Coverage Check
+
+| Criterion | Task ids | Quote | Disposition |
+| --- | --- | --- | --- |
+| ${criterion} | 1 | "Ship the widget with arrival tracking." | ${disposition} |
+`;
+  }
+
+  it('runs the tier-S plan carrier: it accepts a grounded claim and rejects a quote outside Done when', async () => {
+    const { canonicalPath, worktreePath } = await createWorktree();
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText, planText: plan('diff-local'), prdText: null,
+      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).resolves.toBeUndefined();
+
+    const stepsOnlyQuote = 'Record the arrival details before completion.';
+    const planWithStepsOnlyQuote = plan('diff-local')
+      .replace('**Done when:**', `${stepsOnlyQuote}\n\n**Done when:**`)
+      .replace('"Ship the widget with arrival tracking."', `"${stepsOnlyQuote}"`);
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText, planText: planWithStepsOnlyQuote, prdText: null,
+      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow('criterion:quote-not-done-when:1');
+  });
+
+  it('rejects a negative disposition in a plan-carried tier-S claim', async () => {
+    const { canonicalPath, worktreePath } = await createWorktree();
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText, planText: plan('outside-diff'), prdText: null,
+      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow('criterion:disposition-negative:1');
+  });
+
+  it('rejects every extracted criterion omitted from a tier-S plan carrier', async () => {
+    const { canonicalPath, worktreePath } = await createWorktree();
+    const omittedStories = `${storiesText}
+### Negative Path
+- Given a widget, when its tracking fails, then shipping is rejected
+`;
+    const negativeCriterion =
+      'Story 1 negative: Given a widget, when its tracking fails, then shipping is rejected';
+
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText: omittedStories,
+      planText: plan('diff-local').replace(/\n## Coverage Check[\s\S]*/, '\n'), prdText: null,
+      outcomeBullets: [], ideaFiles: new Set(['.docs/plans/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow(new RegExp(
+      `criterion:omitted:1[\\s\\S]*${criterion}[\\s\\S]*criterion:omitted:2[\\s\\S]*${negativeCriterion}`,
+    ));
+  });
+
+  it('refuses unparseable tier-S stories even when a fresh waiver names the gap', async () => {
+    const { canonicalPath, worktreePath } = await createWorktree();
+    await mkdir(join(worktreePath, '.docs/coherence-waivers'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence-waivers/idea.md'),
+      'Waives: criterion:stories-unparseable\nRationale: malformed story evidence cannot be waived.\n',
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'add attempted tier S criterion waiver']);
+
+    await expect(runCoherenceGate({
+      worktreePath, canonicalPath, tier: 'S', track: 'product', sourceRef: undefined,
+      planStem: 'idea', storiesText: '# Stories\n\n## Story 1: Widget\n',
+      planText: plan('diff-local'), prdText: null,
+      outcomeBullets: [],
+      ideaFiles: new Set(['.docs/plans/idea.md', '.docs/coherence-waivers/idea.md']),
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow('criterion:stories-unparseable');
   });
 });
 
@@ -1757,11 +1956,17 @@ describe('criterion coverage (Tasks 4-18, 24)', () => {
 Ship the widget with
 arrival tracking.
 
+**Done when:**
+- Ship the widget with arrival tracking.
+
 ### Task 2: Reject broken widget
 **Story:** Story 1
 **Type:** negative-path
 
 Reject the broken widget before shipping.
+
+**Done when:**
+- Reject the broken widget before shipping.
 `;
   const criterion = 'Story 1 happy: Given a widget, when it ships, then it arrives';
   const negativeCriterion = 'Story 1 negative: Given a broken widget, when it ships, then it is rejected';
@@ -1780,6 +1985,75 @@ Reject the broken widget before shipping.
       `| criterion | ${criterion} | task-1 | covered | "Ship the widget with arrival tracking." | diff-local |`,
       `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
     ]);
+
+  const doneWhenStories = `# Stories
+
+## Story 1: Done-when evidence
+
+### Happy Path
+- Given a coverage claim, when its task completes, then the cited check proves the claim
+`;
+  const doneWhenCriterion =
+    'Story 1 happy: Given a coverage claim, when its task completes, then the cited check proves the claim';
+  const doneWhenPlan = `# Plan
+
+### Task 3: Grounded check
+**Done when:**
+- The widget is shipped with   arrival tracking.
+
+### Task 5: Alternate grounded check
+**Done when:**
+- The alternate task records the shipping confirmation.
+
+### Task 14: Steps-only evidence
+Document the steps-only evidence before completion.
+
+**Done when:**
+- Verify the recorded status.
+- Record the audit evidence.
+`;
+
+  it('accepts a whitespace-normalized quote from a cited task Done when check', () => {
+    const valid = rows([
+      `| criterion | ${doneWhenCriterion} | task-3 | covered | "The widget is shipped with arrival tracking." | diff-local |`,
+    ]);
+
+    expect(checkCriterionCoverage(valid, doneWhenStories, doneWhenPlan)).toEqual({ ok: true });
+  });
+
+  it('accepts a quote from any cited task Done when check', () => {
+    const valid = rows([
+      `| criterion | ${doneWhenCriterion} | task-3, task-5 | covered | "The alternate task records the shipping confirmation." | diff-local |`,
+    ]);
+
+    expect(checkCriterionCoverage(valid, doneWhenStories, doneWhenPlan)).toEqual({ ok: true });
+  });
+
+  it('rejects a quote found only in Steps prose with the cited Done when checks', () => {
+    const invalid = rows([
+      `| criterion | ${doneWhenCriterion} | task-14 | covered | "Document the steps-only evidence before completion." | diff-local |`,
+    ]);
+
+    const result = checkCriterionCoverage(invalid, doneWhenStories, doneWhenPlan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-not-done-when:1']);
+    expect(result.gaps[0].detail).toContain(doneWhenCriterion);
+    expect(result.gaps[0].detail).toContain('task-14');
+    expect(result.gaps[0].detail).toContain('Verify the recorded status.');
+    expect(result.gaps[0].detail).toContain('Record the audit evidence.');
+  });
+
+  it('keeps quote-ungrounded when the quote is absent from the cited task entirely', () => {
+    const invalid = rows([
+      `| criterion | ${doneWhenCriterion} | task-14 | covered | "Absent task evidence." | diff-local |`,
+    ]);
+
+    const result = checkCriterionCoverage(invalid, doneWhenStories, doneWhenPlan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-ungrounded:1']);
+  });
 
   it('accepts every extracted criterion when its quote is in a cited task, including normalized whitespace', () => {
     const valid = rows([
@@ -1841,21 +2115,19 @@ Cover the two acceptance variants: created and updated.
     expect(result.gaps[0].detail).toContain('task-1');
   });
 
-  // Plan Task 15 — the stale-quote case: the same rows pass against the plan
-  // text the quote was authored from, then fail after the task's wording is
-  // edited. Two runs over edited text prove the gate re-derives task bodies
-  // instead of caching a prior verdict.
-  it('re-checks a previously valid quote after the cited task body is edited (plan Task 15)', () => {
+  // A task-body edit alone no longer invalidates a quote grounded in `Done
+  // when`; changing its completion check instead produces the new D2 gap.
+  it('re-checks a previously valid quote after the cited task Done when check is edited', () => {
     const valid = completeRows();
     expect(checkCriterionCoverage(valid, stories, plan)).toEqual({ ok: true });
     const editedPlan = plan.replace(
-      'Ship the widget with\narrival tracking.',
+      'Ship the widget with arrival tracking.',
       'Dispatch the widget with delivery confirmation.',
     );
     const rerun = checkCriterionCoverage(valid, stories, editedPlan);
     expect(rerun.ok).toBe(false);
     if (rerun.ok) return;
-    expect(rerun.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-ungrounded:1']);
+    expect(rerun.gaps.map((gap) => gap.gapId)).toEqual(['criterion:quote-not-done-when:1']);
     expect(rerun.gaps[0].detail).toContain(criterion);
   });
 
@@ -1886,6 +2158,53 @@ Cover the two acceptance variants: created and updated.
       expect.arrayContaining(['criterion:quote-ungrounded:1', 'criterion:task-missing:2:99']),
     );
     expect(result.gaps.map((gap) => gap.detail).join('\n')).toContain(criterion);
+  });
+
+  it('resolves a trailing task annotation before checking criterion evidence', () => {
+    const annotatedPlan = `${plan}
+### Task 4: Ship widget after landing
+**Story:** Story 1
+
+**Done when:**
+- Ship the widget with arrival tracking.
+`;
+    const annotated = rows([
+      `| criterion | ${criterion} | 4 (landed) | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
+    ]);
+
+    expect(checkCriterionCoverage(annotated, stories, annotatedPlan)).toEqual({ ok: true });
+  });
+
+  it('keeps the existing missing-task id when a criterion cites task 9 outside the plan task set', () => {
+    const missingTask = rows([
+      `| criterion | ${criterion} | task-9 | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
+    ]);
+
+    const result = checkCriterionCoverage(missingTask, stories, plan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        gapId: 'criterion:task-missing:1:9',
+        criterion,
+      }),
+    ]));
+  });
+
+  it('keeps the existing invented id when a criterion is absent from the stories file', () => {
+    const invented = rows([
+      `| criterion | Story 99 happy: Given an invented widget, when shipped, then it arrives. | task-1 | covered | "Ship the widget with arrival tracking." | diff-local |`,
+      `| criterion | ${negativeCriterion} | task-2 | covered | "Reject the broken widget before shipping." | diff-local |`,
+    ]);
+
+    const result = checkCriterionCoverage(invented, stories, plan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ gapId: 'criterion:invented:1' }),
+    ]));
   });
 
   it('requires a non-negative, closed diff-locality disposition without inspecting criterion prose', () => {
@@ -1946,6 +2265,9 @@ Cover the two acceptance variants: created and updated.
 **Type:** happy-path
 
 Count the landed plans on main.
+
+**Done when:**
+- Count the landed plans on main.
 `;
     const censusCriterion =
       `Story 1 happy: Given a plan whose Done-when reads "${CENSUS}", when the coherence gate reads its criterion row, then the land is rejected unless the row is dispositioned diff-local`;
@@ -2027,20 +2349,38 @@ Count the landed plans on main.
 ### Task 1: Duplicate evidence
 Duplicate evidence.
 
+**Done when:**
+- Duplicate evidence.
+
 ### Task 2: Verdict evidence
 Verdict evidence.
+
+**Done when:**
+- Verdict evidence.
 
 ### Task 3: Missing disposition evidence
 Missing disposition evidence.
 
+**Done when:**
+- Missing disposition evidence.
+
 ### Task 4: Negative disposition evidence
 Negative disposition evidence.
+
+**Done when:**
+- Negative disposition evidence.
 
 ### Task 5: Empty quote evidence
 Empty quote evidence.
 
+**Done when:**
+- Empty quote evidence.
+
 ### Task 6: Grounded quote evidence
 Grounded quote evidence.
+
+**Done when:**
+- Grounded quote evidence.
 `;
     const coverageRows = rows([
       '| criterion | Story 1 happy: Given a duplicate widget, when it ships, then it arrives | task-1 | covered | "Duplicate evidence." | diff-local |',
@@ -2310,12 +2650,18 @@ describe('runCoherenceGate ADR pool (Task 7)', () => {
 
 Build widget arrival.
 
+**Done when:**
+- Build widget arrival.
+
 ### Task 2: Return widget
 **Story:** Story 2 (FR-2)
 **Type:** happy-path
 **Files:** src/ship.ts
 
 Return requests are accepted.
+
+**Done when:**
+- Return requests are accepted.
 `,
         prdText: `# PRD
 

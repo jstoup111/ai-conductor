@@ -54,6 +54,7 @@ describe('conductor build-outcome baseline capture', () => {
       conflict_check: 'done',
       plan: 'done',
       coherence_check: 'done',
+      coverage_binding: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',

@@ -26,6 +26,7 @@ import { parseScopeTrailers } from './scope-trailer.js';
 import { ALL_STEPS, buildStepRegistry, getStepDefinition, tryGetStepIndex } from './steps.js';
 import {
   resolveStepConfig,
+  resolveCoverageBindingConfig,
   phaseForStep,
   resolveProviderPreparationTimeoutMinutes,
   type ResolvedStepConfig,
@@ -41,6 +42,14 @@ import {
   resolveFeaturePlanPath,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
+import {
+  claimDigest,
+  parseJudgePayload,
+  readCoverageBindingEnvelope,
+  writeCoverageBindingEnvelope,
+  type CoverageBindingEnvelopeEntry,
+} from './coverage-binding-envelope.js';
+import { assembleCoverageBindingClaims } from './coverage-binding-inputs.js';
 import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { BUILD_REVIEW_RUBRIC_IDS, getBuildReviewRubricDescriptor } from './build-review-registry.js';
@@ -58,7 +67,7 @@ import {
   renderContainmentFloorReport,
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
-import { resolveBuildReviewConfig } from './resolved-config.js';
+import { resolveBuildReviewConfig, type ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 import {
   coordinateBuildReviewRubrics,
   type BuildReviewCoordinationEngineIdentity,
@@ -78,6 +87,7 @@ import {
   bumpMechanicalFaultsInLedger,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
 } from './kickback-ledger.js';
+
 import {
   deriveBuildReviewInfrastructureFailureReason,
   makeBuildReviewDispatchFailure,
@@ -136,6 +146,16 @@ import {
   resolveAsBuiltPolicy,
   type AsBuiltPolicyConfig,
 } from './as-built-policy.js';
+
+/** A closed coverage-binding payload that cannot be treated as a verdict. */
+export class CoverageBindingPayloadError extends Error {
+  readonly kind = 'coverage-binding-payload' as const;
+
+  constructor(readonly reason: string) {
+    super(`coverage_binding invalid judge payload: ${reason}`);
+    this.name = 'CoverageBindingPayloadError';
+  }
+}
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -746,6 +766,9 @@ export class DefaultStepRunner implements StepRunner {
     // fresh-uuid/resume:false pattern).
     if (step === 'build_review') {
       return this.runBuildReview();
+    }
+    if (step === 'coverage_binding') {
+      return this.runCoverageBinding(state);
     }
 
     // Lazy-init: check marker file on first run
@@ -2378,6 +2401,157 @@ export class DefaultStepRunner implements StepRunner {
         finish({ kind: 'timeout', stdout, stderr });
       }, { once: true });
     });
+  }
+
+  private async runCoverageBinding(state: ConductState): Promise<StepRunResult> {
+    const { judgeEnabled } = resolveCoverageBindingConfig(this.config);
+    const filesystem = {
+      readFile: (path: string) => readFile(path, 'utf8'),
+      mkdir: (path: string) => mkdir(path, { recursive: true }).then(() => undefined),
+      writeFile,
+      rename,
+    };
+    const writeEnvelope = async (
+      status: 'disabled' | 'done' | 'failed' | 'refused',
+      entries: readonly CoverageBindingEnvelopeEntry[],
+    ) => writeCoverageBindingEnvelope(this.projectDir, {
+      version: 1,
+      slug: this.featureDesc || 'unknown-feature',
+      runId: this.runId,
+      status,
+      entries,
+    }, filesystem);
+
+    if (!judgeEnabled) {
+      await writeEnvelope('disabled', []);
+      await this.events?.emit({ type: 'coverage_binding_disabled', step: 'coverage_binding' });
+      return { success: true, output: 'coverage_binding judge disabled' };
+    }
+
+    const planPath = this.planPathOverride
+      ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
+    if (!planPath) return { success: false, output: 'coverage_binding could not resolve the feature plan' };
+
+    let planText: string;
+    try {
+      planText = await readFile(planPath, 'utf8');
+    } catch (error) {
+      return { success: false, output: `coverage_binding could not read plan: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    const coherencePath = join(this.projectDir, '.docs', 'coherence', `${this.featureDesc}.md`);
+    const coherenceText = await readFile(coherencePath, 'utf8').catch(() => null);
+    const claims = assembleCoverageBindingClaims({
+      tier: state.complexity_tier ?? 'M',
+      coherenceText,
+      planText,
+    });
+    const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
+    const cached = new Map(previous?.entries.map((entry) => [entry.digest, entry]) ?? []);
+    const entries: CoverageBindingEnvelopeEntry[] = [];
+    const refused: CoverageBindingEnvelopeEntry[] = [];
+    const resolved = this.resolvedConfigFor('coverage_binding');
+    const auxiliaryPolicy: ResolvedBuildReviewRubricPolicy = {
+      enabled: true,
+      llm_provider: this.config?.steps?.coverage_binding?.llm_provider ?? this.config?.llm_provider ?? 'claude',
+      model: resolved.model,
+      effort: resolved.effort,
+      model_fallback_ladder: this.modelPolicy.modelFallbackLadder,
+      max_retries: resolved.max_retries,
+      escalate: resolved.escalate,
+    };
+    const entryFor = (
+      claim: ReturnType<typeof assembleCoverageBindingClaims>[number],
+      digest: string,
+      verdict: CoverageBindingEnvelopeEntry['verdict'],
+      missingAssertion?: string,
+    ): CoverageBindingEnvelopeEntry => ({
+      digest,
+      criterion: claim.criterion,
+      taskIds: claim.taskIds,
+      doneWhen: claim.doneWhen,
+      verdict,
+      ...(missingAssertion === undefined ? {} : { missingAssertion }),
+    });
+
+    for (const claim of claims) {
+      const digest = claimDigest(claim);
+      if (claim.applicability === 'not-applicable') {
+        const entry = entryFor(claim, digest, 'not-applicable');
+        entries.push(entry);
+        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
+        continue;
+      }
+      const hit = cached.get(digest);
+      if (hit && hit.verdict !== 'not-applicable') {
+        const entry = entryFor(claim, digest, hit.verdict, hit.missingAssertion);
+        entries.push(entry);
+        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
+        if (entry.verdict === 'does-not-assert') refused.push(entry);
+        continue;
+      }
+      const prompt = [
+        'Judge only this criterion and these cited Done when checks. Do not read files, inspect a diff, or use any transcript.',
+        'Return exactly one JSON object: {"verdict":"asserts"} or {"verdict":"does-not-assert","missingAssertion":"..."}.',
+        JSON.stringify({ criterion: claim.criterion, taskIds: claim.taskIds, doneWhen: claim.doneWhen }),
+      ].join('\n\n');
+      let result: { success: boolean; output?: string };
+      if (this.providerRuntimes && this.sessionStore) {
+        const dispatched = await this.dispatchProviderWithLifecycleSupervision(
+          'coverage_binding',
+          { prompt, cwd: this.projectDir, dangerouslySkipPermissions: true },
+          (options) => executeAuxiliaryProviderCandidates({
+            step: 'coverage_binding', memberId: digest, policy: auxiliaryPolicy,
+            runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`coverage-binding:${digest}`),
+            config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+            withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
+            onAttempt: this.providerAttempt, warn: this.providerWarn,
+            options,
+            optionsForCandidate: (providerKey) => ({ ...options, prompt: `${renderAuxiliarySkillInvocation('coverage-binding', providerKey)}\n\n${prompt}` }),
+          }),
+        );
+        this.callCount++;
+        result = { success: dispatched.success, output: dispatched.output };
+      } else {
+        const dispatched = await this.provider.invoke({
+          prompt: `${renderAuxiliarySkillInvocation('coverage-binding', this.providerKey)}\n\n${prompt}`,
+          sessionId: randomUUID(), resume: false, dangerouslySkipPermissions: true, cwd: this.projectDir,
+          model: auxiliaryPolicy.model, effort: auxiliaryPolicy.effort,
+        });
+        this.callCount++;
+        result = dispatched;
+      }
+      if (!result.success || typeof result.output !== 'string') {
+        await writeEnvelope('failed', entries);
+        return { success: false, output: result.output ?? `coverage_binding provider failed for ${digest}` };
+      }
+      const parsed = parseJudgePayload(result.output);
+      if (!parsed.ok) {
+        await writeEnvelope('failed', entries);
+        const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
+        return {
+          success: false,
+          output: infrastructureFailure.message,
+          infrastructureFailure,
+        };
+      }
+      const entry = entryFor(claim, digest, parsed.value.verdict, parsed.value.missingAssertion);
+      entries.push(entry);
+      await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
+      if (entry.verdict === 'does-not-assert') refused.push(entry);
+    }
+
+    if (refused.length > 0) {
+      await writeEnvelope('refused', entries);
+      const detail = refused.map((entry) => [
+        `Criterion: ${entry.criterion}`,
+        `Task ids: ${entry.taskIds.join(', ')}`,
+        `Done when checks: ${entry.doneWhen.flat().join(' | ')}`,
+        `Missing assertion: ${entry.missingAssertion}`,
+      ].join('\n')).join('\n\n');
+      return { success: false, refusal: { kind: 'needs-human', reason: `coverage_binding refused: cited Done when checks do not assert the criterion.\n\n${detail}` } };
+    }
+    await writeEnvelope('done', entries);
+    return { success: true, output: `coverage_binding judged ${entries.length} claim(s)` };
   }
 
   private async runBuildReview(): Promise<StepRunResult> {

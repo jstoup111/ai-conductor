@@ -3003,4 +3003,35 @@ steps:
       expect(result.error.message).toContain('bogus_top_level');
     });
   });
+
+  describe('coverage_binding config field (Task 8)', () => {
+    it('resolves the omitted judge to disabled', () => {
+      const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.coverage_binding?.judge?.enabled).toBe(false);
+    });
+
+    it('preserves an enabled judge', () => {
+      const result = validateConfig({ coverage_binding: { judge: { enabled: true } } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.coverage_binding?.judge?.enabled).toBe(true);
+    });
+
+    it('rejects a non-boolean judge enablement', () => {
+      const result = validateConfig({ coverage_binding: { judge: { enabled: 'yes' } } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('coverage_binding.judge.enabled');
+      expect(result.error.message).toContain('boolean');
+    });
+
+    it('rejects an unknown key under coverage_binding.judge', () => {
+      const result = validateConfig({ coverage_binding: { judge: { enabled: true, bogus: true } } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('Unknown key in coverage_binding.judge');
+    });
+  });
 });

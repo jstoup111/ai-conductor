@@ -70,6 +70,7 @@ const FRONT_DONE_M: ConductState = {
   conflict_check: 'skipped',
   plan: 'done',
   coherence_check: 'done',
+  coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'done',
   acceptance_specs: 'skipped',
@@ -172,6 +173,9 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
       );
+    } else if (step === 'coverage_binding') {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'add-foo', runId: 'test-run', status: 'disabled', entries: [] }));
     } else if (step === 'build_review') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(

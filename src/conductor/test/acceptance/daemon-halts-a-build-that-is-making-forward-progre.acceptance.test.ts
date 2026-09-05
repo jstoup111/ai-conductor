@@ -104,6 +104,9 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     ['.docs/coherence/2026-07-12-plan.md', 'x'],
     ['.docs/architecture/arch.md', 'x'],
     ['.docs/decisions/adr-001.md', 'x'],
+    ['.pipeline/coverage-binding.json', JSON.stringify({
+      version: 1, slug: 'progress-halt', runId: 'test-run', status: 'disabled', entries: [],
+    })],
     ['spec/acceptance/feature_spec.rb', 'x'],
     ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
   ];

@@ -32,7 +32,10 @@ const STORIES = [
   '## Story 1: enforce approval',
   '',
   '### Acceptance Criteria',
-  '- Given an ADR corpus, when the gate runs, then only approved decisions pass.',
+  '#### Happy Path',
+  '- Given an approved ADR corpus, when the gate runs, then land passes.',
+  '#### Negative Paths',
+  '- Given an unapproved ADR, when the gate runs, then land is refused.',
   '',
 ].join('\n');
 
@@ -46,8 +49,15 @@ const PLAN = [
   '**Dependencies:** none',
   '',
   '**Done when:**',
-  '- Approved ADR declarations are accepted.',
-  '- Unapproved ADR declarations are refused.',
+  '- Given an approved ADR corpus, when the gate runs, then land passes.',
+  '- Given an unapproved ADR, when the gate runs, then land is refused.',
+  '',
+  '## Coverage Check',
+  '',
+  '| Criterion | Tasks | Quote | Disposition |',
+  '|---|---|---|---|',
+  '| Story 1 happy: Given an approved ADR corpus, when the gate runs, then land passes. | 1 | Given an approved ADR corpus, when the gate runs, then land passes. | diff-local |',
+  '| Story 1 negative: Given an unapproved ADR, when the gate runs, then land is refused. | 1 | Given an unapproved ADR, when the gate runs, then land is refused. | diff-local |',
   '',
 ].join('\n');
 

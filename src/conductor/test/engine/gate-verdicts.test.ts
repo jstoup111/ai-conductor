@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
+  checkGateCompletion,
   computeAndWriteVerdict,
   readAllVerdicts,
   readVerdict,
@@ -62,5 +63,18 @@ describe('engine/gate-verdicts', () => {
     const v = await readVerdict(dir, 'plan');
     expect(v?.kickback?.from).toBe('build');
     expect(v?.kickback?.evidence).toMatch(/AC-7/);
+  });
+
+  it.each(['failed', 'refused'] as const)('does not satisfy coverage_binding for a %s envelope', async (status) => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+      version: 1,
+      slug: 'coverage-feature',
+      runId: 'coverage-run',
+      status,
+      entries: [],
+    }));
+
+    expect(await checkGateCompletion(dir, 'coverage_binding')).toMatchObject({ done: false });
   });
 });

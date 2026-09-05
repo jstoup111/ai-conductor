@@ -106,10 +106,13 @@ The artifact is a Markdown table (or one table per row class) with these columns
 6. **criterion** — one row per exact happy or negative Given/When/Then
    criterion extracted from the stories file. Its cells are the exact criterion
    text, cited task id(s), verdict, a verbatim quote from one cited task's
-   body, and a diff-locality disposition. The quote is matched as an exact
-   substring after whitespace normalization; a paraphrase does not ground
-   coverage. The disposition is exactly `diff-local` or `outside-diff`; only
-   `diff-local` is non-negative and lands without a coherence waiver.
+   `Done when` block, and a diff-locality disposition. The quote is matched as
+   an exact substring after whitespace normalization; a paraphrase does not
+   ground coverage. Do not quote Steps or Files prose: those describe work but
+   do not require its completion, so they can ground a claim the builder is not
+   obliged to satisfy. The disposition is exactly `diff-local` or
+   `outside-diff`; only `diff-local` is non-negative and lands without a
+   coherence waiver.
 
 ### 4b. Verdict Vocabulary
 
@@ -155,6 +158,8 @@ For the `adr` row class, the cited id form and the canonical gap-id form are bot
   or only by a story that does not implement or honor the decision
 - `claim-<row>` — the plan's own `## Coverage Check` table cites a phantom id or
   contradicts the parsed task tree (row number within that table)
+- `criterion:quote-not-done-when:<n>` — a criterion quote occurs in the cited
+  task body but not in any cited task's `Done when` block
 - `duplicate:<ref>` — a second spec claiming an already-claimed `Source-Ref` (emitted
   by the land-time duplicate-claim scan, not authored here — documented for vocabulary
   completeness only)
@@ -162,6 +167,9 @@ For the `adr` row class, the cited id form and the canonical gap-id form are bot
 Gap ids are opaque strings to downstream consumers (the validator, the waiver parser)
 — do not paraphrase or abbreviate them; use the exact forms above so cross-checking
 against the real artifact files (Section 5) is possible.
+
+Before marking a criterion row `covered`, read every cited task's `Done when` block
+and verify that the quoted text comes from one of those checks.
 
 A **fail** row uses the same id form as its row class (`outcome-<n>`, `fr-<N>`,
 `story-<id>`, `task-<id>`, `adr-<stem>`) — the id identifies *which* row, and the

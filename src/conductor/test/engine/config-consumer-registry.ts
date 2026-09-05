@@ -73,6 +73,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   codex_doctor_timeout_seconds: consumer('src/conductor/src/engine/plugin-loader.ts'),
   mergeable_autoresolve: consumer(AUTORESOLVE),
   build_review: consumer(RESOLVED_CONFIG),
+  coverage_binding: consumer(RESOLVED_CONFIG),
   conflict_check: consumer('skills/conflict-check/SKILL.md'),
   prd_audit: consumer(CONDUCTOR),
   architecture_review_as_built: consumer(AS_BUILT_POLICY),
@@ -198,6 +199,12 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.rubrics.model_fallback_ladder': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.escalate': consumer(RESOLVED_CONFIG),
+
+  // ── coverage_binding ────────────────────────────────────────────────────
+  // The step runner consumes the resolved boolean; resolution is the sole
+  // reader of the raw nested configuration.
+  'coverage_binding.judge': consumer(RESOLVED_CONFIG),
+  'coverage_binding.judge.enabled': consumer(RESOLVED_CONFIG),
 
   // ── ci_watch ──────────────────────────────────────────────────────────────
   'ci_watch.enabled': consumer(DAEMON_CLI),

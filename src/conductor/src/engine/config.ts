@@ -102,7 +102,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
     'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'build_review', 'conflict_check',
     'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
-    'retry_routing', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
+    'retry_routing', 'coverage_binding', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
     'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup',
     'step_heartbeat_stall_minutes', 'stale_claim_window_hours',
     'provider_preparation_timeout_minutes', 'teardown_timeout_seconds',
@@ -135,6 +135,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
   gate_code_validity: ['enabled'],
   retry_routing: ['enabled'],
+  coverage_binding: ['judge'],
+  'coverage_binding.judge': ['enabled'],
   otel: ['exporter', 'endpoint', 'file', 'protocol', 'project_name'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
   mermaid_renderer: ['preset', 'command', 'args', 'mode'],
@@ -1298,6 +1300,15 @@ export function validateConfig(
     }
   }
 
+  // coverage_binding — default-off pre-BUILD criterion-to-Done-when judge.
+  {
+    const err = validateCoverageBindingBlock(obj.coverage_binding);
+    if (err) return { ok: false, error: err };
+    if (obj.coverage_binding !== undefined || materializeDefaults) {
+      obj.coverage_binding = resolveCoverageBindingBlock(obj.coverage_binding);
+    }
+  }
+
   return { ok: true, config: obj as HarnessConfig, warnings, deprecatedKeys };
 }
 
@@ -2130,6 +2141,47 @@ function resolveRetryRoutingBlock(raw: unknown): { enabled: boolean } {
   return {
     enabled: typeof obj.enabled === 'boolean' ? obj.enabled : RETRY_ROUTING_DEFAULTS.enabled,
   };
+}
+
+function validateCoverageBindingBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'coverage_binding must be an object' };
+  }
+  const block = raw as Record<string, unknown>;
+  const allowedBlockKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.coverage_binding);
+  for (const key of Object.keys(block)) {
+    if (!allowedBlockKeys.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in coverage_binding: "${key}"` };
+    }
+  }
+  if (block.judge === undefined) return null;
+  if (!isPlainObject(block.judge)) {
+    return { type: 'validation_error', message: 'coverage_binding.judge must be an object' };
+  }
+  const judge = block.judge as Record<string, unknown>;
+  const allowedJudgeKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS['coverage_binding.judge']);
+  for (const key of Object.keys(judge)) {
+    if (!allowedJudgeKeys.has(key)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in coverage_binding.judge: "${key}"`,
+      };
+    }
+  }
+  if (judge.enabled !== undefined && typeof judge.enabled !== 'boolean') {
+    return {
+      type: 'validation_error',
+      message: 'coverage_binding.judge.enabled must be a boolean',
+    };
+  }
+  return null;
+}
+
+function resolveCoverageBindingBlock(raw: unknown): { judge: { enabled: boolean } } {
+  const block = isPlainObject(raw) ? raw as Record<string, unknown> : {};
+  const judge = isPlainObject(block.judge) ? block.judge as Record<string, unknown> : {};
+  return { judge: { enabled: typeof judge.enabled === 'boolean' ? judge.enabled : false } };
 }
 
 function validateMergeableAutoresolveBlock(raw: unknown): ConfigError | null {

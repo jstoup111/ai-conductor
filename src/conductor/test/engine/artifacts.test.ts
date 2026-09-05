@@ -147,6 +147,23 @@ describe('engine/artifacts', () => {
     await writeFile(fullPath, content);
   }
 
+  it.each([
+    ['disabled', true],
+    ['done', true],
+    ['failed', false],
+    ['refused', false],
+  ] as const)('accepts coverage-binding completion evidence only when status is %s', async (status, done) => {
+    await createFile('.pipeline/coverage-binding.json', JSON.stringify({
+      version: 1,
+      slug: 'coverage-feature',
+      runId: 'coverage-run',
+      status,
+      entries: [],
+    }));
+
+    expect(await checkStepCompletion(dir, 'coverage_binding')).toMatchObject({ done });
+  });
+
   describe('parsePrdAuditReport', () => {
     // The plan is the parser's citation authority: a Verdict Table row naming
     // a `Plan task` is resolved against the ids THIS text declares, never
@@ -566,6 +583,7 @@ describe('engine/artifacts', () => {
           '.docs/decisions/adr-*.md',
         ],
         worktree: [],
+        coverage_binding: ['.pipeline/coverage-binding.json'],
         acceptance_specs: [
           'spec/acceptance/**/*',
           'spec/requests/**/*',
@@ -612,6 +630,12 @@ describe('engine/artifacts', () => {
         ],
         derivedProjection: true,
       });
+    });
+
+    it('declares coverage_binding as run-scoped completion evidence', () => {
+      expect(STEP_ARTIFACT_CONTRACTS.coverage_binding).toEqual([
+        { pattern: '.pipeline/coverage-binding.json', scope: 'run' },
+      ]);
     });
 
     it('declares lifecycle scope and feature identity for every built-in artifact pattern', () => {

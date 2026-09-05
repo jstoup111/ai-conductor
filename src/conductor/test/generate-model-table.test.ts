@@ -418,30 +418,39 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
   });
 });
 
-describe('build-review auxiliary rubric rows', () => {
-  const rubricSkills = ['build-review-test-quality'];
+describe('engine-managed auxiliary rows', () => {
+  const auxiliarySkills = ['build-review-test-quality', 'coverage-binding'];
 
-  it('renders the retained engine-managed rubric skill with inherited resolved policy', () => {
+  it('renders rubric and coverage-binding helpers with their resolved policies', () => {
     expect(buildAuxiliaryRows()).toEqual(
-      rubricSkills.map((name) => expect.objectContaining({
-        name,
-        executionPath: 'engine-managed auxiliary rubric',
-        claudeModel: 'inherits resolved rubric policy',
-        claudeEffort: 'inherits resolved rubric policy',
-        codexModel: 'inherits resolved rubric policy',
-        codexEffort: 'inherits resolved rubric policy',
-      })),
+      [
+        expect.objectContaining({
+          name: 'build-review-test-quality',
+          executionPath: 'engine-managed auxiliary rubric',
+          claudeModel: 'inherits resolved rubric policy',
+          claudeEffort: 'inherits resolved rubric policy',
+          codexModel: 'inherits resolved rubric policy',
+          codexEffort: 'inherits resolved rubric policy',
+        }),
+        expect.objectContaining({
+          name: 'coverage-binding',
+          executionPath: 'engine-managed auxiliary judge',
+          claudeModel: 'inherits resolved coverage-binding policy',
+          claudeEffort: 'inherits resolved coverage-binding policy',
+          codexModel: 'inherits resolved coverage-binding policy',
+          codexEffort: 'inherits resolved coverage-binding policy',
+        }),
+      ],
     );
   });
 
   it('keeps auxiliary rubric rows out of the lifecycle-step renderer', () => {
     const engineNames = buildEngineRows().map((row) => row.name);
-    expect(rubricSkills.filter((name) => engineNames.includes(name))).toEqual([]);
+    expect(auxiliarySkills.filter((name) => engineNames.includes(name))).toEqual([]);
 
     const rendered = renderModelTable();
-    for (const name of rubricSkills) {
-      expect(rendered).toContain(`| ${name} | engine-managed auxiliary rubric |`);
-    }
+    expect(rendered).toContain('| build-review-test-quality | engine-managed auxiliary rubric |');
+    expect(rendered).toContain('| coverage-binding | engine-managed auxiliary judge |');
   });
 });
 
@@ -704,6 +713,8 @@ describe('runGenerateModelTable --check mode — drift detection (TS-3)', () => 
   });
 
   it('changed engine default (e.g. stories model flipped) -> exit 1, diff shows the stale row, file untouched', async () => {
+    // Capture the unmocked table before replacing the provider-policy module.
+    const cleanForOldDefaults = fixture(renderModelTable());
     vi.resetModules();
     vi.doMock('../src/engine/provider-model-policy.js', async () => {
       const actual = await vi.importActual<typeof import('../src/engine/provider-model-policy.js')>(
@@ -720,13 +731,6 @@ describe('runGenerateModelTable --check mode — drift detection (TS-3)', () => 
 
     try {
       const mod = await import('../src/tools/generate-model-table.js');
-      const cleanForOldDefaults = ((): string => {
-        // Build a fixture against the ORIGINAL (unmocked) renderer so the
-        // on-disk table reflects the pre-change engine defaults.
-        const original = renderModelTable();
-        return fixture(original);
-      })();
-
       await writeFile(harnessPath, cleanForOldDefaults, 'utf8');
       const before = await readFile(harnessPath, 'utf8');
 

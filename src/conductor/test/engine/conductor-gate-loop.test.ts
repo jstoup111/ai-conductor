@@ -228,7 +228,10 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
   async function installFixture(name: 'unsatisfied-verdict' | 'satisfied-verdict'): Promise<string> {
     const source = join(FIXTURES, name);
     await cp(source, projectRoot, { recursive: true });
-    return join(projectRoot, 'conduct-state.json');
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState;
+    await writeFile(stateFilePath, JSON.stringify({ ...state, coverage_binding: 'done' }));
+    return stateFilePath;
   }
 
   function staleSuiteVerifier(
@@ -285,7 +288,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       complexity_tier: 'S',
       track: 'technical',
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
-      conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
+      conflict_check: 'skipped', plan: 'done', coherence_check: 'done', coverage_binding: 'done', architecture_diagram: 'skipped',
       architecture_review: 'skipped', acceptance_specs: 'skipped',
       build: 'done',  test_suite: 'done', build_review: 'pending',
     } satisfies Partial<ConductState>));
