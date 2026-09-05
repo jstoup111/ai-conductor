@@ -308,7 +308,10 @@ describe('integration/rebase-loop', () => {
           '## Verdict Table',
           '| Criterion | Grade | Plan task | Evidence |',
           '|---|---|---|---|',
-          '| S1.1 | PASS | 1 | foo.ts:1 |',
+          // The fixture story's heading id is `1-1`, so its sole criterion is
+          // `S1-1.1` — the criterion id carries the whole heading id, not just
+          // its first digit run.
+          '| S1-1.1 | PASS | 1 | foo.ts:1 |',
           '',
           '| FR | Verdict | Evidence |',
           '|---|---|---|',

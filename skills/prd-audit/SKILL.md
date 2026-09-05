@@ -26,6 +26,10 @@ valid sibling rows. Never invent a key (`OS.1`, `SCOPE.2`) or write duplicate ro
 `S<story>.<criterion>`; do not use `NC.<n>` in the Verdict Table. A well-formed story key that
 names no criterion in the active stories is also invalid.
 
+`<story>` is the story's heading id verbatim, not just its digits — `## Story 5a:` owns `S5a.1`,
+`S5a.2`, … and `## Story 2.1:` owns `S2.1.1`, `S2.1.2`, …, each distinct from Story 5's and Story
+2's. `<criterion>` is always the numeric ordinal. Keys are matched case-insensitively.
+
 Per the `/verify-claims` protocol, cite concrete `file:line` evidence and give a confidence when
 evidence is ambiguous. Do not turn uncertainty into a PASS.
 

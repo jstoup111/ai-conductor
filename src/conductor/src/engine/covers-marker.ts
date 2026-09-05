@@ -8,7 +8,8 @@ export type CoversReference =
 
 const COVERS_MARKER = /\bCovers\s*:\s*([^\r\n]*)/g;
 const FR_REFERENCE = /^FR-\d+$/;
-const CRITERION_REFERENCE = /^S\d+\.\d+$/;
+/** `S<story-id>.<number>`, using the story-heading id alphabet (`S5a.1`, `S2.1.3`). */
+const CRITERION_REFERENCE = /^S[A-Za-z0-9.-]+\.\d+$/;
 const TASK_REFERENCE = /^task:([A-Za-z0-9._-]+)$/;
 
 /**
