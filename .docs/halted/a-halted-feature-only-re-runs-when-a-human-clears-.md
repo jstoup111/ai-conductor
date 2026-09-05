@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-05T21:20:22.705Z
+Status: halted
 Slug: a-halted-feature-only-re-runs-when-a-human-clears-
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-a-halted-feature-only-re-runs-when-a-human-clears-
-Head SHA: be231fcdaf44f0b8d90e62a1ba65a2d44025a2ab
-Halted at: 2026-09-05T15:55:13.056Z
+Head SHA: b719bd5eeb1c6035cfa93e6b397e084a6ad520ed
+Halted at: 2026-09-05T22:15:55.772Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
