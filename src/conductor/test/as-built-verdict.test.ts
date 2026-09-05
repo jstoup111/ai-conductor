@@ -301,7 +301,10 @@ describe('as-built verdict gate', () => {
       '| ARCH-2 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
     ].join('\n');
 
-    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'blocked-design' });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+      kind: 'blocked-design',
+      designFindings: [{ id: 'ARCH-2', clause: 'adr-2026-08-25-example decision 3' }],
+    });
   });
 
   it('classifies every malformed BLOCKED findings table as invalid', () => {
@@ -428,7 +431,10 @@ describe('as-built verdict gate', () => {
         '| --- | --- | --- | --- |',
         '| ARCH-1 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
       ].join('\n'),
-      { kind: 'blocked-design' },
+      {
+        kind: 'blocked-design',
+        designFindings: [{ id: 'ARCH-1', clause: 'adr-2026-08-25-example decision 3' }],
+      },
     ],
   ])('keeps %s classified through the invalid-cause split', (_description, report, expected) => {
     expect(classifyAsBuiltReviewOutcome(report)).toEqual(expected);
@@ -490,11 +496,44 @@ describe('as-built verdict gate', () => {
     ].join('\n'));
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
       done: false,
-      reason: 'as-built review verdict is BLOCKED — shipped code violates an approved architecture decision',
+      reason:
+        'as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): ' +
+        'ARCH-1 (adr-2026-08-25-example decision 3)',
     });
 
     await writeAsBuilt(dir, '# As-built review\n');
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({ done: false });
+  });
+
+  it('names a remediable verdict as a repair and names only DESIGN findings in a mixed verdict', async () => {
+    const dir = await fixture();
+    const ctx = { sessionStartedAt: Date.now() - 1_000 };
+    await writeAsBuilt(dir, [
+      'Verdict: BLOCKED', '', '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-1 | REMEDIABLE | Task 1 | Fix it |',
+      '| AB-2 | REMEDIABLE | Task 2 | Fix it too |',
+    ].join('\n'));
+    await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
+      reason: expect.stringContaining('every blocking finding is REMEDIABLE'),
+    });
+    await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
+      reason: expect.stringContaining('a repair, not a decision'),
+    });
+
+    await writeAsBuilt(dir, [
+      'Verdict: BLOCKED', '', '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-1 | DESIGN | ADR-example decision 1 | Decide it |',
+      '| AB-2 | REMEDIABLE | Task 2 | Fix it |',
+    ].join('\n'));
+    await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
+      reason: expect.stringContaining('AB-1 (ADR-example decision 1)'),
+    });
+    const result = await checkStepCompletion(dir, 'architecture_review_as_built', ctx);
+    expect(result.done ? '' : result.reason).not.toContain('AB-2');
   });
 });
 
