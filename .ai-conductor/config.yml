@@ -148,10 +148,11 @@ prd_audit:
 architecture_review_as_built:
   max_remediation_laps: 2
 
-# Operator-authorized 2026-09-04: grant a second as-built remediation lap for
+# Operator-authorized 2026-09-05: third lap granted — AB-1 converged to the
+# conductor-consumption half only. Previously 2026-09-04: second lap for
 # finding AB-1 after the lap-cap halt; worktree-local recovery, not feature scope.
 architecture_review_as_built:
-  max_remediation_laps: 2
+  max_remediation_laps: 3
 
 steps:
   explore:
