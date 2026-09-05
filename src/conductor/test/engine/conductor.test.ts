@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -8502,6 +8503,91 @@ describe('engine/conductor', () => {
       expect(calls.filter((call) => call.step === 'manual_test')).toHaveLength(1);
       expect(calls.filter((call) => call.step === 'prd_audit').map((call) => call.attempt)).toEqual([1, 1]);
       expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
+    });
+
+    it('retries a transient prd_audit branch failure within the serial attempt budget before joining', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      const calls: Array<{ step: StepName; attempt?: number }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+          calls.push({ step, attempt: options?.attempt });
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          const prdAuditCalls = calls.filter((call) => call.step === 'prd_audit').length;
+          if (step === 'prd_audit' && prdAuditCalls === 1) {
+            throw new Error('HTTP 500 transient provider error');
+          }
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 2,
+        verifyArtifacts: true,
+      });
+
+      await conductor.run();
+
+      expect({
+        prdAuditAttempts: calls
+          .filter((call) => call.step === 'prd_audit')
+          .map((call) => call.attempt),
+        prdAuditVerdict: await readFile(join(dir, '.pipeline/gates/prd_audit.json'), 'utf-8'),
+        haltExists: await haltMarkerExists(dir),
+      }).toEqual({
+        prdAuditAttempts: [1, 2],
+        prdAuditVerdict: expect.stringContaining('"satisfied": true'),
+        haltExists: false,
+      });
+    });
+
+    it('halts after a prd_audit branch spends the serial attempt budget without a verdict', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      const calls: Array<{ step: StepName; attempt?: number }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+          calls.push({ step, attempt: options?.attempt });
+          if (step === 'prd_audit') throw new Error('HTTP 500 provider error');
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 3,
+      });
+
+      await conductor.run();
+
+      expect({
+        prdAuditAttempts: calls
+          .filter((call) => call.step === 'prd_audit')
+          .map((call) => call.attempt),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
+        haltReason: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+      }).toEqual({
+        prdAuditAttempts: [1, 2, 3],
+        haltClass: 'needs-human',
+        haltReason: expect.stringMatching(/branch "prd_audit"[\s\S]*after 3 attempts[\s\S]*HTTP 500 provider error/),
+      });
     });
 
     it('classifies a grouped authentication timeout as needs-human without changing its reason', async () => {

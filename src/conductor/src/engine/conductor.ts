@@ -6637,6 +6637,22 @@ export class Conductor {
             this.config,
             false,
           );
+          const memberAttemptBudgets = new Map(
+            membership.dispatchable.map((member) => [
+              member.name,
+              resolveStepConfig(
+                member.name as StepName,
+                phaseForStep(member.name as StepName),
+                this.modelPolicyForStep(member.name as StepName),
+                this.config,
+                {
+                  tier: state.complexity_tier,
+                  modelCliOverride: this.providerExecution?.modelOverride,
+                  effortCliOverride: this.providerExecution?.effortOverride,
+                },
+              ).max_retries,
+            ]),
+          );
           // Engagement is keyed to the first member that still needs work,
           // rather than blindly to members[0]. A nominal entry that was
           // config-skipped or is already green hits a `continue` before this
@@ -6774,7 +6790,7 @@ export class Conductor {
                         }
                       },
                     },
-                    1,
+                    memberAttemptBudgets.get(member.name)!,
                   )),
                 cap,
               );
@@ -7021,9 +7037,10 @@ export class Conductor {
             if (noVerdictIdx !== -1) {
               const noVerdictOutcome = outcomes[noVerdictIdx] as NoVerdictOutcome;
               const noVerdictMember = membership.dispatchable[noVerdictIdx]!;
+              const attemptsSpent = memberAttemptBudgets.get(noVerdictMember.name)!;
               const haltReason =
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
-                `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
+                `no-verdict after ${attemptsSpent} attempts (${noVerdictOutcome.reason}).`;
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
               // Story 3, negative path: a no-verdict outcome is the validator's
               // own runner dying (thrown branch, terminal error, or exhausted
@@ -12111,7 +12128,14 @@ export class Conductor {
 
     const outcomes: BranchOutcome[] = await runWithConcurrency(
       members.map((member) => async () => {
-        return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);
+        const resolved = resolveStepConfig(
+          member.name as StepName,
+          phaseForStep(member.name as StepName),
+          this.modelPolicyForStep(member.name as StepName),
+          this.config,
+          { tier: state.complexity_tier },
+        );
+        return runGroupBranch(member, state, { stepRunner: this.stepRunner }, resolved.max_retries);
       }),
       Math.max(1, Math.min(this.validationConcurrency, branches.length)),
     );
