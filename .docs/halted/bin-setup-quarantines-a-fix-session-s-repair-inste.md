@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-05T00:14:52.351Z
 Slug: bin-setup-quarantines-a-fix-session-s-repair-inste
 Class: protected-artifact
 Halting step: test_suite
