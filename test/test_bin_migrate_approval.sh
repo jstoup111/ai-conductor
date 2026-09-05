@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Covers: task:1
 # Acceptance coverage for Task 10's interactive per-candidate approval loop.
 # The real migrate entry point runs in isolated local harness/consumer fixtures;
 # only its install boundary is a local no-op.
@@ -9,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIGRATE_SRC="$REPO_ROOT/bin/migrate"
 COMMON_SRC="$REPO_ROOT/bin/lib/harness-common.sh"
+MIGRATION_FENCES_SRC="$REPO_ROOT/bin/lib/migration_fences.py"
 
 PASS=0
 FAIL=0
@@ -55,6 +57,7 @@ make_fixture() {
   mkdir -p "$HARNESS/bin/lib" "$CONSUMER" "$HOME_DIR/.ai-conductor"
   cp "$MIGRATE_SRC" "$HARNESS/bin/migrate"
   cp "$COMMON_SRC" "$HARNESS/bin/lib/harness-common.sh"
+  cp "$MIGRATION_FENCES_SRC" "$HARNESS/bin/lib/migration_fences.py"
   chmod +x "$HARNESS/bin/migrate"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$HARNESS/bin/install"
   chmod +x "$HARNESS/bin/install"
