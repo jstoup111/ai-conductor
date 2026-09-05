@@ -734,3 +734,54 @@ export async function fixSession(
   if (parent.exitCode !== 0 || parent.stdout.trim() !== original.head) return reject('repair-postcondition-failed', 'repair commit parent did not match original HEAD', true);
   return success('engine-committed');
 }
+
+/**
+ * Run the complete, bounded setup-recovery ladder for one failed setup run.
+ *
+ * Stage 1 first removes only quarantinable residue. Stage 2 is reachable only
+ * when setup still fails at a clean HEAD; it owns exactly one provider repair
+ * dispatch and its mechanical verification. Keeping this decision beside both
+ * stages prevents callers from accidentally treating a stage-1-only recovery
+ * as a fix-session candidate.
+ */
+export async function runSetupFailureTriage(
+  git: GitRunner,
+  worktreePath: string,
+  slug: string,
+  setupError: any,
+  runPrepare: (worktreePath: string) => Promise<void>,
+  dispatchFixSession: () => Promise<void>,
+  logger?: Logger,
+  events?: ConductorEventEmitter,
+): Promise<TriageOutcome> {
+  const triageOutcome = await runTriage(
+    git,
+    worktreePath,
+    slug,
+    setupError,
+    runPrepare,
+    logger,
+    events,
+  );
+
+  if (triageOutcome.kind === 'park' && !triageOutcome.quarantineRef) {
+    return triageOutcome;
+  }
+  if (triageOutcome.kind === 'quarantined-pass') {
+    return triageOutcome;
+  }
+
+  const fixOutcome = await fixSession(
+    git,
+    worktreePath,
+    slug,
+    dispatchFixSession,
+    runPrepare,
+    events,
+  );
+
+  if (fixOutcome.kind === 'park' && !fixOutcome.quarantineRef && triageOutcome.quarantineRef) {
+    return { ...fixOutcome, quarantineRef: triageOutcome.quarantineRef };
+  }
+  return fixOutcome;
+}

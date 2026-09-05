@@ -28,7 +28,7 @@ import type { ProviderExecutionContext } from '../../src/engine/provider-executi
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
   fixSession,
-  runTriage,
+  runSetupFailureTriage,
   type GitRunner,
   type TriageOutcome,
 } from '../../src/engine/setup-triage.js';
@@ -84,13 +84,15 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
       });
       let conductorCalls = 0;
       let prepareCalls = 0;
+      let fixSessionDispatches = 0;
       const runSetupTriage = vi.fn<NonNullable<FeatureRunnerDeps['runSetupTriage']>>(
-        async (error, worktree, item, _providerExecution, _log, events) => runTriage(
+        async (error, worktree, item, _providerExecution, _log, events) => runSetupFailureTriage(
           makeGitRunner(worktree.path),
           worktree.path,
           item.slug,
           error,
           async () => { prepareCalls += 1; },
+          async () => { fixSessionDispatches += 1; },
           { log: () => {} },
           events,
         ),
@@ -131,6 +133,7 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
       expect(rendered.filter((line) => line.includes('setup repair')), scenario).toHaveLength(0);
       expect(conductorCalls, scenario).toBe(1);
       expect(prepareCalls, scenario).toBe(scenario === 'ordinary setup' ? 1 : 2);
+      expect(fixSessionDispatches, scenario).toBe(0);
       expect(runSetupTriage, scenario).toHaveBeenCalledTimes(scenario === 'ordinary setup' ? 0 : 1);
       if (scenario === 'stage-1-only recovery') {
         expect(runSetupTriage.mock.calls[0]?.[5]).toBe(persistence.events);

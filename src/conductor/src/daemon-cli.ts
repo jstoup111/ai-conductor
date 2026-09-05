@@ -134,7 +134,7 @@ import {
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import { prepareWorktree } from './engine/worktree-prepare.js';
 import { preparePipelineForDaemonDispatch } from './engine/daemon-dispatch-preparation.js';
-import { runTriage, fixSession, type GitRunner } from './engine/setup-triage.js';
+import { runSetupFailureTriage, type GitRunner } from './engine/setup-triage.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
@@ -1275,30 +1275,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       },
     );
 
-    // Triage stage 1: run-triage (TS-2/TS-3)
-    // Classify tree state and route: clean → pass, dirty → quarantine+retry
-    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log: featureLog }, featureEvents);
-
-    // A park with no quarantineRef is a genuine PRESERVATION failure (the
-    // quarantine commit/branch itself could not be created) — stop immediately,
-    // never risk a fix-session on top of an unsafe tree. A park WITH a
-    // quarantineRef means quarantine succeeded but the post-quarantine retry
-    // still failed (committed breakage at a now-clean HEAD) — per the ADR this
-    // must still proceed to the bounded fix-session (Stage 2), not stop here.
-    if (triageOutcome.kind === 'park' && !triageOutcome.quarantineRef) {
-      return triageOutcome;
-    }
-
-    // A quarantined-pass outcome means stage-1 retry succeeded and setup is now
-    // passing at a clean HEAD. Per adr-2026-07-09-setup-failure-triage sub-decision 4,
-    // stage 2 (fix-session) should only run 'if setup still fails at a clean HEAD',
-    // so quarantined-pass skips directly to normal build dispatch.
-    if (triageOutcome.kind === 'quarantined-pass') {
-      return triageOutcome;
-    }
-
-    // Triage stage 2: fix-session (Task 10)
-    // For non-park outcomes, dispatch LLM fix session and mechanically verify
+    // The injected callback is called only by stage 2 of the engine-owned
+    // ladder, after stage 1 proves setup still fails at a clean HEAD.
     const dispatchFixSession = async () => {
       // Construct a fresh DefaultStepRunner for this fix session
       const sessionId = uuidv4();
@@ -1326,17 +1304,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       });
     };
 
-    // Run fix-session: dispatch LLM, verify contract (prepare + clean tree)
-    const fixOutcome = await fixSession(git, worktree.path, item.slug, dispatchFixSession, runPrepare, featureEvents);
-
-    // A stage-1 quarantine ref must never be lost from the final outcome —
-    // fixSession() doesn't know about it, so carry it forward if the fix
-    // itself also failed (park) and didn't already attach its own ref.
-    if (fixOutcome.kind === 'park' && !fixOutcome.quarantineRef && triageOutcome.quarantineRef) {
-      return { ...fixOutcome, quarantineRef: triageOutcome.quarantineRef };
-    }
-
-    return fixOutcome;
+    return runSetupFailureTriage(
+      git,
+      worktree.path,
+      item.slug,
+      error,
+      runPrepare,
+      dispatchFixSession,
+      { log: featureLog },
+      featureEvents,
+    );
   };
 
   const deps = makeFeatureRunnerDeps({
