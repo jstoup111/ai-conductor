@@ -170,6 +170,12 @@ export class AuditTrailWriter {
           reason: event.reason || 'step retry',
           attempt: event.attempt,
         };
+      case 'remediation_disposition_rejected':
+        return {
+          origin: 'build',
+          event: event.type,
+          reason: `${event.gapId}: disposition "${event.disposition}" not in [${event.accepted.join(', ')}]`,
+        };
       case 'build_review_disposition_version_invalidated':
         return {
           origin: 'build',

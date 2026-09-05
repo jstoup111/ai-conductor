@@ -181,6 +181,7 @@ import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
   type RemediationGap,
+  type RemediationDispositionRejection,
   type CompletionContext,
   type CompletionResult,
   discardStaleLapBuildReviewFail,
@@ -565,6 +566,12 @@ interface RemediationHintSource {
    * task-status re-stage, no-op baseline — must not run for this round.
    */
   consolidatedManualTestFail?: boolean;
+}
+
+function formatRejectedDispositions(rejected: readonly RemediationDispositionRejection[]): string {
+  if (rejected.length === 0) return '';
+  return `${rejected.map(({ gapId, disposition }) => `${gapId} → "${disposition}"`).join(', ')}; ` +
+    `accepted dispositions are ${rejected[0].accepted.join(' | ')}`;
 }
 
 /** PRD-audit and as-built review own configured remediation allowances; other gates share the generic cap. */
@@ -3814,12 +3821,33 @@ export class Conductor {
       hintSource.source,
     );
     if (!plan) return { kind: 'none' };
+    for (const rejection of plan.rejected) {
+      try {
+        await this.events.emit({
+          type: 'remediation_disposition_rejected',
+          gapId: rejection.gapId,
+          disposition: rejection.disposition,
+          accepted: [...rejection.accepted],
+        });
+      } catch {
+        // Rejection reporting is observability, not a dependency of its halt.
+      }
+    }
+    const droppedDispositionDetail = formatRejectedDispositions(plan.rejected);
+    const droppedSuffix = droppedDispositionDetail ? `; dropped: ${droppedDispositionDetail}` : '';
+    if (plan.gaps.length === 0 && !plan.invalidTasklessBuild) {
+      return {
+        kind: 'halt',
+        haltClass: 'needs-human',
+        detail: `remediation planner returned no recognized disposition: ${droppedDispositionDetail}`,
+      };
+    }
     if (plan.invalidTasklessBuild) {
       return {
         kind: 'halt',
         detail:
           'remediation produced no dispatchable build work: rejected an ordinary BUILD disposition with no concrete task; ' +
-          'human needed to provide dispatchable work',
+          `human needed to provide dispatchable work${droppedSuffix}`,
       };
     }
 
@@ -4487,7 +4515,7 @@ export class Conductor {
     if (halts.length > 0) {
       return {
         kind: 'halt',
-        detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; '),
+        detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; ') + droppedSuffix,
       };
     }
     const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
@@ -4652,7 +4680,7 @@ export class Conductor {
             detail:
               routedFixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
               ' — remediation produced no dispatchable build work; the implicated task(s) ' +
-              'are already evidence-complete — human needed',
+              `are already evidence-complete — human needed${droppedSuffix}`,
             // #647 D3: this HALT is specifically the D1 no-op guard (target
             // was already evidence-complete before build ever ran) — the
             // discriminator the audit trail surfaces via the 'kickback' event.
@@ -4668,7 +4696,7 @@ export class Conductor {
           hintSource.source,
           remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
         ),
-        evidence: remediationEvidence,
+        evidence: remediationEvidence + droppedSuffix,
       };
     }
     return { kind: 'none' };

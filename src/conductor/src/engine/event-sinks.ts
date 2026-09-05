@@ -73,6 +73,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   protected_artifact_reseal_refused: { render: true, persist: false, audit: true, otel: false },
   auto_heal: { render: false, persist: true, audit: false, otel: false },
   remediation_sealed_artifact_redirect: { render: true, persist: true, audit: true, otel: false },
+  remediation_disposition_rejected: { render: true, persist: true, audit: true, otel: false },
   verdict_freshness: { render: true, persist: true, audit: true, otel: false },
   build_review_base: { render: true, persist: false, audit: false, otel: false },
   build_review_stale_mirage_regrade: { render: true, persist: false, audit: false, otel: false },

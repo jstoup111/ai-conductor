@@ -2574,6 +2574,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'remediation_disposition_rejected': {
+      log(
+        `${dot} ${chalk.yellow(
+          `✗ remediation gap ${event.gapId} dropped — disposition "${event.disposition}" not in [${event.accepted.join(', ')}]`,
+        )}`,
+      );
+      break;
+    }
     case 'build_progress': {
       // Plain heartbeat line (adr-2026-07-10-intra-step-build-progress-events):
       // step, N/total, current task, feature slug. No warning coloring —

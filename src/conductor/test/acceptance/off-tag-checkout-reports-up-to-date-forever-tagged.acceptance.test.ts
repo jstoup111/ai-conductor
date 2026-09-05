@@ -35,6 +35,7 @@ const REPO_ROOT = process.env.OFF_TAG_ACCEPTANCE_REPO_ROOT ?? join(process.cwd()
 const REAL_UPDATE = join(REPO_ROOT, 'bin', 'update');
 const REAL_AI_CONDUCTOR = join(REPO_ROOT, 'bin', 'ai-conductor');
 const REAL_COMMON = join(REPO_ROOT, 'bin', 'lib', 'harness-common.sh');
+const SYSTEM_PYTHON = '/usr/bin/python3';
 
 interface CommandResult {
   exitCode: number;
@@ -97,6 +98,10 @@ async function makeHarness(name: string): Promise<HarnessFixture> {
   await copyFile(REAL_COMMON, join(lib, 'harness-common.sh'));
   await chmod(update, 0o755);
 
+  // bin/update uses Python's standard library for changelog rendering. Pin
+  // the fixture to the host interpreter instead of inheriting an asdf shim,
+  // which resolves versions from this temporary harness root.
+  await symlink(SYSTEM_PYTHON, join(bin, 'python3'));
   await symlink(REAL_AI_CONDUCTOR, join(bin, 'ai-conductor'));
 
   await writeFile(join(bin, 'migrate'), '#!/usr/bin/env bash\nexit 0\n', 'utf8');

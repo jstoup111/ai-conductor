@@ -42,6 +42,7 @@ const REAL_AI_CONDUCTOR = join(REPO_ROOT, 'bin', 'ai-conductor');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
 const REAL_UPDATE = join(REPO_ROOT, 'bin', 'update');
 const REAL_COMMON = join(REPO_ROOT, 'bin', 'lib', 'harness-common.sh');
+const SYSTEM_PYTHON = '/usr/bin/python3';
 
 interface CommandResult {
   exitCode: number;
@@ -106,6 +107,9 @@ async function makeHarness(options: { withConductor?: boolean } = {}): Promise<F
   await copyFile(REAL_UPDATE, update);
   await copyFile(REAL_COMMON, join(lib, 'harness-common.sh'));
   await chmod(update, 0o755);
+  // The legacy seed uses Python's standard-library JSON parser. A temporary
+  // harness must not inherit a version-manager shim that cannot resolve here.
+  await symlink(SYSTEM_PYTHON, join(bin, 'python3'));
 
   if (options.withConductor !== false) {
     await symlink(REAL_AI_CONDUCTOR, join(bin, 'ai-conductor'));

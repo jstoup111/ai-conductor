@@ -511,6 +511,13 @@ export type ConductorEvent =
       gapId: string;
       artifact: string;
     }
+  | {
+      /** A remediation planner disposition was not recognized by the engine. */
+      type: 'remediation_disposition_rejected';
+      gapId: string;
+      disposition: string;
+      accepted: string[];
+    }
   | ({
       /**
        * Emitted after a verdict-consuming completion check

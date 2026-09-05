@@ -5122,14 +5122,22 @@ export interface RemediationGap {
 
 export interface RemediationPlan {
   gaps: RemediationGap[];
+  /** Planner dispositions outside the engine's accepted vocabulary. */
+  rejected: RemediationDispositionRejection[];
   /** Ordinary BUILD dispositions rejected for lacking concrete work. */
   invalidTasklessBuild: boolean;
+}
+
+export interface RemediationDispositionRejection {
+  gapId: string;
+  disposition: string;
+  accepted: readonly string[];
 }
 
 /**
  * Read + validate `.pipeline/remediation.json` (the /remediate skill's output).
  * Returns null when the file is absent, stale (predates this session), malformed,
- * or contains no recognizable gap — the caller then falls back to the
+ * or contains no recognizable gap or rejected disposition — the caller then falls back to the
  * deterministic `classifyPrdAuditGaps` routing. Tolerant of junk: unknown
  * dispositions and non-object gaps are dropped rather than failing the whole plan.
  */
@@ -5156,12 +5164,23 @@ export async function readRemediationPlan(
     'halt',
   ];
   const gaps: RemediationGap[] = [];
+  const rejected: RemediationDispositionRejection[] = [];
   let invalidTasklessBuild = false;
-  for (const g of rawGaps) {
+  for (const [index, g] of rawGaps.entries()) {
     if (!g || typeof g !== 'object') continue;
     const o = g as Record<string, unknown>;
-    const disposition = o.disposition as RemediationDisposition;
-    if (!valid.includes(disposition)) continue;
+    const gapId = typeof o.id === 'string' ? o.id : `#${index + 1}`;
+    const dispositionValue = o.disposition;
+    const renderedDisposition = dispositionValue === undefined
+      ? '<missing>'
+      : typeof dispositionValue === 'string'
+        ? dispositionValue
+        : JSON.stringify(dispositionValue);
+    if (typeof dispositionValue !== 'string' || !valid.includes(dispositionValue as RemediationDisposition)) {
+      rejected.push({ gapId, disposition: renderedDisposition, accepted: valid });
+      continue;
+    }
+    const disposition = dispositionValue as RemediationDisposition;
     const category =
       o.category === 'architectural-clarity' || o.category === 'product-scope'
         ? (o.category as RemediationHaltCategory)
@@ -5199,14 +5218,16 @@ export async function readRemediationPlan(
       continue;
     }
     gaps.push({
-      id: typeof o.id === 'string' ? o.id : '?',
+      id: gapId,
       disposition,
       category,
       rationale: typeof o.rationale === 'string' ? o.rationale : '',
       tasks,
     });
   }
-  return gaps.length > 0 || invalidTasklessBuild ? { gaps, invalidTasklessBuild } : null;
+  return gaps.length > 0 || invalidTasklessBuild || rejected.length > 0
+    ? { gaps, rejected, invalidTasklessBuild }
+    : null;
 }
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---

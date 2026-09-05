@@ -271,6 +271,17 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders rejected remediation dispositions with the accepted vocabulary', () => {
+    expect(lines({
+      type: 'remediation_disposition_rejected',
+      gapId: 'gap-1',
+      disposition: 'unknown-disposition',
+      accepted: ['build', 'plan'],
+    })).toEqual([
+      '· ✗ remediation gap gap-1 dropped — disposition "unknown-disposition" not in [build, plan]',
+    ]);
+  });
+
   it('renders each protected-artifact reseal event as one human-readable line', () => {
     expect([
       lines({
