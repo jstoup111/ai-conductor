@@ -1187,6 +1187,27 @@ dispatches at 12:20:39Z, 13:07:12Z and 16:46:00Z. That is the documented behavio
 record failed to take; confirm the record itself in `.pipeline/build-review-dispositions.json`.
 Issue #1832 tracks suppressing the redundant dispatches.
 
+### Remediation supplied no recognized disposition
+
+**Symptom:** `.pipeline/HALT` begins with `remediation planner returned no recognized
+disposition:` and `.pipeline/HALT.class` reads `needs-human`. The remainder names every dropped
+gap as `<gap-id> → "<disposition>"` and gives the accepted vocabulary.
+
+**Diagnosis:** inspect `.pipeline/remediation.json`. Each listed gap has a missing, non-string, or
+unrecognized `disposition`, so the engine rejects it instead of silently treating it as build work.
+It emits one `remediation_disposition_rejected` event per rejected gap to both
+`.pipeline/events.jsonl` and `.pipeline/audit-trail/events.jsonl`. A mixed remediation plan still
+routes its recognized gaps; only the rejected entries are dropped and reported.
+
+**Recovery:** correct the remediation output so every intended gap uses one of the accepted
+dispositions named in the halt, then clear the halt using
+[the resume procedure](#clear-a-halt-and-let-the-feature-resume). Do not clear the halt first:
+the unchanged remediation output will halt again.
+
+**Verification:** the next run either routes the recognized remediation work or halts for the
+documented reason belonging to a valid `halt` disposition. The rejected-disposition event is absent
+unless the corrected plan still contains an invalid entry.
+
 ### Remediation routed the work but the engine found nothing to dispatch
 
 **Symptom:** `.pipeline/HALT` ends with this clause, and `.pipeline/HALT.class` reads `needs-human`:
@@ -1211,9 +1232,10 @@ for x in d['dispositions']:
 "
 ```
 
-Distinguish it from the superficially similar case where remediation genuinely emitted nothing —
-there the dispositions are absent, empty, or all `halt`, and the fix is a remediation problem
-rather than a dispatch one.
+Distinguish it from the superficially similar case where remediation supplied no recognized
+disposition — that halt names the rejected entries and their accepted vocabulary; correct the
+remediation output rather than treating it as a dispatch problem. A valid remediation containing
+only `halt` dispositions instead reports the planner's stated halt reason.
 
 **Recovery:** the owning tasks named in the rationales still need the work, and clearing the halt
 alone will reproduce it on the next lap if the same gate re-raises the same findings. Either:
