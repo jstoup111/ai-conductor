@@ -9,6 +9,15 @@ const { provider_stream_progress: _omitted, ...missingProviderStreamProgress } =
 missingProviderStreamProgress satisfies Record<ConductorEvent['type'], SinkDeclaration>;
 
 describe('event sink registry', () => {
+  it('renders and persists setup repair dispositions without audit or OTel subscriptions', () => {
+    expect(EVENT_SINKS.setup_repair).toEqual({
+      render: true,
+      persist: true,
+      audit: false,
+      otel: false,
+    });
+  });
+
   it('persists provider stream progress without rendering or auditing it', () => {
     expect(EVENT_SINKS.provider_stream_progress).toEqual({
       render: false,

@@ -18,6 +18,8 @@
 
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { ConductorEventEmitter } from '../ui/events.js';
+import type { SetupRepairRejectionReason } from '../types/events.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
@@ -88,6 +90,8 @@ export type TriageOutcome =
       quarantineRef?: string;
       preservedPaths?: string[];
       contractOutcome?: string;
+      /** Present only when a provider failure left the exact dispatch tree intact. */
+      treeUnchangedSinceDispatch?: { before: string; after: string };
     };
 
 /**
@@ -514,7 +518,12 @@ export async function runTriage(
   setupError: any, // Import SetupFailureError at call site for type checking
   runPrepare: (worktreePath: string) => Promise<void>,
   logger?: Logger,
+  events?: ConductorEventEmitter,
 ): Promise<TriageOutcome> {
+  // Both silent stage-1 outcomes deliberately receive the feature-scoped event
+  // spine. They emit nothing; carrying it here makes an accidental future
+  // setup_repair emission observable by the production acceptance boundary.
+  void events;
   // Task 8 guard: require SetupFailureError as input
   if (!setupError) {
     throw new Error('runTriage requires a SetupFailureError to enter; no triage without failure');
@@ -574,69 +583,205 @@ export async function runTriage(
  *         (never "setup failed" — bin/setup itself succeeded)
  *   - (d) seam throws → park, seam called exactly once
  */
+type RepairSnapshot = { head: string; tree: string; paths: string[]; dirty: boolean };
+type PreservationResult =
+  | { ok: true; ref: string; paths: string[] }
+  | { ok: false; restored: false; outputTail: string }
+  | { ok: false; restored: true; ref: string; paths: string[]; outputTail: string };
+
+function gitFailure(result: GitResult, fallback: string): string {
+  return result.stderr || result.stdout || fallback;
+}
+
+async function repairSnapshot(git: GitRunner): Promise<{ ok: true; value: RepairSnapshot } | { ok: false; outputTail: string }> {
+  const head = await git(['rev-parse', 'HEAD']);
+  if (head.exitCode !== 0 || !head.stdout.trim()) return { ok: false, outputTail: gitFailure(head, 'could not resolve HEAD') };
+  const status = await git(['status', '--porcelain']);
+  if (status.exitCode !== 0) return { ok: false, outputTail: gitFailure(status, 'could not read worktree status') };
+  const paths = parsePortcelainPaths(status.stdout);
+  if (paths.length === 0) {
+    const tree = await git(['rev-parse', 'HEAD^{tree}']);
+    return tree.exitCode === 0 && tree.stdout.trim()
+      ? { ok: true, value: { head: head.stdout.trim(), tree: tree.stdout.trim(), paths, dirty: false } }
+      : { ok: false, outputTail: gitFailure(tree, 'could not resolve HEAD tree') };
+  }
+  const add = await git(['add', '-A']);
+  if (add.exitCode !== 0) return { ok: false, outputTail: gitFailure(add, 'could not stage repair candidate') };
+  const tree = await git(['write-tree']);
+  // Restore the original index without touching candidate bytes in the working tree.
+  const reset = await git(['reset', '--mixed', head.stdout.trim()]);
+  if (tree.exitCode !== 0 || reset.exitCode !== 0 || !tree.stdout.trim()) {
+    return { ok: false, outputTail: gitFailure(tree.exitCode !== 0 ? tree : reset, 'could not snapshot repair candidate') };
+  }
+  return { ok: true, value: { head: head.stdout.trim(), tree: tree.stdout.trim(), paths, dirty: true } };
+}
+
+async function preserveRepairAttempt(git: GitRunner, slug: string, originalHead: string): Promise<PreservationResult> {
+  const status = await git(['status', '--porcelain']);
+  if (status.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(status, 'could not inspect attempted repair') };
+  const residue = parsePortcelainPaths(status.stdout);
+  const changed = await git(['diff', '--name-only', originalHead, 'HEAD']);
+  if (changed.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(changed, 'could not inspect attempted commits') };
+  const paths = [...new Set([...changed.stdout.split('\n').filter(Boolean), ...residue])];
+  if (residue.length > 0) {
+    const add = await git(['add', '-A']);
+    if (add.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(add, 'could not stage rejected repair') };
+    const commit = await git(['commit', '-m', 'wip(setup): preserve rejected repair']);
+    if (commit.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(commit, 'could not preserve rejected repair') };
+  }
+  const attempted = await git(['rev-parse', 'HEAD']);
+  if (attempted.exitCode !== 0 || !attempted.stdout.trim()) return { ok: false, restored: false, outputTail: gitFailure(attempted, 'could not resolve attempted repair') };
+  const ref = `wip/setup-quarantine-${slug}`;
+  const branch = await git(['branch', '-f', ref, attempted.stdout.trim()]);
+  if (branch.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(branch, 'could not preserve rejected repair ref') };
+  const verify = await git(['rev-parse', '--verify', ref]);
+  if (verify.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(verify, 'could not verify rejected repair ref') };
+  if (verify.stdout.trim() !== attempted.stdout.trim()) return { ok: false, restored: false, outputTail: 'could not verify rejected repair ref: refreshed ref did not resolve to the attempted HEAD' };
+  const reset = await git(['reset', '--hard', originalHead]);
+  if (reset.exitCode !== 0) return { ok: false, restored: true, ref, paths, outputTail: gitFailure(reset, 'could not restore original HEAD') };
+  return { ok: true, ref, paths };
+}
+
+/** Runs one fix session and accepts only a setup-stable, provable Git state. */
 export async function fixSession(
   git: GitRunner,
   worktreePath: string,
   slug: string,
   dispatchFixSession: () => Promise<void>,
   runPrepare: (worktreePath: string) => Promise<void>,
+  events?: ConductorEventEmitter,
 ): Promise<TriageOutcome> {
+  const initial = await repairSnapshot(git);
+  if (!initial.ok || initial.value.dirty) {
+    return { kind: 'park', outputTail: initial.ok ? 'fix-session requires a clean initial worktree' : initial.outputTail, contractOutcome: 'precondition-failed' };
+  }
+  const original = initial.value;
+  let settled = false;
+  const success = async (disposition: 'engine-committed' | 'accepted-existing-commit' | 'verified-no-tree-change'): Promise<TriageOutcome> => {
+    if (!settled) { settled = true; await events?.emit({ type: 'setup_repair', disposition, preservedPaths: [] }); }
+    return { kind: 'fixed-pass', outputTail: '', preservedPaths: [], contractOutcome: disposition };
+  };
+  const reject = async (
+    reason: SetupRepairRejectionReason,
+    outputTail: string,
+    preserve: boolean,
+    treeUnchangedSinceDispatch?: { before: string; after: string },
+  ): Promise<TriageOutcome> => {
+    let ref: string | undefined;
+    let paths: string[] = [];
+    let finalReason = reason;
+    let finalTail = outputTail;
+    if (preserve) {
+      const result = await preserveRepairAttempt(git, slug, original.head);
+      if (result.ok) { ref = result.ref; paths = result.paths; }
+      else if (result.restored) { ref = result.ref; paths = result.paths; finalReason = 'restoration-failed'; finalTail = result.outputTail; }
+      else { finalReason = 'preservation-failed'; finalTail = result.outputTail; }
+    }
+    if (!settled) { settled = true; await events?.emit({ type: 'setup_repair', disposition: 'rejected', reason: finalReason, ...(ref ? { quarantineRef: ref } : {}), preservedPaths: paths }); }
+    return {
+      kind: 'park',
+      outputTail: finalTail,
+      contractOutcome: finalReason,
+      ...(ref ? { quarantineRef: ref } : {}),
+      ...(treeUnchangedSinceDispatch ? { treeUnchangedSinceDispatch } : {}),
+      preservedPaths: paths,
+    };
+  };
+
   try {
-    // Step 1: Dispatch the LLM fix-session
     await dispatchFixSession();
   } catch (err) {
-    // Step 2: Dispatch failed — park immediately
-    const outputTail = extractErrorOutput(err);
-    return {
-      kind: 'park',
-      outputTail,
-    };
+    const afterFailure = await repairSnapshot(git);
+    if (!afterFailure.ok) return reject('snapshot-failed', afterFailure.outputTail, true);
+    const treeUnchanged =
+      afterFailure.value.head === original.head &&
+      afterFailure.value.tree === original.tree &&
+      !afterFailure.value.dirty;
+    return reject(
+      'provider-failure',
+      extractErrorOutput(err),
+      !treeUnchanged,
+      treeUnchanged ? { before: original.tree, after: afterFailure.value.tree } : undefined,
+    );
+  }
+  const candidate = await repairSnapshot(git);
+  if (!candidate.ok) return reject('snapshot-failed', candidate.outputTail, true);
+  const forward = await git(['merge-base', '--is-ancestor', original.head, candidate.value.head]);
+  if (forward.exitCode !== 0) return reject('history-rewritten', 'fix-session rewrote original history', true);
+  if (candidate.value.head !== original.head && candidate.value.dirty) return reject('mixed-commit-and-residue', 'fix-session left commits plus uncommitted residue', true);
+  try { await runPrepare(worktreePath); } catch (err) {
+    return reject('setup-still-failing', extractErrorOutput(err), candidate.value.head !== original.head || candidate.value.dirty);
+  }
+  const afterPrepare = await repairSnapshot(git);
+  if (!afterPrepare.ok) return reject('snapshot-failed', afterPrepare.outputTail, true);
+  if (afterPrepare.value.head !== candidate.value.head || afterPrepare.value.tree !== candidate.value.tree) return reject('setup-drift', 'forced setup changed the repair candidate', true);
+  if (!candidate.value.dirty) return candidate.value.head === original.head ? success('verified-no-tree-change') : success('accepted-existing-commit');
+  const add = await git(['add', '-A']);
+  const commit = add.exitCode === 0 ? await git(['commit', '-m', 'fix(setup): retain verified repair']) : add;
+  if (commit.exitCode !== 0) return reject('repair-commit-failed', gitFailure(commit, 'could not commit verified repair'), true);
+  const verified = await repairSnapshot(git);
+  if (!verified.ok) return reject('repair-postcondition-failed', verified.outputTail, true);
+  if (verified.value.head === original.head) {
+    return reject('repair-postcondition-failed', 'repair commit postcondition failed: HEAD did not advance past the original commit', true);
+  }
+  if (verified.value.tree !== candidate.value.tree) {
+    return reject('repair-postcondition-failed', 'repair commit postcondition failed: committed tree did not match the verified candidate tree', true);
+  }
+  if (verified.value.dirty) {
+    return reject('repair-postcondition-failed', 'repair commit postcondition failed: worktree left dirty after the repair commit', true);
+  }
+  const parent = await git(['rev-parse', 'HEAD^']);
+  if (parent.exitCode !== 0 || parent.stdout.trim() !== original.head) return reject('repair-postcondition-failed', 'repair commit parent did not match original HEAD', true);
+  return success('engine-committed');
+}
+
+/**
+ * Run the complete, bounded setup-recovery ladder for one failed setup run.
+ *
+ * Stage 1 first removes only quarantinable residue. Stage 2 is reachable only
+ * when setup still fails at a clean HEAD; it owns exactly one provider repair
+ * dispatch and its mechanical verification. Keeping this decision beside both
+ * stages prevents callers from accidentally treating a stage-1-only recovery
+ * as a fix-session candidate.
+ */
+export async function runSetupFailureTriage(
+  git: GitRunner,
+  worktreePath: string,
+  slug: string,
+  setupError: any,
+  runPrepare: (worktreePath: string) => Promise<void>,
+  dispatchFixSession: () => Promise<void>,
+  logger?: Logger,
+  events?: ConductorEventEmitter,
+): Promise<TriageOutcome> {
+  const triageOutcome = await runTriage(
+    git,
+    worktreePath,
+    slug,
+    setupError,
+    runPrepare,
+    logger,
+    events,
+  );
+
+  if (triageOutcome.kind === 'park' && !triageOutcome.quarantineRef) {
+    return triageOutcome;
+  }
+  if (triageOutcome.kind === 'quarantined-pass') {
+    return triageOutcome;
   }
 
-  try {
-    // Step 3: Retry prepare after the fix attempt
-    await runPrepare(worktreePath);
-  } catch (err) {
-    // Step 4: Prepare still fails after fix attempt — park with contract outcome
-    const outputTail = extractErrorOutput(err);
-    return {
-      kind: 'park',
-      outputTail,
-      contractOutcome: 'setup-still-failing',
-    };
+  const fixOutcome = await fixSession(
+    git,
+    worktreePath,
+    slug,
+    dispatchFixSession,
+    runPrepare,
+    events,
+  );
+
+  if (fixOutcome.kind === 'park' && !fixOutcome.quarantineRef && triageOutcome.quarantineRef) {
+    return { ...fixOutcome, quarantineRef: triageOutcome.quarantineRef };
   }
-
-  // Step 5: Verify tree is clean after prepare succeeds
-  const porcelainResult = await git(['status', '--porcelain']);
-  const dirtyPaths = parsePortcelainPaths(porcelainResult.stdout);
-
-  if (dirtyPaths.length > 0) {
-    // Step 6: Tree is dirty after prepare succeeded — bin/setup itself did not
-    // fail, so this is NOT "setup failed". Quarantine the residual strays
-    // (tracked and untracked alike) and return a distinct park outcome so
-    // downstream reporting never mislabels this as a setup failure.
-    const quarantineAttempt = await quarantine(git, slug);
-
-    if ('kind' in quarantineAttempt) {
-      // Preservation itself failed — fail toward park, unchanged, naming the
-      // preservation failure. Do not proceed.
-      return quarantineAttempt;
-    }
-
-    const { ref, preservedPaths } = quarantineAttempt;
-    return {
-      kind: 'park',
-      outputTail: `bin/setup exited 0 but the worktree could not be brought clean — residual uncommitted paths quarantined to ${ref}: ${preservedPaths.join(', ')}`,
-      contractOutcome: 'dirty-tree-uncleaned',
-      quarantineRef: ref,
-      preservedPaths,
-    };
-  }
-
-  // Step 7: All checks passed — fixed!
-  return {
-    kind: 'fixed-pass',
-    outputTail: '',
-    preservedPaths: [],
-  };
+  return fixOutcome;
 }

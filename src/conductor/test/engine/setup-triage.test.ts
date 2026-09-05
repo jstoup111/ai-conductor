@@ -675,7 +675,10 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
   });
 });
 
-describe('engine/setup-triage — fixSession (Task 10: fix-session stage)', () => {
+// Superseded by the #1346 exact-state repair contract tests below and its
+// real-Git acceptance fixture. These cases model the former clean-or-
+// quarantine contract, which intentionally no longer accepts a dirty repair.
+describe.skip('engine/setup-triage — legacy fixSession (pre-#1346)', () => {
   it('(a) happy path: dispatchFixSession succeeds, runPrepare passes, porcelain empty → fixed-pass', async () => {
     const { git, calls } = fakeGit([
       // Final porcelain check after prepare
@@ -850,6 +853,288 @@ describe('engine/setup-triage — fixSession (Task 10: fix-session stage)', () =
     expect(dispatchCallCount).toBe(1);
     expect(result.kind).toBe('park');
     expect(result.outputTail).toContain('LLM session failed');
+  });
+});
+
+type RejectionCase =
+  | 'provider-failure'
+  | 'history-rewritten'
+  | 'mixed-commit-and-residue'
+  | 'setup-still-failing'
+  | 'setup-drift'
+  | 'snapshot-failed'
+  | 'repair-commit-failed'
+  | 'repair-postcondition-failed'
+  | 'preservation-failed'
+  | 'restoration-failed'
+  | 'ref-refresh-failed'
+  | 'ref-verification-failed';
+
+type PostconditionCase = 'snapshot-unreadable' | 'head-unchanged' | 'tree-mismatch' | 'worktree-dirty';
+
+/**
+ * A stateful fake of the small Git protocol owned by fixSession. It deliberately
+ * models only that protocol: the table below changes one terminal condition at
+ * a time while preservation follows the real helper's ref-before-reset order.
+ */
+function rejectionGit(kind: RejectionCase | PostconditionCase): { git: GitRunner; calls: string[][]; refreshedRef: () => string | undefined } {
+  const calls: string[][] = [];
+  let headReads = 0;
+  let snapshot = 0;
+  let statusReads = 0;
+  let preserve = false;
+  let postCommit = false;
+  let refreshedRef: string | undefined;
+  const terminal = kind === 'preservation-failed' || kind === 'restoration-failed' || kind === 'ref-refresh-failed' || kind === 'ref-verification-failed'
+    ? 'history-rewritten'
+    : kind;
+  const originalHead = 'a'.repeat(40);
+  const attemptedHead = 'b'.repeat(40);
+  const result = (stdout = '', exitCode = 0, stderr = ''): GitResult => ({ stdout, exitCode, stderr });
+
+  const git: GitRunner = async (args) => {
+    calls.push(args);
+    const [command, ...rest] = args;
+    if (command === 'rev-parse' && rest[0] === 'HEAD') {
+      headReads += 1;
+      if (kind === 'snapshot-failed' && headReads === 2) return result('', 1, 'cannot read candidate');
+      if (kind === 'mixed-commit-and-residue' && headReads === 2) return result(`${attemptedHead}\n`);
+      if (kind === 'head-unchanged' && headReads === 4) return result(`${originalHead}\n`);
+      return result(`${postCommit || preserve ? attemptedHead : originalHead}\n`);
+    }
+    if (command === 'rev-parse' && rest[0] === 'HEAD^{tree}') {
+      snapshot += 1;
+      if (kind === 'snapshot-unreadable' && snapshot === 2) return result('', 1, 'cannot read committed snapshot');
+      if (kind === 'setup-drift' && snapshot === 3) return result('drifted-tree\n');
+      if (kind === 'tree-mismatch' && snapshot === 2) return result('unexpected-tree\n');
+      return result(snapshot === 1 ? 'original-tree\n' : (kind === 'mixed-commit-and-residue' || kind === 'repair-commit-failed' || kind === 'repair-postcondition-failed' || kind === 'head-unchanged' || kind === 'tree-mismatch' || kind === 'worktree-dirty' || kind === 'snapshot-unreadable') ? 'repair-tree\n' : 'original-tree\n');
+    }
+    if (command === 'status') {
+      statusReads += 1;
+      const postconditionCandidate = kind === 'repair-postcondition-failed' || kind === 'snapshot-unreadable' || kind === 'head-unchanged' || kind === 'tree-mismatch' || kind === 'worktree-dirty';
+      const dirty = postconditionCandidate
+        ? statusReads === 2 || statusReads === 3 || (kind === 'worktree-dirty' && statusReads === 4)
+        : statusReads > 1 && (
+          terminal === 'mixed-commit-and-residue' ||
+          terminal === 'repair-commit-failed' ||
+          terminal === 'repair-postcondition-failed' ||
+          kind === 'preservation-failed'
+        );
+      return result(dirty ? '?? repair.txt\n' : '');
+    }
+    if (command === 'write-tree') return result('repair-tree\n');
+    if (command === 'merge-base') return result('', terminal === 'history-rewritten' ? 1 : 0);
+    if (command === 'diff') {
+      preserve = true;
+      return result('repair.txt\n');
+    }
+    if (command === 'add') {
+      if (kind === 'preservation-failed') return result('', 1, 'cannot preserve');
+      return result();
+    }
+    if (command === 'commit') {
+      if (preserve) return result();
+      if (kind === 'repair-commit-failed') return result('', 1, 'cannot commit repair');
+      postCommit = true;
+      return result();
+    }
+    if (command === 'branch') {
+      if (kind === 'ref-refresh-failed') return result('', 1, 'cannot refresh rejected repair ref');
+      refreshedRef = attemptedHead;
+      return result();
+    }
+    if (command === 'reset' && rest[0] === '--hard') {
+      preserve = true;
+      return kind === 'restoration-failed' ? result('', 1, 'cannot restore') : result();
+    }
+    if (command === 'reset') return result();
+    if (command === 'rev-parse' && rest[0] === '--verify') return kind === 'ref-verification-failed'
+      ? result(`${'c'.repeat(40)}\n`)
+      : result(`${attemptedHead}\n`);
+    return result();
+  };
+  return { git, calls, refreshedRef: () => refreshedRef };
+}
+
+describe('engine/setup-triage — fixSession closed rejection dispositions (Task 13)', () => {
+  const cases: Array<{
+    reason: RejectionCase;
+    dispatchThrows?: boolean;
+    prepareThrows?: boolean;
+    hasRef: boolean;
+    contractOutcome?: 'preservation-failed';
+    outputTail?: string;
+  }> = [
+    { reason: 'provider-failure', dispatchThrows: true, hasRef: false },
+    { reason: 'history-rewritten', hasRef: true },
+    { reason: 'mixed-commit-and-residue', hasRef: true },
+    { reason: 'setup-still-failing', prepareThrows: true, hasRef: false },
+    { reason: 'setup-drift', hasRef: true },
+    { reason: 'snapshot-failed', hasRef: true },
+    { reason: 'repair-commit-failed', hasRef: true },
+    { reason: 'repair-postcondition-failed', hasRef: true },
+    { reason: 'preservation-failed', hasRef: false },
+    { reason: 'restoration-failed', hasRef: true },
+    { reason: 'ref-refresh-failed', hasRef: false, contractOutcome: 'preservation-failed', outputTail: 'cannot refresh rejected repair ref' },
+    { reason: 'ref-verification-failed', hasRef: false, contractOutcome: 'preservation-failed', outputTail: 'could not verify rejected repair ref' },
+  ];
+
+  it.each(cases)('$reason emits one matching rejected disposition and accurate ref evidence', async ({ reason, dispatchThrows, prepareThrows, hasRef, contractOutcome, outputTail }) => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const events = { emit: async (event: Record<string, unknown>) => { emitted.push(event); } };
+    const { git, calls, refreshedRef } = rejectionGit(reason);
+    const outcome = await fixSession(
+      git,
+      '/worktree',
+      'task-13',
+      async () => {
+        if (dispatchThrows) throw new Error('provider failed');
+      },
+      async () => {
+        if (prepareThrows) throw new Error('setup still fails');
+      },
+      events as never,
+    );
+
+    const expectedReason = contractOutcome ?? reason;
+    expect(outcome).toMatchObject({ kind: 'park', contractOutcome: expectedReason });
+    if (outputTail) expect(outcome.outputTail).toContain(outputTail);
+    expect(emitted).toEqual([
+      expect.objectContaining({ type: 'setup_repair', disposition: 'rejected', reason: expectedReason }),
+    ]);
+    expect((emitted[0] as { quarantineRef?: string }).quarantineRef).toBe(
+      hasRef ? 'wip/setup-quarantine-task-13' : undefined,
+    );
+    expect(outcome.quarantineRef).toBe(
+      hasRef ? 'wip/setup-quarantine-task-13' : undefined,
+    );
+    if (reason === 'ref-refresh-failed' || reason === 'ref-verification-failed') {
+      expect(calls.filter((args) => args.join('\u0000') === ['reset', '--hard', 'a'.repeat(40)].join('\u0000'))).toHaveLength(0);
+    }
+    if (reason === 'restoration-failed') {
+      expect(calls).toContainEqual(['rev-parse', '--verify', 'wip/setup-quarantine-task-13']);
+      expect(refreshedRef()).toBe('b'.repeat(40));
+    }
+  });
+});
+
+describe('engine/setup-triage — repair commit postcondition detail (Task 10)', () => {
+  const cases: Array<{ kind: PostconditionCase; outputTail: string }> = [
+    { kind: 'snapshot-unreadable', outputTail: 'cannot read committed snapshot' },
+    { kind: 'head-unchanged', outputTail: 'HEAD did not advance past the original commit' },
+    { kind: 'tree-mismatch', outputTail: 'committed tree did not match the verified candidate tree' },
+    { kind: 'worktree-dirty', outputTail: 'worktree left dirty after the repair commit' },
+  ];
+
+  it.each(cases)('$kind names its failed postcondition', async ({ kind, outputTail }) => {
+    const { git } = rejectionGit(kind);
+    const outcome = await fixSession(git, '/worktree', 'task-10', async () => {}, async () => {});
+
+    expect(outcome).toMatchObject({ kind: 'park', contractOutcome: 'repair-postcondition-failed' });
+    expect(outcome.outputTail).toContain(outputTail);
+  });
+
+  it('keeps the parent mismatch message distinct', async () => {
+    const { git } = rejectionGit('repair-postcondition-failed');
+    const outcome = await fixSession(git, '/worktree', 'task-10', async () => {}, async () => {});
+
+    expect(outcome).toMatchObject({ kind: 'park', contractOutcome: 'repair-postcondition-failed' });
+    expect(outcome.outputTail).toBe('repair commit parent did not match original HEAD');
+  });
+});
+
+/** Models the clean Git states accepted by fixSession and records its protocol argv. */
+function acceptedRepairGit(): { git: GitRunner; calls: string[][]; applyForwardCommit: () => void } {
+  const calls: string[][] = [];
+  const originalHead = 'a'.repeat(40);
+  const originalTree = 'original-tree';
+  const repairedHead = 'b'.repeat(40);
+  const repairedTree = 'repaired-tree';
+  let forwardCommitApplied = false;
+  const result = (stdout = '', exitCode = 0, stderr = ''): GitResult => ({ stdout, exitCode, stderr });
+
+  const git: GitRunner = async (args) => {
+    calls.push(args);
+    const [command, ...rest] = args;
+    if (command === 'rev-parse' && rest[0] === 'HEAD') {
+      return result(`${forwardCommitApplied ? repairedHead : originalHead}\n`);
+    }
+    if (command === 'rev-parse' && rest[0] === 'HEAD^{tree}') {
+      return result(`${forwardCommitApplied ? repairedTree : originalTree}\n`);
+    }
+    if (command === 'status' && rest[0] === '--porcelain') return result();
+    if (command === 'merge-base' && rest[0] === '--is-ancestor') return result();
+    return result();
+  };
+
+  return { git, calls, applyForwardCommit: () => { forwardCommitApplied = true; } };
+}
+
+describe('engine/setup-triage — fixSession accepted repair dispositions (Task 5)', () => {
+  it('accepts a no-change repair without an engine commit and emits its closed disposition', async () => {
+    const { git, calls } = acceptedRepairGit();
+    const emitted: Array<Record<string, unknown>> = [];
+    const events = { emit: async (event: Record<string, unknown>) => { emitted.push(event); } };
+
+    const outcome = await fixSession(git, '/worktree', 'task-5', async () => {}, async () => {}, events as never);
+
+    expect(outcome).toMatchObject({ kind: 'fixed-pass', contractOutcome: 'verified-no-tree-change', preservedPaths: [] });
+    expect(outcome.quarantineRef).toBeUndefined();
+    expect(calls.some(([command]) => command === 'add' || command === 'commit')).toBe(false);
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: 'setup_repair',
+        disposition: 'verified-no-tree-change',
+        preservedPaths: [],
+      }),
+    ]);
+    expect((emitted[0] as { quarantineRef?: string }).quarantineRef).toBeUndefined();
+    expect(emitted[0]?.disposition).not.toBe('rejected');
+  });
+
+  it('accepts a clean forward commit without an additional engine commit and emits its closed disposition', async () => {
+    const { git, calls, applyForwardCommit } = acceptedRepairGit();
+    const emitted: Array<Record<string, unknown>> = [];
+    const events = { emit: async (event: Record<string, unknown>) => { emitted.push(event); } };
+
+    const outcome = await fixSession(git, '/worktree', 'task-5', async () => { applyForwardCommit(); }, async () => {}, events as never);
+
+    expect(outcome).toMatchObject({ kind: 'fixed-pass', contractOutcome: 'accepted-existing-commit', preservedPaths: [] });
+    expect(outcome.quarantineRef).toBeUndefined();
+    expect(calls.some(([command]) => command === 'add' || command === 'commit')).toBe(false);
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: 'setup_repair',
+        disposition: 'accepted-existing-commit',
+        preservedPaths: [],
+      }),
+    ]);
+    expect((emitted[0] as { quarantineRef?: string }).quarantineRef).toBeUndefined();
+    expect(emitted[0]?.disposition).not.toBe('rejected');
+  });
+
+  it('parks an initially dirty worktree before dispatch and emits no repair event', async () => {
+    const { git } = fakeGit([
+      { match: ['rev-parse', 'HEAD'], result: { stdout: `${'a'.repeat(40)}\n` } },
+      { match: ['status', '--porcelain'], result: { stdout: ' M src/dirty.ts\n' } },
+      { match: ['write-tree'], result: { stdout: 'dirty-tree\n' } },
+    ]);
+    const emitted: Array<Record<string, unknown>> = [];
+    const events = { emit: async (event: Record<string, unknown>) => { emitted.push(event); } };
+    let dispatches = 0;
+
+    const outcome = await fixSession(
+      git,
+      '/worktree',
+      'task-12',
+      async () => { dispatches += 1; },
+      async () => {},
+      events as never,
+    );
+
+    expect(outcome).toMatchObject({ kind: 'park', contractOutcome: 'precondition-failed' });
+    expect(dispatches).toBe(0);
+    expect(emitted).toEqual([]);
   });
 });
 

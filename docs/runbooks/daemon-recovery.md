@@ -232,9 +232,18 @@ feature back in the rotation to fail again. Diagnosis is in
 
 #### The project's `bin/setup` fails in every worktree
 
-The feature is quarantined: `.pipeline/QUARANTINE` in the worktree and a
-`wip/setup-quarantine-<slug>` branch holding the evidence. Fix `bin/setup` in the repo, not in
-the worktree — every new worktree re-runs it.
+The daemon first performs bounded setup triage. It may quarantine dirty residue on
+`wip/setup-quarantine-<slug>`, retry from a clean `HEAD`, and, only if setup still fails there,
+run one provider repair session. Do not start a second repair by editing the quarantined worktree
+while that attempt is in progress.
+
+If triage recovers, inspect `.pipeline/QUARANTINE` and its named branch before removing the notice;
+the feature can continue while the preserved residue remains available for review. If triage parks,
+read the `setup_repair` event in `.pipeline/events.jsonl` and the halt body. A rejection that names
+a quarantine branch preserved the rejected repair and restored the feature to its original `HEAD`;
+review or transplant the branch deliberately. A provider failure with no quarantine branch left the
+original worktree unchanged. In either case, fix the underlying `bin/setup` problem on the intended
+branch, then follow the applicable halt-resume procedure. Every new worktree re-runs `bin/setup`.
 
 Setup triage treats Docker services as shared across worktrees. It starts missing containers with
 `docker compose up -d --no-recreate`; it does not stop, restart, recreate, or tear down containers
