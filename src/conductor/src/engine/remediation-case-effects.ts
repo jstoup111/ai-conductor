@@ -45,9 +45,23 @@ export function isBuildEligibleActionCase(record: RemediationCaseRecord): record
   return isActionCase(record) && record.effect.status === 'applied';
 }
 
-/** Action effects that require a durable work order before recovery or terminal PASS. */
-export function isBuildReviewWorkOrderObligationActionCase(record: RemediationCaseRecord): record is ActionCase {
-  return isActionCase(record) && ['reserved', 'applied', 'failed'].includes(record.effect.status);
+/**
+ * The ONE effect-status test shared by the reconciler's benign-absence resolve
+ * predicate and the settlement obligation predicate below. A reserved effect
+ * is uncompleted durable work and a failed effect is an unresolved failure;
+ * neither may settle into a terminal PASS by absence alone, whatever the
+ * effect kind. Deriving both predicates from this single test is what keeps
+ * them agreeing — editing one side reopened the fail-open PASS.
+ */
+export function hasReservedOrFailedRemediationEffect(record: RemediationCaseRecord): boolean {
+  return record.effect.kind !== 'none'
+    && (record.effect.status === 'reserved' || record.effect.status === 'failed');
+}
+
+/** Open cases whose durable effect blocks recovery or terminal PASS settlement. */
+export function isBuildReviewSettlementObligationCase(record: RemediationCaseRecord): boolean {
+  return isOpenRemediationCase(record)
+    && (isBuildEligibleActionCase(record) || hasReservedOrFailedRemediationEffect(record));
 }
 
 function replaceCases(
