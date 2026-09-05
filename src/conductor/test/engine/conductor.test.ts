@@ -102,7 +102,7 @@ import {
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -952,16 +952,17 @@ describe('engine/conductor', () => {
 
   });
 
-  it('re-dispatches a failed coverage-binding step without halting', async () => {
+  it('re-dispatches a typed coverage-binding payload failure without halting', async () => {
     const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
     state.coverage_binding = 'pending';
     await writeState(statePath, state);
 
     let coverageDispatches = 0;
+    const retryReasons: string[] = [];
     const loopHalts: ConductorEvent[] = [];
     events.on('loop_halt', (event) => { loopHalts.push(event); });
     const runner: StepRunner = {
-      run: vi.fn().mockImplementation(async (step) => {
+      run: vi.fn().mockImplementation(async (step, _state, options?: StepRunOptions) => {
         if (step !== 'coverage_binding') return { success: true };
         coverageDispatches++;
         if (coverageDispatches === 1) {
@@ -970,8 +971,16 @@ describe('engine/conductor', () => {
             join(dir, '.pipeline', 'coverage-binding.json'),
             JSON.stringify({ version: 1, slug: 'test-feature', runId: 'test-run', status: 'failed', entries: [] }),
           );
-          return { success: false, output: 'coverage-binding provider failed' };
+          const infrastructureFailure = new CoverageBindingPayloadError('out-of-vocabulary verdict');
+          return {
+            success: false,
+            // Deliberately unrelated to prove the retry consumes the typed
+            // classifier rather than routing on arbitrary provider text.
+            output: 'provider output that must not select the retry route',
+            infrastructureFailure,
+          };
         }
+        retryReasons.push(options?.retryReason ?? '');
         return { success: true };
       }),
     };
@@ -988,6 +997,9 @@ describe('engine/conductor', () => {
     await conductor.run();
 
     expect(coverageDispatches).toBe(2);
+    expect(retryReasons).toEqual([
+      expect.stringContaining('coverage-binding judge infrastructure failure: out-of-vocabulary verdict'),
+    ]);
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
     expect(loopHalts).toEqual([]);
     expect(JSON.parse(await readFile(join(dir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
