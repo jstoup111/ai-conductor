@@ -12,11 +12,13 @@ budget, halt-class, or config change.
 
 ## Technical Approach
 
-- **Planner no-plan cause.** `readRemediationPlan` returns `null` for four distinct conditions
-  (file absent, file stale against session start, unparseable JSON, `dispositions` not an array)
+- **Planner no-plan cause.** `readRemediationPlan` returns `null` for five distinct conditions
+  (file absent, file stale against session start, unparseable JSON, `dispositions` not an array,
+  and a well-formed `dispositions` array yielding no routable disposition — empty, non-object
+  entries, `halt` entries without a category, or `existing-task` entries with blank task ids)
   and its `prd_audit` callers rely on that `null` to fall back to deterministic routing, so the
   `none` kind must survive. Add an exported `readRemediationPlanResult` that returns either the
-  plan or a `{ plan: null, cause }` with a closed `RemediationPlanAbsenceCause` union of those four
+  plan or a `{ plan: null, cause }` with a closed `RemediationPlanAbsenceCause` union of those five
   values; keep `readRemediationPlan` as a thin wrapper so its callers are untouched. `planRemediation`
   then returns `{ kind: 'none', reason }` where `reason` is rendered from the cause. The `none`
   result type gains a required `reason`, so no caller can receive a reason-less no-plan result.
@@ -52,16 +54,16 @@ budget, halt-class, or config change.
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing tests: `readRemediationPlanResult` returns `{ plan: null, cause: 'absent' }` with no file, `'stale'` when the file's mtime predates `sessionStartedAt`, `'unparseable'` on invalid JSON, `'non-array-dispositions'` when `dispositions` is an object; and returns `{ plan }` for a valid fresh file.
+1. Write failing tests: `readRemediationPlanResult` returns `{ plan: null, cause: 'absent' }` with no file, `'stale'` when the file's mtime predates `sessionStartedAt`, `'unparseable'` on invalid JSON, `'non-array-dispositions'` when `dispositions` is an object, `'no-routable-dispositions'` when `dispositions` is a well-formed array yielding no routable disposition (empty array, non-object entries, `halt` entries without a category, `existing-task` entries with blank task ids); and returns `{ plan }` for a valid fresh file.
 2. Verify tests fail (RED).
 3. Implement: add `RemediationPlanAbsenceCause` and `readRemediationPlanResult` beside `readRemediationPlan`; reimplement `readRemediationPlan` as `(await readRemediationPlanResult(...)).plan`.
 4. Verify tests pass (GREEN); the existing `readRemediationPlan` tests still pass unchanged.
 5. Commit: "feat(remediate): expose the cause when no remediation plan is readable".
 
 **Done when:**
-- `readRemediationPlanResult` is exported and a unit test asserts each of the four causes `absent`, `stale`, `unparseable`, `non-array-dispositions` from the matching fixture.
+- `readRemediationPlanResult` is exported and a unit test asserts each of the five causes `absent`, `stale`, `unparseable`, `non-array-dispositions`, `no-routable-dispositions` from the matching fixture.
 - `readRemediationPlan` still returns `null` for all four fixtures and the plan for a valid one, proven by the existing tests passing without edits.
-- `RemediationPlanAbsenceCause` is a string-literal union of exactly those four values.
+- `RemediationPlanAbsenceCause` is a string-literal union of exactly those five values.
 
 **Files likely touched:**
 - `src/conductor/src/engine/artifacts.ts` — new cause type, `readRemediationPlanResult`, wrapper
@@ -76,13 +78,13 @@ budget, halt-class, or config change.
 **Steps:**
 1. Write failing test: with a fake step runner that writes nothing, `planRemediation` (via a daemon `Conductor` whose as-built gate is blocked-remediable) yields a halt/hint text containing "the planner wrote no remediation plan"; with a stale file, text containing "stale".
 2. Verify it fails (RED) — today the result is a bare `{ kind: 'none' }`.
-3. Implement: `planRemediation` calls `readRemediationPlanResult`; on `plan: null` returns `{ kind: 'none', reason: renderRemediationPlanAbsence(cause) }` where the renderer maps `absent` → "the planner wrote no remediation plan", `stale` → "the planner's remediation plan is stale (predates this session)", `unparseable` → "the planner's remediation plan is not valid JSON", `non-array-dispositions` → "the planner's remediation plan has no dispositions array". Make `reason` required on the `none` member of the return type so TypeScript rejects a bare `none`.
+3. Implement: `planRemediation` calls `readRemediationPlanResult`; on `plan: null` returns `{ kind: 'none', reason: renderRemediationPlanAbsence(cause) }` where the renderer maps `absent` → "the planner wrote no remediation plan", `stale` → "the planner's remediation plan is stale (predates this session)", `unparseable` → "the planner's remediation plan is not valid JSON", `non-array-dispositions` → "the planner's remediation plan has no dispositions array", `no-routable-dispositions` → "the planner's remediation plan contains no routable dispositions". Make `reason` required on the `none` member of the return type so TypeScript rejects a bare `none`.
 4. Verify tests pass (GREEN); `npx tsc --noEmit` in `src/conductor` passes.
 5. Commit: "feat(remediate): planRemediation names why no plan was read".
 
 **Done when:**
 - The `none` member of `planRemediation`'s return type has a required `reason: string`, and `npx tsc --noEmit` passes.
-- A unit test asserts the four rendered reason strings above from the four causes.
+- A unit test asserts the five rendered reason strings above from the five causes.
 - The `prd_audit` callers that fall back on `none` are unchanged in behavior, proven by the existing prd-audit kickback tests passing without edits.
 
 **Files likely touched:**
