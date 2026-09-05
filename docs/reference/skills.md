@@ -614,6 +614,14 @@ current result from the repository-configured aggregate verifier.
 skills; their raw verdicts are joined before effective dispositions are applied. `test_suite` runs
 after `build` and before `build_review`.
 
+BUILD activities (`pipeline`, `tdd`, `conduct` progression, and `debugging`) run scoped
+affected tests. If scope is uncertain, they record the trigger and defer aggregate proof
+to `test_suite`, rather than running an intermediate aggregate verifier. Known scoped
+failures still block BUILD. On an auto-mode suite-failure kickback, the engine supplies
+failure diagnostics and the `.pipeline/test-suite-evidence.json` path to BUILD; repair
+sessions use that evidence, verify affected tests, and commit before the engine reruns
+the aggregate gate. Scoped success alone never satisfies that gate.
+
 ## SHIP-phase skills
 
 ### manual-test

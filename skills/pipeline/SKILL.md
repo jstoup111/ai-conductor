@@ -189,7 +189,13 @@ dispatch it — report BLOCKED and escalate as a conformance finding. Writing co
 deletion is wasted effort; the cheapest check (one ADR/PRD read) precedes the most expensive
 action (a full TDD subagent dispatch + review cycle).
 
-**Failure verification (step 4):** Before re-dispatching a failed task, run the **task's scoped set** (the same set used in step 3 VERIFY, or the full suite if a fallback trigger fired in step 3) to confirm the failure is real. Running the same scope ensures comparable signal — same false-positive/false-negative risk. If tests pass and commits exist for the task, mark as completed — do not trust JSON state alone. JSON state can become stale after connection interruptions or subagent context loss.
+**Failure verification (step 4):** Before re-dispatching a failed task, run the **task's scoped
+set** from step 3 VERIFY to confirm the failure is real. On a suite-failure kickback, include
+the affected tests identified by the engine's failure evidence; never run the full suite.
+If no scoped set can be identified, record that limitation rather than claiming verification
+passed. If the scoped tests pass, required task evidence exists, and commits exist for the
+task, mark it completed; aggregate proof remains pending at `test_suite`. Do not trust JSON
+state alone: it can become stale after connection interruptions or subagent context loss.
 
 **Superseded-symbol check (step 5 — replacement tasks):** Before marking a task `completed`
 whose plan says it **replaces or supersedes** an existing symbol/behavior ("replace X",
@@ -289,12 +295,20 @@ Scoping logic:
 - The scoped/affected set is empty.
 - Module-to-test mapping is low-confidence and cannot be made confidently.
 
-For per-task VERIFY, uncertainty resolves toward this fallback scope — scoping is an
-optimization, never a gate change.
+For per-task VERIFY, uncertainty defers aggregate proof; it does not waive known scoped
+failures or the task's required RED/GREEN evidence.
 
-When a trigger fires, state `Aggregate fallback: <exact trigger and reason>` and invoke the
-repository-configured aggregate verifier interface. Do not call the project's aggregate command
-directly. The task REPORT names the trigger and fallback scope.
+When a trigger fires, state `Aggregate fallback: <exact trigger and reason>` in the task REPORT
+and DEFER aggregate verification to the engine's dedicated aggregate gate (the `test_suite`
+step), which owns whole-suite execution and its evidence. Never run the full suite — and never
+invoke the aggregate verifier — inside the build session; the dedicated step will surface any
+cross-cutting regression and route it back.
+
+**Suite-failure kickback:** Read the engine's retry diagnostics and referenced
+`.pipeline/test-suite-evidence.json`. Pass the relevant failure evidence and affected-test
+selectors to repair subagents. Fix the failure, verify the scoped affected-test union
+through `ai-conductor scoped-run <selectors...>`, then commit and leave the aggregate rerun to
+`test_suite`. A scoped PASS does not establish an aggregate PASS.
 
 **Batch affected-test union:** At each batch boundary, compute one named
 `BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set, then run
@@ -302,10 +316,10 @@ that union once to catch regressions from task interactions.
 
 Batch verification MUST run only the named `BATCH_AFFECTED_TESTS` union.
 The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.
-Only when `BATCH_AFFECTED_TESTS` cannot be determined with confidence MUST the full test suite run instead.
+When `BATCH_AFFECTED_TESTS` cannot be determined with confidence, record that in the REPORT and defer aggregate proof to the engine's dedicated aggregate gate — the build session never runs the full test suite.
 
 **REPORT requirement (step 6):** The task's step 6 REPORT must list the files included in the
-scoped test set (or, if a fallback trigger fired, state the trigger and fallback scope).
+scoped test set (or, if a fallback trigger fired, state the trigger, the tests actually run, and the deferred aggregate proof).
 This provides audit-trail visibility into the scoping decision.
 
 ### Quality Gates
@@ -614,7 +628,8 @@ At natural batch boundaries (after completing a group of related tasks):
 **Pre-batch verification (before starting next batch):**
 - Compute `BATCH_AFFECTED_TESTS` as the union of every task's scoped affected-test set and run
   the named union once. If ANY test fails that is NOT an expected RED test, stop and fix before
-  proceeding. If the union cannot be determined confidently, run the full suite instead.
+  proceeding. If the union cannot be determined confidently, record that and defer aggregate
+  proof to the engine's dedicated aggregate gate — never run the full suite in this session.
   Previous session bugs must not accumulate.
 - Verify the current branch is merge-ready: no WIP commits, no TODO-fixme code added this batch,
   all new code has tests. The branch should be shippable at any batch boundary, even if the

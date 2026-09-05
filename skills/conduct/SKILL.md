@@ -242,8 +242,9 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - If a known scoped test fails, BLOCK this BUILD activity and fix it here; do
   not defer it to the later aggregate gate
 - If one of the repository's documented intermediate fallback triggers makes
-  the union genuinely unsafe, name the exact trigger and invoke the configured
-  aggregate verifier; never call the raw aggregate command
+  the union genuinely unsafe, name the exact trigger and defer aggregate proof
+  to the engine-native configured-verifier gate that follows; never run the
+  aggregate suite (or its raw command) inside this BUILD activity
 - Check git status for uncommitted changes
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
@@ -252,7 +253,9 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - After the BUILD verification above passes, run `ai-conductor test-suite`.
 - A zero exit reporting `EXECUTED PASS` or `REUSED PASS` satisfies this gate.
 - A non-zero exit BLOCKS progression to SHIP. Return to BUILD remediation via
-  `/tdd` or `/pipeline`, then rerun the command.
+  `/tdd` or `/pipeline`, passing the failure diagnostics and
+  `.pipeline/test-suite-evidence.json` path. Repair sessions verify affected
+  tests only; rerun the aggregate command here at the gate after repair.
 
 **After prd-audit (before suggesting architecture-review --as-built):**
 - Open the audit report (`.pipeline/prd-audit.md`) and check the per-FR verdict table

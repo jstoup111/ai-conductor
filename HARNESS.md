@@ -405,21 +405,12 @@ email/payment services, webhooks, package registries, and other network services
 named smoke tests (`test/smoke/**` or `*.smoke.test.*`) may use the real third party. Smoke tests
 are opt-in and excluded from the default test command and CI aggregate suite.
 
-Broad fallback is permitted only when one of these four triggers makes the
-affected-test scope genuinely uncertain:
-
-1. A shared/core module has 3+ production importers.
-2. The diff touches config, migrations, dependency manifests, or test infrastructure.
-3. The scoped/affected set is empty.
-4. Module-to-test mapping is low-confidence and cannot be made confidently.
-
-When a trigger fires, state `Aggregate fallback: <exact trigger and reason>`
-and use the host's repository-configured aggregate verifier interface. Do not
-call the project's aggregate command directly. No other intermediate
-condition authorizes a broad run. The native pre-SHIP aggregate gate runs after
-BUILD and before manual testing; finish
-reuse/fallback, mutation-specific repair checks, and independent CI authority
-remain separate boundaries.
+Aggregate execution and evidence belong to the engine-native `test_suite` gate after BUILD.
+BUILD skills record uncertain affected-test scope and defer aggregate proof to that gate;
+uncertainty never authorizes an intermediate aggregate run. See `pipeline` for scope triggers.
+On a suite-failure kickback, use the supplied diagnostics and referenced evidence to repair
+and verify the affected tests; the gate owns the aggregate rerun. Finish reuse/fallback,
+mutation-specific repair checks, and independent CI authority remain separate boundaries.
 
 **Rules for the orchestrator (the session running /pipeline or /tdd):**
 - Do NOT narrate what you are about to do. Just do it.
