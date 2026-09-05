@@ -376,6 +376,8 @@ describe('parallel: group execution (T15-T22)', () => {
       config: {
         steps: {
           explore: {
+            // The first failed result is the group outcome under test.
+            max_retries: 1,
             parallel: [
               { name: 'gating-branch' },   // advisory defaults to false → gating
               { name: 'other-branch' },
@@ -418,6 +420,8 @@ describe('parallel: group execution (T15-T22)', () => {
       config: {
         steps: {
           explore: {
+            // The first failed result is the advisory outcome under test.
+            max_retries: 1,
             parallel: [
               { name: 'advisory-branch', advisory: true },
               { name: 'other-branch' },

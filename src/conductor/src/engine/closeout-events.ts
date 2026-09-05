@@ -14,10 +14,12 @@ export type TaskPlanGapExternalEvent = Extract<ConductorEvent, { type: 'loop_hal
   haltClass: 'plan-gap';
   ts: string;
 };
+export type KickbackBudgetExternalEvent = Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>;
 export type ExternalPipelineEvent =
   | PipelineCloseoutEvent
   | BuildReviewExternalEvent
-  | TaskPlanGapExternalEvent;
+  | TaskPlanGapExternalEvent
+  | KickbackBudgetExternalEvent;
 
 /** Append a pipeline-owned closeout event without touching the engine ledger. */
 export function appendCloseoutEvent(

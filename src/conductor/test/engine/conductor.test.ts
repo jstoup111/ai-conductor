@@ -1,3 +1,4 @@
+// Covers: task:1, task:3, task:4, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -88,6 +89,7 @@ import {
 import * as artifactModule from '../../src/engine/artifacts.js';
 import {
   creditKickbackGateLaps,
+  MAX_SUITE_INFRASTRUCTURE_RETRIES,
   readKickbackLedger,
   writeKickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
@@ -1255,6 +1257,7 @@ describe('engine/conductor', () => {
       'Evidence: .pipeline/test-suite-evidence.json';
     expect(haltReasons).toEqual([expected]);
     expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toBe(`${expected}\n`);
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
   });
 
   describe('test_suite kickback boundary', () => {
@@ -1357,7 +1360,7 @@ describe('engine/conductor', () => {
     });
 
     it('consumes exactly one test_suite kickback for a genuine rerun nonzero exit', async () => {
-      // Covers: task:12
+      // Covers: task:3
       await writeTestSuiteOnlyState();
       const kickbacks: ConductorEvent[] = [];
       events.on('kickback', (event) => { kickbacks.push(event); });
@@ -1390,6 +1393,9 @@ describe('engine/conductor', () => {
         count: 1,
         cumulative: 1,
       }));
+      expect((await readKickbackLedger(dir)).gates.test_suite).not.toHaveProperty(
+        'suiteInfrastructureRetries',
+      );
       expect(kickbacks).toEqual([expect.objectContaining({
         type: 'kickback',
         from: 'test_suite',
@@ -1401,15 +1407,186 @@ describe('engine/conductor', () => {
       expect(runner.run).toHaveBeenCalledWith('build', expect.anything(), expect.anything());
     });
 
+    it('retries a timeout within test_suite without consuming a code-repair kickback', async () => {
+      // Covers: task:3
+      await writeTestSuiteOnlyState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), ledgerBytes);
+      const timeoutFailure = {
+        status: 'FAILED' as const,
+        reason: 'timeout' as const,
+        message: 'fixture suite timeout',
+      };
+      const retryEvents: ConductorEvent[] = [];
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry' && event.step === 'test_suite') retryEvents.push(event);
+      });
+      const verifier = {
+        inspect: vi.fn()
+          .mockResolvedValueOnce(timeoutFailure)
+          .mockResolvedValueOnce({ status: 'CURRENT' as const, evidence: preservedEvidence }),
+        ensure: vi.fn()
+          .mockResolvedValueOnce(timeoutFailure)
+          .mockResolvedValueOnce({ status: 'REUSED' as const, evidence: preservedEvidence }),
+      };
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      const finalState = await readState(statePath);
+      expect(finalState.ok).toBe(true);
+      if (!finalState.ok) throw new Error(finalState.error.message);
+      expect(finalState.value.test_suite).toBe('done');
+      expect(retryEvents).toEqual([expect.objectContaining({
+        type: 'step_retry',
+        step: 'test_suite',
+        attempt: 1,
+        reason: expect.stringContaining('infrastructure'),
+      })]);
+      expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
+        count: 1,
+        cumulative: 1,
+      }));
+      expect(verifier.inspect).toHaveBeenCalledTimes(2);
+      expect(verifier.ensure).toHaveBeenCalledTimes(2);
+      expect(runner.run).not.toHaveBeenCalled();
+    });
+
+    it('halts needs-human when test_suite infrastructure retries are exhausted', async () => {
+      // Covers: task:4
+      await writeTestSuiteOnlyState();
+      const suiteFailure = {
+        status: 'FAILED' as const,
+        reason: 'spawn_failed' as const,
+        message: 'fixture suite process could not start',
+      };
+      const verifier = {
+        inspect: vi.fn().mockResolvedValue(suiteFailure),
+        ensure: vi.fn().mockResolvedValue(suiteFailure),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        `test_suite infrastructure failure (spawn_failed): ${suiteFailure.message}`,
+      );
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        `retries spent: ${MAX_SUITE_INFRASTRUCTURE_RETRIES}`,
+      );
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        'Evidence: .pipeline/test-suite-evidence.json',
+      );
+      expect(verifier.inspect).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
+      expect(verifier.ensure).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
+    });
+
+    it('halts needs-human without a test_suite re-run when its durable retry counter is unreadable', async () => {
+      // Covers: task:4
+      await writeTestSuiteOnlyState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: { test_suite: { suiteInfrastructureRetries: 1.5 } },
+      }));
+      const suiteFailure = {
+        status: 'FAILED' as const,
+        reason: 'spawn_failed' as const,
+        message: 'fixture suite process could not start',
+      };
+      const verifier = {
+        inspect: vi.fn().mockResolvedValue(suiteFailure),
+        ensure: vi.fn().mockResolvedValue(suiteFailure),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        maxRetries: 1,
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        'test_suite infrastructure retry counter is unreadable',
+      );
+      expect(verifier.inspect).toHaveBeenCalledTimes(1);
+      expect(verifier.ensure).toHaveBeenCalledTimes(1);
+    });
+
+    it('continues a persisted test_suite infrastructure retry counter before halting at its allowance', async () => {
+      // Covers: task:4
+      await writeTestSuiteOnlyState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), ledgerBytes.replace(
+        '"resolvedBefore": 4',
+        '"resolvedBefore": 4,\n          "suiteInfrastructureRetries": 1',
+      ));
+      const suiteFailure = {
+        status: 'FAILED' as const,
+        reason: 'spawn_failed' as const,
+        message: 'fixture suite process could not start',
+      };
+      const verifier = {
+        inspect: vi.fn().mockResolvedValue(suiteFailure),
+        ensure: vi.fn().mockResolvedValue(suiteFailure),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        fullSuiteVerifier: verifier,
+      });
+
+      await conductor.run();
+
+      expect((await readKickbackLedger(dir)).gates.test_suite.suiteInfrastructureRetries)
+        .toBe(MAX_SUITE_INFRASTRUCTURE_RETRIES);
+      expect(verifier.inspect).toHaveBeenCalledTimes(2);
+      expect(verifier.ensure).toHaveBeenCalledTimes(2);
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        `retries spent: ${MAX_SUITE_INFRASTRUCTURE_RETRIES}`,
+      );
+    });
+
     it.each(['timeout', 'unlaunchable'] as const)(
       'halts %s test_suite infrastructure failures without consuming a kickback',
       async (reason) => {
-        // Covers: task:12
+        // Covers: task:3, task:12
         await writeTestSuiteOnlyState();
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
         await writeFile(ledgerPath, ledgerBytes);
-        const before = await readFile(ledgerPath, 'utf8');
         const kickbacks: ConductorEvent[] = [];
         events.on('kickback', (event) => { kickbacks.push(event); });
         const suiteFailure = {
@@ -1435,10 +1612,13 @@ describe('engine/conductor', () => {
 
         await conductor.run();
 
-        expect(await readFile(ledgerPath, 'utf8')).toBe(before);
+        expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
+          count: 1,
+          cumulative: 1,
+        }));
         expect(kickbacks).toEqual([]);
-        expect(verifier.inspect).toHaveBeenCalledTimes(1);
-        expect(verifier.ensure).toHaveBeenCalledTimes(1);
+        expect(verifier.inspect).toHaveBeenCalledTimes(3);
+        expect(verifier.ensure).toHaveBeenCalledTimes(3);
         expect(runner.run).not.toHaveBeenCalled();
         await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
         await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
@@ -5073,7 +5253,8 @@ describe('engine/conductor', () => {
     // keeps FAILing, the gate-loop budget (MAX_KICKBACKS_PER_GATE) is what
     // eventually stops the loop — a "gate selected N times without
     // satisfying" halt, not a product/plan gap. It must be classified
-    // mechanical so the re-kick sweep keeps retrying it on base advance.
+    // needs-human so the re-kick sweep leaves its capped remediation to an
+    // operator rather than retrying it on base advance.
     it('manual_test FAIL exhausts its mechanical cap when the D2 kill-switch is disabled', async () => {
       await seedToManualTest();
       let buildAttempt = 0;
@@ -5126,7 +5307,7 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/manual-test FAIL unresolved/);
 
       const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
-      expect(haltClass).toBe('mechanical');
+      expect(haltClass).toBe('needs-human');
     });
 
     it('hands BUILD the FAIL rows + the no-whitewash contract in its retryReason', async () => {
@@ -6124,11 +6305,10 @@ describe('engine/conductor', () => {
       expect(haltContent).toContain('Remediation budget exhausted');
       expect(haltContent).toContain('max 2 kickbacks per gate');
 
-      // A build stall is a transient/mechanical condition (no product/plan
-      // gap) — the re-kick sweep must keep retrying it on base advance, so
-      // it is classified mechanical, never needs-human.
+      // The exhausted remediation budget needs a human decision; the re-kick
+      // sweep must not retry it automatically on base advance.
       const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
-      expect(haltClass).toBe('mechanical');
+      expect(haltClass).toBe('needs-human');
     });
   });
 
@@ -8502,6 +8682,91 @@ describe('engine/conductor', () => {
       expect(calls.filter((call) => call.step === 'manual_test')).toHaveLength(1);
       expect(calls.filter((call) => call.step === 'prd_audit').map((call) => call.attempt)).toEqual([1, 1]);
       expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
+    });
+
+    it('retries a transient prd_audit branch failure within the serial attempt budget before joining', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      const calls: Array<{ step: StepName; attempt?: number }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+          calls.push({ step, attempt: options?.attempt });
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          const prdAuditCalls = calls.filter((call) => call.step === 'prd_audit').length;
+          if (step === 'prd_audit' && prdAuditCalls === 1) {
+            throw new Error('HTTP 500 transient provider error');
+          }
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 2,
+        verifyArtifacts: true,
+      });
+
+      await conductor.run();
+
+      expect({
+        prdAuditAttempts: calls
+          .filter((call) => call.step === 'prd_audit')
+          .map((call) => call.attempt),
+        prdAuditVerdict: await readFile(join(dir, '.pipeline/gates/prd_audit.json'), 'utf-8'),
+        haltExists: await haltMarkerExists(dir),
+      }).toEqual({
+        prdAuditAttempts: [1, 2],
+        prdAuditVerdict: expect.stringContaining('"satisfied": true'),
+        haltExists: false,
+      });
+    });
+
+    it('halts after a prd_audit branch spends the serial attempt budget without a verdict', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      const calls: Array<{ step: StepName; attempt?: number }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+          calls.push({ step, attempt: options?.attempt });
+          if (step === 'prd_audit') throw new Error('HTTP 500 provider error');
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 3,
+      });
+
+      await conductor.run();
+
+      expect({
+        prdAuditAttempts: calls
+          .filter((call) => call.step === 'prd_audit')
+          .map((call) => call.attempt),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
+        haltReason: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+      }).toEqual({
+        prdAuditAttempts: [1, 2, 3],
+        haltClass: 'needs-human',
+        haltReason: expect.stringMatching(/branch "prd_audit"[\s\S]*after 3 attempts[\s\S]*HTTP 500 provider error/),
+      });
     });
 
     it('classifies a grouped authentication timeout as needs-human without changing its reason', async () => {

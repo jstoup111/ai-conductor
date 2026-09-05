@@ -121,6 +121,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   unattributed_dispatch: { render: false, persist: false, audit: false, otel: false },
   unattributed_progress: { render: true, persist: true, audit: false, otel: true },
   halt_cleared: { render: false, persist: false, audit: true, otel: false },
+  kickback_budget_adjustment_authorized: { render: false, persist: true, audit: true, otel: false },
   ci_failed: { render: true, persist: false, audit: false, otel: false },
   attribution_divergence: { render: false, persist: true, audit: false, otel: false },
   acceptance_red: { render: false, persist: true, audit: false, otel: false },
