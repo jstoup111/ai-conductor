@@ -5689,27 +5689,6 @@ export class Conductor {
     // missing.
     const isFreshFeatureSession = await this.initializeRunState(state);
 
-    // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): a fresh
-    // feature-session must not inherit a prior session's stale-mirage regrade
-    // count — a reused worktree whose `.pipeline/build-review-regrade.json`
-    // survives from a previous feature would otherwise start this session
-    // already at (or over) the once-per-session bound and HALT on its first
-    // real detection. Best-effort: never block session start on this reset.
-    if (isFreshFeatureSession) {
-      await resetRegradeCounter(this.projectRoot).catch(() => {
-        // Missing/unwritable counter file — nothing to reset.
-      });
-      await clearKickbackLedger(this.projectRoot).catch(() => {
-        // Missing/unwritable ledger file — nothing to clear.
-      });
-    }
-
-    // Load task evidence sidecar for durable no-evidence counter (Task 12).
-    // The counter is a durable telemetry record of consecutive gate misses
-    // with no task progress and persists across engine restarts. It no
-    // longer feeds any auto-park trigger (that trigger was removed by #773).
-    this.taskEvidence = await createTaskEvidence(this.projectRoot);
-
     // Sweep stale per-session markers from prior invocations. A marker left
     // here from a previous run can't legitimately satisfy this run's gate
     // — the finish skill writes it freshly on every successful run. The
@@ -5841,6 +5820,38 @@ export class Conductor {
         startIndex = clampedIndex;
       }
     }
+
+    // Do this before any per-worktree reset or sidecar load. Those helpers
+    // create `.pipeline/` as part of their normal write path, which would
+    // turn an absent worktree into a stub before the dispatch preflight gets
+    // a chance to refuse it.
+    const initialStep = steps[startIndex]?.name ?? this.fromStep ?? 'explore';
+    const missingWorktree = await this.missingWorktreeResult(initialStep);
+    if (missingWorktree?.worktreeMissing) {
+      await this.emitLoopHalt(missingWorktree.output ?? `Cannot dispatch '${initialStep}': the feature worktree no longer exists.`);
+      return;
+    }
+
+    // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): a fresh
+    // feature-session must not inherit a prior session's stale-mirage regrade
+    // count — a reused worktree whose `.pipeline/build-review-regrade.json`
+    // survives from a previous feature would otherwise start this session
+    // already at (or over) the once-per-session bound and HALT on its first
+    // real detection. Best-effort: never block session start on this reset.
+    if (isFreshFeatureSession) {
+      await resetRegradeCounter(this.projectRoot).catch(() => {
+        // Missing/unwritable counter file — nothing to reset.
+      });
+      await clearKickbackLedger(this.projectRoot).catch(() => {
+        // Missing/unwritable ledger file — nothing to clear.
+      });
+    }
+
+    // Load task evidence sidecar for durable no-evidence counter (Task 12).
+    // The counter is a durable telemetry record of consecutive gate misses
+    // with no task progress and persists across engine restarts. It no
+    // longer feeds any auto-park trigger (that trigger was removed by #773).
+    this.taskEvidence = await createTaskEvidence(this.projectRoot);
 
     // Task 27: pending per-member completions for a builtin validation
     // group's fan-out that is CURRENTLY in flight (set while
