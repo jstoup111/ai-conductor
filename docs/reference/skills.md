@@ -361,9 +361,14 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `## Wiring Surface` section at tiers M and L.
 - **Outputs** — `.docs/plans/<date>-<feature>.md`.
 - **Gate role** — blocking. It refuses to produce a plan without stories, dependency lines, both paths,
-  and a clean conflict-check; every acceptance criterion must map to at least one task; 41 or more tasks
-  is a hard stop. Every task carries a `Done when:` block with two to five nonblank, falsifiable
-  completion checks. At land time, a missing, empty, underspecified, or oversized block rejects the
+  and a clean conflict-check; every acceptance criterion must map to at least one task, and every
+  citable decision in a non-deleted land-accepted ADR (`APPROVED` or `SUPERSEDED`) in the current
+  change set must have one Architecture
+  Obligation Coverage disposition (`task`, `existing`, or `no-change`). Forty-one or more tasks is a
+  hard stop; 21–40 warns. Every task carries a `Done when:` block with two to five nonblank, falsifiable
+  completion checks. Each changed cross-boundary behavior has exactly one integration-owning task whose
+  checks state observable behavior through an appropriate project entry point; internal tasks do not
+  each acquire an integration-test obligation. At land time, a missing, empty, underspecified, or oversized block rejects the
   whole spec; Markdown fenced-code examples do not count as task structure or checks. An unbounded
   quality word ("fail-closed", "robust", "comprehensive") must be closed by an enumeration or a named
   mechanism in the same block, and completion review is bound by these checks (deeper concerns are
@@ -391,7 +396,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   and accepted ADRs that constrain the stories.
 - **Outputs** — `.docs/coherence/<plan-stem>.md`. The stem must match the plan filename stem exactly or
   the land validator rejects it as a missing coherence artifact. Applicable `adr` rows trace each
-  accepted decision to the stories that implement or must honor it. The sixth row class, `criterion`,
+  accepted ADR to the stories that implement or must honor it, and independently judge every decision's
+  plan-level Architecture Obligation Coverage disposition. The sixth row class, `criterion`,
   maps each exact extracted happy- or negative-path criterion to cited plan tasks in a six-cell row:
   criterion text, task ids, verdict, a verbatim task-body quote, and `diff-local` or `outside-diff`.
 - **PRD ↔ stories tie-out** — the `fr` and `story` row classes are checked in both directions (SKILL.md
@@ -520,7 +526,9 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Outputs** — git commits carrying `Task: <id>` trailers, including empty evidence commits;
   conditional `.memory/gotchas/` and `.memory/patterns/` entries. No `.docs/` artifact.
 - **Gate role** — neither in flow terms, but COMMIT is a hard in-cycle gate: scoped tests green, linter
-  and type-check clean, clean tree, and an exact bare plan task id in the trailer. The domain reviewer
+  and type-check clean, clean tree, any cross-boundary integration check owned by the task proven
+  through the appropriate project entry point (helper-level proof alone does not close that task), and
+  an exact bare plan task id in the trailer. The domain reviewer
   holds veto authority back to RED or GREEN. `Task:` trailers are telemetry only — build completion is
   derived by `build_review`, not from trailer self-reports.
 - **Declared replication does not shorten the cycle** — a declared replication's copy task only

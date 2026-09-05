@@ -84,6 +84,12 @@ Blockers from `/prd-audit`, as-built `/architecture-review`, and `/finish` route
 to the appropriate SDLC step or a required human decision. Neither path is pre-authored as
 speculative implementation work.
 
+For each new or changed behavior that crosses a production boundary, exactly one plan task owns the
+integration proof through an appropriate project entry point. The task's `Done when:` states the
+observable boundary behavior, and BUILD cannot close it using only direct helper tests. This follows
+behavior rather than production-file count: internal helpers, types, and refactors do not each require
+their own entry-point test when another task owns the boundary integration.
+
 An acceptance-spec remediation may waive separate RED proof only when one atomic repair must change
 both the acceptance spec and its implementation. The waiver must be recorded with a non-empty reason
 and attributable approval; the completion is reported as waived, never as proven RED. Without that

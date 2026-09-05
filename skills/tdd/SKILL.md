@@ -249,7 +249,15 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    Refactor commits within the same task also carry the same Task: <id> so the task
    is atomically marked complete when the final commit lands.
 
-8. **Commit only to the current feature branch — never integrate upstream.** Do NOT run
+9. **Cross-boundary integration proved by its owning task.** When the current task owns a
+   cross-boundary integration check under `/plan` §3d, a test (new or existing) must exercise the
+   changed behavior through the appropriate project entry point named by that check—for example a
+   public API or route, CLI, job or worker, event consumer, framework hook, or application-service
+   boundary. A direct helper test alone cannot close that task. Tasks that do not own a changed
+   boundary remain at the lowest sufficient test layer; production-file count does not create
+   integration-test obligations.
+
+10. **Commit only to the current feature branch — never integrate upstream.** Do NOT run
    `git fetch`, `git pull`, `git rebase`, or switch branches during the cycle. Mid-build
    rebase onto a moved `origin/<default>` rewrites history under active work. The only
    sanctioned rebases are the daemon's finish-time rebase-onto-latest and the `/rebase`
@@ -428,6 +436,8 @@ exact replication still follows its full delta cycle and required scoped verific
 - [ ] Linter passes before commit
 - [ ] Type-check passes before commit (typed stacks — run as the Phase 4 pre-check; skipped for stacks with no compile step)
 - [ ] Working tree clean at commit
+- [ ] Any cross-boundary integration check owned by this task is proven through the appropriate
+      project entry point, not only by a helper-level unit test
 - [ ] One behavior per cycle (not multiple changes lumped together)
 - [ ] Every new/changed test file carries a resolvable `Covers:` marker bound to the active
       feature's stories or plan (build_review test-quality scope)
