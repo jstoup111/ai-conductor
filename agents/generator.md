@@ -39,7 +39,9 @@ in an applicable local pattern basis. Everything else you need is in your prompt
   required.
 - Run the scope check before writing: ~20 lines, 1 file, 1 function
 - If scope check fails: stop and report NEEDS_DRILL_DOWN
-- Run the full test suite after implementation
+- Run the affected tests through `ai-conductor scoped-run <selectors...>` after implementation.
+  If scope is uncertain, report it and defer aggregate proof to the engine-native `test_suite`
+  step. Never run the full suite in the implementation session.
 
 ### General Rules
 - Never implement behavior not required by a failing test

@@ -392,8 +392,10 @@ they never silently serialize.
 **Intermediate test execution policy:** Ordinary TDD RED/GREEN runs the scoped union of affected tests
 through `ai-conductor scoped-run <selectors...>`. The agent derives the selectors; it does not
 hand-assemble or narrate a test command. Debugging and conduct progression use the same policy.
-Pipeline batch boundaries, parallel joins, and evaluators use pipeline's existing named
-`BATCH_AFFECTED_TESTS` union through the same interface. A known scoped failure blocks its current
+Pipeline batch boundaries and parallel joins use pipeline's existing named
+`BATCH_AFFECTED_TESTS` union through the same interface. Evaluators inspect the supplied results
+without routine reruns; they run targeted tests only to reproduce a specific suspected defect.
+A known scoped failure blocks its current
 BUILD activity; it is never deferred to the aggregate gate.
 
 **Test isolation policy:** Automated unit, acceptance, integration, and end-to-end tests
