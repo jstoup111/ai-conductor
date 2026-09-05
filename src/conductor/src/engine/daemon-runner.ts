@@ -31,6 +31,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { writeHaltMarker } from './halt-marker.js';
+import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
 import type { OperatorParkedTermination } from './conductor.js';
 
 /**
@@ -666,9 +667,11 @@ export async function terminateFeature({
     : 'not-requested';
   const haltReason = reason;
 
-  const heading = autoParkWriteOutcome === 'deferred'
-    ? 'feature parked — will not re-dispatch on the next scan'
-    : 'feature errored — will re-dispatch on the next scan';
+  const deferredAutoParkPresentation = autoParkWriteOutcome === 'deferred'
+    ? deferredAutoParkHaltPresentation(slug!, 'pending')
+    : undefined;
+  const heading = deferredAutoParkPresentation?.heading
+    ?? 'feature errored — will re-dispatch on the next scan';
   let note = `${heading}\n${haltReason}\n`;
 
   const triage = triageEvidence as any;
@@ -693,12 +696,8 @@ export async function terminateFeature({
     }
   }
 
-  const resumeProcedure = autoParkWriteOutcome === 'deferred'
-    ?
-      `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
-      `  2. rm .pipeline/HALT\n` +
-      `  3. ai-conductor daemon unpark ${slug}\n` +
-      `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`
+  const resumeProcedure = deferredAutoParkPresentation
+    ? deferredAutoParkPresentation.resumeProcedure
     :
       `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
       `  2. rm .pipeline/HALT\n` +

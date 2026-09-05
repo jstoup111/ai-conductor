@@ -40,6 +40,7 @@ import {
   removeOperatorPark,
   writeAutoPark,
 } from '../../src/engine/park-marker.js';
+import { amendDeferredAutoParkHaltAtWorktree } from '../../src/engine/auto-park-halt.js';
 import { reconcileParkedFeatures } from '../../src/engine/park-reconciliation.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
@@ -275,12 +276,18 @@ describe('automatic park termination — real runner to durable daemon consumers
     await chmod(parkedDir, 0o555);
 
     const { result, record } = await runTriagePark('setup still broken', freshRecord(), false);
+    await amendDeferredAutoParkHaltAtWorktree(
+      worktreePath,
+      SLUG,
+      new Error('EACCES: permission denied writing auto-park marker'),
+    );
 
     expect(result.status).toBe('error');
     expect(await exists(markerPath())).toBe(false);
     const halt = await readFile(haltPath(), 'utf8');
-    expect(halt).toMatch(/^feature parked — will not re-dispatch/i);
-    expect(halt).toContain(`ai-conductor daemon unpark ${SLUG}`);
+    expect(halt).toMatch(/^feature errored — automatic park failed/i);
+    expect(halt).toContain('permission denied');
+    expect(halt).toContain(`ai-conductor daemon park ${SLUG}`);
     expect(record.logs).toEqual([
       '[daemon-runner] triage outcome: park, erroring feature — setup still broken',
     ]);

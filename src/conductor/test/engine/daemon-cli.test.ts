@@ -68,6 +68,111 @@ class RecordingConductStateStore implements ConductStateStore<ConductState> {
 }
 
 describe('daemon termination guidance', () => {
+  it('amends the executor HALT through the dispatcher collection seam when auto-park writing fails', async () => {
+    const slug = 'auto-park-write-failed';
+    const worktreeBase = join(root, '.worktrees');
+    const worktreePath = join(worktreeBase, slug);
+    const writeFailure = Object.assign(new Error('EACCES: permission denied writing auto-park marker'), {
+      code: 'EACCES',
+    });
+    await mkdir(worktreePath, { recursive: true });
+    await terminateFeature({
+      worktreePath,
+      reason: 'setup still broken',
+      park: true,
+      deferAutoPark: true,
+      slug,
+    });
+
+    const daemonModule = await import('../../src/engine/daemon.js');
+    const parkMarkerModule = await import('../../src/engine/park-marker.js');
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const runDaemonSpy = vi.spyOn(daemonModule, 'runDaemon').mockImplementation(async (deps) => {
+      await deps.onFeatureTerminalEffects?.({
+        slug,
+        status: 'error',
+        terminalEffects: { autoPark: { reason: 'setup still broken' } },
+      });
+      return { processed: [], stoppedReason: 'backlog_drained' };
+    });
+    const writeAutoParkSpy = vi.spyOn(parkMarkerModule, 'writeAutoPark').mockRejectedValue(writeFailure);
+
+    try {
+      await runDaemonMode({
+        projectRoot: root,
+        concurrency: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        runHaltClassMigration: async () => worktreeBase,
+        workSource: { discover: async () => [] },
+        watch: false,
+      });
+
+      const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf8');
+      expect(halt).toMatch(/^feature errored — automatic park failed/);
+      expect(halt).toContain('EACCES: permission denied writing auto-park marker');
+      expect(halt).toContain(`ai-conductor daemon park ${slug}`);
+      expect(halt).not.toContain(`ai-conductor daemon unpark ${slug}`);
+      expect(consoleLogSpy.mock.calls.flat().join('\n')).toContain(
+        `[daemon-runner] auto-park write failed for ${slug}: EACCES: permission denied writing auto-park marker`,
+      );
+    } finally {
+      runDaemonSpy.mockRestore();
+      writeAutoParkSpy.mockRestore();
+      consoleLogSpy.mockRestore();
+    }
+  });
+
+  it('collects a settled auto-park at the main root and preserves its EEXIST re-park', async () => {
+    const slug = 'dispatcher-collected-auto-park';
+    const worktreeBase = join(root, '.worktrees');
+    const worktreePath = join(worktreeBase, slug);
+    await mkdir(worktreePath, { recursive: true });
+    await terminateFeature({
+      worktreePath,
+      reason: 'runtime dispatch failure',
+      park: true,
+      deferAutoPark: true,
+      slug,
+    });
+
+    const daemonModule = await import('../../src/engine/daemon.js');
+    const runDaemonSpy = vi.spyOn(daemonModule, 'runDaemon').mockImplementation(async (deps) => {
+      const effect = {
+        slug,
+        status: 'error' as const,
+        terminalEffects: { autoPark: { reason: 'runtime dispatch failure' } },
+      };
+      await deps.onFeatureTerminalEffects?.(effect);
+      await deps.onFeatureTerminalEffects?.({
+        ...effect,
+        terminalEffects: { autoPark: { reason: 'new reason must not replace an existing park' } },
+      });
+      return { processed: [], stoppedReason: 'backlog_drained' };
+    });
+
+    try {
+      await runDaemonMode({
+        projectRoot: root,
+        concurrency: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        runHaltClassMigration: async () => worktreeBase,
+        workSource: { discover: async () => [] },
+        watch: false,
+      });
+
+      const marker = await readFile(join(root, '.daemon', 'parked', slug), 'utf8');
+      const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf8');
+      expect(marker).toMatch(/^auto-parked: runtime dispatch failure\ntimestamp: .+\n$/);
+      expect(halt).toMatch(/^feature parked — will not re-dispatch on the next scan/);
+      await expect(readFile(join(worktreePath, '.daemon', 'parked', slug), 'utf8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      runDaemonSpy.mockRestore();
+    }
+  });
+
   // Covers: task:10
   it('keeps parked-feature recovery guidance in the executor HALT', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-cli-guidance-'));

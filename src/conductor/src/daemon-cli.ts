@@ -138,6 +138,7 @@ import {
 import { InMemoryWorkClaims } from './engine/work-claims.js';
 import { WorktreeLifecycleQueue } from './engine/worktree.js';
 import { isOperatorParked, reconcileStrandedParkMarkers, writeAutoPark } from './engine/park-marker.js';
+import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
 import {
@@ -1852,6 +1853,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             await writeAutoPark(projectRoot, outcome.slug, effects.autoPark.reason);
           } catch (err) {
             featureLog(`[daemon-runner] auto-park write failed for ${outcome.slug}: ${err instanceof Error ? err.message : String(err)}`);
+            await amendDeferredAutoParkHaltAtWorktree(join(worktreeBase, outcome.slug), outcome.slug, err)
+              .catch((amendmentError) => {
+                featureLog(
+                  `[daemon-runner] auto-park HALT amendment failed for ${outcome.slug}: ${amendmentError instanceof Error ? amendmentError.message : String(amendmentError)}`,
+                );
+              });
           }
         }
         if (effects.cleanupHaltPresentation && deps.projectRoot && deps.runGh) {
