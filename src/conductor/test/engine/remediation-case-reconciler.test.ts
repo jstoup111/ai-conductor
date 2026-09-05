@@ -157,6 +157,72 @@ describe('remediation case reconciler', () => {
     expect(result).toMatchObject({ ok: true, state: { cases: [{ id: 'case-1', resolution: 'open' }] } });
   });
 
+  it.each(['reserved', 'failed'] as const)('keeps an absent open non-action case with a %s effect open on a clean settlement', async (status) => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const seeded = await store.mutate(async (state) => ({
+      value: null,
+      nextState: {
+        ...state,
+        cases: [{
+          id: 'case-deferred', domain: 'build_review', disposition: 'defer', priority: 'low', confidence: 'high',
+          rationale: 'Belongs outside this feature.', resolution: 'open',
+          sources: [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', recordedAt: RECORDED_AT }],
+          effect: status === 'reserved'
+            ? { id: 'effect-deferred', kind: 'deferral', status }
+            : { id: 'effect-deferred', kind: 'deferral', status, diagnostic: 'tracker unavailable' },
+        }],
+      },
+    }));
+    expect(seeded.ok).toBe(true);
+
+    const result = await reconcileRemediationCases(store, {
+      graph: { sourceOutcomes: [], cases: [] },
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: () => 'must-not-be-used',
+      resolveAbsentOpenNonActionCases: true,
+    });
+
+    // Shared effect-status test: a reserved/failed effect is durable
+    // unfinished evidence and must never resolve by benign absence into PASS.
+    expect(result).toMatchObject({
+      ok: true,
+      state: { cases: [{ id: 'case-deferred', resolution: 'open' }] },
+      resolvedAbsentCaseIds: [],
+    });
+  });
+
+  it('still settles an absent open non-action case whose deferral effect applied', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const seeded = await store.mutate(async (state) => ({
+      value: null,
+      nextState: {
+        ...state,
+        cases: [{
+          id: 'case-deferred', domain: 'build_review', disposition: 'defer', priority: 'low', confidence: 'high',
+          rationale: 'Belongs outside this feature.', resolution: 'open',
+          sources: [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', recordedAt: RECORDED_AT }],
+          effect: { id: 'effect-deferred', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' },
+        }],
+      },
+    }));
+    expect(seeded.ok).toBe(true);
+
+    const result = await reconcileRemediationCases(store, {
+      graph: { sourceOutcomes: [], cases: [] },
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: () => 'must-not-be-used',
+      resolveAbsentOpenNonActionCases: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: { cases: [{ id: 'case-deferred', resolution: 'resolved' }] },
+      resolvedAbsentCaseIds: ['case-deferred'],
+    });
+  });
+
   it.each([
     ['unknown', 'missing-case', undefined, 'unknown-case-binding'],
     ['foreign', 'foreign-case', ['foreign-case'], 'foreign-case-binding'],
