@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-04T23:20:55.809Z
+Status: halted
 Slug: enable-single-repo-daemon-concurrency-un-clamp-the
-Class: needs-human
+Class: plan-gap
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-enable-single-repo-daemon-concurrency-un-clamp-the
-Head SHA: 9e2fc53a0beadc2870cd265d9f1a1d1b9add8029
-Halted at: 2026-09-04T18:10:38.384Z
+Head SHA: 9d89bb7ff7ffe7578ac3dec0daeee5f8cabfa0f5
+Halted at: 2026-09-05T17:44:34.392Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings. Missing: AB-8.
+Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
 ```
