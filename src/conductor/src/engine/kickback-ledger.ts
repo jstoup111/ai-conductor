@@ -24,6 +24,8 @@ export interface KickbackGateEntry {
   /** Remediation rounds authorized for this gate, independent of plan growth. */
   laps?: number;
   mechanicalFaults?: number;
+  /** Non-charging retry laps for test-suite infrastructure failures. */
+  suiteInfrastructureRetries?: number;
   lastMechanicalFault?: KickbackLastMechanicalFault;
   treeHash: string | null;
   lastReason: string;
@@ -65,9 +67,13 @@ export interface KickbackLedger {
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
 }
 
-type PersistedKickbackGateEntry = Omit<KickbackGateEntry, 'cumulative' | 'mechanicalFaults'> & {
+type PersistedKickbackGateEntry = Omit<
+  KickbackGateEntry,
+  'cumulative' | 'mechanicalFaults' | 'suiteInfrastructureRetries'
+> & {
   cumulative?: number;
   mechanicalFaults?: number;
+  suiteInfrastructureRetries?: number;
 };
 
 interface PersistedKickbackLedger {
@@ -87,6 +93,9 @@ export const MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW = 5;
 
 /** Mechanical build-review faults allowed before human intervention is required. */
 export const MAX_MECHANICAL_FAULTS_BUILD_REVIEW = 3;
+
+/** Test-suite infrastructure retries allowed before human intervention is required. */
+export const MAX_SUITE_INFRASTRUCTURE_RETRIES = 2;
 
 /** Matches the raw rubric diagnostic cap before its detail reaches durable state. */
 const RUBRIC_FAILURE_DETAIL_CAP_BYTES = 2_048;
@@ -163,6 +172,7 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
       Number.isInteger(entry.mechanicalFaults) &&
       entry.mechanicalFaults >= 0
     )) &&
+    (entry.suiteInfrastructureRetries === undefined || isNonNegativeInteger(entry.suiteInfrastructureRetries)) &&
     (entry.lastMechanicalFault === undefined || isLastMechanicalFault(entry.lastMechanicalFault)) &&
     (typeof entry.treeHash === 'string' || entry.treeHash === null) &&
     typeof entry.lastReason === 'string' &&
@@ -265,6 +275,29 @@ export async function readKickbackLedger(projectRoot: string): Promise<KickbackL
   }
 
   return emptyLedger();
+}
+
+/**
+ * Read the test-suite infrastructure retry counter. Unlike ordinary ledger
+ * reads, this counter fails closed for corrupt durable state. A fresh ledger
+ * (or one without a test_suite entry) has spent no retry allowance yet.
+ */
+export async function readSuiteInfrastructureRetries(
+  projectRoot: string,
+): Promise<number | 'unreadable'> {
+  try {
+    const parsed: unknown = JSON.parse(
+      await readFile(join(projectRoot, KICKBACK_LEDGER_PATH), 'utf-8'),
+    );
+    if (!isKickbackLedger(parsed)) return 'unreadable';
+
+    const entry = parsed.gates.test_suite;
+    if (entry === undefined) return 0;
+
+    return entry.suiteInfrastructureRetries ?? 0;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 0 : 'unreadable';
+  }
 }
 
 /** Write the ledger atomically, so readers never observe a partially written file. */
@@ -492,6 +525,32 @@ export async function bumpMechanicalFaultsInLedger(
   await writeKickbackLedger(projectRoot, {
     ...ledger,
     gates: { ...ledger.gates, [gate]: nextEntry },
+  });
+
+  return nextEntry;
+}
+
+/** Increment the non-charging test-suite infrastructure retry allowance. */
+export async function bumpSuiteInfrastructureRetriesInLedger(
+  projectRoot: string,
+): Promise<KickbackGateEntry> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const entry = ledger.gates.test_suite ?? {
+    count: 0,
+    cumulative: 0,
+    treeHash: null,
+    lastReason: '',
+    priorVerdict: true,
+    resolvedBefore: 0,
+  };
+  const nextEntry: KickbackGateEntry = {
+    ...entry,
+    suiteInfrastructureRetries: (entry.suiteInfrastructureRetries ?? 0) + 1,
+  };
+
+  await writeKickbackLedger(projectRoot, {
+    ...ledger,
+    gates: { ...ledger.gates, test_suite: nextEntry },
   });
 
   return nextEntry;

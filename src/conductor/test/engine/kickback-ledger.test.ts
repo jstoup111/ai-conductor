@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,12 +14,15 @@ import {
   bumpMechanicalFaults,
   bumpKickbackGate,
   bumpKickbackGateInLedger,
+  bumpSuiteInfrastructureRetriesInLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  MAX_SUITE_INFRASTRUCTURE_RETRIES,
   recordGrowth,
   readGrowth,
   readKickbackLedger,
+  readSuiteInfrastructureRetries,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
@@ -632,5 +636,76 @@ describe('kickback-ledger', () => {
         mechanicalFaults: 0,
       });
     });
+  });
+
+  it('increments only the test-suite infrastructure retry counter in the ledger', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        test_suite: {
+          count: 2,
+          cumulative: 4,
+          mechanicalFaults: 1,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'previous code failure',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    });
+
+    await bumpSuiteInfrastructureRetriesInLedger(dir);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: {
+        test_suite: {
+          suiteInfrastructureRetries: 1,
+          count: 2,
+          cumulative: 4,
+        },
+      },
+    });
+  });
+
+  it('exports the declared suite-infrastructure retry ceiling', () => {
+    expect(MAX_SUITE_INFRASTRUCTURE_RETRIES).toBe(2);
+  });
+
+  it('credits suite-infrastructure retries with the other rebase-invalidated laps', () => {
+    const entry: KickbackGateEntry = {
+      count: 2,
+      cumulative: 4,
+      suiteInfrastructureRetries: 2,
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      lastReason: 'suite timeout',
+      priorVerdict: false,
+      resolvedBefore: 7,
+    };
+
+    expect(creditKickbackGateLaps(entry)).toEqual({
+      ...entry,
+      cumulative: 0,
+      suiteInfrastructureRetries: 0,
+    });
+  });
+
+  it('treats a malformed test-suite infrastructure retry counter as unreadable', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        test_suite: {
+          count: 2,
+          cumulative: 4,
+          suiteInfrastructureRetries: 1.5,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'suite timeout',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    }));
+
+    await expect(readSuiteInfrastructureRetries(dir)).resolves.toBe('unreadable');
   });
 });
