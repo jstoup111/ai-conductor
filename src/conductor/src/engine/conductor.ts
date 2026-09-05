@@ -6632,7 +6632,7 @@ export class Conductor {
         `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
         `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
         (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '');
-      await this.writeHaltMarker(reason + '\n', 'mechanical');
+      await this.writeHaltMarker(reason + '\n', 'needs-human');
       await this.persistPendingStateChanges(state, 'persist conductor transition');
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.emitLoopHalt(reason, prUrl);
@@ -10270,7 +10270,7 @@ export class Conductor {
                         '\n\nRemediation budget exhausted (max ' + MAX_KICKBACKS_PER_GATE + ' kickbacks per gate).';
                       await this.haltSerialExecution({
                         reason: haltContent,
-                        haltClass: 'mechanical',
+                        haltClass: 'needs-human',
                         persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
                         surfaceRemediation: true,
                         loopHaltReason: effectiveQuestion,
@@ -10790,7 +10790,7 @@ export class Conductor {
               const reason =
                 `test_suite failure unresolved after ${count} build kickback(s) ` +
                 `(cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
-              await this.writeHaltMarker(reason + '\n', 'mechanical');
+              await this.writeHaltMarker(reason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.emitLoopHalt(reason, prUrl);
