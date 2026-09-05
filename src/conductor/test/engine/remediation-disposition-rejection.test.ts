@@ -54,7 +54,7 @@ describe('rejected remediation dispositions', () => {
   it('emits every rejection and halts with the rejected vocabulary when no gap survives', async () => {
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('remediation_disposition_rejected', (event) => events.push(event));
+    emitter.on('remediation_disposition_rejected', (event) => { events.push(event); });
     const outcome = await remediate(emitter, [
       { id: 'AB-1', disposition: 'unknown-disposition' },
       { id: 'AB-2', disposition: 'unknown-disposition' },
@@ -74,7 +74,7 @@ describe('rejected remediation dispositions', () => {
   it('routes recognized gaps and reports only the dropped gap', async () => {
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('remediation_disposition_rejected', (event) => events.push(event));
+    emitter.on('remediation_disposition_rejected', (event) => { events.push(event); });
     const outcome = await remediate(emitter, [
       { id: 'AB-1', disposition: 'build', rationale: 'fix it', tasks: [{ id: 'rem-1', title: 'Fix it' }] },
       { id: 'AB-2', disposition: 'unknown-disposition' },
