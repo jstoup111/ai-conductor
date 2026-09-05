@@ -509,7 +509,13 @@ describe('coordinateBuildReviewAdjudication', () => {
     const live = settled.state.cases.find((record) => record.id === 'action-window-3');
     expect(accepted).toMatchObject({ resolution: 'resolved', effect: { status: 'failed' } });
     expect(live).toMatchObject({ resolution: 'open', effect: { status: 'failed' } });
-    expect(events.some((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted?.id)).toBe(false);
+    // The executor durably settled BOTH reservations to failed; that
+    // reserved->failed transition emits even for the operator-retired case.
+    expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted?.id)).toEqual([
+      expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: accepted?.id, effectKind: 'action', reason: 'ledger unavailable',
+      }),
+    ]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed', caseId: live?.id, effectKind: 'action' }));
     expect(events.filter((event) => event.type === 'remediation_adjudication_started')).toHaveLength(1);
     expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
@@ -540,7 +546,14 @@ describe('coordinateBuildReviewAdjudication', () => {
     const live = settled.state.cases.find((record) => record.id === 'deferral-window-3');
     expect(accepted).toMatchObject({ resolution: 'resolved', effect: { status: 'failed', diagnostic: 'retired by operator acceptance' } });
     expect(live).toMatchObject({ resolution: 'open', effect: { status: 'reserved' } });
-    expect(events.some((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted?.id)).toBe(false);
+    // Finalize flipped the accepted case's reserved deferral to durable
+    // failed; that reserved->failed transition emits exactly once.
+    expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted?.id)).toEqual([
+      expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: accepted?.id, effectKind: 'deferral',
+        reason: 'retired by operator acceptance',
+      }),
+    ]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed', caseId: live?.id, effectKind: 'deferral' }));
     expect(events.filter((event) => event.type === 'remediation_adjudication_started')).toHaveLength(1);
     expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
