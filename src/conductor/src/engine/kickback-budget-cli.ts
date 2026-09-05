@@ -5,9 +5,10 @@ import { join } from 'node:path';
 
 import type { KickbackBudgetDispatch } from '../cli.js';
 import { appendCloseoutEvent } from './closeout-events.js';
+import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { applyKickbackBudgetAdjustment, readKickbackLedger, type KickbackBudgetAdjustment } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView } from './kickback-budget-view.js';
-import { resolveMainRepoRoot, isOperatorParked, removeOperatorPark, writeOperatorPark } from './park-marker.js';
+import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
 
 const GATES = new Set(['build_review', 'prd_audit', 'architecture_review_as_built']);
 const DEFAULTS: Record<string, number> = { build_review: 5, prd_audit: 1, architecture_review_as_built: 1 };
@@ -48,7 +49,10 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   if (!entry?.capEvidence) { print('kickback-budget: no current cap evidence for that gate.'); return 1; }
   try { await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8'); } catch { print('kickback-budget: feature is not currently halted.'); return 1; }
   const parked = await isOperatorParked(root, command.feature);
-  if (!parked) await writeOperatorPark(root, command.feature);
+  if (!parked) {
+    const result = await dispatchDaemonPark({ kind: 'park', slug: command.feature }, { cwd: root, out: () => {} });
+    if (result !== 0) { print(`kickback-budget: could not park '${command.feature}'.`); return 1; }
+  }
   try {
     const remediation = command.gate !== 'build_review';
     const currentLimit = remediation ? (entry.effectiveLapCap ?? DEFAULTS[command.gate]) : (entry.effectiveLimit ?? DEFAULTS[command.gate]);
@@ -66,5 +70,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     return 0;
   } catch (error) {
     print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1;
-  } finally { if (!parked) await removeOperatorPark(root, command.feature); }
+  } finally {
+    if (!parked) await dispatchDaemonPark({ kind: 'unpark', slug: command.feature }, { cwd: root, out: () => {} });
+  }
 }

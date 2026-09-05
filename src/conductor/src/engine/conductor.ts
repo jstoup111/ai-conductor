@@ -12192,9 +12192,13 @@ export class Conductor {
     const outcomes: BranchOutcome[] = await runWithConcurrency(
       members.map((member) => async () => {
         const resolved = resolveStepConfig(
-          member.name as StepName,
-          phaseForStep(member.name as StepName),
-          this.modelPolicyForStep(member.name as StepName),
+          // A DSL branch has its own dispatch identity, but is not itself a
+          // lifecycle step. Its parent group supplies the registered phase
+          // and policy; resolving the arbitrary branch name through the step
+          // registry throws before the branch can be dispatched.
+          groupName,
+          phaseForStep(groupName),
+          this.modelPolicyForStep(groupName),
           this.config,
           { tier: state.complexity_tier },
         );
