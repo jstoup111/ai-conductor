@@ -92,29 +92,64 @@ owns that call.
 
 ## How to work with it
 
-You own design; the daemon owns execution. Your judgement enters at two points, the spec PR and the
-implementation PR, and both are document reviews rather than live steering. That shape is what frees
-your attention for the next design problem while the last one builds.
+Read this before your second feature. The full guide is [Working effectively](docs/guides/working-effectively.md);
+this is the part people skip and then ask about.
 
-The throughput comes from the queue, not from any single build. Across this repository's own shipped
-record the median feature costs about $8 and takes about 90 minutes of active build time, and the
-daemon shipped 134 features in August 2026. A queue of one spec leaves it idle most of the day; a queue
-of six delivers overnight. Compose specs in batches, merge them in batches, review the PRs in batches,
-and bundle related changes as stories inside one spec rather than one spec each.
+**You own design. The daemon owns execution.** Your judgement enters at exactly two points, and both
+are document reviews, not live steering:
 
-Between merging the spec and the PR flipping to ready-for-review, the build measures itself against
-the plan you merged. If you need to change course, park the feature, edit inside the plan's scope,
-commit, and unpark; if it is the plan itself that is wrong, amend and reseal the spec. When something
-halts, `/daemon-triage` routes you to the right runbook.
+1. **Compose the spec** (`ai-conductor compose`). Explore, stories, ADRs, plan. This is where your
+   design sense matters. Spend your attention here.
+2. **Merge the spec PR.** That says "build exactly this".
+3. The daemon builds it in a worktree, grades the result against your plan and ADRs, and opens a PR.
+4. **Review the implementation PR** like a colleague's.
 
-The spec artifacts are the compounding asset. Every ADR is a durable architectural decision that the
-composer reads before planning the next feature and the as-built review enforces after building it.
-Design knowledge that used to be tribal becomes written and machine-checked, so each feature makes the
-next one cheaper to align. Refactors and structural changes therefore go through DECIDE, not a review
-commit: if the code came back with the wrong shape, either the plan or the constraints were wrong.
+Between 2 and 4 the daemon does the cheap part: code, tests, review fixes, rebase, PR prose. Delegating
+that is what frees your head for the next design problem while this one builds.
 
-[Working effectively](docs/guides/working-effectively.md) has the full rhythm and the numbers;
-[FAQ](docs/guides/faq.md) has the short answers.
+**The ADRs are the asset.** Every ADR is a durable architectural decision with its reasoning attached,
+committed to the repo and read by machinery: the composer plans the next feature against them, and the
+as-built review kicks back any build that violates one. Design knowledge that used to live in a few
+people's heads becomes written and enforced, so each feature makes the next one cheaper to align.
+Keeping those artifacts truthful is the highest-leverage thing you do here.
+
+**Keep the queue full. That is the whole speed story.** From this repository's own telemetry:
+
+| Measure | Value |
+|---|---|
+| One daemon run, pickup to settle | median 35 min, three-quarters under an hour |
+| Cost per shipped feature | median $8, three-quarters under $27 |
+| Features shipped in August 2026 | 134 (best days: 10 to 13 PRs merged) |
+
+A feature that builds in an hour but waits eight hours for you to merge the spec and eight more to
+merge the PR is a 17-hour cycle with one hour of machine time. Queue six specs on Monday and you get
+six PRs by Tuesday; work them one at a time and the same six take the week. So: compose specs in
+batches, merge in batches, review in batches, and bundle related changes as stories inside one spec.
+Split only when the pieces are independent enough to build in parallel.
+
+**Do not steer a running build.** Every gate grades the code against the plan you merged, so an edit
+that arrives mid-build shows up as drift, a false stall, or a discarded review lap. There are three
+windows where your hands on the code are welcome:
+
+- **Parked.** `ai-conductor daemon park <slug>`, edit, commit, `unpark`. Stay inside what the plan
+  already says; anything the plan never mentioned will be kicked back as scope drift.
+- **After the PR is ready for review.** Ordinary PR from here, with one caution: a review commit that
+  changes structure without touching the stories or ADRs leaves them describing a system that no longer
+  exists, and the next feature plans against that stale record.
+- **After a `needs-human` halt.** The halt record says what it could not resolve.
+
+**Refactors go through DECIDE.** If the implementation came back with the wrong shape, either the plan
+was wrong or the architectural constraints were unclear. Both are spec problems. Run the refactor as
+its own compose loop so the ADRs are amended and every later build inherits the corrected structure.
+
+**Where the feedback is.** Once or twice a day: `ai-conductor daemon status` and `gh pr list --state open`.
+Act on a spec PR, a PR flipping to ready-for-review, or a `needs-human` halt. Logs, cost lines, and
+review kickback laps are tuning telemetry, not your signal.
+
+**It got stuck.** Run `/daemon-triage` from a Claude Code or Codex session in the project. It gathers
+the evidence and routes you to the right [runbook](docs/runbooks/index.md).
+
+[FAQ](docs/guides/faq.md) has the short answers to everything above.
 
 ## Documentation
 
