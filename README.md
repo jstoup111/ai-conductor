@@ -107,7 +107,14 @@ the plan you merged. If you need to change course, park the feature, edit inside
 commit, and unpark; if it is the plan itself that is wrong, amend and reseal the spec. When something
 halts, `/daemon-triage` routes you to the right runbook.
 
-[Working effectively](docs/guides/working-effectively.md) has the full rhythm, the numbers, and the FAQ.
+The spec artifacts are the compounding asset. Every ADR is a durable architectural decision that the
+composer reads before planning the next feature and the as-built review enforces after building it.
+Design knowledge that used to be tribal becomes written and machine-checked, so each feature makes the
+next one cheaper to align. Refactors and structural changes therefore go through DECIDE, not a review
+commit: if the code came back with the wrong shape, either the plan or the constraints were wrong.
+
+[Working effectively](docs/guides/working-effectively.md) has the full rhythm and the numbers;
+[FAQ](docs/guides/faq.md) has the short answers.
 
 ## Documentation
 
@@ -119,7 +126,8 @@ halts, `/daemon-triage` routes you to the right runbook.
 
 **Guides** — task-oriented procedures
 
-- **[Working effectively](docs/guides/working-effectively.md) — read this first.** The delegation model, why a full queue is the whole speed story, when you can touch code mid-build, and what to do when it sticks
+- **[Working effectively](docs/guides/working-effectively.md) — read this first.** The delegation model, why the ADRs compound, why a full queue is the whole speed story, when you can touch code mid-build, and what to do when it sticks
+- [FAQ](docs/guides/faq.md) — short answers to the questions engineers ask in their first weeks
 - [Your first feature](docs/guides/first-feature.md) — idea → spec PR → build → implementation PR
 - [The composer loop](docs/guides/engineer-loop.md) — the interactive idea→spec flow, including claim-time recovery of stale claims after the configurable 24-hour `stale_claim_window_hours` window and the `compose unclaim` / `compose requeue --stale [--older-than <dur>]` maintenance commands
 - [Running the daemon](docs/guides/running-the-daemon.md) — start, park, observe, recover
