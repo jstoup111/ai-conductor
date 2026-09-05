@@ -132,7 +132,7 @@ async function makeHarness(options: { withConductor?: boolean } = {}): Promise<F
       ...process.env,
       HOME: home,
       FAKE_GIT_LOG: gitLog,
-      PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+      PATH: `${bin}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
     },
   };
 }
