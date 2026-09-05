@@ -2506,3 +2506,82 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// rem-as-built-rem-ab3-1 (adr-2026-08-27 D1): the engineer-store write leaves
+// the executor lifetime. The executor only CAPTURES the signal (outcome +
+// pre-teardown events.jsonl content) as a declarative terminal effect; the
+// dispatcher performs the cross-project write at collection
+// (daemon-cli.test.ts covers that side of the seam).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('engine/daemon-runner — engineer signal crosses the dispatcher-executor seam', () => {
+  it('deferred daemon completion captures events content before teardown and performs zero writes under root/.daemon or the engineer dir', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-engineer-signal-'));
+    const engineerDir = await mkdtemp(join(tmpdir(), 'daemon-runner-engineer-dir-'));
+    const savedEnv = process.env.AI_CONDUCTOR_ENGINEER_DIR;
+    process.env.AI_CONDUCTOR_ENGINEER_DIR = engineerDir;
+    const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
+    const eventsLine =
+      '{"type":"kickback","from":"build","to":"plan","count":1,"ts":"2026-06-25T00:00:02.000Z"}\n';
+    try {
+      const featureDeps = deps({ done: false, halted: true, reason: 'needs human', costTokens: 7 });
+      featureDeps.daemon = true;
+      featureDeps.deferTerminalEffects = true;
+      featureDeps.projectRoot = projectRoot;
+      featureDeps.createWorktree = async (slug) => {
+        await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+        await writeFile(join(worktreePath, '.pipeline', 'events.jsonl'), eventsLine, 'utf-8');
+        return { path: worktreePath, branch: `feat/${slug}` };
+      };
+      // Teardown destroys the events log — the captured content must predate it.
+      featureDeps.teardownWorktree = async () => {
+        await rm(join(worktreePath, '.pipeline', 'events.jsonl'), { force: true });
+      };
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+
+      expect(outcome.terminalEffects?.engineerSignal).toEqual({
+        outcome: {
+          slug: ITEM.slug,
+          status: 'halted',
+          reason: 'needs human',
+          prUrl: undefined,
+          costTokens: 7,
+        },
+        eventsContent: eventsLine,
+      });
+      // Executor lifetime performed the capture only — zero engineer-store,
+      // root-checkout, or `.daemon` writes.
+      await expect(readFile(join(engineerDir, 'signals.jsonl'), 'utf-8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      if (savedEnv === undefined) delete process.env.AI_CONDUCTOR_ENGINEER_DIR;
+      else process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv;
+      await rm(projectRoot, { recursive: true, force: true });
+      await rm(engineerDir, { recursive: true, force: true });
+    }
+  });
+
+  it('manual (daemon=false) deferred completion requests no engineer signal', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-engineer-manual-'));
+    const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
+    try {
+      const featureDeps = deps({ done: false, halted: true, reason: 'needs human' });
+      featureDeps.daemon = false;
+      featureDeps.deferTerminalEffects = true;
+      featureDeps.projectRoot = projectRoot;
+      featureDeps.createWorktree = async (slug) => {
+        await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+        return { path: worktreePath, branch: `feat/${slug}` };
+      };
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+
+      expect(outcome.terminalEffects).toEqual({ sweep: true });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+});

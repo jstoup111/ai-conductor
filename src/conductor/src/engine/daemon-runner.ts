@@ -328,6 +328,20 @@ export function makeRunFeature(
     featureLog: (message: string) => void,
   ): Promise<import('./feature-executor.js').FeatureTerminalEffects | undefined> => {
     if (deps.deferTerminalEffects) return effects;
+    if (effects.engineerSignal) {
+      // Non-deferred (legacy composition) path: perform the engineer-store
+      // signal here. Best-effort inside emitEngineerSignal — never throws.
+      await emitEngineerSignal({
+        engineerDir: resolveEngineerDir(),
+        eventsContent: effects.engineerSignal.eventsContent,
+        outcome: effects.engineerSignal.outcome,
+        project: deps.project,
+        feature: item.slug,
+        runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
+        provider: deps.provider,
+        log: featureLog,
+      });
+    }
     if (effects.cleanupHaltPresentation && deps.projectRoot) {
       try {
         const result = await cleanup(gh, deps.projectRoot, effects.cleanupHaltPresentation.prUrl, featureLog);
@@ -461,14 +475,15 @@ export function makeRunFeature(
       }
       const outcome = await deps.readOutcome(worktree);
 
-      // Phase 9.1: on daemon completion, emit a structured signal to the
-      // cross-project engineer store. Runs AFTER readOutcome and BEFORE any
-      // teardown. Manual runs (daemon=false) emit nothing.
-      // Best-effort inside emitEngineerSignal — never throws, so it cannot affect
-      // the feature outcome or teardown discipline below.
-      if (deps.daemon) {
-        await emitDaemonSignal(deps, worktree, item, outcome, featureLog);
-      }
+      // Phase 9.1: on daemon completion, request a structured signal to the
+      // cross-project engineer store. The store lives OUTSIDE the feature
+      // worktree, so the write itself crosses the dispatcher-executor seam as
+      // a declarative terminal effect (adr-2026-08-27 decision 1); the
+      // worktree's events.jsonl content is captured here — AFTER readOutcome
+      // and BEFORE any teardown. Manual runs (daemon=false) emit nothing.
+      const engineerSignal = deps.daemon
+        ? await captureEngineerSignal(worktree, item, outcome)
+        : undefined;
 
       if (outcome.done) {
         const shipmentFailure = await shipmentFailureReason(
@@ -501,6 +516,7 @@ export function makeRunFeature(
             } : {}),
             markProcessed: { prUrl: outcome.prUrl },
             sweep: true,
+            ...(engineerSignal ? { engineerSignal } : {}),
           }, item, featureLog);
           return {
             slug: item.slug,
@@ -550,7 +566,7 @@ export function makeRunFeature(
 
         await deps.teardownWorktree(worktree, true);
         featureLog(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
-        const terminalEffects = await runTerminalEffects({ sweep: true }, item, featureLog);
+        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
         return {
           slug: item.slug,
           status: 'halted',
@@ -563,7 +579,7 @@ export function makeRunFeature(
       if (outcome.halted) {
         await deps.teardownWorktree(worktree, true); // keep for the human
         featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
-        const terminalEffects = await runTerminalEffects({ sweep: true }, item, featureLog);
+        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
         return {
           slug: item.slug,
           status: 'halted',
@@ -591,7 +607,7 @@ export function makeRunFeature(
       events: featureRun?.events,
               });
       await deps.teardownWorktree(worktree, true);
-      const terminalEffects = await runTerminalEffects({ sweep: true }, item, featureLog);
+      const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
       return {
         slug: item.slug,
         status: 'error',
@@ -743,35 +759,32 @@ export async function terminateFeature({
 }
 
 /**
- * Emit one engineer signal for a completed daemon feature. Maps the worktree
- * outcome to a `FeatureOutcome`, resolves the engineer dir from the environment
- * (`$AI_CONDUCTOR_ENGINEER_DIR`), reads the worktree's `.pipeline/events.jsonl`,
- * and derives a fresh runId.
- * Best-effort: `emitEngineerSignal` swallows all errors, so this never throws.
+ * Capture the engineer-signal terminal effect for a completed daemon feature.
+ * Maps the worktree outcome to the signal's `FeatureOutcome` shape and reads
+ * the worktree's `.pipeline/events.jsonl` content BEFORE any teardown, so the
+ * dispatcher can perform the cross-project engineer-store write after
+ * collection (adr-2026-08-27 decision 1). Read failures degrade to empty
+ * content — the signal assembles from the outcome alone; this never throws.
  */
-async function emitDaemonSignal(
-  deps: FeatureRunnerDeps,
+async function captureEngineerSignal(
   worktree: FeatureWorktree,
   item: BacklogItem,
   outcome: WorktreeOutcome,
-  log?: (message: string) => void,
-): Promise<void> {
-  const featureOutcome: FeatureOutcome = {
-    slug: item.slug,
-    status: outcome.done ? 'done' : outcome.halted ? 'halted' : 'error',
-    reason: outcome.reason,
-    prUrl: outcome.prUrl,
-    costTokens: outcome.costTokens,
+): Promise<NonNullable<import('./feature-executor.js').FeatureTerminalEffects['engineerSignal']>> {
+  let eventsContent = '';
+  try {
+    eventsContent = await readFile(join(worktree.path, '.pipeline', 'events.jsonl'), 'utf-8');
+  } catch {
+    // Missing/unreadable log → the signal assembles from the outcome alone.
+  }
+  return {
+    outcome: {
+      slug: item.slug,
+      status: outcome.done ? 'done' : outcome.halted ? 'halted' : 'error',
+      reason: outcome.reason,
+      prUrl: outcome.prUrl,
+      costTokens: outcome.costTokens,
+    },
+    eventsContent,
   };
-  const eventsPath = join(worktree.path, '.pipeline', 'events.jsonl');
-  await emitEngineerSignal({
-    engineerDir: resolveEngineerDir(),
-    eventsPath,
-    outcome: featureOutcome,
-    project: deps.project,
-    feature: item.slug,
-    runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
-    provider: deps.provider,
-    log,
-  });
 }

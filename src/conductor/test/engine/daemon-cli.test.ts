@@ -15,7 +15,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { access, chmod, mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -170,6 +170,105 @@ describe('daemon termination guidance', () => {
         .rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       runDaemonSpy.mockRestore();
+    }
+  });
+
+  // rem-as-built-rem-ab3-1 (adr-2026-08-27 D1): the engineer-store write is a
+  // dispatcher-side terminal effect performed from executor-captured content.
+  it('emits exactly one engineer signal at collection from executor-captured events content, after the worktree is gone', async () => {
+    const slug = 'dispatcher-collected-engineer-signal';
+    const engineerDir = join(root, 'engineer-store');
+    const savedEnv = process.env.AI_CONDUCTOR_ENGINEER_DIR;
+    process.env.AI_CONDUCTOR_ENGINEER_DIR = engineerDir;
+    const eventsContent = [
+      '{"type":"kickback","from":"build","to":"plan","count":1,"ts":"2026-06-25T00:00:02.000Z"}',
+      '',
+    ].join('\n');
+
+    const daemonModule = await import('../../src/engine/daemon.js');
+    const runDaemonSpy = vi.spyOn(daemonModule, 'runDaemon').mockImplementation(async (deps) => {
+      // No worktree exists for this slug — the dispatcher must emit from the
+      // captured content, not by re-reading `.pipeline/events.jsonl`.
+      await deps.onFeatureTerminalEffects?.({
+        slug,
+        status: 'done',
+        prUrl: 'http://pr/9',
+        terminalEffects: {
+          engineerSignal: {
+            outcome: { slug, status: 'done', prUrl: 'http://pr/9', costTokens: 12 },
+            eventsContent,
+          },
+        },
+      });
+      return { processed: [], stoppedReason: 'backlog_drained' };
+    });
+
+    try {
+      await runDaemonMode({
+        projectRoot: root,
+        concurrency: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        runHaltClassMigration: async () => join(root, '.worktrees'),
+        workSource: { discover: async () => [] },
+        watch: false,
+      });
+
+      const lines = (await readFile(join(engineerDir, 'signals.jsonl'), 'utf8'))
+        .split('\n').filter(Boolean);
+      expect(lines).toHaveLength(1);
+      const record = JSON.parse(lines[0]);
+      expect(record).toMatchObject({
+        project: basename(root),
+        feature: slug,
+        outcome: 'done',
+        kickbacks: [{ from: 'build', to: 'plan', count: 1 }],
+      });
+    } finally {
+      runDaemonSpy.mockRestore();
+      if (savedEnv === undefined) delete process.env.AI_CONDUCTOR_ENGINEER_DIR;
+      else process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv;
+    }
+  });
+
+  it('an unwritable engineer dir never fails collection (best-effort signal)', async () => {
+    const slug = 'engineer-signal-unwritable';
+    const blockerFile = join(root, 'blocker-file');
+    await writeFile(blockerFile, 'not a directory', 'utf8');
+    const savedEnv = process.env.AI_CONDUCTOR_ENGINEER_DIR;
+    process.env.AI_CONDUCTOR_ENGINEER_DIR = join(blockerFile, 'engineer');
+
+    const daemonModule = await import('../../src/engine/daemon.js');
+    const runDaemonSpy = vi.spyOn(daemonModule, 'runDaemon').mockImplementation(async (deps) => {
+      await deps.onFeatureTerminalEffects?.({
+        slug,
+        status: 'halted',
+        terminalEffects: {
+          engineerSignal: {
+            outcome: { slug, status: 'halted', reason: 'needs human' },
+            eventsContent: '',
+          },
+        },
+      });
+      return { processed: [], stoppedReason: 'backlog_drained' };
+    });
+
+    try {
+      // Resolving without throwing IS the assertion: the store write is
+      // best-effort and must never fail collection.
+      await runDaemonMode({
+        projectRoot: root,
+        concurrency: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        runHaltClassMigration: async () => join(root, '.worktrees'),
+        workSource: { discover: async () => [] },
+        watch: false,
+      });
+    } finally {
+      runDaemonSpy.mockRestore();
+      if (savedEnv === undefined) delete process.env.AI_CONDUCTOR_ENGINEER_DIR;
+      else process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv;
     }
   });
 

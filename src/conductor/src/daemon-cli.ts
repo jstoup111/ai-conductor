@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { access, mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
@@ -12,6 +13,7 @@ import {
   formatFeatureUsageTotal,
 } from './execution/provider-diagnostics.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
+import { emitEngineerSignal, resolveEngineerDir } from './engine/engineer-store.js';
 import {
   isEligibleForResolve,
   makeAutoresolveEligibility,
@@ -1848,6 +1850,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         const effects = outcome.terminalEffects;
         if (!effects) return;
         const featureLog = featureLogFor(outcome.slug);
+        if (effects.engineerSignal) {
+          // Phase 9.1, relocated across the dispatcher-executor seam
+          // (adr-2026-08-27 decision 1): the cross-project engineer store lives
+          // outside the feature worktree, so the dispatcher performs the write,
+          // from the events.jsonl content the executor captured before
+          // teardown. Best-effort inside emitEngineerSignal — never throws.
+          await emitEngineerSignal({
+            engineerDir: resolveEngineerDir(),
+            eventsContent: effects.engineerSignal.eventsContent,
+            outcome: effects.engineerSignal.outcome,
+            project: basename(projectRoot),
+            feature: outcome.slug,
+            runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
+            log: featureLog,
+          });
+        }
         if (effects.autoPark) {
           try {
             await writeAutoPark(projectRoot, outcome.slug, effects.autoPark.reason);
