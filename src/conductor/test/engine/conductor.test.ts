@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4
+// Covers: task:1, task:3, task:4, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -1257,6 +1257,7 @@ describe('engine/conductor', () => {
       'Evidence: .pipeline/test-suite-evidence.json';
     expect(haltReasons).toEqual([expected]);
     expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toBe(`${expected}\n`);
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
   });
 
   describe('test_suite kickback boundary', () => {
@@ -5252,7 +5253,8 @@ describe('engine/conductor', () => {
     // keeps FAILing, the gate-loop budget (MAX_KICKBACKS_PER_GATE) is what
     // eventually stops the loop — a "gate selected N times without
     // satisfying" halt, not a product/plan gap. It must be classified
-    // mechanical so the re-kick sweep keeps retrying it on base advance.
+    // needs-human so the re-kick sweep leaves its capped remediation to an
+    // operator rather than retrying it on base advance.
     it('manual_test FAIL exhausts its mechanical cap when the D2 kill-switch is disabled', async () => {
       await seedToManualTest();
       let buildAttempt = 0;
@@ -5305,7 +5307,7 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/manual-test FAIL unresolved/);
 
       const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
-      expect(haltClass).toBe('mechanical');
+      expect(haltClass).toBe('needs-human');
     });
 
     it('hands BUILD the FAIL rows + the no-whitewash contract in its retryReason', async () => {
@@ -6303,11 +6305,10 @@ describe('engine/conductor', () => {
       expect(haltContent).toContain('Remediation budget exhausted');
       expect(haltContent).toContain('max 2 kickbacks per gate');
 
-      // A build stall is a transient/mechanical condition (no product/plan
-      // gap) — the re-kick sweep must keep retrying it on base advance, so
-      // it is classified mechanical, never needs-human.
+      // The exhausted remediation budget needs a human decision; the re-kick
+      // sweep must not retry it automatically on base advance.
       const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
-      expect(haltClass).toBe('mechanical');
+      expect(haltClass).toBe('needs-human');
     });
   });
 
