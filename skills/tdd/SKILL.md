@@ -27,6 +27,14 @@ Documentation-only requests are delivered from `/explore`. Keep tests for machin
 only when they assert generated or runtime behavior (for example OpenAPI contracts or generated
 repository-harness functionality), never prose shape.
 
+### Suite-failure repair
+
+When BUILD returns after `test_suite` fails, read the engine's retry diagnostics and
+referenced `.pipeline/test-suite-evidence.json`, and include the relevant failure evidence
+in RED/GREEN dispatches. Repair and verify the affected tests through
+`ai-conductor scoped-run <selectors...>`, then commit. Leave aggregate re-verification to
+`test_suite`; a scoped PASS does not establish an aggregate PASS.
+
 ## Practices
 
 ### The Cycle

@@ -253,7 +253,9 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - After the BUILD verification above passes, run `ai-conductor test-suite`.
 - A zero exit reporting `EXECUTED PASS` or `REUSED PASS` satisfies this gate.
 - A non-zero exit BLOCKS progression to SHIP. Return to BUILD remediation via
-  `/tdd` or `/pipeline`, then rerun the command.
+  `/tdd` or `/pipeline`, passing the failure diagnostics and
+  `.pipeline/test-suite-evidence.json` path. Repair sessions verify affected
+  tests only; rerun the aggregate command here at the gate after repair.
 
 **After prd-audit (before suggesting architecture-review --as-built):**
 - Open the audit report (`.pipeline/prd-audit.md`) and check the per-FR verdict table

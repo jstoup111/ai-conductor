@@ -102,8 +102,9 @@ first, every time.
     - A known scoped failure blocks this debugging activity and is fixed here
       rather than deferred
     - If one of the repository's documented intermediate fallback triggers
-      makes scope genuinely unsafe, state the exact trigger and invoke the
-      configured aggregate verifier; never call the raw aggregate command
+      makes scope genuinely unsafe, state the exact trigger and defer aggregate
+      proof to the engine-native `test_suite` gate; never run the aggregate suite
+      inside this debugging activity
     - The original symptoms are gone
 
 ### The 3-Strike Rule
@@ -144,5 +145,5 @@ Skip if: the root cause was a simple typo, missing import, or other mechanical e
 - [ ] Failing test written that reproduces the bug
 - [ ] Fix targets root cause, not symptoms
 - [ ] Scoped union of affected tests passes after fix; any known failure blocked the activity
-- [ ] Any genuinely uncertain-scope fallback named its trigger and used the configured aggregate verifier
+- [ ] Any genuinely uncertain-scope fallback named its trigger and deferred aggregate proof to `test_suite`
 - [ ] Non-obvious root cause persisted to `.memory/gotchas/` (if applicable)
