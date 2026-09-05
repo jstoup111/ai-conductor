@@ -139,6 +139,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'setup_repair',
   'project_setup',
   'plan_growth',
+  'kickback_budget_adjustment_authorized',
   'coverage_binding_judged',
   'coverage_binding_disabled',
   'config_deprecated_key',
@@ -783,6 +784,7 @@ describe('event sink subscriptions', () => {
       'shipment_evidence_refused',
       'build_review_disposition_version_invalidated',
       'build_review_cache_discarded',
+      'kickback_budget_adjustment_authorized',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
     ]));
