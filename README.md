@@ -90,6 +90,25 @@ assumption: progress is proven by files on disk, gates are deterministic where m
 and an LLM is dispatched only where judgment is genuinely required. The daemon never merges — a human still
 owns that call.
 
+## How to work with it
+
+You own design; the daemon owns execution. Your judgement enters at two points, the spec PR and the
+implementation PR, and both are document reviews rather than live steering. That shape is what frees
+your attention for the next design problem while the last one builds.
+
+The throughput comes from the queue, not from any single build. Across this repository's own shipped
+record the median feature costs about $8 and takes about 90 minutes of active build time, and the
+daemon shipped 134 features in August 2026. A queue of one spec leaves it idle most of the day; a queue
+of six delivers overnight. Compose specs in batches, merge them in batches, review the PRs in batches,
+and bundle related changes as stories inside one spec rather than one spec each.
+
+Between merging the spec and the PR flipping to ready-for-review, the build measures itself against
+the plan you merged. If you need to change course, park the feature, edit inside the plan's scope,
+commit, and unpark; if it is the plan itself that is wrong, amend and reseal the spec. When something
+halts, `/daemon-triage` routes you to the right runbook.
+
+[Working effectively](docs/guides/working-effectively.md) has the full rhythm, the numbers, and the FAQ.
+
 ## Documentation
 
 [Browse the hosted documentation](https://jstoup111.github.io/ai-conductor/)
@@ -100,8 +119,8 @@ owns that call.
 
 **Guides** — task-oriented procedures
 
+- **[Working effectively](docs/guides/working-effectively.md) — read this first.** The delegation model, why a full queue is the whole speed story, when you can touch code mid-build, and what to do when it sticks
 - [Your first feature](docs/guides/first-feature.md) — idea → spec PR → build → implementation PR
-- [Working effectively](docs/guides/working-effectively.md) — batch your specs, never steer a running build, and where the useful feedback actually is
 - [The composer loop](docs/guides/engineer-loop.md) — the interactive idea→spec flow, including claim-time recovery of stale claims after the configurable 24-hour `stale_claim_window_hours` window and the `compose unclaim` / `compose requeue --stale [--older-than <dur>]` maintenance commands
 - [Running the daemon](docs/guides/running-the-daemon.md) — start, park, observe, recover
 - [Intake](docs/guides/intake.md) — filing issues that seed the DECIDE phase

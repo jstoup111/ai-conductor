@@ -1,7 +1,7 @@
 ---
 title: Self-hosting the harness
 parent: Guides
-nav_order: 6
+nav_order: 7
 ---
 
 # Self-hosting the harness

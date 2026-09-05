@@ -1,7 +1,7 @@
 ---
 title: Ship your first feature
 parent: Guides
-nav_order: 1
+nav_order: 2
 ---
 
 # Ship your first feature
