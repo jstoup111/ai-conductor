@@ -11,6 +11,48 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-05
+
+### Added
+
+- Daemon OpenTelemetry traces now identify the feature branch and executing engine version. ([implementation PR #2080](https://github.com/jstoup111/ai-conductor/pull/2080)).
+- OpenTelemetry now exports cumulative per-feature cost and token gauges after each terminal step. ([implementation PR #2104](https://github.com/jstoup111/ai-conductor/pull/2104)).
+- Remediation findings owned by existing plan tasks route back to BUILD via the existing-task disposition, charging the gate lap allowance and never the plan-growth allowance. ([implementation PR #2189](https://github.com/jstoup111/ai-conductor/pull/2189)).
+- Adds a coverage-binding gate that verifies plan criteria against cited task completion checks. ([implementation PR #2135](https://github.com/jstoup111/ai-conductor/pull/2135)).
+
+### Changed
+
+- Plans now declare only genuine task dependencies and tight file sets, so BUILD can fan out independent tasks instead of serializing them. ([implementation PR #2073](https://github.com/jstoup111/ai-conductor/pull/2073)).
+- The prd_audit remediation append allowance is raised from 5 tasks / 25% of the plan to 8 tasks / 50%. ([implementation PR #2131](https://github.com/jstoup111/ai-conductor/pull/2131)).
+- Plans now assign production-boundary integration ownership and must provide machine-grounded, semantically reviewed coverage for citable ADR decisions. ([implementation PR #2183](https://github.com/jstoup111/ai-conductor/pull/2183)).
+
+### Fixed
+
+- A build_review aggregate from a prior lap no longer replays its findings as kickbacks. ([implementation PR #2094](https://github.com/jstoup111/ai-conductor/pull/2094)).
+- build_review no longer stamps its aggregate with a stale lap identity when the test-suite evidence is reused. ([implementation PR #2110](https://github.com/jstoup111/ai-conductor/pull/2110)).
+- A remediation finding the planner dispositions as a human decision is no longer reported as a missing finding. ([implementation PR #2112](https://github.com/jstoup111/ai-conductor/pull/2112)).
+- Build-review cache entries now miss when the reviewer skill text or the engine build changes. ([implementation PR #2115](https://github.com/jstoup111/ai-conductor/pull/2115)).
+- A SHIP-tail verdict gate resumed as its group's last member no longer discards the verdict it just produced and retry until its budget is spent. ([implementation PR #2117](https://github.com/jstoup111/ai-conductor/pull/2117)).
+- The daemon's cleared-HALT watcher now carries a bounded polling fallback, so a halt cleared before the watcher is ready (or a dropped filesystem event) is still picked up within one poll interval, and watcher errors are logged instead of swallowed. ([implementation PR #2118](https://github.com/jstoup111/ai-conductor/pull/2118)).
+- PRD audit citations now accept every task identifier declared by the active plan. ([implementation PR #2105](https://github.com/jstoup111/ai-conductor/pull/2105)).
+- Configuration now prevents conditional or disabled gating and structural steps from bypassing required workflow enforcement. ([implementation PR #2107](https://github.com/jstoup111/ai-conductor/pull/2107)).
+- A remediation halt caused by a planner gap-id mismatch now reports the halt rationale the planner recorded, instead of only the id mismatch. ([implementation PR #2129](https://github.com/jstoup111/ai-conductor/pull/2129)).
+- Build review distinguishes counterfactual test sensitivity from infrastructure failures. ([implementation PR #2109](https://github.com/jstoup111/ai-conductor/pull/2109)).
+- A plan task citing a placeholder artifact path such as `.docs/plans/<slug>.md` is no longer treated as targeting another feature's sealed artifact. ([implementation PR #2130](https://github.com/jstoup111/ai-conductor/pull/2130)).
+- A prd-audit Verdict Table row may cite every plan task its evidence spans, as a comma-separated list; a FIXABLE row must still cite exactly one owning task. ([implementation PR #2134](https://github.com/jstoup111/ai-conductor/pull/2134)).
+- Prevents approved ADRs without citable decisions from landing. ([implementation PR #2133](https://github.com/jstoup111/ai-conductor/pull/2133)).
+- ADR decisions numbered as `**1. Title.**` are now citable as governing clauses, so a remediable as-built finding naming one no longer halts for a human. ([implementation PR #2141](https://github.com/jstoup111/ai-conductor/pull/2141)).
+- Install and uninstall banners now say AI Conductor Harness. ([implementation PR #2142](https://github.com/jstoup111/ai-conductor/pull/2142)).
+- Operator over-scope decisions on no-owner (NC) findings now survive prd_audit lap renumbering and line-anchor drift instead of re-halting as unknown-criterion. ([implementation PR #2144](https://github.com/jstoup111/ai-conductor/pull/2144)).
+- Operator over-scope decisions on NC findings now survive laps that reword the evidence summary, not just renumbering and line-anchor drift. ([implementation PR #2146](https://github.com/jstoup111/ai-conductor/pull/2146)).
+- The prd_audit skill reuses recorded operator-decision wording for already-decided no-owner findings, so decisions keep matching across re-graded laps. ([implementation PR #2148](https://github.com/jstoup111/ai-conductor/pull/2148)).
+- Remediation gaps whose tasks merely cite a protected artifact as evidence stay dispatchable instead of halting as Missing. ([implementation PR #2150](https://github.com/jstoup111/ai-conductor/pull/2150)).
+- Custom steps with only a completion artifact no longer crash interactive conductor runs. ([implementation PR #2136](https://github.com/jstoup111/ai-conductor/pull/2136)).
+- Covers: story-criterion markers now resolve against positional criterion ids, so criterion-bound tests actually enter test-quality scope. ([implementation PR #2182](https://github.com/jstoup111/ai-conductor/pull/2182)).
+- Rejected remediation dispositions now halt with actionable details instead of being silently dropped. ([implementation PR #2194](https://github.com/jstoup111/ai-conductor/pull/2194)).
+- The daemon now safely recovers from failed project setup by quarantining residue and verifying one bounded repair attempt before parking. ([implementation PR #2108](https://github.com/jstoup111/ai-conductor/pull/2108)).
+- Criterion ids now carry the whole story heading id, so stories with non-numeric ids (`## Story 5a:`) get distinct, addressable criterion keys instead of colliding with a numerically-adjacent story's. ([implementation PR #2222](https://github.com/jstoup111/ai-conductor/pull/2222)).
+
 ## [1.0.0] - 2026-08-31
 
 ### Added
