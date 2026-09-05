@@ -133,7 +133,7 @@ Naming note: `WorkClaims` is the dispatch-domain claim registry; it is unrelated
 
 **Done when:**
 - [ ] The pinned-behind-tip test passes using a real temp git fixture.
-- [ ] At claim time the resolved pin is recorded on the order and logged with the slug.
+- [ ] At claim time the resolved pin is recorded on the order, and at effective concurrency above 1 it is logged with the slug; at effective concurrency 1 no pin log line is emitted, preserving Story 2 / adr-2026-08-27 D7 byte-for-byte N=1 log equivalence.
 
 **Files:**
 - src/conductor/src/engine/daemon-deps.ts — pinned base resolution
