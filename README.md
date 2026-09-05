@@ -90,6 +90,67 @@ assumption: progress is proven by files on disk, gates are deterministic where m
 and an LLM is dispatched only where judgment is genuinely required. The daemon never merges — a human still
 owns that call.
 
+## How to work with it
+
+Read this before your second feature. The full guide is [Working effectively](docs/guides/working-effectively.md);
+this is the part people skip and then ask about.
+
+**You own design. The daemon owns execution.** Your judgement enters at exactly two points, and both
+are document reviews, not live steering:
+
+1. **Compose the spec** (`ai-conductor compose`). Explore, stories, ADRs, plan. This is where your
+   design sense matters. Spend your attention here.
+2. **Merge the spec PR.** That says "build exactly this".
+3. The daemon builds it in a worktree, grades the result against your plan and ADRs, and opens a PR.
+4. **Review the implementation PR** like a colleague's.
+
+Between 2 and 4 the daemon does the cheap part: code, tests, review fixes, rebase, PR prose. Delegating
+that is what frees your head for the next design problem while this one builds.
+
+**The ADRs are the asset.** Every ADR is a durable architectural decision with its reasoning attached,
+committed to the repo and read by machinery: the composer plans the next feature against them, and the
+as-built review kicks back any build that violates one. Design knowledge that used to live in a few
+people's heads becomes written and enforced, so each feature makes the next one cheaper to align.
+Keeping those artifacts truthful is the highest-leverage thing you do here.
+
+**Keep the queue full. That is the whole speed story.** From this repository's own telemetry:
+
+| Measure | Value |
+|---|---|
+| One daemon run, pickup to settle | median 35 min, three-quarters under an hour |
+| Cost per shipped feature | median $8, three-quarters under $27 |
+| Features shipped in August 2026 | 134 (best days: 10 to 13 PRs merged) |
+
+A feature that builds in an hour but waits eight hours for you to merge the spec and eight more to
+merge the PR is a 17-hour cycle with one hour of machine time. Queue six specs on Monday and you get
+six PRs by Tuesday; work them one at a time and the same six take the week. So: compose specs in
+batches, merge in batches, review in batches, and bundle related changes as stories inside one spec.
+Split only when the pieces are independent enough to build in parallel.
+
+**Do not steer a running build.** Every gate grades the code against the plan you merged, so an edit
+that arrives mid-build shows up as drift, a false stall, or a discarded review lap. There are three
+windows where your hands on the code are welcome:
+
+- **Parked.** `ai-conductor daemon park <slug>`, edit, commit, `unpark`. Stay inside what the plan
+  already says; anything the plan never mentioned will be kicked back as scope drift.
+- **After the PR is ready for review.** Ordinary PR from here, with one caution: a review commit that
+  changes structure without touching the stories or ADRs leaves them describing a system that no longer
+  exists, and the next feature plans against that stale record.
+- **After a `needs-human` halt.** The halt record says what it could not resolve.
+
+**Refactors go through DECIDE.** If the implementation came back with the wrong shape, either the plan
+was wrong or the architectural constraints were unclear. Both are spec problems. Run the refactor as
+its own compose loop so the ADRs are amended and every later build inherits the corrected structure.
+
+**Where the feedback is.** Once or twice a day: `ai-conductor daemon status` and `gh pr list --state open`.
+Act on a spec PR, a PR flipping to ready-for-review, or a `needs-human` halt. Logs, cost lines, and
+review kickback laps are tuning telemetry, not your signal.
+
+**It got stuck.** Run `/daemon-triage` from a Claude Code or Codex session in the project. It gathers
+the evidence and routes you to the right [runbook](docs/runbooks/index.md).
+
+[FAQ](docs/guides/faq.md) has the short answers to everything above.
+
 ## Documentation
 
 [Browse the hosted documentation](https://jstoup111.github.io/ai-conductor/)
@@ -100,6 +161,8 @@ owns that call.
 
 **Guides** — task-oriented procedures
 
+- **[Working effectively](docs/guides/working-effectively.md) — read this first.** The delegation model, why the ADRs compound, why a full queue is the whole speed story, when you can touch code mid-build, and what to do when it sticks
+- [FAQ](docs/guides/faq.md) — short answers to the questions engineers ask in their first weeks
 - [Your first feature](docs/guides/first-feature.md) — idea → spec PR → build → implementation PR
 - [The composer loop](docs/guides/engineer-loop.md) — the interactive idea→spec flow, including claim-time recovery of stale claims after the configurable 24-hour `stale_claim_window_hours` window and the `compose unclaim` / `compose requeue --stale [--older-than <dur>]` maintenance commands
 - [Running the daemon](docs/guides/running-the-daemon.md) — start, park, observe, recover

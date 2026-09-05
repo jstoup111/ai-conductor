@@ -1,7 +1,7 @@
 ---
 title: The composer loop
 parent: Guides
-nav_order: 2
+nav_order: 4
 ---
 
 # The composer loop

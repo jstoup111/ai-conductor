@@ -1,7 +1,7 @@
 ---
 title: Running the daemon
 parent: Guides
-nav_order: 5
+nav_order: 7
 ---
 
 # Running the daemon

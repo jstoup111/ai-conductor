@@ -232,12 +232,14 @@ source_has_guide_destination() {
 }
 
 record "source guides have unique titles, the Guides parent, and stable order" \
-  "$( source_has_guide_destination 'first-feature.md' 'Ship your first feature' 1 && \
-    source_has_guide_destination 'engineer-loop.md' 'The composer loop' 2 && \
-    source_has_guide_destination 'intake.md' 'Filing intake issues' 3 && \
-    source_has_guide_destination 'multiprovider.md' 'Choose and configure the LLM host' 4 && \
-    source_has_guide_destination 'running-the-daemon.md' 'Running the daemon' 5 && \
-    source_has_guide_destination 'self-hosting.md' 'Self-hosting the harness' 6 && echo 0 || echo 1 )"
+  "$( source_has_guide_destination 'working-effectively.md' 'Working effectively with the harness' 1 && \
+    source_has_guide_destination 'faq.md' 'FAQ' 2 && \
+    source_has_guide_destination 'first-feature.md' 'Ship your first feature' 3 && \
+    source_has_guide_destination 'engineer-loop.md' 'The composer loop' 4 && \
+    source_has_guide_destination 'intake.md' 'Filing intake issues' 5 && \
+    source_has_guide_destination 'multiprovider.md' 'Choose and configure the LLM host' 6 && \
+    source_has_guide_destination 'running-the-daemon.md' 'Running the daemon' 7 && \
+    source_has_guide_destination 'self-hosting.md' 'Self-hosting the harness' 8 && echo 0 || echo 1 )"
 
 source_has_reference_destination() {
   local path=$1

@@ -1,7 +1,7 @@
 ---
 title: Choose and configure the LLM host
 parent: Guides
-nav_order: 4
+nav_order: 6
 ---
 
 # Choose and configure the LLM host
