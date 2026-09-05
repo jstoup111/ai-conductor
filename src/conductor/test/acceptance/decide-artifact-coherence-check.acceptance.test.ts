@@ -149,7 +149,7 @@ const PLAN = [
   '',
   '| Decision | Disposition | Task(s) | Evidence |',
   '| --- | --- | --- | --- |',
-  '| adr-coherence#D1 | task | task-1 | An unmapped outcome is rejected at land. |',
+  '| adr-coherence#D1 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |',
   '',
 ].join('\n');
 
