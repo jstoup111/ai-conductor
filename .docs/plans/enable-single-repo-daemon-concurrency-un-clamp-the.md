@@ -503,6 +503,27 @@ Naming note: `WorkClaims` is the dispatch-domain claim registry; it is unrelated
 
 **Dependencies:** Task 22; Task 23; Task 24
 
+### Task 26: Documentation reflects configurable daemon concurrency
+**Story:** Story 1 (happy path: operator-configured worker count replaces the unconditional clamp)
+**Type:** happy-path
+
+**Steps:**
+1. Update docs/reference/cli.md (lines ~287, 297-300) to remove the claim that daemon worker values above one are clamped and describe the configurable pool width.
+2. Update docs/guides/running-the-daemon.md (~line 768) to describe running with concurrency above one, including the N=1 default and serial-equivalence guarantee.
+3. Add the daemon concurrency key to docs/reference/configuration.md with its default, accepted values, and the legacy env-mutating path's refusal above 1.
+
+**Done when:**
+- [ ] No page under docs/ states that daemon concurrency values above one are clamped.
+- [ ] docs/reference/configuration.md documents the concurrency key, its default, and the refusal behavior of the legacy dispatch path.
+- [ ] docs/guides/running-the-daemon.md describes operating the daemon with more than one worker.
+
+**Files:**
+- docs/reference/cli.md — remove clamp language
+- docs/guides/running-the-daemon.md — multi-worker operation
+- docs/reference/configuration.md — concurrency key reference
+
+**Dependencies:** Task 24
+
 ## Task Dependency Graph
 
 ```
