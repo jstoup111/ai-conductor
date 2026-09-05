@@ -191,6 +191,7 @@ import {
   stampGateRunIdentity,
   isVerdictRunIdentityStep,
 } from './artifacts.js';
+import { extractStoryCriterionIds } from './story-criteria.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
 import { canonicalTaskId } from './autoheal.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
@@ -806,7 +807,12 @@ function criterionStorySection(
   storiesText: string,
   criterion: string,
 ): 'happy' | 'negative' | undefined {
-  const id = criterion.match(/^S(\d+)\.(\d+)$/i);
+  // The story id uses the stories parser's heading alphabet (`[A-Za-z0-9.-]`,
+  // see `story-criteria.ts`), mirroring `CRITERION_ID_RE` in artifacts.ts: the
+  // trailing `.<digits>` is the criterion ordinal and everything before it is
+  // the heading id verbatim, so `S5a.3` and `S2.1.3` classify instead of
+  // silently returning undefined (#2219 / PR #2222 fixed the sibling sites).
+  const id = criterion.match(/^S([A-Za-z0-9.-]+)\.(\d+)$/i);
   if (!id) return undefined;
 
   const [, storyId, ordinal] = id;
@@ -3956,14 +3962,18 @@ export class Conductor {
         }
         const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
         const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
-        const criterionOrdinalByStory = new Map<string, number>();
-        const criteria = new Set(extractAuthoritativeStoryCriteria(storiesText).flatMap((criterion) => {
-          const story = criterion.match(/^Story\s+(\d+)\s+/i)?.[1];
-          if (!story) return [];
-          const ordinal = (criterionOrdinalByStory.get(story) ?? 0) + 1;
-          criterionOrdinalByStory.set(story, ordinal);
-          return [`S${story}.${ordinal}`];
-        }));
+        // Derive the authoritative id set with the SAME function the prd_audit
+        // completion predicate uses (#2219 / PR #2222). This site used to
+        // re-derive ids from `extractAuthoritativeStoryCriteria` prose with
+        // `^Story\s+(\d+)\s+`, which reduced the heading id to its first digit
+        // run — `## Story 5a:` never matched at all, so every one of its
+        // criteria vanished from the expected set and the report's legitimate
+        // `S5A.*` rows were rejected as "absent from the active stories".
+        // Reported keys are upper-cased at parse time, so the expected set is
+        // too, exactly as `prdAuditStoryCoverageGap` does.
+        const criteria = new Set(
+          extractStoryCriterionIds(storiesText).map((id) => id.toUpperCase()),
+        );
         const unresolvedCriteria = parsed.value.findings
           .map((finding) => finding.criterion)
           .filter((criterion) => !isNoOwnerKey(criterion) && !criteria.has(criterion));
