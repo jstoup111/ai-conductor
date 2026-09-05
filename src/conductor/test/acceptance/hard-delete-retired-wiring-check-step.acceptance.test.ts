@@ -470,9 +470,11 @@ describe('hard-deleted BUILD gate leaves one serial BUILD verifier', () => {
       },
     }).run();
 
-    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(ensure).toHaveBeenCalledTimes(3);
     expect(kickbacks).toEqual([]);
-    expect((await readKickbackLedger(projectRoot)).gates.test_suite).toBeUndefined();
+    expect((await readKickbackLedger(projectRoot)).gates.test_suite).toEqual(
+      expect.objectContaining({ suiteInfrastructureRetries: 2 }),
+    );
     expect(halts).toEqual([
       expect.objectContaining({
         reason: expect.stringContaining('test_suite infrastructure failure (unlaunchable)'),
@@ -480,6 +482,9 @@ describe('hard-deleted BUILD gate leaves one serial BUILD verifier', () => {
     ]);
     await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
       'test_suite infrastructure failure (unlaunchable): spawn npm ENOENT',
+    );
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'retries spent: 2 (cap 2)',
     );
   });
 });

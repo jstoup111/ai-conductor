@@ -6656,17 +6656,20 @@ export class Conductor {
           const memberAttemptBudgets = new Map(
             membership.dispatchable.map((member) => [
               member.name,
-              resolveStepConfig(
-                member.name as StepName,
-                phaseForStep(member.name as StepName),
-                this.modelPolicyForStep(member.name as StepName),
-                this.config,
-                {
-                  tier: state.complexity_tier,
-                  modelCliOverride: this.providerExecution?.modelOverride,
-                  effortCliOverride: this.providerExecution?.effortOverride,
-                },
-              ).max_retries,
+              (() => {
+                const memberModelPolicy = this.modelPolicyForStep(member.name as StepName);
+                return resolveStepConfig(
+                  member.name as StepName,
+                  phaseForStep(member.name as StepName),
+                  memberModelPolicy,
+                  this.config,
+                  {
+                    tier: state.complexity_tier,
+                    modelCliOverride: this.providerExecution?.modelOverride,
+                    effortCliOverride: this.providerExecution?.effortOverride,
+                  },
+                ).max_retries;
+              })(),
             ]),
           );
           // Engagement is keyed to the first member that still needs work,
@@ -12202,6 +12205,7 @@ export class Conductor {
 
     const outcomes: BranchOutcome[] = await runWithConcurrency(
       members.map((member) => async () => {
+        const groupModelPolicy = this.modelPolicyForStep(groupName);
         const resolved = resolveStepConfig(
           // A DSL branch has its own dispatch identity, but is not itself a
           // lifecycle step. Its parent group supplies the registered phase
@@ -12209,7 +12213,7 @@ export class Conductor {
           // registry throws before the branch can be dispatched.
           groupName,
           phaseForStep(groupName),
-          this.modelPolicyForStep(groupName),
+          groupModelPolicy,
           this.config,
           { tier: state.complexity_tier },
         );
