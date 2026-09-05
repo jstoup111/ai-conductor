@@ -84,7 +84,17 @@ describe('integration/session-hooks-provisioning (Task 15)', () => {
     expect(raw).not.toContain('CLAUDE_CONFIG_DIR');
     expect(raw).not.toContain('$HOME');
     expect(raw).not.toMatch(/(?<![A-Za-z0-9_./-])~(?=[/"\s]|$)/);
-    expect(raw).not.toMatch(/\/home\//);
+    // Absolute paths must all live inside the worktree. A bare `/home/` match
+    // is the wrong test for that: it is neither necessary nor sufficient. The
+    // repo under test is created inside TMPDIR, so on a machine whose TMPDIR
+    // is home-rooted every legitimate in-worktree path contains `/home/` and
+    // this failed spuriously; conversely a leaked `/etc` or `/opt` path is a
+    // real portability break that `/home/` never catches. Assert the actual
+    // invariant instead — the same one `commandPaths` is checked against.
+    for (const absolutePath of raw.match(/\/[A-Za-z0-9_.\-/]+/g) ?? []) {
+      if (absolutePath.startsWith(repoRoot)) continue;
+      expect(absolutePath).not.toMatch(/^\/(home|root|etc|opt|usr\/local)\//);
+    }
 
     for (const cmdPath of commandPaths) {
       expect(cmdPath.startsWith(repoRoot)).toBe(true);
