@@ -714,6 +714,9 @@ describe('as-built SHIP routing', () => {
     priorLap?: boolean;
     maxRemediationLaps?: number;
     projectionRefusal?: boolean;
+    remediationEnabled?: boolean;
+    daemon?: boolean;
+    writeRemediationPlan?: boolean;
   }): Promise<ConductorEvent[]> {
     const dir = await fixture();
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -782,7 +785,7 @@ describe('as-built SHIP routing', () => {
           ].join('\n'));
         } else if (step === 'architecture_review_as_built') {
           await writeAsBuilt(dir, input.report);
-        } else if (step === 'remediate') {
+        } else if (step === 'remediate' && input.writeRemediationPlan !== false) {
           await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
             dispositions: [{
               id: 'ARCH-1', disposition: 'build', category: null,
@@ -802,13 +805,13 @@ describe('as-built SHIP routing', () => {
       events,
       projectRoot: dir,
       mode: 'auto',
-      daemon: true,
+      daemon: input.daemon ?? true,
       verifyArtifacts: true,
       fromStep: 'manual_test',
       maxRetries: 1,
       config: {
         architecture_review_as_built: {
-          remediation: { enabled: true },
+          remediation: { enabled: input.remediationEnabled ?? true },
           max_remediation_laps: input.maxRemediationLaps ?? 2,
         },
       } as never,
@@ -865,6 +868,35 @@ describe('as-built SHIP routing', () => {
 
     const invalid = await runGroupedAsBuiltExit({ report: 'Verdict: BLOCKED\n' });
     expectOneGroupTerminalBefore(invalid, 'loop_halt');
+  });
+
+  it.each([
+    {
+      name: 'remediation is disabled',
+      input: { remediationEnabled: false },
+      cause: 'remediation is disabled by architecture_review_as_built.remediation.enabled',
+    },
+    {
+      name: 'the run is not a daemon',
+      input: { daemon: false },
+      cause: 'remediation runs only in daemon mode',
+    },
+    {
+      name: 'the planner writes no remediation plan',
+      input: { writeRemediationPlan: false },
+      cause: 'the planner wrote no remediation plan',
+    },
+  ])('renders the remediable group-halt cause and findings when $name', async ({ input, cause }) => {
+    const observed = await runGroupedAsBuiltExit({ report: REMEDIABLE_REPORT, ...input });
+    const halt = observed.find((event) => event.type === 'loop_halt');
+
+    expect(halt).toMatchObject({
+      reason: expect.stringContaining(`remediation did not route: ${cause}`),
+    });
+    expect(halt?.reason).toContain('Blocking findings:');
+    expect(halt?.reason).toContain('ARCH-1 (REMEDIABLE;');
+    expect(halt?.reason).not.toContain('shipped code violates an approved architecture decision');
+    expect(observed.some((event) => event.type === 'kickback')).toBe(false);
   });
 
   it('names the parser fault when the validation-group as-built report is invalid', async () => {
