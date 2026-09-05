@@ -18,6 +18,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon OpenTelemetry traces now identify the feature branch and executing engine version. ([implementation PR #2080](https://github.com/jstoup111/ai-conductor/pull/2080)).
 - OpenTelemetry now exports cumulative per-feature cost and token gauges after each terminal step. ([implementation PR #2104](https://github.com/jstoup111/ai-conductor/pull/2104)).
 - Remediation findings owned by existing plan tasks route back to BUILD via the existing-task disposition, charging the gate lap allowance and never the plan-growth allowance. ([implementation PR #2189](https://github.com/jstoup111/ai-conductor/pull/2189)).
+- Adds a coverage-binding gate that verifies plan criteria against cited task completion checks. ([implementation PR #2135](https://github.com/jstoup111/ai-conductor/pull/2135)).
 
 ### Changed
 
