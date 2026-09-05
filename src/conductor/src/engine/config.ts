@@ -103,7 +103,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'build_review', 'conflict_check',
     'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
     'retry_routing', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
-    'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup',
+    'gate_code_validity', 'coverage_binding', 'daemon_verbose', 'reconcile_parked_auto_cleanup',
     'step_heartbeat_stall_minutes', 'stale_claim_window_hours',
     'provider_preparation_timeout_minutes', 'teardown_timeout_seconds',
     'dispatch_start_timeout_seconds',
@@ -134,6 +134,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   provider_stream: ['min_interval_ms'],
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
   gate_code_validity: ['enabled'],
+  coverage_binding: ['judge'],
+  'coverage_binding.judge': ['enabled'],
   retry_routing: ['enabled'],
   otel: ['exporter', 'endpoint', 'file', 'protocol', 'project_name'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
@@ -1289,6 +1291,15 @@ export function validateConfig(
     }
   }
 
+  // coverage_binding — pre-BUILD coverage-binding judge (adr-2026-08-31 D7).
+  {
+    const err = validateCoverageBindingBlock(obj.coverage_binding);
+    if (err) return { ok: false, error: err };
+    if (obj.coverage_binding !== undefined || materializeDefaults) {
+      obj.coverage_binding = resolveCoverageBindingBlock(obj.coverage_binding);
+    }
+  }
+
   // retry_routing — retry classify rerun-vs-route kill-switch.
   {
     const err = validateRetryRoutingBlock(obj.retry_routing);
@@ -2100,6 +2111,54 @@ function validateGateCodeValidityBlock(raw: unknown): ConfigError | null {
 function resolveGateCodeValidityBlock(raw: unknown): { enabled: boolean } {
   const obj = isPlainObject(raw) ? (raw as Record<string, unknown>) : {};
   return { enabled: typeof obj.enabled === 'boolean' ? obj.enabled : true };
+}
+
+export const COVERAGE_BINDING_DEFAULTS = {
+  judge: { enabled: true },
+} as const;
+
+/**
+ * Validate the `coverage_binding:` block. Object-only; `judge` must be an
+ * object whose only key is a boolean `enabled`; unknown keys at either level
+ * are hard errors (fail-closed, like `gate_code_validity`).
+ */
+function validateCoverageBindingBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'coverage_binding must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.coverage_binding);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in coverage_binding: "${key}"` };
+    }
+  }
+  if (obj.judge === undefined || obj.judge === null) return null;
+  if (!isPlainObject(obj.judge)) {
+    return { type: 'validation_error', message: 'coverage_binding.judge must be an object' };
+  }
+  const judge = obj.judge as Record<string, unknown>;
+  const allowedJudge = new Set<string>(CONFIG_CONSUMER_KEY_SETS['coverage_binding.judge']);
+  for (const key of Object.keys(judge)) {
+    if (!allowedJudge.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in coverage_binding.judge: "${key}"` };
+    }
+  }
+  if (judge.enabled !== undefined && typeof judge.enabled !== 'boolean') {
+    return { type: 'validation_error', message: 'coverage_binding.judge.enabled must be a boolean' };
+  }
+  return null;
+}
+
+function resolveCoverageBindingBlock(raw: unknown): { judge: { enabled: boolean } } {
+  const obj = isPlainObject(raw) ? (raw as Record<string, unknown>) : {};
+  const judge = isPlainObject(obj.judge) ? (obj.judge as Record<string, unknown>) : {};
+  return {
+    judge: {
+      enabled: typeof judge.enabled === 'boolean' ? judge.enabled : COVERAGE_BINDING_DEFAULTS.judge.enabled,
+    },
+  };
 }
 
 /**
