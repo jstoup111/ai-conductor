@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildReviewSettlementObligationCase, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
 const feature = { version: 'v1', repository: 'repo', feature: 'feature' } as const;
@@ -22,6 +23,34 @@ async function storeWith(state: RemediationCaseStoreState): Promise<RemediationC
 }
 
 describe('remediation case effects', () => {
+  const record = (effect: RemediationCaseRecord['effect'], overrides: Partial<RemediationCaseRecord> = {}): RemediationCaseRecord => ({
+    id: 'case-1', domain: 'build_review', disposition: 'defer', priority: 'low', confidence: 'high',
+    rationale: 'Belongs outside this feature.', resolution: 'open',
+    sources: [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', recordedAt: '2026-08-30T12:00:00.000Z' }],
+    effect, ...overrides,
+  });
+
+  it.each([
+    ['reserved deferral', { id: 'e', kind: 'deferral', status: 'reserved' }, true],
+    ['failed deferral', { id: 'e', kind: 'deferral', status: 'failed', diagnostic: 'tracker unavailable' }, true],
+    ['applied deferral', { id: 'e', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' }, false],
+    ['no effect', { kind: 'none' }, false],
+  ] as const)('shared effect-status test flags %s durable evidence', (_label, effect, expected) => {
+    expect(hasReservedOrFailedRemediationEffect(record(effect as RemediationCaseRecord['effect']))).toBe(expected);
+  });
+
+  it.each([
+    ['reserved deferral blocks settlement', { id: 'e', kind: 'deferral', status: 'reserved' }, {}, true],
+    ['failed deferral blocks settlement', { id: 'e', kind: 'deferral', status: 'failed', diagnostic: 'x' }, {}, true],
+    ['applied deferral is benign', { id: 'e', kind: 'deferral', status: 'applied', issueUrl: 'https://x' }, {}, false],
+    ['applied action awaits its work order', { id: 'e', kind: 'action', status: 'applied', workOrderId: 'o' }, { disposition: 'act' }, true],
+    ['reserved action blocks settlement', { id: 'e', kind: 'action', status: 'reserved' }, { disposition: 'act' }, true],
+    ['failed action blocks settlement', { id: 'e', kind: 'action', status: 'failed', diagnostic: 'x' }, { disposition: 'act' }, true],
+    ['resolved case carries no obligation', { id: 'e', kind: 'deferral', status: 'failed', diagnostic: 'x' }, { resolution: 'resolved' }, false],
+  ] as const)('settlement obligation: %s', (_label, effect, overrides, expected) => {
+    expect(isBuildReviewSettlementObligationCase(record(effect as RemediationCaseRecord['effect'], overrides as Partial<RemediationCaseRecord>))).toBe(expected);
+  });
+
   it('publishes and charges a stable action order once', async () => {
     const store = await storeWith({ version: 'v1', feature, cases: [{
       id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'repair', confidence: 'high', resolution: 'open',

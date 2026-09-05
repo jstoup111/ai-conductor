@@ -547,6 +547,37 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect((await run.state()).build_review).not.toBe('done');
   });
 
+  it.each(['reserved', 'failed'] as const)('halts a clean PASS when an open %s deferral effect has no order', async (status) => {
+    const first = await fixture({ judgement: deferralJudgement() });
+    const cases = await first.readJson('.pipeline/remediation-cases.json') as {
+      cases: Array<{ id: string; effect: { id: string; kind: string; status: string; issueUrl?: string; diagnostic?: string } }>;
+    };
+    const seeded = {
+      ...cases,
+      cases: cases.cases.map((record) => ({
+        ...record,
+        effect: {
+          id: record.effect.id,
+          kind: record.effect.kind,
+          status,
+          ...(status === 'failed' ? { diagnostic: 'previous deferral failure' } : {}),
+        },
+      })),
+    };
+    const caseId = seeded.cases[0]!.id;
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(seeded), 'utf8'),
+    });
+
+    // A reserved/failed deferral is durable unfinished evidence: it must never
+    // resolve by benign absence into a terminal PASS.
+    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: work order attempt missing-work-order with open deferral case ${caseId} (${status})`);
+    expect((await run.state()).build_review).not.toBe('done');
+    const settled = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ resolution: string }> };
+    expect(settled.cases).toEqual([expect.objectContaining({ resolution: 'open' })]);
+  });
+
   it('halts BUILD recovery when an open applied action case has no work order', async () => {
     const first = await fixture();
     const cases = await first.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ id: string; effect: { status: string } }> };

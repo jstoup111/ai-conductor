@@ -31,7 +31,7 @@ import {
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
-import { isBuildEligibleActionCase, isBuildReviewWorkOrderObligationActionCase } from './remediation-case-effects.js';
+import { isBuildEligibleActionCase, isBuildReviewSettlementObligationCase } from './remediation-case-effects.js';
 import {
   appendBuildReviewWorkOrderContext,
   classifyBuildReviewDurableRead,
@@ -4888,11 +4888,15 @@ export class Conductor {
     if (missingAttemptEvidence) {
       const state = await store.read();
       if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
-      const openActionCase = state.state.cases.find(isBuildReviewWorkOrderObligationActionCase);
-      if (openActionCase) {
+      // Shared effect-status obligation: an applied action awaiting its work
+      // order, or ANY reserved/failed effect (action or deferral), is durable
+      // unfinished evidence — settling around it would turn it into a
+      // terminal PASS.
+      const obligationCase = state.state.cases.find(isBuildReviewSettlementObligationCase);
+      if (obligationCase && obligationCase.effect.kind !== 'none') {
         return {
           kind: 'invalid',
-          reason: `work order attempt missing-work-order with open action case ${openActionCase.id} (${openActionCase.effect.status})`,
+          reason: `work order attempt missing-work-order with open ${obligationCase.effect.kind} case ${obligationCase.id} (${obligationCase.effect.status})`,
         };
       }
     }

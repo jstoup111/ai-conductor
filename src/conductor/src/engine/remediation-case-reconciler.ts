@@ -1,4 +1,5 @@
 import type { RemediationCaseRow } from './remediation-case-artifact.js';
+import { hasReservedOrFailedRemediationEffect } from './remediation-case-effects.js';
 import {
   type RemediationCaseEffect,
   type RemediationCaseRecord,
@@ -223,6 +224,10 @@ function reconcileState(
       && replacement.disposition !== 'act'
       && !referencedExisting.has(replacement.id)
       && input.resolveAbsentOpenNonActionCases
+      // Shared effect-status test (remediation-case-effects.ts): a reserved or
+      // failed effect is durable unfinished evidence, never benign absence, so
+      // it must not resolve into a terminal PASS.
+      && !hasReservedOrFailedRemediationEffect(replacement)
     ) {
       changed = true;
       resolvedAbsentCaseIds.push(replacement.id);
