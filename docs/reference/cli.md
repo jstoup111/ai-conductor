@@ -903,6 +903,19 @@ protected reference elsewhere in the task.
 Run it before committing a plan. Correct the accepted artifact during DECIDE and re-author the task;
 do not hand the amendment to BUILD. The land gate repeats this check when a spec is landed.
 
+## `ai-conductor kickback-budget`
+
+```bash
+ai-conductor kickback-budget inspect --feature <slug> [--format human|json]
+ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive-integer> --rationale "<reason>"
+ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<reason>"
+```
+
+Use this operator-only command to inspect or authorize one recovery from a budget-cap halt. `raise`
+and `reset` require a local interactive terminal, a live HALT, and matching cap evidence; they record
+an auditable authorization for the daemon to consume. Supported gates are `build_review`, `prd_audit`,
+and `architecture_review_as_built`.
+
 ## `ai-conductor decide-grant`
 
 ```bash

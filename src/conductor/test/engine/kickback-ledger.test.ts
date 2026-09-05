@@ -1,3 +1,4 @@
+// Covers: task:2, task:7, task:8
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,12 +14,15 @@ import {
   bumpMechanicalFaults,
   bumpKickbackGate,
   bumpKickbackGateInLedger,
+  bumpSuiteInfrastructureRetriesInLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  MAX_SUITE_INFRASTRUCTURE_RETRIES,
   recordGrowth,
   readGrowth,
   readKickbackLedger,
+  readSuiteInfrastructureRetries,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
@@ -189,6 +193,119 @@ describe('kickback-ledger', () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual({
       ...ledger,
       gates: { test_suite: { ...ledger.gates.test_suite, cumulative: 0, mechanicalFaults: 0 } },
+    });
+  });
+
+  it('preserves budget-recovery state while crediting laps', () => {
+    const entry = {
+          count: 2,
+          cumulative: 5,
+          mechanicalFaults: 0,
+          effectiveLimit: 6,
+          effectiveLapCap: 3,
+          adjustments: [{
+            id: 'adjustment-1',
+            kind: 'raise' as const,
+            beforeConsumed: 5,
+            afterConsumed: 5,
+            beforeLimit: 5,
+            afterLimit: 6,
+            operator: 'james',
+            rationale: 'one additional reviewed lap',
+            timestamp: '2026-09-05T12:00:00.000Z',
+            haltGeneration: 'halt-1',
+          }],
+          pendingAdjustment: {
+            id: 'adjustment-2',
+            kind: 'reset' as const,
+            beforeConsumed: 5,
+            afterConsumed: 0,
+            beforeLimit: 6,
+            afterLimit: 6,
+            operator: 'james',
+            rationale: 'fresh review contract',
+            timestamp: '2026-09-05T12:01:00.000Z',
+            haltGeneration: 'halt-1',
+          },
+          capEvidence: {
+            gate: 'build_review',
+            consumed: 5,
+            limit: 6,
+            latestReason: 'coverage needs one more review',
+            haltGeneration: 'halt-1',
+          },
+          resumeAuthorization: {
+            adjustmentId: 'adjustment-1',
+            haltGeneration: 'halt-1',
+            consumed: false,
+          },
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'coverage needs one more review',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        } satisfies KickbackGateEntry & {
+          effectiveLimit: number;
+          effectiveLapCap: number;
+          adjustments: unknown[];
+          pendingAdjustment: unknown;
+          capEvidence: unknown;
+          resumeAuthorization: unknown;
+        };
+
+    expect(creditKickbackGateLaps(entry)).toEqual({ ...entry, cumulative: 0 });
+  });
+
+  it('round-trips all budget-recovery fields', async () => {
+    const entry: KickbackGateEntry = {
+      count: 2, cumulative: 5, mechanicalFaults: 0, effectiveLimit: 6, effectiveLapCap: 3,
+      adjustments: [{ id: 'adjustment-1', kind: 'raise', beforeConsumed: 5, afterConsumed: 5, beforeLimit: 5, afterLimit: 6, operator: 'james', rationale: 'one additional reviewed lap', timestamp: '2026-09-05T12:00:00.000Z', haltGeneration: 'halt-1' }],
+      pendingAdjustment: { id: 'adjustment-2', kind: 'reset', beforeConsumed: 5, afterConsumed: 0, beforeLimit: 6, afterLimit: 6, operator: 'james', rationale: 'fresh review contract', timestamp: '2026-09-05T12:01:00.000Z', haltGeneration: 'halt-1' },
+      capEvidence: { gate: 'build_review', consumed: 5, limit: 6, latestReason: 'coverage needs one more review', haltGeneration: 'halt-1' },
+      resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'halt-1', consumed: false },
+      treeHash: '0123456789abcdef0123456789abcdef01234567', lastReason: 'coverage needs one more review', priorVerdict: false, resolvedBefore: 7,
+    };
+    await writeKickbackLedger(dir, { version: 1, gates: { build_review: entry } });
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: { build_review: entry } });
+  });
+
+  it('keeps validated enforcement values when adjustment history is malformed', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: { build_review: { count: 2, cumulative: 5, effectiveLimit: 6, adjustments: [{ id: 'missing-attribution' }], treeHash: null, lastReason: 'review failed', priorVerdict: false, resolvedBefore: 7 } },
+    }));
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual({
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 5,
+          mechanicalFaults: 0,
+          effectiveLimit: 6,
+          treeHash: null,
+          lastReason: 'review failed',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    });
+  });
+
+  it('invalidates only the gate whose effective limit is malformed', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        build_review: { count: 2, cumulative: 5, effectiveLimit: 0, treeHash: null, lastReason: 'review failed', priorVerdict: false, resolvedBefore: 7 },
+        test_suite: { count: 1, cumulative: 1, treeHash: null, lastReason: 'suite failed', priorVerdict: false, resolvedBefore: 2 },
+      },
+    }));
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual({
+      version: 1,
+      gates: { test_suite: { count: 1, cumulative: 1, mechanicalFaults: 0, treeHash: null, lastReason: 'suite failed', priorVerdict: false, resolvedBefore: 2 } },
     });
   });
 
@@ -370,6 +487,61 @@ describe('kickback-ledger', () => {
 
     const raw = await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8');
     expect(() => JSON.parse(raw)).not.toThrow();
+  });
+
+  it('serializes concurrent gate bumps so both increments land in the ledger', async () => {
+    const input = {
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      resolvedCount: 0,
+      reason: 'concurrent build review failure',
+    };
+
+    await Promise.all([
+      bumpKickbackGateInLedger(dir, 'build_review', input),
+      bumpKickbackGateInLedger(dir, 'build_review', input),
+    ]);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { build_review: { count: 2, cumulative: 2 } },
+    });
+  });
+
+  it('refuses a live foreign kickback-ledger lease without changing the ledger', async () => {
+    const ledger: KickbackLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 1,
+          cumulative: 1,
+          mechanicalFaults: 0,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'existing failure',
+          priorVerdict: false,
+          resolvedBefore: 0,
+        },
+      },
+    };
+    const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+    const leasePath = `${ledgerPath}.lease`;
+    await writeKickbackLedger(dir, ledger);
+    await mkdir(leasePath, { recursive: true });
+    await writeFile(join(leasePath, 'owner.json'), `${JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      token: 'foreign-owner',
+      acquiredAt: new Date().toISOString(),
+    })}\n`);
+
+    await expect(bumpKickbackGateInLedger(dir, 'build_review', {
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      resolvedCount: 0,
+      reason: 'new failure',
+    })).rejects.toMatchObject({
+      name: 'KickbackLedgerLeaseError',
+      kind: 'timeout',
+      message: expect.stringContaining('kickback-ledger'),
+    });
+    await expect(readKickbackLedger(dir)).resolves.toEqual(ledger);
   });
 
   describe('creditKickbackGateLaps', () => {
@@ -601,6 +773,19 @@ describe('kickback-ledger', () => {
         beyondCap: beyondCap.cumulativeExhausted,
       }).toEqual({ cap: 5, atCap: false, beyondCap: true });
     });
+
+    it('uses an operator-authorized effective limit for cumulative exhaustion', () => {
+      const atEffectiveLimit = bumpKickbackGate(
+        { ...existingEntry, cumulative: 5, effectiveLimit: 6 },
+        {
+          treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+          resolvedCount: existingEntry.resolvedBefore,
+          reason: 'the authorized final semantic failure',
+        },
+      );
+
+      expect(atEffectiveLimit.cumulativeExhausted).toBe(false);
+    });
   });
 
   describe('mechanical-fault allowance', () => {
@@ -632,5 +817,76 @@ describe('kickback-ledger', () => {
         mechanicalFaults: 0,
       });
     });
+  });
+
+  it('increments only the test-suite infrastructure retry counter in the ledger', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        test_suite: {
+          count: 2,
+          cumulative: 4,
+          mechanicalFaults: 1,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'previous code failure',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    });
+
+    await bumpSuiteInfrastructureRetriesInLedger(dir);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: {
+        test_suite: {
+          suiteInfrastructureRetries: 1,
+          count: 2,
+          cumulative: 4,
+        },
+      },
+    });
+  });
+
+  it('exports the declared suite-infrastructure retry ceiling', () => {
+    expect(MAX_SUITE_INFRASTRUCTURE_RETRIES).toBe(2);
+  });
+
+  it('credits suite-infrastructure retries with the other rebase-invalidated laps', () => {
+    const entry: KickbackGateEntry = {
+      count: 2,
+      cumulative: 4,
+      suiteInfrastructureRetries: 2,
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      lastReason: 'suite timeout',
+      priorVerdict: false,
+      resolvedBefore: 7,
+    };
+
+    expect(creditKickbackGateLaps(entry)).toEqual({
+      ...entry,
+      cumulative: 0,
+      suiteInfrastructureRetries: 0,
+    });
+  });
+
+  it('treats a malformed test-suite infrastructure retry counter as unreadable', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        test_suite: {
+          count: 2,
+          cumulative: 4,
+          suiteInfrastructureRetries: 1.5,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'suite timeout',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    }));
+
+    await expect(readSuiteInfrastructureRetries(dir)).resolves.toBe('unreadable');
   });
 });

@@ -169,6 +169,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // friction-mapped via `step_retry`, so it writes no record of its own.
   unattributed_progress: 'not-audited-by-design',
   halt_cleared: 'friction-mapped',
+  kickback_budget_adjustment_authorized: 'friction-mapped',
   operator_rewind: 'friction-mapped',
   plan_growth: 'not-audited-by-design',
   ci_failed: 'not-audited-by-design',
@@ -439,6 +440,13 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   parallel_completed: { type: 'parallel_completed', step: 'build', branches: ['a', 'b'] },
   parallel_failure: { type: 'parallel_failure', step: 'build', branch: 'a', error: 'boom' },
   group_member_step: { type: 'group_member_step', member: 'a', skill: 'build', phase: 'dispatch' },
+  kickback_budget_adjustment_authorized: {
+    type: 'kickback_budget_adjustment_authorized',
+    adjustmentId: 'adjustment-1',
+    gate: 'build_review',
+    kind: 'raise',
+    ts: '2026-09-05T12:00:00.000Z',
+  },
   gate_verdict: { type: 'gate_verdict', step: 'build', satisfied: true },
   test_suite_verification: { type: 'test_suite_verification', freshness: { status: 'CURRENT' } },
   build_member_evidence_reused: {

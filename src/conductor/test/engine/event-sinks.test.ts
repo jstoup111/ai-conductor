@@ -133,6 +133,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'provider_stream_progress',
   'self_host_containment_verdict',
   'over_scope_decision',
+  'kickback_budget_adjustment_authorized',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -160,6 +161,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'step_status_write_refused',
   'halt_cleared',
   'operator_rewind',
+  'kickback_budget_adjustment_authorized',
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [

@@ -248,9 +248,13 @@ import {
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  MAX_SUITE_INFRASTRUCTURE_RETRIES,
+  bumpSuiteInfrastructureRetriesInLedger,
   readGrowth,
   readKickbackLedger,
+  readSuiteInfrastructureRetries,
   recordGrowth,
+  recordKickbackCapEvidence,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
@@ -726,7 +730,8 @@ async function readRemediationGateAppendBudget(
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
   )?.laps ?? 0;
-  return { gate, priorLaps, lapCap, taskCount, growthTaskCount, growthCap, growth };
+  const effectiveLapCap = ledger.gates[gate]?.effectiveLapCap ?? lapCap;
+  return { gate, priorLaps, lapCap: effectiveLapCap, taskCount, growthTaskCount, growthCap, growth };
 }
 
 function remediationGateAppendBudgetExhausted(
@@ -5697,27 +5702,6 @@ export class Conductor {
     // missing.
     const isFreshFeatureSession = await this.initializeRunState(state);
 
-    // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): a fresh
-    // feature-session must not inherit a prior session's stale-mirage regrade
-    // count — a reused worktree whose `.pipeline/build-review-regrade.json`
-    // survives from a previous feature would otherwise start this session
-    // already at (or over) the once-per-session bound and HALT on its first
-    // real detection. Best-effort: never block session start on this reset.
-    if (isFreshFeatureSession) {
-      await resetRegradeCounter(this.projectRoot).catch(() => {
-        // Missing/unwritable counter file — nothing to reset.
-      });
-      await clearKickbackLedger(this.projectRoot).catch(() => {
-        // Missing/unwritable ledger file — nothing to clear.
-      });
-    }
-
-    // Load task evidence sidecar for durable no-evidence counter (Task 12).
-    // The counter is a durable telemetry record of consecutive gate misses
-    // with no task progress and persists across engine restarts. It no
-    // longer feeds any auto-park trigger (that trigger was removed by #773).
-    this.taskEvidence = await createTaskEvidence(this.projectRoot);
-
     // Sweep stale per-session markers from prior invocations. A marker left
     // here from a previous run can't legitimately satisfy this run's gate
     // — the finish skill writes it freshly on every successful run. The
@@ -5849,6 +5833,38 @@ export class Conductor {
         startIndex = clampedIndex;
       }
     }
+
+    // Do this before any per-worktree reset or sidecar load. Those helpers
+    // create `.pipeline/` as part of their normal write path, which would
+    // turn an absent worktree into a stub before the dispatch preflight gets
+    // a chance to refuse it.
+    const initialStep = steps[startIndex]?.name ?? this.fromStep ?? 'explore';
+    const missingWorktree = await this.missingWorktreeResult(initialStep);
+    if (missingWorktree?.worktreeMissing) {
+      await this.emitLoopHalt(missingWorktree.output ?? `Cannot dispatch '${initialStep}': the feature worktree no longer exists.`);
+      return;
+    }
+
+    // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): a fresh
+    // feature-session must not inherit a prior session's stale-mirage regrade
+    // count — a reused worktree whose `.pipeline/build-review-regrade.json`
+    // survives from a previous feature would otherwise start this session
+    // already at (or over) the once-per-session bound and HALT on its first
+    // real detection. Best-effort: never block session start on this reset.
+    if (isFreshFeatureSession) {
+      await resetRegradeCounter(this.projectRoot).catch(() => {
+        // Missing/unwritable counter file — nothing to reset.
+      });
+      await clearKickbackLedger(this.projectRoot).catch(() => {
+        // Missing/unwritable ledger file — nothing to clear.
+      });
+    }
+
+    // Load task evidence sidecar for durable no-evidence counter (Task 12).
+    // The counter is a durable telemetry record of consecutive gate misses
+    // with no task progress and persists across engine restarts. It no
+    // longer feeds any auto-park trigger (that trigger was removed by #773).
+    this.taskEvidence = await createTaskEvidence(this.projectRoot);
 
     // Task 27: pending per-member completions for a builtin validation
     // group's fan-out that is CURRENTLY in flight (set while
@@ -6182,7 +6198,7 @@ export class Conductor {
         `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
         `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
         (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '');
-      await this.writeHaltMarker(reason + '\n', 'mechanical');
+      await this.writeHaltMarker(reason + '\n', 'needs-human');
       await this.persistPendingStateChanges(state, 'persist conductor transition');
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.emitLoopHalt(reason, prUrl);
@@ -6650,6 +6666,25 @@ export class Conductor {
             this.config,
             false,
           );
+          const memberAttemptBudgets = new Map(
+            membership.dispatchable.map((member) => [
+              member.name,
+              (() => {
+                const memberModelPolicy = this.modelPolicyForStep(member.name as StepName);
+                return resolveStepConfig(
+                  member.name as StepName,
+                  phaseForStep(member.name as StepName),
+                  memberModelPolicy,
+                  this.config,
+                  {
+                    tier: state.complexity_tier,
+                    modelCliOverride: this.providerExecution?.modelOverride,
+                    effortCliOverride: this.providerExecution?.effortOverride,
+                  },
+                ).max_retries;
+              })(),
+            ]),
+          );
           // Engagement is keyed to the first member that still needs work,
           // rather than blindly to members[0]. A nominal entry that was
           // config-skipped or is already green hits a `continue` before this
@@ -6787,7 +6822,7 @@ export class Conductor {
                         }
                       },
                     },
-                    1,
+                    memberAttemptBudgets.get(member.name)!,
                   )),
                 cap,
               );
@@ -7034,9 +7069,10 @@ export class Conductor {
             if (noVerdictIdx !== -1) {
               const noVerdictOutcome = outcomes[noVerdictIdx] as NoVerdictOutcome;
               const noVerdictMember = membership.dispatchable[noVerdictIdx]!;
+              const attemptsSpent = memberAttemptBudgets.get(noVerdictMember.name)!;
               const haltReason =
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
-                `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
+                `no-verdict after ${attemptsSpent} attempts (${noVerdictOutcome.reason}).`;
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
               // Story 3, negative path: a no-verdict outcome is the validator's
               // own runner dying (thrown branch, terminal error, or exhausted
@@ -8998,6 +9034,59 @@ export class Conductor {
                 `(the grader/subprocess likely failed to start or died before writing a verdict)`;
             retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;
 
+            const fullSuiteFailure = result.fullSuiteVerification;
+            if (
+              step.name === 'test_suite' &&
+              fullSuiteFailure?.status === 'FAILED' &&
+              fullSuiteFailure.reason !== 'nonzero_exit'
+            ) {
+              const retries = await readSuiteInfrastructureRetries(this.projectRoot);
+              const infrastructureFailure =
+                `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` +
+                fullSuiteFailure.message;
+              let haltReason: string | undefined;
+              if (retries === 'unreadable') {
+                haltReason =
+                  `test_suite infrastructure retry counter is unreadable; unable to safely retry ` +
+                  `${infrastructureFailure}\nEvidence: .pipeline/test-suite-evidence.json`;
+              } else if (retries >= MAX_SUITE_INFRASTRUCTURE_RETRIES) {
+                haltReason =
+                  `${infrastructureFailure}\nretries spent: ${retries} ` +
+                  `(cap ${MAX_SUITE_INFRASTRUCTURE_RETRIES})\n` +
+                  'Evidence: .pipeline/test-suite-evidence.json';
+              }
+              if (haltReason !== undefined) {
+                state[step.name] = 'failed';
+                await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(haltReason);
+                await this.emitLoopHalt(haltReason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              if (
+                typeof retries === 'number' &&
+                retries < MAX_SUITE_INFRASTRUCTURE_RETRIES
+              ) {
+                const entry = await bumpSuiteInfrastructureRetriesInLedger(this.projectRoot);
+                const infrastructureAttempt = entry.suiteInfrastructureRetries ?? retries + 1;
+                await emitTracked({
+                  type: 'step_retry',
+                  step: 'test_suite',
+                  attempt: infrastructureAttempt,
+                  maxAttempts: MAX_SUITE_INFRASTRUCTURE_RETRIES,
+                  reason:
+                    `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` +
+                    fullSuiteFailure.message,
+                });
+                // Infrastructure retries are bounded in their own durable
+                // allowance and must not consume the generic step budget.
+                attempt--;
+                continue;
+              }
+            }
+
             // #814: a grader-dispatch failure (build_review's grader could not
             // RUN — distinct from it running and returning a not-PASS verdict,
             // which arrives as success:true via the completion predicate) is an
@@ -9704,7 +9793,7 @@ export class Conductor {
                         '\n\nRemediation budget exhausted (max ' + MAX_KICKBACKS_PER_GATE + ' kickbacks per gate).';
                       await this.haltSerialExecution({
                         reason: haltContent,
-                        haltClass: 'mechanical',
+                        haltClass: 'needs-human',
                         persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
                         surfaceRemediation: true,
                         loopHaltReason: effectiveQuestion,
@@ -10224,7 +10313,7 @@ export class Conductor {
               const reason =
                 `test_suite failure unresolved after ${count} build kickback(s) ` +
                 `(cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
-              await this.writeHaltMarker(reason + '\n', 'mechanical');
+              await this.writeHaltMarker(reason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.emitLoopHalt(reason, prUrl);
@@ -10425,6 +10514,11 @@ export class Conductor {
                     `build_review cumulative kickback cap exceeded (cumulative ` +
                     `${kickback.entry.cumulative}, cap ${MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
                     `${kickback.entry.lastReason || 'no reasons recorded'}`;
+                  await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
+                    consumed: kickback.entry.cumulative,
+                    limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                    latestReason: kickback.entry.lastReason,
+                  });
                   const markerResult = await this.writeHaltMarker(reason + '\n', 'needs-human');
                   if (markerResult.status === 'failed') {
                     this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);
@@ -12137,7 +12231,19 @@ export class Conductor {
 
     const outcomes: BranchOutcome[] = await runWithConcurrency(
       members.map((member) => async () => {
-        return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);
+        const groupModelPolicy = this.modelPolicyForStep(groupName);
+        const resolved = resolveStepConfig(
+          // A DSL branch has its own dispatch identity, but is not itself a
+          // lifecycle step. Its parent group supplies the registered phase
+          // and policy; resolving the arbitrary branch name through the step
+          // registry throws before the branch can be dispatched.
+          groupName,
+          phaseForStep(groupName),
+          groupModelPolicy,
+          this.config,
+          { tier: state.complexity_tier },
+        );
+        return runGroupBranch(member, state, { stepRunner: this.stepRunner }, resolved.max_retries);
       }),
       Math.max(1, Math.min(this.validationConcurrency, branches.length)),
     );

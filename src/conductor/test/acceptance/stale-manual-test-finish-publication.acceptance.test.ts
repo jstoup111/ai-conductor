@@ -365,6 +365,6 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).resolves.toContain(
       'manual-test FAIL unresolved after 2 build kickback(s) (cap 2)',
     );
-    await expect(readFile(join(pipeline, 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+    await expect(readFile(join(pipeline, 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 });

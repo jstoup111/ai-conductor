@@ -379,8 +379,8 @@ describe('test_suite native gate loop', () => {
         projectRoot,
         mode: 'auto',
         fromStep: 'test_suite',
-        // The native gate owns a single attempt regardless of the generic
-        // retry policy; BUILD must intervene before ensure() can run again.
+        // Infrastructure failures use their own bounded, non-charging retry
+        // allowance rather than the generic step retry policy.
         maxRetries: 7,
         fullSuiteVerifier: {
           ensure,
@@ -394,8 +394,9 @@ describe('test_suite native gate loop', () => {
       const finalState = persisted.ok ? persisted.value : {};
       const haltMarker = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf-8');
       const haltClass = await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf-8');
-      const infrastructureEvidence =
+      const infrastructureFailure =
         `test_suite infrastructure failure (${reason}): ${message}\n` +
+        'retries spent: 2 (cap 2)\n' +
         'Evidence: .pipeline/test-suite-evidence.json';
       expect({
         ensureCalls: ensure.mock.calls.length,
@@ -411,13 +412,13 @@ describe('test_suite native gate loop', () => {
         finalGateState: finalState.test_suite,
         restagedDownstreamState: finalState.rebase,
       }).toEqual({
-        ensureCalls: 1,
-        relevantTimeline: ['test_suite'],
+        ensureCalls: 3,
+        relevantTimeline: ['test_suite', 'test_suite', 'test_suite'],
         shipDispatches: [],
         kickbacks: [],
         buildRetryReasons: [],
-        haltReason: infrastructureEvidence,
-        haltMarker: `${infrastructureEvidence}\n`,
+        haltReason: infrastructureFailure,
+        haltMarker: `${infrastructureFailure}\n`,
         haltClass: 'needs-human',
         finalGateState: 'failed',
         restagedDownstreamState: undefined,
