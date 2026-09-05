@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-05T13:26:02.002Z
 Slug: a-coverage-claim-can-name-a-task-whose-done-when-d
 Class: needs-human
 Halting step: prd_audit
