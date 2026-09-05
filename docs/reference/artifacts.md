@@ -678,6 +678,7 @@ those:
 
 `contained_live_checkout_drift`, `self_host_containment_verdict`, `containment_check_unresolved`,
 `operator_rewind`,
+`setup_repair`, `project_setup`,
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
 `build_review_cache_hit`, `build_review_cache_discarded`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
 `build_review_stale_aggregate`,

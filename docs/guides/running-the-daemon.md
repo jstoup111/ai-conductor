@@ -561,13 +561,29 @@ made by the build move the worktree's `HEAD` but not its base, so they never re-
 setup leaves no marker, and the marker is deleted before each re-run, so a broken setup can never
 be skipped.
 
-Setup-failure triage never trusts the marker: its verification re-runs are forced, so they always
-execute `bin/setup` for real, and a forced run that succeeds records a fresh marker — a project
+When setup fails, the daemon uses a bounded recovery ladder before it parks the feature. If the
+worktree is dirty, it first preserves the residue on `wip/setup-quarantine-<slug>`, resets to a
+clean `HEAD`, and retries setup once. A successful retry resumes the feature and leaves
+`.pipeline/QUARANTINE` as a notice for reviewing the preserved changes. The daemon starts its one
+provider repair session only when setup still fails at that clean `HEAD`; a successful dirty-tree
+retry never spends that repair attempt.
+
+The repair session is accepted only after the daemon re-runs `bin/setup` and mechanically verifies
+the candidate state. It retains a verified uncommitted repair in an engine commit, accepts an
+existing repair commit when its history is forward from the original `HEAD`, and rejects rewritten
+history, setup drift, a still-failing setup, or an unpreserved candidate. Rejections park the
+feature; when preservation succeeds, the same quarantine branch holds the rejected attempt and the
+original `HEAD` is restored. A provider failure that leaves the worktree unchanged also parks, but
+does not create repair or quarantine state.
+
+Triage verification never trusts the marker: all of its verification re-runs are forced, so they
+always execute `bin/setup` for real. A forced run that succeeds records a fresh marker — a project
 repaired by triage skips setup on its next dispatch instead of paying for it again.
 
-Under the daemon each decision is emitted as a `project_setup` event, persisted in the feature's
-`.pipeline/events.jsonl` and rendered into the daemon log, so the log says whether setup ran and
-what made it run.
+Under the daemon each setup decision is emitted as a `project_setup` event, persisted in the
+feature's `.pipeline/events.jsonl` and rendered into the daemon log, so the log says whether setup
+ran and what made it run. A completed or rejected repair also emits `setup_repair`; a rejected
+event names its reason and, when available, its quarantine branch and preserved paths.
 
 The marker lives with the worktree and dies with it: a worktree recreated from its branch has no
 marker and re-provisions from scratch. To force a single re-run by hand, delete
