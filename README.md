@@ -101,6 +101,7 @@ owns that call.
 **Guides** — task-oriented procedures
 
 - [Your first feature](docs/guides/first-feature.md) — idea → spec PR → build → implementation PR
+- [Working effectively](docs/guides/working-effectively.md) — batch your specs, never steer a running build, and where the useful feedback actually is
 - [The composer loop](docs/guides/engineer-loop.md) — the interactive idea→spec flow, including claim-time recovery of stale claims after the configurable 24-hour `stale_claim_window_hours` window and the `compose unclaim` / `compose requeue --stale [--older-than <dur>]` maintenance commands
 - [Running the daemon](docs/guides/running-the-daemon.md) — start, park, observe, recover
 - [Intake](docs/guides/intake.md) — filing issues that seed the DECIDE phase
