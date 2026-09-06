@@ -177,7 +177,12 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
     expect(ledger.gates.architecture_review_as_built.laps).toBe(1);
     expect(ledger.growthUsed ?? 0).toBe(0);
     const engineState = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8')) as {
-      repairObligations?: { records?: Record<string, { settlement?: string }> };
+      repairObligations?: {
+        records?: Record<string, {
+          settlement?: string;
+          baseline?: { resolvedCount?: number };
+        }>;
+      };
     };
     expect(Object.values(engineState.repairObligations?.records ?? {}).map((record) => record.settlement))
       .toContain('settled');
