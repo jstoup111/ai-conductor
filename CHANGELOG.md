@@ -65,6 +65,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The as-built governing-clause resolver accepts the `D<n>` decision shorthand that ADR headings use, so a REMEDIABLE finding citing `adr-x D3` no longer halts needs-human. ([implementation PR #2250](https://github.com/jstoup111/ai-conductor/pull/2250)).
 - Closeout event tailing now recovers from corrupt completed ledger records without hiding later valid events. ([implementation PR #2241](https://github.com/jstoup111/ai-conductor/pull/2241)).
 - Blocks destructive bare force pushes in compound commands while preserving safe force-with-lease pushes. ([implementation PR #2221](https://github.com/jstoup111/ai-conductor/pull/2221)).
+- Docs guard now blocks NUL-bearing, alias-root, and symlink-routed writes that could bypass protected documentation paths. ([implementation PR #2242](https://github.com/jstoup111/ai-conductor/pull/2242)).
 
 ## [1.0.0] - 2026-08-31
 
