@@ -17,6 +17,7 @@ import { buildReviewFindingReferenceContext, parseBuildReviewLapId } from '../..
 import { deriveBuildReviewRubricProjections } from '../../src/engine/build-review-projections.js';
 import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
 import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
+import { BuildReviewSourceReadError } from '../../src/engine/build-review-scope-source.js';
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
@@ -46,13 +47,31 @@ function fakeGit(
   const git: GitRunner = async (args) => {
     calls.push(args);
     for (const entry of script) {
-      if (entry.match.every((tok, i) => args[i] === tok)) {
+      if (entry.match.every((tok, i) =>
+        args[i] === tok
+        || (tok === 'HEAD' && i > 0)
+        || (tok.endsWith('..HEAD') && args[i]?.startsWith(tok.slice(0, -4)))
+        || (tok.startsWith('HEAD:') && args[i]?.endsWith(tok.slice(4)))
+      )) {
         return {
           exitCode: entry.result.exitCode ?? 0,
           stdout: entry.result.stdout ?? '',
           stderr: entry.result.stderr ?? '',
         };
       }
+    }
+    if (args[0] === 'show' && args[1]?.endsWith('.md')) {
+      return { exitCode: 0, stdout: '# Plan body\n\nSome plan content.\n', stderr: '' };
+    }
+    if (args[0] === 'show') {
+      // Incidental legacy fixtures still model a pinned Git blob; focused
+      // missing-blob cases script a nonzero response explicitly.
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'diff' && args.includes('--name-status')) {
+      const humanDiff = script.find((entry) => entry.match[0] === 'diff' && !entry.match.includes('--name-status'))?.result.stdout ?? '';
+      const paths = [...humanDiff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
+      return { exitCode: 0, stdout: paths.flatMap((path) => ['M', path]).join('\0') + (paths.length ? '\0' : ''), stderr: '' };
     }
     return { exitCode: 1, stdout: '', stderr: '' };
   };
@@ -132,6 +151,19 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
 
       await expect(assembleBuildReviewInputs(git, planPath)).rejects.toThrow(MergeBaseError);
+    });
+
+    it('rejects a missing pinned plan blob instead of reading the live plan file', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: '' } },
+        { match: ['show', 'head123:plan.md'], result: { exitCode: 128, stderr: 'pinned blob missing' } },
+      ]);
+
+      await expect(assembleBuildReviewInputs(git, planPath)).rejects.toMatchObject({
+        name: 'BuildReviewSourceReadError', kind: 'required-read-failed', path: 'plan.md',
+      } satisfies Partial<BuildReviewSourceReadError>);
     });
 
     it('freezes one source snapshot and admits only an injected CURRENT test-suite proof', async () => {
@@ -371,7 +403,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         provenanceIsExcluded: true,
         blobIdentityIsExcluded: true,
         diffIsIncluded: true,
-        planIsIncluded: true,
+        planIsIncluded: false,
         resealIsExcluded: true,
       });
     });
@@ -444,7 +476,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(diffCall).toBeDefined();
       expect(diffCall).toEqual([
         'diff',
-        'abc1234..HEAD',
+        'abc1234..head123',
         '--',
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
@@ -491,7 +523,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(calls.find((c) => c[0] === 'diff')).toEqual([
         'diff',
-        'abc1234..HEAD',
+        'abc1234..head123',
         '--',
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
@@ -519,7 +551,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(calls.find((c) => c[0] === 'diff')).toEqual([
         'diff',
-        'abc1234..HEAD',
+        'abc1234..head123',
         '--',
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
@@ -537,7 +569,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(calls.find((c) => c[0] === 'diff')).toEqual([
         'diff',
-        'abc1234..HEAD',
+        'abc1234..head123',
         '--',
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
@@ -648,6 +680,11 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       // real remote to talk to, then set refs/remotes/origin/HEAD to point
       // at refs/heads/main so default-branch discovery resolves it.
       await writeFile(join(dir, 'base.txt'), 'base\n');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await Promise.all([
+        writeFile(join(dir, '.docs/plans/fixture.md'), '# Pinned fixture plan\n'),
+        writeFile(join(dir, '.docs/plans/semantic-repair.md'), '# Pinned semantic plan\n'),
+      ]);
       await git('add', '.');
       await git('commit', '-m', 'initial commit on base');
       await git('remote', 'add', 'origin', dir);
@@ -681,6 +718,47 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.diff).toContain('feature.txt');
       expect(result.diff).toContain('feature change');
       expect(result.planBody).toContain('Fixture plan.');
+    });
+
+    it('keeps pinned plan, stories, test bytes and a space-containing rename pair after live worktree mutation', async () => {
+      const frozenPlan = join(dir, '.docs/plans/frozen.md');
+      const frozenStories = join(dir, '.docs/stories/frozen.md');
+      await git('checkout', 'main');
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(frozenPlan, '**Stories:** .docs/stories/frozen.md\n\n### Task 1: frozen\n');
+      await writeFile(frozenStories, '# Frozen stories\n\n## Story 1: frozen\n\n#### Happy Path\n- Given frozen bytes, when assembled, then they remain pinned\n');
+      await writeFile(join(dir, 'test/old name.test.ts'), '// Covers: S1.1\nit(\'pinned test\', () => {});\n');
+      await git('add', '.docs', 'test/old name.test.ts');
+      await git('commit', '-m', 'add frozen source artifacts');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+
+      await git('checkout', '-b', 'feature/frozen-source');
+      await git('mv', 'test/old name.test.ts', 'test/new name.test.ts');
+      await git('commit', '-m', 'rename test with spaces');
+
+      const result = await assembleInputs(realGit(), frozenPlan, {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+        } as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>),
+      });
+
+      await Promise.all([
+        writeFile(frozenPlan, '# MUTATED LIVE PLAN\n'),
+        writeFile(frozenStories, '# MUTATED LIVE STORIES\n'),
+        writeFile(join(dir, 'test/new name.test.ts'), 'it(\'mutated live test\', () => {});\n'),
+      ]);
+
+      expect(result.planBody).toContain('### Task 1: frozen');
+      expect(result.sourceSnapshot.testQuality).toEqual({
+        inScopeTests: ['test/new name.test.ts'], unresolvedMarkers: [],
+      });
+      expect(result.sourceSnapshot.changedTestTitles).toEqual([
+        { selector: 'test/new name.test.ts', titleText: 'pinned test', staticExtractionFallback: false },
+      ]);
+      expect(result.sourceSnapshot.sourceChanges).toContainEqual({
+        kind: 'R', oldPath: 'test/old name.test.ts', path: 'test/new name.test.ts',
+      });
     });
 
     it('projects only changed tests whose Covers markers bind to this plan or its referenced stories', async () => {
@@ -1057,6 +1135,9 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
     it('grades only the feat branch commits, not merged-PR-only content that arrived after the tracking ref went stale', async () => {
       const fixture = await setupStaleTrackingRefFixture(dir);
+      await writeFile(join(fixture.repo, 'plan.md'), '# Pinned plan\n');
+      await execFileAsync('git', ['-C', fixture.repo, 'add', 'plan.md']);
+      await execFileAsync('git', ['-C', fixture.repo, 'commit', '-m', 'add pinned plan']);
       const git = makeGitRunner(fixture.repo);
 
       const result = await assembleBuildReviewInputs(git, planPath);
