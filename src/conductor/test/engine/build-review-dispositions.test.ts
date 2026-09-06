@@ -200,6 +200,21 @@ describe('build-review dispositions', () => {
     });
   });
 
+  it('admits scope-incomplete as a closed reduced-coverage cause under the existing lease', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, clock: () => Date.parse('2026-09-06T12:00:00.000Z'),
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(store.appendReducedCoverageIfCurrent({
+      feature, rubric: 'testQuality', reason: 'scope-incomplete',
+      rationale: 'The scope binding is incomplete.', operator: 'james',
+    }, async () => true)).resolves.toMatchObject({
+      ok: true, record: { identity: { rubric: 'testQuality', reason: 'scope-incomplete' }, operator: 'james' },
+    });
+  });
+
   it('refuses blank rationales without writing a reduced-coverage decision', async () => {
     const filesystem = new MemoryFilesystem();
     const store = new BuildReviewDispositionStore('/repo', {
