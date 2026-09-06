@@ -55,6 +55,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon now safely recovers from failed project setup by quarantining residue and verifying one bounded repair attempt before parking. ([implementation PR #2108](https://github.com/jstoup111/ai-conductor/pull/2108)).
 - Criterion ids now carry the whole story heading id, so stories with non-numeric ids (`## Story 5a:`) get distinct, addressable criterion keys instead of colliding with a numerically-adjacent story's. ([implementation PR #2222](https://github.com/jstoup111/ai-conductor/pull/2222)).
 - The PRD-audit remediation path now derives criterion ids from the whole story heading id, so a story with a non-numeric id (`## Story 5a:`) no longer has all of its criteria dropped from the expected set and reported as absent from the active stories. ([implementation PR #2227](https://github.com/jstoup111/ai-conductor/pull/2227)).
+- Story criterion ids now count hard-wrapped Given/When/Then rows; previously a row whose "then" fell on a continuation line was silently dropped and later ordinals shifted, which could halt the prd_audit gate against a correct report. ([implementation PR #2237](https://github.com/jstoup111/ai-conductor/pull/2237)).
 
 ## [1.0.0] - 2026-08-31
 
