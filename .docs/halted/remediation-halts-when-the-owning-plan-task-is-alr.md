@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-06T21:49:23.483Z
 Slug: remediation-halts-when-the-owning-plan-task-is-alr
 Class: needs-human
 Halting step: prd_audit
