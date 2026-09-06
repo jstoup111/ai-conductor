@@ -29,6 +29,8 @@ intervention. Intake: jstoup111/ai-conductor#647.
 
 ## Story 1 — a kickback that produces real rework still self-heals in BUILD (regression)
 
+**Scenario scope:** The already-complete/no-dispatchable-work cases in these stories exclude tasks with an open, admitted current repair obligation. Such an obligation makes the owning task dispatchable despite historical completion, under `adr-2026-09-06-reopened-task-resolution`.
+
 As the remediation kickback→build path, when `/remediate` emits a build disposition with a *new*
 `rem-*` task, the re-entered build must genuinely dispatch that task, so the legitimate self-heal
 path is unchanged.
@@ -64,9 +66,10 @@ a silent no-op.
   (empty `tasks`, or all appended `rem-*` ids already complete),
 - **When** the route is resolved,
 - **Then** the engine returns a HALT outcome (not a `route`), writes a HALT marker whose reason
-  carries the blocking finding plus "remediation produced no dispatchable build work; the implicated
-  task(s) are already evidence-complete — human needed", and surfaces it via the existing
-  `surfaceRemediationPr` path — the build step is never re-entered for this round.
+  carries the blocking finding and distinguishes genuinely empty output from emitted work whose
+  implicated tasks are already resolved, and surfaces it via the existing `surfaceRemediationPr`
+  path — the build step is never re-entered for this round. Emitted-but-refused work identifies its
+  ownership, authority, persistence/restaging, or current-evidence failure instead of being labeled empty.
 
 ### Negative Path — dispatchable work present ⇒ normal route
 

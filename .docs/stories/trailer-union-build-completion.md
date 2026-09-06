@@ -10,6 +10,8 @@ APPROVED adr-2026-07-23-trailer-union-build-step-routing. Governing invariant th
 
 ## Story 1: Shared task-resolution definition (union fold with canonical id matching)
 
+**Scenario scope:** The legacy union and parity scenarios below concern tasks without a current explicit repair obligation. For explicitly reopened tasks, the shared resolver applies current repair evidence under `adr-2026-09-06-reopened-task-resolution`; every consumer uses that same definition.
+
 **Requirement:** O2 (one resolution definition) · ADR Decision 2, 4, 5
 
 As the engine, I want one shared `resolveTaskIds(projectRoot, planIds)` resolution — status rows
@@ -40,6 +42,8 @@ this task resolved?" identically.
 ---
 
 ## Story 2: All-evidenced build exits to build_review (the #859 regression shape)
+
+**Scenario scope:** Trailer-only completion below assumes no current explicit repair obligation remains open. An admitted outstanding repair prevents the all-resolved condition despite historical trailers.
 
 **Requirement:** O1, O4 · ADR Decision 1, 2
 
@@ -73,7 +77,7 @@ instead of halting `no_task_progress`.
 
 As the build loop, I want the predicate's not-done reason to enumerate only ids unresolved under
 the shared definition, so that retry dispatches are steered away from already-resolved tasks and
-never re-issue a committed one.
+never re-issue a committed one unless an explicit current repair obligation makes it unresolved.
 
 ### Acceptance Criteria
 
@@ -82,7 +86,7 @@ never re-issue a committed one.
 - Given that reason threaded into the build retry hint, when the next build session is dispatched, then its prompt names only the unresolved ids as remaining work.
 
 #### Negative Paths
-- Given a task whose trailer-carrying commit was later reverted on the branch, when the predicate runs, then the id still counts as resolved (documented shipped-breaker semantics; `build_review`'s plan-vs-diff verdict — not this gate — catches genuinely missing work; ADR surfaced assumption).
+- Given a task without a current explicit repair obligation whose trailer-carrying commit was later reverted on the branch, when the predicate runs, then the id still counts as resolved (documented shipped-breaker semantics; `build_review`'s plan-vs-diff verdict — not this gate — catches genuinely missing work; ADR surfaced assumption).
 - Given ALL ids unresolved (no rows, no trailers, fresh build), when the predicate runs, then the reason lists the first ids with the existing `(+N more)` truncation — formatting behavior unchanged.
 
 ### Done When

@@ -72,10 +72,14 @@ Adopt **Option A**, with these constraints:
 3. **Rows stay dead, but still count.** No machinery writes `completed` rows (no derivation
    revival). Rows present from operator/recovery edits or `skipped` markers still resolve — the
    union only widens resolution, never narrows it.
+
+> **Amended 2026-09-06 by #1831:** For an explicitly admitted owning-task repair, historical terminal rows and pre-reopen trailers do not resolve the current obligation. Untouched tasks retain this union unchanged. `adr-2026-09-06-reopened-task-resolution` governs fresh evidence, shared resolver/reconstruction behavior, and restart recovery; this changes routing freshness, not correctness authority.
 4. **No wedge-class reasoning.** The resolver is a plain trailer-id fold (the same one
    `countResolvedTasks` shipped with) — NO SHA reachability, NO pinned stamps, NO path
    corroboration, NO per-task attribution. The #773 guardrail against re-emerging wedge classes
    applies verbatim.
+
+> **Amended 2026-09-06 by #1831:** The sole new boundary is the pre-reopen HEAD of an explicit repair obligation, used to exclude old routing evidence. An unavailable boundary must not fall back to an older range. No general pinned-stamp validation, per-file attribution, or completion-derivation engine is revived. Current engine-accepted task-close evidence remains a valid close path without a new commit; see `adr-2026-09-06-reopened-task-resolution`.
 5. **Fail direction.** The gate stays fail-closed ("no data ⇒ not done"); trailer reads inside
    the resolver stay fail-soft (git error ⇒ no extra ids) — degradation is to today's row-only
    behavior, never to a false `done`. The legacy no-context fallback branch of the predicate
