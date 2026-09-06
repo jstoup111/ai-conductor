@@ -54,6 +54,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   AuditedEventType,
   'friction-mapped' | 'not-audited-by-design'
 > = {
+  intake_inbound_sanitized: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
   setup_repair: 'not-audited-by-design',
   coverage_binding_judged: 'not-audited-by-design',
@@ -179,6 +180,12 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
+  intake_inbound_sanitized: {
+    type: 'intake_inbound_sanitized',
+    sourceRef: 'owner/repo#12',
+    neutralizations: [{ category: 'agent-directive', count: 1 }],
+    digest: 'a'.repeat(64),
+  },
   project_setup: { type: 'project_setup', ran: false, reason: 'marker-valid' },
   setup_repair: {
     type: 'setup_repair',

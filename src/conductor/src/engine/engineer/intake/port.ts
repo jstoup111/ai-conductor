@@ -1,12 +1,19 @@
 // engineer/intake/port.ts — Envelope contract + parseEnvelope + IntakePort interface
 // FR-13, FR-16, ADR-009, C5.
 
+import type { InboundNeutralization } from './sanitize-inbound.js';
+
 // ─── Envelope ────────────────────────────────────────────────────────────────
 
 /** Status values for an Envelope's lifecycle. */
 export type EnvelopeStatus = 'pending' | 'routed' | 'deciding' | 'done';
 
 const VALID_STATUSES: ReadonlySet<string> = new Set(['pending', 'routed', 'deciding', 'done']);
+
+export interface EnvelopeInbound {
+  neutralizations: InboundNeutralization[];
+  digest: string;
+}
 
 /**
  * Envelope — the sole data contract crossing the intake port boundary.
@@ -31,6 +38,8 @@ export interface Envelope {
   receivedAt: string;
   /** Optional GitHub label names, e.g. for size-label based complexity seeding. */
   labels?: string[];
+  /** Optional summary of sanitization applied at an untrusted inbound seam. */
+  inbound?: EnvelopeInbound;
 }
 
 // ─── EmptyEnvelopeTextError ───────────────────────────────────────────────────
@@ -107,6 +116,7 @@ export function parseEnvelope(input: Record<string, unknown>): Envelope {
   // ── optional hintRepo ─────────────────────────────────────────────────────
   const hintRepo =
     'hintRepo' in input && typeof input.hintRepo === 'string' ? input.hintRepo : undefined;
+  const inbound = parseInbound(input.inbound);
 
   return {
     id: input.id as string,
@@ -116,7 +126,28 @@ export function parseEnvelope(input: Record<string, unknown>): Envelope {
     hintRepo,
     status: input.status as EnvelopeStatus,
     receivedAt: input.receivedAt as string,
+    inbound,
   };
+}
+
+function parseInbound(value: unknown): EnvelopeInbound | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.digest !== 'string' || !Array.isArray(candidate.neutralizations)) return undefined;
+  const neutralizations: InboundNeutralization[] = [];
+  for (const item of candidate.neutralizations) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+    const entry = item as Record<string, unknown>;
+    if (!isInboundCategory(entry.category) || typeof entry.count !== 'number' || !Number.isInteger(entry.count) || entry.count < 0) {
+      return undefined;
+    }
+    neutralizations.push({ category: entry.category as InboundNeutralization['category'], count: entry.count });
+  }
+  return { digest: candidate.digest, neutralizations };
+}
+
+function isInboundCategory(value: unknown): value is InboundNeutralization['category'] {
+  return value === 'agent-directive' || value === 'role-tag' || value === 'system-prompt' || value === 'tool-call' || value === 'armor-lookalike';
 }
 
 // ─── ReportMeta ───────────────────────────────────────────────────────────────

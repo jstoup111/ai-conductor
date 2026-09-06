@@ -22,7 +22,7 @@
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
@@ -385,12 +385,13 @@ async function persistClaimRecord(
   engDir: string,
   sourceRef: string | null | undefined,
   body: string | null | undefined,
+  inbound?: Envelope['inbound'],
 ): Promise<void> {
   if (!sourceRef) return;
   try {
     const dir = join(engDir, 'claims');
     await mkdir(dir, { recursive: true });
-    await writeFile(claimRecordPath(engDir, sourceRef), JSON.stringify({ sourceRef, body: body ?? null }), 'utf8');
+    await writeFile(claimRecordPath(engDir, sourceRef), JSON.stringify({ sourceRef, body: body ?? null, inbound }), 'utf8');
   } catch {
     // Best-effort — degrade to no staging at worktree time (matches the chat-origin
     // negative path in worktree-authoring.ts).
@@ -405,12 +406,16 @@ async function persistClaimRecord(
 async function loadClaimRecord(
   engDir: string,
   sourceRef: string,
-): Promise<{ sourceRef: string; body: string | null } | null> {
+): Promise<{ sourceRef: string; body: string | null; inbound?: Envelope['inbound'] } | null> {
   try {
     const raw = await readFile(claimRecordPath(engDir, sourceRef), 'utf8');
-    const parsed = JSON.parse(raw) as { sourceRef?: string; body?: string | null };
+    const parsed = JSON.parse(raw) as { sourceRef?: string; body?: string | null; inbound?: Envelope['inbound'] };
     if (typeof parsed.sourceRef !== 'string') return null;
-    return { sourceRef: parsed.sourceRef, body: typeof parsed.body === 'string' ? parsed.body : null };
+    return {
+      sourceRef: parsed.sourceRef,
+      body: typeof parsed.body === 'string' ? parsed.body : null,
+      inbound: parsed.inbound,
+    };
   } catch {
     return null;
   }
@@ -917,10 +922,12 @@ export async function dispatchEngineer(
       // explicit --body always wins. A missing/unreadable record degrades to no
       // staging (matches worktree-authoring.ts's chat-origin negative path) — never throws.
       let resolvedBody = body;
-      if (sourceRef && resolvedBody == null) {
+      let inbound: Envelope['inbound'];
+      if (sourceRef) {
         const engDir = engineerDir ?? resolveEngineerDir({});
         const record = await loadClaimRecord(engDir, sourceRef);
-        resolvedBody = record?.body ?? undefined;
+        if (resolvedBody == null) resolvedBody = record?.body ?? undefined;
+        inbound = record?.inbound;
       }
 
       try {
@@ -928,6 +935,17 @@ export async function dispatchEngineer(
           sourceRef,
           body: resolvedBody,
         });
+        // This is deliberately worktree-local evidence: the engineer store and
+        // feature event spine are not alternative destinations for an intake fact.
+        if (sourceRef && inbound) {
+          try {
+            const path = join(wt.worktreePath, '.pipeline', 'intake-events.jsonl');
+            await mkdir(join(wt.worktreePath, '.pipeline'), { recursive: true });
+            await appendFile(path, `${JSON.stringify({ type: 'intake_inbound_sanitized', sourceRef, ...inbound, ts: new Date().toISOString() })}\n`, 'utf8');
+          } catch (err) {
+            printErr(`engineer worktree: could not append inbound intake evidence: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         print(JSON.stringify({ kind: 'worktree', ...wt }));
         return 0;
       } catch (err: unknown) {
@@ -1269,7 +1287,7 @@ export async function dispatchEngineer(
       }
       // FR-13: persist a claim record so `engineer worktree --source-ref` can later
       // resolve the Desired-outcome body without the skill ever passing --body itself.
-      await persistClaimRecord(engDir, envelope.sourceRef, envelope.text);
+      await persistClaimRecord(engDir, envelope.sourceRef, envelope.text, envelope.inbound);
       print(
         JSON.stringify({
           kind: 'claim',
@@ -1277,6 +1295,7 @@ export async function dispatchEngineer(
           body: envelope.text,
           source: envelope.source,
           sourceRef: envelope.sourceRef,
+          inbound: envelope.inbound,
         }),
       );
       return 0;
