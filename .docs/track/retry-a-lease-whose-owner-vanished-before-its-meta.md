@@ -1,0 +1,13 @@
+# Track: Retry a lease whose owner vanished before its metadata read
+
+Track: technical
+
+Scope boundary: Small fix for #2172, approved by the operator on 2026-09-06 (delegated). Scope is the first owner-metadata read inside the conduct-state lease recovery path and how the acquire loop retries when that metadata is absent. Stale recovery claims, claim-pid liveness, the full-suite lock, lease telemetry, and any change to the wait-budget defaults or the store call sites are outside this slice.
+
+This is an internal engine correctness fix with no product requirement; acceptance criteria live in technical stories rather than a PRD.
+
+The operator approved distinguishing an absent owner file from an unreadable one, rather than reusing the existing immediate-retry `vanished` outcome, on 2026-09-06 (delegated). Reusing `vanished` would retry with no delay, so a lease directory that never gains owner metadata would spin the acquire loop for the whole wait budget; routing the absent case through the ordinary retry delay keeps the contention path bounded.
+
+Scope check: A — consumer-facing engine behavior (the lease guards every installed project's own state mutations; no repo-only signal fires and no daemon or self-host gate is involved), but it needs no `HARNESS.md` rule and no documentation page because it adds no flag, config key, or documented failure mode; B — n/a (no new skill); C — provider-agnostic. No catalog registration is required. Event spine: this adds no watcher, sidecar file, ledger, stamped timestamp, or out-of-band signal, so no channel is introduced; the existing in-process `onRecoveryDiagnostic` seam is unchanged in shape.
+
+Verified foundation: `conduct-state-lease.ts` declares `recoverDeadOwner` with the outcome union `recovered | occupied | vanished | refused` and, at lines 183-189, catches every failure of the first `filesystem.readOwner` by reporting an `ownership_changed` diagnostic and returning `refused` with "owner metadata is unavailable"; the acquire loop maps `refused` to `ok:false, kind:'recovery_refused'`. The same function already treats an ENOENT from `writeRecoveryClaim` as `vanished` through the module-level `isMissing` helper, and the loop retries a `vanished` outcome without paying the retry delay. Three call sites construct the lease — the filesystem conduct-state store, the intake ledger, and build-review dispositions — so ordinary daemon-plus-CLI contention reaches this path. `conduct-state-lease.test.ts` already builds an in-memory `sharedLeaseFilesystem` whose `readOwner` throws ENOENT for a missing file and whose write helpers refuse a file whose parent directory is gone, which is the seam these stories need.
