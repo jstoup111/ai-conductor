@@ -82,6 +82,9 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
       // Atomic state replacement creates a unique same-directory temporary
       // file before rename; it is unrelated to the daemon pidfile.
       'engine/filesystem-conduct-state-store.ts',
+      // Engine repair state uses the same unique temporary-file publication
+      // pattern; it does not participate in daemon process ownership.
+      'engine/engine-state-store.ts',
     ];
 
     for (const file of allTs) {
