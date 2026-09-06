@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-06T19:50:12.763Z
 Slug: build-review-rubrics-need-a-post-join-adjudicator-
 Class: protected-artifact
 Halting step: test_suite
