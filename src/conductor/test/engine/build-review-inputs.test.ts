@@ -247,6 +247,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         targets: [['changed assertion']],
         candidates: [],
       });
+      const evidence = inputs.sourceSnapshot.testScopeEvidence?.find((entry) => entry.source.fileName === 'test/widget.test.ts' && entry.source.side === 'head' && entry.content.includes('changed assertion'));
+      expect(evidence).toMatchObject({ startLine: 2, endLine: 2 });
     });
 
     it('memoizes frozen side-effect source and preserves an injected analyzer failure as a marked candidate', async () => {
