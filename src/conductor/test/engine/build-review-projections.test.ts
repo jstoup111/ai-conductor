@@ -1,3 +1,4 @@
+// Covers: task:10
 import { describe, expect, it } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -10,6 +11,11 @@ import {
   type BuildReviewProjectionSource,
   type TestQualityProjection,
 } from '../../src/engine/build-review-projections.js';
+import type {
+  BuildReviewPinnedScopeEvidence,
+} from '../../src/engine/build-review-inputs.js';
+import type { BuildReviewTestScope } from '../../src/engine/build-review-test-scope.js';
+import { analyzeBuildReviewTestScope } from '../../src/engine/build-review-test-scope.js';
 
 // The reduced-coverage publication contract and cache-identity behaviour are
 // covered by test/engine/build-review-cache.test.ts and the coordinator tests;
@@ -84,7 +90,124 @@ function digestOf(src: Source): string {
   return deriveBuildReviewRubricProjections(src).testQuality.digest;
 }
 
+function typedScopeWithUnchangedSiblings(siblingCount: number): BuildReviewTestScope {
+  const source = (changed: boolean) => [
+    '// Covers: task:10',
+    `it('changed assertion', () => expect(true).toBe(${changed ? 'false' : 'true'}));`,
+    ...Array.from({ length: siblingCount }, (_, index) => `it('unchanged sibling ${index + 1}', () => expect(true).toBe(true));`),
+  ].join('\n');
+  return analyzeBuildReviewTestScope({
+    base: { source: { fileName: 'test/a.test.ts', bytes: Buffer.from(source(false)) }, storiesText: '', planText: '### Task 10: Scope\n' },
+    head: { source: { fileName: 'test/a.test.ts', bytes: Buffer.from(source(true)) }, storiesText: '', planText: '### Task 10: Scope\n' },
+  });
+}
+
+/** Frozen typed assembly output: one directly changed declaration and no sibling targets. */
+function scopedSource(overrides: {
+  readonly bindingId?: string;
+  readonly helperContent?: string;
+  readonly analysisVersion?: string;
+  readonly provenanceHeadSha?: string;
+  readonly provenanceStartedAt?: string;
+} = {}): Source {
+  const {
+    bindingId = '10',
+    helperContent = 'export const helper = 1;',
+    analysisVersion = 'test-scope-v1',
+    provenanceHeadSha = 'head',
+    provenanceStartedAt = '2026-08-15T11:00:00.000Z',
+  } = overrides;
+  const declaration = {
+    kind: 'test' as const,
+    titleChain: ['changed assertion'],
+    modifierChain: [],
+    occurrence: 0,
+    span: { start: 24, end: 72 },
+    argumentsSpan: { start: 27, end: 69 },
+    bodySpan: { start: 50, end: 69 },
+    change: 'modified' as const,
+  };
+  const testScope: BuildReviewTestScope = {
+    changedDeclarations: [declaration],
+    targets: [{
+      declaration,
+      bindings: [{
+        kind: 'bound',
+        target: declaration,
+        marker: { span: { start: 0, end: 18 }, reference: { kind: 'task', id: bindingId } },
+        owner: { kind: 'test', association: 'leading-comment', declaration },
+      }],
+      associationChanges: [],
+    }],
+    candidates: [{
+      declaration,
+      markers: [],
+      associationChanges: [],
+      reasons: ['uncertain-association'],
+    }],
+    notes: [],
+    affectedGroups: [],
+    sharedSources: [],
+  };
+  const evidence: readonly BuildReviewPinnedScopeEvidence[] = [{
+    id: 'source:head:src/helper.ts:0:24',
+    source: { fileName: 'src/helper.ts', side: 'head' },
+    region: { start: 0, end: helperContent.length },
+    content: helperContent,
+    contentHash: `sha256:${helperContent}`,
+  }];
+
+  return withProof(withSnapshot(source(), {
+    headSha: provenanceHeadSha,
+    testScope,
+    testScopeEvidence: evidence,
+    testScopeAnalysisVersion: analysisVersion,
+  } as Partial<Source['inputs']['sourceSnapshot']>), { startedAt: provenanceStartedAt });
+}
+
 describe('build-review rubric projections', () => {
+  it('projects the frozen v3 test scope compactly and keeps runner selectors separate from review targets', () => {
+    const projection = deriveBuildReviewRubricProjections(scopedSource()).testQuality as unknown as Record<string, unknown>;
+
+    expect(projection.projectionVersion).toBe('v3');
+    expect(projection.runnerSelectors).toEqual(['test/a.test.ts', 'test/b.test.ts']);
+    expect(projection.testScope).toMatchObject({
+      analysisVersion: 'test-scope-v1',
+      targets: [{
+        declaration: { titleChain: ['changed assertion'], occurrence: 0 },
+        bindings: [{ marker: { reference: { id: '10' } } }],
+      }],
+      candidates: [{ reasons: ['uncertain-association'] }],
+      evidence: [{ id: 'source:head:src/helper.ts:0:24', content: 'export const helper = 1;' }],
+    });
+    expect((projection.testScope as { targets: readonly unknown[] }).targets).toHaveLength(1);
+  });
+
+  it('does not inflate direct review targets when frozen input adds unchanged sibling titles', () => {
+    const directOnly = deriveBuildReviewRubricProjections(withSnapshot(scopedSource(), {
+      testScope: typedScopeWithUnchangedSiblings(0),
+    })).testQuality as unknown as Record<string, unknown>;
+    const surroundedByUnchangedSiblings = deriveBuildReviewRubricProjections(withSnapshot(scopedSource(), {
+      testScope: typedScopeWithUnchangedSiblings(724),
+    })).testQuality as unknown as Record<string, unknown>;
+
+    expect((directOnly.testScope as { targets: readonly unknown[] }).targets).toEqual(
+      (surroundedByUnchangedSiblings.testScope as { targets: readonly unknown[] }).targets,
+    );
+    expect((surroundedByUnchangedSiblings.testScope as { targets: readonly { declaration: { titleChain: readonly string[] } }[] }).targets)
+      .toMatchObject([{ declaration: { titleChain: ['changed assertion'] } }]);
+  });
+
+  it('binds v3 semantic identity to frozen binding, pinned helper content, and analysis schema while ignoring provenance', () => {
+    const baseline = deriveBuildReviewRubricProjections(scopedSource()).testQuality;
+
+    expect(deriveBuildReviewRubricProjections(scopedSource({ bindingId: '7.5' })).testQuality.digest).not.toBe(baseline.digest);
+    expect(deriveBuildReviewRubricProjections(scopedSource({ helperContent: 'export const helper = 2;' })).testQuality.digest).not.toBe(baseline.digest);
+    expect(deriveBuildReviewRubricProjections(scopedSource({ analysisVersion: 'test-scope-v2' })).testQuality.digest).not.toBe(baseline.digest);
+    expect(deriveBuildReviewRubricProjections(scopedSource({ provenanceHeadSha: 'head-rebased' })).testQuality.digest).toBe(baseline.digest);
+    expect(deriveBuildReviewRubricProjections(scopedSource({ provenanceStartedAt: '2026-08-16T11:00:00.000Z' })).testQuality.digest).toBe(baseline.digest);
+  });
+
   it('derives the closed test-quality projection by reference, never embedding the raw diff body', () => {
     const projections = deriveBuildReviewRubricProjections(source());
     const projection: TestQualityProjection = projections.testQuality;
@@ -92,10 +215,10 @@ describe('build-review rubric projections', () => {
     expect(Object.keys(projections)).toEqual(['testQuality']);
     expect(Object.keys(projection).sort()).toEqual([
       'changedFiles', 'changedTestSelectors', 'changedTestTitles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
-      'mergeBase', 'preflight', 'projectionVersion', 'revertedProductionManifest', 'rubric', 'snapshotDigest', 'testSuiteProof', 'unresolvedMarkers',
+      'mergeBase', 'preflight', 'projectionVersion', 'revertedProductionManifest', 'rubric', 'runnerSelectors', 'snapshotDigest', 'testScope', 'testSuiteProof', 'unresolvedMarkers',
     ]);
     expect(projection).toMatchObject({
-      rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
+      rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
       mergeBase: 'base', headSha: 'head',
       changedFiles: [{ path: 'src/a.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 2, newStart: 1, newCount: 3, contentHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) }] }],
       changedTestTitles: [{ selector: 'test/a.test.ts', titleText: 'a > persists', staticExtractionFallback: false }],
