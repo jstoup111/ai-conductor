@@ -191,7 +191,16 @@ export function applyTmpdirTeardownDecision(
 export function applyRunRootSweepDecision(
   result: StaleRunTmpRootsResult,
   realTmpdir: string,
-  logger: (message: string) => void = console.error
+  logger: (message: string) => void = console.error,
+  options: {
+    /**
+     * Report every retained root with its reason and deciding window. Off
+     * for an ordinary run, which must stay silent when nothing is reaped;
+     * on when the operator overrides the staleness window and needs to see
+     * which roots the override kept (its own root as `own-root` included).
+     */
+    reportRetained?: boolean;
+  } = {}
 ): void {
   try {
     if (result.reaped.length > 0) {
@@ -209,6 +218,7 @@ export function applyRunRootSweepDecision(
       );
     }
 
+    if (!options.reportRetained) return;
     for (const retained of result.retained) {
       logger(
         `tmpdir-leak-guard: retained run root ${join(realTmpdir, retained.name)} — ` +
@@ -325,10 +335,8 @@ export default async function setup() {
   // real tmpdir before the reap for exactly the same reason.
   process.env.TMPDIR = realTmpdir;
   const staleAfterOverride = Number(process.env.AI_CONDUCTOR_TEST_TMP_ROOT_STALE_AFTER_MS);
-  const staleAfterMs =
-    Number.isFinite(staleAfterOverride) && staleAfterOverride >= 0
-      ? staleAfterOverride
-      : RUN_TMP_ROOT_STALE_AFTER_MS;
+  const staleAfterOverridden = Number.isFinite(staleAfterOverride) && staleAfterOverride >= 0;
+  const staleAfterMs = staleAfterOverridden ? staleAfterOverride : RUN_TMP_ROOT_STALE_AFTER_MS;
   const runRootSweep = await sweepStaleRunTmpRoots(realTmpdir, {
     ownRoot: runTmpRoot,
     now: Date.now(),
@@ -341,7 +349,7 @@ export default async function setup() {
       if (!message.startsWith(RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX)) console.error(message);
     },
   });
-  applyRunRootSweepDecision(runRootSweep, realTmpdir);
+  applyRunRootSweepDecision(runRootSweep, realTmpdir, console.error, { reportRetained: staleAfterOverridden });
 
   // Tmpdir leak guard (#1112), part 2 of 2 — the GUARD. Baseline the REAL
   // tmpdir's top-level entries AFTER the stale-root sweep above and still

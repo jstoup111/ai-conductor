@@ -65,7 +65,26 @@ describe('applyRunRootSweepDecision', () => {
     ).not.toThrow();
   });
 
-  it('reports each retained root with its reason and deciding window', () => {
+  it('stays silent about retained roots on an ordinary run that reaps nothing', () => {
+    const logger = vi.fn();
+
+    applyRunRootSweepDecision(
+      {
+        reaped: [],
+        retained: [
+          { name: 'ai-conductor-vitest-run-own', reason: 'own-root', windowMs: 900_000 },
+          { name: 'ai-conductor-vitest-run-recent', reason: 'unmarked-recent', windowMs: 86_400_000 },
+        ],
+        failures: [],
+      },
+      '/tmp',
+      logger
+    );
+
+    expect(logger).not.toHaveBeenCalled();
+  });
+
+  it('reports each retained root with its reason and deciding window under the staleness override', () => {
     const logger = vi.fn();
 
     applyRunRootSweepDecision(
@@ -78,7 +97,8 @@ describe('applyRunRootSweepDecision', () => {
         failures: [],
       },
       '/tmp',
-      logger
+      logger,
+      { reportRetained: true }
     );
 
     expect(logger).toHaveBeenCalledTimes(2);
