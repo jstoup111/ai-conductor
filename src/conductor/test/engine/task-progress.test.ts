@@ -1,3 +1,4 @@
+// Covers: task:4
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,8 @@ import {
   dispatchTaskCommand,
   runTaskStart,
 } from '../../src/engine/task-cli.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 
 describe('task-progress', () => {
   let dir: string;
@@ -335,6 +338,95 @@ describe('task-progress', () => {
       const resolved = await resolveTaskIds(dir, ['1', '2']);
 
       expect(resolved).toEqual(new Set(['1']));
+    });
+  });
+
+  describe('current repair freshness', () => {
+    it('keeps pre-reopen trailer and completed-row evidence unresolved at the build boundary', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '### Task 2: repaired task\n');
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '2', status: 'completed' }],
+      }));
+      await writeFile(join(dir, 'old.txt'), 'old');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'old completion\n\nTask: 2'], { cwd: dir });
+      const boundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+
+      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+      const admitted = await repairs.admit({
+        id: 'reopened-round',
+        planPath: '.docs/plans/feature.md',
+        taskIds: ['T2'],
+        source: { findingId: 'finding-1', authority: 'build_review', instruction: 'repair it' },
+        baseline: { head: boundary, tree: 'tree-before-reopen', resolvedTaskIds: ['T2'] },
+      });
+      if (!admitted.ok) throw new Error(admitted.message);
+
+      const completion = await checkStepCompletion(dir, 'build', {
+        projectRoot: dir,
+        planPath: join(dir, '.docs', 'plans', 'feature.md'),
+      });
+
+      expect(completion).toMatchObject({ done: false, reason: expect.stringMatching(/2/) });
+    });
+
+    it('accepts a canonical task alias only when its trailer is after the repair boundary', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await writeFile(join(dir, 'baseline.txt'), 'baseline');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'baseline'], { cwd: dir });
+      const boundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+      await repairs.admit({
+        id: 'post-boundary-round',
+        planPath: '.docs/plans/feature.md',
+        taskIds: ['T2'],
+        source: { findingId: 'finding-2', authority: 'build_review', instruction: 'repair it' },
+        baseline: { head: boundary, tree: 'tree', resolvedTaskIds: [] },
+      });
+      await writeFile(join(dir, 'repair.txt'), 'repair');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'repair\n\nTask: T2'], { cwd: dir });
+
+      expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
+    });
+
+    it('retains a persisted current closure when its historical boundary is unavailable', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+      const admitted = await repairs.admit({
+        id: 'closed-round',
+        planPath: '.docs/plans/feature.md',
+        taskIds: ['2'],
+        source: { findingId: 'finding-3', authority: 'build_review', instruction: 'repair it' },
+        baseline: { head: 'no-such-commit', tree: 'tree', resolvedTaskIds: [] },
+      });
+      if (!admitted.ok) throw new Error(admitted.message);
+      await repairs.close({
+        planPath: '.docs/plans/feature.md',
+        taskId: '2',
+        obligationId: admitted.obligation.id,
+        evidence: { kind: 'task-done', value: 'current' },
+      });
+
+      expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
     });
   });
 

@@ -134,6 +134,11 @@ export interface EvidenceRangeResult {
   warnings: string[];
 }
 
+/** Strict repair evidence never falls back to older branch history. */
+export type StrictEvidenceRangeResult =
+  | { kind: 'available'; commits: CommitWithTrailers[] }
+  | { kind: 'unavailable'; reason: string };
+
 /**
  * Resolve the `origin/<default>` ref to evaluate evidence against.
  *
@@ -371,6 +376,48 @@ export async function listCommitsWithTrailers(
     .filter((record) => record.length > 0)
     .map(parseCommitRecord)
     .filter((item): item is CommitWithTrailers => item !== null);
+}
+
+/**
+ * Reads only commits made after a persisted repair boundary. Unlike the
+ * ordinary evidence-range ladder, an unavailable or non-ancestor boundary is
+ * a typed refusal: historical evidence must not close an open repair.
+ */
+export async function listCommitsWithTrailersAfterRepairBoundary(
+  projectRoot: string,
+  boundary: string,
+): Promise<StrictEvidenceRangeResult> {
+  const commit = await execa('git', ['rev-parse', '--verify', `${boundary}^{commit}`], {
+    cwd: projectRoot,
+    reject: false,
+  });
+  if (commit.exitCode !== 0 || !commit.stdout.trim()) {
+    return { kind: 'unavailable', reason: `repair boundary ${boundary} is unavailable` };
+  }
+  const verifiedBoundary = commit.stdout.trim();
+  const ancestor = await execa('git', ['merge-base', '--is-ancestor', verifiedBoundary, 'HEAD'], {
+    cwd: projectRoot,
+    reject: false,
+  });
+  if (ancestor.exitCode !== 0) {
+    return { kind: 'unavailable', reason: `repair boundary ${verifiedBoundary} is not an ancestor of HEAD` };
+  }
+  const log = await execa('git', ['log', `--format=${COMMIT_RECORD_FORMAT}`, `${verifiedBoundary}..HEAD`], {
+    cwd: projectRoot,
+    reject: false,
+  });
+  if (log.exitCode !== 0 || typeof log.stdout !== 'string') {
+    return { kind: 'unavailable', reason: `repair boundary ${verifiedBoundary} could not be read` };
+  }
+  return {
+    kind: 'available',
+    commits: log.stdout
+      .split('\x1e')
+      .map((record) => record.trim())
+      .filter(Boolean)
+      .map(parseCommitRecord)
+      .filter((item): item is CommitWithTrailers => item !== null),
+  };
 }
 
 /**
