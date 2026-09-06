@@ -462,6 +462,27 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
     listing. Never dump an unfiltered file list or an unbounded log.
   - Read source by symbol or line range (`nl -ba <file> | sed -n 'A,Bp'`), not whole engine files.
   - If you must choose, spend the budget on the shipped source under review, not on policy prose.
+- **Delegated evidence gathering.** The window that matters is the reviewer's own: it holds the
+  verdict. Keep it for judgement and push the reading into subagents through the host's facility
+  (Claude Code: the Agent tool; Codex: `collaboration.spawn_agent` / `collaboration.wait_agent`),
+  the same way §"Provider-native delegation" already allows:
+  - One subagent per enabled check cluster: the APPROVED-ADR set (one per ADR when several apply),
+    the diagram set, the changed-primitive reachability sweep (split by module when the diff is
+    wide), and the plan-gap check against the sealed stories.
+  - Each subagent returns a **digest**, not a transcript: the governing clause quoted verbatim with
+    its path, the shipped code quoted verbatim with `file:line`, the caller chain for
+    reachability, and a candidate disposition with confidence. Cap a digest at roughly two thousand
+    words; anything larger is the subagent forwarding its reads instead of doing them.
+  - The reviewer grades from the digests, re-reads only the lines it needs to settle a disagreement,
+    and owns every verdict. A subagent never writes the report, the verdict, or an ADR.
+  - **Model tiers.** The reviewer stays on this skill's pinned tier; do not trade it down to pay for
+    fan-out. Reading and extraction subagents run on the host's mid tier
+    (Claude Code `model="sonnet"`; Codex uses its configured default). Step a subagent up to the reviewer's
+    tier only when its task is adjudication — an adversarial re-check of one candidate BLOCKED
+    finding before it is recorded.
+  - Subagents inherit the context budget above. A subagent that cannot finish within it reports
+    what it covered and what it did not; the reviewer records the uncovered surface as unverified
+    rather than silently passing it.
 - Do NOT re-run §2/§3/§5 (feasibility/complexity/domain pre-checks) — those belong to the DECIDE
   pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
   deliberately cheap.
