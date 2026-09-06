@@ -55,6 +55,7 @@ describe('rejected remediation dispositions', () => {
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
     emitter.on('remediation_disposition_rejected', (event) => { events.push(event); });
+    emitter.on('gate_blocked', (event) => { events.push(event); });
     const outcome = await remediate(emitter, [
       { id: 'AB-1', disposition: 'unknown-disposition' },
       { id: 'AB-2', disposition: 'unknown-disposition' },
@@ -68,7 +69,25 @@ describe('rejected remediation dispositions', () => {
     expect(events).toMatchObject([
       { type: 'remediation_disposition_rejected', gapId: 'AB-1', disposition: 'unknown-disposition' },
       { type: 'remediation_disposition_rejected', gapId: 'AB-2', disposition: 'unknown-disposition' },
+      { type: 'gate_blocked', step: 'remediate', reason: expect.stringContaining('AB-1') },
     ]);
+  });
+
+  it('reports a taskless build refusal through the same gate-blocked event', async () => {
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('gate_blocked', (event) => { events.push(event); });
+
+    const outcome = await remediate(emitter, [
+      { id: 'AB-1', disposition: 'build', tasks: [] },
+    ], 'architecture_review_as_built');
+
+    expect(outcome.kind).toBe('halt');
+    expect(events).toMatchObject([{
+      type: 'gate_blocked',
+      step: 'remediate',
+      reason: expect.stringContaining('no dispatchable build work'),
+    }]);
   });
 
   it('routes recognized gaps and reports only the dropped gap', async () => {
