@@ -9,6 +9,7 @@ import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import {
   completeTaskDoneWhen,
+  openRepairForTask,
   type DoneWhenEvidenceInput,
 } from './task-progress.js';
 import { writeHaltMarker } from './halt-marker.js';
@@ -244,9 +245,18 @@ export async function runTaskDone(
   try {
     stampContent = await readFile(stampPath, 'utf-8');
   } catch (err) {
-    // Legacy closes remain idempotent. An explicitly reopened task must still
-    // satisfy its current proof boundary rather than silently retaining an
-    // open durable repair because its marker was interrupted or removed.
+    // Legacy closes remain idempotent: a never-reopened task with no stamp is
+    // a no-op exit 0 that never rewrites task-status.json. Only an explicitly
+    // reopened task must still satisfy its current proof boundary rather than
+    // silently retaining an open durable repair because its marker was
+    // interrupted or removed. Malformed present repair state is a refusal,
+    // not legacy absence.
+    const repair = await openRepairForTask(projectRoot, id);
+    if (repair.kind === 'unavailable') {
+      console.error(`[task-cli] cannot close task ${id}: ${repair.reason}`);
+      return 1;
+    }
+    if (repair.kind === 'none') return 0;
     const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);
     if (completion.kind === 'refused') {
       console.error(completion.message);

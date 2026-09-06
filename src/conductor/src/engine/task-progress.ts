@@ -185,6 +185,25 @@ async function readOpenRepairState(projectRoot: string): Promise<OpenRepairState
   return obligations.length === 0 ? { kind: 'none' } : { kind: 'available', obligations };
 }
 
+export type OpenRepairLookup =
+  | { kind: 'none' }
+  | { kind: 'open'; obligationId: string }
+  | { kind: 'unavailable'; reason: string };
+
+/**
+ * Whether `id` currently carries an open repair obligation in the active plan.
+ * `unavailable` distinguishes malformed present control state from legacy
+ * absence so callers refuse instead of silently skipping an open repair.
+ */
+export async function openRepairForTask(projectRoot: string, id: string): Promise<OpenRepairLookup> {
+  const state = await readOpenRepairState(projectRoot);
+  if (state.kind === 'unavailable') return { kind: 'unavailable', reason: state.reason };
+  if (state.kind === 'none') return { kind: 'none' };
+  const canonicalId = canonicalTaskId(id);
+  const open = state.obligations.find((obligation) => obligation.tasks[canonicalId]?.status === 'open');
+  return open ? { kind: 'open', obligationId: open.id } : { kind: 'none' };
+}
+
 /**
  * Distinct raw `Task:` trailer values across commits on the current branch
  * (per `listCommitsWithTrailers`'s merge-base-relative range). Fails soft to
@@ -253,16 +272,16 @@ export async function completeTaskDoneWhen(
   suppliedEvidence: DoneWhenEvidenceInput[],
 ): Promise<TaskDoneWhenCloseResult> {
   const pipelineDir = join(projectRoot, '.pipeline');
-  let activePlanPath: string | undefined;
-  try {
-    const rawState = await readFile(join(pipelineDir, 'engine-state.json'), 'utf-8');
-    const state = JSON.parse(rawState) as { activePlanPath?: unknown };
-    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
-      activePlanPath = state.activePlanPath;
-    }
-  } catch {
-    // No engine-recorded plan is the legacy close path.
+  // A missing engine state is the legacy close path. A present but unreadable
+  // control document is a typed refusal (AB-1): the close must not fail open
+  // and clear the marker on top of malformed repair state.
+  const engineState = await readEngineState(join(pipelineDir, 'engine-state.json'));
+  if (!engineState.ok) {
+    return { kind: 'refused', message: `[task-cli] cannot close task ${id}: ${engineState.message}` };
   }
+  const recordedPlanPath = engineState.value.activePlanPath;
+  const activePlanPath =
+    typeof recordedPlanPath === 'string' && recordedPlanPath.trim() ? recordedPlanPath : undefined;
   if (!activePlanPath) return { kind: 'legacy' };
 
   let planText: string;
