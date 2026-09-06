@@ -1,0 +1,15 @@
+# Track: Stamp the resolved model into audit-trail step records
+
+Track: technical
+
+Scope boundary: Small fix for #640, approved by the operator on 2026-09-06 (delegated). Record the model that produced each completed step dispatch, and the provider that ran it, on the audit-trail record the engine already writes for that step. Nothing consumes the stamp: no gate, no verdict, no enforcement, no dashboard, and no change to model selection. The issue's optional commit-trailer extension is explicitly outside this slice — it touches separate trailer machinery and would not be a Small change.
+
+This is an internal attribution correction to an existing engine ledger; acceptance criteria live in technical stories rather than a PRD.
+
+The operator-delegated decision on 2026-09-06 was to record only the model that actually produced the completed work, not the escalated model an upcoming retry attempt will use. A single `model` key whose meaning is "the model that authored this step's result" stays unambiguous; mixing in a forward-looking escalation value would make the same key mean two different things on different lines.
+
+Scope check: A — consumer-facing (the audit-trail writer is wired at both engine entry points and runs in any repository that installs the harness, with or without a daemon; no self-host, release-gate, or repository-private convention is touched); B — n/a (no new skill); C — provider-agnostic (both values are read from provider-neutral fields on the existing event, and the provider is recorded as data rather than branched on). Documentation therefore belongs in `docs/reference/`, and no catalog registration is required.
+
+Event spine: this adds no channel. The audit trail is an existing declared sink of the one spine — `AuditTrailWriter.subscribe` registers on `ConductorEventEmitter` for the allowlisted types in `EVENT_SINKS`, and `step_completed` is already declared `audit: true`. The concern is an occurrence the bus already carries: `step_completed` already carries `model` and `actualProvider`. No union member is added, no sink declaration changes, no sidecar file appears, and no value is stamped into an artifact to stand in for an event — the writer simply stops discarding two fields it is already handed. Verdict: extend the existing consumer's projection; exception: none required.
+
+Verified foundation: `src/conductor/src/types/events.ts:316-331` declares `step_completed` with `model?`, `preferredProvider?`, and `actualProvider?`. `src/conductor/src/engine/step-runners.ts:1363` populates that `model` from the runner's `resolvedModel`, and `src/conductor/src/engine/conductor.ts:11411` forwards it onto the bus. `src/conductor/src/engine/event-sinks.ts:41` declares `step_completed` audited. `src/conductor/src/engine/audit-trail.ts:27-53` defines `AuditRecord` with no model or provider field, and its `step_completed` case at `:287-293` returns a bare `gate_pass` record — or `null` when a gate verdict was already recorded for that step — so the model the engine already resolved is discarded at the last hop. The resolved model is therefore present and provable at the seam; only the projection loses it.
