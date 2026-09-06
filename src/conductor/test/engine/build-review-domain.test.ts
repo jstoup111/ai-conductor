@@ -1,3 +1,4 @@
+// Covers: task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
@@ -8,6 +9,7 @@ import {
   makeBuildReviewDispatchFailure,
   mapBuildReviewCoordinatorFailureReason,
   parseBuildReviewCanonicalPathReference,
+  parseBuildReviewCandidateScopeResolutions,
   parseBuildReviewDispatchFailure,
   parseBuildReviewFindingAnchor,
   parseBuildReviewInfrastructureFailure,
@@ -61,16 +63,17 @@ describe('build-review domain', () => {
     expect(parseBuildReviewRubricContractVersion(3)).toBeUndefined();
   });
 
-  it('accepts canonical repository-relative paths and refuses absolute, traversal, dot-relative, and prose forms', () => {
+  it('accepts canonical repository-relative paths and refuses absolute, traversal, and dot-relative forms', () => {
     for (const path of ['src/a.ts', '.docs/plans/x.md', 'a/.hidden', 'src/@scope/x+y-z_1.ts', 'README']) {
       expect(parseBuildReviewCanonicalPathReference(path), path).toBe(path);
     }
     for (const path of [
       '/abs/x.ts', '../x.ts', 'a/../b.ts', './a.ts', 'a/./b.ts',
-      ' src/a.ts', 'src/a.ts ', '`src/a.ts`', 'The file src/a.ts', 'a b', '-x', '', 42, null,
+      ' src/a.ts', 'src/a.ts ', '`src/a.ts`', '-x', '', 42, null,
     ]) {
       expect(parseBuildReviewCanonicalPathReference(path), JSON.stringify(path)).toBeUndefined();
     }
+    expect(parseBuildReviewCanonicalPathReference('test/space containing name.test.ts')).toBe('test/space containing name.test.ts');
   });
 
   it('rejects malformed content-region loci at the grader anchor boundary', () => {
@@ -323,6 +326,65 @@ describe('build-review domain', () => {
     expect(parseBuildReviewDispatchFailure('dispatch-failure')).toBeUndefined();
   });
 
+  it('accepts resolved candidate scope evidence pinned to the projected candidate and an applicable obligation', () => {
+    const sourceRegion = {
+      path: 'src/widget.ts', startLine: 12, endLine: 18,
+      contentHash: HASH, display: 'widget persists the configured value',
+    };
+    const candidate = {
+      candidateId: 'candidate-widget-persistence',
+      sourceRegion,
+      obligationReferences: ['criterion-widget-persistence'],
+    };
+    const resolution = {
+      candidateId: candidate.candidateId,
+      status: 'resolved',
+      sourceRegion,
+      obligationReferences: ['criterion-widget-persistence'],
+      associationReason: 'The asserted persistence branch is the candidate region and implements the applicable criterion.',
+    };
+
+    expect(parseBuildReviewCandidateScopeResolutions([resolution], { candidates: [candidate] })).toEqual([resolution]);
+  });
+
+  it('rejects a resolved candidate that claims a sibling source region sharing its coarse file identity', () => {
+    const sourceRegion = {
+      path: 'test/widget.test.ts', startLine: 12, endLine: 18,
+      contentHash: HASH, display: 'first widget assertion',
+    };
+    const siblingRegion = { ...sourceRegion, startLine: 22, endLine: 28, display: 'unrelated sibling assertion' };
+    const candidates = [
+      { candidateId: 'candidate-first', sourceRegion, obligationReferences: ['S5.4'] },
+      { candidateId: 'candidate-sibling', sourceRegion: siblingRegion, obligationReferences: ['S5.4'] },
+    ];
+
+    expect(parseBuildReviewCandidateScopeResolutions([{
+      candidateId: 'candidate-first', status: 'resolved', sourceRegion: siblingRegion,
+      obligationReferences: ['S5.4'], associationReason: 'The sibling has the same file identity.',
+    }, {
+      candidateId: 'candidate-sibling', status: 'out-of-scope', exclusionReason: 'No changed behavior.',
+    }], { candidates })).toBeUndefined();
+  });
+
+  it('rejects missing, duplicate, unknown, foreign, absent, and out-of-candidate scope resolution authority', () => {
+    const sourceRegion = { path: 'test/widget.test.ts', startLine: 12, endLine: 18, contentHash: HASH, display: 'widget assertion' };
+    const candidate = { candidateId: 'candidate-widget', sourceRegion, obligationReferences: ['S5.4'] };
+    const resolved = {
+      candidateId: candidate.candidateId, status: 'resolved', sourceRegion,
+      obligationReferences: ['S5.4'], associationReason: 'The assertion is the projected candidate.',
+    };
+    const invalid = [
+      [],
+      [resolved, resolved],
+      [{ ...resolved, candidateId: 'unknown-candidate' }],
+      [{ ...resolved, obligationReferences: ['S9.9'] }],
+      [{ ...resolved, sourceRegion: { ...sourceRegion, path: 'test/missing.test.ts' } }],
+      [{ ...resolved, sourceRegion: { ...sourceRegion, startLine: 13 } }],
+    ];
+
+    expect(invalid.map((resolutions) => parseBuildReviewCandidateScopeResolutions(resolutions, { candidates: [candidate] }))).toEqual(Array(invalid.length).fill(undefined));
+  });
+
   describe('finding reference context', () => {
     const projection = {
       rubric: 'testQuality',
@@ -348,6 +410,22 @@ describe('build-review domain', () => {
         planTasks: [],
       });
       expect(buildReviewFindingReferenceContext({ ...projection, changedTestTitles: undefined } as unknown as BuildReviewRubricProjection).changedTestRegions).toEqual([]);
+    });
+
+    it('adds only validated resolved candidate regions to fresh finding authority', () => {
+      const candidateRegion = {
+        path: 'test/space containing name.test.ts', startLine: 8, endLine: 12,
+        contentHash: HASH, display: 'fallback candidate assertion',
+      };
+
+      expect(buildReviewFindingReferenceContext(projection, [{
+        candidateId: 'candidate-fallback', status: 'resolved', sourceRegion: candidateRegion,
+        obligationReferences: ['S5.4'], associationReason: 'Pinned source proves the candidate.',
+      }, {
+        candidateId: 'candidate-excluded', status: 'out-of-scope', exclusionReason: 'Pinned source is unrelated.',
+      }]).changedTestRegions).toContainEqual({
+        path: candidateRegion.path, contentHash: HASH, display: candidateRegion.display,
+      });
     });
 
     it('accepts only a locus that names a projected content region when references are supplied', () => {
