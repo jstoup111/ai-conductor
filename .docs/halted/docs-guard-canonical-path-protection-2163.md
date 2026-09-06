@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-06T11:48:49.699Z
 Slug: docs-guard-canonical-path-protection-2163
 Class: needs-human
 Halting step: unknown
