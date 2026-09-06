@@ -2,7 +2,7 @@ name: shipped-record
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, closed]
+    types: [opened, reopened, synchronize, edited, closed]
 
 permissions:
   contents: read
