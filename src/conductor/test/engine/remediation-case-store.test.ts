@@ -106,6 +106,13 @@ describe('remediation case store', () => {
       ...CASE_STATE,
       cases: [CASE_STATE.cases[0], { ...CASE_STATE.cases[0], id: 'case-2' }],
     }, 'malformed-state'],
+    ['a source id shared across two canonical cases', {
+      ...CASE_STATE,
+      cases: [
+        CASE_STATE.cases[0],
+        { ...CASE_STATE.cases[0], id: 'case-2', effect: { ...CASE_STATE.cases[0].effect, id: 'effect-2' } },
+      ],
+    }, 'malformed-state'],
     ['a duplicate source id within one case', {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], sources: [CASE_STATE.cases[0].sources[0], CASE_STATE.cases[0].sources[0]] }],

@@ -226,6 +226,7 @@ function parseState(value: unknown):
   // any caller can consume or mutate the state.
   const caseIds = new Set<string>();
   const effectIds = new Set<string>();
+  const sourceIds = new Set<string>();
   for (const caseValue of value.cases) {
     const parsed = parseCase(caseValue);
     if (!parsed.ok) return parsed;
@@ -236,8 +237,13 @@ function parseState(value: unknown):
       if (effectIds.has(record.effect.id)) return { ok: false, reason: 'malformed-state' };
       effectIds.add(record.effect.id);
     }
-    const sourceIds = new Set(record.sources.map((source) => source.sourceId));
-    if (sourceIds.size !== record.sources.length) return { ok: false, reason: 'malformed-state' };
+    for (const source of record.sources) {
+      // Global, not per-case: a source id repeated across two canonical cases
+      // is ambiguous durable history in exactly the way a repeat within one
+      // case is, and both readers index sources back to a single case.
+      if (sourceIds.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
+      sourceIds.add(source.sourceId);
+    }
     cases.push(record);
   }
   return { ok: true, state: { version: STORE_VERSION, feature, cases } };
