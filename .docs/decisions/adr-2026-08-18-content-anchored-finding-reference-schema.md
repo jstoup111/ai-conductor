@@ -170,3 +170,5 @@ dispositions (content change ⇒ new identity), while staying inside
 
 
 > **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).
+
+> **Amended 2026-09-06 by #2231:** adr-2026-09-06-engine-owned-test-quality-scope decision 8 preserves declared-title/content-region/occurrence identity, including explicitly coarse fallback where a title cannot be recovered. Coarse identity no longer constitutes whole-file scope authority: only the concrete candidate resolved against pinned source and an approved binding may use it. Source coordinates may locate evidence but are not canonical identity inputs. Input projection v3 separates target authority from identity precision.

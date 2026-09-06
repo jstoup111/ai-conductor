@@ -126,6 +126,8 @@ D2 already establishes as "an engine-supplied enum from the rubric registry, not
 > note. #1767 tracks the intended end-state — migrating the audit to a uniform channel so this
 > carve-out can be retired by a superseding ADR.
 
+> **Amended 2026-09-06 by #2231:** D2's closed provider evidence field set, as extended by #2051, is superseded only to admit `scopeResolutions` under adr-2026-09-06-engine-owned-test-quality-scope decisions 6 and 8. Required candidate dispositions are provider-owned evidence validated against the projection. The engine still stamps every envelope field; existing findings and optional counterfactualSensitivity remain. Result contract v3 and finding identity are preserved; input projection advances to v3.
+
 **D3 — `contractVersion` does not bump; it stays `v3`.**
 `adr-2026-08-16-closed-build-review-finding-vocabularies` D4 rules that "a contract version changes
 only when identity semantics change". Anchors, closed vocabularies, reference kinds and
