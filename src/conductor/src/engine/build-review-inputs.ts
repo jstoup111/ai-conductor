@@ -19,6 +19,13 @@ import { classifyTautologyPaths } from './build-review-test-quality-preflight.js
 import { parseCoversMarkers } from './covers-marker.js';
 import { extractStoryCriterionIds } from './story-criteria.js';
 import {
+  analyzeBuildReviewTestScope,
+  type BuildReviewTestScope,
+  type BuildReviewTestScopeInput,
+  unavailableBuildReviewTestScope,
+} from './build-review-test-scope.js';
+import { discoverBuildReviewScopeDependencies } from './build-review-scope-dependencies.js';
+import {
   BuildReviewScopeSource,
   safeRepoRelativePath,
   type BuildReviewPathChange,
@@ -105,6 +112,12 @@ export interface BuildReviewSourceSnapshot {
   readonly changedTestTitles?: readonly BuildReviewChangedTestTitle[];
   /** Test-quality's closed, feature-local selector set. */
   readonly testQuality?: BuildReviewTestQualityScope;
+  /**
+   * Typed, source-bound test-quality analysis.  This is the authoritative
+   * assembly result; the compact legacy selector/title fields remain only
+   * until the v3 projection consumes this value directly.
+   */
+  readonly testScope?: BuildReviewTestScope;
   /** Machine-readable changed paths from the pinned diff, retaining rename pairs. */
   readonly sourceChanges?: readonly BuildReviewPathChange[];
 }
@@ -134,6 +147,8 @@ export interface BuildReviewTestQualityScope {
 /** Process-free proof inspection seam; it must never launch the aggregate suite. */
 export interface BuildReviewInputOptions {
   readonly inspectTestSuite?: () => Promise<FullSuiteInspectionResult>;
+  /** Test seam for a parser/analyzer failure; consumer source is never loaded. */
+  readonly analyzeTestScope?: (input: BuildReviewTestScopeInput) => BuildReviewTestScope;
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -242,15 +257,16 @@ function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'co
 
 function contentSnapshotDigest(snapshot: Pick<
   BuildReviewSourceSnapshot,
-  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'testQuality'
+  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'testQuality' | 'testScope'
 >): string {
-  const { diff, planBody, repairContext, removalContext, testQuality } = snapshot;
+  const { diff, planBody, repairContext, removalContext, testQuality, testScope } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff: withoutDiffBlobIdentities(diff),
     planBody,
     repairContext: semanticRepairContext(repairContext),
     removalContext,
     testQuality,
+    testScope,
   })).digest('hex')}`;
 }
 
@@ -507,6 +523,144 @@ async function snapshotChangedTestTitles(
   return Object.freeze(titles.flat());
 }
 
+function isTestPath(path: string): boolean {
+  return /(?:^|\/)(?:test|tests)\//.test(path) || /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(path);
+}
+
+function markerReferenceForScope(reference: { readonly kind: string; readonly id: string }): string {
+  return reference.kind === 'task' ? `task:${reference.id}` : reference.id;
+}
+
+function freezeRecursively<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    freezeRecursively((value as Record<PropertyKey, unknown>)[key], seen);
+  }
+  return Object.freeze(value);
+}
+
+interface ScopedTestFile {
+  readonly path: string;
+  readonly basePath: string;
+  readonly baseText: string;
+  readonly headText: string;
+  readonly scope: BuildReviewTestScope;
+}
+
+function mergeTestScopes(scopes: readonly BuildReviewTestScope[]): BuildReviewTestScope {
+  return freezeRecursively({
+    changedDeclarations: scopes.flatMap((scope) => scope.changedDeclarations),
+    targets: scopes.flatMap((scope) => scope.targets),
+    candidates: scopes.flatMap((scope) => scope.candidates),
+    notes: scopes.flatMap((scope) => scope.notes),
+    affectedGroups: scopes.flatMap((scope) => scope.affectedGroups),
+    sharedSources: scopes.flatMap((scope) => scope.sharedSources),
+  });
+}
+
+/**
+ * Assemble test-quality evidence from the same immutable blob reader used by
+ * the plan and diff.  The analyzer receives bytes only; neither declaration
+ * discovery nor dependency traversal ever imports consumer source.
+ */
+async function snapshotTypedTestScope(
+  source: BuildReviewScopeSource,
+  changes: readonly BuildReviewPathChange[],
+  mergeBaseSha: string,
+  planBody: string,
+  storiesBody: string,
+  analyzer: (input: BuildReviewTestScopeInput) => BuildReviewTestScope,
+): Promise<{
+  readonly scope: BuildReviewTestScope;
+  readonly testQuality: BuildReviewTestQualityScope;
+  readonly changedTestTitles: readonly BuildReviewChangedTestTitle[];
+}> {
+  const renamedFrom = new Map(changes.flatMap((change) => change.kind === 'R' || change.kind === 'C'
+    ? [[change.path, change.oldPath] as const]
+    : []));
+  const changedPaths = new Set(changes.filter((change) => change.kind !== 'D').map((change) => change.path));
+  const changeByPath = new Map(changes.filter((change) => change.kind !== 'D').map((change) => [change.path, change]));
+  const paths = new Set([
+    ...changedPaths,
+    ...[...parsePlanTaskPaths(planBody).values()].flatMap((taskPaths) => [...taskPaths]),
+  ].filter(isTestPath));
+  const initial: ScopedTestFile[] = [];
+  for (const path of paths) {
+    const basePath = renamedFrom.get(path) ?? path;
+    const changed = changeByPath.get(path);
+    const [baseText, headText] = await Promise.all([
+      changed && changed.kind !== 'A'
+        ? source.readAtRequired(mergeBaseSha, basePath)
+        : source.readAtOptional(mergeBaseSha, basePath),
+      changedPaths.has(path) ? source.readRequired(path) : source.readOptional(path),
+    ]);
+    // A plan Files hint whose pinned HEAD source is absent is evidence of
+    // nothing. Changed paths are required frozen evidence and reject above.
+    if (headText === undefined) continue;
+    const input: BuildReviewTestScopeInput = {
+      base: { source: { fileName: basePath, bytes: Buffer.from(baseText ?? '', 'utf-8') }, storiesText: storiesBody, planText: planBody },
+      head: { source: { fileName: path, bytes: Buffer.from(headText, 'utf-8') }, storiesText: storiesBody, planText: planBody },
+    };
+    let scope: BuildReviewTestScope;
+    try {
+      scope = analyzer(input);
+    } catch (error) {
+      scope = unavailableBuildReviewTestScope(input, error);
+    }
+    initial.push({ path, basePath, baseText: baseText ?? '', headText, scope });
+  }
+
+  const dependencies = await discoverBuildReviewScopeDependencies({
+    reader: {
+      read: (side, path) => source.readAtOptional(side === 'base' ? mergeBaseSha : source.headSha, path),
+    },
+    changedTestPaths: initial.filter((file) => file.scope.changedDeclarations.length > 0).map((file) => file.path),
+    planText: planBody,
+  });
+  const files = initial.map((file) => {
+    const input: BuildReviewTestScopeInput = {
+      base: { source: { fileName: file.basePath, bytes: Buffer.from(file.baseText, 'utf-8') }, storiesText: storiesBody, planText: planBody },
+      head: { source: { fileName: file.path, bytes: Buffer.from(file.headText, 'utf-8') }, storiesText: storiesBody, planText: planBody },
+      dependencyEffects: dependencies.effects,
+    };
+    try {
+      return { ...file, scope: analyzer(input) };
+    } catch (error) {
+      return { ...file, scope: unavailableBuildReviewTestScope(input, error) };
+    }
+  });
+  const scope = mergeTestScopes(files.map((file) => file.scope));
+  const inScopeFiles = files.filter((file) => file.scope.targets.length > 0 || file.scope.candidates.length > 0);
+  const unresolvedMarkers = files.flatMap((file) => file.scope.notes.flatMap((note) => note.kind === 'unresolved-reference'
+    ? [Object.freeze({ selector: file.path, reference: markerReferenceForScope(note.marker.reference) })]
+    : []));
+  // Kept as a compatibility projection until input v3.  Unlike the old
+  // scanner it is derived only from declarations proven changed by the typed
+  // comparison, so unchanged siblings in a marked file never appear here.
+  const changedTestTitles: BuildReviewChangedTestTitle[] = files.flatMap<BuildReviewChangedTestTitle>((file) => {
+    const declarations = file.scope.changedDeclarations.filter((declaration) => declaration.kind === 'test');
+    if (declarations.length > 0) return declarations.map((declaration) => Object.freeze({
+      selector: file.path,
+      titleText: declaration.titleChain.join(' > '),
+      staticExtractionFallback: false,
+    }));
+    return file.scope.notes.some((note) => note.kind === 'declaration-uncertainty')
+      ? [Object.freeze({ selector: file.path, titleText: '', staticExtractionFallback: true })]
+      : [];
+  });
+  return Object.freeze({
+    scope,
+    testQuality: Object.freeze({
+      inScopeTests: Object.freeze(inScopeFiles.map((file) => file.path)),
+      unresolvedMarkers: Object.freeze(unresolvedMarkers.sort((left, right) =>
+        `${left.selector}\u0000${left.reference}`.localeCompare(`${right.selector}\u0000${right.reference}`),
+      )),
+    }),
+    changedTestTitles: Object.freeze(changedTestTitles),
+  });
+}
+
 /**
  * Assemble the build_review grader's inputs: the diff since the merge-base
  * of a freshly-resolved base ref and HEAD, plus the plan body. Inputs are
@@ -623,12 +777,17 @@ export async function assembleBuildReviewInputs(
   }
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
-  const changedTestTitles = await snapshotChangedTestTitles(source, changes);
-  const testQuality = await snapshotTestQualityScope(
+  const storiesPath = activeStoriesPath(planRepoPath, planBody);
+  const storiesBody = storiesPath === undefined
+    ? ''
+    : await source.readOptional(storiesPath) ?? '';
+  const typedTestScope = await snapshotTypedTestScope(
     source,
     changes,
-    planRepoPath,
+    mergeBaseSha,
     planBody,
+    storiesBody,
+    options.analyzeTestScope ?? analyzeBuildReviewTestScope,
   );
   const snapshotWithoutDigest = {
     baseRef,
@@ -646,8 +805,11 @@ export async function assembleBuildReviewInputs(
         line: assertion.line,
       }))),
     }),
-    changedTestTitles,
-    testQuality,
+    // v2 finding identity still consumes a title projection, but it now comes
+    // from typed changed declarations rather than a file-wide static scan.
+    changedTestTitles: typedTestScope.changedTestTitles,
+    testQuality: typedTestScope.testQuality,
+    testScope: typedTestScope.scope,
     sourceChanges: changes,
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
