@@ -1,8 +1,30 @@
+// Covers: task:10
 import { describe, it, expect } from 'vitest';
 import { detectDaemonCommand } from '../../src/engine/daemon-command.js';
 
 // argv is process.argv: [node, entry, sub, ...rest].
 const argv = (...rest: string[]) => ['node', 'conduct', ...rest];
+
+type DaemonConcurrencyResolution = {
+  concurrency: number;
+  source: 'flag' | 'config' | 'default';
+};
+
+async function concurrencyContract(): Promise<{
+  resolve: (command: NonNullable<ReturnType<typeof detectDaemonCommand>>, configured?: number) => DaemonConcurrencyResolution;
+  formatStartupLog: (resolution: DaemonConcurrencyResolution, continuous: boolean) => string;
+}> {
+  const mod = await import('../../src/engine/daemon-command.js') as Record<string, unknown>;
+  const resolve = mod.resolveDaemonCommandConcurrency;
+  const formatStartupLog = mod.formatDaemonStartupLog;
+  if (typeof resolve !== 'function' || typeof formatStartupLog !== 'function') {
+    throw new Error('expected daemon concurrency resolution and startup-log exports');
+  }
+  return {
+    resolve: resolve as (command: NonNullable<ReturnType<typeof detectDaemonCommand>>, configured?: number) => DaemonConcurrencyResolution,
+    formatStartupLog: formatStartupLog as (resolution: DaemonConcurrencyResolution, continuous: boolean) => string,
+  };
+}
 
 describe('detectDaemonCommand', () => {
   it('returns null when the first token is not `daemon`', () => {
@@ -35,7 +57,54 @@ describe('detectDaemonCommand', () => {
 
   it('parses concurrency and max-items', () => {
     const opts = detectDaemonCommand(argv('daemon', '--concurrency', '3', '--max-items', '10'));
-    expect(opts).toMatchObject({ concurrency: 3, maxItems: 10, continuous: false });
+    expect(opts).toMatchObject({
+      concurrency: 3,
+      concurrencyExplicit: true,
+      maxItems: 10,
+      continuous: false,
+    });
+  });
+
+  it('resolves an explicit --concurrency over configured concurrency and names flag source in startup log', async () => {
+    const { resolve, formatStartupLog } = await concurrencyContract();
+    const command = detectDaemonCommand(argv('daemon', '--concurrency', '3'))!;
+    const resolution = resolve(command, 2);
+
+    expect(resolution).toEqual({ concurrency: 3, source: 'flag' });
+    expect(formatStartupLog(resolution, false)).toBe(
+      'scanning backlog (concurrency 3, source flag)…',
+    );
+  });
+
+  it('resolves configured concurrency when --concurrency is absent and names config source in startup log', async () => {
+    const { resolve, formatStartupLog } = await concurrencyContract();
+    const command = detectDaemonCommand(argv('daemon'))!;
+    const resolution = resolve(command, 2);
+
+    expect(resolution).toEqual({ concurrency: 2, source: 'config' });
+    expect(formatStartupLog(resolution, false)).toBe(
+      'scanning backlog (concurrency 2, source config)…',
+    );
+  });
+
+  it('defaults concurrency to one when no flag or config exists with the serial startup log', async () => {
+    const { resolve, formatStartupLog } = await concurrencyContract();
+    const command = detectDaemonCommand(argv('daemon'))!;
+    const resolution = resolve(command, undefined);
+
+    expect(resolution).toEqual({ concurrency: 1, source: 'default' });
+    expect(formatStartupLog(resolution, false)).toBe(
+      'scanning backlog (concurrency 1)…',
+    );
+  });
+
+  it('keeps config provenance in the startup log at concurrency above one', async () => {
+    const { resolve, formatStartupLog } = await concurrencyContract();
+    const resolution = resolve(detectDaemonCommand(argv('daemon'))!, 2);
+
+    expect(formatStartupLog(resolution, false)).toBe(
+      'scanning backlog (concurrency 2, source config)…',
+    );
   });
 
   it('parses the continuous ceilings', () => {

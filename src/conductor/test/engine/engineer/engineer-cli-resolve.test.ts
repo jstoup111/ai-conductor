@@ -6,7 +6,8 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 
@@ -203,7 +204,7 @@ describe('engineer resolve: happy path (Task 12)', () => {
 
   describe('Test 1: Stranded claimed entry (no prUrl) → resolve with prUrl → done with prUrl + branch preserved', () => {
     it('resolves stranded entry with prUrl, preserves branch, echoes JSON with 4 fields, exit 0', async () => {
-      const testDir = `/tmp/resolve-test-${Date.now()}-${Math.random()}`;
+      const testDir = await mkdtemp(join(tmpdir(), 'resolve-test-'));
       try {
         // Create temp engineer directory with ledger
         const engDir = join(testDir, 'engineer');
@@ -245,7 +246,7 @@ describe('engineer resolve: happy path (Task 12)', () => {
 
   describe('Test 2: Idempotency — re-run resolve on same entry → unchanged, exit 0', () => {
     it('second resolve with same prUrl on done entry → unchanged state, exit 0', async () => {
-      const testDir = `/tmp/resolve-test-${Date.now()}-${Math.random()}`;
+      const testDir = await mkdtemp(join(tmpdir(), 'resolve-test-'));
       try {
         const engDir = join(testDir, 'engineer');
         await mkdir(engDir, { recursive: true });
@@ -287,7 +288,7 @@ describe('engineer resolve: happy path (Task 12)', () => {
 
   describe('Test 3: Unknown sourceRef → found:false, exit 0 (soft failure)', () => {
     it('unknown sourceRef → {kind:resolve, found:false}, exit 0', async () => {
-      const testDir = `/tmp/resolve-test-${Date.now()}-${Math.random()}`;
+      const testDir = await mkdtemp(join(tmpdir(), 'resolve-test-'));
       try {
         const engDir = join(testDir, 'engineer');
         await mkdir(engDir, { recursive: true });
@@ -320,7 +321,7 @@ describe('engineer resolve: happy path (Task 12)', () => {
 
   describe('Test 4: Branch override — resolve with --branch → new branch set, prUrl added', () => {
     it('claimed entry with existing branch, resolve with --branch override → new branch set', async () => {
-      const testDir = `/tmp/resolve-test-${Date.now()}-${Math.random()}`;
+      const testDir = await mkdtemp(join(tmpdir(), 'resolve-test-'));
       try {
         const engDir = join(testDir, 'engineer');
         await mkdir(engDir, { recursive: true });
@@ -361,7 +362,7 @@ describe('engineer resolve: happy path (Task 12)', () => {
 
   describe('Test 5: Branch preservation — resolve without --branch → branch unchanged', () => {
     it('claimed entry with branch, resolve without --branch → branch unchanged, prUrl added', async () => {
-      const testDir = `/tmp/resolve-test-${Date.now()}-${Math.random()}`;
+      const testDir = await mkdtemp(join(tmpdir(), 'resolve-test-'));
       try {
         const engDir = join(testDir, 'engineer');
         await mkdir(engDir, { recursive: true });

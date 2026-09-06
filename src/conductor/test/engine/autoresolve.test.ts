@@ -184,7 +184,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       makeIsFeatureInFlight(true),
     );
     expect(result.eligible).toBe(false);
-    expect(result.reason).toContain('active feature run');
+    expect(result.reason).toContain('active work claim');
   });
 
   it('respects custom rebase_resolution_attempts cap', async () => {

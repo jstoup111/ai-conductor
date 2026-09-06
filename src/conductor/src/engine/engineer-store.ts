@@ -217,7 +217,14 @@ export function serializeSignal(sig: EngineerSignal): string {
 
 export interface AssembleArgs {
   /** Path to the feature's `.pipeline/events.jsonl`. */
-  eventsPath: string;
+  eventsPath?: string;
+  /**
+   * Pre-captured `.pipeline/events.jsonl` content. Takes precedence over
+   * `eventsPath` — used when the worktree may already be torn down by the time
+   * the signal is emitted (dispatcher-side emission across the executor seam,
+   * adr-2026-08-27 decision 1).
+   */
+  eventsContent?: string;
   outcome: FeatureOutcome;
   project: string;
   feature: string;
@@ -232,11 +239,15 @@ export interface AssembleArgs {
  */
 export async function assembleSignal(args: AssembleArgs): Promise<EngineerSignal> {
   let raw = '';
-  try {
-    raw = await readFile(args.eventsPath, 'utf-8');
-  } catch {
-    // Missing/unreadable log → assemble from FeatureOutcome alone.
-    raw = '';
+  if (args.eventsContent != null) {
+    raw = args.eventsContent;
+  } else if (args.eventsPath != null) {
+    try {
+      raw = await readFile(args.eventsPath, 'utf-8');
+    } catch {
+      // Missing/unreadable log → assemble from FeatureOutcome alone.
+      raw = '';
+    }
   }
 
   const events = parseEvents(raw);
@@ -338,7 +349,9 @@ export async function writeNarrative(
 
 export interface EmitEngineerSignalArgs {
   engineerDir: string;
-  eventsPath: string;
+  eventsPath?: string;
+  /** Pre-captured events.jsonl content; takes precedence over `eventsPath`. */
+  eventsContent?: string;
   outcome: FeatureOutcome;
   project: string;
   feature: string;
@@ -360,6 +373,7 @@ export async function emitEngineerSignal(args: EmitEngineerSignalArgs): Promise<
   try {
     const signal = await assembleSignal({
       eventsPath: args.eventsPath,
+      eventsContent: args.eventsContent,
       outcome: args.outcome,
       project: args.project,
       feature: args.feature,

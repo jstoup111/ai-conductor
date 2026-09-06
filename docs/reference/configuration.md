@@ -163,7 +163,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-42 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
+43 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
 [build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
@@ -191,6 +191,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `attribution_audit_sample_pct` | number | `10` | [attribution telemetry](#attribution-telemetry) |
 | `rebase_resolution_attempts` | number | `3` | [rebase_resolution_attempts](#rebase_resolution_attempts) |
 | `validation_concurrency` | number | `4` | [validation_concurrency](#validation_concurrency) |
+| `daemon_concurrency` | number | `1` | [daemon_concurrency](#daemon_concurrency) |
 | `harness_self_host` | object | see section | [harness_self_host](#harness_self_host) |
 | `model_fallback_ladder` | string[] | provider policy | [model_fallback_ladder](#model_fallback_ladder) |
 | `auto_restart_on_stale_engine` | boolean | `false` | [auto_restart_on_stale_engine](#auto_restart_on_stale_engine) |
@@ -1341,6 +1342,30 @@ A non-number is a hard error (`config.ts:748-752`). Zero, negative, and `NaN` pa
 `resolveValidationConcurrency` (`config.ts:2009-2021`) silently substitutes `4`.
 
 Consumed at `src/conductor/src/engine/conductor.ts:1263`, then clamped to the branch count at `:6357`.
+
+## daemon_concurrency
+
+Sets the daemon feature-executor pool width. It is optional and defaults to `1`, which preserves the
+serial daemon behavior. Set it to a positive integer to allow that many eligible features to run at
+once:
+
+```yaml
+daemon_concurrency: 3
+```
+
+Only integers in `[1, ∞)` are valid. Zero, negative, fractional, non-finite, and non-numeric values
+make configuration loading fail before the daemon dispatches work; they are not silently clamped.
+
+For a daemon invocation, an explicit `--concurrency <n>` flag takes precedence over this setting;
+otherwise this setting takes precedence over the default of `1`. This pool width is independent of
+[`validation_concurrency`](#validation_concurrency), which bounds validation-phase branch fan-out
+within one feature.
+
+The legacy compatibility dispatch used when no `ProviderExecutionContext` is available mutates the
+process-global provider environment. To avoid concurrent environment mutation, it refuses an
+effective daemon concurrency above `1` before build dispatch and reports
+`LEGACY_NO_PROVIDER_EXECUTION_CONCURRENCY_REFUSAL`. That compatibility-path refusal is not a clamp
+on the daemon's normal worker pool.
 
 ## stale_claim_window_hours
 

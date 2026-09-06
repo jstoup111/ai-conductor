@@ -1,10 +1,17 @@
+// Covers: task:20
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
-import { slugify, WorktreeManager, checkPrMerged } from '../../src/engine/worktree.js';
+import {
+  slugify,
+  WorktreeLifecycleQueue,
+  WorktreeManager,
+  checkPrMerged,
+} from '../../src/engine/worktree.js';
+import { makeFeatureRunnerDeps } from '../../src/engine/daemon-deps.js';
 
 const execFile = promisify(execFileCb);
 
@@ -171,6 +178,116 @@ describe('engine/worktree', () => {
         const branches = await git(tempDir, 'branch', '--list', 'feature/cleanup-target');
         expect(branches).toBe('');
       });
+    });
+  });
+
+  describe('daemon worktree lifecycle', () => {
+    let lifecycleRoot: string;
+
+    beforeEach(async () => {
+      lifecycleRoot = await mkdtemp(join(tmpdir(), 'daemon-worktree-lifecycle-'));
+      await git(lifecycleRoot, 'init', '--initial-branch=main');
+      await git(lifecycleRoot, 'config', 'user.email', 'daemon-worktree@example.test');
+      await git(lifecycleRoot, 'config', 'user.name', 'Daemon Worktree Test');
+      await writeFile(join(lifecycleRoot, 'README.md'), 'fixture\n');
+      await git(lifecycleRoot, 'add', 'README.md');
+      await git(lifecycleRoot, 'commit', '-m', 'fixture');
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await rm(lifecycleRoot, { recursive: true, force: true });
+    });
+
+    it('runs lifecycle requests one at a time and continues after a failed request', async () => {
+      const queue = new WorktreeLifecycleQueue();
+      const events: string[] = [];
+      let releaseFirst!: () => void;
+      const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      let markFirstStarted!: () => void;
+      const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+
+      const first = queue.run(async () => {
+        events.push('first:start');
+        markFirstStarted();
+        await firstReleased;
+        events.push('first:fail');
+        throw new Error('expected lifecycle failure');
+      });
+      const second = queue.run(async () => {
+        events.push('second:start');
+      });
+
+      await firstStarted;
+      await Promise.resolve();
+      expect(events).toEqual(['first:start']);
+      releaseFirst();
+      await expect(first).rejects.toThrow('expected lifecycle failure');
+      await expect(second).resolves.toBeUndefined();
+      expect(events).toEqual(['first:start', 'first:fail', 'second:start']);
+    });
+
+    it('serializes concurrent add and remove requests against one shared git directory for 20 iterations', async () => {
+      const originalRun = WorktreeLifecycleQueue.prototype.run;
+      let activeLifecycleOperations = 0;
+      let peakLifecycleOperations = 0;
+      const lifecycleRun = vi.spyOn(WorktreeLifecycleQueue.prototype, 'run').mockImplementation(
+        function <T>(this: WorktreeLifecycleQueue, operation: () => Promise<T>): Promise<T> {
+          return originalRun.call(this, async () => {
+            activeLifecycleOperations += 1;
+            peakLifecycleOperations = Math.max(peakLifecycleOperations, activeLifecycleOperations);
+            try {
+              return await operation();
+            } finally {
+              activeLifecycleOperations -= 1;
+            }
+          }) as Promise<T>;
+        },
+      );
+      const deps = makeFeatureRunnerDeps({
+        projectRoot: lifecycleRoot,
+        worktreeBase: join(lifecycleRoot, '.worktrees'),
+        baseBranch: 'main',
+        runConductorInWorktree: async () => {},
+      });
+      for (let iteration = 0; iteration < 20; iteration += 1) {
+        const slugA = `add-${iteration}`;
+        const slugB = `remove-${iteration}`;
+        const pathB = join(lifecycleRoot, '.worktrees', slugB);
+        await git(lifecycleRoot, 'worktree', 'add', '-b', `feat/daemon-${slugB}`, pathB, 'main');
+
+        const [created] = await Promise.all([
+          deps.createWorktree(slugA),
+          deps.teardownWorktree({ path: pathB, branch: `feat/daemon-${slugB}` }, false),
+        ]);
+
+        expect(created).toEqual({
+          path: join(lifecycleRoot, '.worktrees', slugA),
+          branch: `feat/daemon-${slugA}`,
+        });
+        const registrations = await git(lifecycleRoot, 'worktree', 'list', '--porcelain');
+        expect(registrations).toContain(`worktree ${created.path}`);
+        expect(registrations).not.toContain(`worktree ${pathB}`);
+      }
+
+      expect(lifecycleRun).toHaveBeenCalledTimes(40);
+      expect(peakLifecycleOperations).toBe(1);
+    });
+
+    it('keeps an unrelated stale registration when a failed cleanup targets only its requested slug', async () => {
+      const manager = new WorktreeManager(lifecycleRoot);
+      const unrelated = await manager.create('unrelated feature');
+      // A missing directory leaves B registered. The old global `worktree prune`
+      // in A's failure path would silently reap it.
+      await rm(unrelated.path, { recursive: true, force: true });
+      const failedCleanupPath = join(lifecycleRoot, '.worktrees', 'failed-cleanup');
+      await writeFile(failedCleanupPath, 'not a worktree');
+
+      await manager.cleanup('failed-cleanup');
+
+      const registered = await git(lifecycleRoot, 'worktree', 'list', '--porcelain');
+      expect(registered).toContain(`worktree ${unrelated.path}`);
+      expect(registered).not.toContain(`worktree ${failedCleanupPath}`);
     });
   });
 

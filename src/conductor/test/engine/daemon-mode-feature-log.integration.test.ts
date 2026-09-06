@@ -25,6 +25,14 @@ vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/ci-fix.js')>();
   return { ...actual, defaultCiFixProbe: ciFixProbeSpy.defaultCiFixProbe };
 });
+vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/daemon-deps.js')>();
+  return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };
+});
+vi.mock('../../src/engine/work-order.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/work-order.js')>();
+  return { ...actual, buildWorkOrder: vi.fn((input) => input) };
+});
 
 // The daemon loop checks its build credential before dispatch. This test owns
 // feature-log wiring, so it supplies a deterministic credential boundary

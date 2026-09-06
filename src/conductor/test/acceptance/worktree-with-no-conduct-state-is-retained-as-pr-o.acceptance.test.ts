@@ -41,6 +41,7 @@ import {
   makeRunFeature,
   type FeatureRunnerDeps,
 } from '../../src/engine/daemon-runner.js';
+import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 
 const SLUG = 'never-started-feature';
 const roots: string[] = [];
@@ -62,9 +63,7 @@ async function exists(path: string): Promise<boolean> {
 
 function pickContext(overrides: Partial<PickEligibleCtx> = {}): PickEligibleCtx {
   return {
-    inFlight: { has: () => false },
-    parked: new Set(),
-    started: new Set(),
+    claims: new InMemoryWorkClaims(),
     ...overrides,
   };
 }
@@ -156,8 +155,11 @@ describe('acceptance: every failed dispatch leaves an operator-clearable lever (
     const sameRunSelection = await pickEligible(
       { items: [item] },
       pickContext({
-        parked: new Set([SLUG]),
-        started: new Set([SLUG]),
+        claims: (() => {
+          const claims = new InMemoryWorkClaims();
+          claims.park(SLUG);
+          return claims;
+        })(),
         isHalted: async (slug) => slug === SLUG && (await exists(haltPath)),
       }),
     );

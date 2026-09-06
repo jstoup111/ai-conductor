@@ -141,7 +141,7 @@ describe('runDaemon — live base-advance re-kick (FR-6/FR-10)', () => {
       },
       sleep: async () => {},
     };
-    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 8 });
+    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 8, idlePollMs: 0 });
     expect(sweeps).toEqual([Y]); // advance observed once → exactly one sweep
     expect(persisted).toEqual([Y]);
     expect(res.stoppedReason).toBe('idle_timeout');
@@ -244,7 +244,7 @@ describe('runDaemon — PR #109 no-advance invariant under re-kick (FR-8)', () =
       },
       sleep: async () => {},
     };
-    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 8 });
+    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 8, idlePollMs: 0 });
     expect(sweeps).toEqual([Y]);
     // Re-dispatched exactly once — through the existing un-park path (the sweep
     // issued no dispatch; clearing the marker let pickEligible un-park it).

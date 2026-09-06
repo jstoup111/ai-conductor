@@ -283,6 +283,11 @@ export interface SweepOpts {
     repoCwd: string,
     slug: string,
   ) => Promise<'present' | 'absent' | 'indeterminate'>;
+  /**
+   * Refuses shipped-record reaping while the daemon still owns the slug.
+   * Omitted preserves the standalone sweep's existing behavior.
+   */
+  canRemoveWorktree?: (slug: string) => boolean | Promise<boolean>;
   /** Task 8: optional event callback for sweep events (e.g. ci_failed on transition). */
   onEvent?: (event: ConductorEvent) => void;
 }
@@ -299,6 +304,7 @@ export async function sweepMergeableLabels({
   ciFix,
   teardownWorktree,
   shippedRecordProbe,
+  canRemoveWorktree,
   onEvent,
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
@@ -340,6 +346,10 @@ export async function sweepMergeableLabels({
           );
           const shippedRecord = await probe(entry.repoCwd, entry.slug);
           if (shippedRecord === 'present') {
+            if (canRemoveWorktree && !(await canRemoveWorktree(entry.slug))) {
+              survivors.push(entry);
+              continue;
+            }
             try {
               if (!teardownWorktree) {
                 throw new Error('worktree teardown dependency unavailable');
