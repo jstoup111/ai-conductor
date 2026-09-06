@@ -118,6 +118,10 @@ let repoPath: string;
 let registryPath: string;
 let engineerDir: string;
 const savedEnv: Record<string, string | undefined> = {};
+const supportedGhVersion = async () => ({
+  kind: 'ok' as const,
+  version: { major: 2, minor: 73, patch: 0 },
+});
 
 beforeEach(async () => {
   workDir = await mkdtemp(join(tmpdir(), 'agent-hosted-'));
@@ -279,7 +283,7 @@ describe('dispatchEngineer({kind:"launch"})', () => {
   it('invokes the injected interactive launcher and returns its exit code', async () => {
     const { dispatchEngineer } = await import('../../src/engine/engineer-cli.js');
     const launchInteractive = vi.fn().mockResolvedValue(0);
-    const code = await dispatchEngineer({ kind: 'launch' }, { launchInteractive });
+    const code = await dispatchEngineer({ kind: 'launch' }, { launchInteractive, probeGhVersion: supportedGhVersion });
     expect(launchInteractive).toHaveBeenCalledOnce();
     expect(code).toBe(0);
   });
@@ -289,7 +293,7 @@ describe('dispatchEngineer({kind:"launch"})', () => {
     const out: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'launch' },
-      { insideClaudeSession: true, print: (s) => out.push(s) },
+      { insideClaudeSession: true, print: (s) => out.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(code).toBe(0);
     expect(out.join('\n')).toMatch(/already inside|run \/engineer directly/i);
@@ -305,7 +309,7 @@ describe('dispatchEngineer({kind:"projects"})', () => {
     await writeFile(registryPath, JSON.stringify([makeRecord(repoPath, 'my-project')], null, 2), 'utf-8');
     const { dispatchEngineer } = await import('../../src/engine/engineer-cli.js');
     const out: string[] = [];
-    const code = await dispatchEngineer({ kind: 'projects' }, { registryPath, print: (s) => out.push(s) });
+    const code = await dispatchEngineer({ kind: 'projects' }, { registryPath, print: (s) => out.push(s), probeGhVersion: supportedGhVersion });
     expect(code).toBe(0);
     const parsed = JSON.parse(out.join(''));
     expect(Array.isArray(parsed)).toBe(true);
@@ -316,7 +320,7 @@ describe('dispatchEngineer({kind:"projects"})', () => {
     await writeFile(registryPath, JSON.stringify([]), 'utf-8');
     const { dispatchEngineer } = await import('../../src/engine/engineer-cli.js');
     const out: string[] = [];
-    const code = await dispatchEngineer({ kind: 'projects' }, { registryPath, print: (s) => out.push(s) });
+    const code = await dispatchEngineer({ kind: 'projects' }, { registryPath, print: (s) => out.push(s), probeGhVersion: supportedGhVersion });
     expect(code).toBe(0);
     expect(JSON.parse(out.join(''))).toEqual([]);
   });
@@ -333,7 +337,7 @@ describe('dispatchEngineer({kind:"worktree"})', () => {
     const out: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'worktree', project: 'target-repo', idea: 'add csv export' },
-      { registryPath, print: (s) => out.push(s) },
+      { registryPath, print: (s) => out.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(code).toBe(0);
     const result = JSON.parse(out.join(''));
@@ -352,7 +356,7 @@ describe('dispatchEngineer({kind:"worktree"})', () => {
     const err: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'worktree', project: 'nope', idea: 'x' },
-      { registryPath, printErr: (s) => err.push(s) },
+      { registryPath, printErr: (s) => err.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(code).toBe(1);
     expect(err.join('')).toMatch(/nope|not found/i);
@@ -374,7 +378,7 @@ describe('dispatchEngineer({kind:"land"})', () => {
     const err: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'land', project: 'target-repo', idea, worktree },
-      { registryPath, print: (s) => out.push(s), printErr: (s) => err.push(s) },
+      { registryPath, print: (s) => out.push(s), printErr: (s) => err.push(s), probeGhVersion: supportedGhVersion },
     );
 
     expect(code).toBe(0);
@@ -394,7 +398,7 @@ describe('dispatchEngineer({kind:"land"})', () => {
     const err: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'land', project: 'nonexistent', idea: 'some idea', worktree: join(workDir, 'x') },
-      { registryPath, printErr: (s) => err.push(s) },
+      { registryPath, printErr: (s) => err.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(code).toBe(1);
     expect(err.join('')).toMatch(/nonexistent|not found/i);
@@ -408,7 +412,7 @@ describe('dispatchEngineer({kind:"land"})', () => {
     const err: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'land', project: 'target-repo', idea, worktree: wt.worktreePath },
-      { registryPath, printErr: (s) => err.push(s) },
+      { registryPath, printErr: (s) => err.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(code).not.toBe(0);
     // Keep-on-failure: the worktree remains for inspection (FR-6).
@@ -431,7 +435,7 @@ describe('dispatchEngineer({kind:"land"})', () => {
     const err: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'land', project: 'target-repo', idea, worktree: wt.worktreePath },
-      { registryPath, printErr: (s) => err.push(s) },
+      { registryPath, printErr: (s) => err.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(code).not.toBe(0);
     expect(err.join('')).toMatch(/draft|rejected|invalid/i);
@@ -448,7 +452,7 @@ describe('dispatchEngineer({kind:"land"})', () => {
     const err: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'land', project: 'target-repo', idea, worktree },
-      { registryPath, printErr: (s) => err.push(s) },
+      { registryPath, printErr: (s) => err.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(code).not.toBe(0);
     expect(err.join('')).toMatch(/dirty|uncommitted/i);
@@ -472,7 +476,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
     const landOut: string[] = [];
     const landCode = await dispatchEngineer(
       { kind: 'land', project: 'target-repo', idea, worktree },
-      { registryPath, print: (s) => landOut.push(s) },
+      { registryPath, print: (s) => landOut.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(landCode).toBe(0);
     const branch = JSON.parse(landOut.join('')).branch;
@@ -498,6 +502,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
         gh: fakeGh,
         git: fakeGit,
         ensureRunningLaunch: fakeLaunch,
+        probeGhVersion: supportedGhVersion,
         print: (s) => handoffOut.push(s),
       },
     );
@@ -528,7 +533,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
     const landOut: string[] = [];
     await dispatchEngineer(
       { kind: 'land', project: 'target-repo', idea, worktree },
-      { registryPath, print: (s) => landOut.push(s) },
+      { registryPath, print: (s) => landOut.push(s), probeGhVersion: supportedGhVersion },
     );
     const branch = JSON.parse(landOut.join('')).branch;
 
@@ -539,7 +544,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
     const handoffOut: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'handoff', project: 'target-repo', branch, worktree },
-      { registryPath, engineerDir, gh: noRemoteGh, print: (s) => handoffOut.push(s) },
+      { registryPath, engineerDir, gh: noRemoteGh, print: (s) => handoffOut.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(code).toBe(0);
     const result = JSON.parse(handoffOut.join(''));
@@ -558,7 +563,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
     const landOut: string[] = [];
     await dispatchEngineer(
       { kind: 'land', project: 'target-repo', idea, worktree },
-      { registryPath, print: (s) => landOut.push(s) },
+      { registryPath, print: (s) => landOut.push(s), probeGhVersion: supportedGhVersion },
     );
     const branch = JSON.parse(landOut.join('')).branch;
 
@@ -573,6 +578,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
         registryPath,
         engineerDir,
         gh: noUrlGh,
+        probeGhVersion: supportedGhVersion,
         git: async () => ({ stdout: '' }),
         print: (s) => out.push(s),
         printErr: (s) => err.push(s),
@@ -591,7 +597,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
     const err: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'handoff', project: 'nonexistent', branch: 'spec/x', worktree: join(workDir, 'x') },
-      { registryPath, printErr: (s) => err.push(s) },
+      { registryPath, printErr: (s) => err.push(s), probeGhVersion: supportedGhVersion },
     );
     expect(code).toBe(1);
     expect(err.join('')).toMatch(/nonexistent|not found/i);
