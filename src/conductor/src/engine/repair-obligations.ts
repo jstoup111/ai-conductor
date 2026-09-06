@@ -64,7 +64,6 @@ export type RepairClosureResult =
   | Extract<RepairResult<never>, { ok: false }>;
 
 export interface RepairObligationStore {
-  admit(admission: RepairAdmission): Promise<RepairAdmissionResult>;
   /** Replays only an explicit, caller-authoritative effect key within one plan. */
   admitOrReplay(admissionKey: string, admission: RepairAdmission): Promise<RepairAdmissionResult>;
   markSettled(input: { planPath: string; obligationId: string }): Promise<RepairClosureResult>;
@@ -210,7 +209,6 @@ export function createRepairObligationStore(
 
   return {
     read,
-    admit: (admission) => admit(admission),
     admitOrReplay: (admissionKey, admission) => admit(admission, admissionKey),
 
     async markSettled(input): Promise<RepairClosureResult> {

@@ -530,7 +530,7 @@ describe('runTaskDone', () => {
     }));
     await fsPromises.writeFile(join(dir, '.pipeline', 'current-task'), '7');
     const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
-    const admitted = await repairs.admit({
+    const admitted = await repairs.admitOrReplay('key-1', {
       id: 'round-7', planPath: '.docs/plans/feature.md', taskIds: ['T7'],
       source: { findingId: 'finding', authority: 'build_review', instruction: 'repair' },
       baseline: { head: 'unavailable', tree: 'tree', resolvedTaskIds: [] },
@@ -749,7 +749,7 @@ describe('runTaskDone', () => {
         tasks: [{ id: '7', status: 'pending' }],
       }));
       const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
-      const admitted = await repairs.admit({
+      const admitted = await repairs.admitOrReplay('key-2', {
         id: 'round-7', planPath: '.docs/plans/feature.md', taskIds: ['7'],
         source: { findingId: 'finding', authority: 'build_review', instruction: 'repair' },
         baseline: { head: 'unavailable', tree: 'tree', resolvedTaskIds: [] },

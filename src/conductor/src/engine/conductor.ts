@@ -4757,11 +4757,17 @@ export class Conductor {
         // Replay identity is engine-owned route input: source, current evidence
         // files, canonical gap ids, and canonical bindings. Planner rationale
         // prose is intentionally excluded.
+        // The current HEAD is part of the identity: a crash replay of the same
+        // admitted effect sees the same HEAD, while a genuinely later repair of
+        // the same finding follows BUILD commits and must mint a new obligation
+        // with a fresh boundary and lap (adr-2026-09-06 D2).
+        const admissionHead = (await currentCommitSha(this.projectRoot)) ?? '';
         const admissionKey = createHash('sha256').update(JSON.stringify({
           planPath,
           source: hintSource.source,
           evidence: remediationEvidenceSources.map(({ gate, evidenceFile }) => [gate, evidenceFile]),
           bindings: [...resolvedExistingTaskIdsByGapId.entries()].sort(),
+          head: admissionHead,
         })).digest('hex');
         const baseline = {
           treeHash: await currentTreeHash(this.projectRoot),
@@ -4789,7 +4795,7 @@ export class Conductor {
             instruction: repairInstruction,
           },
           baseline: {
-            head: (await currentCommitSha(this.projectRoot)) ?? '',
+            head: admissionHead,
             tree: baseline.treeHash ?? '',
             resolvedTaskIds: [],
             resolvedCount: baseline.resolvedCount,

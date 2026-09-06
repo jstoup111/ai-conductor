@@ -200,6 +200,36 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
       expect.objectContaining({ findingId: 'ARCH-1', instruction: buildHints[0] }),
     ]);
     expect(buildHints[0]).toContain('Tasks 1 and 2 own the current finding.');
+
+    // AB-1 (adr-2026-09-06 D2): BUILD lands a commit, the same finding comes
+    // back, and the later repair must be a NEW obligation with a fresh
+    // boundary — not a replay of the first admission.
+    await writeFile(join(projectRoot, 'completed-task.txt'), 'the first repair attempt\n');
+    await git('add', 'completed-task.txt');
+    await git('commit', '-q', '-m', 'fix: first repair attempt\n\nTask: 1');
+    const afterFirst = await readState(stateFilePath);
+    await writeState(stateFilePath, {
+      ...(afterFirst.ok ? afterFirst.value : {}),
+      architecture_review_as_built: 'pending',
+      build: 'done',
+    });
+    await rm(join(projectRoot, '.pipeline', 'HALT'), { force: true });
+    await rm(join(projectRoot, '.pipeline', 'HALT.class'), { force: true });
+    await makeConductor(
+      runner,
+      { architecture_review_as_built: { remediation: { enabled: true }, max_remediation_laps: 3 } },
+      'architecture_review_as_built',
+    ).run();
+
+    expect(dispatched.filter((step) => step === 'build')).toHaveLength(2);
+    const laterState = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8')) as {
+      repairObligations?: { records?: Record<string, { baseline?: { head?: string } }> };
+    };
+    const records = Object.entries(laterState.repairObligations?.records ?? {});
+    expect(records).toHaveLength(2);
+    const heads = records.map(([, record]) => record.baseline?.head);
+    expect(new Set(heads).size).toBe(2);
+    expect(heads).toContain(await git('rev-parse', 'HEAD'));
   });
 
   it('dispatches the bound authored task as pending without appending a replacement task', async () => {
@@ -674,7 +704,7 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
 describe('restart recovery is scoped to the active plan (AB-2, AB-3)', () => {
   async function admitSettledRepair(planPath: string): Promise<void> {
     const repairs = createRepairObligationStore(projectRoot, join(projectRoot, '.pipeline', 'engine-state.json'));
-    const admitted = await repairs.admit({
+    const admitted = await repairs.admitOrReplay('key-1', {
       id: 'repair-durable',
       planPath,
       taskIds: ['1'],

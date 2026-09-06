@@ -47,9 +47,9 @@ describe('repair obligations', () => {
   it('settles only the current obligation and keeps a replay settled', async () => {
     const { projectRoot, statePath } = await createStatePath();
     const repairs = createRepairObligationStore(projectRoot, statePath);
-    const first = await repairs.admit(admission());
+    const first = await repairs.admitOrReplay('key-round-1', admission());
     if (!first.ok) throw new Error(first.message);
-    const later = await repairs.admit(admission({ id: 'round-2' }));
+    const later = await repairs.admitOrReplay('key-round-2', admission({ id: 'round-2' }));
     if (!later.ok) throw new Error(later.message);
 
     await expect(repairs.markSettled({
@@ -60,7 +60,7 @@ describe('repair obligations', () => {
       planPath: '.docs/plans/current.md',
       obligationId: later.obligation.id,
     })).resolves.toMatchObject({ ok: true, obligation: { settlement: 'settled' } });
-    await expect(repairs.admit(admission({ id: 'round-2' }))).resolves.toMatchObject({
+    await expect(repairs.admitOrReplay('key-round-2', admission({ id: 'round-2' }))).resolves.toMatchObject({
       ok: true,
       replayed: true,
       obligation: { settlement: 'settled' },
@@ -89,7 +89,7 @@ describe('repair obligations', () => {
     const { projectRoot, statePath } = await createStatePath();
     const repairs = createRepairObligationStore(projectRoot, statePath);
 
-    const admitted = await repairs.admit(admission());
+    const admitted = await repairs.admitOrReplay('key-round-1', admission());
     expect(admitted).toMatchObject({ ok: true, replayed: false, obligation: { taskIds: ['2', '3'] } });
     if (!admitted.ok) return;
 
@@ -100,7 +100,7 @@ describe('repair obligations', () => {
       evidence: { kind: 'task-done', value: 'evidence-1' },
     })).resolves.toMatchObject({ ok: true });
 
-    await expect(repairs.admit(admission({
+    await expect(repairs.admitOrReplay('key-round-1', admission({
       taskIds: ['999'],
       source: { findingId: 'other', authority: 'other', instruction: 'must not replace' },
       baseline: { head: 'different', tree: 'different', resolvedTaskIds: [] },
@@ -118,14 +118,14 @@ describe('repair obligations', () => {
   it('isolates plan identities, retains prior rounds, and rejects a stale closure after a later repair', async () => {
     const { projectRoot, statePath } = await createStatePath();
     const repairs = createRepairObligationStore(projectRoot, statePath);
-    const first = await repairs.admit(admission());
+    const first = await repairs.admitOrReplay('key-round-1', admission());
     if (!first.ok) throw new Error(first.message);
-    const later = await repairs.admit(admission({
+    const later = await repairs.admitOrReplay('key-round-2', admission({
       id: 'round-2',
       source: { findingId: 'finding-2', authority: 'build_review', instruction: 'Repair again.' },
     }));
     if (!later.ok) throw new Error(later.message);
-    const otherPlan = await repairs.admit(admission({
+    const otherPlan = await repairs.admitOrReplay('key-other-plan', admission({
       id: 'round-other-plan',
       planPath: join(projectRoot, '.docs/plans/other.md'),
       taskIds: ['T2'],

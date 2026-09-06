@@ -361,7 +361,7 @@ describe('task-progress', () => {
       const boundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
 
       const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
-      const admitted = await repairs.admit({
+      const admitted = await repairs.admitOrReplay('key-1', {
         id: 'reopened-round',
         planPath: '.docs/plans/feature.md',
         taskIds: ['T2'],
@@ -391,7 +391,7 @@ describe('task-progress', () => {
       await execa('git', ['commit', '-m', 'baseline'], { cwd: dir });
       const boundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
       const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
-      await repairs.admit({
+      await repairs.admitOrReplay('key-2', {
         id: 'post-boundary-round',
         planPath: '.docs/plans/feature.md',
         taskIds: ['T2'],
@@ -411,7 +411,7 @@ describe('task-progress', () => {
         activePlanPath: '.docs/plans/feature.md',
       }));
       const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
-      const admitted = await repairs.admit({
+      const admitted = await repairs.admitOrReplay('key-3', {
         id: 'closed-round',
         planPath: '.docs/plans/feature.md',
         taskIds: ['2'],
