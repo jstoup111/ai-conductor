@@ -1,9 +1,10 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
+import * as restageWatermark from '../../src/engine/restage-watermark.js';
 import {
   countResolvedTasks,
   countTaskTrailerCommits,
@@ -240,6 +241,42 @@ describe('task-progress', () => {
   });
 
   describe('resolveTaskIds', () => {
+    async function prepareWatermarkedTask(status = 'pending'): Promise<string> {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await writeFile(join(dir, 'README.md'), '# fixture\n');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed'], { cwd: dir });
+
+      const worktreeRoot = join(dir, '.worktrees', 'feature');
+      await mkdir(join(dir, '.worktrees'), { recursive: true });
+      await execa('git', ['worktree', 'add', '-b', 'feature', worktreeRoot, 'main'], { cwd: dir });
+      await mkdir(join(worktreeRoot, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(worktreeRoot, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.daemon', 'restage-watermarks'), { recursive: true });
+      await writeFile(join(worktreeRoot, '.docs', 'plans', 'stem-a.md'), '# Plan\n');
+      await writeFile(
+        join(worktreeRoot, '.pipeline', 'engine-state.json'),
+        JSON.stringify({ activePlanPath: '.docs/plans/stem-a.md' }),
+      );
+      await writeFile(
+        join(worktreeRoot, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '16', status }] }),
+      );
+      await writeFile(
+        join(dir, '.daemon', 'restage-watermarks', 'stem-a.json'),
+        JSON.stringify({ version: 1, tasks: { '16': 2 } }),
+      );
+      return worktreeRoot;
+    }
+
+    async function commitTaskTrailer(worktreeRoot: string, name: string, trailer: string): Promise<void> {
+      await writeFile(join(worktreeRoot, name), name);
+      await execa('git', ['add', '.'], { cwd: worktreeRoot });
+      await execa('git', ['commit', '-m', `${name}\n\nTask: ${trailer}`], { cwd: worktreeRoot });
+    }
+
     it('counts distinct commits per plan id, alias-matched, once per commit', async () => {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
@@ -262,6 +299,63 @@ describe('task-progress', () => {
           ['21', 1],
         ]),
       );
+    });
+
+    it('keeps a watermarked id unresolved when its trailer count is unchanged', async () => {
+      const worktreeRoot = await prepareWatermarkedTask();
+      await commitTaskTrailer(worktreeRoot, 'first.txt', '16');
+      await commitTaskTrailer(worktreeRoot, 'second.txt', '16');
+
+      await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set());
+    });
+
+    it('resolves a watermarked id after one new canonical trailer commit', async () => {
+      const worktreeRoot = await prepareWatermarkedTask();
+      await commitTaskTrailer(worktreeRoot, 'first.txt', '16');
+      await commitTaskTrailer(worktreeRoot, 'second.txt', '16');
+
+      await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set());
+
+      await commitTaskTrailer(worktreeRoot, 'third.txt', '16');
+
+      await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set(['16']));
+    });
+
+    it('resolves a completed row regardless of its unchanged watermark trailer count', async () => {
+      const worktreeRoot = await prepareWatermarkedTask('completed');
+      await commitTaskTrailer(worktreeRoot, 'first.txt', '16');
+      await commitTaskTrailer(worktreeRoot, 'second.txt', '16');
+
+      await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set(['16']));
+    });
+
+    it('resolves a watermarked id after one new alias trailer commit', async () => {
+      const worktreeRoot = await prepareWatermarkedTask();
+      await commitTaskTrailer(worktreeRoot, 'first.txt', '16');
+      await commitTaskTrailer(worktreeRoot, 'second.txt', '16');
+
+      await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set());
+
+      await commitTaskTrailer(worktreeRoot, 'third.txt', 'T16');
+
+      await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set(['16']));
+    });
+
+    it('does not read restage watermarks without an activePlanPath', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({}));
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '16', status: 'pending' }] }),
+      );
+      const readWatermarks = vi.spyOn(restageWatermark, 'readRestageWatermarks');
+
+      try {
+        await resolveTaskIds(dir, ['16']);
+        expect(readWatermarks).not.toHaveBeenCalled();
+      } finally {
+        readWatermarks.mockRestore();
+      }
     });
 
     it('resolves completed rows, skipped rows, trailer-only ids, and canonical alias trailers', async () => {

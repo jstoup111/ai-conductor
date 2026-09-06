@@ -1,7 +1,8 @@
 import { readFile, unlink, mkdir, writeFile, rename, rm } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { listCommitsWithTrailers, canonicalTaskId, parsePlanTaskVerifyOnly } from './autoheal.js';
 import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
+import { readRestageWatermarks } from './restage-watermark.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -88,9 +89,24 @@ export async function resolveTaskIds(projectRoot: string, planIds: string[]): Pr
     }
   }
 
+  let activePlanPath: string | undefined;
+  try {
+    const rawState = await readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf-8');
+    const state = JSON.parse(rawState) as { activePlanPath?: unknown };
+    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
+      activePlanPath = state.activePlanPath;
+    }
+  } catch {
+    // A missing or malformed engine state has no restage-watermark authority.
+  }
+
+  const watermarks = activePlanPath
+    ? await readRestageWatermarks(projectRoot, basename(activePlanPath, '.md'))
+    : undefined;
   const trailerCounts = await countTaskTrailerCommits(projectRoot, planIds);
   for (const [id, count] of trailerCounts) {
-    if (count > 0) resolved.add(id);
+    const watermark = watermarks?.kind === 'ok' ? watermarks.tasks[id] : undefined;
+    if (count > (watermark ?? 0)) resolved.add(id);
   }
 
   return resolved;
