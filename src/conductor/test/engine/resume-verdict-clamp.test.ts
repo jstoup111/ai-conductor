@@ -611,6 +611,82 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
+  // ── Task 2: every resume candidate is reconciled with checkGate ─────────
+  describe('Task 2: resume reconciles state-derived entries without a verdict clamp', () => {
+    async function seedReopenedBuildFixture(): Promise<void> {
+      const seed = seedDoneThrough('test_suite');
+      // findResumeIndex honors the in-progress test suite first, even though
+      // build was subsequently re-opened. Its entry gate refuses test_suite;
+      // build is the earlier runnable prerequisite.
+      seed.build = 'failed';
+      seed.test_suite = 'in_progress';
+      await writeState(statePath, seed as ConductState);
+    }
+
+    it('reconciles a refused state-derived test_suite entry back to build', async () => {
+      await seedReopenedBuildFixture();
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.find((entry) => entry.startsWith('run:'))).toBe('run:build');
+      expect(log.filter((entry) => entry.startsWith('run:'))).not.toHaveLength(0);
+    });
+
+    it('reconciles from state when the verdict directory cannot be read', async () => {
+      await seedReopenedBuildFixture();
+      const verdictRead = vi.spyOn(gateVerdicts, 'readAllVerdicts')
+        .mockRejectedValueOnce(new Error('fixture verdict directory unreadable'));
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+
+      await conductor.run();
+
+      expect(verdictRead).toHaveBeenCalledWith(dir);
+      expect(log.find((entry) => entry.startsWith('run:'))).toBe('run:build');
+      expect(log.filter((entry) => entry.startsWith('run:'))).not.toHaveLength(0);
+    });
+
+    it('keeps a state-derived entry whose own gate already passes', async () => {
+      const seed = seedDoneThrough('build_review');
+      seed.build_review = 'in_progress';
+      await writeState(statePath, seed as ConductState);
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.find((entry) => entry.startsWith('run:'))).toBe('run:build_review');
+      expect(log).not.toContain('run:build');
+    });
+
+    it('daemon resume halts through the existing DECIDE-entry disposition after reconciliation', async () => {
+      const seed = seedDoneThrough('coverage_binding');
+      seed.plan = 'failed';
+      seed.coverage_binding = 'in_progress';
+      await writeState(statePath, seed as ConductState);
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        resume: true, daemon: true, mode: 'auto',
+      });
+
+      await conductor.run();
+
+      expect(log.filter((entry) => entry.startsWith('run:'))).toHaveLength(0);
+      expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).toMatch(
+        /DECIDE entry refused.*resume-clamp.*plan/is,
+      );
+    });
+  });
+
   // ── Story 5: tail selection is clamped by the entry-gate predicate ──────
   describe('Story 5: tail selection cannot enter a gate its prerequisite rejects', () => {
     async function selectTailWithTestSuiteStatus(
