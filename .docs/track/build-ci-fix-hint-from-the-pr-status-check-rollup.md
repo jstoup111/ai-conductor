@@ -1,0 +1,13 @@
+# Track: Build the ci-fix hint from the PR status check rollup
+
+Track: technical
+
+Scope boundary: Small fix for #2153, approved by the operator on 2026-09-06 (delegated). Replace the malformed check-enumeration call inside the ci-fix RETRY hint builder with a well-formed fetch of the pull request's status check rollup, parse the shape that fetch actually returns, name every failing entry with its detail link, keep the existing failed-run log excerpt, bound the hint's total length, and surface every empty-hint outcome through the module's existing outcome log line. Outside this slice: the ci-fix eligibility gates and the non-terminal classification helper in the same module, the merge-state module's rollup element type and its failing-or-pending predicate, the sweep's dispatch callback signature, the resolver's worktree/guard/lease pipeline, the attempt cap and cooldown, and the content of the fix prompt beyond the hint string.
+
+This is daemon machinery inside the harness repository; acceptance criteria live in technical stories rather than a PRD.
+
+The operator approved fetching the rollup through the pull-request view command over correcting the check-list command's field list on 2026-09-06 (delegated). The check-list command exits non-zero exactly when checks fail, and the canonical gh runner surfaces a non-zero exit as a thrown error whose stdout is discarded, so a corrected field list would still produce an empty hint on the only path that matters. Threading the rollup already fetched for eligibility was rejected because it widens the sweep's dispatch callback signature, a seam another in-flight change already touches.
+
+Scope check: A — harness-repo-only (daemon CI-fix dispatch machinery, no mechanism outside this repository); B — n/a (no new skill); C — provider-agnostic (the hint is a plain string handed to whichever provider runs the fix session). No catalog registration is required.
+
+Verified foundation: the hint builder invokes the check-list command with a bare `--json` and no field list, then walks a nested check-suite shape that neither that command nor the rollup returns; both failures land in the same catch that returns an empty string. The pull-request view command already used by the merge-state fetcher returns rollup nodes carrying name, status, conclusion and detailsUrl for check runs and context, state and targetUrl for commit statuses, confirmed against a live pull request on 2026-09-06. The module already exports an error classifier and already reuses the shared outcome log line for its eligibility refusals, so surfacing the failure needs no new channel.
