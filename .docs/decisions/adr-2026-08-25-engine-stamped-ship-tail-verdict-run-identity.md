@@ -53,6 +53,18 @@ stale-artifact sweep — #817 D4). No reader keeps a private freshness conventio
 routes through `checkStepCompletion` — no peer satisfaction authority is added
 (adr-2026-07-11-verdict-aware-resume-entry D5).
 
+> **Amended 2026-09-06 (hotfix, jstoup111/ai-conductor#2381 follow-up):** D5 is narrowed. A
+> prior-identity artifact is scored `absent` only when its code stamp cannot vouch for it. The
+> `prd_audit` and `architecture_review_as_built` predicates, and the stale-artifact sweep, run the
+> adr-2026-07-22 code-validity check BEFORE the identity check: a verdict whose stamped baseline is
+> reachable (or translates through the engine's own `.pipeline/rebase-rewrites.json` to a reachable
+> rewritten commit) and whose delta misses the gate's surface is preserved across run identities.
+> A halt/resume, or the SHIP-tail `rebase` step replaying the reviewed commits onto a new base, no
+> longer re-runs a review of code that did not change. Identity mismatch still governs any
+> artifact the stamp cannot explain (missing, unstamped, orphaned by an amend/reset, or a surface
+> hit). D3's write handshake and D4's single reader are unchanged. `manual_test` keeps its
+> identity-first order because of the #367 whitewash guard.
+
 **D5 — Mismatch means "no verdict", typed, never routed-on-text.** A missing or
 prior-identity artifact is scored `routeClass: 'absent'` → **rerun** within the existing
 step-retry budget (adr-2026-07-13-retry-classify-rerun-vs-route D1); its findings are never

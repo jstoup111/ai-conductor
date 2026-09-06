@@ -23,6 +23,7 @@ import type { GitRunner } from './rebase.js';
 import { originDefaultBranch, changedPathsBetween } from './rebase.js';
 import { featureTestPaths, GATE_SURFACE, partitionDelta } from './gate-invalidation.js';
 import { resolveGateCodeValidityConfig } from './config.js';
+import { resolveThroughMap } from './rebase-translate.js';
 
 /** Minimal context the decision helper needs: an injected git runner rooted
  * at the project's working directory. Mirrors the `GitRunner` convention
@@ -137,6 +138,29 @@ async function deriveFeatureSurface(ctx: GateCodeValidityContext): Promise<strin
  *
  * An unknown `gate` (not in `GATE_SURFACE`) fails closed to `rerun`.
  */
+/**
+ * Resolve a stamped baseline through `.pipeline/rebase-rewrites.json` (written
+ * by the engine's own rebase step, see `rebase-translate.ts`). Returns the
+ * rewritten sha when the map knows the stamp, otherwise null. Missing or
+ * unreadable map → null (fail closed: nothing explains the orphan).
+ */
+async function translateThroughRebaseRewrites(
+  projectRoot: string,
+  codeStamp: string,
+): Promise<string | null> {
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline', 'rebase-rewrites.json'), 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const map = parsed as Record<string, unknown>;
+    const hit = map[codeStamp];
+    if (typeof hit !== 'string' || hit.length === 0 || hit === codeStamp) return null;
+    return resolveThroughMap(codeStamp, map as Record<string, string>);
+  } catch {
+    return null;
+  }
+}
+
 export async function gateVerdictStillValid(
   ctx: GateCodeValidityContext,
   gate: string,
@@ -148,9 +172,25 @@ export async function gateVerdictStillValid(
   if (!surface) return 'rerun';
 
   const ancestry = await ctx.git(['merge-base', '--is-ancestor', codeStamp, 'HEAD']);
-  if (ancestry.exitCode !== 0) return 'rerun';
+  let diffRange = `${codeStamp}..HEAD`;
+  if (ancestry.exitCode !== 0) {
+    // The stamped baseline is not in the current history. That is the #766
+    // fail-closed case (an amend/reset orphaned it) UNLESS the engine's own
+    // `rebase` step rewrote it: `.pipeline/rebase-rewrites.json` records every
+    // old→new sha the play-forward produced. A stamp that translates to a
+    // reachable rewritten commit is the same reviewed content replayed onto a
+    // new base, so the verdict is judged on the tree delta between the
+    // stamped tree and HEAD (which surfaces the base's own changes as foreign
+    // paths for the partition below). Anything the map cannot explain stays
+    // fail-closed.
+    const translated = await translateThroughRebaseRewrites(ctx.projectRoot, codeStamp);
+    if (translated === null) return 'rerun';
+    const translatedAncestry = await ctx.git(['merge-base', '--is-ancestor', translated, 'HEAD']);
+    if (translatedAncestry.exitCode !== 0) return 'rerun';
+    diffRange = `${codeStamp} HEAD`;
+  }
 
-  const diffResult = await ctx.git(['diff', '--name-only', `${codeStamp}..HEAD`]);
+  const diffResult = await ctx.git(['diff', '--name-only', ...diffRange.split(' ')]);
   if (diffResult.exitCode !== 0) return 'rerun';
 
   const delta = diffResult.stdout

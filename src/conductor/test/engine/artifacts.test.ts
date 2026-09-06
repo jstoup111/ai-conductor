@@ -5720,13 +5720,31 @@ Task 1 → Task 2
         expect(result.reason).toContain('rem-ab1-9');
       });
 
-      // Covers: task:9, task:10
-      it('never preserves or completes a report stamped for a prior run', async () => {
+      // Covers: task:9, task:10 — amended 2026-09-06 (adr-2026-08-25 D5): the
+      // code stamp decides first; a prior run identity condemns the report
+      // only when the stamp cannot vouch for the tree on disk.
+      it('preserves a code-valid report stamped for a prior run (unchanged surface)', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeReport(gdir);
         await writeSidecar(gdir, baseline, 'prior-run');
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: true });
+      });
+
+      it('scores a prior-run report absent when its surface changed since the stamp', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline, 'prior-run');
+        await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
 
         const result = await checkStepCompletion(gdir, 'prd_audit', {
           ...ctxFor(gdir),
@@ -5906,13 +5924,29 @@ Task 1 → Task 2
         expect(result.done).toBe(true);
       });
 
-      // Covers: task:9
-      it('never completes an approval report stamped for a prior run', async () => {
+      // Covers: task:9 — amended 2026-09-06 (adr-2026-08-25 D5): stamp first.
+      it('preserves a code-valid approval report stamped for a prior run (unchanged surface)', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeReport(gdir);
         await writeSidecar(gdir, baseline, 'prior-run');
+
+        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', {
+          ...ctxFor(gdir),
+          attemptRunId: 'current-run',
+        });
+
+        expect(result).toMatchObject({ done: true });
+      });
+
+      it('scores a prior-run approval report absent when its surface changed since the stamp', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline, 'prior-run');
+        await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
 
         const result = await checkStepCompletion(gdir, 'architecture_review_as_built', {
           ...ctxFor(gdir),
@@ -6331,7 +6365,9 @@ Task 1 → Task 2
       });
 
       // Covers: task:5
-      it('sweeps an otherwise code-valid report when the shared reader finds a prior run identity', async () => {
+      // Amended 2026-09-06 (adr-2026-08-25 D5): a code-valid report survives a
+      // prior run identity — the stamp, not the session, decides.
+      it('spares an otherwise code-valid report when the shared reader finds a prior run identity', async () => {
         gdir = await makeGitDir();
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeStaleReport(gdir);
@@ -6354,7 +6390,7 @@ Task 1 → Task 2
           'run-current',
         );
 
-        expect(removed).toEqual([join(gdir, PATH)]);
+        expect(removed).toEqual([]);
       });
 
       it('gate_code_validity.enabled: false restores pure mtime-freshness — deletes a stale report even when the codeStamp sidecar surface is unchanged (Task 8, #817)', async () => {

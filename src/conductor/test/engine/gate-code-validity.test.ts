@@ -280,6 +280,33 @@ describe('gateVerdictStillValid', () => {
     expect(result).toBe('rerun');
   });
 
+  it('preserves an orphaned baseline that rebase-rewrites.json maps to a reachable rewritten commit (surface miss)', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await mkdir(join(s.repo, '.pipeline'), { recursive: true });
+    const orphaned = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
+    await s.git(['commit', '--amend', '-q', '-m', 'init (replayed)']);
+    const rewritten = (await s.git(['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(s.repo, '.pipeline', 'rebase-rewrites.json'), JSON.stringify({ [orphaned]: rewritten }));
+
+    const result = await gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'build_review', orphaned);
+    expect(result).toBe('preserve');
+  });
+
+  it('re-runs an orphaned baseline whose rewrite still leaves a code delta to HEAD (surface hit)', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await mkdir(join(s.repo, '.pipeline'), { recursive: true });
+    const orphaned = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
+    await s.git(['commit', '--amend', '-q', '-m', 'init (replayed)']);
+    const rewritten = (await s.git(['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(s.repo, '.pipeline', 'rebase-rewrites.json'), JSON.stringify({ [orphaned]: rewritten }));
+    await commit(s, { 'src/a.ts': 'changed\n' }, 'later code change');
+
+    const result = await gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'build_review', orphaned);
+    expect(result).toBe('rerun');
+  });
+
   it('returns rerun when the delta from the stamped baseline is uncomputable (bogus sha)', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
