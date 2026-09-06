@@ -15,6 +15,17 @@ export interface Exporters {
   metricExporter: PushMetricExporter;
 }
 
+/** Build the HTTP/protobuf exporter options for one OTLP signal. */
+export function buildHttpExporterOptions(
+  config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>,
+  signal: 'traces' | 'metrics',
+): { url: string; headers?: Record<string, string> } {
+  return {
+    url: `${config.endpoint.replace(/\/$/, '')}/v1/${signal}`,
+    ...(config.headers ? { headers: config.headers } : {}),
+  };
+}
+
 /**
  * Build OTel span + metric exporters for a resolved (enabled) config.
  *
@@ -37,8 +48,8 @@ export function buildExporters(
     }
     // Default: HTTP/protobuf (port 4318)
     return {
-      spanExporter: new OTLPHttpTraceExporter({ url: `${url.replace(/\/$/, '')}/v1/traces` }),
-      metricExporter: new OTLPHttpMetricExporter({ url: `${url.replace(/\/$/, '')}/v1/metrics` }),
+      spanExporter: new OTLPHttpTraceExporter(buildHttpExporterOptions(config, 'traces')),
+      metricExporter: new OTLPHttpMetricExporter(buildHttpExporterOptions(config, 'metrics')),
     };
   }
 

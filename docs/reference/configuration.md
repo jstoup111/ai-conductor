@@ -754,11 +754,41 @@ each sample already represents the whole feature total at that moment.
 | `otel.endpoint` | string | Yes, when `exporter: otlp` | any URL | — |
 | `otel.file` | string | No | any path | `<pipelineDir>/otel.jsonl` |
 | `otel.protocol` | string | No | `http/protobuf`, `grpc` per the type | passed through unchecked; omitted when falsy |
+| `otel.headers` | mapping | No; only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` | absent; no headers are sent |
 | `otel.project_name` | string | No | any non-blank name | project root basename |
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
 `{ enabled: false, error: "Unknown otel exporter '<x>'. Valid options: otlp, file." }`; `otlp` without an
 endpoint yields `{ enabled: false, error: "otel exporter='otlp' requires an 'endpoint' URL …" }`.
+
+`otel.headers` supplies HTTP OTLP credentials by reference, never by value. Its only supported
+credential source in this slice is the process environment, using this shape:
+
+```yaml
+otel:
+  exporter: otlp
+  endpoint: https://collector.example.test
+  headers:
+    authorization:
+      env: OTEL_EXPORT_TOKEN
+```
+
+At configuration load, the resolver reads the non-empty `OTEL_EXPORT_TOKEN` environment variable and
+uses its value for the `authorization` HTTP header. The configuration remains a header-name and
+variable-name reference; it does not contain the credential. A literal string is refused rather than
+treated as a credential in configuration.
+
+The same silent-disable result names these header failures: a non-mapping `headers` value; an empty
+or control-character header name; a literal credential; a reference other than exactly
+`{ env: <non-empty variable name> }`; and an unset or empty referenced environment variable. Header
+entries are also refused for gRPC and the file exporter with an error that names the configured header
+and, when the reference contains a string `env` field, its environment-variable name; it never includes
+the environment variable's value.
+
+Other credential sources are excluded from this slice. Headers are carried only by the HTTP/protobuf
+OTLP exporters: this configuration does not provide gRPC credential or metadata carriage. It also
+does not classify an unauthorized export response as an authentication-specific outcome; existing
+export-failure handling remains in effect.
 
 `otel.project_name` is trimmed before use. An absent, blank, or whitespace-only value falls back to
 the basename of the absolute project root for metric data-point identity; it does not affect
