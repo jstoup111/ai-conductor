@@ -67,6 +67,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Closeout event tailing now recovers from corrupt completed ledger records without hiding later valid events. ([implementation PR #2241](https://github.com/jstoup111/ai-conductor/pull/2241)).
 - Blocks destructive bare force pushes in compound commands while preserving safe force-with-lease pushes. ([implementation PR #2221](https://github.com/jstoup111/ai-conductor/pull/2221)).
 - Docs guard now blocks NUL-bearing, alias-root, and symlink-routed writes that could bypass protected documentation paths. ([implementation PR #2242](https://github.com/jstoup111/ai-conductor/pull/2242)).
+- Vitest global setup removes stale temporary run roots before they accumulate. ([implementation PR #2249](https://github.com/jstoup111/ai-conductor/pull/2249)).
 
 ## [1.0.0] - 2026-08-31
 
