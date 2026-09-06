@@ -52,6 +52,26 @@ this skill does not infer a skip from feature tier, track, or the absence of a P
 Use focused context per criterion. A broad codebase search is warranted only when targeted evidence
 cannot establish whether that criterion was delivered.
 
+**Delegated evidence gathering.** This audit runs late in a long session, and the auditor's own
+context is what holds the verdict table. Push the reading into subagents through the host's
+facility (Claude Code: the Agent tool; Codex: `collaboration.spawn_agent` / `collaboration.wait_agent`)
+and keep the auditor's window for grading:
+
+- One subagent per story (or per criterion cluster when a story is large). Each receives the
+  story's criteria verbatim, the owning plan tasks, and the changed-file list, and returns a
+  **digest**: per criterion, the evidence found (`file:line`, the test name, or the `Scope:`
+  trailer), a candidate grade, and one sentence of rationale. Cap a digest at roughly two thousand
+  words.
+- The auditor never re-reads what a digest already quotes. It grades from the digests, re-opens
+  only the lines needed to settle a disagreement, and owns every row of the Verdict Table.
+- **Model tiers.** The auditor stays on this skill's pinned tier. Reading and extraction subagents
+  run on the host's mid tier (Claude Code `model="sonnet"`; Codex uses its configured default).
+  Step a subagent up to the auditor's tier only for adjudication of one contested criterion.
+- Bound every read the subagents and the auditor make: read each artifact once; per-file
+  `git diff <base>...HEAD -- <path>` with default context, never `--unified=80` or wider;
+  `git log --oneline -n 30`; filter `rg` output by path before listing. Do not re-read
+  `HARNESS.md`, `CLAUDE.md`, or this skill; they are already in context.
+
 ## Judge each criterion
 
 For every story criterion, record one row.
