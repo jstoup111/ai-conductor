@@ -114,6 +114,10 @@ export class TerminalRenderer implements UIRenderer {
     }
 
     switch (event.type) {
+      case 'intake_inbound_sanitized':
+        this.region.log(chalk.dim(`  Intake sanitized: ${event.sourceRef} — ${event.neutralizations.map(({ category, count }) => `${category}: ${count}`).join(', ') || 'no matches'}`));
+        break;
+
       case 'step_started': {
         const def = this.steps.find((s) => s.name === event.step);
         this.currentStep = {

@@ -58,6 +58,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   feature_dispatch_started: 'not-audited-by-design',
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
+  intake_inbound_sanitized: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
   memory_setup: 'not-audited-by-design',
   setup_repair: 'not-audited-by-design',
@@ -207,6 +208,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },
   feature_shipped: { type: 'feature_shipped', slug: 'feature', active: { state: 'unavailable' } },
+  intake_inbound_sanitized: {
+    type: 'intake_inbound_sanitized',
+    sourceRef: 'owner/repo#12',
+    neutralizations: [{ category: 'agent-directive', count: 1 }],
+    digest: 'a'.repeat(64),
+  },
   project_setup: { type: 'project_setup', ran: false, reason: 'marker-valid' },
   memory_setup: { type: 'memory_setup', before: 'absent', canonical: true },
   setup_repair: {
