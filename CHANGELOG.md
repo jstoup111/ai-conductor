@@ -31,6 +31,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build skills defer aggregate verification to the dedicated test_suite gate and use its failure evidence for scoped repairs. ([implementation PR #2232](https://github.com/jstoup111/ai-conductor/pull/2232)).
 - The hosted documentation site now publishes from the `stable` branch at each release cut instead of from every merge to `main`. ([implementation PR #2363](https://github.com/jstoup111/ai-conductor/pull/2363)).
 - The pre-BUILD coverage-binding judge (`coverage_binding.judge.enabled`) is now on by default. ([implementation PR #2116](https://github.com/jstoup111/ai-conductor/pull/2116)).
+- The as-built architecture review now follows an explicit context budget (bounded diff/log/search reads, no re-reading policy text) to avoid mid-review compaction. ([implementation PR #2379](https://github.com/jstoup111/ai-conductor/pull/2379)).
+- The as-built architecture review and prd-audit now delegate evidence gathering to host-native subagents and grade from bounded digests, keeping the reviewer's context for judgement. ([implementation PR #2380](https://github.com/jstoup111/ai-conductor/pull/2380)).
 
 ### Fixed
 
@@ -72,6 +74,9 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Vitest global setup removes stale temporary run roots before they accumulate. ([implementation PR #2249](https://github.com/jstoup111/ai-conductor/pull/2249)).
 - Step and closeout duration histograms now bucket up to 8 hours, so p95 no longer saturates at 30 minutes for long build steps. ([implementation PR #2360](https://github.com/jstoup111/ai-conductor/pull/2360)).
 - Daemon as-built review halts now distinguish human decisions, repair-routing failures, and malformed reports. ([implementation PR #2201](https://github.com/jstoup111/ai-conductor/pull/2201)).
+- Revert the coverage_binding judge default to off; the judge-on default caused a daemon retry spin. ([implementation PR #2370](https://github.com/jstoup111/ai-conductor/pull/2370)).
+- Reopened remediation tasks now resume with fresh evidence instead of halting after prior completion. ([implementation PR #2355](https://github.com/jstoup111/ai-conductor/pull/2355)).
+- prd_audit and as-built verdicts are preserved across a SHIP-tail rebase rewrite and across a halt/resume when the reviewed code is unchanged; a review re-runs only when its surface actually changed. ([implementation PR #2382](https://github.com/jstoup111/ai-conductor/pull/2382)).
 
 ## [1.0.0] - 2026-08-31
 
