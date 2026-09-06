@@ -15,6 +15,9 @@ import {
   type TestDeclarationSpan,
 } from './build-review-test-declarations.js';
 import type { BuildReviewScopeDependencyEffect } from './build-review-scope-dependencies.js';
+import { parseCoversMarkers } from './covers-marker.js';
+import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { extractStoryCriterionIds } from './story-criteria.js';
 import ts from 'typescript';
 
 export interface BuildReviewTestScopeInput {
@@ -196,6 +199,55 @@ function candidate(
     markers: uniqueMarkers(markers),
     associationChanges: Object.freeze([...associationChanges]),
     reasons: Object.freeze([...new Set(reasons)]),
+  });
+}
+
+/**
+ * Preserve a parser/analyzer outage as source-bound uncertainty.  This is
+ * deliberately narrower than a file fallback: without a feature-local Covers
+ * marker, an unreadable declaration has no review authority at all.
+ */
+export function unavailableBuildReviewTestScope(
+  input: BuildReviewTestScopeInput,
+  error: unknown,
+): BuildReviewTestScope {
+  const text = sourceText(input.head.source);
+  const criteria = new Set(extractStoryCriterionIds(input.head.storiesText).map((id) => id.toUpperCase()));
+  const frs = new Set([...input.head.storiesText.matchAll(/\bFR-\d+\b/gi)].map((match) => match[0].toUpperCase()));
+  const tasks = new Set(parsePlanTaskPaths(input.head.planText).keys());
+  const markers: CoversMarker[] = [];
+  const markerPattern = /\bCovers\s*:\s*[^\r\n]*/g;
+  for (const match of text.matchAll(markerPattern)) {
+    const start = match.index ?? 0;
+    for (const reference of parseCoversMarkers(match[0])) {
+      const resolved = reference.kind === 'criterion'
+        ? criteria.has(reference.id.toUpperCase())
+        : reference.kind === 'fr'
+          ? frs.has(reference.id.toUpperCase())
+          : reference.kind === 'task'
+            ? tasks.has(reference.id)
+            : false;
+      if (resolved) markers.push(Object.freeze({
+        span: Object.freeze({ start, end: start + match[0].length }),
+        reference,
+      }));
+    }
+  }
+  const diagnostic = Object.freeze({
+    reason: 'syntax-diagnostic' as const,
+    span: Object.freeze({ start: 0, end: text.length }),
+    message: `test declaration analysis failed: ${error instanceof Error ? error.message : String(error)}`,
+  });
+  const candidates = markers.length === 0
+    ? []
+    : [candidate(undefined, markers, [], ['unsupported-declaration'], diagnostic)];
+  return Object.freeze({
+    changedDeclarations: Object.freeze([]),
+    targets: Object.freeze([]),
+    candidates: Object.freeze(candidates),
+    notes: Object.freeze([Object.freeze({ kind: 'declaration-uncertainty' as const, diagnostic })]),
+    affectedGroups: Object.freeze([]),
+    sharedSources: Object.freeze([]),
   });
 }
 
