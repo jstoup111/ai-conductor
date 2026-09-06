@@ -1,6 +1,13 @@
 import { readFile, unlink, mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { listCommitsWithTrailers, canonicalTaskId, parsePlanTaskVerifyOnly } from './autoheal.js';
+import {
+  listCommitsWithTrailers,
+  listCommitsWithTrailersAfterRepairBoundary,
+  canonicalTaskId,
+  parsePlanTaskVerifyOnly,
+} from './autoheal.js';
+import { readEngineState } from './engine-state-store.js';
+import { createRepairObligationStore, repairPlanIdentity, type RepairObligation } from './repair-obligations.js';
 import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
@@ -63,7 +70,16 @@ export async function countResolvedTasks(projectRoot: string): Promise<number> {
  * here so other callers (the build completion predicate) can consume the
  * same definition instead of re-deriving it.
  */
-export async function resolveTaskIds(projectRoot: string, planIds: string[]): Promise<Set<string>> {
+export interface TaskResolution {
+  resolved: Set<string>;
+  unavailableReasons: Map<string, string>;
+}
+
+/** Resolves task completion while retaining strict-repair refusal diagnostics. */
+export async function resolveTaskIdsWithDiagnostics(
+  projectRoot: string,
+  planIds: string[],
+): Promise<TaskResolution> {
   const statusPath = join(projectRoot, '.pipeline/task-status.json');
   let raw: string;
   try {
@@ -98,7 +114,75 @@ export async function resolveTaskIds(projectRoot: string, planIds: string[]): Pr
     if (match !== undefined) resolved.add(match);
   }
 
-  return resolved;
+  const unavailableReasons = new Map<string, string>();
+  const repairState = await readOpenRepairState(projectRoot);
+  if (repairState.kind === 'unavailable') {
+    for (const planId of planIds) unavailableReasons.set(planId, repairState.reason);
+    return { resolved: new Set(), unavailableReasons };
+  }
+  if (repairState.kind === 'none') return { resolved, unavailableReasons };
+
+  for (const planId of planIds) {
+    const canonicalId = canonicalTaskId(planId);
+    const obligations = repairState.obligations.filter((obligation) => obligation.tasks[canonicalId] !== undefined);
+    if (obligations.length === 0) continue;
+
+    if (obligations.every((obligation) => obligation.tasks[canonicalId].status === 'resolved')) {
+      resolved.add(planId);
+      continue;
+    }
+
+    // An explicit repair takes precedence over legacy rows and broad branch
+    // history. Every still-open obligation needs current, boundary-bounded
+    // Task evidence before this task can route forward.
+    resolved.delete(planId);
+    let allOpenObligationsEvidenced = true;
+    for (const obligation of obligations) {
+      if (obligation.tasks[canonicalId].status === 'resolved') continue;
+      const strictRange = await listCommitsWithTrailersAfterRepairBoundary(projectRoot, obligation.baseline.head);
+      if (strictRange.kind !== 'available') {
+        allOpenObligationsEvidenced = false;
+        unavailableReasons.set(planId, strictRange.reason);
+        continue;
+      }
+      const hasCurrentTrailer = strictRange.commits.some((commit) =>
+        (commit.trailers.Task ?? []).some((trailer) => canonicalTaskId(trailer) === canonicalId),
+      );
+      if (!hasCurrentTrailer) allOpenObligationsEvidenced = false;
+    }
+    if (allOpenObligationsEvidenced) resolved.add(planId);
+  }
+
+  return { resolved, unavailableReasons };
+}
+
+/** Backwards-compatible resolved-id fold for callers that do not render diagnostics. */
+export async function resolveTaskIds(projectRoot: string, planIds: string[]): Promise<Set<string>> {
+  return (await resolveTaskIdsWithDiagnostics(projectRoot, planIds)).resolved;
+}
+
+type OpenRepairState =
+  | { kind: 'none' }
+  | { kind: 'available'; obligations: RepairObligation[] }
+  | { kind: 'unavailable'; reason: string };
+
+/**
+ * The durable repair section is a control boundary. A malformed present state
+ * must not silently restore historic completion through the legacy union.
+ */
+async function readOpenRepairState(projectRoot: string): Promise<OpenRepairState> {
+  const statePath = join(projectRoot, '.pipeline', 'engine-state.json');
+  const state = await readEngineState(statePath);
+  if (!state.ok) return { kind: 'unavailable', reason: `repair state is unavailable: ${state.message}` };
+  const activePlanPath = state.value.activePlanPath;
+  if (typeof activePlanPath !== 'string' || !activePlanPath.trim()) return { kind: 'none' };
+
+  const repairs = await createRepairObligationStore(projectRoot, statePath).read();
+  if (!repairs.ok) return { kind: 'unavailable', reason: `repair state is unavailable: ${repairs.message}` };
+  const planIdentity = repairPlanIdentity(projectRoot, activePlanPath);
+  const obligations = Object.values(repairs.value.records)
+    .filter((obligation) => obligation.planIdentity === planIdentity);
+  return obligations.length === 0 ? { kind: 'none' } : { kind: 'available', obligations };
 }
 
 /**

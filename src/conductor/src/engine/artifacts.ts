@@ -26,7 +26,7 @@ import {
   readOverScopeDecisions,
 } from './accepted-widenings.js';
 import { resolveGateCodeValidityConfig } from './config.js';
-import { resolveTaskIds } from './task-progress.js';
+import { resolveTaskIdsWithDiagnostics } from './task-progress.js';
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
 import {
   FullSuiteVerifier,
@@ -2798,15 +2798,20 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // task is trailer-evidenced but rows are still pending/in_progress
       // (rows never explicitly flipped) previously false-halted here at
       // 100% real completion.
-      const resolvedIds = await resolveTaskIds(ctx.projectRoot, planTaskIds);
+      const taskResolution = await resolveTaskIdsWithDiagnostics(ctx.projectRoot, planTaskIds);
+      const resolvedIds = taskResolution.resolved;
       const unresolved = planTaskIds.filter((id) => !resolvedIds.has(id));
 
       if (unresolved.length > 0) {
         const names = unresolved.slice(0, 3).join(', ');
         const more = unresolved.length > 3 ? ` (+${unresolved.length - 3} more)` : '';
+        const repairReason = unresolved
+          .map((id) => taskResolution.unavailableReasons.get(id))
+          .find((reason): reason is string => Boolean(reason));
         return {
           done: false,
-          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}`,
+          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}` +
+            (repairReason ? `; ${repairReason}` : ''),
         };
       }
 
