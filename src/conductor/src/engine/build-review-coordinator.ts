@@ -362,8 +362,16 @@ export async function coordinateBuildReviewRubrics(
   const testQualityPolicy = input.config.rubrics.testQuality;
   const inScopeTests = input.inputs.sourceSnapshot.testQuality?.inScopeTests ?? [];
   const unresolvedMarkers = input.inputs.sourceSnapshot.testQuality?.unresolvedMarkers ?? [];
-  const hasConcreteCandidates = (input.inputs.sourceSnapshot.testScope?.candidates.length ?? 0) > 0;
-  if (input.config.enabled && testQualityPolicy?.enabled && inScopeTests.length === 0 && !hasConcreteCandidates) {
+  // The source-bound scope is authoritative. Legacy selector fields remain
+  // projection compatibility data and must not turn a refactor or note into
+  // a review target. A snapshot from before typed scope existed retains its
+  // legacy selector behavior solely for compatibility.
+  const typedScope = input.inputs.sourceSnapshot.testScope;
+  const hasEstablishedTargets = typedScope === undefined
+    ? inScopeTests.length > 0
+    : (typedScope.targets?.length ?? 0) > 0;
+  const hasConcreteCandidates = (typedScope?.candidates?.length ?? 0) > 0;
+  if (input.config.enabled && testQualityPolicy?.enabled && !hasEstablishedTargets && !hasConcreteCandidates) {
     await input.emit?.({
       type: "build_review_outer_verdict",
       lapId: input.lapId,
