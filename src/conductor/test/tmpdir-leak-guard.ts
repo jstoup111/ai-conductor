@@ -71,6 +71,15 @@ export interface RunRootOwnerMarker {
   startedAt: string;
 }
 
+/** Structural check for a parsed marker: the exact shape `writeRunRootOwnerMarker` persists. */
+export function isRunRootOwnerMarker(value: unknown): value is RunRootOwnerMarker {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.pid === 'number' && Number.isFinite(record.pid)
+    && typeof record.hostname === 'string'
+    && typeof record.startedAt === 'string';
+}
+
 /** A candidate run-root and its already-read owner marker state. */
 export interface RunRootEntry {
   name: string;
@@ -456,7 +465,13 @@ export async function sweepStaleRunTmpRoots(
     try {
       const markerPath = join(rootPath, RUN_TMP_ROOT_OWNER_MARKER);
       const markerStat = statSync(markerPath);
-      JSON.parse(readFileSync(markerPath, 'utf8'));
+      const parsed: unknown = JSON.parse(readFileSync(markerPath, 'utf8'));
+      // Valid JSON is not yet a valid marker: only the owner shape this
+      // guard writes counts as `present`. Anything else is ambiguous
+      // evidence and is retained exactly like unparseable bytes.
+      if (!isRunRootOwnerMarker(parsed)) {
+        throw new Error('owner marker JSON is not a RunRootOwnerMarker (pid, hostname, startedAt)');
+      }
       marker = { kind: 'present', mtimeMs: markerStat.mtimeMs };
     } catch (error) {
       if (isMissing(error)) {

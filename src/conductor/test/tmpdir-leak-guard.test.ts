@@ -559,7 +559,10 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
   async function makeMarkedRoot(name: string, markerMtimeMs: number): Promise<string> {
     const runRoot = join(fakeRealTmpdir, name);
     await mkdir(runRoot);
-    await writeFile(join(runRoot, RUN_TMP_ROOT_OWNER_MARKER), JSON.stringify({ owner: 'test' }));
+    await writeFile(
+      join(runRoot, RUN_TMP_ROOT_OWNER_MARKER),
+      JSON.stringify({ pid: 42, hostname: 'test-host', startedAt: '2026-09-05T12:00:00.000Z' })
+    );
     await utimes(join(runRoot, RUN_TMP_ROOT_OWNER_MARKER), markerMtimeMs / 1_000, markerMtimeMs / 1_000);
     return runRoot;
   }
@@ -604,6 +607,36 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
     ).resolves.toEqual({ reaped: [], retained: [], failures: [] });
 
     expect(logger).not.toHaveBeenCalled();
+  });
+
+  it('retains a stale marker that is valid JSON but not the owner shape as marker-unreadable', async () => {
+    const shapeless = join(fakeRealTmpdir, root('shapeless'));
+    const logger = vi.fn();
+    await mkdir(shapeless);
+    await writeFile(join(shapeless, RUN_TMP_ROOT_OWNER_MARKER), JSON.stringify({ owner: 'test' }));
+    const stale = (now - staleAfterMs - 1) / 1_000;
+    await utimes(join(shapeless, RUN_TMP_ROOT_OWNER_MARKER), stale, stale);
+    const remove = vi.fn();
+
+    await expect(
+      sweepStaleRunTmpRoots(fakeRealTmpdir, {
+        ownRoot: join(fakeRealTmpdir, root('own')),
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+        remove,
+        logger,
+      })
+    ).resolves.toEqual({
+      reaped: [],
+      retained: [{ name: root('shapeless'), reason: 'marker-unreadable', windowMs: staleAfterMs }],
+      failures: [],
+    });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining(`owner marker unreadable for ${shapeless}; retaining run root`)
+    );
   });
 
   it('retains and reports a malformed owner marker without attempting removal', async () => {
