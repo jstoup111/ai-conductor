@@ -474,3 +474,5 @@ The following records the repo-wide narrowing. “Retained subject candidate” 
 | `adr-2026-09-02-adr-decision-citability-contract` | Narrowed out: unrelated subject |
 | `adr-2026-09-05-gh-cli-version-floor-and-environment-gate` | Narrowed out: unrelated subject |
 | `adr-2026-09-06-reopened-task-resolution` | Retained subject candidate |
+
+> **Amended 2026-09-06 by #1831:** At the operator’s direction, the eight cross-feature artifact amendments are isolated in sidecar PR #2264 (https://github.com/jstoup111/ai-conductor/pull/2264). Spec PR #2263 is stacked on that sidecar and must follow it. The previously approved conflict resolutions and architecture remain unchanged; statements above describing corrections in the same change now refer to this paired DECIDE delivery. The sidecar must be in the base before the first BUILD entry.

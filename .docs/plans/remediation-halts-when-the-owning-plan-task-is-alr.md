@@ -279,6 +279,8 @@ All criteria below concern behavior against the current feature checkout and exp
 
 ## Architecture Obligation Coverage
 
+> **Amended 2026-09-06 by #1831:** The operator directed cross-feature amendments into sidecar PR #2264 (https://github.com/jstoup111/ai-conductor/pull/2264), which must merge before spec PR #2263. The current spec PR is stacked on that sidecar. Its own change set contains one ADR with nine citable decisions; the two older amended ADRs belong to the sidecar. The prior combined-review mappings are retained below as quoted context, outside the active coverage table.
+
 | Decision | Disposition | Task(s) | Evidence |
 | --- | --- | --- | --- |
 | adr-2026-09-06-reopened-task-resolution#D1 | task | task-3 | repair-obligations.test.ts preserves source findings, repair instructions, original evidence/progress boundaries, and open/resolved state across serialization. |
@@ -290,16 +292,21 @@ All criteria below concern behavior against the current feature checkout and exp
 | adr-2026-09-06-reopened-task-resolution#D7 | task | task-7 | Through Conductor.run, the accepted-only scope fixture advances with unchanged HEAD, zero BUILD calls, and zero repair laps, including restart and late acceptance of the same pending route. |
 | adr-2026-09-06-reopened-task-resolution#D8 | task | task-10 | Through Conductor.run, the unchanged-failure fixture halts with prior/current context and no further BUILD after status-only reopen/reclose produces no net progress. |
 | adr-2026-09-06-reopened-task-resolution#D9 | task | task-8, task-11 | Through Conductor.run, plan-growth-existing-task-restage.acceptance.test.ts dispatches historically completed bound owners with their findings, adds no plan task, folds aliases, and charges one lap per owning gate for the admitted round with zero growth. |
-| adr-2026-07-13-kickback-build-no-op-escalation#D1 | task | task-11 | Through the conductor remediation route, diagnostic fixtures distinguish empty output, unresolved ownership, persistence/restage failure, unavailable current evidence, and genuinely resolved emitted work with available source/finding/task context. |
-| adr-2026-07-13-kickback-build-no-op-escalation#D2 | task | task-10 | Through Conductor.run, the unchanged-failure fixture halts with prior/current context and no further BUILD after status-only reopen/reclose produces no net progress. |
-| adr-2026-07-13-kickback-build-no-op-escalation#D3 | task | task-11 | Existing event persistence receives the same refusal context as the route/HALT result; no second telemetry channel is introduced. |
-| adr-2026-07-23-trailer-union-build-step-routing#D1 | task | task-10 | Through Conductor.run, conductor-remediation-noop-guard.test.ts advances after a current evidence-only close and passing effective review on an unchanged code tree, with no further repair dispatch. |
-| adr-2026-07-23-trailer-union-build-step-routing#D2 | task | task-4 | Through checkStepCompletion(build) and countResolvedTasks, task-progress.test.ts keeps old trailers, unrelated commits, and manually completed rows unresolved for an open repair while a matching post-boundary task commit permits routing. |
-| adr-2026-07-23-trailer-union-build-step-routing#D3 | task | task-4 | Through checkStepCompletion(build) and countResolvedTasks, task-progress.test.ts keeps old trailers, unrelated commits, and manually completed rows unresolved for an open repair while a matching post-boundary task commit permits routing. |
-| adr-2026-07-23-trailer-union-build-step-routing#D4 | task | task-4 | task-progress.test.ts leaves an unavailable or non-ancestor repair boundary unresolved with a named reason and never substitutes older branch history; a persisted valid current close remains usable. |
-| adr-2026-07-23-trailer-union-build-step-routing#D5 | task | task-4 | task-progress.test.ts preserves unreopened terminal-row, trailer, legacy no-context, and Git-read-failure outcomes while malformed present repair state cannot produce historical completion. |
-| adr-2026-07-23-trailer-union-build-step-routing#D6 | no-change | none | Historical #859 contract-text synchronization is not a new implementation obligation in #1831; the current routing/task-close/review authority is governed by the already-approved successor decisions. |
 
 ## Completion of plan authoring
 
 The task graph is acyclic: 1 → 2/3; 3 → 4/6; 4 → 5; 2/3/4/7 → 8; 5/8 → 9; 6/9 → 10; 8/9 → 11. Task 7 is independent and preserves the existing scope-decision authority. All 34 acceptance criteria have an explicit coverage row; all 18 citable changed-ADR decisions have one disposition. No BUILD task directs amendment of another feature’s protected artifact.
+
+## Sidecar mappings from the prior combined review
+
+> | adr-2026-07-13-kickback-build-no-op-escalation#D1 | task | task-11 | Through the conductor remediation route, diagnostic fixtures distinguish empty output, unresolved ownership, persistence/restage failure, unavailable current evidence, and genuinely resolved emitted work with available source/finding/task context. |
+> | adr-2026-07-13-kickback-build-no-op-escalation#D2 | task | task-10 | Through Conductor.run, the unchanged-failure fixture halts with prior/current context and no further BUILD after status-only reopen/reclose produces no net progress. |
+> | adr-2026-07-13-kickback-build-no-op-escalation#D3 | task | task-11 | Existing event persistence receives the same refusal context as the route/HALT result; no second telemetry channel is introduced. |
+> | adr-2026-07-23-trailer-union-build-step-routing#D1 | task | task-10 | Through Conductor.run, conductor-remediation-noop-guard.test.ts advances after a current evidence-only close and passing effective review on an unchanged code tree, with no further repair dispatch. |
+> | adr-2026-07-23-trailer-union-build-step-routing#D2 | task | task-4 | Through checkStepCompletion(build) and countResolvedTasks, task-progress.test.ts keeps old trailers, unrelated commits, and manually completed rows unresolved for an open repair while a matching post-boundary task commit permits routing. |
+> | adr-2026-07-23-trailer-union-build-step-routing#D3 | task | task-4 | Through checkStepCompletion(build) and countResolvedTasks, task-progress.test.ts keeps old trailers, unrelated commits, and manually completed rows unresolved for an open repair while a matching post-boundary task commit permits routing. |
+> | adr-2026-07-23-trailer-union-build-step-routing#D4 | task | task-4 | task-progress.test.ts leaves an unavailable or non-ancestor repair boundary unresolved with a named reason and never substitutes older branch history; a persisted valid current close remains usable. |
+> | adr-2026-07-23-trailer-union-build-step-routing#D5 | task | task-4 | task-progress.test.ts preserves unreopened terminal-row, trailer, legacy no-context, and Git-read-failure outcomes while malformed present repair state cannot produce historical completion. |
+> | adr-2026-07-23-trailer-union-build-step-routing#D6 | no-change | none | Historical #859 contract-text synchronization is not a new implementation obligation in #1831; the current routing/task-close/review authority is governed by the already-approved successor decisions. |
+
+> **Amended 2026-09-06 by #1831:** The operator directed cross-feature amendments into sidecar PR #2264 (https://github.com/jstoup111/ai-conductor/pull/2264), which must merge before spec PR #2263. The current spec PR is stacked on that sidecar. Its own change set contains one ADR with nine citable decisions; the two older amended ADRs belong to the sidecar. The prior combined-review mappings are retained below as quoted context, outside the active coverage table.

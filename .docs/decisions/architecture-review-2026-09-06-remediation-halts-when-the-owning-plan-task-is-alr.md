@@ -53,3 +53,5 @@ Candidate files: `src/conductor/src/engine/conductor.ts`, `task-progress.ts`, `t
 ## Verify-Claims
 
 CLEAR. Code behavior was read directly in the authoring worktree; the ADR records the evidence. Scope, classification, architecture, and bounded departures were explicitly approved. The unavailable remote dependency read remains an advisory uncertainty, not a claim of no overlap.
+
+> **Amended 2026-09-06 by #1831:** At the operator’s direction, the eight cross-feature artifact amendments are isolated in sidecar PR #2264 (https://github.com/jstoup111/ai-conductor/pull/2264). Spec PR #2263 is stacked on that sidecar and must follow it. The previously approved conflict resolutions and architecture remain unchanged; statements above describing corrections in the same change now refer to this paired DECIDE delivery. The sidecar must be in the base before the first BUILD entry.

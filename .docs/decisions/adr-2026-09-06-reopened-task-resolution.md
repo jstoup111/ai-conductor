@@ -77,3 +77,5 @@ The operator explicitly approved the scope, technical/M classification, architec
 - [ ] Implement the decision through scoped tasks with explicit integration ownership.
 - [ ] Prove admitted repair dispatch, fresh and evidence-only closure, scope acceptance, crash replay, and bounded unresolved retries.
 - [ ] Update canonical daemon guidance and the affected recovery runbook alongside implementation.
+
+> **Amended 2026-09-06 by #1831:** At the operator’s direction, the eight cross-feature artifact amendments are isolated in sidecar PR #2264 (https://github.com/jstoup111/ai-conductor/pull/2264). Spec PR #2263 is stacked on that sidecar and must follow it. The previously approved conflict resolutions and architecture remain unchanged; statements above describing corrections in the same change now refer to this paired DECIDE delivery. The sidecar must be in the base before the first BUILD entry.
