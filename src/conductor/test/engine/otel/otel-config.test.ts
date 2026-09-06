@@ -157,6 +157,84 @@ describe('resolveOtelConfig', () => {
         else process.env.OTEL_TEST_AUTHORIZATION = previous;
       }
     });
+
+    it('accepts a well-formed mapping with no error or warning', () => {
+      const previous = process.env.OTEL_TEST_AUTHORIZATION;
+      try {
+        process.env.OTEL_TEST_AUTHORIZATION = 'valid-token';
+        const result = resolveOtelConfig(headerConfig, PIPELINE_DIR);
+        expect(result).toEqual({
+          enabled: true,
+          exporter: 'otlp',
+          endpoint: 'http://localhost:4318',
+          headers: { Authorization: 'valid-token' },
+        });
+        expect((result as { error?: string }).error).toBeUndefined();
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
+
+    it.each([
+      ['a literal credential', { Authorization: 'literal-credential' }, /Authorization.*literal credential/i],
+      ['an unknown reference key', { Authorization: { env: 'OTEL_TEST_AUTHORIZATION', secret: true } }, /Authorization.*\{ env:/i],
+      ['an absent reference key', { Authorization: {} }, /Authorization.*\{ env:/i],
+      ['a non-string environment variable name', { Authorization: { env: 42 } }, /Authorization.*\{ env:/i],
+      ['a non-mapping headers block', 'not-a-mapping', /headers.*mapping/i],
+      ['an empty header name', { '': { env: 'OTEL_TEST_AUTHORIZATION' } }, /header ''/i],
+      ['a header name containing a control character', { 'Bad\nHeader': { env: 'OTEL_TEST_AUTHORIZATION' } }, /Bad.*Header/i],
+    ] as const)('refuses %s by name', (_caseName, headers, errorPattern) => {
+      const result = resolveOtelConfig(
+        {
+          otel: {
+            exporter: 'otlp',
+            endpoint: 'http://localhost:4318',
+            headers,
+          } as never,
+        },
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({ enabled: false });
+      expect((result as { error?: string }).error).toMatch(errorPattern);
+    });
+
+    it.each([
+      ['grpc protocol', { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', headers: headerConfig.otel.headers }, /grpc.*headers|headers.*grpc/i],
+      ['file exporter', { exporter: 'file', headers: headerConfig.otel.headers }, /file.*headers|headers.*file/i],
+    ] as const)('refuses headers with the %s', (_caseName, otel, errorPattern) => {
+      const result = resolveOtelConfig({ otel }, PIPELINE_DIR);
+
+      expect(result).toMatchObject({ enabled: false });
+      expect((result as { error?: string }).error).toMatch(errorPattern);
+    });
+
+    it('never includes an environment value in a header-related error', () => {
+      const previous = process.env.OTEL_TEST_AUTHORIZATION;
+      const sentinel = 'distinctive-sentinel-secret';
+      try {
+        process.env.OTEL_TEST_AUTHORIZATION = sentinel;
+        const result = resolveOtelConfig(
+          {
+            otel: {
+              exporter: 'otlp',
+              endpoint: 'http://localhost:4318',
+              headers: { Authorization: { env: 'OTEL_TEST_AUTHORIZATION', secret: true } },
+            } as never,
+          },
+          PIPELINE_DIR,
+        );
+
+        const error = (result as { error?: string }).error ?? '';
+        expect(error).toContain('Authorization');
+        expect(error).toContain('OTEL_TEST_AUTHORIZATION');
+        expect(error).not.toContain(sentinel);
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
   });
 
   describe('project_name', () => {
