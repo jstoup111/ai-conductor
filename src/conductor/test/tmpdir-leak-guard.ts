@@ -1,6 +1,17 @@
-import { chmodSync, lstatSync, mkdtempSync, readdirSync, realpathSync } from 'fs';
+import {
+  chmodSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'fs';
+import type { Dirent } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 
 /**
  * Temp-directory leak containment for the vitest suite (two mechanisms).
@@ -40,6 +51,167 @@ export const RUN_TMP_ROOT_PREFIX = 'ai-conductor-vitest-run-';
  * worker-side test prove propagation by comparing `os.tmpdir()` to it.
  */
 export const RUN_TMP_ROOT_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT';
+
+/** Owner marker persisted inside each run root for cross-namespace liveness checks. */
+export const RUN_TMP_ROOT_OWNER_MARKER = '.owner';
+
+/** Frequency at which a live run refreshes its owner marker. */
+export const RUN_TMP_ROOT_HEARTBEAT_MS = 60_000;
+
+/** A marker older than this is stale, unless the caller overrides the policy. */
+export const RUN_TMP_ROOT_STALE_AFTER_MS = 3 * 60 * 60 * 1_000;
+
+/** Legacy roots without a marker get a longer retention window. */
+export const RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS = 24 * 60 * 60 * 1_000;
+
+/** Identity recorded when a run root becomes live. */
+export interface RunRootOwnerMarker {
+  pid: number;
+  hostname: string;
+  startedAt: string;
+}
+
+/** Structural check for a parsed marker: the exact shape `writeRunRootOwnerMarker` persists. */
+export function isRunRootOwnerMarker(value: unknown): value is RunRootOwnerMarker {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.pid === 'number' && Number.isFinite(record.pid)
+    && typeof record.hostname === 'string'
+    && typeof record.startedAt === 'string';
+}
+
+/** A candidate run-root and its already-read owner marker state. */
+export interface RunRootEntry {
+  name: string;
+  isDirectory: boolean;
+  dirMtimeMs: number;
+  marker:
+    | { kind: 'present'; mtimeMs: number }
+    | { kind: 'absent' }
+    | { kind: 'unreadable'; error: unknown };
+}
+
+/** Pure stale-run-root sweep result, retaining any ambiguous candidate. */
+export interface StaleRunRootDecision {
+  reap: string[];
+  retain: {
+    name: string;
+    reason: 'live' | 'own-root' | 'unmarked-recent' | 'marker-unreadable' | 'not-a-directory';
+    /**
+     * The staleness window that decided this retention: `staleAfterMs` for
+     * every marker-based reason, `legacyStaleAfterMs` for `unmarked-recent`.
+     * Lets a caller report which window (including an operator override)
+     * produced the decision.
+     */
+    windowMs: number;
+  }[];
+}
+
+/** Filesystem sweep result, including failures that were retained fail-open. */
+export interface StaleRunTmpRootsResult {
+  reaped: string[];
+  retained: StaleRunRootDecision['retain'];
+  failures: { name: string; error: unknown }[];
+}
+
+/**
+ * Decide which enumerated run roots can safely be reaped.
+ *
+ * This deliberately consumes marker readings rather than reaching for the
+ * filesystem itself: callers own the I/O boundary, while this policy remains
+ * deterministic and conservative around incomplete observations.
+ */
+export function decideStaleRunRoots({
+  entries,
+  ownRoot,
+  now,
+  staleAfterMs,
+  legacyStaleAfterMs,
+}: {
+  entries: RunRootEntry[];
+  ownRoot: string;
+  now: number;
+  staleAfterMs: number;
+  legacyStaleAfterMs: number;
+}): StaleRunRootDecision {
+  const reap: string[] = [];
+  const retain: StaleRunRootDecision['retain'] = [];
+  const ownRootName = basename(ownRoot);
+
+  for (const entry of entries) {
+    if (!entry.name.startsWith(RUN_TMP_ROOT_PREFIX)) continue;
+
+    if (!entry.isDirectory) {
+      retain.push({ name: entry.name, reason: 'not-a-directory', windowMs: staleAfterMs });
+    } else if (entry.name === ownRootName) {
+      retain.push({ name: entry.name, reason: 'own-root', windowMs: staleAfterMs });
+    } else if (entry.marker.kind === 'unreadable') {
+      retain.push({ name: entry.name, reason: 'marker-unreadable', windowMs: staleAfterMs });
+    } else if (entry.marker.kind === 'present') {
+      if (now - entry.marker.mtimeMs > staleAfterMs) {
+        reap.push(entry.name);
+      } else {
+        retain.push({ name: entry.name, reason: 'live', windowMs: staleAfterMs });
+      }
+    } else if (now - entry.dirMtimeMs > legacyStaleAfterMs) {
+      reap.push(entry.name);
+    } else {
+      retain.push({ name: entry.name, reason: 'unmarked-recent', windowMs: legacyStaleAfterMs });
+    }
+  }
+
+  return { reap, retain };
+}
+
+type GuardLogger = (message: string) => void;
+
+function logOwnerMarkerError(logger: GuardLogger, action: string, error: unknown): void {
+  logger(
+    `tmpdir-leak-guard: owner marker ${action} failed — ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  );
+}
+
+/**
+ * Persist this run's owner identity inside its root.
+ *
+ * Marker failures are deliberately non-fatal: cleanup must remain possible
+ * even when a filesystem edge condition prevents stale-root attribution.
+ */
+export function writeRunRootOwnerMarker(
+  runRoot: string,
+  owner: RunRootOwnerMarker,
+  logger: GuardLogger = console.error
+): void {
+  try {
+    writeFileSync(join(runRoot, RUN_TMP_ROOT_OWNER_MARKER), JSON.stringify(owner), 'utf8');
+  } catch (error) {
+    logOwnerMarkerError(logger, 'write', error);
+  }
+}
+
+/** Start an unref'd liveness heartbeat for an existing run-root owner marker. */
+export function startRunRootHeartbeat(
+  runRoot: string,
+  {
+    intervalMs = RUN_TMP_ROOT_HEARTBEAT_MS,
+    logger = console.error,
+  }: { intervalMs?: number; logger?: GuardLogger } = {}
+): { stop: () => void } {
+  const markerPath = join(runRoot, RUN_TMP_ROOT_OWNER_MARKER);
+  const heartbeat = setInterval(() => {
+    try {
+      const now = new Date();
+      utimesSync(markerPath, now, now);
+    } catch (error) {
+      logOwnerMarkerError(logger, 'heartbeat refresh', error);
+    }
+  }, intervalMs);
+  heartbeat.unref(); // portability-ok: heartbeat must not keep an interrupted test run alive
+
+  return { stop: () => clearInterval(heartbeat) };
+}
 
 /** Make nested directories removable without following symlinks. */
 function makeDirectoriesWritableSync(path: string): void {
@@ -184,6 +356,160 @@ export function ensureRunTmpRootSync(
 export async function removeRunTmpRoot(runRoot: string): Promise<void> {
   makeDirectoriesWritableSync(runRoot);
   await rm(runRoot, { recursive: true, force: true });
+}
+
+function isMissing(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
+}
+
+/**
+ * Prefix of every sweep-failure line. Exported so the setup wiring can
+ * recognise and drop these lines from the sweep's own logger, leaving
+ * `applyRunRootSweepDecision` as the sole reporter of failures.
+ */
+export const RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX = 'tmpdir-leak-guard: stale run root sweep failed for ';
+
+function logSweepFailure(logger: GuardLogger, name: string, error: unknown): void {
+  try {
+    logger(
+      `${RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX}${name} — ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  } catch {
+    // A best-effort diagnostic must not turn a fail-open sweep into a setup failure.
+  }
+}
+
+function logUnreadableOwnerMarker(logger: GuardLogger, name: string, error: unknown): void {
+  try {
+    logger(
+      `tmpdir-leak-guard: owner marker unreadable for ${name}; retaining run root — ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  } catch {
+    // A best-effort diagnostic must not turn a fail-open sweep into a setup failure.
+  }
+}
+
+/**
+ * Reap stale run roots from the real tmpdir while retaining any ambiguous entry.
+ *
+ * The root itself is always inspected with `lstatSync`, so a prefixed symlink
+ * is never followed or presented to the recursive remover as a directory.
+ */
+export async function sweepStaleRunTmpRoots(
+  realTmpdir: string,
+  {
+    ownRoot,
+    now,
+    staleAfterMs,
+    legacyStaleAfterMs,
+    remove = removeRunTmpRoot,
+    logger = console.error,
+  }: {
+    ownRoot: string;
+    now: number;
+    staleAfterMs: number;
+    legacyStaleAfterMs: number;
+    remove?: (runRoot: string) => Promise<void>;
+    logger?: GuardLogger;
+  }
+): Promise<StaleRunTmpRootsResult> {
+  const failures: StaleRunTmpRootsResult['failures'] = [];
+  let dirents: Dirent[];
+
+  try {
+    dirents = await readdir(realTmpdir, { withFileTypes: true });
+  } catch (error) {
+    failures.push({ name: realTmpdir, error });
+    logSweepFailure(logger, realTmpdir, error);
+    return { reaped: [], retained: [], failures };
+  }
+
+  const entries: RunRootEntry[] = [];
+  for (const dirent of dirents.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!dirent.name.startsWith(RUN_TMP_ROOT_PREFIX)) continue;
+
+    const rootPath = join(realTmpdir, dirent.name);
+    let rootStat: ReturnType<typeof lstatSync>;
+    try {
+      rootStat = lstatSync(rootPath);
+    } catch (error) {
+      failures.push({ name: dirent.name, error });
+      logSweepFailure(logger, rootPath, error);
+      entries.push({
+        name: dirent.name,
+        isDirectory: false,
+        dirMtimeMs: 0,
+        marker: { kind: 'unreadable', error },
+      });
+      continue;
+    }
+
+    if (!rootStat.isDirectory()) {
+      // A prefixed symlink or plain file is retained `not-a-directory` by
+      // the decision helper; never look inside it, so a symlink pointing at
+      // an external directory is not followed even to read its `.owner`.
+      entries.push({
+        name: dirent.name,
+        isDirectory: false,
+        dirMtimeMs: rootStat.mtimeMs,
+        marker: { kind: 'absent' },
+      });
+      continue;
+    }
+
+    let marker: RunRootEntry['marker'];
+    try {
+      const markerPath = join(rootPath, RUN_TMP_ROOT_OWNER_MARKER);
+      const markerStat = statSync(markerPath);
+      const parsed: unknown = JSON.parse(readFileSync(markerPath, 'utf8'));
+      // Valid JSON is not yet a valid marker: only the owner shape this
+      // guard writes counts as `present`. Anything else is ambiguous
+      // evidence and is retained exactly like unparseable bytes.
+      if (!isRunRootOwnerMarker(parsed)) {
+        throw new Error('owner marker JSON is not a RunRootOwnerMarker (pid, hostname, startedAt)');
+      }
+      marker = { kind: 'present', mtimeMs: markerStat.mtimeMs };
+    } catch (error) {
+      if (isMissing(error)) {
+        marker = { kind: 'absent' };
+      } else {
+        marker = { kind: 'unreadable', error };
+        logUnreadableOwnerMarker(logger, rootPath, error);
+      }
+    }
+
+    entries.push({
+      name: dirent.name,
+      isDirectory: rootStat.isDirectory(),
+      dirMtimeMs: rootStat.mtimeMs,
+      marker,
+    });
+  }
+
+  const decision = decideStaleRunRoots({
+    entries,
+    ownRoot,
+    now,
+    staleAfterMs,
+    legacyStaleAfterMs,
+  });
+  const reaped: string[] = [];
+
+  for (const name of decision.reap) {
+    try {
+      await remove(join(realTmpdir, name));
+      reaped.push(name);
+    } catch (error) {
+      failures.push({ name, error });
+      logSweepFailure(logger, join(realTmpdir, name), error);
+    }
+  }
+
+  return { reaped, retained: decision.retain, failures };
 }
 
 /**

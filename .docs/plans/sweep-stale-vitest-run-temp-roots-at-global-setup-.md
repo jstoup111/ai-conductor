@@ -78,7 +78,7 @@ None. `removeRunTmpRoot`, `snapshotTmpdirEntries`, the real-tmpdir window, and `
 
 1. Write failing tests under `describe('tmpdir-leak-guard: stale run root sweep')` using a `mkdtemp` fixture directory as the fake real tmpdir: (a) two `ai-conductor-vitest-run-*` roots with stale markers, one containing a read-only nested directory, are removed and reported in `reaped`; a third with a fresh marker survives in `retained`; (b) an empty fixture yields `reaped: []` and the logger is never called; (c) with an injected `remove` that rejects for the first root, the second stale root is still removed, `failures` names the first root and its error, and the promise resolves; (d) with a non-existent fixture path, the result is empty, `failures` carries the listing error, and nothing throws.
 2. Verify RED.
-3. Implement `sweepStaleRunTmpRoots(realTmpdir, { ownRoot, now, staleAfterMs, legacyStaleAfterMs, remove = removeRunTmpRoot, logger })`: `readdir` with `withFileTypes`, `lstat` per prefixed entry (never following symlinks), read the marker with `statSync`/`readFileSync` into the `marker` shape, call `decideStaleRunRoots`, remove each `reap` entry sequentially inside its own try/catch, and return `{ reaped, retained, failures }`.
+3. Implement `sweepStaleRunTmpRoots(realTmpdir, { ownRoot, now, staleAfterMs, legacyStaleAfterMs, remove = removeRunTmpRoot, logger })`: `readdir` with `withFileTypes`, `lstat` per prefixed entry (never following symlinks), read the marker with `statSync`/`readFileSync` into the `marker` shape, call `decideStaleRunRoots`, remove each `reap` entry sequentially inside its own try/catch, and return `{ reaped, retained, failures }`. A marker is `present` only when its JSON carries the `RunRootOwnerMarker` shape (numeric `pid`, string `hostname`, string `startedAt`); syntactically valid JSON without that shape is `unreadable`, exactly like unparseable bytes (amended 2026-09-06 for as-built PG-1, Story 3 N2).
 4. Verify GREEN. Commit: `test(tmpdir-leak-guard): sweep stale run roots fail-open with injected removal (#2223)`.
 
 **Done when:**
@@ -87,6 +87,7 @@ None. `removeRunTmpRoot`, `snapshotTmpdirEntries`, the real-tmpdir window, and `
 - `sweepStaleRunTmpRoots` on an empty fixture returns no reaped roots and never calls the logger.
 - `sweepStaleRunTmpRoots` with a rejecting `remove` for the first root still removes the second, records the first in `failures`, and resolves without throwing.
 - `sweepStaleRunTmpRoots` on an unlistable directory resolves with an empty result and the listing error in `failures`.
+- `sweepStaleRunTmpRoots` retains a root whose marker is valid JSON but not the owner shape as `marker-unreadable`, logs the reason, and never reaps it however stale its mtime.
 
 ### Task 4: Wire marker, heartbeat, and sweep into global setup
 

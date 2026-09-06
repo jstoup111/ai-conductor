@@ -1,9 +1,22 @@
+// Covers: task:1, task:2, task:3
 // Unit tests for the tmpdir leak guard (#1112) — the redirect helpers, the
 // pure stray/ignored classification, and the throw-vs-warn teardown decision.
 // No vitest wiring involved: each seam is exercised directly, the same split
 // used by signals-leak-guard.test.ts and global-setup-engineer-signals.test.ts.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { chmod, mkdtemp, mkdir, realpath, readdir, rm, symlink, writeFile } from 'fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -12,8 +25,13 @@ import {
   ensureRunTmpRootSync,
   removeRunTmpRoot,
   RUN_TMP_ROOT_ENV,
+  RUN_TMP_ROOT_OWNER_MARKER,
+  startRunRootHeartbeat,
   snapshotTmpdirEntries,
   diffTmpdirEntries,
+  decideStaleRunRoots,
+  sweepStaleRunTmpRoots,
+  writeRunRootOwnerMarker,
   IGNORED_TMPDIR_PREFIXES,
   RUN_TMP_ROOT_PREFIX,
   type TmpdirSnapshot,
@@ -175,6 +193,99 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
   });
 });
 
+describe('tmpdir-leak-guard: owner marker', () => {
+  let fixtureRoot: string;
+  const owner = { pid: 42, hostname: 'test-host', startedAt: '2026-09-05T12:00:00.000Z' };
+
+  beforeEach(async () => {
+    fixtureRoot = await mkdtemp(join(tmpdir(), 'tmpdir-guard-owner-'));
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it('writes the owner identity to the marker and gives it an mtime', async () => {
+    const runRoot = join(fixtureRoot, 'run-root');
+    await mkdir(runRoot);
+
+    writeRunRootOwnerMarker(runRoot, owner);
+
+    const marker = join(runRoot, RUN_TMP_ROOT_OWNER_MARKER);
+    expect(JSON.parse(await readFile(marker, 'utf8'))).toEqual(owner);
+    expect((await stat(marker)).mtimeMs).toBeGreaterThan(0);
+  });
+
+  it('refreshes only the marker mtime on every heartbeat interval', async () => {
+    vi.useFakeTimers();
+    const runRoot = join(fixtureRoot, 'run-root');
+    await mkdir(runRoot);
+    writeRunRootOwnerMarker(runRoot, owner);
+    const marker = join(runRoot, RUN_TMP_ROOT_OWNER_MARKER);
+    const rootEntries = await readdir(runRoot);
+    const parentEntries = await readdir(fixtureRoot);
+    const firstMtime = (await stat(marker)).mtimeMs;
+
+    // The initial write uses the real filesystem clock; begin the fake clock
+    // after it so each virtual heartbeat is observably newer.
+    vi.setSystemTime(new Date('2099-01-01T00:00:00.000Z'));
+    const heartbeat = startRunRootHeartbeat(runRoot, { intervalMs: 1_000, logger: vi.fn() });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const secondMtime = (await stat(marker)).mtimeMs;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const thirdMtime = (await stat(marker)).mtimeMs;
+    heartbeat.stop();
+
+    expect(secondMtime).toBeGreaterThan(firstMtime);
+    expect(thirdMtime).toBeGreaterThan(secondMtime);
+    expect(await readdir(runRoot)).toEqual(rootEntries);
+    expect(await readdir(fixtureRoot)).toEqual(parentEntries);
+  });
+
+  it('stops refreshing the marker after stop is called', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-05T12:00:00.000Z'));
+    const runRoot = join(fixtureRoot, 'run-root');
+    await mkdir(runRoot);
+    writeRunRootOwnerMarker(runRoot, owner);
+    const marker = join(runRoot, RUN_TMP_ROOT_OWNER_MARKER);
+    const heartbeat = startRunRootHeartbeat(runRoot, { intervalMs: 1_000, logger: vi.fn() });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    heartbeat.stop();
+    const stoppedMtime = (await stat(marker)).mtimeMs;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect((await stat(marker)).mtimeMs).toBe(stoppedMtime);
+  });
+
+  it('fails open and logs once when the root disappears before a heartbeat tick', async () => {
+    vi.useFakeTimers();
+    const runRoot = join(fixtureRoot, 'run-root');
+    await mkdir(runRoot);
+    writeRunRootOwnerMarker(runRoot, owner);
+    const logger = vi.fn();
+    const heartbeat = startRunRootHeartbeat(runRoot, { intervalMs: 1_000, logger });
+    await rm(runRoot, { recursive: true, force: true });
+
+    expect(() => vi.advanceTimersByTime(1_000)).not.toThrow();
+    heartbeat.stop();
+
+    expect(logger).toHaveBeenCalledTimes(1);
+    expect(logger).toHaveBeenCalledWith(expect.stringMatching(/^tmpdir-leak-guard: owner marker /));
+  });
+
+  it('fails open and logs once when the owner marker cannot be written', () => {
+    const logger = vi.fn();
+
+    expect(() => writeRunRootOwnerMarker(join(fixtureRoot, 'missing-root'), owner, logger)).not.toThrow();
+
+    expect(logger).toHaveBeenCalledTimes(1);
+    expect(logger).toHaveBeenCalledWith(expect.stringMatching(/^tmpdir-leak-guard: owner marker /));
+  });
+});
+
 describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
   it('classifies an entry that appeared outside the run root as stray', () => {
     const diff = diffTmpdirEntries(snap(['existing']), snap(['existing', 'governor-test-XyZ']));
@@ -234,6 +345,401 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
 
   it('exempts the run root prefix by default so the guard never trips on its own root', () => {
     expect(IGNORED_TMPDIR_PREFIXES).toContain(RUN_TMP_ROOT_PREFIX);
+  });
+});
+
+describe('tmpdir-leak-guard: stale run root decision', () => {
+  const now = 1_000_000;
+  const staleAfterMs = 10_000;
+  const legacyStaleAfterMs = 86_400_000;
+  const root = (suffix: string) => `${RUN_TMP_ROOT_PREFIX}${suffix}`;
+
+  it('reaps a root whose owner marker heartbeat is stale and ignores unrelated entries', () => {
+    expect(
+      decideStaleRunRoots({
+        entries: [
+          {
+            name: root('stale-marker'),
+            isDirectory: true,
+            dirMtimeMs: now,
+            marker: { kind: 'present', mtimeMs: now - staleAfterMs - 1 },
+          },
+          {
+            name: 'unrelated-stale-entry',
+            isDirectory: true,
+            dirMtimeMs: now,
+            marker: { kind: 'present', mtimeMs: 0 },
+          },
+        ],
+        ownRoot: '/tmp/another-run-root',
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+      })
+    ).toEqual({ reap: [root('stale-marker')], retain: [] });
+  });
+
+  it('retains fresh markers, including two concurrent roots created within one second', () => {
+    const decision = decideStaleRunRoots({
+      entries: [
+        {
+          name: root('fresh-a'),
+          isDirectory: true,
+          dirMtimeMs: now,
+          marker: { kind: 'present', mtimeMs: now },
+        },
+        {
+          name: root('fresh-b'),
+          isDirectory: true,
+          dirMtimeMs: now,
+          marker: { kind: 'present', mtimeMs: now - 1_000 },
+        },
+      ],
+      ownRoot: '/tmp/another-run-root',
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+    });
+
+    expect(decision).toEqual({
+      reap: [],
+      retain: [
+        { name: root('fresh-a'), reason: 'live', windowMs: staleAfterMs },
+        { name: root('fresh-b'), reason: 'live', windowMs: staleAfterMs },
+      ],
+    });
+  });
+
+  it('retains its own root even when its owner marker is stale', () => {
+    expect(
+      decideStaleRunRoots({
+        entries: [
+          {
+            name: root('own'),
+            isDirectory: true,
+            dirMtimeMs: now - legacyStaleAfterMs - 1,
+            marker: { kind: 'present', mtimeMs: 0 },
+          },
+        ],
+        ownRoot: `/tmp/${root('own')}`,
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+      })
+    ).toEqual({ reap: [], retain: [{ name: root('own'), reason: 'own-root', windowMs: staleAfterMs }] });
+  });
+
+  it('reaps only legacy unmarked directories older than the fallback window', () => {
+    const decision = decideStaleRunRoots({
+      entries: [
+        {
+          name: root('legacy'),
+          isDirectory: true,
+          dirMtimeMs: now - legacyStaleAfterMs - 1,
+          marker: { kind: 'absent' },
+        },
+        {
+          name: root('recent'),
+          isDirectory: true,
+          dirMtimeMs: now - legacyStaleAfterMs + 1,
+          marker: { kind: 'absent' },
+        },
+      ],
+      ownRoot: '/tmp/another-run-root',
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+    });
+
+    expect(decision).toEqual({
+      reap: [root('legacy')],
+      retain: [{ name: root('recent'), reason: 'unmarked-recent', windowMs: legacyStaleAfterMs }],
+    });
+  });
+
+  it('retains unreadable markers and non-directory entries without following them', () => {
+    expect(
+      decideStaleRunRoots({
+        entries: [
+          {
+            name: root('unreadable'),
+            isDirectory: true,
+            dirMtimeMs: now - legacyStaleAfterMs - 1,
+            marker: { kind: 'unreadable', error: 'EACCES' },
+          },
+          {
+            name: root('symlink'),
+            isDirectory: false,
+            dirMtimeMs: now - legacyStaleAfterMs - 1,
+            marker: { kind: 'present', mtimeMs: 0 },
+          },
+        ],
+        ownRoot: '/tmp/another-run-root',
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+      })
+    ).toEqual({
+      reap: [],
+      retain: [
+        { name: root('unreadable'), reason: 'marker-unreadable', windowMs: staleAfterMs },
+        { name: root('symlink'), reason: 'not-a-directory', windowMs: staleAfterMs },
+      ],
+    });
+  });
+
+  it('honours a caller-provided staleness window and has no filesystem seam', () => {
+    const entry = {
+      name: root('custom-window'),
+      isDirectory: true,
+      dirMtimeMs: now,
+      marker: { kind: 'present' as const, mtimeMs: now - 101 },
+    };
+    const customInput = {
+      entries: [
+        entry,
+      ],
+      ownRoot: '/tmp/another-run-root',
+      now,
+      staleAfterMs: 100,
+      legacyStaleAfterMs,
+    };
+
+    const first = decideStaleRunRoots(customInput);
+    const second = decideStaleRunRoots(customInput);
+
+    expect(first).toEqual({
+      reap: [root('custom-window')],
+      retain: [],
+    });
+    expect(second).toEqual(first);
+    expect(
+      decideStaleRunRoots({ ...customInput, staleAfterMs })
+    ).toEqual({
+      reap: [],
+      retain: [{ name: root('custom-window'), reason: 'live', windowMs: staleAfterMs }],
+    });
+  });
+
+  it('reports the caller-supplied window in the retained entry it decided with', () => {
+    const entry = {
+      name: root('override'),
+      isDirectory: true,
+      dirMtimeMs: now,
+      marker: { kind: 'present' as const, mtimeMs: now - 50 },
+    };
+    const base = { entries: [entry], ownRoot: '/tmp/another-run-root', now, legacyStaleAfterMs };
+
+    expect(decideStaleRunRoots({ ...base, staleAfterMs: 40 })).toEqual({
+      reap: [root('override')],
+      retain: [],
+    });
+    expect(decideStaleRunRoots({ ...base, staleAfterMs: 60 })).toEqual({
+      reap: [],
+      retain: [{ name: root('override'), reason: 'live', windowMs: 60 }],
+    });
+  });
+});
+
+describe('tmpdir-leak-guard: stale run root sweep', () => {
+  let fakeRealTmpdir: string;
+  const now = Date.parse('2026-09-05T12:00:00.000Z');
+  const staleAfterMs = 10_000;
+  const legacyStaleAfterMs = 86_400_000;
+  const root = (suffix: string) => `${RUN_TMP_ROOT_PREFIX}${suffix}`;
+
+  beforeEach(async () => {
+    fakeRealTmpdir = await mkdtemp(join(tmpdir(), 'tmpdir-guard-sweep-'));
+  });
+
+  afterEach(async () => {
+    await rm(fakeRealTmpdir, { recursive: true, force: true });
+  });
+
+  async function makeMarkedRoot(name: string, markerMtimeMs: number): Promise<string> {
+    const runRoot = join(fakeRealTmpdir, name);
+    await mkdir(runRoot);
+    await writeFile(
+      join(runRoot, RUN_TMP_ROOT_OWNER_MARKER),
+      JSON.stringify({ pid: 42, hostname: 'test-host', startedAt: '2026-09-05T12:00:00.000Z' })
+    );
+    await utimes(join(runRoot, RUN_TMP_ROOT_OWNER_MARKER), markerMtimeMs / 1_000, markerMtimeMs / 1_000);
+    return runRoot;
+  }
+
+  it('reaps stale roots, including read-only nesting, and retains a live root', async () => {
+    const staleOne = await makeMarkedRoot(root('stale-one'), now - staleAfterMs - 1);
+    const staleTwo = await makeMarkedRoot(root('stale-two'), now - staleAfterMs - 1);
+    const protectedDir = join(staleTwo, 'nested', 'read-only');
+    await mkdir(protectedDir, { recursive: true });
+    await chmod(protectedDir, 0o555);
+    const live = await makeMarkedRoot(root('live'), now);
+
+    const result = await sweepStaleRunTmpRoots(fakeRealTmpdir, {
+      ownRoot: join(fakeRealTmpdir, root('own')),
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+      logger: vi.fn(),
+    });
+
+    expect(result).toEqual({
+      reaped: [root('stale-one'), root('stale-two')],
+      retained: [{ name: root('live'), reason: 'live', windowMs: staleAfterMs }],
+      failures: [],
+    });
+    expect(existsSync(staleOne)).toBe(false);
+    expect(existsSync(staleTwo)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+  });
+
+  it('is silent and reports no work for an empty fixture', async () => {
+    const logger = vi.fn();
+
+    await expect(
+      sweepStaleRunTmpRoots(fakeRealTmpdir, {
+        ownRoot: join(fakeRealTmpdir, root('own')),
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+        logger,
+      })
+    ).resolves.toEqual({ reaped: [], retained: [], failures: [] });
+
+    expect(logger).not.toHaveBeenCalled();
+  });
+
+  it('retains a stale marker that is valid JSON but not the owner shape as marker-unreadable', async () => {
+    const shapeless = join(fakeRealTmpdir, root('shapeless'));
+    const logger = vi.fn();
+    await mkdir(shapeless);
+    await writeFile(join(shapeless, RUN_TMP_ROOT_OWNER_MARKER), JSON.stringify({ owner: 'test' }));
+    const stale = (now - staleAfterMs - 1) / 1_000;
+    await utimes(join(shapeless, RUN_TMP_ROOT_OWNER_MARKER), stale, stale);
+    const remove = vi.fn();
+
+    await expect(
+      sweepStaleRunTmpRoots(fakeRealTmpdir, {
+        ownRoot: join(fakeRealTmpdir, root('own')),
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+        remove,
+        logger,
+      })
+    ).resolves.toEqual({
+      reaped: [],
+      retained: [{ name: root('shapeless'), reason: 'marker-unreadable', windowMs: staleAfterMs }],
+      failures: [],
+    });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining(`owner marker unreadable for ${shapeless}; retaining run root`)
+    );
+  });
+
+  it('retains and reports a malformed owner marker without attempting removal', async () => {
+    const malformed = join(fakeRealTmpdir, root('malformed'));
+    const logger = vi.fn();
+    await mkdir(malformed);
+    await writeFile(join(malformed, RUN_TMP_ROOT_OWNER_MARKER), '{not-json');
+    const remove = vi.fn();
+
+    await expect(
+      sweepStaleRunTmpRoots(fakeRealTmpdir, {
+        ownRoot: join(fakeRealTmpdir, root('own')),
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+        remove,
+        logger,
+      })
+    ).resolves.toEqual({
+      reaped: [],
+      retained: [{ name: root('malformed'), reason: 'marker-unreadable', windowMs: staleAfterMs }],
+      failures: [],
+    });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining(`owner marker unreadable for ${malformed}; retaining run root`)
+    );
+  });
+
+  it('retains a prefixed symlink not-a-directory without following it to its target', async () => {
+    const external = await mkdtemp(join(tmpdir(), 'tmpdir-guard-external-'));
+    try {
+      await writeFile(join(external, RUN_TMP_ROOT_OWNER_MARKER), '{not-json');
+      await symlink(external, join(fakeRealTmpdir, root('symlink')));
+      const logger = vi.fn();
+      const remove = vi.fn();
+
+      await expect(
+        sweepStaleRunTmpRoots(fakeRealTmpdir, {
+          ownRoot: join(fakeRealTmpdir, root('own')),
+          now,
+          staleAfterMs,
+          legacyStaleAfterMs,
+          remove,
+          logger,
+        })
+      ).resolves.toEqual({
+        reaped: [],
+        retained: [{ name: root('symlink'), reason: 'not-a-directory', windowMs: staleAfterMs }],
+        failures: [],
+      });
+
+      expect(remove).not.toHaveBeenCalled();
+      expect(logger).not.toHaveBeenCalled();
+      expect(existsSync(join(external, RUN_TMP_ROOT_OWNER_MARKER))).toBe(true);
+    } finally {
+      await rm(external, { recursive: true, force: true });
+    }
+  });
+
+  it('continues after an injected removal failure and records it', async () => {
+    const failing = await makeMarkedRoot(root('failing'), now - staleAfterMs - 1);
+    const succeeding = await makeMarkedRoot(root('succeeding'), now - staleAfterMs - 1);
+    const removalError = new Error('simulated EBUSY');
+    const remove = vi.fn(async (path: string) => {
+      if (path === failing) throw removalError;
+      await rm(path, { recursive: true, force: true });
+    });
+
+    const result = await sweepStaleRunTmpRoots(fakeRealTmpdir, {
+      ownRoot: join(fakeRealTmpdir, root('own')),
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+      remove,
+      logger: vi.fn(),
+    });
+
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      reaped: [root('succeeding')],
+      retained: [],
+      failures: [{ name: root('failing'), error: removalError }],
+    });
+    expect(existsSync(succeeding)).toBe(false);
+  });
+
+  it('retains everything and records the listing error when the fixture cannot be listed', async () => {
+    const missing = join(fakeRealTmpdir, 'does-not-exist');
+    const result = await sweepStaleRunTmpRoots(missing, {
+      ownRoot: join(fakeRealTmpdir, root('own')),
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+      logger: vi.fn(),
+    });
+
+    expect(result.reaped).toEqual([]);
+    expect(result.retained).toEqual([]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.name).toBe(missing);
+    expect(result.failures[0]?.error).toBeInstanceOf(Error);
   });
 });
 
