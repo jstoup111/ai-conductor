@@ -65,8 +65,9 @@ export async function probeGhVersion(
   runner: GhVersionRunner = productionRunner,
   timeoutMs = GH_VERSION_PROBE_TIMEOUT_MS,
 ): Promise<GhVersionFloorVerdict> {
+  let timeout: NodeJS.Timeout | undefined;
   const timed = new Promise<GhVersionFloorVerdict>((resolve) => {
-    setTimeout(() => resolve({ kind: 'timeout' }), timeoutMs);
+    timeout = setTimeout(() => resolve({ kind: 'timeout' }), timeoutMs);
   });
   const attempted: Promise<GhVersionFloorVerdict> = runner().then(
     ({ stdout, exitCode }): GhVersionFloorVerdict =>
@@ -76,5 +77,9 @@ export async function probeGhVersion(
       return code === 'ENOENT' ? { kind: 'absent' } : { kind: 'unparseable' };
     },
   );
-  return Promise.race([attempted, timed]);
+  try {
+    return await Promise.race([attempted, timed]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
