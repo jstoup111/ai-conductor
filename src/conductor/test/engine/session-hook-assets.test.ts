@@ -256,6 +256,17 @@ describe('DOCS_GUARD_HOOK', () => {
     expect(result.status).toBe(2);
   });
 
+  it('fails closed for a target carrying a NUL byte outside .docs', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\n',
+      payload: (dir: string) => ({
+        tool_name: 'Write',
+        tool_input: { file_path: join(dir, 'src', '\u0000foo.ts') },
+      }),
+    });
+    expect(result.status).toBe(2);
+  });
+
   it.skipIf(process.getuid?.() === 0)('fails closed for an unreadable path component', () => {
     const result = runDocsGuardHook({
       markerContent: 'step: build\nphase: BUILD\n',

@@ -31,6 +31,14 @@ process.stdin.on("end", () => {
         : typeof input.notebook_path === "string"
           ? input.notebook_path
           : "";
+    // A NUL byte cannot survive the shell command substitution that
+    // receives this value, so it would be silently reclassified as a
+    // different path. Emit nothing: an empty TARGET is undeterminable
+    // and takes the fail-closed exit-2 path under an active phase.
+    if (target.includes("\0")) {
+      process.stderr.write("docs-guard-hook: target contains NUL, undeterminable\n");
+      return;
+    }
     process.stdout.write(target);
   } catch (err) {
     // Malformed/unparseable payload — fail open: emit a diagnostic on
