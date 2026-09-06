@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-06T21:04:12.500Z
+Status: halted
 Slug: build-review-rubrics-need-a-post-join-adjudicator-
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-build-review-rubrics-need-a-post-join-adjudicator-
-Head SHA: 7099349041b1a74a20730b64b68e2c50308c63c5
-Halted at: 2026-09-06T21:02:28.589Z
+Head SHA: bbf04ee97e327feda176d8af1d66ad81cbcb4a17
+Halted at: 2026-09-06T21:20:53.677Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-step 'build_review' cannot make progress: its inputs cannot change on a re-dispatch. Re-run 'test_suite' before retrying 'build_review'.
+Validation group "prd_audit" halted: needs human DECIDE — AB-1 (existing-task: REMEDIABLE implementation drift that preserves the approved architecture (98%, verified directly in current source at HEAD bbf04ee97 with a clean tree): the last lap closed the settlement-cap half of Task 16 (src/conductor/src/engine/build-review-adjudication-coordinator.ts:224,308-339 now derive the bound from the finite source list) but left the failure-delivery half open. Both content-effect failure exits re-read authority only BEFORE calling fail - the action-effect path reads at :576 and returns fail(action.reason) at :583, the deferral-effect path reads at :631 and returns fail(deferred.reason) at :637 - while fail itself AWAITS remediation_adjudication_failed delivery at :135-137, and the production caller turns that non-ok straight into a needs-human HALT at src/conductor/src/engine/conductor.ts:10662-10668, so an exact acceptance landing during that final delivery window is ignored. Separately, the post-delivery recovery inside failUnlessAccepted at :367-373 cancels the failure only when allOperatorResolved(afterDelivery) holds over ALL sources, so an accepted failing case beside one unresolved non-failing sibling still returns the obsolete failure and is never settled - which is exactly what Task 16 Done-when 1 forbids ('suppresses obsolete work/effect/route/HALT for ONLY its source'). Task 16's Done-when 1 and 2 and its Steps 1 and 3 ('call it at every exit boundary', race table covering each of work-order reservation, intake reservation, BUILD route, HALT and PASS) already admit this remedy, and the as-built Plan-Gap Check records no PLAN_GAP and no ADR/diagram change, so this binds to the existing active-plan task and appends nothing. CLASS SWEEP: every site where a content-specific non-ok can outlive an awaited delivery is the fail-after-await pair - :583, :637, and the shared failUnlessAccepted/fail pair at :345-373 that the semantic-repeat and context/judgement/reconciliation exits at :403, :421, :424, :437, :456, :515 all funnel through - so all three must be closed in one pass or the next as-built lap re-raises the untouched one. Found and deliberately EXCLUDED: the infrastructure fail-closed paths ('operator disposition state is unavailable' at :213, :299, :553, :575, :619, :630, and 'case store <reason>'/'build-review work order <reason>'/'deferral case identity was not reconciled') must keep failing closed regardless of authority per Story 5's negative path at .docs/stories/build-review-rubrics-need-a-post-join-adjudicator-.md:141-144, so they are not routed through the acceptance-aware exit. MATCHED PAIR: acceptance coverage is currently expressed two ways - the all-source predicate allOperatorResolved at :133 and the case-specific liveSourceIdsFor helper at :143-144 used by the effect exits - and the repair must make the failing case's own settlement flow through ONE case-specific derivation (liveSourceIdsFor) rather than introducing a third predicate; allOperatorResolved keeps its existing entry-time and all-accepted-lap callers at :212 and :393 and is not deleted. NO COVERAGE DROPPED: this repair adds a post-delivery read and narrows a predicate from all-source to per-source; it deletes none of the existing pre-effect authority reads at :553, :575, :619, :630, none of the durable remediation_effect_failed emissions at :568-572 and :626-629 (a durable reserved->failed transition still emits, retired or not), and none of the existing race-table assertions that Task 16 Done-when 3 and Story 5's Done-when rely on to prove mid-lap suppression and store separation.) — remediation produced no dispatchable build work; the implicated task(s) are already evidence-complete — human needed
 ```
