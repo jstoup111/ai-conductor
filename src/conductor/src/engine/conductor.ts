@@ -4669,6 +4669,13 @@ export class Conductor {
       // the caller rewinds to the repair target.
       let restaged: Array<{ id: string; trailerCount: number }> | undefined;
       if (resolvedExistingTaskIdsByGapId.size > 0 && planPath) {
+        // Re-staging changes completed bound rows to pending. Capture the
+        // baseline first so re-completing those same rows cannot look like
+        // progress in the ensuing BUILD pass.
+        const baseline = {
+          treeHash: await currentTreeHash(this.projectRoot),
+          resolvedCount: await countResolvedTasks(this.projectRoot),
+        };
         const restage = await restageExistingRemediationTaskStatuses(
           this.projectRoot,
           planPath,
@@ -4683,10 +4690,6 @@ export class Conductor {
           };
         }
         restaged = restage.watermarks;
-        const baseline = {
-          treeHash: await currentTreeHash(this.projectRoot),
-          resolvedCount: await countResolvedTasks(this.projectRoot),
-        };
         this.pendingNoOpBaselines.clear();
         for (const provenance of remediationEvidenceSources) {
           this.pendingNoOpBaselines.set(provenance.gate, baseline);
