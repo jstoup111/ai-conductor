@@ -4705,10 +4705,11 @@ export class Conductor {
           treeHash: await currentTreeHash(this.projectRoot),
           resolvedCount: await countResolvedTasks(this.projectRoot),
         };
-        const admission = await createRepairObligationStore(
+        const repairs = createRepairObligationStore(
           this.projectRoot,
           join(this.projectRoot, '.pipeline', 'engine-state.json'),
-        ).admitOrReplay(admissionKey, {
+        );
+        const admission = await repairs.admitOrReplay(admissionKey, {
           id: `repair-${admissionKey.slice(0, 16)}`,
           planPath,
           taskIds: boundTaskIds,
@@ -4740,6 +4741,13 @@ export class Conductor {
           return {
             kind: 'halt', haltClass: 'needs-human',
             detail: `existing-task remediation could not settle its admitted round: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+        const settled = await repairs.markSettled({ planPath, obligationId: admission.obligation.id });
+        if (!settled.ok) {
+          return {
+            kind: 'halt', haltClass: 'needs-human',
+            detail: `existing-task remediation recorded its receipt but could not persist settlement: ${settled.message}`,
           };
         }
         this.pendingNoOpBaselines.clear();
