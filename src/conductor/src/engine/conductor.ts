@@ -4903,12 +4903,16 @@ export class Conductor {
     if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) !== 'absent') {
       return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
     }
+    // A clean PASS is the evidence that the content set is empty, whether or
+    // not an earlier lap left a work order on disk: absent non-action history
+    // settles benignly here too, while the reconciler's shared effect-status
+    // test keeps any reserved or failed effect open.
     const reconciled = await reconcileRemediationCases(store, {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: new Date().toISOString(),
       generateId: randomUUID,
       attemptedCaseIds: attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [],
-      ...(missingAttemptEvidence ? { resolveAbsentOpenNonActionCases: true } : {}),
+      resolveAbsentOpenNonActionCases: true,
     });
     if (!reconciled.ok) {
       return {
@@ -4926,6 +4930,17 @@ export class Conductor {
         caseId,
         resolution: 'resolved',
       });
+    }
+    // The obligation test runs on what SURVIVED reconciliation, regardless of
+    // whether attempt evidence existed. A stale work order used to skip this
+    // guard entirely, so a deferral whose intake create failed (effect still
+    // reserved) settled into a terminal PASS with its intake unfiled.
+    const survivingObligation = reconciled.state.cases.find(isBuildReviewSettlementObligationCase);
+    if (survivingObligation && survivingObligation.effect.kind !== 'none') {
+      return {
+        kind: 'invalid',
+        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})`,
+      };
     }
     return { kind: 'settled' };
   }

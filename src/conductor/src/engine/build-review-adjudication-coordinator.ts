@@ -166,7 +166,38 @@ export async function coordinateBuildReviewAdjudication(input: {
      * observe anything new, and charging one would be pure duplicate work.
      */
     readonly resolvedAtEntry?: ReadonlySet<string>;
+    /**
+     * Set by every exit taken BEFORE this lap's reconciliation ran. Those
+     * exits used to skip the attempt-evidence read and the reconciler, so a
+     * prior attempted action case absent from the current sources survived
+     * open with an applied effect: the reducer answered PASS while BUILD
+     * recovery still replayed its work order. Settling against the empty
+     * admitted graph here resolves exactly that absent attempted history,
+     * through the same reconciler and shared effect-status test the main
+     * path uses.
+     */
+    readonly settleAbsentAttempted?: boolean;
   }): Promise<BuildReviewAdjudicationCoordinatorResult> => {
+    if (options.settleAbsentAttempted) {
+      const exitAttemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
+      if (!exitAttemptEvidence.ok && classifyBuildReviewDurableRead(exitAttemptEvidence) === 'invalid') {
+        return fail(`build-review work order ${exitAttemptEvidence.reason}`);
+      }
+      const absentSettled = await reconcileRemediationCases(store, {
+        graph: { sourceOutcomes: [], cases: [] }, recordedAt: new Date().toISOString(),
+        generateId: input.generateId ?? randomUUID,
+        attemptedCaseIds: exitAttemptEvidence.ok ? exitAttemptEvidence.attemptedCaseIds : [],
+      });
+      if (!absentSettled.ok) {
+        return fail(absentSettled.reason === 'store-failure' ? `case store ${absentSettled.storeReason}` : `case reconciliation ${absentSettled.reason}`);
+      }
+      for (const caseId of absentSettled.resolvedAbsentCaseIds) {
+        await input.emit?.({
+          type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
+          caseId, resolution: 'resolved',
+        });
+      }
+    }
     const settled = await store.read();
     if (!settled.ok) return fail(`case store ${settled.reason}`);
     // Adjacent to the BUILD/HALT/PASS exit itself: an acceptance that arrived
@@ -263,6 +294,25 @@ export async function coordinateBuildReviewAdjudication(input: {
       remainingMechanical: transition.remainingMechanical,
     };
   };
+  /**
+   * A content-specific failure that follows awaited work. The work may have
+   * outlasted an exact operator acceptance, in which case the failure's HALT
+   * would be obsolete: re-read authority once and, if every source is now
+   * accepted, take the acceptance-terminal exit instead. Infrastructure
+   * failures (unavailable disposition state, case store faults) never come
+   * here — they fail closed regardless of authority.
+   */
+  const failUnlessAccepted = async (
+    detail: string,
+    options: { readonly settleAbsentAttempted: boolean },
+  ): Promise<BuildReviewAdjudicationCoordinatorResult> => {
+    let latest: ReadonlySet<string>;
+    try { latest = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+    if (allOperatorResolved(latest)) {
+      return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: latest, settleAbsentAttempted: options.settleAbsentAttempted });
+    }
+    return fail(detail);
+  };
   let resolved: ReadonlySet<string>;
   try { resolved = await operatorResolvedFindingIds(); } catch { return { ok: false, detail: 'operator disposition state is unavailable' }; }
   // Operator authority is terminal for an all-resolved content lap, but it is
@@ -270,7 +320,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   // be open with a live work order. Settle durable state and route from what
   // survives, rather than reporting a route no one checked.
   if (allOperatorResolved(resolved)) {
-    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
   }
   let currentSources = sources.filter((source) => !resolved.has(source.findingId));
   const prior = await store.read();
@@ -291,13 +341,13 @@ export async function coordinateBuildReviewAdjudication(input: {
   const context = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
-  if (!context.ok) return fail(`adjudication context ${context.stop.code}`);
+  if (!context.ok) return failUnlessAccepted(`adjudication context ${context.stop.code}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
   // provider dispatch.  Rebuild the complete projection rather than letting
   // the provider see an obsolete source.
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
   if (allOperatorResolved(resolved)) {
-    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
   }
   currentSources = sources.filter((source) => !resolved.has(source.findingId));
   // Frozen at dispatch: the exact source set the judge was asked about. Every
@@ -309,15 +359,15 @@ export async function coordinateBuildReviewAdjudication(input: {
   const freshContext = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
-  if (!freshContext.ok) return fail(`adjudication context ${freshContext.stop.code}`);
+  if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${freshContext.stop.code}`, { settleAbsentAttempted: true });
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
   let judgement: RemediationCaseJudgement;
-  try { judgement = await input.judge(freshContext.context); } catch { return fail('remediate judgement failed'); }
+  try { judgement = await input.judge(freshContext.context); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }
   // Do not reconcile or effect a provider result after a late exact operator
   // acceptance made every source non-autonomous.
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
   if (allOperatorResolved(resolved)) {
-    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
   }
   // The judgement is validated against exactly the sources the judge was handed.
   // An acceptance that landed while it was thinking suppresses only its own
@@ -325,7 +375,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   // still reconciled, effected, and routed. Failing the whole lap closed here
   // is what made any pre-existing acceptance un-adjudicable.
   const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement);
-  if (!graph.ok) return fail(`invalid remediation judgement ${graph.reason}`);
+  if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
   const liveSourceIds = liveSourceIdsFor(resolved);
   const admitted = graph.graph.cases.filter((proposed) =>
     proposed.sources.some((source) => liveSourceIds.has(source.sourceId)),
@@ -334,7 +384,12 @@ export async function coordinateBuildReviewAdjudication(input: {
     graph: { ...graph.graph, cases: admitted }, recordedAt: new Date().toISOString(), generateId: input.generateId ?? randomUUID,
     attemptedCaseIds,
   });
-  if (!reconciled.ok) return fail(reconciled.reason === 'store-failure' ? `case store ${reconciled.storeReason}` : `case reconciliation ${reconciled.reason}`);
+  if (!reconciled.ok) {
+    // A store fault stays fail-closed; a rejected graph is content-specific
+    // and, like every failure above, may be obsolete under a late acceptance.
+    if (reconciled.reason === 'store-failure') return fail(`case store ${reconciled.storeReason}`);
+    return failUnlessAccepted(`case reconciliation ${reconciled.reason}`, { settleAbsentAttempted: true });
+  }
 
   // Reconciliation owns durable identity, so it reports the caseRef -> case-id
   // map itself. Deriving it here from array positions could not see a replayed
@@ -434,15 +489,14 @@ export async function coordinateBuildReviewAdjudication(input: {
       const retiredByAcceptance = new Set(pendingActionEffects
         .filter((record) => record.sources.every((source) => !liveSourceIdsAfterActionFailure.has(source.sourceId)))
         .map((record) => record.id));
-      // The effect executor may have already settled these reservations to a
-      // durable failed status under its own lease. Every durable
-      // reserved->failed transition emits, retired or not — only a case whose
-      // reservation is still untouched leaves its emission to the exit
-      // retirement path in `finalize`.
-      const afterFailure = await store.read();
-      const durablyFailedCaseIds = new Set((afterFailure.ok ? afterFailure.state.cases : [])
-        .filter((record) => record.effect.kind === 'action' && record.effect.status === 'failed')
-        .map((record) => record.id));
+      // The effect executor settled these reservations to a durable failed
+      // status under its own lease and reports exactly that set from the same
+      // mutation. Every durable reserved->failed transition emits, retired or
+      // not — only a case whose reservation is still untouched leaves its
+      // emission to the exit retirement path in `finalize`. Re-reading the
+      // store here instead treated a read failure as "nothing failed" and
+      // dropped the occurrence for a case accepted during the boundary.
+      const durablyFailedCaseIds = new Set(action.failedCaseIds ?? []);
       for (const record of pendingActionEffects) {
         if (record.effect.kind !== 'action') continue;
         if (retiredByAcceptance.has(record.id) && !durablyFailedCaseIds.has(record.id)) continue;

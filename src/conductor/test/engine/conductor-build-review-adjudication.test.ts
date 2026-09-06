@@ -617,6 +617,46 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     }));
   });
 
+  it.each(['reserved', 'failed'] as const)('halts a clean PASS on an open %s deferral even when a stale work order exists', async (status) => {
+    // A deferral whose intake create failed keeps its effect reserved/failed.
+    // With an earlier lap's work order still on disk the settlement guard used
+    // to be skipped entirely, so this settled into a terminal PASS with its
+    // intake unfiled (AB-4 / S10.1).
+    const first = await fixture({ judgement: deferralJudgement() });
+    const cases = await first.readJson('.pipeline/remediation-cases.json') as {
+      cases: Array<{ id: string; effect: { id: string; kind: string; status: string; issueUrl?: string } }>;
+    };
+    const seeded = {
+      ...cases,
+      cases: cases.cases.map((record) => ({
+        ...record,
+        effect: {
+          id: record.effect.id,
+          kind: record.effect.kind,
+          status,
+          ...(status === 'failed' ? { diagnostic: 'deferred intake failed: tracker down' } : {}),
+        },
+      })),
+    };
+    const caseId = seeded.cases[0]!.id;
+    // An earlier action lap's order, rebound to this fixture's feature
+    // identity so it reads as this feature's own stale attempt evidence.
+    const earlierOrder = await (await fixture()).readJson('.pipeline/build-review-work-order.json') as Record<string, unknown>;
+    const staleOrder = { ...earlierOrder, feature: (cases as unknown as { feature: unknown }).feature };
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(seeded), 'utf8');
+        await writeFile(join(root, '.pipeline/build-review-work-order.json'), JSON.stringify(staleOrder), 'utf8');
+      },
+    });
+
+    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: clean PASS cannot settle open deferral case ${caseId} (${status})`);
+    expect((await run.state()).build_review).not.toBe('done');
+    const settled = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ resolution: string }> };
+    expect(settled.cases).toEqual([expect.objectContaining({ resolution: 'open' })]);
+  });
+
   it('halts a clean PASS when durable work-order attempt evidence is invalid', async () => {
     const first = await fixture();
     const cases = await first.readJson('.pipeline/remediation-cases.json');
