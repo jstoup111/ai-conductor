@@ -44,6 +44,24 @@ function admission(overrides: Partial<RepairAdmission> = {}): RepairAdmission {
 }
 
 describe('repair obligations', () => {
+  it('atomically replays a caller-authoritative admission key without suppressing a later key', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+
+    const first = await repairs.admitOrReplay('architecture_review_as_built:ARCH-1:round-1', admission());
+    const replay = await repairs.admitOrReplay('architecture_review_as_built:ARCH-1:round-1', admission({
+      id: 'ignored-on-replay',
+      baseline: { head: 'new', tree: 'new', resolvedTaskIds: [] },
+    }));
+    const later = await repairs.admitOrReplay('architecture_review_as_built:ARCH-1:round-2', admission({ id: 'round-2' }));
+
+    expect({ first, replay, later }).toMatchObject({
+      first: { ok: true, replayed: false, obligation: { id: 'round-1' } },
+      replay: { ok: true, replayed: true, obligation: { id: 'round-1', baseline: { head: 'abc123' } } },
+      later: { ok: true, replayed: false, obligation: { id: 'round-2' } },
+    });
+  });
+
   it('replays an admitted identity without replacing its immutable boundary or resolved task', async () => {
     const { projectRoot, statePath } = await createStatePath();
     const repairs = createRepairObligationStore(projectRoot, statePath);
