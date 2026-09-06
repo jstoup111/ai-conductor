@@ -1229,6 +1229,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         providerExecution,
         events: featureEvents,
         log: featureLog,
+        worktreeLifecycle,
       },
     );
 
@@ -2351,6 +2352,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                       run: (opts) => productionCiFixRunner.run({ ...opts, dispatcher: ciFixDispatcher }),
                     },
                     suiteCommand: config?.mergeable_autoresolve?.suiteCommand,
+                    liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
                   },
                   log,
                 );
