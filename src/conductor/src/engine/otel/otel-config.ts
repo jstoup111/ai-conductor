@@ -4,6 +4,20 @@ import type { HarnessConfig } from '../../types/config.js';
 const VALID_EXPORTERS = ['otlp', 'file'] as const;
 const DEFAULT_FILE = 'otel.jsonl';
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function hasHeaderEntries(headers: unknown): boolean {
+  return headers !== undefined && (!isPlainObject(headers) || Object.keys(headers).length > 0);
+}
+
+function renderedHeaderName(header: string): string {
+  return header === '' ? "''" : JSON.stringify(header);
+}
+
 /**
  * Resolved OTel config. A discriminated union:
  *   { enabled: false }            — exporter is off; error is set if config was invalid
@@ -62,14 +76,50 @@ export function resolveOtelConfig(
           'No endpoint was provided.',
       };
     }
+    if (headers !== undefined && !isPlainObject(headers)) {
+      return {
+        enabled: false,
+        error: 'otel headers must be a mapping from header names to { env: <variable name> } references.',
+      };
+    }
+
+    if (hasHeaderEntries(headers) && protocol === 'grpc') {
+      return {
+        enabled: false,
+        error: 'otel headers are unsupported with the grpc protocol.',
+      };
+    }
+
     const resolvedHeaders: Record<string, string> = {};
-    if (headers) {
+    if (headers && hasHeaderEntries(headers)) {
       for (const [header, reference] of Object.entries(headers)) {
-        const value = process.env[reference.env];
+        const headerName = renderedHeaderName(header);
+        if (header === '' || /[\x00-\x1F\x7F]/.test(header)) {
+          return {
+            enabled: false,
+            error: `otel header ${headerName} must be a non-empty name without control characters.`,
+          };
+        }
+        if (typeof reference === 'string') {
+          return {
+            enabled: false,
+            error: `otel header ${headerName} refuses a literal credential in configuration; use { env: <variable name> }.`,
+          };
+        }
+        const environmentVariable = isPlainObject(reference) && typeof reference.env === 'string'
+          ? reference.env
+          : undefined;
+        if (!isPlainObject(reference) || Object.keys(reference).length !== 1 || !('env' in reference) || environmentVariable === undefined || environmentVariable === '') {
+          return {
+            enabled: false,
+            error: `otel header ${headerName}${environmentVariable ? ` references environment variable '${environmentVariable}',` : ''} must use the supported reference form { env: <variable name> }.`,
+          };
+        }
+        const value = process.env[environmentVariable];
         if (!value) {
           return {
             enabled: false,
-            error: `otel header '${header}' references environment variable '${reference.env}', which is unset or empty.`,
+            error: `otel header ${headerName} references environment variable '${environmentVariable}', which is unset or empty.`,
           };
         }
         resolvedHeaders[header] = value;
@@ -81,12 +131,18 @@ export function resolveOtelConfig(
       exporter: 'otlp',
       endpoint,
       ...(protocol ? { protocol } : {}),
-      ...(headers ? { headers: resolvedHeaders } : {}),
+      ...(hasHeaderEntries(headers) ? { headers: resolvedHeaders } : {}),
       ...(projectName ? { projectName } : {}),
     };
   }
 
   // exporter === 'file'
+  if (hasHeaderEntries(headers)) {
+    return {
+      enabled: false,
+      error: 'otel headers are unsupported with the file exporter.',
+    };
+  }
   const resolvedFile = file ?? join(pipelineDir, DEFAULT_FILE);
   return {
     enabled: true,
