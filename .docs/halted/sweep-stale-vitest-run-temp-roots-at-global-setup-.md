@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-06T13:41:46.863Z
 Slug: sweep-stale-vitest-run-temp-roots-at-global-setup-
 Class: plan-gap
 Halting step: prd_audit
