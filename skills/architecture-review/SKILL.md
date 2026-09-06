@@ -513,7 +513,8 @@ finding. The header row is **copy-exact** — write literally
 rename columns (`ID`, `Description`, `Finding` in the last slot, etc.): the SHIP gate parses this
 table mechanically and any other header halts the feature as unparseable, wasting the whole review
 lap. `Class` is a closed set: exactly `REMEDIABLE` or `DESIGN`. A `REMEDIABLE` row's
-`Governing clause` must name either an ADR filename stem plus its decision number, or a task id from
+`Governing clause` must name either an ADR filename stem plus its decision number (`adr-x decision 3`
+or the heading shorthand `adr-x D3` — both resolve), or a task id from
 this feature's own plan; a REMEDIABLE row without a governing clause is malformed. Write the clause
 as **bare text** — no backticks, no bold — and cite **exactly one** clause per row: the resolver
 matches a single identifier, so `` `adr-x` + Decision 4 `` and `Task 9 and Task 10` are both

@@ -1176,6 +1176,16 @@ describe('prd_audit kickback', () => {
       .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 1` });
     await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), 'Task 7'))
       .resolves.toEqual({ kind: 'plan-task', clause: 'Task 7', parentTask: '7' });
+    // #2228: the `D<n>` shorthand the ADR headings teach resolves to the same clause.
+    await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), `${adrStem} D1`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} D1` });
+    await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), `${adrStem} d1`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} d1` });
+    // An out-of-range decision still fails to resolve in either form.
+    await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), `${adrStem} D9`))
+      .resolves.toBeNull();
+    await expect(resolveAsBuiltGoverningClause(root, await readFile(planPath, 'utf8'), `${adrStem} decision 9`))
+      .resolves.toBeNull();
 
     let remediationRound = 0;
     const runner: StepRunner = {

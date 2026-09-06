@@ -635,8 +635,9 @@ export async function resolveAsBuiltGoverningClause(
   const adrReference = normalizedClause.match(
     // The skill's own template renders as `<stem> + <decision number>`, so the
     // literal word `decision` is optional; requiring it made the documented
-    // form unresolvable.
-    /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+(?:\+\s*)?(?:decision\s+)?(\d+)$/i,
+    // form unresolvable. ADR headings themselves use the `D3` shorthand, so
+    // reviewers naturally cite `<stem> D3` — accept that form too (#2228).
+    /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+(?:\+\s*)?(?:decision\s+|D)?(\d+)$/i,
   );
   if (!adrReference) return null;
   const [, stem, decisionNumber] = adrReference;
