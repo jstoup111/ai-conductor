@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, expect, it, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import {
@@ -293,6 +293,80 @@ describe('DOCS_GUARD_HOOK', () => {
     const result = runDocsGuardHook({
       markerContent: 'step: build\nphase: BUILD\nallow: .docs/release-waivers/\n',
       payload: { tool_name: 'Write', tool_input: { file_path: '.docs/release-waivers-evil/x.md' } },
+    });
+    expect(result.status).toBe(2);
+  });
+
+  it.each([
+    ['an ordinary allowed target', (dir: string) => join(dir, '.docs', 'release-waivers', 'ordinary.md'), 0],
+    ['an ordinary allowed target through an alternate root alias', (dir: string) => join(dir, 'alternate-root', '.docs', 'release-waivers', 'ordinary.md'), 0],
+    ['an allowed requested path whose destination is protected', (dir: string) => join(dir, '.docs', 'release-waivers', 'to-plans', 'x.md'), 2],
+    ['a protected requested path whose destination is outside', (dir: string) => join(dir, '.docs', 'plans', 'outward-link', 'x.md'), 2],
+    ['a protected requested path whose destination is allowed', (dir: string) => join(dir, '.docs', 'plans', 'to-waivers', 'x.md'), 2],
+    ['an unprotected requested path whose destination is protected', (dir: string) => join(dir, 'unprotected-to-plans', 'x.md'), 2],
+  ] as const)(
+    'requires both requested and resolved paths to permit %s',
+    (_description, target, expectedStatus) => {
+      const result = runDocsGuardHook({
+        markerContent: 'step: build\nphase: BUILD\nallow: .docs/release-waivers/\n',
+        setup: (dir: string) => {
+          mkdirSync(join(dir, '.docs', 'plans'), { recursive: true });
+          mkdirSync(join(dir, '.docs', 'release-waivers'));
+          mkdirSync(join(dir, 'outside'));
+          symlinkSync('.', join(dir, 'alternate-root'));
+          symlinkSync(join(dir, '.docs', 'plans'), join(dir, '.docs', 'release-waivers', 'to-plans'));
+          symlinkSync(join(dir, 'outside'), join(dir, '.docs', 'plans', 'outward-link'));
+          symlinkSync(join(dir, '.docs', 'release-waivers'), join(dir, '.docs', 'plans', 'to-waivers'));
+          symlinkSync(join(dir, '.docs', 'plans'), join(dir, 'unprotected-to-plans'));
+        },
+        payload: (dir: string) => ({ tool_name: 'Write', tool_input: { file_path: target(dir) } }),
+      });
+      expect(result.status).toBe(expectedStatus);
+    },
+  );
+
+  it('blocks a protected outward link through an alternate root alias and preserves refusal context', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\nallow: .docs/release-waivers/\n',
+      setup: (dir: string) => {
+        mkdirSync(join(dir, '.docs', 'plans'), { recursive: true });
+        mkdirSync(join(dir, 'outside'));
+        symlinkSync('.', join(dir, 'alternate-root'));
+        symlinkSync(join(dir, 'outside'), join(dir, '.docs', 'plans', 'outward-link'));
+      },
+      payload: (dir: string) => ({
+        tool_name: 'Write',
+        tool_input: { file_path: join(dir, 'alternate-root', '.docs', 'plans', 'outward-link', 'x.md') },
+      }),
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/BUILD.*build/);
+    expect(result.stderr).toMatch(/\.pipeline\/phase-active/);
+    expect(result.stderr).toMatch(/rm \.pipeline\/phase-active/);
+  });
+
+  it.each([
+    ['normalizes an allow-prefix traversal before matching', '.docs/release-waivers/../plans/x.md', 2],
+    ['keeps a similarly named sibling outside the allow prefix', '.docs/release-waivers-sibling/x.md', 2],
+  ] as const)('%s', (_description, filePath, expectedStatus) => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\nallow: .docs/release-waivers/\n',
+      payload: { tool_name: 'Write', tool_input: { file_path: filePath } },
+    });
+    expect(result.status).toBe(expectedStatus);
+  });
+
+  it('uses filesystem semantics for a symlink followed by parent traversal', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\nallow: .docs/release-waivers/\n',
+      setup: (dir: string) => {
+        mkdirSync(join(dir, '.docs', 'plans'), { recursive: true });
+        mkdirSync(join(dir, '.docs', 'release-waivers'));
+        mkdirSync(join(dir, 'outside', 'nested'), { recursive: true });
+        symlinkSync(join(dir, 'outside', 'nested'), join(dir, '.docs', 'release-waivers', 'link'));
+        symlinkSync(join(dir, '.docs', 'plans'), join(dir, 'outside', 'plans'));
+      },
+      payload: { tool_name: 'Write', tool_input: { file_path: '.docs/release-waivers/link/../plans/x.md' } },
     });
     expect(result.status).toBe(2);
   });
