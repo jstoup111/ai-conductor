@@ -24,6 +24,9 @@ export type BuildReviewProjectionJson =
   | { readonly [key: string]: BuildReviewProjectionJson };
 
 export interface BuildReviewTestQualityProjectionInput {
+  /** Conservative file union executed by the counterfactual runner. */
+  readonly runnerSelectors?: readonly string[];
+  /** Established quality targets; never expanded merely because a file ran. */
   readonly changedTestSelectors: readonly string[];
   /** Declared Covers references that did not resolve in the active feature. */
   readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
@@ -369,9 +372,9 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
   const inputs = source.inputs;
   const testQuality = seal({
     ...common(source, 'testQuality'),
-    runnerSelectors: canonicalArray(source.testQuality.changedTestSelectors) as readonly string[],
+    runnerSelectors: canonicalArray(source.testQuality.runnerSelectors ?? source.testQuality.changedTestSelectors) as readonly string[],
     // Keep this legacy field while downstream result-v3 consumers migrate to
-    // `runnerSelectors`. It is an execution selector set, never a target set.
+    // source-bound targets. It is a review-target set, never an execution set.
     changedTestSelectors: canonicalArray(source.testQuality.changedTestSelectors) as readonly string[],
     unresolvedMarkers: canonicalArray((source.testQuality.unresolvedMarkers ?? []) as unknown as readonly BuildReviewProjectionJson[]) as unknown as readonly BuildReviewUnresolvedMarker[],
     changedTestTitles: inputs.sourceSnapshot.changedTestTitles,

@@ -66,6 +66,12 @@ export interface TautologyPreflightDependencies {
   readonly removalMaintenanceSelectors?: RemovalMaintenanceSelectors;
   /** Exact scoped-command template used for the counterfactual. */
   readonly scopedCommand?: string | null;
+  /**
+   * Conservative file selectors chosen by frozen scope analysis. These name
+   * files to execute, not the subset of declarations the reviewer may judge.
+   * When absent, preserve the legacy diff-derived selector behavior.
+   */
+  readonly counterfactualFileSelectors?: readonly string[];
   /** Identity of the CURRENT aggregate green proof this preflight relies on. */
   readonly currentGreenProofIdentity?: string | null;
   /** Cancels the isolated command only; the disposable checkout is still cleaned up. */
@@ -111,6 +117,8 @@ export interface TautologyCompletedPreflight {
       readonly cacheProvenance: 'hit' | 'miss';
       readonly changedPaths: readonly string[];
       readonly changedTestSelectors: readonly string[];
+      /** Conservative file union actually selected for counterfactual execution. */
+      readonly counterfactualFileSelectors?: readonly string[];
       /** Content-free manifest of the reverted production files. */
       readonly revertedProductionManifest: readonly RevertedProductionFileReference[];
       /** Exact per-selector removal evidence used to exclude a changed test. */
@@ -307,6 +315,9 @@ function cacheKey(deps: TautologyPreflightDependencies, paths: readonly string[]
     removalMaintenanceSelectors: [...(deps.removalMaintenanceSelectors ?? [])].sort(),
     eligibleSelectorRemovals: deps.removalMaintenanceSelectors?.eligibleSelectorRemovals ?? [],
     scopedCommand: deps.scopedCommand ?? null,
+    counterfactualFileSelectors: deps.counterfactualFileSelectors === undefined
+      ? null
+      : [...new Set(deps.counterfactualFileSelectors)].sort(),
     currentGreenProofIdentity: deps.currentGreenProofIdentity ?? null,
   })).digest('hex')}`;
 }
@@ -353,10 +364,17 @@ export async function materializeTautologyPreflight(
   if (cached) return { ...cached, cacheProvenance: 'hit' };
   const eligibleSelectorRemovals = deps.removalMaintenanceSelectors?.eligibleSelectorRemovals ?? [];
   const eligibleRemovalSelectors = new Set(eligibleSelectorRemovals.map(({ selector }) => selector));
-  if (classified.tests.length === 0) return failure('no-changed-tests', paths, classified.tests, sourceIdentities);
+  // The scoped command executes a conservative, frozen file union. It may
+  // include an affected concrete candidate whose file is not itself an
+  // established review target. Keep the diff-derived list as evidence rather
+  // than conflating the two selections.
+  const selectedCounterfactualFiles = deps.counterfactualFileSelectors === undefined
+    ? classified.tests
+    : [...new Set(deps.counterfactualFileSelectors)].sort();
+  if (selectedCounterfactualFiles.length === 0) return failure('no-changed-tests', paths, classified.tests, sourceIdentities);
   const counterfactualSelectors = deps.approvedException === 'removal-maintenance'
-    ? classified.tests.filter((selector) => !eligibleRemovalSelectors.has(selector))
-    : classified.tests;
+    ? selectedCounterfactualFiles.filter((selector) => !eligibleRemovalSelectors.has(selector))
+    : selectedCounterfactualFiles;
   if (deps.approvedException === 'empty-test-set' && classified.tests.length === 0) {
     const completed: TautologyCompletedPreflight = {
       classification: 'approved-exception', exception: deps.approvedException, cacheable: true, cacheProvenance: 'miss',
@@ -457,6 +475,7 @@ export async function materializeTautologyPreflight(
             cacheProvenance: 'miss',
             changedPaths: paths,
             changedTestSelectors: classified.tests,
+            counterfactualFileSelectors: selectedCounterfactualFiles,
             revertedProductionManifest: manifest,
             eligibleSelectorRemovals,
             sourceIdentities,
