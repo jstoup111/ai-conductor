@@ -380,3 +380,11 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks with no unbounded quality word left open
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-001: src/conductor/src/ui/subscriber.ts — deliver intake_inbound_sanitized to TerminalRenderer.handle: add 'intake_inbound_sanitized' to the eventTypes array (:27-55) AND to its matched counterpart, the forwarding condition at :60-65 — the two lists must agree or the subscription renders nothing. Follow the existing halt_marker_write_failed/renderer_error pattern exactly so onRender still fires once and no second render path is introduced; do NOT touch src/conductor/src/daemon-cli.ts:2490-2495, which is the separate daemon.log sink and would double-render. Add a subscriber test in src/conductor/test/ui/subscriber.test.ts proving one emitted intake_inbound_sanitized reaches TerminalRenderer.handle exactly once; this adds coverage and preserves — does not replace — the TerminalRenderer line assertion Task 8's Done-when already delivered in src/conductor/test/ui/terminal-renderer.test.ts.
+**Gate:** as-built
+**Rationale:** AB-1 (REMEDIABLE, governing clause Task 8): src/conductor/src/ui/terminal-renderer.ts:117-119 implements the intake_inbound_sanitized line but src/conductor/src/ui/subscriber.ts:27-55 omits the type from TerminalSubscriber's eventTypes list and :60-65 forwards to TerminalRenderer.handle for only three other types, so the branch has no production caller; the approved architecture already mandates rendering (EVENT_SINKS.intake_inbound_sanitized is render:true at src/conductor/src/engine/event-sinks.ts:11, per adr-2026-07-26-event-sink-registry-exhaustiveness), so this is conforming implementation drift, not an architectural decision. Sibling sweep: that eventTypes/forward pair is the only site of this shape; src/conductor/src/daemon-cli.ts:2493 is a separate daemon.log sink reached through its own derived subscription at daemon-cli.ts:1130-1148 and src/conductor/src/ui/dispatch.ts:13-20 has no production caller — both are found-and-excluded, since touching either would either double-render or exceed Task 8's clause.
+**Governing clause:** Task 8
+**Parent task:** 8
+**Done when:**
+- Task 8 is satisfied by this task.
