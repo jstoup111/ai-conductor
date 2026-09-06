@@ -25,6 +25,20 @@ const aggregate = joinBuildReviewRubricOutcomes({
   },
 });
 
+const scopeIncompleteAggregate = joinBuildReviewRubricOutcomes({
+  lapId, snapshotDigest: 'sha256:snapshot',
+  results: {
+    testQuality: {
+      kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS',
+      scopeResolutions: [{
+        candidateId: 'candidate:setup', status: 'indeterminate',
+        sourceRegion: { path: 'test/a.test.ts', startLine: 2, endLine: 3, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'setup binding' },
+        obligationReferences: ['story:S6.2'], missingEvidenceReason: 'the pinned binding is incomplete',
+      }],
+    },
+  },
+});
+
 function aggregateWithTestQuality(result: BuildReviewRubricResult) {
   return joinBuildReviewRubricOutcomes({
     lapId, snapshotDigest: 'sha256:snapshot', results: { ...infrastructureAggregate.results, testQuality: result },
@@ -61,6 +75,38 @@ describe('build-review findings CLI', () => {
       feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, rubric: 'testQuality', reason: 'provider-error',
       rationale: 'Provider is unavailable.', operator: 'local-operator',
     }, expect.any(Function));
+  });
+
+  it('records exhausted current scope-incomplete coverage through the existing leased action', async () => {
+    const appendReducedCoverageIfCurrent = vi.fn(async (input, validate) => {
+      expect(await validate([])).toBe(true);
+      return {
+        ok: true as const,
+        record: {
+          kind: 'reduced-coverage' as const, version: 'v1' as const, feature: input.feature,
+          identity: { rubric: input.rubric, reason: input.reason }, rationale: input.rationale,
+          operator: input.operator, acceptedAt: '2026-09-06T00:00:00.000Z',
+        },
+      };
+    });
+    const print = vi.fn();
+    const appendEvent = vi.fn();
+
+    await expect(dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'The pinned association cannot be recovered.',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(scopeIncompleteAggregate), readMechanicalFaults: async () => 3,
+      createStore: () => ({ appendReducedCoverageIfCurrent }), print, appendEvent,
+    })).resolves.toBe(0);
+
+    expect(appendReducedCoverageIfCurrent).toHaveBeenCalledWith(expect.objectContaining({
+      rubric: 'testQuality', reason: 'scope-incomplete', operator: 'local-operator',
+    }), expect.any(Function));
+    expect(appendEvent).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', expect.objectContaining({
+      type: 'build_review_reduced_coverage_accepted', rubric: 'testQuality', reason: 'scope-incomplete', operator: 'local-operator',
+    }));
+    expect(print).toHaveBeenCalledWith('build-review record-reduced-coverage: recorded testQuality for lap lap-current.');
   });
 
   it('reports the committed decision when acceptance telemetry throws', async () => {
@@ -102,6 +148,7 @@ describe('build-review findings CLI', () => {
     ['skipped rubric', aggregateWithTestQuality({ kind: 'skipped', rubric: 'testQuality', reason: 'disabled' }), 3, [], 'infrastructure failure', false],
     ['remaining allowance', infrastructureAggregate, 2, [], 'allowance', true],
     ['duplicate decision', infrastructureAggregate, 3, [{ kind: 'reduced-coverage' as const, version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' }, identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const }, rationale: 'already accepted', operator: 'james', acceptedAt: '2026-08-19T12:00:00.000Z' }], 'already recorded', true],
+    ['corrected scope', aggregateWithTestQuality({ kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS', scopeResolutions: [{ candidateId: 'candidate:setup', status: 'resolved', sourceRegion: { path: 'test/a.test.ts', startLine: 2, endLine: 3, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'setup binding' }, obligationReferences: ['story:S6.2'], associationReason: 'Corrected pinned binding proves this candidate.' }] }), 3, [], 'current.*fault', false],
   ])('refuses %s without storing a reduced-coverage decision', async (_caseName, currentAggregate, mechanicalFaults, records, reason, entersLease) => {
     const persisted = [...records];
     const appendReducedCoverageIfCurrent = vi.fn(async (_input, validate) => {
