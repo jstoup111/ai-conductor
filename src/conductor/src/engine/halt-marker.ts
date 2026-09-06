@@ -46,8 +46,17 @@ export type HaltDisposition = HaltClass | 'legacy' | 'unclassified';
 /** True for a classified halt which the daemon must retain for an operator. */
 export function isOperatorActionHalt(
   haltClass: HaltDisposition,
-): haltClass is 'needs-human' | typeof PLAN_GAP_HALT_CLASS | 'unclassified' {
-  return haltClass === 'needs-human' || haltClass === PLAN_GAP_HALT_CLASS || haltClass === 'unclassified';
+): haltClass is
+  | 'needs-human'
+  | typeof PROTECTED_ARTIFACT_HALT_CLASS
+  | typeof PLAN_GAP_HALT_CLASS
+  | 'unclassified' {
+  return (
+    haltClass === 'needs-human' ||
+    haltClass === PROTECTED_ARTIFACT_HALT_CLASS ||
+    haltClass === PLAN_GAP_HALT_CLASS ||
+    haltClass === 'unclassified'
+  );
 }
 
 /** True when a newly written step HALT has a class that carries its body as a reason. */

@@ -19,6 +19,7 @@ import {
   HALT_CLEARED_MARKER,
   REKICK_SENTINEL,
 } from '../../src/engine/daemon-rekick.js';
+import type { HaltDisposition } from '../../src/engine/halt-marker.js';
 import { join as pjoin } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
@@ -53,7 +54,7 @@ function fakeDeps(opts: {
   isOperatorParked?: (slug: string) => Promise<boolean>;
   readHaltClass?: (
     slug: string,
-  ) => Promise<'needs-human' | 'mechanical' | 'legacy' | 'unclassified'>;
+  ) => Promise<HaltDisposition>;
 }): { deps: RekickSweepDeps; trace: Trace } {
   const trace: Trace = { events: [], cleared: new Set() };
   const warned = opts.warned ?? new Set<string>();
@@ -159,7 +160,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(last.get('x')).toBe(SHA_C);
   });
 
-  it.each(['needs-human', 'unclassified'] as const)(
+  it.each(['needs-human', 'plan-gap', 'protected-artifact', 'unclassified'] as const)(
     'a %s halt has no retry side effects across base advances',
     async (disposition) => {
       const last = new Map<string, string>();
@@ -180,10 +181,10 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
       expect(trace.cleared).toEqual(new Set());
       expect(last.has('h')).toBe(false);
-      const logLine = trace.events.find(
+      const skipLogs = trace.events.filter(
         (e) => e.startsWith('log:') && e.includes('h') && e.includes(disposition),
       );
-      expect(logLine).toBeDefined();
+      expect(skipLogs).toHaveLength(2);
     },
   );
 
