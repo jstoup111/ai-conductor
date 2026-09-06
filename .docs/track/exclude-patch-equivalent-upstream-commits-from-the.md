@@ -1,0 +1,15 @@
+# Track: Exclude patch-equivalent upstream commits from the graded build_review diff
+
+Track: technical
+
+Scope boundary: Small fix for #1654, approved by the operator on 2026-09-06 (delegated). One seam only — build_review grader-input assembly filters the feature commits that Git itself identifies as patch-equivalent to the freshly-resolved review base, and records which commits it filtered on the existing base-telemetry event. Rebasing the feature, changing the merge-base resolution, altering rubric judgement, and reworking the completion authority are all outside this slice.
+
+This is an internal harness correction to what the review grader is shown; acceptance criteria live in technical stories rather than a PRD.
+
+The operator ruling of 2026-08-16 (spec PR #1514 closed) stands: the harness rebases once, at ship time. This slice therefore changes only what the grader sees, and triggers no rebase.
+
+Two design choices decided as the operator's delegate on 2026-09-06 (delegated). First, exclusion is path-scoped and fail-closed: a changed path is dropped from the graded diff only when every commit in the graded range that touched it is patch-equivalent to the base, so a path a novel commit also touched stays fully graded. Second, the audit record rides the existing `build_review_base` telemetry event as additive optional fields rather than a new event variant or a stamped artifact, which is the extension the event-spine skill prescribes.
+
+Scope check: A — harness-repo-only (the build_review grader-input seam exists only in this engine); B — n/a (no new skill); C — provider-agnostic (pure Git and engine code, no provider-visible contract change). No catalog registration is required.
+
+Verified foundation: `src/conductor/src/engine/build-review-inputs.ts` computes the graded diff as `git diff <merge-base(baseRef, HEAD)>..HEAD` (line 561) with a pathspec exclusion list already assembled from `MACHINERY_AUTHORED_PATHS` (line 153) and `engineAppendedPlanExclusion` (line 554) — the precedent this change copies. Every derived projection (`removalContext`, `changedTestTitles`, `snapshotTestQualityScope`) is computed from that one diff string, so filtering it filters every rubric input at one seam. The content-based `supersededByBase` helper added for #1497 lives in `src/conductor/src/engine/rebase.ts` (line 922) and is reachable only from `featureCommitsPreserved`, a post-rebase acceptance guard; it never runs on the review path and covers none of this. `build_review_base` is declared in `src/conductor/src/types/events.ts` (line 591), carried on `StepRunResult.baseFreshness` (`src/conductor/src/engine/conductor.ts` line 1241), populated in `src/conductor/src/engine/step-runners.ts` (line 2620), emitted in `src/conductor/src/engine/conductor.ts` (line 8554), and rendered in `src/conductor/src/daemon-cli.ts` (line 2810). Git behaviour was verified directly in a scratch repository: `git cherry -v <base> HEAD` marks a patch-equivalent feature commit `-` even when its subject differs upstream, marks a modified variant `+`, and `git log --format=%H <merge-base>..HEAD -- <path>` attributes the changed path to that single commit.
