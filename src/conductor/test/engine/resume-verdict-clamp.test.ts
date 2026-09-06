@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
@@ -38,7 +39,8 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { clampToRunnablePrerequisite, Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
-import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
+import * as gateVerdicts from '../../src/engine/gate-verdicts.js';
+import { readVerdict, writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { checkGate } from '../../src/engine/gates.js';
 import { gateSatisfied } from '../../src/engine/selector.js';
@@ -661,6 +663,107 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(gateSatisfied('test_suite', state, { test_suite: { satisfied: true, checkedAt: 1 } })).toBe(false);
       expect(checkGate(buildReview, state)).toEqual({ passed: true });
       expect(clampToRunnablePrerequisite(ALL_STEPS, state, buildReviewIndex)).toBe(buildReviewIndex);
+    });
+  });
+
+  describe('Task 1: routed-forward BUILD verdict persistence', () => {
+    function advanceTail(conductor: Conductor) {
+      return (conductor as unknown as {
+        advanceTail: (
+          step: typeof ALL_STEPS[number],
+          state: ConductState,
+          stuckGate: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          indexOf: (name: StepName) => number,
+          buildRoutedForward?: boolean,
+        ) => Promise<number | null | 'halt'>;
+      }).advanceTail.bind(conductor);
+    }
+
+    async function routedBuildFixture(): Promise<{
+      conductor: Conductor;
+      state: ConductState;
+      build: typeof ALL_STEPS[number];
+      indexOf: (name: StepName) => number;
+    }> {
+      const state = {
+        ...seedDoneThrough('finish'),
+        build_routed_reason: 'build routed after commit movement: retry budget exhausted',
+        test_suite: 'pending',
+      } as ConductState;
+      await writeState(statePath, state);
+      await writeVerdict(dir, 'build', { satisfied: false, checkedAt: 1, kickback });
+      for (const step of ALL_STEPS) {
+        if (step.loopGate && step.name !== 'build' && step.name !== 'test_suite') {
+          await writeVerdict(dir, step.name, { satisfied: true, checkedAt: 1 });
+        }
+      }
+      const { runner } = trackingRunner(dir);
+      return {
+        conductor: new Conductor({
+          projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: true,
+        }),
+        state,
+        build: ALL_STEPS.find((step) => step.name === 'build')!,
+        indexOf: (name) => ALL_STEPS.findIndex((step) => step.name === name),
+      };
+    }
+
+    it('replaces a routed build kickback verdict before selecting test_suite', async () => {
+      const { conductor, state, build, indexOf } = await routedBuildFixture();
+
+      const selected = await advanceTail(conductor)(build, state, new Map(), ALL_STEPS, indexOf, true);
+
+      const verdict = await readVerdict(dir, 'build');
+      expect({ selected, verdict }).toEqual({
+        selected: indexOf('test_suite'),
+        verdict: expect.objectContaining({
+          satisfied: true,
+          reason: state.build_routed_reason,
+          checkedAt: expect.any(Number),
+        }),
+      });
+      expect(verdict?.checkedAt).toBeGreaterThan(1);
+      expect(verdict?.kickback).toBeUndefined();
+    });
+
+    it('creates a routed build verdict with the fallback reason when none exists', async () => {
+      const { conductor, state, build, indexOf } = await routedBuildFixture();
+      delete state.build_routed_reason;
+      await rm(join(dir, '.pipeline', 'gates', 'build.json'));
+
+      await advanceTail(conductor)(build, state, new Map(), ALL_STEPS, indexOf, true);
+
+      expect(await readVerdict(dir, 'build')).toEqual(expect.objectContaining({
+        satisfied: true,
+        reason: 'build routed after commit movement',
+        checkedAt: expect.any(Number),
+      }));
+    });
+
+    it('does not treat an old route reason as a satisfied ordinary build', async () => {
+      const { conductor, state, build, indexOf } = await routedBuildFixture();
+
+      await advanceTail(conductor)(build, state, new Map(), ALL_STEPS, indexOf, false);
+
+      expect(await readVerdict(dir, 'build')).toEqual(expect.objectContaining({ satisfied: false }));
+    });
+
+    it('rejects before emitting a successful routed verdict when persistence fails', async () => {
+      const { conductor, state, build, indexOf } = await routedBuildFixture();
+      const emitted: StepName[] = [];
+      events.on('gate_verdict', (event) => {
+        if (event.type === 'gate_verdict' && event.satisfied) emitted.push(event.step);
+      });
+      const rejected = vi.spyOn(gateVerdicts, 'writeVerdict').mockRejectedValueOnce(new Error('disk full'));
+      try {
+        await expect(advanceTail(conductor)(build, state, new Map(), ALL_STEPS, indexOf, true))
+          .rejects.toThrow('disk full');
+
+        expect(emitted).not.toContain('build');
+      } finally {
+        rejected.mockRestore();
+      }
     });
   });
 });
