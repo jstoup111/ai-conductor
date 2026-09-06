@@ -70,14 +70,20 @@ fi
 # display parsed the agent-era object-form task cache, which the engine now
 # owns and writes in array form; step state is the stable session signal.)
 if [ -f "$PIPELINE_STATE" ]; then
-  python3 -c "
+  if pipeline_summary=$(python3 - "$PIPELINE_STATE" <<'PYEOF'
 import json
-with open('$PIPELINE_STATE') as f:
+import sys
+with open(sys.argv[1]) as f:
     state = json.load(f)
 steps = {k: v for k, v in state.items() if isinstance(v, str)}
 done = sum(1 for v in steps.values() if v in ('done', 'skipped'))
 print(f'Pipeline: {done}/{len(steps)} steps done')
-" 2>/dev/null || true
+PYEOF
+  ); then
+    printf '%s\n' "$pipeline_summary"
+  else
+    echo "WARNING: Could not summarize pipeline state; continuing session context." >&2
+  fi
 fi
 
 # Record memory entry count for session-delta check at stop
