@@ -64,6 +64,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon retains protected-artifact halts through base-branch advances until an operator resolves them. ([implementation PR #2248](https://github.com/jstoup111/ai-conductor/pull/2248)).
 - The as-built governing-clause resolver accepts the `D<n>` decision shorthand that ADR headings use, so a REMEDIABLE finding citing `adr-x D3` no longer halts needs-human. ([implementation PR #2250](https://github.com/jstoup111/ai-conductor/pull/2250)).
 - Closeout event tailing now recovers from corrupt completed ledger records without hiding later valid events. ([implementation PR #2241](https://github.com/jstoup111/ai-conductor/pull/2241)).
+- Blocks destructive bare force pushes in compound commands while preserving safe force-with-lease pushes. ([implementation PR #2221](https://github.com/jstoup111/ai-conductor/pull/2221)).
 
 ## [1.0.0] - 2026-08-31
 
