@@ -107,6 +107,9 @@ publisher still re-derives all release authority immediately before mutation:
 5. After both publication artifacts exist, `refs/heads/stable` is created or fast-forwarded to the same
    release commit. The update is non-forced and a failure fails the publish job; retrying the workflow
    verifies the existing artifacts and safely retries only the stable-branch advance.
+   The hosted documentation site (GitHub Pages) publishes from `stable:/docs`, so a release cut is
+   also the moment new documentation goes live; a docs change merged to `main` stays unpublished until
+   the next cut.
 
 The publisher creates the annotated tag and GitHub Release through GitHub APIs. It never rewrites
 `CHANGELOG.md`, bumps `VERSION`, creates a release commit, or pushes `main`. `stable` therefore never points
