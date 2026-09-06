@@ -7,6 +7,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 import { execFile as execFileSpy } from 'node:child_process';
 import {
+  GhCapabilityError,
   makeProductionGh,
   assertRealExecAllowed,
   createGithubTrackerClient,
@@ -31,6 +32,64 @@ describe('tracker-client: canonical GhRunner + guarded makeProductionGh', () => 
       /AI_CONDUCTOR_NO_REAL_EXEC|real .*(gh|exec).* blocked/i,
     );
     expect(execFileSpy).not.toHaveBeenCalled();
+  });
+});
+
+function mockProductionGhFailure(input: { code: number; stderr: string; message: string }): void {
+  vi.mocked(execFileSpy).mockImplementationOnce(((
+    _file: string,
+    _args: readonly string[] | null | undefined,
+    _options: unknown,
+    callback: ((error: unknown, stdout: unknown, stderr: unknown) => void) | undefined,
+  ) => {
+    const error = Object.assign(new Error(input.message), {
+      code: input.code,
+      stderr: input.stderr,
+    });
+    callback?.(error as never, '' as never, input.stderr as never);
+    return undefined as never;
+  }) as unknown as typeof execFileSpy);
+}
+
+describe('makeProductionGh — unsupported JSON-field capability errors', () => {
+  it('translates a non-zero stderr unsupported-field signal into structured capability evidence', async () => {
+    const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    mockProductionGhFailure({
+      code: 1,
+      stderr: 'Unknown JSON field: "headRefOid"',
+      message: 'Command failed: gh pr view',
+    });
+
+    try {
+      const invocation = makeProductionGh()(['pr', 'view'], { cwd: '/tmp' });
+      await expect(invocation).rejects.toMatchObject({
+        name: 'GhCapabilityError',
+        cli: 'gh',
+        field: 'headRefOid',
+      });
+      await expect(invocation).rejects.toBeInstanceOf(GhCapabilityError);
+    } finally {
+      process.env.AI_CONDUCTOR_NO_REAL_EXEC = noRealExec;
+    }
+  });
+
+  it('does not infer a capability error from an unsupported-field phrase in message alone', async () => {
+    const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    mockProductionGhFailure({
+      code: 1,
+      stderr: '',
+      message: 'Unknown JSON field: "headRefOid"',
+    });
+
+    try {
+      await expect(makeProductionGh()(['pr', 'view'], { cwd: '/tmp' })).rejects.not.toBeInstanceOf(
+        GhCapabilityError,
+      );
+    } finally {
+      process.env.AI_CONDUCTOR_NO_REAL_EXEC = noRealExec;
+    }
   });
 });
 
