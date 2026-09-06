@@ -46,6 +46,20 @@ Choose Option A.
 6. Link the hosted landing page prominently from the root project overview while retaining in-repository topic links for source readers.
 7. Treat GitHub's Pages deployment status as the post-merge publication signal. Default automated tests remain offline; any live URL probe is opt-in smoke/manual verification because GitHub is a third-party boundary.
 
+> **Amended 2026-09-06 (docs publish at release cut):** decision 1 is superseded for the publishing
+> source only; every other decision stands.
+>
+> 1. **Pages publishes from the `stable` branch, not the default branch.** The GitHub Pages source is
+>    `stable:/docs`. `release.yml` already fast-forwards `stable` to each published release, so the
+>    hosted site changes only when a release is cut and always describes shipped behavior. A merge to
+>    `main` no longer publishes documentation.
+> 2. **The branch publisher is retained.** This stays a repository Pages setting; no deployment
+>    workflow is added. The repository validation (decision 5) still runs against the checkout under
+>    test, so it gates the docs before they reach `stable` rather than after.
+> 3. **Post-merge publication signal moves to post-release.** Decision 7's Pages deployment status is
+>    now the post-release publication signal; a docs change merged between cuts is expected to be
+>    absent from the site until the next release.
+
 ## Consequences
 
 ### Positive

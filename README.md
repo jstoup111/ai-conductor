@@ -153,7 +153,7 @@ the evidence and routes you to the right [runbook](docs/runbooks/index.md).
 
 ## Documentation
 
-[Browse the hosted documentation](https://jstoup111.github.io/ai-conductor/)
+[Browse the hosted documentation](https://jstoup111.github.io/ai-conductor/) — published from the `stable` branch, so it always describes the latest release; unreleased changes are documented in `docs/` on `main`.
 
 **Start here**
 
