@@ -26,6 +26,28 @@ export interface VerdictParseResult {
   unparseable: number;
 }
 
+const canonicalUtcTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/**
+ * Convert a canonical millisecond UTC timestamp into an epoch instant.
+ *
+ * Timestamps from the monitor log are accepted only when their UTC rendering
+ * round-trips exactly, preventing Date from normalizing invalid dates or
+ * silently accepting imprecise/local timestamps.
+ */
+export function parseCanonicalUtcTimestamp(timestamp: string | undefined): number | undefined {
+  if (!timestamp || !canonicalUtcTimestampPattern.test(timestamp)) {
+    return undefined;
+  }
+
+  const epochMs = new Date(timestamp).getTime();
+  if (!Number.isFinite(epochMs) || new Date(epochMs).toISOString() !== timestamp) {
+    return undefined;
+  }
+
+  return epochMs;
+}
+
 /**
  * Parse verdicts from monitor log text.
  *
@@ -46,19 +68,23 @@ export function parseVerdicts(logText: string, repo: string): VerdictParseResult
   // Extract all haltAt timestamps from NEW HALT lines
   // Pattern: NEW HALT: <timestamp> [daemon] ✋ <slug>
   // We extract both the timestamp and the slug from each NEW HALT line
-  const haltAtLinePattern = /NEW HALT:\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}).*?\[daemon\]\s*✋\s*([\w-]+)/g;
-  const haltAtMap: Map<string, string> = new Map();
+  const haltAtLinePattern = /NEW HALT:\s+(\S+).*?\[daemon\]\s*✋\s*([\w-]+)/g;
+  const haltAtMap: Map<string, { timestamp: string; epochMs: number }> = new Map();
   let haltMatch;
 
   while ((haltMatch = haltAtLinePattern.exec(logText)) !== null) {
     const timestamp = haltMatch[1];
     const slug = haltMatch[2];
+    const epochMs = parseCanonicalUtcTimestamp(timestamp);
 
-    // Keep the newest (latest) timestamp for each slug
-    // ISO timestamps sort lexicographically correctly
+    if (epochMs === undefined) {
+      continue;
+    }
+
+    // Keep the newest source instant for each slug, including milliseconds.
     const existingTimestamp = haltAtMap.get(slug);
-    if (!existingTimestamp || timestamp > existingTimestamp) {
-      haltAtMap.set(slug, timestamp);
+    if (!existingTimestamp || epochMs > existingTimestamp.epochMs) {
+      haltAtMap.set(slug, { timestamp, epochMs });
     }
   }
 
@@ -66,7 +92,7 @@ export function parseVerdicts(logText: string, repo: string): VerdictParseResult
   while ((match = verdictPattern.exec(logText)) !== null) {
     const slug = match[1];
     const issue = match[2];
-    const haltAt = haltAtMap.get(slug);
+    const haltAt = haltAtMap.get(slug)?.timestamp;
 
     // Dedupe by issue number - store in a Map keyed by issue
     entries.set(issue, { slug, issue, repo, haltAt });
