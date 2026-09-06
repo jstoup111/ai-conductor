@@ -26,6 +26,8 @@ intervention.
 Add two deterministic guards at the existing remediation kickback→build seam; do **not** add a task-
 stamp-invalidation mechanism.
 
+> **Amended 2026-09-06 by #1831:** Explicit existing-task bindings now identify the owning repair task. `adr-2026-09-06-reopened-task-resolution` permits a current repair obligation to exclude old routing evidence while preserving historical evidence. D1 still halts for genuinely empty or non-dispatchable work; an open admitted repair is dispatchable, not evidence-complete merely because its prior task was completed.
+
 ### D1 — Route-into-no-op guard (`planRemediation`)
 
 When `planRemediation` (`conductor.ts:871-930`) resolves a route whose earliest target is `build`,
@@ -37,6 +39,8 @@ Return a HALT outcome carrying the gap ledger (the blocking finding + "remediati
 dispatchable build work; the implicated task(s) are already evidence-complete — human needed"),
 reusing the existing HALT-marker + `surfaceRemediationPr` path. Idempotent: same inputs → same
 decision; audit-logged via the existing `kickback` event plus a new distinguishing field (D3).
+
+> **Amended 2026-09-06 by #1831:** D1 retains its no-dispatchable-work halt but distinguishes truly empty output from emitted work that is refused or already resolved. Its diagnostic names the applicable ownership, authority, persistence/restaging, or evidence cause and retains finding/task context. Historical completion alone does not make an admitted current repair non-dispatchable.
 
 ### D2 — Zero-progress + unchanged-verdict escalation (post-build re-entry)
 
@@ -72,6 +76,8 @@ input. Extends the existing `kickback` event (`audit-trail.ts:16,136`; rendered
   task). Rejected as tangled — see track approach 2. Issue Outcome 1's "records a new gap work-item"
   clause is already satisfied by `remediation-append`; D1 makes that path escalate loudly when it
   yields nothing.
+
+> **Amended 2026-09-06 by #1831:** This non-goal remains applicable outside explicitly bound existing-task repair. The new obligation does not delete old stamps or infer ownership from prose; it uses validated owning-task bindings and shared resolution. Preserve pre-reopen no-progress baselines: reopening/reclosing alone is not progress. A passing effective review or valid acceptance of its scope blocker ends the cycle even without a changed code tree; unchanged unresolved failure remains bounded.
 - **No classifier for transient-vs-deterministic failure** — that is #646.
 - **No change to the daemon DECIDE gate** — #644 is already fixed by PR #645.
 - **No change to completion derivation** (`autoheal.ts` / `artifacts.ts`), the remediation-append

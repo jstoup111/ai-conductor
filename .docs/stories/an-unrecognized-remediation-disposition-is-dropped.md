@@ -20,7 +20,7 @@ As the operator reading a halt, I want the halt to name the disposition word the
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `.pipeline/remediation.json` whose every gap carries a disposition word outside the accepted vocabulary (for example `existing-task` on AB-1 and AB-2), when remediation routing reads it, then the feature halts needs-human with a message that names each rejected word, the gap id it was attached to, and the full accepted vocabulary list.
+- Given `.pipeline/remediation.json` whose every gap carries a disposition word outside the accepted vocabulary (for example `unsupported-disposition` on AB-1 and AB-2), when remediation routing reads it, then the feature halts needs-human with a message that names each rejected word, the gap id it was attached to, and the full accepted vocabulary list.
 - Given the same input, when the halt is written, then the halt text does not contain the generic "as-built review verdict is BLOCKED" reason.
 
 #### Negative Paths
@@ -57,7 +57,7 @@ As the daemon, I want a planner output that mixes recognized and unrecognized di
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a planner output with AB-1 → `build` (with tasks) and AB-2 → `existing-task`, when remediation routing reads it, then AB-1 routes to `build` with its tasks appended exactly as it does today, one `remediation_disposition_rejected` event is emitted for AB-2, and the route's `evidence`/hint text mentions AB-2 as dropped.
+- Given a planner output with AB-1 → `build` (with tasks) and AB-2 → `unsupported-disposition`, when remediation routing reads it, then AB-1 routes to `build` with its tasks appended exactly as it does today, one `remediation_disposition_rejected` event is emitted for AB-2, and the route's `evidence`/hint text mentions AB-2 as dropped.
 - Given a planner output whose every disposition is recognized, when remediation routing reads it, then the route, hint, evidence, appended tasks, and halt behavior are unchanged from current behavior.
 
 #### Negative Paths

@@ -84,3 +84,5 @@ None — no uncovered structural decision. Two existing governing ADRs amended (
    `.pipeline/task-status.json` via the same re-seed seam the appender uses (conductor.ts
    ~:4263), fail-closed before the rewind — the next dispatch must see the unfinished tasks as
    pending work. A route that cannot re-stage halts instead of dispatching an empty BUILD.
+
+> **Amended 2026-09-06 by #1831:** Pending rows alone do not establish dispatchability because the shared resolver also reads old trailers. Apply `adr-2026-09-06-reopened-task-resolution` so admitted bound repairs remain open across shared resolution and reconstruction until current closure evidence exists. Admission, consolidated manual-test behavior, and lap-only charging stay unchanged; fresh evidence followed by a passing review closes without a make-work commit.

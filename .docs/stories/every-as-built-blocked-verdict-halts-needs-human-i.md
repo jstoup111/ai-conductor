@@ -81,7 +81,7 @@ instead of looping.
 #### Negative Paths
 - Given one as-built lap already recorded, when the gate returns any BLOCKED outcome again, then no tasks are appended and the feature halts with class kickback-cap, the halt body listing every finding with its class and clause
 - Given the requested task count exceeds the remaining shared growth allowance, when admission runs, then no tasks are appended and the feature halts with class kickback-cap naming the allowance and the findings
-- Given a remediation lap whose rebuild produced no tree movement, when the no-op escalation check runs for the as-built gate, then the lap escalates to a halt instead of re-dispatching
+- Given a remediation lap whose rebuild produced no tree movement or net resolved-task progress and whose effective review still fails unchanged, when the no-op escalation check runs for the as-built gate, then the lap escalates to a halt instead of re-dispatching; a passing effective review ends the cycle even without tree movement
 - Given an as-built lap is recorded, when the ledger is inspected, then build_review's cumulative counter and prd_audit's lap counter are unchanged (isolation test)
 
 ### Done When

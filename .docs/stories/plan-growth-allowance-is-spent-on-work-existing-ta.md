@@ -75,7 +75,7 @@ As the operator, I want the non-appending route bounded by the lap allowance wit
 
 #### Negative Paths
 - Given a gate whose lap cap is already consumed, when a new `existing-task` round is requested, then the round halts `kickback-cap` with prose naming the lap cap (`lap cap reached (n/n)`) — not the plan-growth allowance
-- Given an `existing-task` lap that produces no tree-hash change by the next gate evaluation, when the no-op escalation pair evaluates, then it escalates to a halt instead of admitting another lap
+- Given an `existing-task` lap that produces no tree-hash change or net resolved-count progress and whose next effective gate verdict still fails unchanged, when the no-op escalation pair evaluates, then it escalates to a halt instead of admitting another lap; a passing effective verdict ends the cycle even when current valid completion evidence required no tree change
 - Given a validation-group round carrying a `manual_test` FAIL alongside as-built gaps, when routing is decided, then the existing-task route does not run and the gaps ride the consolidated dispatch (adr-2026-08-25 D8)
 
 ### Done When
