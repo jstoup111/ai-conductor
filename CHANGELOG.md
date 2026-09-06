@@ -20,6 +20,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Remediation findings owned by existing plan tasks route back to BUILD via the existing-task disposition, charging the gate lap allowance and never the plan-growth allowance. ([implementation PR #2189](https://github.com/jstoup111/ai-conductor/pull/2189)).
 - Adds a coverage-binding gate that verifies plan criteria against cited task completion checks. ([implementation PR #2135](https://github.com/jstoup111/ai-conductor/pull/2135)).
 - Daemon runs can now process multiple features concurrently within a single repository. ([implementation PR #2075](https://github.com/jstoup111/ai-conductor/pull/2075)).
+- The daemon prints a startup warning whenever its effective concurrency exceeds 1, describing the extra rebase churn and spend to expect and how to return to serial dispatch. ([implementation PR #2240](https://github.com/jstoup111/ai-conductor/pull/2240)).
 
 ### Changed
 
