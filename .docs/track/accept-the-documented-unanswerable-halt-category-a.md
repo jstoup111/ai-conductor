@@ -1,0 +1,15 @@
+# Track: Accept the documented unanswerable halt category
+
+Track: technical
+
+Scope boundary: Small fix for #1076, approved by the operator on 2026-09-06 (delegated). Bring the engine's accepted halt-category vocabulary into agreement with the published remediation skill contract, and report a halt category the engine does not accept the way an unrecognized disposition is already reported. Halt-class policy, retry policy, remediation routing targets, and the remediation skill's own text are outside this slice.
+
+This is an engine correctness fix in shipped conductor code; acceptance criteria live in technical stories rather than a PRD.
+
+Decision recorded: the skill contract is the authoritative side, so the engine grows to accept `unanswerable`. The issue leaves the direction open, and the operator's delegate resolved it on 2026-09-06 on three grounds. The category is published in three consumer-visible surfaces (the remediate skill's disposition table and its JSON field contract, the pipeline skill's halt description, and the skills reference page), an existing acceptance test asserts that skill text verbatim, and the category carries a distinct operator signal — a question that cannot be answered from committed artifacts is a different instruction to the human than one needing architecture or product judgement. Removing it would delete a published signal to match an omission in a parser.
+
+Scope check: A — consumer-facing; the remediation planner and its parser ship in the engine to every repository that installs the harness, and no repo-only signal fires (no self-host gate, no local validation or release gate, no repo CI, no `.docs/`-layout dependence). B — n/a (no new skill). C — provider-agnostic; the parser and its renderers are provider-neutral. No catalog registration and no rule-file change are required: the published contract already documents the accepted vocabulary, and this change makes the engine honor it.
+
+Event spine: Channel? no new channel — the rejection already rides `remediation_disposition_rejected` on the existing bus. Concern: occurrence. Verdict: extend the union with an additive optional field on that existing variant. Exception: none required.
+
+Verified foundation: `readRemediationPlan` in `src/conductor/src/engine/artifacts.ts` narrows `o.category` to the two-member `RemediationHaltCategory` union and then drops any halt gap whose category resolved to null with a bare `continue`; when that gap is the plan's only one the function returns null and `planRemediation` in `src/conductor/src/engine/conductor.ts` reports a missing or invalid plan. The same function already collects unrecognized *dispositions* into a typed `rejected` array that `planRemediation` emits on the event spine and folds into the operator halt, so the reporting path this fix needs already exists and only its input vocabulary is missing. Halt categories are consumed nowhere but the two operator-facing detail strings in `conductor.ts`, so widening the union has no routing consequence.
