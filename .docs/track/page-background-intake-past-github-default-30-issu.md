@@ -1,0 +1,15 @@
+# Track: Complete assigned-issue capture for background intake
+
+Track: technical
+
+Scope boundary: Small fix for #1133, approved by the operator on 2026-09-06 (delegated). Request an explicit assigned-issue result limit at the canonical tracker seam so the GitHub CLI's 30-result default no longer truncates a poll, and report an explicit incompleteness signal through intake's existing injected log sink when the returned set saturates the requested maximum. Ledger-backed capture, write-back, re-eligibility, and every other poll rule are unchanged. Cursor-based paging, a configurable limit key, per-repo tuning, closed-issue reconciliation, and any change to the queue or ledger schema are outside this slice.
+
+This is an internal tooling correction to the intake adapter and its tracker seam; acceptance criteria live in technical stories rather than a PRD.
+
+The operator-delegate approved a single explicit high limit over hand-rolled cursor paging on 2026-09-06: the GitHub CLI already pages internally up to `--limit`, so a limit restores completeness with one argv element, while a bespoke pager would fork the seam's single-call contract and its fakes.
+
+Scope check: A — consumer-facing; no repo-only signal fires (this is neither self-host/daemon-gated machinery, nor this repository's validation or release gates, nor its CI, nor a convention only this repository has), and the tracker seam ships in the engine that every installed harness consumer polls its own GitHub issues with. B — n/a (no new skill). C — provider-agnostic: the change is entirely GitHub CLI argv and an injected log sink, with no Claude- or Codex-specific path, variable, or capability. No catalog registration is required, and no behavioral rule is added to either instruction file.
+
+Event spine: Channel? no — the incompleteness signal reuses the adapter's existing injected `log` sink (the same sink that already reports an isolated repo failure), adding no file, no format, and no reader path. The adapter runs in the intake CLI process and never touches the conductor event union, so no variant, sibling ledger, or ADR is required.
+
+Verified foundation: `src/conductor/src/engine/tracker-client.ts` builds the assigned-issue argv as `issue list --assignee @me --state open --json number,title,body,labels -R <repo>` with no `--limit` element, so the GitHub CLI applies its documented 30-result default. `src/conductor/src/engine/engineer/intake/github-issues.ts` is the only production caller: its `poll()` calls `tracker.listAssignedIssues(ghRepo, repo.path)` inside a try/catch that isolates a failing repo through the injected `log` sink, then per issue skips the `engineer:handled` label, skips a ledger-known `sourceRef`, skips an empty title-and-body issue, and records the rest. `src/conductor/src/engine/engineer-cli.ts` wires that sink to the CLI's stderr printer in `buildIntake`. Because the ledger dedups on `sourceRef`, a larger result set changes what a poll can see without changing what a re-poll re-captures.
