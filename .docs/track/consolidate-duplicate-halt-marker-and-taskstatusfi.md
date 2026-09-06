@@ -1,0 +1,13 @@
+# Track: Consolidate duplicate halt-marker and task-status declarations
+
+Track: technical
+
+Scope boundary: Small fix for #1016, approved by the operator on 2026-09-06 (delegated). Collapse each duplicated engine declaration to a single exported source, make every other module import it, and register the surviving import edges in the existing matched-pair registry so a future re-fork fails a check. Derive the stale-engine restart suppression path from its own marker constant. Renaming any on-disk marker file, unifying the two distinct restart pipelines (#408 owns that), and re-shaping `task-status.json` are outside this slice.
+
+This is internal engine declaration hygiene with no user-visible behavior change; acceptance criteria live in technical stories rather than a PRD.
+
+The operator approved consolidation-by-derivation over a new drift checker on 2026-09-06 (delegated). #1833 already shipped the matched-pair registry, whose `satisfied-by-derivation` mode exists precisely for a pair that has been collapsed into one source; adding a second checking mechanism would duplicate it.
+
+Scope check: A — harness-repo-only (engine-internal type and constant declarations; no consumer-facing rule, skill text, or contract changes); B — n/a (no new skill); C — provider-agnostic (no provider adapter, prompt, or host-specific path is touched). No catalog registration is required.
+
+Verified foundation: `artifacts.ts:508` declares `HALT_MARKER = '.pipeline/halt-user-input-required'`, read only at `artifacts.ts:2634` and `:2637`, while `task-progress.ts:339` declares `HALT_MARKER_RELATIVE` with the same value plus the `haltMarkerPath`/`haltMarkerExists`/read/clear helpers; the unrelated `.pipeline/HALT` constant of the same name lives in `halt-marker.ts:22` and every other module already imports it from there. `task-seed.ts:21` declares the array-of-records `TaskStatusFile` that actually writes `task-status.json`; `rebase-translate.ts:144` re-declares a compatible reader shape as `TaskStatusFileLike`; `types/state.ts:81` declares an incompatible `TaskStatusFile = Record<string, TaskStatus>` with no importer anywhere in the repository. `restart-intent.ts:18` and `:21` spell `.daemon/RESTART_PENDING` and its `.suppression` sibling as two independent literals; the hyphenated `.daemon/RESTART-PENDING` at `restart-marker.ts:17` is a different marker for a different pipeline. `test/engine/matched-pairs.ts` already supports a `satisfied-by-derivation` declaration verified by `test/structural/matched-pair-registry.test.ts`, and `docs/reference/artifacts.md:508-513` records this defect as a known limitation while its `.daemon/` table misattributes the suppression file to the hyphenated marker.
