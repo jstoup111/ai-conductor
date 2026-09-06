@@ -449,6 +449,19 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
     was stated. `.docs/intake/` is an idea capture that is **superseded** once stories are approved;
     never grade the shipped code against it. Where intake and the stories disagree, the stories win:
     a deliberate narrowing recorded in an amended, resealed story is the decision, not a plan gap.
+- **Context budget.** This review runs late in a long session and providers with a ~250k-token
+  window have compacted mid-review (jstoup111/ai-conductor#2377: peaks of 236k–251k, with the
+  reviewer's own reads accounting for 0.85–1.5M characters of output). Treat the window as a budget:
+  - Do NOT re-read `HARNESS.md`, `CLAUDE.md`, or this skill file. They are already in context via
+    the session-start hook and the skill loader.
+  - Read each artifact once. The plan and stories are large; extract the task table, `Done when`
+    blocks, and the criteria you are grading, not the whole file twice.
+  - Bound every git and search command: `git diff --stat <base>...HEAD` first, then per-file
+    `git diff <base>...HEAD -- <path>` with DEFAULT context (never `--unified=80` or higher);
+    `git log --oneline -n 30`; `rg -l` / `rg --files` piped through a slug or path filter before
+    listing. Never dump an unfiltered file list or an unbounded log.
+  - Read source by symbol or line range (`nl -ba <file> | sed -n 'A,Bp'`), not whole engine files.
+  - If you must choose, spend the budget on the shipped source under review, not on policy prose.
 - Do NOT re-run §2/§3/§5 (feasibility/complexity/domain pre-checks) — those belong to the DECIDE
   pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
   deliberately cheap.
