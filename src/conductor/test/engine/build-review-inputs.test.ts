@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -718,6 +719,32 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.diff).toContain('feature.txt');
       expect(result.diff).toContain('feature change');
       expect(result.planBody).toContain('Fixture plan.');
+    });
+
+    it('excludes tests introduced only by a newer base branch from feature-owned declaration evidence', async () => {
+      await git('checkout', 'feature/foo');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(join(dir, 'test/feature-owned.test.ts'), "it('feature-owned test', () => {});\n");
+      await git('add', 'test/feature-owned.test.ts');
+      await git('commit', '-m', 'add feature-owned test');
+
+      await git('checkout', 'main');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(join(dir, 'test/base-only.test.ts'), "it('base-only test', () => {});\n");
+      await git('add', 'test/base-only.test.ts');
+      await git('commit', '-m', 'add merged base test');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+      await git('checkout', 'feature/foo');
+
+      const result = await assembleInputs(realGit(), planPath, {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+        } as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>),
+      });
+
+      expect(result.sourceSnapshot.changedTestTitles).toEqual([
+        { selector: 'test/feature-owned.test.ts', titleText: 'feature-owned test', staticExtractionFallback: false },
+      ]);
     });
 
     it('keeps pinned plan, stories, test bytes and a space-containing rename pair after live worktree mutation', async () => {
