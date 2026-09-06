@@ -1037,12 +1037,24 @@ config key is the only off switch. When disabled, the step is marked `skipped` a
 is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
 
 `testQuality` accepts `enabled`, `llm_provider`, `model`, `effort`, `model_fallback_ladder`,
-`max_retries`, and `escalate`. It is off by default; a feature with no acceptance-criteria change has an
-empty judged scope and the rubric passes without judging even when enabled. Any unknown or retired rubric
+`max_retries`, and `escalate`. It is off by default. When enabled, the engine derives a frozen,
+feature-local typed scope from the graded diff, the active plan and stories, and established `Covers`
+bindings; it does not admit every declaration in a marked file. A production-only refactor, move, or
+rename with neither an established target nor a concrete candidate is a valid empty-scope PASS and
+dispatches neither the reviewer nor counterfactual execution. Missing markers, absent plan test paths, and
+an abstract possibility of an unknown dependency do not turn that empty scope into a coverage failure.
+Any unknown or retired rubric
 id under `build_review.rubrics` — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
 `wiring` — is accepted as a no-op with a one-time notice naming the retired setting; it never fails
 configuration loading or halts a run
 (`adr-2026-08-22-build-review-opt-in-rubric-container`).
+
+An ambiguous changed marker association or identified changed setup/helper that affects an opted-in test
+is a concrete candidate, not an automatically in-scope test. The existing test-quality reviewer resolves
+each candidate from pinned source in its normal review call as `resolved`, `out-of-scope`, or
+`indeterminate`. Candidate file selectors may be used for conservative counterfactual execution without
+authorizing unchanged siblings as review targets. An `indeterminate` result preserves any valid findings
+but yields the derived `scope-incomplete` coverage fault; see [the stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#build_review-has-a-scope-incomplete-candidate) for recovery and the bounded reduced-coverage path.
 
 `scopeContainmentEnforced` is resolved through the same block and read by the real
 `ai-conductor scope-check` command. It defaults to `false`, so verified violations are reported while
