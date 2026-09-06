@@ -19,7 +19,7 @@ export const INTAKE_OUTCOMES_RELATIVE_PATH = join('.pipeline', 'intake-outcomes.
  * bullets that follow it, up to (but not including) the next `## ` heading or
  * end of body. Returns null when no such section is present.
  */
-function extractDesiredOutcomeSection(intakeBody: string): string | null {
+export function extractDesiredOutcomeSection(intakeBody: string): string | null {
   const headingIdx = intakeBody.search(/^## Desired outcome\s*$/m);
   if (headingIdx === -1) return null;
 
@@ -59,7 +59,14 @@ export async function stageIntakeOutcomes(
   const pipelineDir = join(worktreePath, '.pipeline');
   const stagedPath = join(pipelineDir, 'intake-outcomes.md');
 
-  const outcomeSection = extractDesiredOutcomeSection(body) ?? '## Desired outcome\n';
+  const extractedOutcomes = extractDesiredOutcomeSection(body);
+  // Tracker-sourced text is armor-delimited. Without an outcomes section it
+  // must not manufacture a staging artifact; explicit CLI bodies retain the
+  // established empty-section behavior for backwards compatibility.
+  if (extractedOutcomes === null && /^<<< INBOUND sourceRef=.+ digest=[a-f0-9]{64} >>>$/m.test(body)) {
+    return null;
+  }
+  const outcomeSection = extractedOutcomes ?? '## Desired outcome\n';
 
   const contents = `Source-Ref: ${ref}\n\n${outcomeSection}\n`;
 

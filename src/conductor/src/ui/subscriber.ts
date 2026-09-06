@@ -52,6 +52,7 @@ export class TerminalSubscriber implements UISubscriber {
       'halt_marker_write_failed',
       'renderer_error',
       'pipeline_tail_diagnostic',
+      'intake_inbound_sanitized',
     ];
 
     for (const type of eventTypes) {
@@ -61,6 +62,7 @@ export class TerminalSubscriber implements UISubscriber {
           event.type === 'halt_marker_write_failed'
           || event.type === 'renderer_error'
           || event.type === 'pipeline_tail_diagnostic'
+          || event.type === 'intake_inbound_sanitized'
         ) {
           await this.terminalRenderer?.handle(event);
         }

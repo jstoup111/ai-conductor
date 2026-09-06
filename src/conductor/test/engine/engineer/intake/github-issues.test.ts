@@ -364,3 +364,22 @@ describe('poll() re-ingests after a forget disposition (TR-10)', () => {
     expect(await ledger.known('github-issues', 'o/a#7')).toBe(false);
   });
 });
+
+describe('poll() invalid generated source references', () => {
+  it('skips and logs an invalid sourceRef instead of aborting the polling pass', async () => {
+    const logs: string[] = [];
+    const registry = { list: async () => [{ name: '', path: dir }] };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return { stdout: JSON.stringify([{ number: 1, title: 'Malformed source', body: 'body' }]) };
+      }
+      return { stdout: '' };
+    };
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger, log: (message) => logs.push(message) });
+
+    await expect(adapter.poll()).resolves.toEqual([]);
+
+    expect(logs).toContain('github-issues: skipping issue with invalid sourceRef #1');
+  });
+});
