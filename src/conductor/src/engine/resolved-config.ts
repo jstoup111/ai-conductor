@@ -95,6 +95,19 @@ export const FALLBACK_EFFORT: EffortLevel = 'medium';
 export const FALLBACK_RETRIES = 3;
 export const FALLBACK_REVIEW: ReviewMode = 'manual';
 
+/** The serial daemon default when no executor-pool width is configured. */
+export const DEFAULT_DAEMON_CONCURRENCY = 1;
+
+/**
+ * Resolve the daemon executor-pool width from validated configuration.
+ *
+ * `validateConfig` rejects values outside the accepted integer range [1, ∞),
+ * so this resolver only needs to apply the absent-key default.
+ */
+export function resolveDaemonConcurrency(config?: HarnessConfig): number {
+  return config?.daemon_concurrency ?? DEFAULT_DAEMON_CONCURRENCY;
+}
+
 /**
  * Default for the per-step `escalate` knob (#188). True means retries climb the
  * escalation ladder (effort, then model tier). Existing configs begin escalating

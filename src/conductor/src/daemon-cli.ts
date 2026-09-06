@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { access, mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
@@ -12,6 +13,7 @@ import {
   formatFeatureUsageTotal,
 } from './execution/provider-diagnostics.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
+import { emitEngineerSignal, resolveEngineerDir } from './engine/engineer-store.js';
 import {
   isEligibleForResolve,
   makeAutoresolveEligibility,
@@ -66,6 +68,7 @@ import { isForwardedFromFeature, startFeatureEventPersistence } from './engine/e
 import { renderedEventTypes } from './engine/event-sinks.js';
 import { wireOtelVisualizer } from './engine/otel/wire.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
+import { LiveBoundaryCoordinator } from './engine/self-host/live-boundary-coordinator.js';
 import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
 import { readLastResolvedCount } from './engine/task-evidence.js';
@@ -78,11 +81,18 @@ import {
   formatDaemonFeatureTag,
   createDaemonModeLogger,
   createFeatureDaemonLogger,
+  createOwnershipAwareDaemonLogger,
+  formatDaemonConsoleTeeLine,
+  withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
-import { runDaemon, type BacklogItem, type DaemonResult } from './engine/daemon.js';
-import { createDaemonTeardown } from './engine/daemon-teardown.js';
+import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
+import {
+  createDaemonTeardown,
+  type DaemonTeardown,
+  type DaemonTeardownOptions,
+} from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import {
   createRefreshThrottle,
@@ -96,11 +106,16 @@ import { createGithubTrackerClient, makeProductionGh } from './engine/tracker-cl
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
-import { clampDaemonConcurrency } from './engine/daemon-command.js';
+import {
+  formatDaemonStartupLog,
+  resolveDaemonCommandConcurrency,
+} from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
+import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
+import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
-import { resolveSpecPrUrl } from './engine/pr-labels.js';
+import { cleanupHaltPresentation, resolveSpecPrUrl } from './engine/pr-labels.js';
 import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
 import { initStaleEngineState } from './engine/stale-engine-init.js';
 import {
@@ -117,10 +132,15 @@ import {
   markWarned,
   repairProcessed,
   makeFeatureRunnerDeps,
+  makeWorkClaimLivenessPredicate,
+  makeWorktreeRemovalPredicate,
   makeWatchHaltClearedSeam,
   resolveDaemonBaseSha,
 } from './engine/daemon-deps.js';
-import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
+import { InMemoryWorkClaims } from './engine/work-claims.js';
+import { WorktreeLifecycleQueue } from './engine/worktree.js';
+import { isOperatorParked, reconcileStrandedParkMarkers, writeAutoPark } from './engine/park-marker.js';
+import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
 import {
@@ -157,17 +177,51 @@ import {
 } from './engine/daemon-rekick.js';
 import { readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
-import { sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
+import { enrollWatch, sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
 import type { PrMergeState } from './engine/pr-labels.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
-import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
+import {
+  readRestartPending,
+  consumeOnBoot,
+  recordRestartPendingDrain,
+  type RestartIntent,
+} from './engine/restart-marker.js';
 import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
 import { createEpisodeHaltTracker } from './engine/episode-halt-tracker.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFile = promisify(execFileCb);
+
+/** One git adapter for WorkOrder build and its executor-side verification. */
+export function createWorkOrderGitRunner(projectRoot: string): WorkOrderGitRunner {
+  return async (args) => {
+    try {
+      const { stdout, stderr } = await execFile('git', [...args], { cwd: projectRoot });
+      return { exitCode: 0, stdout, stderr };
+    } catch (error) {
+      const failure = error as { code?: number; stdout?: string; stderr?: string };
+      return {
+        exitCode: typeof failure.code === 'number' ? failure.code : 1,
+        stdout: failure.stdout ?? '',
+        stderr: failure.stderr ?? '',
+      };
+    }
+  };
+}
+
+/** The only transformation from the serializable executor contract to runner input. */
+export function workOrderToBacklogItem(order: WorkOrder): BacklogItem {
+  return {
+    slug: order.slug,
+    ...(order.tier ? { tier: order.tier } : {}),
+    ...(order.sourceRef ? { sourceRef: order.sourceRef } : {}),
+    ...(order.track ? { track: order.track } : {}),
+    ...(order.band ? { band: order.band } : {}),
+    ...(order.resolutionMode ? { resolutionMode: order.resolutionMode } : {}),
+  };
+}
 
 /**
  * Task 17: Create a transition-aware discovery logger that tracks fetch state
@@ -190,6 +244,65 @@ export function createDiscoveryLogger(log: (msg: string) => void): DiscoveryLogg
         log(`[fetch] recovered`);
         lastState = 'succeeded';
       }
+    },
+  };
+}
+
+export interface ScaledDaemonTeardown extends DaemonTeardown {
+  /** Re-arm the remaining drain budget after one executor has settled. */
+  executorSettled(): void;
+}
+
+export interface ScaledDaemonTeardownOptions<T = ReturnType<typeof setTimeout>>
+  extends Omit<DaemonTeardownOptions<T>, 'timeoutMs'> {
+  /** The existing grace period granted to one in-flight executor. */
+  perExecutorTimeoutMs: number;
+  /** The live drain set; it is read each time the bound is armed. */
+  liveExecutorCount: () => number;
+}
+
+/**
+ * Give each executor in a SIGTERM drain one full grace period. The active
+ * controller is re-armed as executors settle, so a routine N-worker drain
+ * cannot consume a single worker's budget while it is making progress.
+ */
+export function createScaledDaemonTeardown<T = ReturnType<typeof setTimeout>>(
+  opts: ScaledDaemonTeardownOptions<T>,
+): ScaledDaemonTeardown {
+  let stopRequested = false;
+  let forceReleased = false;
+  let current: DaemonTeardown | undefined;
+
+  const arm = (): void => {
+    const liveExecutors = Math.max(1, opts.liveExecutorCount());
+    current = createDaemonTeardown<T>({
+      timeoutMs: opts.perExecutorTimeoutMs * liveExecutors,
+      onForceRelease: () => {
+        forceReleased = true;
+        opts.onForceRelease();
+      },
+      setTimer: opts.setTimer,
+      clearTimer: opts.clearTimer,
+    });
+    current.requestStop();
+  };
+
+  return {
+    requestStop(): void {
+      if (stopRequested) return;
+      stopRequested = true;
+      arm();
+    },
+    shouldStop(): boolean {
+      return stopRequested;
+    },
+    executorSettled(): void {
+      if (!stopRequested || forceReleased) return;
+      current?.cancel();
+      arm();
+    },
+    cancel(): void {
+      current?.cancel();
     },
   };
 }
@@ -325,6 +438,8 @@ export interface DaemonModeOptions {
    * Tests inject a fake to verify the exit call is made.
    */
   exitProcess?: (code: number) => void;
+  /** Injectable executor boundary for daemon composition tests. */
+  runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
   /**
    * Task 3: Show completed (PROCESSED) features in the startup dashboard's
    * console output. Defaults to false/undefined — the persisted log sink
@@ -595,6 +710,8 @@ export function createForcedSetupPrepare(
   base: {
     projectRoot: string;
     baseBranch: string;
+    /** Dispatcher's immutable WorkOrder base; legacy callers resolve lazily. */
+    baseSha?: string;
     events?: ConductorEventEmitter;
     /**
      * The other half of the `dispatchStart` contract. `dispatchStart` and
@@ -608,7 +725,7 @@ export function createForcedSetupPrepare(
   },
 ): (worktreePath: string) => Promise<void> {
   return async (worktreePath) => {
-    const baseSha = await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
+    const baseSha = base.baseSha ?? await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
     await prepare(worktreePath, log, {
       verbose,
       force: true,
@@ -635,6 +752,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     throw new Error(`Config error: ${configResult.error.message}`);
   }
   const config = configResult.ok ? configResult.config : undefined;
+  const daemonConcurrency = resolveDaemonCommandConcurrency(opts, config?.daemon_concurrency);
 
   // Backstop for every daemon launch path: refuse to run on a stale harness
   // install (missing/stale skill symlinks) — non-interactively, so it throws an
@@ -643,8 +761,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // self-heal lives at `daemon start`.
   const ensureFresh = opts.ensureFresh ?? (() => ensureInstallFresh({ interactive: false }));
   // The local branch worktrees fork from and discovery reads. Resolve origin's
-  // real default (main/master/trunk) rather than hardcoding 'main'; the daemon
-  // fast-forwards this branch on each idle poll (see fastForwardRoot).
+  // real default (main/master/trunk) rather than hardcoding 'main'; dispatcher
+  // maintenance fast-forwards this branch at its refresh policy boundary (see
+  // fastForwardRoot).
   const baseBranch =
     opts.baseBranch ?? (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
   // Tee every daemon log line to a file so the daemon stays observable via
@@ -678,6 +797,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // console stays uncluttered for live watching.
     writePersisted: (line) => logSink?.write(formatDaemonLogLine(stripAnsi(line))),
   });
+  // daemon.ts is also used as a plain core, where its `[daemon]` messages are
+  // meaningful. Its daemon-mode renderer already owns that prefix, though, so
+  // normalize only the core-to-renderer bridge to one durable/live prefix.
+  const daemonCoreLog = (message: string): void =>
+    log(message.startsWith('[daemon] ') ? message.slice('[daemon] '.length) : message);
 
   // Task 17: Create the transition-aware discovery logger
   // Logs fetch failures/recovery only on state transitions
@@ -728,7 +852,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const teeConsoleLine = (level: string, args: unknown[]): void => {
     try {
       const line = args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ');
-      logSink?.write(formatDaemonLogLine(`[${level}] ${stripAnsi(line)}`));
+      logSink?.write(formatDaemonLogLine(formatDaemonConsoleTeeLine(level, stripAnsi(line))));
     } catch {
       // Best-effort: the tee must never disrupt the warning path itself.
     }
@@ -775,35 +899,39 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   });
   if (worktreeBase === null) return;
 
+  // Task 22: Process-level SIGTERM handler for daemon mode. Track all in-flight
+  // rate-limit waits and conductors across N concurrent workers so one handler
+  // can abort, close ledgers, and coordinate the drain.
+  const allWaitSignals = new Set<AbortController>();
+  const activeConductors = new Set<Conductor>();
+  // The in-process path contributes a conductor to this set, while the
+  // injectable composition-test executor deliberately does not. Count the
+  // runDaemon executor boundary instead so the scaled drain budget covers
+  // every live worker through the one dispatch seam.
+  let activeExecutorCount = 0;
+  let shutdownRequested = false;
+
   // #561 (Story 1 + Story 3): SIGTERM must drain in-flight work before the
   // lock is released — force-exiting on SIGTERM (the old behavior) let a
   // second daemon race the pidfile while a conductor was still mid-write.
   // The teardown controller gives the daemon loop a bounded window to drain
   // (via shouldStop, wired into runDaemon below); if the drain doesn't
-  // finish within FORCE_RELEASE_TIMEOUT_MS, onForceRelease fires as a
+  // finish within its live-drain-set-scaled grace period, onForceRelease fires as a
   // last-resort backstop: release the lock synchronously and exit non-zero,
   // logged with a greppable marker for post-hoc forensics.
   const FORCE_RELEASE_TIMEOUT_MS = 30_000;
-  const teardown = createDaemonTeardown({
-    timeoutMs: FORCE_RELEASE_TIMEOUT_MS,
+  const teardown = createScaledDaemonTeardown({
+    perExecutorTimeoutMs: FORCE_RELEASE_TIMEOUT_MS,
+    liveExecutorCount: () => activeExecutorCount,
     onForceRelease: () => {
       log(
-        `[daemon] teardown force-release: drain did not complete within ${FORCE_RELEASE_TIMEOUT_MS / 1000}s — releasing lock and exiting`,
+        `[daemon] teardown force-release: drain did not complete within its scaled ${FORCE_RELEASE_TIMEOUT_MS / 1000}s-per-executor bound — releasing lock and exiting`,
       );
       releaseBackstop();
       const exitProcess = opts.exitProcess ?? process.exit;
       exitProcess(1);
     },
   });
-
-  // Task 22: Process-level SIGTERM handler for daemon mode. Track all in-flight
-  // rate-limit waits across N concurrent conductors so a single process-level
-  // handler can abort them all and coordinate state saves before exit.
-  // Conductors running in daemon mode (daemon:true) will register their
-  // AbortControllers here instead of installing per-conductor handlers.
-  const allWaitSignals = new Set<AbortController>();
-  const activeConductors = new Set<Conductor>();
-  let shutdownRequested = false;
 
   // Task 22 / #561: Install ONE process-level SIGTERM handler (not N
   // per-conductor). When SIGTERM fires, abort all in-flight waits so they
@@ -865,6 +993,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // feature this daemon builds; threaded to each Conductor as `selfHost`. For any
   // non-harness repo this is false and the build path is byte-for-byte unchanged.
   const isSelfHost = await classifySelfHost(defaultSelfHostDetector(), config, projectRoot);
+  // One daemon process owns both dispatcher root mutations and every
+  // in-process self-host executor's fingerprint window.
+  const liveBoundaryCoordinator = isSelfHost ? new LiveBoundaryCoordinator() : undefined;
+  const coordinatedRootMutation = <T>(
+    mutation: () => Promise<T>,
+    deferLog: (reason: string) => void,
+  ): Promise<T> => liveBoundaryCoordinator
+    ? liveBoundaryCoordinator.runMutation(mutation, deferLog)
+    : mutation();
   if (isSelfHost) {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');
   }
@@ -919,6 +1056,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     readStateFn: readState,
     projectRoot,
   };
+  const globalSubscriberLog = createOwnershipAwareDaemonLogger(log);
   const subscriber = registerBuiltins(registry, events, (event) => {
     // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
     // are already rendered, tagged, by that feature's own listeners
@@ -926,7 +1064,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // TerminalSubscriber event types would double-print, once tagged and once
     // untagged.
     if (isForwardedFromFeature(event)) return;
-    renderDaemonEvent(event, log);
+    renderDaemonEvent(event, globalSubscriberLog);
   }, rendererOpts, config?.codex_doctor_timeout_seconds);
   registry.markInitialized();
   validateRegisteredProviderSelections({
@@ -1091,6 +1229,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         providerExecution,
         events: featureEvents,
         log: featureLog,
+        worktreeLifecycle,
       },
     );
 
@@ -1112,6 +1251,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       config,
       modelPolicy: selectedRuntime.policy,
       providerExecution,
+      effectiveDaemonConcurrency: daemonConcurrency.concurrency,
       projectRoot: wt.path,
       acceptanceRedExec: createProductionAcceptanceRedExec(),
       // Daemon FINISH shares the same engine-owned coordinator as foreground
@@ -1138,6 +1278,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // is building the harness itself. `baseBranch` feeds the release-artifact
       // migration classifier (`<base>...HEAD`).
       selfHost: isSelfHost,
+      liveBoundaryCoordinator,
       baseBranch,
       verifyArtifacts: true,
       // Resume from the first unsatisfied step rather than hardcoding the entry
@@ -1247,6 +1388,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     providerExecution = createProviderExecution(),
     featureLog = log,
     featureEvents?: ConductorEventEmitter,
+    workOrderBaseSha?: string,
   ) => {
     // Kill-switch for testing: prevent actual LLM dispatch
     if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
@@ -1267,6 +1409,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       {
         projectRoot,
         baseBranch,
+        baseSha: workOrderBaseSha,
         events: featureEvents,
         // Same resolved value the ordinary dispatch path threads into
         // makeFeatureRunnerDeps below, so triage's hook and dispatch's hook
@@ -1316,10 +1459,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     );
   };
 
+  // The same registry backs dispatcher claims and every maintenance liveness
+  // check. A sweep may observe a terminal PR while its executor still owns the
+  // worktree; that worktree must remain until the claim is released.
+  const workClaims = new InMemoryWorkClaims();
+  const worktreeLifecycle = new WorktreeLifecycleQueue();
+  const isWorkClaimActive = makeWorkClaimLivenessPredicate(workClaims);
+  const canRemoveWorktree = makeWorktreeRemovalPredicate(isWorkClaimActive, log);
+  const workOrderGit = createWorkOrderGitRunner(projectRoot);
+
   const deps = makeFeatureRunnerDeps({
     projectRoot,
     worktreeBase,
     baseBranch,
+    effectiveConcurrency: daemonConcurrency.concurrency,
     runConductorInWorktree,
     providerExecution: createProviderExecution,
     beginFeatureRun,
@@ -1329,8 +1482,62 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
     teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
     runSetupTriage,
+    workOrderGit,
+    worktreeLifecycle,
   });
-  const runFeature = makeRunFeature(deps);
+  const createWorkOrder = async (item: BacklogItem) => {
+    const baseSha = await resolveDaemonBaseSha(projectRoot, baseBranch);
+    if (!baseSha) {
+      throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
+    }
+    return buildWorkOrder(
+      {
+        repository: basename(projectRoot),
+        slug: item.slug,
+        baseSha,
+        documentRefs: [
+          item.storiesPath ?? `.docs/stories/${item.slug}.md`,
+          item.planPath ?? `.docs/plans/${item.slug}.md`,
+        ],
+        tier: item.tier,
+        sourceRef: item.sourceRef,
+        track: item.track,
+        band: item.band,
+        resolutionMode: item.resolutionMode,
+      },
+      workOrderGit,
+    );
+  };
+  const executor = createInProcessFeatureExecutor({
+    withFeatureOwnership: withDaemonLogFeatureOwnership,
+    run: async (order) => {
+      const item = workOrderToBacklogItem(order);
+      return makeRunFeature({
+        ...deps,
+        deferTerminalEffects: true,
+        runSetupTriage: (
+          error,
+          worktree,
+          item,
+          providerExecution,
+          featureLog,
+          featureEvents,
+        ) => runSetupTriage(
+          error,
+          worktree,
+          item,
+          providerExecution,
+          featureLog,
+          featureEvents,
+          order.baseSha,
+        ),
+        createWorktree: (slug) => deps.createWorktree(slug, order),
+        prepareWorktree: (wt, log, events) => deps.prepareWorktree!(wt, log, events, order),
+      })(item);
+    },
+  });
+  const executeFeature = opts.runFeature ?? makeRunFeature(deps);
+  const runFeature = (item: BacklogItem): Promise<FeatureOutcome> => executeFeature(item);
 
   const continuous = opts.continuous ?? false;
   // Continuous with no ceiling at all runs unbounded — surface that loudly
@@ -1346,16 +1553,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     );
   }
 
-  log(
-    `scanning backlog (concurrency ${opts.concurrency}${continuous ? ', continuous' : ''})…`,
-  );
+  log(formatDaemonStartupLog(daemonConcurrency, continuous));
 
   // Shared backlog discovery — used both by the pool and the startup dashboard's
-  // ELIGIBLE group, so they stay in lockstep. `refresh` is true only when the pool
-  // is fully idle: there we fast-forward the local default branch to origin so
-  // newly merged specs become present (and discoverable on the local tree). While
-  // builds are in flight (`refresh:false`) there is NO fetch/ff, so an in-flight
-  // build is never advanced onto specs that merged mid-run.
+  // ELIGIBLE group, so they stay in lockstep. Dispatcher maintenance uses
+  // `refresh:true` at its rate-limited policy boundary, including a free slot
+  // while executors run; WorkOrders pin active builds to their claimed base.
   //
   // ADR-014: the discoverTick closure is now encapsulated in a WorkSource adapter
   // so the run-loop is decoupled from direct fs/git I/O and tests can inject fakes.
@@ -1473,7 +1676,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         access(join(projectRoot, '.worktrees', slug, '.pipeline', 'finish-choice'))
           .then(() => true)
           .catch(() => false),
-      fastForwardRoot,
+      fastForwardRoot: (root, sourceLog) => coordinatedRootMutation(
+        () => fastForwardRoot(root, sourceLog),
+        (reason) => log(`[daemon] root refresh deferred: ${reason}`),
+      ),
       discoverBacklog,
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug) => readSpecOwnerStamp(ownerGit, baseBranch, slug),
@@ -1545,7 +1751,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // relink rebuilds the harness skill symlinks before self-host dispatches
   // triggerSelfRestart is injected from opts (respawn pane in session-hosted mode)
   const requestRestart = createRestartRequester(projectRoot, log, lock, process, {
-    relink: () => relinkSkillsForSelfBuild({ log }),
+    relink: () => coordinatedRootMutation(
+      () => relinkSkillsForSelfBuild({ log }),
+      (reason) => log(`[daemon] root relink deferred: ${reason}`),
+    ),
     triggerSelfRestart: opts.triggerSelfRestart,
   });
 
@@ -1561,6 +1770,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
   const result = await runDaemon(
     {
+      claims: workClaims,
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
       sweepProviderScratch: () => sweepFeatureWorktreeScratch({
@@ -1631,8 +1841,77 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         }
       },
       runFeature,
+      onExecutorStarted: () => {
+        activeExecutorCount += 1;
+      },
+      onExecutorSettled: () => {
+        activeExecutorCount -= 1;
+        teardown.executorSettled();
+      },
+      onFeatureTerminalEffects: async (outcome) => {
+        const effects = outcome.terminalEffects;
+        if (!effects) return;
+        const featureLog = featureLogFor(outcome.slug);
+        if (effects.engineerSignal) {
+          // Phase 9.1, relocated across the dispatcher-executor seam
+          // (adr-2026-08-27 decision 1): the cross-project engineer store lives
+          // outside the feature worktree, so the dispatcher performs the write,
+          // from the events.jsonl content the executor captured before
+          // teardown. Best-effort inside emitEngineerSignal — never throws.
+          await emitEngineerSignal({
+            engineerDir: resolveEngineerDir(),
+            eventsContent: effects.engineerSignal.eventsContent,
+            outcome: effects.engineerSignal.outcome,
+            project: basename(projectRoot),
+            feature: outcome.slug,
+            runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
+            log: featureLog,
+          });
+        }
+        if (effects.autoPark) {
+          try {
+            await writeAutoPark(projectRoot, outcome.slug, effects.autoPark.reason);
+          } catch (err) {
+            featureLog(`[daemon-runner] auto-park write failed for ${outcome.slug}: ${err instanceof Error ? err.message : String(err)}`);
+            await amendDeferredAutoParkHaltAtWorktree(join(worktreeBase, outcome.slug), outcome.slug, err)
+              .catch((amendmentError) => {
+                featureLog(
+                  `[daemon-runner] auto-park HALT amendment failed for ${outcome.slug}: ${amendmentError instanceof Error ? amendmentError.message : String(amendmentError)}`,
+                );
+              });
+          }
+        }
+        if (effects.cleanupHaltPresentation && deps.projectRoot && deps.runGh) {
+          try {
+            const result = await (deps.cleanupHaltPresentation ?? cleanupHaltPresentation)(
+              deps.runGh,
+              deps.projectRoot,
+              effects.cleanupHaltPresentation.prUrl,
+              featureLog,
+            );
+            featureLog(`[daemon-runner] cleanup result: ${result}`);
+          } catch (err) {
+            featureLog(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (effects.enrollWatch && deps.projectRoot) {
+          try {
+            await (deps.enrollWatch ?? enrollWatch)(deps.projectRoot, {
+              prUrl: effects.enrollWatch.prUrl,
+              slug: outcome.slug,
+              repoCwd: deps.projectRoot,
+            });
+          } catch (err) {
+            featureLog(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (effects.markProcessed) await deps.markProcessed(outcome.slug, effects.markProcessed.prUrl);
+      },
+      // An explicit runFeature is the composition-test executor boundary. The
+      // normal production path continues through the WorkOrder executor.
+      ...(opts.runFeature ? {} : { featureExecution: { createWorkOrder, executor } }),
       featureLog: featureLogFor,
-      log,
+      log: daemonCoreLog,
       staleEngineChecker,
       requestRestart,
       // Rebuild the engine from source before each dispatch (self-host only) so
@@ -1640,7 +1919,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // (#309) hides. projectRoot is the harness root under self-host, so
       // src/conductor is its build package.
       rebuildEngine: isSelfHost
-        ? () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor'))
+        ? () => coordinatedRootMutation(
+          () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor')),
+          (reason) => log(`[daemon] engine rebuild deferred: ${reason}`),
+        )
         : undefined,
       // Fast-forward the harness checkout to origin before each dispatch
       // (self-host only, NP4) so rebuildEngine above builds from
@@ -1660,7 +1942,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             return async (refreshOpts?: { force?: boolean }) => {
               if (!refreshOpts?.force && !throttle.shouldRun()) return;
               throttle.markRan();
-              const outcome = await fastForwardRoot(projectRoot, log);
+              const outcome = await coordinatedRootMutation(
+                () => fastForwardRoot(projectRoot, log),
+                (reason) => log(`[daemon] root refresh deferred: ${reason}`),
+              );
               if (
                 outcome.status === 'skipped' &&
                 (outcome.cause === 'dirty' ||
@@ -1747,6 +2032,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           // and is the sole consumer of the startup-resolved toggle.
           autoCleanup: false,
           verbose: config?.daemon_verbose ?? false,
+          worktreeLifecycle,
         });
         const annotations = new Map(
           reconciliation.entries.map(({ slug, classification }) => [
@@ -1803,15 +2089,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         );
       },
       // FR-4: resolve the base-branch tip SHA from the SAME local default branch
-      // the backlog reads. On idle refresh we fast-forward it first so the SHA
-      // reflects origin's latest (driving ADR-013 re-kick when main advances).
+      // the backlog reads. A scheduler-approved refresh fast-forwards it first
+      // so the SHA reflects origin's latest (driving ADR-013 re-kick on advance).
       resolveBaseSha: async ({ refresh }) => {
-        if (refresh) await fastForwardRoot(projectRoot, log, undefined, discoveryLogger);
+        if (refresh) await coordinatedRootMutation(
+          () => fastForwardRoot(projectRoot, log, undefined, discoveryLogger),
+          (reason) => log(`[daemon] root refresh deferred: ${reason}`),
+        );
         return readBaseSha(makeGitRunner(projectRoot), baseBranch);
       },
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
-      rekickSweep: async (sha) => {
+      rekickSweep: async (sha, context) => {
         // Reconcile stranded park markers at the TOP of the sweep so the same
         // sweep that moves them also skips them (#486).
         await reconcileStrandedParkMarkers(projectRoot, log);
@@ -1822,6 +2111,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           {
             ...rekickDeps,
             isProcessed: makeIsProcessed(processedDir, gitTreeSource(projectRoot, baseBranch)),
+            isFeatureInFlight: context.isFeatureInFlight,
           },
           sha,
         );
@@ -1851,22 +2141,24 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           disposeHaltWatcher,
           teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
           verbose: config?.daemon_verbose ?? false,
+          worktreeLifecycle,
         });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
-      sweepMergeableLabels: async (activity) => {
+      sweepMergeableLabels: async () => {
         await sweepMergeableLabels({
           projectRoot,
           log,
           teardownWorktree: deps.teardownWorktree,
+          canRemoveWorktree,
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).
           autoresolve: {
             enabled: config?.mergeable_autoresolve?.enabled ?? false,
-            isEligible: makeAutoresolveEligibility(config, activity.isFeatureInFlight, log),
+            isEligible: makeAutoresolveEligibility(config, isWorkClaimActive, log),
             dispatch: async (entry) => {
               log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
 
@@ -1969,7 +2261,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
                     attemptCap,
                   },
-                  { runGh: ghRunner, runSuite, resolver, log },
+                  { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle },
                 );
 
                 log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
@@ -2060,6 +2352,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                       run: (opts) => productionCiFixRunner.run({ ...opts, dispatcher: ciFixDispatcher }),
                     },
                     suiteCommand: config?.mergeable_autoresolve?.suiteCommand,
+                    liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
                   },
                   log,
                 );
@@ -2084,10 +2377,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         const intent = await readRestartPending(projectRoot);
         return intent !== null;
       },
+      recordRestartPendingDrain: async (slugs) => {
+        await recordRestartPendingDrain(projectRoot, slugs);
+      },
       // Task T28: trigger self-restart when marker is pending (injected from supervisor/bare-run).
       triggerSelfRestart: opts.triggerSelfRestart,
       // Queued supervisor restarts rebuild/relink only for the harness self-host.
-      ...(isSelfHost ? { relink: () => relinkSkillsForSelfBuild({ log }) } : {}),
+      ...(isSelfHost ? {
+        relink: () => coordinatedRootMutation(
+          () => relinkSkillsForSelfBuild({ log }),
+          (reason) => log(`[daemon] root relink deferred: ${reason}`),
+        ),
+      } : {}),
       // Task T30: consume restart marker in bare-run mode (when triggerSelfRestart absent).
       consumeRestartPending: async () => {
         return await consumeOnBoot(projectRoot);
@@ -2102,7 +2403,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       shouldStop: () => teardown.shouldStop(),
     },
     {
-      concurrency: clampDaemonConcurrency(opts.concurrency, log),
+      concurrency: daemonConcurrency.concurrency,
       maxItems: opts.maxItems,
       maxTotalCostTokens: opts.maxCostTokens,
       maxRuntimeMs:
@@ -2145,7 +2446,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // #561 (Story 1): only force a clean process exit when this completion was
   // driven by a SIGTERM-requested drain — ordinary (non-signal) completion
   // keeps today's return-and-let-the-event-loop-drain behavior.
-  if (teardownWasRequested) {
+  if (teardownWasRequested || result.restartPendingConsumed) {
     (opts.exitProcess ?? process.exit)(0);
   }
   return result;

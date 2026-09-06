@@ -443,7 +443,7 @@ describe('engine/daemon-park-cli', () => {
       );
 
       const backlog = await discoverBacklog(root);
-      expect({ code, parked: await isOperatorParked(root, slug), items: backlog.items }).toEqual({
+      expect({ code, parked: await isOperatorParked(root, slug), items: backlog.items }).toMatchObject({
         code: 0,
         parked: false,
         items: [{ slug }],

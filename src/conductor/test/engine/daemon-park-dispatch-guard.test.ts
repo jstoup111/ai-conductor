@@ -45,7 +45,7 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
 
     // Isolate the `dispatch` closure body and confirm the call lives inside it.
     const dispatchMatch = source.match(
-      /const dispatch = \(item: BacklogItem\): void => \{[\s\S]*?\n  \};/,
+      /const dispatch = async \(item: BacklogItem\): Promise<boolean> => \{[\s\S]*?\n  \};/,
     );
     expect(dispatchMatch, 'expected to locate the `dispatch` closure body').toBeTruthy();
     expect(dispatchMatch![0]).toMatch(/\.runFeature\(/);
@@ -143,10 +143,14 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
     const body = loopMatch![0];
     const parkCheckIdx = body.search(/deps\.isOperatorParked/);
     expect(parkCheckIdx).toBe(body.indexOf('deps.isOperatorParked'));
-    // The park check must be the first conditional in the loop body — i.e. it
-    // appears before any other `deps.` guard (isProcessed, SHA guard, etc.).
-    const firstDepsCall = body.search(/deps\.\w+/);
-    expect(firstDepsCall).toBe(parkCheckIdx);
+    // A dispatcher-owned active-claim check can precede the park check: it
+    // refuses mutation for a live executor.  Of the HALT-processing guards,
+    // though, park remains first so operator intent outranks processed/SHA
+    // handling and no marker is touched before it is consulted.
+    const firstHaltProcessingGuard = body.search(
+      /deps\.(?:isOperatorParked|isProcessed|readHaltClass|lastRekickSha)/,
+    );
+    expect(firstHaltProcessingGuard).toBe(parkCheckIdx);
 
     // A parked slug must `continue` (skip this slug entirely) rather than
     // merely logging.

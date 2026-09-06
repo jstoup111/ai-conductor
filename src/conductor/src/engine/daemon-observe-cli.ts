@@ -295,9 +295,12 @@ const STATE_BADGE: Record<DaemonState, string> = {
 };
 
 function formatStatusRow(row: DaemonStatusRow): string {
+  const drainSlugs = row.restartPending?.drainSlugs;
   const badge =
-    row.state === 'restart-pending' && row.restartPending?.blockingSlug
-      ? `⏳ restart-pending (waiting on ${row.restartPending.blockingSlug})`
+    row.state === 'restart-pending' && drainSlugs && drainSlugs.length > 0
+      ? `⏳ restart-pending (waiting on ${drainSlugs.join(', ')})`
+      : row.state === 'restart-pending' && row.restartPending?.blockingSlug
+        ? `⏳ restart-pending (waiting on ${row.restartPending.blockingSlug})`
       : STATE_BADGE[row.state];
   const parts = [`${badge}  ${row.name}`, `  ${row.path}`];
   if (row.pid !== undefined) parts.push(`  pid ${row.pid}`);
