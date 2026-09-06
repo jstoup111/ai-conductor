@@ -75,6 +75,7 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     await commit(root, {
       '.gitignore': '.pipeline/\n',
       'src/feature.ts': 'export const feature = 1;\n',
+      '.docs/plans/stale-manual-test-discovered-at-finish-is-unroutab.md': '# Plan\n',
     }, 'feat: establish manual-test baseline');
 
     const state: Record<string, unknown> = {
@@ -211,6 +212,10 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       }
       if (args[0] === 'pr' && args[1] === 'ready') {
         pullRequest = { ...pullRequest, isDraft: false };
+        return { stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') {
+        pullRequest = { ...pullRequest, body: args[args.indexOf('--body') + 1]! };
         return { stdout: '' };
       }
       throw new Error(`unexpected GitHub command: ${args.join(' ')}`);

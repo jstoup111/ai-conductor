@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -21,6 +22,213 @@ import type { ConductState } from '../../src/types/index.js';
 const commandResult = { stdout: '' };
 
 describe('production FINISH publication composition', () => {
+  it.each([
+    {
+      label: 'an absent declaration for an exact plan',
+      planName: 'feature.md',
+      initialBody: 'Reader-facing summary.\n',
+      expectedBody: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
+      expectedTrace: ['repair', 'declaration', 'outcome'],
+    },
+    {
+      label: 'a stale declaration for an exact plan',
+      planName: 'feature.md',
+      initialBody: 'Reader-facing summary.\nPlan: .docs/plans/stale.md\n',
+      expectedBody: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
+      expectedTrace: ['repair', 'declaration', 'outcome'],
+    },
+    {
+      label: 'an already canonical declaration',
+      planName: 'feature.md',
+      initialBody: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
+      expectedBody: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
+      expectedTrace: ['repair', 'outcome'],
+    },
+    {
+      label: 'a unique date-prefixed plan',
+      planName: '2026-09-06-feature.md',
+      initialBody: 'Reader-facing summary.\n',
+      expectedBody: 'Reader-facing summary.\nPlan: .docs/plans/2026-09-06-feature.md\n',
+      expectedTrace: ['repair', 'declaration', 'outcome'],
+    },
+  ])('stamps $label after presentation repair and before outcome recording', async ({
+    planName, initialBody, expectedBody, expectedTrace,
+  }) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-plan-declaration-'));
+    const advanceFinishPublication = vi.fn(async (input: {
+      effects: {
+        repairPresentation?: () => Promise<void>;
+        recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void>;
+      };
+    }) => {
+      await input.effects.repairPresentation!();
+      await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
+      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+    });
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.pipeline'));
+      await writeFile(join(root, '.docs', 'plans', planName), 'plan\n');
+      let body = initialBody;
+      const trace: string[] = [];
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ body }) };
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          body = args[args.indexOf('--body') + 1]!;
+          trace.push('declaration');
+          return commandResult;
+        }
+        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+      });
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh,
+        acquireInteractiveIntent: async () => 'pr',
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation: async () => { trace.push('repair'); },
+        recordFinish: async () => { trace.push('outcome'); return 0; },
+      });
+
+      await coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: 'https://github.com/acme/widget/pull/3',
+        } as ConductState,
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
+      });
+
+      expect({ body, trace }).toEqual({
+        body: expectedBody,
+        trace: expectedTrace,
+      });
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { label: 'a missing plan', plans: [], githubFailure: undefined, expected: 'plan not found' },
+    { label: 'ambiguous date-prefixed plans', plans: ['2026-09-05-feature.md', '2026-09-06-feature.md'], githubFailure: undefined, expected: 'ambiguous plan candidates' },
+    { label: 'a GitHub body read failure', plans: ['feature.md'], githubFailure: 'read', expected: 'body read failed' },
+    { label: 'a GitHub body write failure', plans: ['feature.md'], githubFailure: 'write', expected: 'body write failed' },
+  ] as const)('does not record a PR outcome after $label', async ({ plans, githubFailure, expected }) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-plan-declaration-failure-'));
+    const advanceFinishPublication = vi.fn(async (input: {
+      effects: {
+        repairPresentation?: () => Promise<void>;
+        recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void>;
+      };
+    }) => {
+      await input.effects.repairPresentation!();
+      await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
+      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+    });
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.pipeline'));
+      await Promise.all(plans.map((plan) => writeFile(join(root, '.docs', 'plans', plan), 'plan\n')));
+      const recordFinish = vi.fn(async () => 0);
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async (args) => {
+          if (args[0] === 'pr' && args[1] === 'view') {
+            if (githubFailure === 'read') throw new Error('body read failed');
+            return { stdout: JSON.stringify({ body: 'Reader-facing summary.' }) };
+          }
+          if (args[0] === 'pr' && args[1] === 'edit' && githubFailure === 'write') {
+            throw new Error('body write failed');
+          }
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        acquireInteractiveIntent: async () => 'pr',
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation: async () => {},
+        recordFinish,
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: 'https://github.com/acme/widget/pull/3',
+        } as ConductState,
+        mode: 'interactive', daemon: false,
+        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      })).rejects.toThrow(expected);
+      expect(recordFinish).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not project a shipment declaration for a keep outcome', async () => {
+    const advanceFinishPublication = vi.fn(async (input: {
+      effects: { recordOutcome?: (request: { choice: 'keep' }) => Promise<void> };
+    }) => {
+      await input.effects.recordOutcome!({ choice: 'keep' });
+      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+    });
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+    try {
+      const recordFinish = vi.fn(async () => 0);
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: '/project', stateFilePath: '/project/.pipeline/conduct-state.json', baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => { throw new Error('keep must not call GitHub'); },
+        acquireInteractiveIntent: async () => 'keep', observeReleaseReadiness: async () => 'present', recordFinish,
+      });
+
+      await coordinator.advance({
+        state: { feature_desc: 'feature' } as ConductState,
+        mode: 'interactive', daemon: false,
+        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      });
+      expect(recordFinish).toHaveBeenCalledOnce();
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+    }
+  });
+
   it.each([
     ['structurally incomplete', { kind: 'revision_required', reason: 'structurally_incomplete' }, 'revision_required'],
     ['placeholder', { kind: 'revision_required', reason: 'placeholder' }, 'revision_required'],
@@ -818,12 +1026,19 @@ describe('production FINISH publication composition', () => {
       const pipeline = join(root, '.pipeline');
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
       await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'plans', 'feature.md'), 'plan\n');
       const prUrl = 'https://github.com/acme/widget/pull/1172';
+      let body = 'Reader-facing summary.';
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: 'Reader-facing summary.', isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          body = args[args.indexOf('--body') + 1]!;
+          return commandResult;
+        }
         throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
       });
       const repairPresentation = vi.fn(async () => undefined);

@@ -4,6 +4,7 @@ import {
   classifyShipmentAssociation,
   type ShipmentAssociationResult,
 } from './shipment-association.js';
+import { extractShipmentPlanDeclarations } from './shipment-plan-declaration.js';
 import {
   evaluateShipmentEvidence,
   type ShipmentEvidenceDependencies,
@@ -125,7 +126,9 @@ export async function dispatchShipmentEvidence(
     const association = classifyShipmentAssociation({
       planStems,
       pr: {
-        metadataPlanStems: extractPlanStems(metadata.body),
+        metadataPlanStems: cmd.kind === 'check'
+          ? extractShipmentPlanDeclarations(metadata.body)
+          : extractPlanStems(metadata.body),
         changedPaths: metadata.changedPaths,
       },
     });
@@ -151,6 +154,7 @@ export async function dispatchShipmentEvidence(
       return result.kind === 'unresolved' ? 1 : 0;
     }
 
+    report(`shipped-record: plan .docs/plans/${association.slug}.md basis=explicit-plan-declaration`);
     const evidence = await (runners.evaluateEvidence ?? evaluateShipmentEvidence)(
       {
         repoDir: cwd,
