@@ -74,6 +74,7 @@ export async function probeGhVersion(
       exitCode && exitCode !== 0 ? { kind: 'unparseable' } : checkGhVersionFloor(stdout),
     (error: unknown): GhVersionFloorVerdict => {
       const code = (error as { code?: unknown })?.code;
+      if (code === undefined) throw error;
       return code === 'ENOENT' ? { kind: 'absent' } : { kind: 'unparseable' };
     },
   );

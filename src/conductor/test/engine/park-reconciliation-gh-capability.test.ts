@@ -11,7 +11,7 @@ describe('park reconciliation — gh capability errors', () => {
     const observed = vi.fn();
 
     await expect(proveByMergedPrHead(runGit, runGh, '/project', 'feature/demo', observed))
-      .resolves.toEqual({ kind: 'indeterminate' });
+      .resolves.toEqual({ kind: 'capability-unavailable' });
     expect(observed).toHaveBeenCalledWith(capability);
     expect(runGit).not.toHaveBeenCalled();
   });

@@ -47,4 +47,10 @@ describe('gh version floor', () => {
     await expect(probeGhVersion(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); })).resolves.toEqual({ kind: 'absent' });
     await expect(probeGhVersion(() => new Promise(() => {}), 1)).resolves.toEqual({ kind: 'timeout' });
   });
+
+  it('rethrows the production real-exec guard instead of converting it to a verdict', async () => {
+    await expect(probeGhVersion()).rejects.toThrow(
+      "tracker-client: real 'gh' exec blocked under AI_CONDUCTOR_NO_REAL_EXEC",
+    );
+  });
 });

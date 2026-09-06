@@ -9,6 +9,7 @@ import {
   reconcileParkedFeatures,
 } from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
+import { GhCapabilityError } from '../../src/engine/tracker-client.js';
 import {
   getProvenanceType,
   isOperatorParked,
@@ -1096,6 +1097,37 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 });
 
 describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
+  it('logs a gh capability diagnostic during the quiet automatic sweep and refuses with no-merge-proof', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-gh-capability';
+    const branch = `feat/${slug}`;
+    const { run, deleted } = makeGit({ shipped: [slug], branches: [branch] });
+    const runGh = vi.fn<GhRunner>().mockRejectedValue(
+      new GhCapabilityError('headRefOid', new Error('unsupported')),
+    );
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, log });
+
+      expect({
+        counts: result.counts,
+        refusedByReason: result.refusedByReason,
+        deleted,
+        capabilityLog: log.mock.calls.map(([message]) => message)
+          .filter((message) => message.includes('gh capability unavailable')),
+      }).toEqual({
+        counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 1, refused: 1, skipped: 0 },
+        refusedByReason: { 'no-merge-proof': 1 },
+        deleted: [],
+        capabilityLog: [`[parked-reconciliation] ${slug}: gh capability unavailable for headRefOid`],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('counts an open-intake automatic park and preserves machine versus operator provenance', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const autoSlug = 'auto-parked';
