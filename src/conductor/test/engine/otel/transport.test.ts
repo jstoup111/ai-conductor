@@ -7,7 +7,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { buildExporters, type Exporters } from '../../../src/engine/otel/transport.js';
+import {
+  buildExporters,
+  buildHttpExporterOptions,
+  type Exporters,
+} from '../../../src/engine/otel/transport.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
@@ -27,6 +31,41 @@ describe('buildExporters', () => {
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  describe('buildHttpExporterOptions', () => {
+    it('preserves per-signal URL suffixes and carries resolved headers', () => {
+      const config = {
+        enabled: true as const,
+        exporter: 'otlp' as const,
+        endpoint: 'http://localhost:4318/',
+        headers: { Authorization: 'Bearer resolved-token', 'X-Tenant': 'acme' },
+      };
+
+      expect(buildHttpExporterOptions(config, 'traces')).toEqual({
+        url: 'http://localhost:4318/v1/traces',
+        headers: { Authorization: 'Bearer resolved-token', 'X-Tenant': 'acme' },
+      });
+      expect(buildHttpExporterOptions(config, 'metrics')).toEqual({
+        url: 'http://localhost:4318/v1/metrics',
+        headers: { Authorization: 'Bearer resolved-token', 'X-Tenant': 'acme' },
+      });
+    });
+
+    it('omits headers when the resolved config has none', () => {
+      const config = {
+        enabled: true as const,
+        exporter: 'otlp' as const,
+        endpoint: 'http://localhost:4318',
+      };
+
+      expect(buildHttpExporterOptions(config, 'traces')).toEqual({
+        url: 'http://localhost:4318/v1/traces',
+      });
+      expect(buildHttpExporterOptions(config, 'metrics')).toEqual({
+        url: 'http://localhost:4318/v1/metrics',
+      });
+    });
   });
 
   describe('otlp exporter', () => {
