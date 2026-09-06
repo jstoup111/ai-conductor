@@ -766,6 +766,12 @@ to `.pipeline/pipeline-events.jsonl` (below). It is rendered (`render: true`) wh
 `build` step's `CloseoutEventTail` re-emits it onto the live bus, so it still reaches the daemon
 log, the terminal UI, and the OTel visualizer without a second writer to this file.
 
+`pipeline_tail_diagnostic` records a recoverable tailing problem in `events.jsonl`. Its `reason`
+is `malformed-line` when a completed source-ledger line cannot be parsed, or `poll-failed` when a
+background read fails; it includes the relative source-ledger `path` and, for a malformed line,
+its byte `byteOffset`. The event is rendered and persisted, but is not audited or sent to OTel.
+It never includes the corrupt line's contents or an exception message.
+
 ### `.pipeline/pipeline-events.jsonl`
 
 The pipeline's own closeout timing ledger, written by `ai-conductor closeout-event` — see
@@ -778,8 +784,10 @@ This is a deliberate second single-writer ledger, not a duplicate of `events.jso
 process that runs closeout obligations may have no conductor or daemon attached (an inline run),
 so it cannot depend on `EventPersister` to observe its own completions. When a `build` step is
 running under the engine, `CloseoutEventTail` tails this file incrementally (skipping partial
-trailing lines) and re-emits each complete record onto the live bus exactly once; an inline run
-produces the same records with no tail and no re-emission. `computeBuildTailRollup` (see
+trailing lines) and re-emits each valid complete record onto the live bus exactly once. A malformed
+complete line is consumed once so later valid records remain observable; the tail emits one
+`pipeline_tail_diagnostic` instead of replaying or exposing the line. An inline run produces the
+same records with no tail and no re-emission. `computeBuildTailRollup` (see
 [`ai-conductor build-tail`](cli.md#ai-conductor-build-tail)) merges this ledger with `events.jsonl` by
 `ts` to decompose a `build` window into task execution, remediation, and closeout segments.
 
