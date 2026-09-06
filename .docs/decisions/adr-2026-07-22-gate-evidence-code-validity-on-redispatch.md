@@ -59,6 +59,14 @@ within-dispatch mtime attempt-floor unchanged.**
    (`build-review.json` etc.). This mirrors `wiring_check`'s `evidence.head` and the `manual_test`
    `headSha` marker.
 
+> **Amended 2026-09-06 (hotfix, jstoup111/ai-conductor#2381 follow-up):** the "unreachable
+> baseline → re-run" rule in item 2 gains one exception. When the engine's own `rebase` step
+> rewrote the stamped commit, `.pipeline/rebase-rewrites.json` (rebase-translate) maps the old sha
+> to its replayed successor. A stamp that translates to a reachable rewritten commit is the same
+> reviewed content on a new base: the check proceeds using the tree delta between the stamped
+> commit and HEAD (so the base's own changes partition as foreign paths). A stamp the map cannot
+> explain stays fail-closed exactly as before (#766).
+
 2. **Validate on completion check (re-dispatch).** In each in-scope verdict predicate, before the
    existing mtime rejection: if a valid `PASS` verdict carries a `codeStamp`, run a shared
    `gate-code-validity` helper that

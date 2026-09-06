@@ -342,6 +342,82 @@ describe('feature-runtime gates preserve on a foreign-only delta, re-run on a fe
   });
 });
 
+describe('a prior run identity does not condemn a code-valid verdict (adr-2026-08-25 D5 amended 2026-09-06)', () => {
+  async function setupOrigin(s: Scratch): Promise<void> {
+    const bare = await mkdtemp(join(tmpdir(), 'gate-validity-origin-'));
+    scratches.push(bare);
+    await execFile('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+    await s.g(['remote', 'add', 'origin', bare]);
+    await s.g(['push', '-q', 'origin', 'HEAD:main']);
+    await s.g(['fetch', '-q', 'origin']);
+    await s.g(['remote', 'set-head', 'origin', '-a']);
+    s.origin = bare;
+  }
+
+  async function setup() {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await commit(s, { 'base.ts': 'base\n' }, 'main: init');
+    await setupOrigin(s);
+    const baseline = await commit(s, { 'featureA.ts': 'f1\n' }, 'feat: add featureA');
+    return { s, baseline };
+  }
+
+  async function stampWithPriorRun(repo: string, sidecarRelPath: string, codeStamp: string): Promise<void> {
+    await writeFile(join(repo, sidecarRelPath), JSON.stringify({ codeStamp, runId: 'run-prior' }, null, 2));
+  }
+
+  it('prd_audit: a halt/resume (new run id) preserves the verdict when only foreign paths changed', async () => {
+    const { s, baseline } = await setup();
+    await writeMdVerdict(s.repo, '.pipeline/prd-audit.md', PRD_ALIGNED, baseline, PRD_AUDIT_CODE_STAMP);
+    await stampWithPriorRun(s.repo, PRD_AUDIT_CODE_STAMP, baseline);
+    await pushForeignCommit(s as Scratch & { origin: string }, { 'foreign.ts': 'foreign1\n' }, 'unrelated foreign work');
+
+    const result = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo, { attemptRunId: 'run-current' }));
+    expect(result.done).toBe(true);
+  });
+
+  it('architecture_review_as_built: a halt/resume (new run id) preserves the verdict when only foreign paths changed', async () => {
+    const { s, baseline } = await setup();
+    await writeMdVerdict(s.repo, '.pipeline/architecture-review-as-built.md', ARCH_APPROVED, baseline, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP);
+    await stampWithPriorRun(s.repo, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, baseline);
+    await pushForeignCommit(s as Scratch & { origin: string }, { 'foreign.ts': 'foreign1\n' }, 'unrelated foreign work');
+
+    const result = await checkStepCompletion(s.repo, 'architecture_review_as_built', ctxFor(s.repo, { attemptRunId: 'run-current' }));
+    expect(result.done).toBe(true);
+  });
+
+  it("prd_audit: a prior run id still re-runs when the feature's own surface changed since the stamp", async () => {
+    const { s, baseline } = await setup();
+    await writeMdVerdict(s.repo, '.pipeline/prd-audit.md', PRD_ALIGNED, baseline, PRD_AUDIT_CODE_STAMP);
+    await stampWithPriorRun(s.repo, PRD_AUDIT_CODE_STAMP, baseline);
+    await commit(s, { 'featureA.ts': 'f2\n' }, 'feat: change featureA');
+
+    const result = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo, { attemptRunId: 'run-current' }));
+    expect(result.done).toBe(false);
+    expect(result.retrySignal).toBe('stale-run-identity');
+  });
+
+  it('prd_audit: the SHIP-tail rebase rewriting the stamped commit preserves the verdict through rebase-rewrites.json', async () => {
+    const { s, baseline } = await setup();
+    await writeMdVerdict(s.repo, '.pipeline/prd-audit.md', PRD_ALIGNED, baseline, PRD_AUDIT_CODE_STAMP);
+    await stampWithPriorRun(s.repo, PRD_AUDIT_CODE_STAMP, baseline);
+    // Replay the reviewed commit onto a new base: the stamped sha is orphaned
+    // and the engine's rebase step records old→new in rebase-rewrites.json.
+    await s.g(['commit', '--amend', '-q', '-m', 'feat: add featureA (replayed)']);
+    const rewritten = (await s.g(['rev-parse', 'HEAD'])).stdout.trim();
+    expect(rewritten).not.toBe(baseline);
+    expect((await s.g(['merge-base', '--is-ancestor', baseline, 'HEAD']).catch((e: { code?: number }) => ({ stdout: '', stderr: '', code: e.code }))).stdout).toBe('');
+
+    const withoutMap = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo, { attemptRunId: 'run-current' }));
+    expect(withoutMap.done).toBe(false);
+
+    await writeFile(join(s.repo, '.pipeline/rebase-rewrites.json'), JSON.stringify({ [baseline]: rewritten }, null, 2));
+    const withMap = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo, { attemptRunId: 'run-current' }));
+    expect(withMap.done).toBe(true);
+  });
+});
+
 describe('fail-closed on a missing stamp — legacy/opt-out verdicts still govern by mtime (Story 3)', () => {
   it('a PASS verdict with no codeStamp re-runs on an older mtime exactly as today', async () => {
     const s = await makeRepo();

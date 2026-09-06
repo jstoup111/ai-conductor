@@ -915,9 +915,11 @@ async function sweptArtifactStillValid(
   expectedRunId?: string,
 ): Promise<boolean> {
   if (!resolveGateCodeValidityConfig(config).enabled) return false;
-  if ((await verdictProducedByRun(dir, step, expectedRunId, config)).state === 'stale-run-identity') {
-    return false;
-  }
+  // A prior run identity alone does not condemn the artifact: the code stamp
+  // below decides whether the reviewed tree is still the tree on disk
+  // (adr-2026-08-25 D5 as amended 2026-09-06). Run identity still governs
+  // artifacts with no valid stamp through the predicates' mtime fallback.
+  void expectedRunId;
   const git = makeGitRunner(dir);
   const ctx = { projectRoot: dir, git };
 
@@ -3178,9 +3180,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // presence + freshness + no blocking rows.
   prd_audit: async (dir, ctx): Promise<CompletionResult> => {
     const runIdentity = await completionVerdictRunIdentity(dir, 'prd_audit', ctx);
-    if (runIdentity.state === 'stale-run-identity') {
-      return staleVerdictRunIdentityResult('.pipeline/prd-audit.md', runIdentity);
-    }
+    // A prior run's verdict is not condemned by identity alone: the code-stamp
+    // preservation check below runs first, so a verdict formed against this
+    // exact reviewed tree (surface miss since the stamp, including through the
+    // engine's own rebase rewrite) survives a halt/resume. Only when the stamp
+    // cannot vouch for it does the stale identity score 'no fresh verdict'
+    // (adr-2026-08-25 D5 as amended 2026-09-06).
     // gate-code-validity-on-redispatch (#817, Task 6): before the
     // freshness/report-parsing checks below, see if the last recorded PASS
     // (the sidecar is written ONLY on the PASS path — Task 4 — so its mere
@@ -3251,6 +3256,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       } catch {
         // No sidecar, unreadable, or unparseable — fall through.
       }
+    }
+    if (runIdentity.state === 'stale-run-identity') {
+      return staleVerdictRunIdentityResult('.pipeline/prd-audit.md', runIdentity);
     }
 
     const files = await findArtifactFiles(dir, 'prd_audit');
@@ -3370,12 +3378,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       'architecture_review_as_built',
       ctx,
     );
-    if (runIdentity.state === 'stale-run-identity') {
-      return staleVerdictRunIdentityResult(
-        '.pipeline/architecture-review-as-built.md',
-        runIdentity,
-      );
-    }
+    // Stale run identity is decided AFTER the code-stamp preservation check,
+    // mirroring prd_audit (adr-2026-08-25 D5 as amended 2026-09-06).
     // gate-code-validity-on-redispatch (#817, Task 6): mirrors prd_audit's
     // preserve-check above — the sidecar is written ONLY on the clean-
     // APPROVED PASS path (Task 4), so its mere presence with a codeStamp IS
@@ -3413,6 +3417,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       } catch {
         // No sidecar, unreadable, or unparseable — fall through.
       }
+    }
+    if (runIdentity.state === 'stale-run-identity') {
+      return staleVerdictRunIdentityResult(
+        '.pipeline/architecture-review-as-built.md',
+        runIdentity,
+      );
     }
 
     const files = await findArtifactFiles(dir, 'architecture_review_as_built');
