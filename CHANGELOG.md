@@ -58,6 +58,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The PRD-audit remediation path now derives criterion ids from the whole story heading id, so a story with a non-numeric id (`## Story 5a:`) no longer has all of its criteria dropped from the expected set and reported as absent from the active stories. ([implementation PR #2227](https://github.com/jstoup111/ai-conductor/pull/2227)).
 - Story criterion ids now count hard-wrapped Given/When/Then rows; previously a row whose "then" fell on a continuation line was silently dropped and later ordinals shifted, which could halt the prd_audit gate against a correct report. ([implementation PR #2237](https://github.com/jstoup111/ai-conductor/pull/2237)).
 - Remove redundant BUILD full-suite requirements and routine reviewer test reruns. ([implementation PR #2236](https://github.com/jstoup111/ai-conductor/pull/2236)).
+- Preserve routed BUILD gate verdicts before downstream gate selection. ([implementation PR #2244](https://github.com/jstoup111/ai-conductor/pull/2244)).
 
 ## [1.0.0] - 2026-08-31
 
