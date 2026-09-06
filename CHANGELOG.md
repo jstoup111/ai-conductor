@@ -70,6 +70,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Docs guard now blocks NUL-bearing, alias-root, and symlink-routed writes that could bypass protected documentation paths. ([implementation PR #2242](https://github.com/jstoup111/ai-conductor/pull/2242)).
 - Vitest global setup removes stale temporary run roots before they accumulate. ([implementation PR #2249](https://github.com/jstoup111/ai-conductor/pull/2249)).
 - Step and closeout duration histograms now bucket up to 8 hours, so p95 no longer saturates at 30 minutes for long build steps. ([implementation PR #2360](https://github.com/jstoup111/ai-conductor/pull/2360)).
+- Daemon as-built review halts now distinguish human decisions, repair-routing failures, and malformed reports. ([implementation PR #2201](https://github.com/jstoup111/ai-conductor/pull/2201)).
 
 ## [1.0.0] - 2026-08-31
 
