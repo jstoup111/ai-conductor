@@ -108,6 +108,7 @@ import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
 import {
   formatDaemonStartupLog,
+  formatDaemonConcurrencyWarning,
   resolveDaemonCommandConcurrency,
 } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
@@ -1554,6 +1555,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   }
 
   log(formatDaemonStartupLog(daemonConcurrency, continuous));
+  const concurrencyWarning = formatDaemonConcurrencyWarning(daemonConcurrency);
+  if (concurrencyWarning !== null) log(concurrencyWarning);
 
   // Shared backlog discovery — used both by the pool and the startup dashboard's
   // ELIGIBLE group, so they stay in lockstep. Dispatcher maintenance uses

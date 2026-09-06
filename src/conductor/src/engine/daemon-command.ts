@@ -201,6 +201,22 @@ export function formatDaemonStartupLog(
 }
 
 /**
+ * Operator warning for an executor pool wider than the serial default. Returns
+ * null at concurrency 1 so the serial daemon's startup output is unchanged.
+ */
+export function formatDaemonConcurrencyWarning(
+  resolution: DaemonConcurrencyResolution,
+): string | null {
+  if (resolution.concurrency <= 1) return null;
+  return (
+    `WARNING: daemon concurrency ${resolution.concurrency} (source ${resolution.source}) runs that many ` +
+    'features at once against one shared repository. Expect the shared .git to be busier, more rebase ' +
+    'kickbacks as siblings land on main first, and provider spend to scale with the pool width. ' +
+    'Set daemon_concurrency: 1 (or --concurrency 1) to return to serial dispatch.'
+  );
+}
+
+/**
  * Parse `process.argv` into a DaemonCommandOptions descriptor, or return null
  * when argv[2] is not `daemon` (so the caller falls through to the normal CLI).
  *

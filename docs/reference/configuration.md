@@ -1356,6 +1356,13 @@ daemon_concurrency: 3
 Only integers in `[1, ∞)` are valid. Zero, negative, fractional, non-finite, and non-numeric values
 make configuration loading fail before the daemon dispatches work; they are not silently clamped.
 
+> **Warning: anything above `1` is a different operating mode.** Every executor shares one
+> repository and one `.git`, so the daemon prints a `WARNING: daemon concurrency N` line at startup
+> whenever the effective width exceeds `1`. Expect more rebase kickbacks (a sibling feature landing on
+> `main` invalidates downstream gates for everyone still in flight), busier worktree lifecycle
+> operations, and provider spend that scales with the pool width. Start at `2`, watch the daemon log
+> for `@rebase` halts, and drop back to `1` if the kickback churn outweighs the throughput.
+
 For a daemon invocation, an explicit `--concurrency <n>` flag takes precedence over this setting;
 otherwise this setting takes precedence over the default of `1`. This pool width is independent of
 [`validation_concurrency`](#validation_concurrency), which bounds validation-phase branch fan-out
