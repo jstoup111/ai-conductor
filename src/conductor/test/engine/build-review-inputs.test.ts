@@ -294,6 +294,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           diagnostic: 'test declaration analysis failed: injected parser unavailable',
         }],
       });
+      expect(inputs.sourceSnapshot.testQuality).toMatchObject({
+        inScopeTests: [],
+        counterfactualFileSelectors: ['test/side-effect.test.ts'],
+      });
     });
 
     it('freezes one changed setup group with its opted-in unchanged bodies', async () => {
@@ -329,6 +333,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           },
         }],
         affectedGroups: [{ suite: { titleChain: ['group'] } }],
+      });
+      expect(inputs.sourceSnapshot.testQuality).toMatchObject({
+        inScopeTests: [],
+        counterfactualFileSelectors: ['test/group.test.ts'],
       });
     });
 
@@ -887,7 +895,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(result.planBody).toContain('### Task 1: frozen');
       expect(result.sourceSnapshot.testQuality).toEqual({
-        inScopeTests: [], unresolvedMarkers: [],
+        inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [],
       });
       expect(result.sourceSnapshot.changedTestTitles).toEqual([]);
       expect(result.sourceSnapshot.sourceChanges).toContainEqual({
@@ -963,6 +971,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(beforeRebase.sourceSnapshot.testQuality).toEqual({
         inScopeTests: ['test/criterion.test.ts', 'test/task.test.ts'],
+        counterfactualFileSelectors: ['test/criterion.test.ts', 'test/task.test.ts'],
         unresolvedMarkers: [
           { selector: 'test/beyond.test.ts', reference: 'S3.2' },
           { selector: 'test/malformed.test.ts', reference: 'FR-' },

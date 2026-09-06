@@ -237,6 +237,33 @@ describe('build-review test-quality preflight', () => {
     expect(JSON.stringify(rootSnapshot)).toBe(featureSnapshot);
   });
 
+  it('executes an engine-selected conservative file union without changing diff-derived test evidence', async () => {
+    const runScoped = vi.fn(async () => ({ exitCode: 0 as const, stdout: '', stderr: '' }));
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: [
+        'diff --git a/src/a.ts b/src/a.ts',
+        'diff --git a/test/established.test.ts b/test/established.test.ts',
+      ].join('\n'),
+      // An affected opted-in candidate is intentionally run even though it is
+      // not an established review target. This is an execution selector only.
+      counterfactualFileSelectors: ['test/candidate-group.test.ts', 'test/established.test.ts'],
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped, removeCheckout: async () => {},
+    });
+
+    expect(runScoped).toHaveBeenCalledWith(
+      expect.any(String),
+      ['test/candidate-group.test.ts', 'test/established.test.ts'],
+      expect.any(AbortSignal),
+    );
+    expect(result).toMatchObject({
+      changedTestSelectors: ['test/established.test.ts'],
+      counterfactualFileSelectors: ['test/candidate-group.test.ts', 'test/established.test.ts'],
+      scopedRun: { ranSelectors: ['test/candidate-group.test.ts', 'test/established.test.ts'] },
+    });
+  });
+
   it('reverts a renamed production file to its merge-base path before running the counterfactual', async () => {
     const calls: string[] = [];
     const removeFile = vi.fn(async (path: string) => { calls.push(`remove:${path}`); });

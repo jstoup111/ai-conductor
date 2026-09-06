@@ -180,6 +180,7 @@ export function preflightProjection(preflight: TautologyPreflightResult): BuildR
     };
   }
   return {
+    runnerSelectors: preflight.counterfactualFileSelectors,
     changedTestSelectors: preflight.changedTestSelectors,
     unresolvedMarkers: [],
     revertedProductionManifest: preflight.revertedProductionManifest,
@@ -361,7 +362,8 @@ export async function coordinateBuildReviewRubrics(
   const testQualityPolicy = input.config.rubrics.testQuality;
   const inScopeTests = input.inputs.sourceSnapshot.testQuality?.inScopeTests ?? [];
   const unresolvedMarkers = input.inputs.sourceSnapshot.testQuality?.unresolvedMarkers ?? [];
-  if (input.config.enabled && testQualityPolicy?.enabled && inScopeTests.length === 0) {
+  const hasConcreteCandidates = (input.inputs.sourceSnapshot.testScope?.candidates.length ?? 0) > 0;
+  if (input.config.enabled && testQualityPolicy?.enabled && inScopeTests.length === 0 && !hasConcreteCandidates) {
     await input.emit?.({
       type: "build_review_outer_verdict",
       lapId: input.lapId,
@@ -415,8 +417,15 @@ export async function coordinateBuildReviewRubrics(
   const derivedProjections = deriveBuildReviewRubricProjections({
     lapId: input.lapId,
     inputs: projectionInputs,
-    testQuality: preflight ? { ...preflightProjection(preflight), changedTestSelectors: inScopeTests, unresolvedMarkers } : {
-      changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
+    testQuality: preflight ? {
+      ...preflightProjection(preflight),
+      runnerSelectors: preflight.classification === "infrastructure-failure"
+        ? preflight.changedTestSelectors
+        : preflight.counterfactualFileSelectors ?? preflight.scopedRun?.ranSelectors ?? preflight.changedTestSelectors,
+      changedTestSelectors: inScopeTests,
+      unresolvedMarkers,
+    } : {
+      runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
   const projections = input.projections ?? derivedProjections;

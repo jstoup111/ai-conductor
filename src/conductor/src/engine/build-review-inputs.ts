@@ -160,8 +160,10 @@ export interface BuildReviewUnresolvedMarker {
 
 /** Closed test-quality scope derived from the feature's active artifacts and graded diff. */
 export interface BuildReviewTestQualityScope {
-  /** Changed executable tests with at least one Covers reference bound to this feature. */
+  /** Changed executable tests with an established Covers binding in this feature. */
   readonly inScopeTests: readonly string[];
+  /** Conservative file union for counterfactual execution, including concrete candidates. */
+  readonly counterfactualFileSelectors: readonly string[];
   /** Changed-test markers that name no criterion, FR, or task in this feature. */
   readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
 }
@@ -374,6 +376,7 @@ async function snapshotTestQualityScope(
 
   return Object.freeze({
     inScopeTests: Object.freeze(inScopeTests),
+    counterfactualFileSelectors: Object.freeze(inScopeTests),
     unresolvedMarkers: Object.freeze(unresolvedMarkers.sort((left, right) =>
       `${left.selector}\u0000${left.reference}`.localeCompare(`${right.selector}\u0000${right.reference}`),
     )),
@@ -764,7 +767,11 @@ async function snapshotTypedTestScope(
   });
   const scope = mergeTestScopes(files.map((file) => file.scope));
   const scopeEvidence = await pinScopeEvidence(files, source, mergeBaseSha);
-  const inScopeFiles = files.filter((file) => file.scope.targets.length > 0 || file.scope.candidates.length > 0);
+  const establishedTargetFiles = files.filter((file) => file.scope.targets.length > 0);
+  const counterfactualFileSelectors = files
+    .filter((file) => file.scope.targets.length > 0 || file.scope.candidates.length > 0)
+    .map((file) => file.path)
+    .sort();
   const unresolvedMarkers = files.flatMap((file) => file.scope.notes.flatMap((note) => note.kind === 'unresolved-reference'
     ? [Object.freeze({ selector: file.path, reference: markerReferenceForScope(note.marker.reference) })]
     : []));
@@ -786,7 +793,8 @@ async function snapshotTypedTestScope(
     scope,
     scopeEvidence,
     testQuality: Object.freeze({
-      inScopeTests: Object.freeze(inScopeFiles.map((file) => file.path)),
+      inScopeTests: Object.freeze(establishedTargetFiles.map((file) => file.path)),
+      counterfactualFileSelectors: Object.freeze(counterfactualFileSelectors),
       unresolvedMarkers: Object.freeze(unresolvedMarkers.sort((left, right) =>
         `${left.selector}\u0000${left.reference}`.localeCompare(`${right.selector}\u0000${right.reference}`),
       )),
