@@ -187,6 +187,10 @@ export async function coordinateBuildReviewAdjudication(input: {
         graph: { sourceOutcomes: [], cases: [] }, recordedAt: new Date().toISOString(),
         generateId: input.generateId ?? randomUUID,
         attemptedCaseIds: exitAttemptEvidence.ok ? exitAttemptEvidence.attemptedCaseIds : [],
+        // Same semantics as clean-PASS settlement: absent non-action history
+        // resolves benignly, while the reconciler's shared effect-status test
+        // keeps any reserved or failed effect open as a blocker.
+        resolveAbsentOpenNonActionCases: true,
       });
       if (!absentSettled.ok) {
         return fail(absentSettled.reason === 'store-failure' ? `case store ${absentSettled.storeReason}` : `case reconciliation ${absentSettled.reason}`);
@@ -200,14 +204,19 @@ export async function coordinateBuildReviewAdjudication(input: {
     }
     const settled = await store.read();
     if (!settled.ok) return fail(`case store ${settled.reason}`);
-    // Adjacent to the BUILD/HALT/PASS exit itself: an acceptance that arrived
-    // while effects were settling must not leave an obsolete route standing.
+    // The settlement above awaited durable work, so even an entry snapshot
+    // taken moments ago can be stale. Every terminal decision below derives
+    // from an authority read that FOLLOWS the last awaited operation: settle
+    // under the current read, and if a newer read shows more acceptances,
+    // settle again (the retirement mutation is idempotent) before routing.
     let exitResolved: ReadonlySet<string>;
-    if (options.resolvedAtEntry) {
-      exitResolved = options.resolvedAtEntry;
-    } else {
-      try { exitResolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
-    }
+    try { exitResolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+    if (options.resolvedAtEntry) exitResolved = new Set([...options.resolvedAtEntry, ...exitResolved]);
+    let settleRounds = 0;
+    const settledCases: RemediationCaseRecord[] = [];
+    const settledRetirements: OperatorRetirementTransition[] = [];
+    for (;;) {
+    settleRounds += 1;
     const exitSourceIds = [...liveSourceIdsFor(exitResolved)];
     const acceptedSourceIds = new Set(sources
       .filter((source) => exitResolved.has(source.findingId))
@@ -267,8 +276,9 @@ export async function coordinateBuildReviewAdjudication(input: {
     });
     if (!neutralized.ok) return fail(`case store ${neutralized.reason}`);
     if (!neutralized.value.ok) return fail(neutralized.value.reason);
-    const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: neutralized.value.cases, mechanical: input.mechanical });
+    settledCases.splice(0, settledCases.length, ...neutralized.value.cases);
     for (const retirement of neutralized.value.retirementTransitions) {
+      settledRetirements.push(retirement);
       await input.emit?.({
         type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId: retirement.caseId, resolution: 'resolved',
@@ -283,16 +293,27 @@ export async function coordinateBuildReviewAdjudication(input: {
         });
       }
     }
-    await input.emit?.({
-      type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
-      caseIds: neutralized.value.cases.map((record) => record.id),
-      effectIds: neutralized.value.cases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
-    });
-    return {
-      ok: true, route: transition.route, detail: transition.reason,
-      trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(neutralized.value.cases)}`,
-      remainingMechanical: transition.remainingMechanical,
-    };
+    // Adjacent to the exit: the mutation and the emissions above were awaited,
+    // so read authority again. Anything newly accepted settles in one more
+    // round; an unchanged read means this round's state is the routed state.
+    let latest: ReadonlySet<string>;
+    try { latest = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+    const grew = [...latest].some((findingId) => !exitResolved.has(findingId));
+    if (!grew || settleRounds >= 3) {
+      const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: settledCases, mechanical: input.mechanical });
+      await input.emit?.({
+        type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
+        caseIds: settledCases.map((record) => record.id),
+        effectIds: settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
+      });
+      return {
+        ok: true, route: transition.route, detail: transition.reason,
+        trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(settledCases)}`,
+        remainingMechanical: transition.remainingMechanical,
+      };
+    }
+    exitResolved = new Set([...exitResolved, ...latest]);
+    }
   };
   /**
    * A content-specific failure that follows awaited work. The work may have
@@ -446,9 +467,10 @@ export async function coordinateBuildReviewAdjudication(input: {
         caseId, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }),
         reason: reuse === 'halt-repeat' ? 'already-attempted' : 'regressed',
       });
-      return fail(reuse === 'halt-repeat'
+      // The emission was awaited; the HALT decision reads authority after it.
+      return failUnlessAccepted(reuse === 'halt-repeat'
         ? `semantic remediation case repeat ${caseId}`
-        : `semantic remediation case regression ${caseId}`);
+        : `semantic remediation case regression ${caseId}`, { settleAbsentAttempted: false });
     }
   }
 
@@ -505,7 +527,13 @@ export async function coordinateBuildReviewAdjudication(input: {
           caseId: record.id, effectId: record.effect.id, effectKind: 'action', reason: action.reason,
         });
       }
-      if (retiredByAcceptance.size > 0) {
+      // The emissions were awaited; the BUILD/HALT decision reads authority
+      // after them, so an acceptance landing during delivery is not missed.
+      try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+      const liveSourceIdsAtActionExit = liveSourceIdsFor(resolved);
+      const retiredAtExit = pendingActionEffects.some((record) =>
+        record.sources.every((source) => !liveSourceIdsAtActionExit.has(source.sourceId)));
+      if (retiredAtExit) {
         return finalize({ tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved });
       }
       return fail(action.reason);
@@ -555,7 +583,11 @@ export async function coordinateBuildReviewAdjudication(input: {
           type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseId, effectId: record.effect.id, effectKind: 'deferral', reason: deferred.reason,
         });
-        if (deferredFailureRetiredByAcceptance) {
+        // The emission was awaited; decide from an authority read after it.
+        try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+        const liveSourceIdsAtDeferralExit = liveSourceIdsFor(resolved);
+        const retiredAtExit = record.sources.every((source) => !liveSourceIdsAtDeferralExit.has(source.sourceId));
+        if (deferredFailureRetiredByAcceptance || retiredAtExit) {
           return finalize({ tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved });
         }
         return fail(deferred.reason);

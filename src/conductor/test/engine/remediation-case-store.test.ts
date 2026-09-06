@@ -98,6 +98,18 @@ describe('remediation case store', () => {
         effect: { id: 'effect-1', kind: 'deferral', status: 'failed' },
       }],
     }, 'malformed-state'],
+    ['a duplicate case id', {
+      ...CASE_STATE,
+      cases: [CASE_STATE.cases[0], { ...CASE_STATE.cases[0], effect: { ...CASE_STATE.cases[0].effect, id: 'effect-2' } }],
+    }, 'malformed-state'],
+    ['a duplicate durable effect id across cases', {
+      ...CASE_STATE,
+      cases: [CASE_STATE.cases[0], { ...CASE_STATE.cases[0], id: 'case-2' }],
+    }, 'malformed-state'],
+    ['a duplicate source id within one case', {
+      ...CASE_STATE,
+      cases: [{ ...CASE_STATE.cases[0], sources: [CASE_STATE.cases[0].sources[0], CASE_STATE.cases[0].sources[0]] }],
+    }, 'malformed-state'],
   ])('fails closed for %s', async (_description, state, reason) => {
     const projectRoot = await createProjectRoot();
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });

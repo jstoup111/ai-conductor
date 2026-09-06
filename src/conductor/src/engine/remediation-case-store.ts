@@ -219,10 +219,26 @@ function parseState(value: unknown):
   const feature = parseFeature(value.feature);
   if (!feature || !Array.isArray(value.cases) || value.cases.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
   const cases: RemediationCaseRecord[] = [];
+  // Canonical identity: one row per case id, one case per durable effect id,
+  // one link per source within a case. Downstream readers index by these ids
+  // (`new Map(cases.map(...))`), which would silently collapse a duplicate
+  // while the array kept both rows — so duplicates are rejected here, before
+  // any caller can consume or mutate the state.
+  const caseIds = new Set<string>();
+  const effectIds = new Set<string>();
   for (const caseValue of value.cases) {
     const parsed = parseCase(caseValue);
     if (!parsed.ok) return parsed;
-    cases.push(parsed.record);
+    const record = parsed.record;
+    if (caseIds.has(record.id)) return { ok: false, reason: 'malformed-state' };
+    caseIds.add(record.id);
+    if (record.effect.kind !== 'none') {
+      if (effectIds.has(record.effect.id)) return { ok: false, reason: 'malformed-state' };
+      effectIds.add(record.effect.id);
+    }
+    const sourceIds = new Set(record.sources.map((source) => source.sourceId));
+    if (sourceIds.size !== record.sources.length) return { ok: false, reason: 'malformed-state' };
+    cases.push(record);
   }
   return { ok: true, state: { version: STORE_VERSION, feature, cases } };
 }
