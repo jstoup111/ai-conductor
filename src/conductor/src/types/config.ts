@@ -223,6 +223,11 @@ export interface AssessConfig {
   stale_after_commits?: number;
 }
 
+/** Environment-variable reference for an OTLP HTTP header value. */
+export interface OtelHeaderEnvironmentReference {
+  env: string;
+}
+
 /**
  * OpenTelemetry exporter configuration. When present in HarnessConfig, the
  * OTel visualizer plugin is constructed and attached to the event bus.
@@ -237,6 +242,8 @@ export interface OtelConfig {
   file?: string;
   /** OTLP wire protocol. Defaults to 'http/protobuf' (port 4318). */
   protocol?: 'http/protobuf' | 'grpc';
+  /** OTLP HTTP headers whose values are read from the process environment. */
+  headers?: Record<string, OtelHeaderEnvironmentReference>;
   /** Optional metric project identity. Defaults to the project root basename. */
   project_name?: string;
 }

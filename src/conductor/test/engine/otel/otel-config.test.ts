@@ -88,6 +88,77 @@ describe('resolveOtelConfig', () => {
     });
   });
 
+  describe('environment-referenced headers', () => {
+    const headerConfig = {
+      otel: {
+        exporter: 'otlp' as const,
+        endpoint: 'http://localhost:4318',
+        headers: { Authorization: { env: 'OTEL_TEST_AUTHORIZATION' } },
+      },
+    };
+
+    it('resolves a configured header and reads its environment value on every resolution', () => {
+      const previous = process.env.OTEL_TEST_AUTHORIZATION;
+      try {
+        process.env.OTEL_TEST_AUTHORIZATION = 'first-token';
+        expect(resolveOtelConfig(headerConfig, PIPELINE_DIR)).toMatchObject({
+          enabled: true,
+          headers: { Authorization: 'first-token' },
+        });
+
+        process.env.OTEL_TEST_AUTHORIZATION = 'second-token';
+        expect(resolveOtelConfig(headerConfig, PIPELINE_DIR)).toMatchObject({
+          enabled: true,
+          headers: { Authorization: 'second-token' },
+        });
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
+
+    it('leaves the resolved result unchanged when headers are absent', () => {
+      expect(
+        resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, PIPELINE_DIR),
+      ).toEqual({ enabled: true, exporter: 'otlp', endpoint: 'http://localhost:4318' });
+    });
+
+    it.each([undefined, ''])('disables otlp when a referenced environment variable is %p', (value) => {
+      const previous = process.env.OTEL_TEST_AUTHORIZATION;
+      try {
+        if (value === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = value;
+
+        const result = resolveOtelConfig(headerConfig, PIPELINE_DIR);
+        expect(result).toMatchObject({ enabled: false });
+        expect((result as { error?: string }).error).toContain('Authorization');
+        expect((result as { error?: string }).error).toContain('OTEL_TEST_AUTHORIZATION');
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
+
+    it('retains only header and environment-variable names in the parsed configuration', () => {
+      const previous = process.env.OTEL_TEST_AUTHORIZATION;
+      try {
+        process.env.OTEL_TEST_AUTHORIZATION = 'credential-value';
+        resolveOtelConfig(headerConfig, PIPELINE_DIR);
+        expect(headerConfig).toEqual({
+          otel: {
+            exporter: 'otlp',
+            endpoint: 'http://localhost:4318',
+            headers: { Authorization: { env: 'OTEL_TEST_AUTHORIZATION' } },
+          },
+        });
+        expect(JSON.stringify(headerConfig)).not.toContain('credential-value');
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
+  });
+
   describe('project_name', () => {
     it('carries a trimmed configured project name on both enabled variants and omits blank values', () => {
       const configs = [

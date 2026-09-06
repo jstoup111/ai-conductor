@@ -185,6 +185,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'otel.endpoint': consumer(OTEL_CONFIG),
   'otel.file': consumer(OTEL_CONFIG),
   'otel.protocol': consumer(OTEL_CONFIG),
+  'otel.headers': consumer(OTEL_CONFIG),
   'otel.project_name': consumer(OTEL_CONFIG),
   'build_review.enabled': consumer(RESOLVED_CONFIG),
   'build_review.perTaskFloor': none(
