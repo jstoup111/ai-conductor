@@ -474,9 +474,11 @@ When every valid finding is `REMEDIABLE`, daemon runs with as-built remediation 
 bounded remediation route, append the authorized repair work, and re-stage BUILD. The route is bounded by
 `architecture_review_as_built.max_remediation_laps` and the shared plan-growth allowance; exhausting
 either produces a `kickback-cap` halt before another append. A `DESIGN` finding (including a mixed
-report), an invalid report, or the remediation kill switch being off appends nothing and halts needs-human.
-After a later successful as-built verdict, each remediated finding is retained in the verdict artifact and
-the shipped record.
+report) halts for a human decision and names each DESIGN finding with its governing clause. An all-
+`REMEDIABLE` report that cannot route halts `needs-human`, names whether remediation was disabled,
+the run was not a daemon, or the planner produced no usable plan, and lists every blocking finding.
+An invalid report halts with its parse fault. After a later successful as-built verdict, each remediated
+finding is retained in the verdict artifact and the shipped record.
 
 ### Per-task `Done when:` evidence
 

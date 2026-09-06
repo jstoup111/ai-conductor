@@ -9820,7 +9820,7 @@ describe('engine/conductor', () => {
     ].join('\n');
     const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
-    it('readRemediationPlan → null (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
+    it('readRemediationPlanResult → null plan (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
@@ -9851,8 +9851,8 @@ describe('engine/conductor', () => {
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
             // Deliberately write no (or unreadable) remediation.json — the
-            // planner produced no usable plan. readRemediationPlan returns
-            // null → planRemediation resolves 'none'.
+            // planner produced no usable plan. readRemediationPlanResult returns
+            // a null plan → planRemediation resolves 'none'.
           }
           return { success: true };
         }),
@@ -16964,7 +16964,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     [
       'none',
       async (dirPath: string) => {
-        // Malformed JSON -> readRemediationPlan returns null -> outcome 'none'.
+        // Malformed JSON -> readRemediationPlanResult returns a null plan -> outcome 'none'.
         await writeFile(join(dirPath, '.pipeline/remediation.json'), '{not valid json');
       },
     ],

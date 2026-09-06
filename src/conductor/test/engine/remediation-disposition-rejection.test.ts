@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { readRemediationPlan } from '../../src/engine/artifacts.js';
+import { readRemediationPlanResult } from '../../src/engine/artifacts.js';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -40,7 +40,7 @@ describe('rejected remediation dispositions', () => {
       ],
     }));
 
-    const plan = await readRemediationPlan(projectRoot, Date.now() - 60_000, 'prd-audit');
+    const plan = (await readRemediationPlanResult(projectRoot, Date.now() - 60_000, 'prd-audit')).plan;
     expect(plan?.gaps).toEqual([]);
     expect(plan?.rejected).toMatchObject([
       { gapId: 'AB-1', disposition: 'unknown-disposition' },

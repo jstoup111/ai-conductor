@@ -1,5 +1,5 @@
-// Covers: task:1, task:2, task:3, task:4, task:5
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -301,7 +301,10 @@ describe('as-built verdict gate', () => {
       '| ARCH-2 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
     ].join('\n');
 
-    expect(classifyAsBuiltReviewOutcome(report)).toEqual({ kind: 'blocked-design' });
+    expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+      kind: 'blocked-design',
+      designFindings: [{ id: 'ARCH-2', clause: 'adr-2026-08-25-example decision 3' }],
+    });
   });
 
   it('classifies every malformed BLOCKED findings table as invalid', () => {
@@ -428,7 +431,10 @@ describe('as-built verdict gate', () => {
         '| --- | --- | --- | --- |',
         '| ARCH-1 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
       ].join('\n'),
-      { kind: 'blocked-design' },
+      {
+        kind: 'blocked-design',
+        designFindings: [{ id: 'ARCH-1', clause: 'adr-2026-08-25-example decision 3' }],
+      },
     ],
   ])('keeps %s classified through the invalid-cause split', (_description, report, expected) => {
     expect(classifyAsBuiltReviewOutcome(report)).toEqual(expected);
@@ -490,11 +496,73 @@ describe('as-built verdict gate', () => {
     ].join('\n'));
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
       done: false,
-      reason: 'as-built review verdict is BLOCKED — shipped code violates an approved architecture decision',
+      reason:
+        'as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): ' +
+        'ARCH-1 (adr-2026-08-25-example decision 3)',
     });
 
     await writeAsBuilt(dir, '# As-built review\n');
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({ done: false });
+  });
+
+  it('keeps the unparseable-report reason free of decision and repair wording through the completion predicate', async () => {
+    const dir = await fixture();
+    const ctx = { sessionStartedAt: Date.now() - 1_000 };
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Summary |',
+      '| --- | --- | --- |',
+      '| ARCH-9 | REMEDIABLE | Missing the clause column |',
+    ].join('\n');
+    await writeAsBuilt(dir, report);
+
+    // Derived from the classifier's own outcome, the single source the
+    // production reason comes from, so this cannot drift from a literal.
+    const outcome = classifyAsBuiltReviewOutcome(report);
+    expect(outcome.kind).toBe('invalid');
+    const result = await checkStepCompletion(dir, 'architecture_review_as_built', ctx);
+    expect(result).toMatchObject({
+      done: false,
+      reason: renderAsBuiltInvalidReason(outcome as Extract<typeof outcome, { kind: 'invalid' }>),
+      routeClass: 'absent',
+    });
+    const reason = result.done ? '' : result.reason;
+    expect(reason).toContain('malformed header');
+    expect(reason).not.toContain('human decision');
+    expect(reason).not.toContain('a repair');
+  });
+
+  it('names a remediable verdict as a repair and names only DESIGN findings in a mixed verdict', async () => {
+    const dir = await fixture();
+    const ctx = { sessionStartedAt: Date.now() - 1_000 };
+    await writeAsBuilt(dir, [
+      'Verdict: BLOCKED', '', '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-1 | REMEDIABLE | Task 1 | Fix it |',
+      '| AB-2 | REMEDIABLE | Task 2 | Fix it too |',
+    ].join('\n'));
+    await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
+      reason: expect.stringContaining('every blocking finding is REMEDIABLE'),
+    });
+    await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
+      reason: expect.stringContaining('a repair, not a decision'),
+    });
+
+    await writeAsBuilt(dir, [
+      'Verdict: BLOCKED', '', '## Blocking Findings',
+      '| Finding | Class | Governing clause | Summary |',
+      '| --- | --- | --- | --- |',
+      '| AB-1 | DESIGN | ADR-example decision 1 | Decide it |',
+      '| AB-2 | REMEDIABLE | Task 2 | Fix it |',
+    ].join('\n'));
+    await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
+      reason: expect.stringContaining('AB-1 (ADR-example decision 1)'),
+    });
+    const result = await checkStepCompletion(dir, 'architecture_review_as_built', ctx);
+    expect(result.done ? '' : result.reason).not.toContain('AB-2');
   });
 });
 
@@ -544,6 +612,8 @@ describe('as-built SHIP routing', () => {
     remediationEnabled?: boolean;
     priorLap?: boolean;
     projectionRefusal?: boolean;
+    writeRemediationPlan?: boolean;
+    haltClass?: { value?: string };
   }): Promise<ConductorEvent[]> {
     const dir = await fixture();
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -573,7 +643,7 @@ describe('as-built SHIP routing', () => {
       run: vi.fn(async (step: StepName) => {
         if (step === 'architecture_review_as_built') {
           await writeAsBuilt(dir, input.report);
-        } else if (step === 'remediate') {
+        } else if (step === 'remediate' && input.writeRemediationPlan !== false) {
           await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
             dispositions: [{
               id: 'ARCH-1',
@@ -615,6 +685,9 @@ describe('as-built SHIP routing', () => {
       ).mockResolvedValue('forced projection refusal');
     }
     await conductor.run();
+    if (input.haltClass) {
+      input.haltClass.value = await readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8');
+    }
     return observed;
   }
 
@@ -675,6 +748,10 @@ describe('as-built SHIP routing', () => {
     priorLap?: boolean;
     maxRemediationLaps?: number;
     projectionRefusal?: boolean;
+    remediationEnabled?: boolean;
+    daemon?: boolean;
+    writeRemediationPlan?: boolean;
+    staleRemediationPlan?: boolean;
   }): Promise<ConductorEvent[]> {
     const dir = await fixture();
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -743,7 +820,7 @@ describe('as-built SHIP routing', () => {
           ].join('\n'));
         } else if (step === 'architecture_review_as_built') {
           await writeAsBuilt(dir, input.report);
-        } else if (step === 'remediate') {
+        } else if (step === 'remediate' && input.writeRemediationPlan !== false) {
           await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
             dispositions: [{
               id: 'ARCH-1', disposition: 'build', category: null,
@@ -751,6 +828,12 @@ describe('as-built SHIP routing', () => {
               tasks: [{ id: 'approved-guard', title: 'Add the approved guard' }],
             }],
           }));
+          if (input.staleRemediationPlan) {
+            // Predate the session: the reader classifies an mtime before
+            // session_started_at as a stale plan.
+            const past = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            await utimes(join(dir, '.pipeline', 'remediation.json'), past, past);
+          }
         } else if (step === 'build') {
           return { success: false, error: 'stop after lifecycle route' };
         }
@@ -763,13 +846,13 @@ describe('as-built SHIP routing', () => {
       events,
       projectRoot: dir,
       mode: 'auto',
-      daemon: true,
+      daemon: input.daemon ?? true,
       verifyArtifacts: true,
       fromStep: 'manual_test',
       maxRetries: 1,
       config: {
         architecture_review_as_built: {
-          remediation: { enabled: true },
+          remediation: { enabled: input.remediationEnabled ?? true },
           max_remediation_laps: input.maxRemediationLaps ?? 2,
         },
       } as never,
@@ -826,6 +909,79 @@ describe('as-built SHIP routing', () => {
 
     const invalid = await runGroupedAsBuiltExit({ report: 'Verdict: BLOCKED\n' });
     expectOneGroupTerminalBefore(invalid, 'loop_halt');
+  });
+
+  it.each([
+    {
+      name: 'remediation is disabled',
+      input: { remediationEnabled: false },
+      cause: 'remediation is disabled by architecture_review_as_built.remediation.enabled',
+    },
+    {
+      name: 'the run is not a daemon',
+      input: { daemon: false },
+      cause: 'remediation runs only in daemon mode',
+    },
+    {
+      name: 'the planner writes no remediation plan',
+      input: { writeRemediationPlan: false },
+      cause: 'the planner wrote no remediation plan',
+    },
+  ])('renders the remediable group-halt cause and findings when $name', async ({ input, cause }) => {
+    const observed = await runGroupedAsBuiltExit({ report: REMEDIABLE_REPORT, ...input });
+    const halt = observed.find((event) => event.type === 'loop_halt');
+
+    expect(halt).toMatchObject({
+      reason: expect.stringContaining(`remediation did not route: ${cause}`),
+    });
+    expect(halt?.reason).toContain('Blocking findings:');
+    expect(halt?.reason).toContain('ARCH-1 (REMEDIABLE;');
+    expect(halt?.reason).not.toContain('shipped code violates an approved architecture decision');
+    expect(observed.some((event) => event.type === 'kickback')).toBe(false);
+  });
+
+  it('renders the stale-plan group-halt cause and lists the REMEDIABLE finding with its clause', async () => {
+    const observed = await runGroupedAsBuiltExit({ report: REMEDIABLE_REPORT, staleRemediationPlan: true });
+    const halt = observed.find((event) => event.type === 'loop_halt');
+
+    expect(halt?.reason).toContain('stale');
+    expect(halt?.reason).toContain('Blocking findings:');
+    expect(halt?.reason).toContain('ARCH-1 (REMEDIABLE; Task 1');
+    expect(observed.some((event) => event.type === 'kickback')).toBe(false);
+  });
+
+  it('renders the Blocking findings listing exactly once for a DESIGN-class group halt', async () => {
+    const observed = await runGroupedAsBuiltExit({
+      report: REMEDIABLE_REPORT.replace('REMEDIABLE', 'DESIGN'),
+    });
+    const halt = observed.find((event) => event.type === 'loop_halt');
+
+    expect((halt?.reason ?? '').split('Blocking findings:').length - 1).toBe(1);
+  });
+
+  it('keeps the no-verdict-line group halt free of findings and remediation wording', async () => {
+    const observed = await runGroupedAsBuiltExit({ report: '# As-Built Architecture Review\n\nNo verdict here.\n' });
+    const halt = observed.find((event) => event.type === 'loop_halt');
+
+    expect(halt).toBeDefined();
+    expect(halt?.reason).not.toContain('Blocking findings:');
+    expect(halt?.reason).not.toContain('remediation did not route');
+  });
+
+  it('names the planner no-plan cause and lists the findings on the serial as-built halt', async () => {
+    const haltClass: { value?: string } = {};
+    const observed = await runSerialAsBuiltExit({
+      report: REMEDIABLE_REPORT,
+      writeRemediationPlan: false,
+      haltClass,
+    });
+    const halt = observed.find((event) => event.type === 'loop_halt');
+
+    expect(halt?.reason).toContain('remediation did not route: the planner wrote no remediation plan');
+    expect(halt?.reason).toContain('Blocking findings:');
+    expect(halt?.reason).toContain('ARCH-1 (REMEDIABLE;');
+    expect(observed.some((event) => event.type === 'kickback')).toBe(false);
+    expect(haltClass.value).toBe('needs-human');
   });
 
   it('names the parser fault when the validation-group as-built report is invalid', async () => {
