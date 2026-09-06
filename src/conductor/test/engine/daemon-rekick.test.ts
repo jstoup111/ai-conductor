@@ -205,37 +205,61 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(logLine).toBeDefined();
   });
 
-  it('applies the four-way halt disposition matrix and logs each slug with its disposition', async () => {
-    const dispositionBySlug = new Map<
-      string,
-      'needs-human' | 'mechanical' | 'legacy' | 'unclassified'
-    >([
-      ['mechanical', 'mechanical'],
-      ['legacy', 'legacy'],
-      ['needs-human', 'needs-human'],
-      ['unclassified', 'unclassified'],
-    ]);
+  it('applies the exhaustive halt disposition matrix through the real sweep', async () => {
+    const expectedActionByDisposition = {
+      'needs-human': 'retain',
+      'plan-gap': 'retain',
+      'protected-artifact': 'retain',
+      unclassified: 'retain',
+      mechanical: 'retry',
+      legacy: 'retry',
+    } satisfies Record<HaltDisposition, 'retain' | 'retry'>;
+
+    const matrix = Object.entries(expectedActionByDisposition);
+    const retryable = matrix
+      .filter(([, action]) => action === 'retry')
+      .map(([disposition]) => disposition);
+    const retained = matrix
+      .filter(([, action]) => action === 'retain')
+      .map(([disposition]) => disposition);
+    const isMatrixDisposition = (disposition: string): disposition is HaltDisposition =>
+      Object.hasOwn(expectedActionByDisposition, disposition);
+    const last = new Map<string, string>();
     const { deps, trace } = fakeDeps({
-      halted: [...dispositionBySlug.keys()],
-      readHaltClass: async (slug) => dispositionBySlug.get(slug)!,
+      halted: matrix.map(([disposition]) => disposition),
+      lastRekickSha: last,
+      readHaltClass: async (slug) => {
+        if (!isMatrixDisposition(slug)) throw new Error(`unexpected disposition: ${slug}`);
+        return slug;
+      },
     });
 
-    const res = await rekickSweep(deps, SHA_B);
+    const first = await rekickSweep(deps, SHA_B);
 
-    expect({
-      cleared: res.cleared,
-      skipped: res.skipped,
-      logged: [...dispositionBySlug].map(([slug, disposition]) =>
-        trace.events.some(
-          (event) =>
-            event.startsWith('log:') && event.includes(slug) && event.includes(disposition),
-        ),
-      ),
-    }).toEqual({
-      cleared: ['mechanical', 'legacy'],
-      skipped: ['needs-human', 'unclassified'],
-      logged: [true, true, true, true],
-    });
+    expect(first).toEqual({ cleared: retryable, skipped: retained });
+    expect([...trace.cleared]).toEqual(retryable);
+    expect(trace.events.filter((event) => event.startsWith('clear:'))).toEqual(
+      retryable.map((disposition) => `clear:${disposition}`),
+    );
+    for (const disposition of retryable) {
+      expect(last.get(disposition)).toBe(SHA_B);
+    }
+    for (const disposition of retained) {
+      expect(last.has(disposition)).toBe(false);
+    }
+
+    const second = await rekickSweep(deps, SHA_B);
+
+    expect(second).toEqual({ cleared: [], skipped: matrix.map(([disposition]) => disposition) });
+    expect(trace.events.filter((event) => event.startsWith('clear:'))).toEqual(
+      retryable.map((disposition) => `clear:${disposition}`),
+    );
+    for (const [disposition, action] of matrix) {
+      const dispositionLogs = trace.events.filter(
+        (event) => event.startsWith('log:') && event.includes(disposition),
+      );
+      expect(dispositionLogs).toHaveLength(action === 'retain' ? 2 : 1);
+    }
   });
 
   it('no readHaltClass dep at all still clears the slug normally (backward-compat)', async () => {
