@@ -7058,6 +7058,23 @@ export class Conductor {
               }
             }
 
+            // The group join is the same verdict boundary as the serial
+            // post-dispatch tail. Emit the final member verdicts only after
+            // accepted-risk routing has had a chance to replace prd_audit's
+            // computed result, so the event records exactly what this join
+            // will use below. A member without a computed verdict did not
+            // produce a passing dispatch outcome and must not fabricate one.
+            for (const member of membership.dispatchable) {
+              const verdict = gateVerdicts.get(member.name);
+              if (!verdict) continue;
+              await emitTracked({
+                type: 'gate_verdict',
+                step: member.name as StepName,
+                satisfied: verdict.satisfied,
+                reason: verdict.reason,
+              });
+            }
+
             const allGreen = outcomes.every((outcome, idx) => {
               if (outcome.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
               if (!this.verifyArtifacts) return true;
