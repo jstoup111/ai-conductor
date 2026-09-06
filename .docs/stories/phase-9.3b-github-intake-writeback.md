@@ -52,7 +52,8 @@ registered repo so that I can file ideas from anywhere and have them queued.
 #### Happy Path
 - Given a fake `gh` returning two open issues assigned to `@me` in repos `o/a` and `o/b`, when
   `poll()` runs, then it returns two Envelopes with `source="github-issues"`,
-  `sourceRef="o/a#1"` / `sourceRef="o/b#7"`, `text` = `title + "\n\n" + body`, and
+  `sourceRef="o/a#1"` / `sourceRef="o/b#7"`, `text` = the inbound-sanitized, armored
+  projection of `title + "\n\n" + body` (adr-2026-09-06-inbound-intake-trust-boundary), and
   `hintRepo="o/a"` / `"o/b"`.
 - Given the 9.2 registry lists repos `o/a` and `o/b`, when `poll()` runs, then `gh issue list
   --assignee @me --state open` is invoked once per registered repo and only those repos.
@@ -113,7 +114,8 @@ ideas never reach routing.
 ### Acceptance Criteria
 #### Happy Path
 - Given an issue with a title and empty body, when `poll()` runs, then an Envelope is produced
-  with `text` = the title (non-empty content is sufficient).
+  with `text` = the inbound-sanitized, armored projection of the title alone (non-empty content
+  is sufficient; adr-2026-09-06-inbound-intake-trust-boundary).
 
 #### Negative Paths
 - Given an issue whose title **and** body are empty/whitespace, when `poll()` runs, then **no**
