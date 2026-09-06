@@ -68,6 +68,22 @@ With a correct concurrent core available, the SHIP tail's three validators —
    verdict; the join then evaluates the union. A no-verdict branch (its retries
    exhausted without its completion marker) fails the group → the existing step-failure
    handling (halt in auto mode). No synthetic gaps are invented for it.
+   > **Amended 2026-09-06 by #1425:** the halt stands, but the join no longer discards
+   > its siblings' work. Before the no-verdict halt commits the group `failed`, the join
+   > persists `done` — in the same atomic state commit — for every dispatched member whose
+   > outcome was `verdict: pass` AND whose objective gate verdict the join itself computed
+   > and wrote as satisfied that round (no handshake failure; for `manual_test`, no FAIL
+   > rows). This is the join declaring satisfaction on its own validated evidence
+   > (adr-2026-08-03-build-repair-member-reuse-validity's invariant), not a bare status
+   > acting as authority: the retained `done` stays subject to `markDownstreamStale`
+   > (done → stale) on any kickback or rebase invalidation, and the FINISH publication
+   > fence (`nonGreenFinishValidators`) re-validates every member from disk at current
+   > HEAD before anything publishes. A member that produced no verdict, a FAIL verdict,
+   > or an unsatisfied gate is never retained. The no-verdict branch's "retries exhausted"
+   > precondition is real again once #2190 (PR #2206) lands: the trailing budget passed to
+   > `runGroupBranch` becomes the member's resolved `max_retries`, per
+   > adr-2026-07-10-concurrent-group-core D5, not the literal `1` the implementation shipped
+   > with. #1425 is blocked by #2190 and delivers only the retention above.
 3. **Consolidated kickback.** On join with failures:
    - `manual_test` FAIL rows → deterministic `build` classification per the preserved
      2026-07-06 ADR (budget and whitewash guard unchanged).
