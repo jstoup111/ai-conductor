@@ -8,6 +8,10 @@
 # automatically: worktree removed, branch deleted, unparked.
 reconcile_parked_auto_cleanup: true
 
+# Feature-executor pool width. Above 1 the daemon warns at startup: more rebase
+# kickbacks as siblings land first, and provider spend scales with the width.
+daemon_concurrency: 2
+
 # Self-host guardrails: declared version freeze (PR #262).
 #
 # VERSION is frozen at 0.100.0 until the operator declares 1.0 (v1.0 cutover

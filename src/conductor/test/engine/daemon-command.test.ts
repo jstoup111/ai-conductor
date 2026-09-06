@@ -74,6 +74,11 @@ describe('detectDaemonCommand', () => {
     expect(formatStartupLog(resolution, false)).toBe(
       'scanning backlog (concurrency 3, source flag)…',
     );
+    const mod = await import('../../src/engine/daemon-command.js');
+    const warning = mod.formatDaemonConcurrencyWarning(resolution);
+    expect(warning).toMatch(/^WARNING: daemon concurrency 3 \(source flag\)/);
+    expect(warning).toContain('daemon_concurrency: 1');
+    expect(mod.formatDaemonConcurrencyWarning({ concurrency: 1, source: 'default' })).toBeNull();
   });
 
   it('resolves configured concurrency when --concurrency is absent and names config source in startup log', async () => {
