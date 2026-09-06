@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import type { BuildReviewFinding, BuildReviewJudgedResult } from '../../src/engine/build-review-domain.js';
 import {
+  deriveBuildReviewScopeIncompleteFault,
   deriveEffectiveBuildReviewVerdict,
+  deriveEffectiveBuildReviewVerdictWithDispositions,
   joinBuildReviewRubricOutcomes,
   parseBuildReviewAggregate,
 } from '../../src/engine/build-review-aggregate.js';
@@ -34,6 +36,60 @@ function currentAggregate() {
 }
 
 describe('build-review raw aggregate', () => {
+  it('retains judged findings while deriving a blocking scope-incomplete fault from validated indeterminacy', () => {
+    const result = {
+      ...judged([finding]),
+      scopeResolutions: [{
+        candidateId: 'candidate:setup', status: 'indeterminate',
+        sourceRegion: { path: 'test/widget.test.ts', startLine: 3, endLine: 8, contentHash: HASH, display: 'widget setup' },
+        obligationReferences: ['story:S6.1'],
+        missingEvidenceReason: 'the helper association is ambiguous',
+      }],
+    } as BuildReviewJudgedResult;
+
+    const fault = deriveBuildReviewScopeIncompleteFault(result);
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: result } });
+
+    expect(fault).toMatchObject({
+      rubric: 'testQuality', reason: 'scope-incomplete',
+      candidates: [{ candidateId: 'candidate:setup', obligationReferences: ['story:S6.1'], missingEvidenceReason: 'the helper association is ambiguous' }],
+    });
+    expect(aggregate).toMatchObject({
+      verdict: 'FAIL', coverage: { testQuality: 'scope-incomplete' },
+      results: { testQuality: { findings: [finding] } },
+      scopeIncomplete: [fault],
+    });
+    expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
+    expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
+      verdict: 'FAIL', unresolvedFindingIds: [expect.any(String)], scopeIncompleteRubrics: ['testQuality'],
+    });
+  });
+
+  it('allows reduced coverage to cover only the derived scope fault, never an independent finding', () => {
+    const scopeOnly = {
+      ...judged(),
+      scopeResolutions: [{
+        candidateId: 'candidate:setup', status: 'indeterminate',
+        sourceRegion: { path: 'test/widget.test.ts', startLine: 3, endLine: 8, contentHash: HASH, display: 'widget setup' },
+        obligationReferences: ['story:S6.1'], missingEvidenceReason: 'the helper association is ambiguous',
+      }],
+    } as BuildReviewJudgedResult;
+    const scopeAndFinding: BuildReviewJudgedResult = { ...scopeOnly, findings: [finding], verdict: 'FAIL' };
+    const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
+    const coverage = [{
+      kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+      identity: { rubric: 'testQuality' as const, reason: 'scope-incomplete' as const },
+      rationale: 'operator accepts the bounded missing association', operator: 'operator', acceptedAt: '2026-09-06T00:00:00.000Z',
+    }];
+
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(
+      joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: scopeOnly } }), feature, [], coverage,
+    )).toMatchObject({ verdict: 'PASS', scopeIncompleteRubrics: ['testQuality'], unresolvedFindingIds: [] });
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(
+      joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: scopeAndFinding } }), feature, [], coverage,
+    )).toMatchObject({ verdict: 'FAIL', scopeIncompleteRubrics: ['testQuality'], unresolvedFindingIds: [expect.any(String)] });
+  });
+
   it.each(['wiring', 'scope', 'rootCause', 'completeness', 'causalIntegrity', 'tautology'] as const)(
     'tolerates an in-flight aggregate whose FAIL verdict derives only from the retired %s member',
     (retired) => {
