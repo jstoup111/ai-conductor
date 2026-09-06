@@ -17,7 +17,7 @@ import type { IntakeSource } from './source.js';
 import type { Ledger } from './ledger.js';
 import { parseSourceRef } from '../issue-ref.js';
 import { createGithubTrackerClient, type TrackerClient } from '../../tracker-client.js';
-import { parseWorkRef } from '../source-ref.js';
+import { parseWorkRef, type WorkRef } from '../source-ref.js';
 import { sanitizeInboundText, type InboundSanitizeResult } from './sanitize-inbound.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -81,13 +81,11 @@ function labelNames(issue: RawIssue): string[] {
 function buildText(
   title: string | undefined,
   body: string | undefined,
-  sourceRef: string,
+  workRef: WorkRef,
 ): { text: string; inbound: Pick<InboundSanitizeResult, 'neutralizations' | 'digest'> } | null {
   const t = (title ?? '').trim();
   const b = (body ?? '').trim();
   if (t === '' && b === '') return null;
-  const workRef = parseWorkRef(sourceRef);
-  if (!workRef) throw new Error(`github-issues: generated invalid sourceRef ${sourceRef}`);
   const sanitized = sanitizeInboundText([t, b].filter((s) => s !== '').join('\n\n'), workRef);
   return {
     text: sanitized.text,
@@ -162,6 +160,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
     repo: { name: string; path: string; ghRepo?: string },
     issue: RawIssue,
     sourceRef: string,
+    workRef: WorkRef,
   ): Promise<Envelope | null> {
     const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
     if (!entry || entry.status !== 'done' || !entry.prUrl) return null;
@@ -184,7 +183,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
       return null;
     }
 
-    const built = buildText(issue.title, issue.body, sourceRef);
+    const built = buildText(issue.title, issue.body, workRef);
     if (built === null) return null; // defensive: nothing to re-route.
 
     // Strip the handled label so a human sees it is back in flight; non-fatal.
@@ -232,11 +231,16 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
 
         for (const issue of issues) {
           const sourceRef = `${ghRepo}#${issue.number}`;
+          const workRef = parseWorkRef(sourceRef);
+          if (!workRef) {
+            log(`github-issues: skipping issue with invalid sourceRef ${sourceRef}`);
+            continue;
+          }
 
           if (labelNames(issue).includes(HANDLED_LABEL)) {
             // FR-35: handled-labelled issues are skipped at capture, except for
             // FR-39 re-eligibility (closed-unmerged spec PR).
-            const reopened = await maybeReopen(repo, issue, sourceRef);
+            const reopened = await maybeReopen(repo, issue, sourceRef, workRef);
             if (reopened) out.push(reopened);
             continue;
           }
@@ -245,7 +249,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
           if (await ledger.known(GITHUB_ISSUES_SOURCE, sourceRef)) continue;
 
           // FR-28: empty issue (no title and no body) is skipped, not captured.
-          const built = buildText(issue.title, issue.body, sourceRef);
+          const built = buildText(issue.title, issue.body, workRef);
           if (built === null) {
             log(`github-issues: skipping empty issue ${sourceRef}`);
             continue;
