@@ -59,6 +59,11 @@ import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { makeProductionGh } from './tracker-client.js';
+import {
+  GH_VERSION_FLOOR,
+  probeGhVersion,
+  type GhVersionFloorVerdict,
+} from './gh-version-floor.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -437,6 +442,8 @@ export interface DispatchEngineerOpts {
   printErr?: (s: string) => void;
   /** Injected gh runner (for tests). */
   gh?: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+  /** Machine-level gh capability probe; injectable so entry refusal is testable. */
+  probeGhVersion?: () => Promise<GhVersionFloorVerdict>;
   /** Injected git runner (for tests). */
   git?: GitRunner;
   /** Injected ensureRunning launch spy (for tests). */
@@ -725,6 +732,29 @@ export async function dispatchEngineer(
   const git = opts.git ?? makeProductionGit();
   const registryPath = opts.registryPath;
   const engineerDir = opts.engineerDir;
+
+  // This is a machine precondition, not an intake failure: refuse before any
+  // command can create a worktree, branch, or claim record.
+  const canSkipCapabilityProbe = dispatch.kind === 'guide' || dispatch.kind === 'reject';
+  const ghVersion = canSkipCapabilityProbe
+    ? ({ kind: 'ok' } as const)
+    : await (opts.probeGhVersion ?? (opts.gh || opts.launchInteractive
+      ? async () => ({ kind: 'ok' } as const)
+      : probeGhVersion))();
+  if (ghVersion.kind !== 'ok') {
+    if (ghVersion.kind === 'absent') {
+      printErr('engineer: gh is not installed; install gh before entering DECIDE or engineer workflows.');
+    } else if (ghVersion.kind === 'below-floor') {
+      const { major, minor, patch } = ghVersion.version;
+      printErr(
+        `engineer: gh ${major}.${minor}.${patch} is below the required ` +
+        `${GH_VERSION_FLOOR.major}.${GH_VERSION_FLOOR.minor}.${GH_VERSION_FLOOR.patch}; upgrade gh before entering DECIDE or engineer workflows.`,
+      );
+    } else {
+      printErr(`engineer: cannot verify gh capability (${ghVersion.kind}); install or repair gh before entering DECIDE or engineer workflows.`);
+    }
+    return 1;
+  }
 
   if (dispatch.invokedVerb === 'engineer') {
     printErr('Warning: `engineer` is deprecated; use `compose` instead.');

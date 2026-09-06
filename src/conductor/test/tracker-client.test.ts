@@ -91,6 +91,23 @@ describe('makeProductionGh — unsupported JSON-field capability errors', () => 
       process.env.AI_CONDUCTOR_NO_REAL_EXEC = noRealExec;
     }
   });
+
+  it.each([
+    { code: 1, stderr: '', message: 'network unavailable' },
+    { code: 1, stderr: 'HTTP 503 service unavailable', message: 'request failed' },
+    { code: 'ENOENT' as unknown as number, stderr: '', message: 'not found' },
+  ])('leaves ambiguous failures unchanged', async (failure) => {
+    const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    mockProductionGhFailure(failure);
+    try {
+      await expect(makeProductionGh()(['pr', 'view'], { cwd: '/tmp' })).rejects.not.toBeInstanceOf(
+        GhCapabilityError,
+      );
+    } finally {
+      process.env.AI_CONDUCTOR_NO_REAL_EXEC = noRealExec;
+    }
+  });
 });
 
 function fakeRunner(stdout: string) {
