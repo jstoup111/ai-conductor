@@ -4,6 +4,17 @@ spec_hash: 492022128b0406537b114146f61083871f45ee0337ca150cddec5d3bf1f68224
 pr: https://github.com/jstoup111/ai-conductor/pull/2221
 shipped: 2026-09-06
 engine_version: 20260906T030606Z-bfc8d7361f81
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "`src/conductor/test/tmpdir-leak-guard.ts:79` — commit 17ac4a5aa adds `moshi-codex-rl.json` to `IGNORED_TMPDIR_PREFIXES` (and `src/conductor/test/tmpdir-leak-guard.test.ts:193,204`), widening an unrelated test-infrastructure guard; neither file appears in the plan's task **Files:** lists and the commit carries no `Scope:` trailer"
+    accepted: false
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.2
+    summary: "`src/conductor/test/integration/session-hooks-provisioning.test.ts:88` — commit 318a1f678 deletes the pre-existing `expect(raw).not.toMatch(/\\/home\\//)` assertion from an unrelated integration test; the file is not in the plan's **Files:** lists and the commit carries no `Scope:` trailer"
+    accepted: false
 ---
 
 ## Cost
