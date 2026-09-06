@@ -1,5 +1,6 @@
+// Covers: task:3
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { Ledger, LedgerSchema, LedgerEntry } from '../../../src/engine/halt-issues/ledger';
+import { Ledger, LedgerSchema, LedgerEntry, mergeVerdicts } from '../../../src/engine/halt-issues/ledger';
 import { VerdictEntry } from '../../../src/engine/halt-issues/verdict-parser';
 
 /**
@@ -24,6 +25,50 @@ describe('Ledger', () => {
       rename: vi.fn(),
       fileExists: vi.fn()
     };
+  });
+
+  describe('mergeVerdicts', () => {
+    it('recovers a precise parsed halt time while retaining lifecycle metadata', () => {
+      const existing: LedgerSchema = {
+        version: 1,
+        entries: {
+          '297': {
+            issue: '297', repo: 'test/repo', slug: 'old-slug', haltAt: '2026-07-04T11:58:38Z',
+            status: 'stamped', stampedAt: '2026-07-04T12:00:00.000Z',
+            closedAt: '2026-07-05T12:00:00.000Z', closedBy: 'external', lastError: 'prior error'
+          }
+        }
+      };
+
+      const merged = mergeVerdicts(existing, [{
+        issue: '297', repo: 'test/repo', slug: 'new-slug', haltAt: '2026-07-04T11:58:38.984Z'
+      }]);
+
+      expect(merged).not.toBe(existing);
+      expect(merged.entries['297']).toMatchObject({
+        issue: '297', repo: 'test/repo', slug: 'new-slug', haltAt: '2026-07-04T11:58:38.984Z',
+        status: 'stamped', stampedAt: '2026-07-04T12:00:00.000Z',
+        closedAt: '2026-07-05T12:00:00.000Z', closedBy: 'external', lastError: 'prior error'
+      });
+      expect(existing.entries['297'].haltAt).toBe('2026-07-04T11:58:38Z');
+    });
+
+    it('retains a precise stored halt time for a later no-time verdict and gives new entries an empty time', () => {
+      const existing: LedgerSchema = {
+        version: 1,
+        entries: {
+          '297': { issue: '297', repo: 'test/repo', slug: 'saved', haltAt: '2026-07-04T11:58:38.984Z', status: 'pending' }
+        }
+      };
+
+      const merged = mergeVerdicts(existing, [
+        { issue: '297', repo: 'test/repo', slug: 'saved' },
+        { issue: '300', repo: 'test/repo', slug: 'new' }
+      ]);
+
+      expect(merged.entries['297'].haltAt).toBe('2026-07-04T11:58:38.984Z');
+      expect(merged.entries['300'].haltAt).toBe('');
+    });
   });
 
   describe('upsert', () => {

@@ -1,3 +1,4 @@
+// Covers: task:3
 /**
  * Tests for halt-issues sweep orchestrator.
  *
@@ -529,6 +530,99 @@ describe('sweep', () => {
       expect(mockGh.writeCalls).toBe(0);
       // Planned action for the closable issue should be surfaced in output
       expect(result.summary).toContain('297');
+    });
+  });
+
+  describe('merged halt times', () => {
+    const recoveredLog = `2026-07-04T11:59:37Z NEW HALT: 2026-07-04T11:58:38.984Z [daemon] ✋ recovered-halt halted
+HALT recovered-halt -> filed #297`;
+
+    function seedStampedLedger(haltAt: string): string {
+      const content = JSON.stringify({
+        version: 1,
+        entries: {
+          '297': {
+            issue: '297', repo: 'test/repo', slug: 'recovered-halt', haltAt,
+            status: 'stamped', stampedAt: '2026-07-04T12:00:00.000Z'
+          }
+        }
+      }, null, 2);
+      mockFs.setFile(baseConfig.ledgerPath, content);
+      return content;
+    }
+
+    function config(dryRun = false): SweepConfig {
+      return {
+        ...baseConfig, dryRun, fs: mockFs, gh: mockGh as unknown as TrackerClient,
+        clock: { now: () => new Date('2099-01-01T00:00:00.000Z') }
+      };
+    }
+
+    it('uses recovered milliseconds immediately: equal-or-earlier evidence stays guarded, later evidence closes and persists', async () => {
+      mockFs.setFile(baseConfig.monitorLogPath, recoveredLog);
+      seedStampedLedger('2026-07-04T11:58:38Z');
+      mockFs.setFile('/test/repo/.daemon/processed/recovered-halt.json', JSON.stringify({ status: 'shipped', prUrl: 'https://github.com/test/repo/pull/1' }), new Date('2026-07-04T11:58:38.983Z'));
+
+      const guarded = await sweep(config());
+
+      expect(guarded.guarded).toBe(1);
+      expect(mockGh.totalCalls).toBe(0);
+
+      mockFs.setFile('/test/repo/.daemon/processed/recovered-halt.json', JSON.stringify({ status: 'shipped', prUrl: 'https://github.com/test/repo/pull/1' }), new Date('2026-07-04T11:58:38.984Z'));
+      const equal = await sweep(config());
+      expect(equal.guarded).toBe(1);
+      expect(mockGh.totalCalls).toBe(0);
+
+      mockFs.setFile('/test/repo/.daemon/processed/recovered-halt.json', JSON.stringify({ status: 'shipped', prUrl: 'https://github.com/test/repo/pull/1' }), new Date('2026-07-04T11:58:38.985Z'));
+      mockGh.setLabels('test/repo', '297', []);
+      mockGh.setState('test/repo', '297', 'open');
+
+      const closed = await sweep(config());
+      const persisted = JSON.parse(await mockFs.readFile(baseConfig.ledgerPath));
+
+      expect(closed.closed).toBe(1);
+      expect(mockGh.callCounts.closeIssue).toBe(1);
+      expect(persisted.entries['297'].haltAt).toBe('2026-07-04T11:58:38.984Z');
+    });
+
+    it('keeps an unrecovered legacy timestamp guarded without tracker calls', async () => {
+      mockFs.setFile(baseConfig.monitorLogPath, 'HALT recovered-halt -> filed #297');
+      seedStampedLedger('2026-07-04T11:58:38Z');
+      mockFs.setFile('/test/repo/.daemon/processed/recovered-halt.json', JSON.stringify({ status: 'shipped', prUrl: 'https://github.com/test/repo/pull/1' }), new Date('2099-01-01T00:00:00.000Z'));
+
+      const result = await sweep(config());
+
+      expect(result.guarded).toBe(1);
+      expect(mockGh.totalCalls).toBe(0);
+    });
+
+    it('persists an empty halt time for a new no-time verdict and preserves precise stored time on later no-time input', async () => {
+      mockFs.setFile(baseConfig.monitorLogPath, 'HALT recovered-halt -> filed #297');
+
+      await sweep(config());
+      expect(JSON.parse(await mockFs.readFile(baseConfig.ledgerPath)).entries['297'].haltAt).toBe('');
+
+      seedStampedLedger('2026-07-04T11:58:38.984Z');
+      await sweep(config());
+      expect(JSON.parse(await mockFs.readFile(baseConfig.ledgerPath)).entries['297'].haltAt).toBe('2026-07-04T11:58:38.984Z');
+    });
+
+    it('uses the recovered comparison in dry-run without changing ledger bytes, tracker calls, or planning an imprecise close', async () => {
+      mockFs.setFile(baseConfig.monitorLogPath, recoveredLog);
+      const original = seedStampedLedger('2026-07-04T11:58:38Z');
+      mockFs.setFile('/test/repo/.daemon/processed/recovered-halt.json', JSON.stringify({ status: 'shipped', prUrl: 'https://github.com/test/repo/pull/1' }), new Date('2026-07-04T11:58:38.983Z'));
+
+      const recovered = await sweep(config(true));
+
+      expect(recovered.summary).not.toContain('planned close');
+      expect(await mockFs.readFile(baseConfig.ledgerPath)).toBe(original);
+      expect(mockGh.totalCalls).toBe(0);
+
+      mockFs.setFile(baseConfig.monitorLogPath, 'HALT recovered-halt -> filed #297');
+      const imprecise = await sweep(config(true));
+      expect(imprecise.summary).not.toContain('planned close');
+      expect(await mockFs.readFile(baseConfig.ledgerPath)).toBe(original);
+      expect(mockGh.totalCalls).toBe(0);
     });
   });
 });
