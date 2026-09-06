@@ -54,6 +54,7 @@ describe('Task 5 — runDaemonMode calls holdLock before ensureFresh', () => {
         projectRoot,
         concurrency: 1,
         ensureFresh,
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         exitProcess: () => {
           throw new Error('__stop__');
         },
@@ -95,6 +96,7 @@ describe('Task 5 — runDaemonMode calls holdLock before ensureFresh', () => {
         projectRoot,
         concurrency: 1,
         ensureFresh,
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         exitProcess: () => {},
       } as any),
     ).rejects.toThrow('stale harness install');

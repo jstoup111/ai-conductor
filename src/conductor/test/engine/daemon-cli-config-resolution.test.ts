@@ -93,6 +93,7 @@ describe('runDaemonMode configuration resolution', () => {
         concurrency: 1,
         baseBranch: 'main',
         ensureFresh: async () => {},
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         workSource: { discover },
         watch: false,
       });

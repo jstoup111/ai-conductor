@@ -66,6 +66,7 @@ describe('Task 14 — Lock-loser explicit refusal exit (RED phase — new contra
       projectRoot,
       concurrency: 1,
       ensureFresh: async () => {},
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
       exitProcess: fakeExitProcess,
     };
     return { opts, getExitCode: () => exitProcessCode };

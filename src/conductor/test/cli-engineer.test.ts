@@ -196,7 +196,11 @@ describe('dispatchEngineer — routes to engineer entry', () => {
     // insideClaudeSession:true must short-circuit before any spawn (no launcher injected).
     const code = await mod.dispatchEngineer(
       { kind: 'launch' },
-      { insideClaudeSession: true, print: (s) => out.push(s) },
+      {
+        insideClaudeSession: true,
+        print: (s) => out.push(s),
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      },
     );
     expect(code).toBe(0);
     expect(out.join('\n')).toMatch(/already inside|run \/composer directly/i);

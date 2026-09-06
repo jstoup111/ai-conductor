@@ -49,6 +49,7 @@ function baseOpts(projectRoot: string, dispatched: string[], discoverItems: Back
     concurrency: 1,
     baseBranch: 'main', // skip the real `git` default-branch lookup
     ensureFresh: async () => {}, // skip the stale-install backstop
+    probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
     workSource: {
       discover: async () => {
         for (const it of discoverItems) dispatched.push(it.slug);

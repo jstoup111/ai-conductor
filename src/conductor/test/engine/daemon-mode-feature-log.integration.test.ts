@@ -110,6 +110,7 @@ describe('daemon-mode feature log integration', () => {
         maxItems: 1,
         baseBranch: 'main',
         ensureFresh: async () => {},
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         watch: false,
         workSource: { discover: async () => [{ slug: 'feature-a' }] },
       });

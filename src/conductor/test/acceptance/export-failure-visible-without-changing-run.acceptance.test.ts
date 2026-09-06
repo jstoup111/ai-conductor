@@ -127,6 +127,7 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
     maxItems: 1,
     baseBranch: 'main',
     ensureFresh: async () => {},
+    probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
     watch: false,
     workSource: { discover: async () => [{ slug: 'feature-a' }] },
   });
