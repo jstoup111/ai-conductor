@@ -57,17 +57,94 @@ if [ -z "$TARGET" ]; then
   exit 2
 fi
 
-# Normalize an absolute TARGET (as delivered by the real Claude Code host,
-# e.g. "$PWD/.docs/plans/x.md") to a repo-root-relative path so the
-# case-glob match below works for both absolute and relative inputs. The
-# hook always runs with cwd set to the project root, so stripping a literal
-# "$PWD/" prefix is sufficient;
-# relative-path callers (e.g. unit tests) are left untouched.
-case "$TARGET" in
-  "$PWD"/*)
-    TARGET="${TARGET#"$PWD"/}"
-    ;;
-esac
+# Classify the requested target from the physical project root. Absolute
+# aliases are recognized by resolving each existing prefix in filesystem
+# order, not by trusting a particular spelling of PWD. This retains the
+# requested suffix beneath a root alias, while also resolving the final
+# destination now so a broken link, cycle, unreadable component, or invalid
+# path cannot fall through as unprotected.
+CLASSIFICATION="$(printf '%s' "$TARGET" | node -e '
+const fs = require("fs");
+const path = require("path");
+const raw = fs.readFileSync(0, "utf8");
+const physicalRoot = fs.realpathSync.native(process.cwd());
+
+const resolveInFilesystemOrder = (value) => {
+  const parsed = path.parse(value);
+  const parts = value.slice(parsed.root.length).split(path.sep);
+  let current = parsed.root;
+  let missing = false;
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") { current = path.dirname(current); continue; }
+    const next = path.join(current, part);
+    if (missing) { current = next; continue; }
+    try {
+      fs.lstatSync(next);
+    } catch (err) {
+      if (err && err.code === "ENOENT") { current = next; missing = true; continue; }
+      throw err;
+    }
+    // lstat succeeds for a broken symlink; realpath must remain a distinct
+    // operation so that failure is never misclassified as a missing leaf.
+    current = fs.realpathSync.native(next);
+  }
+  return current;
+};
+
+const normalizeSuffix = (parts) => {
+  const normalized = [];
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (normalized.length && normalized[normalized.length - 1] !== "..") normalized.pop();
+      else normalized.push(part);
+    } else normalized.push(part);
+  }
+  return normalized.join("/");
+};
+
+try {
+  if (raw.includes("\0")) throw new Error("target contains NUL");
+  const requestedAbsolute = path.isAbsolute(raw) ? raw : `${physicalRoot}/${raw}`;
+  const parsed = path.parse(requestedAbsolute);
+  const parts = requestedAbsolute.slice(parsed.root.length).split(path.sep);
+  let prefix = parsed.root;
+  let requested;
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (!part) continue;
+    prefix += (prefix.endsWith(path.sep) ? "" : path.sep) + part;
+    if (resolveInFilesystemOrder(prefix) === physicalRoot) {
+      const suffix = normalizeSuffix(parts.slice(index + 1));
+      // A root-returning link inside an already protected requested suffix
+      // is not another root spelling. Preserve that protected suffix.
+      if (requested === undefined || (!requested.startsWith(".docs/") && requested !== ".docs")) {
+        requested = suffix;
+      }
+    }
+  }
+  const resolved = resolveInFilesystemOrder(requestedAbsolute);
+  // Task 1 applies the existing policy to the requested root-relative
+  // spelling. Keeping resolved here makes the later dual-candidate policy
+  // additive without ever treating an unresolvable destination as safe.
+  void resolved;
+  process.stdout.write(`ok:${requested === undefined ? "" : requested}`);
+} catch {
+  process.stdout.write("undeterminable");
+}
+' || true)"
+
+if [ "$CLASSIFICATION" = "undeterminable" ]; then
+  {
+    echo "docs-guard: blocked write — target path could not be resolved safely while a build phase is active."
+    echo "Marker: .pipeline/phase-active"
+    echo "Remedy: if this write is intentional and allowlisted, no action needed; otherwise run 'rm .pipeline/phase-active' only if you are certain the phase should not be active."
+  } >&2
+  exit 2
+fi
+
+TARGET="${CLASSIFICATION#ok:}"
 
 case "$TARGET" in
   .docs/*|.docs)
