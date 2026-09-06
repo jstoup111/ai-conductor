@@ -1,6 +1,5 @@
-import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join, relative } from 'node:path';
+import { basename, dirname, relative } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
 import {
   readBaseAdvanceHistory,
@@ -19,6 +18,11 @@ import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { classifyTautologyPaths } from './build-review-test-quality-preflight.js';
 import { parseCoversMarkers } from './covers-marker.js';
 import { extractStoryCriterionIds } from './story-criteria.js';
+import {
+  BuildReviewScopeSource,
+  safeRepoRelativePath,
+  type BuildReviewPathChange,
+} from './build-review-scope-source.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -101,6 +105,8 @@ export interface BuildReviewSourceSnapshot {
   readonly changedTestTitles?: readonly BuildReviewChangedTestTitle[];
   /** Test-quality's closed, feature-local selector set. */
   readonly testQuality?: BuildReviewTestQualityScope;
+  /** Machine-readable changed paths from the pinned diff, retaining rename pairs. */
+  readonly sourceChanges?: readonly BuildReviewPathChange[];
 }
 
 /** One executable changed-test selector's declared title evidence. */
@@ -195,24 +201,29 @@ export class TestSuiteProofError extends Error {
  * its commit, means no exclusion.
  */
 async function engineAppendedPlanExclusion(
-  git: GitRunner,
+  source: BuildReviewScopeSource,
   mergeBaseSha: string,
   projectRoot: string,
-  planPath: string,
+  planRepoPath: string,
+  headSha: string,
 ): Promise<readonly string[]> {
   const recorded = await readRecordedAppendedRemediationTaskIds(projectRoot);
   if (recorded.length === 0) return [];
-  const pathspec = relative(projectRoot, planPath);
-  if (pathspec === '' || pathspec.startsWith('..')) return [];
+  let pathspec: string;
+  try {
+    pathspec = safeRepoRelativePath(planRepoPath);
+  } catch {
+    return [];
+  }
   // Both ends of the graded diff exactly: `<mergeBase>..HEAD`.
   const [base, head] = await Promise.all([
-    git(['show', `${mergeBaseSha}:${pathspec}`]),
-    git(['show', `HEAD:${pathspec}`]),
+    source.readAtOptional(mergeBaseSha, pathspec),
+    source.readAtOptional(headSha, pathspec),
   ]);
-  if (base.exitCode !== 0 || head.exitCode !== 0) return [];
+  if (base === undefined || head === undefined) return [];
   return isEngineAppendedRemediationAmendment(
-    Buffer.from(base.stdout, 'utf-8'),
-    Buffer.from(head.stdout, 'utf-8'),
+    Buffer.from(base, 'utf-8'),
+    Buffer.from(head, 'utf-8'),
     recorded,
   )
     ? [`:(exclude)${pathspec}`]
@@ -256,14 +267,9 @@ function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
   return repairs.map(({ gate, reason, diagnostic }) => ({ gate, reason, diagnostic }));
 }
 
-function changedPathsFromDiff(diff: string): readonly string[] {
-  return [...diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
-}
-
-function activeStoriesPath(projectRoot: string, planPath: string, planBody: string): string | undefined {
-  const planRepoPath = relative(projectRoot, planPath).replaceAll('\\', '/');
+function activeStoriesPath(planRepoPath: string, planBody: string): string | undefined {
   const storiesRepoPath = resolvePlanStoriesPath(planRepoPath, planBody);
-  return storiesRepoPath === null ? undefined : join(projectRoot, storiesRepoPath);
+  return storiesRepoPath === null ? undefined : storiesRepoPath;
 }
 
 function markerReference(reference: { readonly kind: string; readonly id: string }): string {
@@ -277,17 +283,15 @@ function markerReference(reference: { readonly kind: string; readonly id: string
  * another feature's criterion silently widen this review.
  */
 async function snapshotTestQualityScope(
-  git: GitRunner,
-  headSha: string,
-  diff: string,
-  projectRoot: string,
-  planPath: string,
+  source: BuildReviewScopeSource,
+  changes: readonly BuildReviewPathChange[],
+  planRepoPath: string,
   planBody: string,
 ): Promise<BuildReviewTestQualityScope> {
-  const storiesPath = activeStoriesPath(projectRoot, planPath, planBody);
+  const storiesPath = activeStoriesPath(planRepoPath, planBody);
   const storiesBody = storiesPath === undefined
     ? ''
-    : await readFile(storiesPath, 'utf-8').catch(() => '');
+    : await source.readOptional(storiesPath) ?? '';
   // Criterion ids are positional — derived from each story's Given/When/Then
   // bullets — because the stories skill never writes literal `S<n>.<m>` ids
   // into the artifact body. A literal grep here would resolve nothing but
@@ -302,14 +306,12 @@ async function snapshotTestQualityScope(
   // Covers is the authoritative opt-in for test-quality review.  Do not
   // pre-filter by a conventional test path: technical-track suites are often
   // deliberately outside it, while a path-only file has no feature binding.
-  const planRelativePath = relative(projectRoot, planPath);
-  const selectors = changedPathsFromDiff(diff).filter(
-    (path) => path !== planRelativePath && !path.startsWith('.docs/'),
+  const selectors = changes.flatMap((change) => change.kind === 'D' ? [] : [change.path]).filter(
+    (path) => path !== planRepoPath && !path.startsWith('.docs/'),
   );
-  const sources = await Promise.all(selectors.map(async (selector) => {
-    const result = await git(['show', `${headSha}:${selector}`]);
-    return { selector, source: result.exitCode === 0 ? result.stdout : undefined };
-  }));
+  const sources = await Promise.all(selectors.map(async (selector) =>
+    ({ selector, source: await source.readRequired(selector) }),
+  ));
   const inScopeTests: string[] = [];
   const unresolvedMarkers: BuildReviewUnresolvedMarker[] = [];
 
@@ -494,16 +496,12 @@ const collect = (start: number, end: number, ancestors: readonly string[], inher
 }
 
 async function snapshotChangedTestTitles(
-  git: GitRunner,
-  headSha: string,
-  diff: string,
+  source: BuildReviewScopeSource,
+  changes: readonly BuildReviewPathChange[],
 ): Promise<readonly BuildReviewChangedTestTitle[]> {
-  const selectors = classifyTautologyPaths(changedPathsFromDiff(diff)).tests;
+  const selectors = classifyTautologyPaths(changes.flatMap((change) => change.kind === 'D' ? [] : [change.path])).tests;
   const titles = await Promise.all(selectors.map(async (selector) => {
-    const result = await git(['show', `${headSha}:${selector}`]);
-    const extracted = result.exitCode === 0
-      ? staticTestTitles(result.stdout)
-      : [{ titleText: '', staticExtractionFallback: true }];
+    const extracted = staticTestTitles(await source.readRequired(selector));
     return extracted.map((title) => Object.freeze({ selector, ...title }));
   }));
   return Object.freeze(titles.flat());
@@ -542,7 +540,22 @@ export async function assembleBuildReviewInputs(
 
   const baseRef = resolution.ref;
 
-  const mergeBase = await git(['merge-base', baseRef, 'HEAD']);
+  // Freeze the graded tree before any diff or source reads. Every later Git
+  // revision expression uses this immutable identity rather than the mutable
+  // symbolic HEAD/worktree.
+  const headResult = await git(['rev-parse', 'HEAD']);
+  const liveHeadSha = headResult.stdout.trim();
+  if (headResult.exitCode !== 0 || !liveHeadSha) {
+    throw new MergeBaseError(
+      `git rev-parse HEAD failed: ${headResult.stderr || 'no HEAD found'}`,
+      baseRef,
+    );
+  }
+  const source = new BuildReviewScopeSource(git, liveHeadSha);
+  const projectRoot = projectRootForPlan(planPath);
+  const planRepoPath = safeRepoRelativePath(relative(projectRoot, planPath).replaceAll('\\', '/'));
+
+  const mergeBase = await git(['merge-base', baseRef, liveHeadSha]);
   const mergeBaseSha = mergeBase.stdout.trim();
   if (mergeBase.exitCode !== 0 || !mergeBaseSha) {
     throw new MergeBaseError(
@@ -552,45 +565,41 @@ export async function assembleBuildReviewInputs(
   }
 
   const planExclusion = await engineAppendedPlanExclusion(
-    git,
+    source,
     mergeBaseSha,
-    projectRootForPlan(planPath),
-    planPath,
+    projectRoot,
+    planRepoPath,
+    liveHeadSha,
   );
 
-  const diffResult = await git([
-    'diff',
-    `${mergeBaseSha}..HEAD`,
+  const diffArgs = [
     '--',
     '.',
     ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
     ...planExclusion,
+  ];
+  const diffResult = await git([
+    'diff', `${mergeBaseSha}..${liveHeadSha}`,
+    ...diffArgs,
   ]);
   if (diffResult.exitCode !== 0) {
     throw new MergeBaseError(
-      `git diff ${mergeBaseSha}..HEAD failed: ${diffResult.stderr || 'unknown error'}`,
+      `git diff ${mergeBaseSha}..${liveHeadSha} failed: ${diffResult.stderr || 'unknown error'}`,
       baseRef,
     );
   }
+  const changes = await source.inventory(mergeBaseSha, diffArgs);
 
-  // The snapshot's headSha anchors what the grader actually looks at — the
-  // live HEAD the diff above was computed against — and is what the lap
-  // identity derives from. It must NOT come from the test-suite evidence's
-  // provenanceHeadSha: when the drift budget preserves an attested PASS
-  // across laps, that provenance stays pinned at an older commit while build
-  // commits advance HEAD, making every aggregate stale by construction
-  // (discarded by the completion check's lap comparison). The proof's own
-  // provenance remains available, separately, as testSuiteProof.
-  const headResult = await git(['rev-parse', 'HEAD']);
-  const liveHeadSha = headResult.stdout.trim();
-  if (headResult.exitCode !== 0 || !liveHeadSha) {
-    throw new MergeBaseError(
-      `git rev-parse HEAD failed: ${headResult.stderr || 'no HEAD found'}`,
-      baseRef,
-    );
-  }
+  // Source artifacts are review evidence. The plan is required; a selected
+  // stories artifact is optional only for legacy/no-artifact plans, never a
+  // fallback to the live checkout.
+  const planBody = await source.readRequired(planRepoPath);
 
-  const planBody = await readFile(planPath, 'utf-8');
+  /*
+   * The snapshot's headSha anchors what the grader actually looks at — the
+   * pinned HEAD above — and is what the lap identity derives from. It must
+   * NOT come from test-suite evidence provenance.
+   */
 
   const featureRoot = dirname(dirname(dirname(planPath)));
   const planIsInFeatureRoot =
@@ -614,13 +623,11 @@ export async function assembleBuildReviewInputs(
   }
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
-  const changedTestTitles = await snapshotChangedTestTitles(git, liveHeadSha, diffResult.stdout);
+  const changedTestTitles = await snapshotChangedTestTitles(source, changes);
   const testQuality = await snapshotTestQualityScope(
-    git,
-    liveHeadSha,
-    diffResult.stdout,
-    projectRootForPlan(planPath),
-    planPath,
+    source,
+    changes,
+    planRepoPath,
     planBody,
   );
   const snapshotWithoutDigest = {
@@ -641,6 +648,7 @@ export async function assembleBuildReviewInputs(
     }),
     changedTestTitles,
     testQuality,
+    sourceChanges: changes,
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
     ...snapshotWithoutDigest,
