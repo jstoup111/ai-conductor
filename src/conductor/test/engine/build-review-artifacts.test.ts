@@ -67,6 +67,23 @@ const persistedV2Artifact = {
     provenance: { kind: 'fresh' },
 } as const;
 
+const persistedV3Artifact = {
+  version: 1,
+  rubric: 'testQuality',
+  lapId,
+  snapshotDigest: 'sha256:snapshot',
+  result: {
+    kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3',
+    findings: [{
+      concernKind: 'test-insensitive', summary: 'A legacy v3 finding identity remains readable.',
+      evidenceLocations: ['src/conductor/src/engine/build-review-artifacts.ts:1'],
+      anchor: { rubric: 'testQuality', locus: { path: 'src/conductor/test/engine/build-review-artifacts.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
+    }],
+    verdict: 'FAIL',
+  },
+  provenance: { kind: 'fresh' },
+} as const;
+
 describe('build-review current-lap branch artifacts', () => {
   it('uses a write-disjoint path for every lap', () => {
     expect([
@@ -168,6 +185,16 @@ describe('build-review current-lap branch artifacts', () => {
     await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
       result: { contractVersion: 'v2', findings: [{ anchor: { rubric: 'testQuality' } }] },
     });
+  });
+
+  it('keeps a legacy result-v3 finding identity readable without migrating its persisted shape', async () => {
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'testQuality');
+    const fs = filesystem({ [path]: JSON.stringify(persistedV3Artifact) });
+
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
+      result: { contractVersion: 'v3', findings: [{ anchor: { rubric: 'testQuality', locus: { contentHash: 'sha256:fixture' } } }] },
+    });
+    expect(fs.writeFile).not.toHaveBeenCalled();
   });
 
   it.each([

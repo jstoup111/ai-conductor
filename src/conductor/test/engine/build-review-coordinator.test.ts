@@ -15,6 +15,7 @@ import {
   parseBuildReviewLapId,
   type BuildReviewInfrastructureFailureReason,
 } from "../../src/engine/build-review-domain.js";
+import { fingerprintBuildReviewRubricPolicy } from "../../src/engine/build-review-registry.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import type {
   ResolvedBuildReviewConfig,
@@ -684,6 +685,44 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     changedFiles: [], changedTestSelectors: [], runnerSelectors: [], unresolvedMarkers: [], changedTestTitles: [],
     testScope: { candidates: [scopeCandidate] }, testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: "approved-exception", exception: "empty-test-set" },
   } as unknown as import('../../src/engine/build-review-projections.js').TestQualityProjection;
+
+  it("revalidates a cache hit against current candidate and finding authority before reuse", async () => {
+    const currentResolution = {
+      candidateId: "candidate-widget", status: "resolved", sourceRegion: scopeRegion,
+      obligationReferences: ["criterion:S5.1"], associationReason: "The current source binds this candidate.",
+    };
+    const staleScopeRegion = {
+      ...scopeRegion,
+      contentHash: `sha256:${"c".repeat(64)}`,
+      display: "unchanged sibling test",
+    };
+    const staleResult = {
+      kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-old")!,
+      snapshotDigest: "sha256:old", findings: [{
+        ...testQualityFinding("A coarse sibling anchor was cached."),
+        anchor: { rubric: "testQuality", locus: { path: staleScopeRegion.path, contentHash: staleScopeRegion.contentHash, display: staleScopeRegion.display } },
+      }],
+      scopeResolutions: [{ ...currentResolution, sourceRegion: staleScopeRegion }], verdict: "FAIL",
+    };
+    const dispatchModel = vi.fn(async () => ({ findings: [], scopeResolutions: [currentResolution] }));
+    const input = coordinationInput(true, {
+      projections: { testQuality: candidateProjection },
+      readCache: vi.fn(async () => ({
+        version: 1, rubric: "testQuality", contractVersion: "v3", projectionVersion: "v3",
+        projectionDigest: candidateProjection.digest, policyFingerprint: fingerprintBuildReviewRubricPolicy(policy),
+        engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" }, result: staleResult,
+      }) as never),
+      dispatchModel,
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(dispatchModel).toHaveBeenCalledOnce();
+    expect(input.writeArtifact).toHaveBeenCalledOnce();
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: "dispatched", result: { findings: [], scopeResolutions: [currentResolution], verdict: "PASS" },
+    });
+  });
 
   it("derives candidate authority only from the frozen v3 testScope candidate and pinned evidence", () => {
     const projection = {
