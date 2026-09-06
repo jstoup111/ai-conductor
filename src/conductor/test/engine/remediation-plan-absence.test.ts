@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  readRemediationPlan,
   readRemediationPlanResult,
   renderRemediationPlanAbsence,
 } from '../../src/engine/artifacts.js';
@@ -28,7 +27,7 @@ describe('remediation plan absence causes', () => {
     const sessionStartedAt = Date.now() - 1_000;
 
     await expect(readRemediationPlanResult(dir, sessionStartedAt)).resolves.toEqual({ plan: null, cause: 'absent' });
-    await expect(readRemediationPlan(dir, sessionStartedAt)).resolves.toBeNull();
+    await expect(readRemediationPlanResult(dir, sessionStartedAt).then((r) => r.plan)).resolves.toBeNull();
 
     await writeFile(path, '{"dispositions": []}');
     await utimes(path, new Date(sessionStartedAt - 1_000), new Date(sessionStartedAt - 1_000));
@@ -80,6 +79,6 @@ describe('remediation plan absence causes', () => {
       plan: null,
       cause: 'no-routable-dispositions',
     });
-    await expect(readRemediationPlan(dir, Date.now() - 1_000)).resolves.toBeNull();
+    await expect(readRemediationPlanResult(dir, Date.now() - 1_000).then((r) => r.plan)).resolves.toBeNull();
   });
 });

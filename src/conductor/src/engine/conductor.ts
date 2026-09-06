@@ -10960,14 +10960,17 @@ export class Conductor {
                   remediableNoPlanReason = remediation.reason;
                 }
               }
-              const asBuiltFindingDetail = renderAsBuiltBlockedFindingDetail(asBuiltReport);
+              // The listing is part of the reason so the marker, the surfaced
+              // PR, and the loop_halt event all carry the same text — the
+              // group site composes its reason the same way.
               const reason =
                 `as-built architecture review halted: ${lastError}` +
                 (asBuiltOutcome.kind === 'blocked-remediable' && remediableNoPlanReason
                   ? ` — remediation did not route: ${remediableNoPlanReason}`
-                  : '');
+                  : '') +
+                renderAsBuiltBlockedFindingDetail(asBuiltReport);
               await this.writeHaltMarker(
-                reason + asBuiltFindingDetail + '\n',
+                reason + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
               );
               await this.persistPendingStateChanges(state, 'persist conductor transition');

@@ -5211,23 +5211,12 @@ export function renderRemediationPlanAbsence(cause: RemediationPlanAbsenceCause)
 }
 
 /**
- * Read + validate `.pipeline/remediation.json` (the /remediate skill's output).
- * Returns null when the file is absent, stale (predates this session), malformed,
- * or contains no recognizable gap or rejected disposition — the caller then falls back to the
- * deterministic `classifyPrdAuditGaps` routing. Tolerant of junk: unknown
- * dispositions and non-object gaps are dropped rather than failing the whole plan.
- */
-export async function readRemediationPlan(
-  dir: string,
-  sessionStartedAt: number | undefined,
-  source?: string,
-): Promise<RemediationPlan | null> {
-  return (await readRemediationPlanResult(dir, sessionStartedAt, source)).plan;
-}
-
-/**
- * Read a remediation plan while retaining why no usable plan was available.
- * Callers which only need the historic nullable result use readRemediationPlan.
+ * Read + validate `.pipeline/remediation.json` (the /remediate skill's output),
+ * retaining why no usable plan was available. `plan` is null when the file is
+ * absent, stale (predates this session), malformed, or contains no recognizable
+ * gap or rejected disposition — the caller then falls back to the deterministic
+ * `classifyPrdAuditGaps` routing. Tolerant of junk: unknown dispositions and
+ * non-object gaps are dropped rather than failing the whole plan.
  */
 export async function readRemediationPlanResult(
   dir: string,
