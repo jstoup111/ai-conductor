@@ -1,12 +1,14 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createEngineStateStore,
   type EngineStateFilesystem,
 } from '../../src/engine/engine-state-store.js';
+import { recordAppendedRemediationTaskIds } from '../../src/engine/artifacts.js';
+import { recordActivePlanPath } from '../../src/engine/conductor.js';
 import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
 
 const temporaryDirectories: string[] = [];
@@ -82,6 +84,46 @@ describe('engine state store', () => {
     ]);
 
     expect(results).toEqual([{ ok: true }, { ok: true }]);
+  });
+
+  it('preserves both bookkeeping updates and sibling repair state when they race', async () => {
+    const statePath = await createStatePath();
+    const projectRoot = dirname(dirname(statePath));
+    await writeFile(statePath, JSON.stringify({
+      unrelated: { retained: true },
+      repairObligations: { version: 1, records: {} },
+    }));
+
+    await Promise.all([
+      recordActivePlanPath(projectRoot, '.docs/plans/current.md'),
+      recordAppendedRemediationTaskIds(projectRoot, ['12']),
+      createEngineStateStore(statePath).update((state) => ({
+        ...state,
+        repairObligations: { version: 1, records: { repair: { open: true } } },
+      })),
+    ]);
+
+    await expect(readFile(statePath, 'utf8')).resolves.toSatisfy((raw) => {
+      expect(JSON.parse(raw)).toEqual({
+        activePlanPath: '.docs/plans/current.md',
+        appendedRemediationTaskIds: ['12'],
+        unrelated: { retained: true },
+        repairObligations: { version: 1, records: { repair: { open: true } } },
+      });
+      return true;
+    });
+  });
+
+  it('refuses malformed state through both bookkeeping writers without replacing it', async () => {
+    const statePath = await createStatePath();
+    const projectRoot = dirname(dirname(statePath));
+    await writeFile(statePath, '{not json');
+
+    await expect(recordActivePlanPath(projectRoot, '.docs/plans/current.md'))
+      .rejects.toThrow('Failed to record active plan path (malformed)');
+    await expect(recordAppendedRemediationTaskIds(projectRoot, ['12']))
+      .rejects.toThrow('Failed to record appended remediation task ids (malformed)');
+    await expect(readFile(statePath, 'utf8')).resolves.toBe('{not json');
   });
 
   it('serializes concurrent updates and preserves unrelated durable fields', async () => {

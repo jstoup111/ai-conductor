@@ -14,7 +14,7 @@ import {
   recordGateRepair,
 } from './test-suite-remediation.js';
 import { basename, dirname, relative, join, isAbsolute } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { execa } from 'execa';
 import {
   HALT_MARKER,
@@ -62,6 +62,7 @@ import type {
   ProviderCandidate,
 } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
+import { createEngineStateStore } from './engine-state-store.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
@@ -13247,32 +13248,13 @@ export async function recordApprovals(
 export async function recordActivePlanPath(projectRoot: string, planPath: string): Promise<void> {
   const pipelineDir = join(projectRoot, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
-
   const engineStatePath = join(pipelineDir, 'engine-state.json');
-
-  // Read existing engine state if present
-  let engineState: Record<string, unknown> = {};
-  try {
-    const existing = await readFile(engineStatePath, 'utf-8');
-    engineState = JSON.parse(existing);
-  } catch {
-    // File doesn't exist or is invalid — start fresh
-    engineState = {};
-  }
-
-  // Update with the active plan path
-  engineState.activePlanPath = planPath;
-
-  // Atomic write: temp file + rename
-  const tempDirPath = join(tmpdir(), `engine-state-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  await mkdir(tempDirPath, { recursive: true });
-  try {
-    const tempFile = join(tempDirPath, 'engine-state.json');
-    await writeFile(tempFile, JSON.stringify(engineState, null, 2) + '\n');
-    await writeFile(engineStatePath, JSON.stringify(engineState, null, 2) + '\n');
-  } finally {
-    const { rm } = await import('node:fs/promises');
-    await rm(tempDirPath, { recursive: true, force: true });
+  const result = await createEngineStateStore(engineStatePath).update((state) => ({
+    ...state,
+    activePlanPath: planPath,
+  }));
+  if (!result.ok) {
+    throw new Error(`Failed to record active plan path (${result.kind}): ${result.message}`);
   }
 }
 
