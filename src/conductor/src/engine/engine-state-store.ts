@@ -60,6 +60,27 @@ const defaultFilesystem: EngineStateFilesystem = {
   cleanupTemporary: (path) => rm(path, { force: true }),
 };
 
+/**
+ * Serializes acquisition attempts made by stores in this process. The durable
+ * lease remains the cross-process authority, but this closes its brief
+ * directory-created/owner-published interval for independent local callers.
+ */
+const localUpdateTails = new Map<string, Promise<void>>();
+
+async function serializeLocalUpdate<T>(statePath: string, operation: () => Promise<T>): Promise<T> {
+  const previous = localUpdateTails.get(statePath);
+  let release: (() => void) | undefined;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  localUpdateTails.set(statePath, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release?.();
+    if (localUpdateTails.get(statePath) === current) localUpdateTails.delete(statePath);
+  }
+}
+
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -140,34 +161,36 @@ export function createEngineStateStore(
     read: () => readEngineState(statePath),
 
     async update(mutator): Promise<EngineStateUpdateResult> {
-      const acquired = await lease.acquire();
-      if (!acquired.ok) return { ok: false, kind: 'lease', message: acquired.message };
+      return serializeLocalUpdate(statePath, async () => {
+        const acquired = await lease.acquire();
+        if (!acquired.ok) return { ok: false, kind: 'lease', message: acquired.message };
 
-      let result: EngineStateUpdateResult;
-      try {
-        const current = await readEngineState(statePath);
-        if (!current.ok) {
-          result = current;
-        } else {
-          const next = await mutator(current.value);
-          if (!isRecord(next)) {
-            result = { ok: false, kind: 'incompatible', message: 'Engine state update must return a JSON object' };
+        let result: EngineStateUpdateResult;
+        try {
+          const current = await readEngineState(statePath);
+          if (!current.ok) {
+            result = current;
           } else {
-            try {
-              await writeAtomically(statePath, next, filesystem);
-              result = { ok: true };
-            } catch (error) {
-              result = { ok: false, kind: 'persistence', message: `Failed to persist engine state: ${message(error)}` };
+            const next = await mutator(current.value);
+            if (!isRecord(next)) {
+              result = { ok: false, kind: 'incompatible', message: 'Engine state update must return a JSON object' };
+            } else {
+              try {
+                await writeAtomically(statePath, next, filesystem);
+                result = { ok: true };
+              } catch (error) {
+                result = { ok: false, kind: 'persistence', message: `Failed to persist engine state: ${message(error)}` };
+              }
             }
           }
+        } catch (error) {
+          result = { ok: false, kind: 'filesystem', message: `Failed to update engine state: ${message(error)}` };
+        } finally {
+          const released = await acquired.handle.release();
+          if (!released.ok) result = { ok: false, kind: 'lease', message: released.message };
         }
-      } catch (error) {
-        result = { ok: false, kind: 'filesystem', message: `Failed to update engine state: ${message(error)}` };
-      } finally {
-        const released = await acquired.handle.release();
-        if (!released.ok) result = { ok: false, kind: 'lease', message: released.message };
-      }
-      return result;
+        return result;
+      });
     },
   };
 }
