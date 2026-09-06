@@ -64,6 +64,7 @@ export interface RepairObligationStore {
   admit(admission: RepairAdmission): Promise<RepairAdmissionResult>;
   /** Replays only an explicit, caller-authoritative effect key within one plan. */
   admitOrReplay(admissionKey: string, admission: RepairAdmission): Promise<RepairAdmissionResult>;
+  markSettled(input: { planPath: string; obligationId: string }): Promise<RepairClosureResult>;
   close(input: {
     planPath: string;
     taskId: string;
@@ -205,6 +206,35 @@ export function createRepairObligationStore(
     read,
     admit: (admission) => admit(admission),
     admitOrReplay: (admissionKey, admission) => admit(admission, admissionKey),
+
+    async markSettled(input): Promise<RepairClosureResult> {
+      let result: RepairClosureResult | undefined;
+      const planIdentity = repairPlanIdentity(projectRoot, input.planPath);
+      const updated = await store.update((current) => {
+        const parsed = parseSection(current);
+        if (!parsed.ok) {
+          result = parsed as RepairClosureResult;
+          return current as EngineState;
+        }
+        const section = clone(parsed.value);
+        const obligation = section.records[input.obligationId];
+        if (!obligation) {
+          result = { ok: false, kind: 'missing', message: 'Repair obligation is missing' };
+          return current as EngineState;
+        }
+        const isCurrent = obligation.planIdentity === planIdentity && obligation.taskIds.every(
+          (taskId) => section.currentByPlan[planIdentity]?.[taskId] === input.obligationId,
+        );
+        if (!isCurrent) {
+          result = { ok: false, kind: 'stale', message: 'Repair obligation has been superseded' };
+          return current as EngineState;
+        }
+        obligation.settlement = 'settled';
+        result = { ok: true, obligation: clone(obligation) };
+        return { ...current, repairObligations: section };
+      });
+      return updated.ok ? result! : persistenceFailure(updated) as RepairClosureResult;
+    },
 
     async close(input): Promise<RepairClosureResult> {
       let result: RepairClosureResult | undefined;

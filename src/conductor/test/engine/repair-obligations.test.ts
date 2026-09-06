@@ -44,6 +44,29 @@ function admission(overrides: Partial<RepairAdmission> = {}): RepairAdmission {
 }
 
 describe('repair obligations', () => {
+  it('settles only the current obligation and keeps a replay settled', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const first = await repairs.admit(admission());
+    if (!first.ok) throw new Error(first.message);
+    const later = await repairs.admit(admission({ id: 'round-2' }));
+    if (!later.ok) throw new Error(later.message);
+
+    await expect(repairs.markSettled({
+      planPath: '.docs/plans/current.md',
+      obligationId: first.obligation.id,
+    })).resolves.toMatchObject({ ok: false, kind: 'stale' });
+    await expect(repairs.markSettled({
+      planPath: '.docs/plans/current.md',
+      obligationId: later.obligation.id,
+    })).resolves.toMatchObject({ ok: true, obligation: { settlement: 'settled' } });
+    await expect(repairs.admit(admission({ id: 'round-2' }))).resolves.toMatchObject({
+      ok: true,
+      replayed: true,
+      obligation: { settlement: 'settled' },
+    });
+  });
+
   it('atomically replays a caller-authoritative admission key without suppressing a later key', async () => {
     const { projectRoot, statePath } = await createStatePath();
     const repairs = createRepairObligationStore(projectRoot, statePath);
