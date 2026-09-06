@@ -35,6 +35,14 @@ header, an uncertain breaking-surface classification, or an integrity-script tim
 rather than pass. Passing every gate still ends at the standard finish-time HALT for the operator
 to re-install, `/verify`, and **merge** — the daemon never merges (structural test, TR-12).
 
+> **Amended 2026-09-06 (#658):** No test executes in the finish plane. `ReleaseArtifactGate`'s
+> integrity sub-gate (TR-8) is deleted and harness integrity verification moves to BUILD's
+> `test_suite` verifier for self-host builds.
+>
+> 1. **Harness integrity is a BUILD verification entry.** For a harness self-build, `test/test_harness_integrity.sh` is a declared entry of this repository's `test_suite` verification, run in the build loop alongside the vitest suite. An integrity failure is therefore a `test_suite` FAIL the build loop can remediate with the command the failing check already prints, not a finish-time HALT of a completed feature at its ship tail.
+> 2. **The release gate runs no tests.** TR-8 — the integrity script constant, its timeout bound, its exec seam, and the composed gate's integrity-only injection fields — is removed. The finish-plane `ReleaseArtifactGate` is the migration-block requirement (TR-10) and its waiver evaluation, and nothing else. `VersionApprovalGate` (TR-7) is unchanged.
+> 3. **Fail-closed is relocated, not weakened.** Integrity failure still blocks progression, now at BUILD's `test_suite` gate, which fails closed on a non-zero exit, a timeout, or unresolvable evidence; and the repository's CI `integrity` job remains an independent required check on every non-documentation diff. The surviving finish-plane sub-gate keeps its own fail-closed rule: an undeterminable change set still HALTs and is still unwaivable.
+
 ## Consequences
 
 - **Positive:** `CLAUDE.md`'s human-gated release rules become enforceable inside an autonomous
