@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { Writable } from 'node:stream';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { UIRenderer } from '../../src/ui/types.js';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
@@ -164,5 +165,25 @@ describe('TerminalSubscriber', () => {
 
     expect(handle).not.toHaveBeenCalled();
     expect(stream.output()).toBe('');
+  });
+  it('forwards an inbound sanitization event to the terminal renderer once', async () => {
+    const terminalRenderer: UIRenderer = {
+      handle: vi.fn(async () => {}),
+      stop: vi.fn(),
+    };
+    subscriber = new TerminalSubscriber(emitter, renderCallback, terminalRenderer);
+    subscriber.start();
+    const event: ConductorEvent = {
+      type: 'intake_inbound_sanitized',
+      sourceRef: 'owner/repo#12',
+      neutralizations: [{ category: 'agent-directive', count: 1 }],
+      digest: 'a'.repeat(64),
+    };
+
+    await emitter.emit(event);
+
+    expect(renderCallback).toHaveBeenCalledOnce();
+    expect(terminalRenderer.handle).toHaveBeenCalledOnce();
+    expect(terminalRenderer.handle).toHaveBeenCalledWith(event);
   });
 });
