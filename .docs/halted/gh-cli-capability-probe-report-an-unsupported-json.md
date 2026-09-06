@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-06T11:48:49.070Z
 Slug: gh-cli-capability-probe-report-an-unsupported-json
 Class: needs-human
 Halting step: prd_audit
