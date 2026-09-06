@@ -22,7 +22,7 @@ export interface CoversMarker {
 }
 
 export interface CoversMarkerOwner {
-  readonly kind: 'suite' | 'test';
+  readonly kind: 'suite' | 'test' | 'group';
   readonly association: 'leading-comment' | 'title';
   readonly declaration: SupportedTestDeclaration;
 }
@@ -59,6 +59,23 @@ export type BuildReviewTestBinding =
 
 export interface BuildReviewTestBindings {
   readonly bindings: readonly BuildReviewTestBinding[];
+}
+
+/** A base/HEAD association delta retains removed marker evidence without making it HEAD authority. */
+export interface CoversMarkerAssociationChange {
+  readonly kind: 'added' | 'removed';
+  readonly binding: Exclude<BuildReviewTestBinding, UnboundTestDeclaration>;
+}
+
+export interface BuildReviewCoversBindingComparisonInput {
+  readonly base: BuildReviewTestBindingsInput;
+  readonly head: BuildReviewTestBindingsInput;
+}
+
+export interface BuildReviewCoversBindingComparison {
+  readonly base: BuildReviewTestBindings;
+  readonly head: BuildReviewTestBindings;
+  readonly changes: readonly CoversMarkerAssociationChange[];
 }
 
 interface AssociatedMarker {
@@ -164,7 +181,7 @@ export function bindCoversMarkers(input: BuildReviewTestBindingsInput): BuildRev
 
   const attach = (declaration: SupportedTestDeclaration, marker: CoversMarker, association: CoversMarkerOwner['association']): void => {
     const owner = Object.freeze({
-      kind: declaration.kind === 'suite' ? 'suite' as const : 'test' as const,
+      kind: declaration.kind,
       association,
       declaration,
     });
@@ -190,7 +207,7 @@ export function bindCoversMarkers(input: BuildReviewTestBindingsInput): BuildRev
   const criteria = new Set(extractStoryCriterionIds(input.storiesText).map((id) => id.toUpperCase()));
   const taskIds = new Set(parsePlanTaskBodies(input.planText).keys());
   const bindings: BuildReviewTestBinding[] = [...uncertain];
-  for (const test of declarations.filter((entry) => entry.kind === 'test')) {
+  for (const test of declarations.filter((entry) => entry.kind === 'test' || entry.kind === 'group')) {
     const applicable = [
       ...(attached.get(test) ?? []),
       ...declarations
@@ -204,4 +221,59 @@ export function bindCoversMarkers(input: BuildReviewTestBindingsInput): BuildRev
     }
   }
   return Object.freeze({ bindings: Object.freeze(bindings) });
+}
+
+function declarationKey(declaration: SupportedTestDeclaration): string {
+  return JSON.stringify([declaration.kind, declaration.titleChain, declaration.occurrence]);
+}
+
+function associationKey(binding: Exclude<BuildReviewTestBinding, UnboundTestDeclaration>): string {
+  if (binding.kind === 'uncertain-association') {
+    return JSON.stringify(['uncertain', binding.marker.reference]);
+  }
+  return JSON.stringify([
+    binding.kind,
+    declarationKey(binding.target),
+    binding.owner.kind,
+    binding.owner.association,
+    declarationKey(binding.owner.declaration),
+    binding.marker.reference,
+  ]);
+}
+
+/**
+ * Compares only association semantics, not source offsets.  A deleted marker
+ * is retained as base-side evidence and is deliberately never reintroduced
+ * into the HEAD binding set.
+ */
+export function compareCoversMarkerBindings(input: BuildReviewCoversBindingComparisonInput): BuildReviewCoversBindingComparison {
+  const base = bindCoversMarkers(input.base);
+  const head = bindCoversMarkers(input.head);
+  const baseAssociations = base.bindings.filter((binding): binding is Exclude<BuildReviewTestBinding, UnboundTestDeclaration> => binding.kind !== 'unbound');
+  const headAssociations = head.bindings.filter((binding): binding is Exclude<BuildReviewTestBinding, UnboundTestDeclaration> => binding.kind !== 'unbound');
+  const remaining = (bindings: readonly Exclude<BuildReviewTestBinding, UnboundTestDeclaration>[]): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const binding of bindings) {
+      const key = associationKey(binding);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  };
+  const consume = (counts: Map<string, number>, key: string): boolean => {
+    const count = counts.get(key) ?? 0;
+    if (count === 0) return false;
+    counts.set(key, count - 1);
+    return true;
+  };
+  const remainingHead = remaining(headAssociations);
+  const remainingBase = remaining(baseAssociations);
+  const changes: CoversMarkerAssociationChange[] = [
+    ...baseAssociations
+      .filter((binding) => !consume(remainingHead, associationKey(binding)))
+      .map((binding) => Object.freeze({ kind: 'removed' as const, binding })),
+    ...headAssociations
+      .filter((binding) => !consume(remainingBase, associationKey(binding)))
+      .map((binding) => Object.freeze({ kind: 'added' as const, binding })),
+  ];
+  return Object.freeze({ base, head, changes: Object.freeze(changes) });
 }
