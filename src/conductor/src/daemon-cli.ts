@@ -2608,6 +2608,9 @@ function buildReviewLapTag(lapId: string): string {
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'intake_inbound_sanitized':
+      log(`${dot} intake sanitized: ${event.sourceRef} — ${event.neutralizations.map(({ category, count }) => `${category}: ${count}`).join(', ') || 'no matches'}`);
+      break;
     case 'setup_repair': {
       const rejection = event.disposition === 'rejected'
         ? ` (${event.reason}${event.quarantineRef ? `; ${event.quarantineRef}` : ''})`
