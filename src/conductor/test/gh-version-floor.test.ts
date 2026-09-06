@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   GH_VERSION_FLOOR,
   checkGhVersionFloor,
@@ -46,6 +46,14 @@ describe('gh version floor', () => {
     await expect(probeGhVersion(async () => ({ stdout: '', exitCode: 1 }))).resolves.toEqual({ kind: 'unparseable' });
     await expect(probeGhVersion(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); })).resolves.toEqual({ kind: 'absent' });
     await expect(probeGhVersion(() => new Promise(() => {}), 1)).resolves.toEqual({ kind: 'timeout' });
+  });
+
+  it('passes the injected runner banner directly to the version-floor check', async () => {
+    const banner = 'gh version 2.100.0 (2026-09-01)';
+    const runner = vi.fn(async () => ({ stdout: banner }));
+
+    await expect(probeGhVersion(runner)).resolves.toEqual(checkGhVersionFloor(banner));
+    expect(runner).toHaveBeenCalledOnce();
   });
 
   it('rethrows the production real-exec guard instead of converting it to a verdict', async () => {
