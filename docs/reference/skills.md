@@ -551,9 +551,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Inputs** — the obsolete file, seam, flag, symbol, or code path; the behavior that must survive;
   and the source, test, configuration, and documentation references that mention it.
 - **Outputs** — the deletion diff, any pre-deletion characterization tests needed to cover a
-  non-obvious survivor, and a green full surviving suite.
-- **Gate role** — advisory. It forbids absence tests: deletion evidence is the diff plus the green
-  suite. It requires a survivor inventory for non-obvious survivors, triages touching tests as
+  non-obvious survivor, and passing scoped survivor tests. The `test_suite` step owns
+  full surviving-suite proof.
+- **Gate role** — advisory. It forbids absence tests: deletion task evidence is the diff plus passing scoped
+  survivor tests. It requires a survivor inventory for non-obvious survivors, triages touching tests as
   DIRECT or INCIDENTAL, and finishes with a literal reference sweep.
 
 ### code-review
@@ -614,9 +615,17 @@ current result from the repository-configured aggregate verifier.
 skills; their raw verdicts are joined before effective dispositions are applied. `test_suite` runs
 after `build` and before `build_review`.
 
-BUILD activities (`pipeline`, `tdd`, `conduct` progression, and `debugging`) run scoped
+BUILD implementation and repair activities (including implementation agents, `code-removal`,
+`tdd`, and `debugging`) run scoped
 affected tests. If scope is uncertain, they record the trigger and defer aggregate proof
-to `test_suite`, rather than running an intermediate aggregate verifier. Known scoped
+to `test_suite`, rather than running an intermediate aggregate verifier.
+
+Bootstrap inventories tests without executing them. Acceptance-spec RED runs select only the
+feature's generated or copied specs. Progression checks, batch boundaries, and worktree merges
+consume existing evidence; only concrete changed behavior or interaction risk justifies targeted
+checks. Full-suite or aggregate runs, as configured, belong to `test_suite`.
+Batch evaluators and `code-review` inspect supplied results without routine reruns; targeted
+runs are reserved for reproducing a specific suspected defect. Known scoped
 failures still block BUILD. On an auto-mode suite-failure kickback, the engine supplies
 failure diagnostics and the `.pipeline/test-suite-evidence.json` path to BUILD; repair
 sessions use that evidence, verify affected tests, and commit before the engine reruns

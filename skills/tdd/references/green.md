@@ -38,7 +38,8 @@ After implementation:
 1. Run the specific failing test → should pass now
 2. Run the affected/scoped test union: the changed tests plus existing tests that cover the changed production modules
 3. If that scoped union fails → the GREEN phase is blocked; fix the regression here rather than deferring it
-4. If one of the repository's documented intermediate fallback triggers makes the affected set genuinely unsafe, name the exact trigger and run the configured aggregate verifier instead of a raw project-suite command
+4. If the affected set is uncertain, report the reason and defer configured suite verification to
+   `test_suite`; never run a full or aggregate suite in GREEN.
 
 ## Common GREEN Phase Mistakes
 

@@ -47,7 +47,10 @@ Gather what the evaluator needs:
   preserve or change, and allowed variation. It complements the task criteria and affected-test
   results; it does not expand review context to the full plan, unrelated stories, or history.
 
-For batch reviews, use the provided `BATCH_AFFECTED_TESTS` result set; require a full-suite result only when the batch scope was indeterminate.
+For batch reviews, inspect the provided `BATCH_AFFECTED_TESTS` result set without routinely
+rerunning tests. Targeted runs are reserved for reproducing a specific suspected defect. If batch scope is
+indeterminate, report the uncertainty and defer aggregate proof to the engine-native `test_suite`
+step. Never require or launch an intermediate full-suite run.
 
 ### 2. Dispatch Evaluator Agent
 
@@ -67,7 +70,8 @@ Provide the evaluator with:
 - The review checklist (generic + tech-context from session if available)
 - **Impacted test file paths** — for batch reviews, the provided `BATCH_AFFECTED_TESTS` union;
   otherwise, spec files changed in the diff plus specs corresponding to changed source files.
-  The evaluator will run these before reviewing.
+  The evaluator inspects their supplied results; it runs a targeted test only when needed
+  to reproduce a specific suspected defect.
 - The focused **current-HEAD pattern basis**, when present alongside the task criteria and affected
   tests. Read the named files at current HEAD; paths and symbols are locating aids, not frozen
   coordinates or source text. If an exemplar moved, locate and verify its semantic equivalent. If
@@ -114,7 +118,8 @@ The evaluator is prompted to be **genuinely critical, not performative**:
 - Don't nitpick style preferences that don't affect correctness
 - Don't flag things that are intentional trade-offs documented in the plan
 - Do flag things that seem intentional but are actually wrong
-- Verify claims by running tests, not by trusting the generator's report
+- Verify claims against the diff and supplied test evidence; use a targeted test run only when
+  needed to reproduce a specific suspected defect
 - Treat pattern conformance as semantic judgment: explain the applicable trait, the observed
   departure, and the material consequence. If the supplied basis cannot be connected to a current
   equivalent, request context; do not infer an exact-copy requirement or manufacture a blocking

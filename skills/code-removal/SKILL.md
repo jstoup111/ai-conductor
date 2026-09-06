@@ -13,7 +13,8 @@ surviving suite, not a new test asserting that the removed thing is absent. Trea
 work as a change to what remains: remove the obsolete file, seam, flag, symbol, or code path, and
 preserve the behavior that survives it.
 
-The evidence for a completed removal is the deletion diff plus the full surviving suite green.
+The evidence for a completed removal task is the deletion diff plus passing scoped survivor tests.
+The engine-native `test_suite` step owns full surviving-suite proof.
 Deletion does not create new behavior to prove, so do not manufacture an absence assertion to
 make removal work look like an additive test cycle.
 
@@ -28,8 +29,8 @@ At build time, do not author a test whose subject is that removed code no longer
 no rubric exemption to lean on: APPROVED `adr-2026-08-22-one-owner-per-review-question.md` retires
 the `scope`, `completeness`, and `rootCause` rubrics together with their exemptions — superseding
 `adr-2026-08-12-removal-anchored-tautology-exemption.md` — and leaves `test-quality` as the only
-shipped rubric. Removal evidence is the deletion diff plus a green full surviving suite, not an
-absence assertion.
+shipped rubric. Removal task evidence is the deletion diff plus passing scoped survivor tests, not an
+absence assertion. Aggregate proof belongs to the engine-native `test_suite` step.
 
 ## Survivor Method
 
@@ -44,7 +45,9 @@ Follow this order:
 2. Check each survivor for existing coverage.
 3. For every uncovered survivor, add and commit a characterization test before any deletion.
 4. Delete the obsolete code.
-5. Run the full suite and leave it green.
+5. Run the affected survivor tests through `ai-conductor scoped-run <selectors...>` and leave
+   them green. If scope is uncertain, report it and defer aggregate proof to the engine-native
+   `test_suite` step. Never run the full suite in the removal session.
 
 Hard stop: do not proceed with deletion until each uncovered survivor has a characterization test.
 

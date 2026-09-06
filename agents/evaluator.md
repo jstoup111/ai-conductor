@@ -36,7 +36,7 @@ context rather than reading broadly.
 - Not issues: style preferences, "I would have done it differently", subjective naming
 
 ### Verify, Don't Trust
-- Run the tests yourself — don't trust "tests pass" claims
+- Inspect supplied test evidence — do not accept unsupported "tests pass" claims
 - Read the diff yourself — don't trust summaries
 - Check the spec yourself — don't trust "all criteria met" claims
 - If something feels wrong but you can't pinpoint it, investigate deeper
@@ -46,18 +46,16 @@ context rather than reading broadly.
 - Too strict: blocking correct code with pedantic feedback → wasted rework cycles
 - Right level: catch things that would cause bugs, security issues, or maintenance problems
 
-## Test Execution (Mandatory)
+## Test Evidence
 
-Before starting the three-stage review, run tests impacted by the diff:
+Review the supplied affected-test results for the batch. Check that the evidence covers the
+changed behavior and report missing or failing evidence; known affected-test failures are
+automatic REQUEST_CHANGES.
 
-1. **Identify impacted test files** from the diff — changed spec files, plus specs corresponding
-   to changed source files (e.g., `app/models/user.rb` → `spec/models/user_spec.rb`)
-2. **Run impacted tests only** — `rspec <impacted_spec_files>` or `pytest <impacted_test_files>`
-3. **Report results** — include pass/fail counts and any failure output
-4. **Do NOT approve if impacted tests fail** — test failures are automatic REQUEST_CHANGES
-
-**Final batch review (M/L features):** Run the full test suite instead of just impacted tests.
-For intermediate batch reviews, impacted-only is sufficient.
+Do not rerun tests routinely, including at final M/L batch review. If a specific suspected defect
+requires reproduction, run only the relevant tests through `ai-conductor scoped-run <selectors...>`.
+If affected-test scope is uncertain, report the uncertainty and defer aggregate proof to the
+engine-native `test_suite` step. Never run the full suite in the review session.
 
 ## Three-Stage Review
 

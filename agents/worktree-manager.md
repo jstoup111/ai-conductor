@@ -44,11 +44,13 @@ Create multiple worktrees for concurrent task execution:
 
 Merge a feature worktree back to the base branch:
 
-1. Verify all tests pass in the worktree
+1. Inspect current `test_suite` evidence for the worktree; missing or stale proof returns to
+   that step before shipment
 2. Checkout base branch in main repo
 3. Merge the feature branch: `git merge <branch> --no-ff`
-4. If merge conflicts: resolve them (read both sides, pick the correct version, run tests)
-5. Run tests after merge to verify
+4. If merge conflicts: resolve them and use minimal targeted checks for changed behavior
+5. Report whether the merge changed verified inputs; return to `test_suite` when suite proof
+   must be refreshed, rather than running a suite here
 6. Report: merge status, any conflicts resolved, test results
 
 ### Merge Parallel
@@ -56,9 +58,10 @@ Merge a feature worktree back to the base branch:
 Merge multiple parallel worktrees back sequentially:
 
 1. Sort batches by dependency order (independent batches first)
-2. Merge each in order, running tests after each merge
-3. If a merge conflicts with a prior merge: resolve, re-run tests
-4. Report: merge order, conflicts resolved, final test count
+2. Merge each in order without routine test reruns
+3. If a merge conflicts with a prior merge: resolve and check only the affected behavior
+4. Report: merge order, conflicts resolved, targeted-check evidence, and whether `test_suite`
+   must refresh configured suite proof
 
 ### Cleanup
 
@@ -103,7 +106,7 @@ You have full git access. You do NOT need permission to create branches or workt
 ## Rules
 
 - Never force-push or rebase published branches
-- Always run tests after merge before reporting success
+- Never run a full or aggregate suite; `test_suite` owns configured suite verification
 - If merge conflicts can't be resolved confidently, report BLOCKED and let the user decide
 - Worktree paths must be under `.worktrees/` inside the project (gitignored)
 - Branch names must be valid git refs (no spaces, special chars)

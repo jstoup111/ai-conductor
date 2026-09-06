@@ -238,7 +238,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Present DRAFT ADRs for review. Only APPROVED ADRs are binding on implementation.
 
 **After build (before the engine-native configured-verifier gate):**
-- Run the union of affected tests for the BUILD diff and verify it passes
+- Inspect the supplied BUILD test evidence; do not rerun tests as a progression check
 - If a known scoped test fails, BLOCK this BUILD activity and fix it here; do
   not defer it to the later aggregate gate
 - If one of the repository's documented intermediate fallback triggers makes
@@ -249,7 +249,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
 
-**After the engine-native configured-verifier gate (before suggesting /manual-test):**
+**At the engine-native `test_suite` gate (before suggesting /manual-test):**
 - After the BUILD verification above passes, run `ai-conductor test-suite`.
 - A zero exit reporting `EXECUTED PASS` or `REUSED PASS` satisfies this gate.
 - A non-zero exit BLOCKS progression to SHIP. Return to BUILD remediation via
