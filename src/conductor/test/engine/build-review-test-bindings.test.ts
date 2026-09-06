@@ -1,6 +1,6 @@
 // Covers: task:4
 import { describe, expect, it } from 'vitest';
-import { bindCoversMarkers } from '../../src/engine/build-review-test-bindings.js';
+import { bindCoversMarkers, compareCoversMarkerBindings } from '../../src/engine/build-review-test-bindings.js';
 
 function bindings(text: string) {
   return bindCoversMarkers({
@@ -94,6 +94,30 @@ it('later test', () => {});
     expect(result.bindings).toMatchObject([
       { kind: 'uncertain-association', marker: { reference: { kind: 'criterion', id: 'S2.1' } } },
       { kind: 'unbound', target: { titleChain: ['later test'] } },
+    ]);
+  });
+
+  it('retains removed marker associations as base-side evidence without representing them as HEAD bindings', () => {
+    const base = `
+// Covers: S2.1
+it('same body', () => { expect(true).toBe(true); });
+`;
+    const head = `
+it('same body', () => { expect(true).toBe(true); });
+`;
+
+    expect(compareCoversMarkerBindings({
+      base: { source: { fileName: 'test/example.test.ts', bytes: Buffer.from(base) }, storiesText: `## Story 2: Example\n\n#### Happy Path\n- Given a feature, when it runs, then it succeeds\n`, planText: '' },
+      head: { source: { fileName: 'test/example.test.ts', bytes: Buffer.from(head) }, storiesText: `## Story 2: Example\n\n#### Happy Path\n- Given a feature, when it runs, then it succeeds\n`, planText: '' },
+    }).changes).toMatchObject([
+      {
+        kind: 'removed',
+        binding: {
+          kind: 'bound',
+          target: { titleChain: ['same body'] },
+          marker: { reference: { kind: 'criterion', id: 'S2.1' } },
+        },
+      },
     ]);
   });
 });
